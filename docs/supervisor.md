@@ -48,3 +48,5 @@ Stop or pause only supervisor-owned jobs, remove the optional `--supervisor` for
 ## Tower installation
 
 After reviewing the branch and confirming no other launcher edit is in progress, run `bash tools/install-supervisor.sh`. It runs the fake test suite, copies the committed supervisor to `/root/lib/ai-supervisor-<commit>`, backs up `/root/bin/ai-agent`, adds only an explicit `--supervisor` forwarding case, and installs `/root/bin/ai-supervisor`. Verify `bash -n /root/bin/ai-agent`, `/root/bin/ai-agent-tests`, and `ai-agent --supervisor help`. This opt-in path does not start a daemon or touch existing tmux sessions. Roll back the launcher with `bash tools/rollback-supervisor.sh COMMIT` after pausing supervisor-owned jobs; retain state for recovery.
+
+For a reviewed follow-up commit after installation, run `bash tools/upgrade-supervisor.sh`. It keeps the original launcher and existing job state, copies the new committed version, backs up the prior wrapper and switches only the wrapper path. Active workers continue on their originally loaded version; pause them first if adapter behavior must be consistent across a switch.

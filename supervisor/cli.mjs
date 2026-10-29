@@ -62,7 +62,11 @@ async function main() {
       return;
     }
     const job = await createJob(root, spec, registry);
-    if (a.foreground) { job.workerPid = process.pid; job.workerStart = processStart(process.pid); saveJob(root, job); print(await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl))); }
+    if (a.foreground) {
+      job.workerPid = process.pid; job.workerStart = processStart(process.pid); saveJob(root, job);
+      const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl));
+      result.workerPid = null; result.workerStart = null; saveJob(root, result); print(result);
+    }
     else { startWorker(root, job.id, registry); print(readJob(root, job.id)); }
     return;
   }

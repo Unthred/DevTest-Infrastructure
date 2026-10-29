@@ -124,7 +124,8 @@ export function checkpoint(root, job, clock = realClock) {
   job.lastProgress = clock.now(); saveJob(root, job, clock); event(root, job, 'checkpoint', clock);
 }
 export function prompt(job, resume = false) {
-  let head = `Selected launcher role: ${job.role}. Supervised issue #${job.issue} in ${job.worktree}. Approved scope: ${job.scope}. Allowed actions: ${job.allowedActions.join(', ')}. Preserve project and role governance. Do not purchase credits, switch to paid API billing, deploy, merge, reboot or change credentials without separate authorization. Update handover at ${job.handover || '(none specified)'} during normal work.`;
+  let head = `Selected launcher role: ${job.role}. Supervised issue #${job.issue} in ${job.worktree}. Approved scope: ${job.scope}. Allowed actions: ${job.allowedActions.join(', ')}. Preserve project and role governance. Do not purchase credits, switch to paid API billing, deploy, merge, reboot or change credentials without separate authorization.`;
+  if (job.handover) head += ` Read the handover at ${job.handover} and update it only when the approved actions permit edits.`;
   if (resume) head += ` Resume the SAME issue and worktree. Read issue, Git state and handover before changing anything. Last checkpoint HEAD: ${job.checkpoint?.head || 'unknown'}. Avoid duplicate actions.`;
   return head + '\n\n' + job.prompt;
 }

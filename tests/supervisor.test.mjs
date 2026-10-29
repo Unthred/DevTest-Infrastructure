@@ -145,5 +145,6 @@ test('CLI pause and stop signal only their supervised child and preserve request
     execFileSync(process.execPath, [cli, action, id, '--state-root', f.root, '--registry', registry], { stdio: 'ignore' });
     await new Promise(resolve => worker.on('close', resolve));
     assert.equal(readJob(f.root, id).status, action === 'pause' ? 'paused_manual' : 'stopped');
+    assert.equal(readJob(f.root, id).workerPid, null);
   }
 });
