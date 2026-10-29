@@ -22,7 +22,21 @@ On-demand, pinned official Docker-based .NET SDK 8/9/10 builds/tests and Playwri
 - Do not automatically reboot Tower, HA Green or other infrastructure.
 
 ## Agent startup
-Read the shared `Unthred/AI-Rules` agent governance and project-specific rules, then review the open queue. Issue #1 must create `docs/DECISIONS.md`, `docs/ai/CURRENT_HANDOVER.md` and the normative local entry points. Until then, this README and issue bodies are the project bootstrap.
+Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read order: shared AI-Rules, the [decision register](docs/DECISIONS.md), the [canonical handover](docs/ai/CURRENT_HANDOVER.md), then your issue.
+
+## Documentation map
+| Document | Purpose |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Components, tracks, storage, security model |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Binding decisions, status, rejected alternatives, open questions |
+| [docs/cli-contract.md](docs/cli-contract.md) | `dev-test` commands, exit codes, result schema |
+| [docs/agent-provider-contract.md](docs/agent-provider-contract.md) | Provider adapter contract shared with the supervisor (#15) |
+| [docs/acceptance-gates.md](docs/acceptance-gates.md) | Completion states, gates and per-issue evidence |
+| [docs/ai/CURRENT_HANDOVER.md](docs/ai/CURRENT_HANDOVER.md) | Canonical current state |
+| [contracts/](contracts/) | Machine-readable CLI and provider contracts, with examples |
+
+## Validation
+`node tools/validate-project.mjs` checks required files, the decision register, the handover, entry points, contracts, secrets, Docker-socket/privileged use and image pinning. `node --test "tests/**/*.test.mjs"` runs it against good and deliberately broken fixtures. CI runs both.
 
 Before each substantive report, preserve progress in the canonical handover once it exists. Record source, CI, deployed and verified states separately.
 

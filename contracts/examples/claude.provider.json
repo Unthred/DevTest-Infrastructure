@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "claude",
+  "display_name": "Claude Code",
+  "adapter_version": "0.1.0",
+  "launch": { "command": "claude", "args": ["--permission-mode", "auto"], "env_allowlist": ["HOME", "PATH", "LANG"] },
+  "resume": { "args": ["--continue"] },
+  "capabilities": {
+    "launch": "supported", "resume": "supported", "session_status": "supported",
+    "usage_limit_detection": "unverified", "reset_time_parsing": "unverified",
+    "checkpoint": "supported", "non_interactive": "unverified", "structured_output": "unverified"
+  },
+  "billing": { "model": "subscription", "fallback_to_other_billing": false },
+  "events": ["usage_limit", "transient_rate_limit", "context_limit", "auth_error", "approval_required", "network_error", "crash"]
+}
