@@ -32,6 +32,8 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Contracts: `contracts/cli.v1.json`, `contracts/provider-manifest.v1.schema.json`, examples for Claude, Codex and a generic future agent.
 - Validation: `node tools/validate-project.mjs`; `node --test "tests/**/*.test.mjs"` (good and deliberately broken fixtures).
 
+- Provider evidence: `docs/provider-observations.md` (static inspection of Claude Code 2.1.312 and Codex CLI 0.165.0; live captures still outstanding).
+
 ## Blockers
 None for #1. #2 onward wait on #1 reaching CI/review passed (prerequisite rule).
 

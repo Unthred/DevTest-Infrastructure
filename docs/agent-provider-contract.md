@@ -41,7 +41,7 @@ These refine Codex's comment on #15; none removes anything from it.
 4. **Injectable clock and process boundary.** Time, process spawn and the filesystem are injected so the failure matrix runs with fake time and fake agents, without real waits and without model calls.
 5. **Idempotent resume.** Each resume attempt has an attempt id recorded before launch, so a supervisor restart mid-resume cannot start two agents.
 6. **Handover write-through.** A checkpoint records the Git HEAD and status plus a bounded handover excerpt, and a graceful stop requires the agent to have updated the canonical handover. A job whose handover is stale is marked, not silently resumed as if current.
-7. **Provider output assumptions need captures.** How Claude and Codex words their limit messages, and which flags resume a session, must come from captured real output kept as fixtures, with the CLI version. Until captured, those capabilities are `unverified`.
+7. **Provider output assumptions need captures.** How Claude and Codex words their limit messages, and which flags resume a session, must come from captured real output kept as fixtures, with the CLI version. Until captured, those capabilities are `unverified`. Current static evidence and the capture list are in [provider-observations.md](provider-observations.md).
 8. **No secrets in manifests or state.** Environment is an allowlist of names, never values. State files and logs are redacted and owner-only.
 9. **Stale lease handling.** A stale lease blocks and is reported with the evidence needed to decide; takeover is a human action recorded in the audit trail.
 
