@@ -36,7 +36,8 @@ function reconcileOnce(root, registry) {
     if (!name.endsWith('.json')) continue;
     const current = readJob(root, name.slice(0, -5));
     if (current.workerPid && processStart(current.workerPid) === current.workerStart) continue;
-    if (current.status === 'paused_limit' && current.autoResume && (current.nextAttemptAt || 0) <= Date.now()) {
+    const eligible = ['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].every(key => current.capabilities?.[key] === 'supported');
+    if (current.status === 'paused_limit' && current.autoResume && eligible && (current.nextAttemptAt || 0) <= Date.now()) {
       recover(root, current.id, false); startWorker(root, current.id, registry); resumed++;
     } else if (current.status === 'running') { transition(root, current, 'blocked', 'orphaned_worker'); blocked++; }
   }
@@ -58,7 +59,9 @@ async function main() {
     if (command === 'dry-run') {
       const { validateSpec } = await import('./core.mjs');
       const checked = validateSpec(spec), { config, adapter } = await provider(registry, checked.provider);
-      console.log(JSON.stringify({ provider: checked.provider, issue: checked.issue, worktree: checked.worktree, branch: checked.branch, command: adapter.command(config, checked, false), capabilities: adapter.capabilities, autoResume: spec.autoResume === true }, null, 2));
+      const capabilities = config.manifest.capabilities;
+      const autoResumeEligible = ['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].every(key => capabilities[key] === 'supported');
+      console.log(JSON.stringify({ provider: checked.provider, issue: checked.issue, worktree: checked.worktree, branch: checked.branch, command: adapter.command(config, checked, false), capabilities, autoResume: spec.autoResume === true, autoResumeEligible }, null, 2));
       return;
     }
     const job = await createJob(root, spec, registry);
@@ -119,7 +122,12 @@ async function main() {
     transition(root, job, command === 'pause' ? 'paused_manual' : 'stopped', command === 'pause' ? 'manual_pause' : 'manual_stop');
     print(job); return;
   }
-  if (command === 'auto-resume') { job.autoResume = a['auto-resume'] !== false; saveJob(root, job); print(job); return; }
+  if (command === 'auto-resume') {
+    const enabled = a['auto-resume'] !== false;
+    if (enabled && !['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].every(key => job.capabilities?.[key] === 'supported'))
+      throw new SupervisorError('auto-resume requires verified supported provider capabilities');
+    job.autoResume = enabled; saveJob(root, job); print(job); return;
+  }
   if (command === 'resume') {
     if (!['paused_manual', 'paused_limit', 'blocked', 'failed'].includes(job.status)) throw new SupervisorError('job is not resumable');
     recover(root, id, a.force === true);

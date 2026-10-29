@@ -10,7 +10,7 @@ for (const id of ['claude', 'codex']) {
   const job = { role: 'devtest', worktree, sessionId: null };
   if (!adapter.preflight(job)) { console.log(JSON.stringify({ provider: id, result: 'subscription_auth_or_governance_unavailable' })); continue; }
   const argv = adapter.command(config, job, false);
-  const child = spawn(argv[0], argv.slice(1), { cwd: worktree, env: safeEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(argv[0], argv.slice(1), { cwd: worktree, env: safeEnvironment(process.env, config.manifest.launch.env_allowlist), stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.end(prompt);
   let output = '', timedOut = false;
   const timeout = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, 90000);

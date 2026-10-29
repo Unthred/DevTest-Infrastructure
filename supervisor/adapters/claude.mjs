@@ -14,7 +14,7 @@ export function command(config, job, resume) {
   const ruleFile = `/mnt/cache/cursor-workspace/ai-rules-live/adapters/generated/claude/${context}/CLAUDE.md`;
   const governance = fs.readFileSync(ruleFile, 'utf8');
   const args = [...config.command, '--print', '--verbose', '--output-format', 'stream-json', '--permission-mode', 'auto', '--append-system-prompt', `${governance}\nSelected role: ${job.role}. Follow its project and host safety instructions.`];
-  if (resume && job.sessionId) args.push('--resume', job.sessionId);
+  if (resume && job.sessionId && config.manifest.capabilities.resume === 'supported') args.push('--resume', job.sessionId);
   return args;
 }
 export function observe(line) {
@@ -23,7 +23,8 @@ export function observe(line) {
   const errorObject = obj && (obj.type === 'error' || obj.is_error === true || obj.type === 'result' && obj.is_error === true);
   const sessionId = typeof obj?.session_id === 'string' ? obj.session_id : null;
   const text = obj ? (errorObject ? String(obj.error?.message || obj.error || obj.message || '') : '') : line;
+  if (/budget limit|spend limit|insufficient credits/i.test(text)) return { event: 'approval_required', sessionId };
   if (/usage limit|weekly limit|session limit|out of extra usage/i.test(text) && !/api key|billing/i.test(text))
-    return { event: 'usage_limit', resetAt: base.resetTime(text), sessionId };
+    return { event: 'usage_limit', resetAt: base.resetTime(text), resetSource: 'provider_reported', verified: false, sessionId };
   return { ...base.observe(text), sessionId };
 }

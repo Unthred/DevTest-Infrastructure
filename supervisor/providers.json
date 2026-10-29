@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "providers": {
-    "claude": {"adapter": "claude", "command": ["claude"], "capabilities": ["resumeSession", "usageReset"]},
-    "codex": {"adapter": "codex", "command": ["codex"], "capabilities": ["resumeSession", "usageReset"]}
+    "claude": {"adapter": "claude", "manifest": "providers/claude.json"},
+    "codex": {"adapter": "codex", "manifest": "providers/codex.json"}
   }
 }
