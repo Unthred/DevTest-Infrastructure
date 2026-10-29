@@ -5,8 +5,6 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   if (typeof adapter.preflight === 'function' && !adapter.preflight(job)) return { code: 1, event: 'auth_error' };
   const argv = adapter.command(config, job, job.attempts > 1);
   const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: safeEnvironment(), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
-  job.childPid = child.pid; saveJob(root, job, clock);
-  child.stdin.end(prompt(job, job.attempts > 1));
   let observed = null, resetAt = null, buffer = '';
   let stopping = false;
   const signalChild = signal => {
@@ -17,6 +15,9 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   const onInt = () => signalChild('SIGINT');
   const onTerm = () => signalChild('SIGTERM');
   process.on('SIGUSR1', onInt); process.on('SIGTERM', onTerm);
+  // Publish the child only after the worker can accept a stop/pause signal.
+  job.childPid = child.pid; saveJob(root, job, clock);
+  child.stdin.end(prompt(job, job.attempts > 1));
   const onData = chunk => {
     buffer = (buffer + chunk.toString('utf8')).slice(-65536);
     let index;
