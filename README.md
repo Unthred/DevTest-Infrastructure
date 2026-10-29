@@ -28,3 +28,6 @@ Before each substantive report, preserve progress in the canonical handover once
 
 ## First useful outcome
 Build and test a real Blazor fixture, render browser screenshots at phone and desktop widths, detect a deliberately broken responsive page, securely capture an authenticated HA view when access is approved, and cleanly stop containers with reproducible evidence saved on Tower.
+
+## Extensible launcher requirement
+The unattended supervisor (issue #15, priority P0) must launch any **user-configured agent provider**, not just Claude or Codex. Claude and Codex are initial adapters and can run concurrently on **separate issues/worktrees**. Add providers through a versioned adapter registry and capability flags without editing core supervisor logic. Auto-resume depends on provider support; expose unsupported features rather than guessing. Preserve role-first selection in the existing `ai-agent` workflow.
