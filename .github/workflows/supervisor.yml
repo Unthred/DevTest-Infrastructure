@@ -1,0 +1,15 @@
+name: Supervisor
+on:
+  pull_request:
+  push:
+    branches: [main, codex/issue-15-supervisor]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - run: node --test tests/supervisor.test.mjs
+      - run: node --check supervisor/cli.mjs
