@@ -33,7 +33,31 @@ export function jobFile(root, id) {
   return path.join(root, 'jobs', `${id}.json`);
 }
 export function readJob(root, id) { return JSON.parse(fs.readFileSync(jobFile(root, id), 'utf8')); }
-export function saveJob(root, job, clock = realClock) { job.updatedAt = clock.now(); atomicJson(jobFile(root, job.id), job); }
+export function saveJob(root, job, clock = realClock, force = false) {
+  const lockDir = path.join(root, 'job-locks', job.id);
+  fs.mkdirSync(path.dirname(lockDir), { recursive: true, mode: 0o700 });
+  let locked = false;
+  for (let attempt = 0; attempt < 200; attempt++) {
+    try { fs.mkdirSync(lockDir, { mode: 0o700 }); locked = true; break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  if (!locked) throw new SupervisorError('job state lock is held; inspect owner before recovery');
+  try {
+    fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }), { mode: 0o600 });
+    const file = jobFile(root, job.id);
+    if (!force && fs.existsSync(file)) {
+      const current = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if ((current.status === 'paused_manual' || terminal.has(current.status)) && current.status !== job.status) {
+        Object.assign(job, current);
+        return;
+      }
+    }
+    job.updatedAt = clock.now(); atomicJson(file, job);
+  } finally { fs.unlinkSync(path.join(lockDir, 'owner.json')); fs.rmdirSync(lockDir); }
+}
 export function event(root, job, kind, clock = realClock) {
   const file = path.join(root, 'events', `${job.id}.jsonl`);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -135,7 +159,8 @@ export function safeEnvironment(source = process.env) {
   return env;
 }
 export function transition(root, job, status, kind, clock = realClock) {
-  job.status = status; job.lastEvent = kind; saveJob(root, job, clock); event(root, job, kind, clock);
+  job.status = status; job.lastEvent = kind; saveJob(root, job, clock);
+  event(root, job, job.status === status ? kind : 'transition_ignored', clock);
 }
 export async function drive(root, job, registry = defaultRegistry, clock = realClock, runOnce, maxAttempts = 4) {
   const { config, adapter } = await provider(registry, job.provider);
@@ -186,6 +211,14 @@ export function recover(root, id, force = false) {
   const job = readJob(root, id);
   if (job.workerPid && processStart(job.workerPid) === job.workerStart) throw new SupervisorError('worker is still running; refusing takeover');
   if (job.childPid && processStart(job.childPid)) throw new SupervisorError('child PID still exists; refusing takeover');
+  const stateLock = path.join(root, 'job-locks', id);
+  if (fs.existsSync(stateLock)) {
+    const ownerFile = path.join(stateLock, 'owner.json');
+    if (!fs.existsSync(ownerFile)) throw new SupervisorError('state lock owner is unknown; inspect before recovery');
+    const owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+    if (processStart(owner.pid) === owner.start) throw new SupervisorError('state lock owner still active');
+    fs.unlinkSync(ownerFile); fs.rmdirSync(stateLock); event(root, job, 'stale_state_lock_recovered');
+  }
   const claim = path.join(root, 'workers', `${id}.json`);
   if (fs.existsSync(claim)) {
     const owner = JSON.parse(fs.readFileSync(claim, 'utf8'));
@@ -193,6 +226,6 @@ export function recover(root, id, force = false) {
     fs.unlinkSync(claim);
   }
   if (job.status === 'running' && !force) { transition(root, job, 'blocked', 'orphaned_worker'); throw new SupervisorError('orphaned worker requires explicit recovery'); }
-  job.workerPid = null; job.workerStart = null; job.childPid = null; job.status = 'queued'; saveJob(root, job);
+  job.workerPid = null; job.workerStart = null; job.childPid = null; job.status = 'queued'; saveJob(root, job, realClock, true);
   event(root, job, 'recovered'); return job;
 }

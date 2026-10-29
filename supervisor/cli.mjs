@@ -111,6 +111,7 @@ async function main() {
   const id = a._[0]; if (!id) throw new SupervisorError('job ID is required');
   const job = readJob(root, id);
   if (command === 'pause' || command === 'stop') {
+    if (['completed', 'failed', 'blocked', 'stopped'].includes(job.status)) throw new SupervisorError('terminal job cannot be paused or stopped');
     if (job.workerPid && processStart(job.workerPid) === job.workerStart) {
       if (job.childPid && processStart(job.childPid)) process.kill(job.workerPid, command === 'pause' ? 'SIGUSR1' : 'SIGTERM');
       else process.kill(job.workerPid, 'SIGTERM');

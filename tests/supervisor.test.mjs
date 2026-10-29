@@ -148,3 +148,30 @@ test('CLI pause and stop signal only their supervised child and preserve request
     assert.equal(readJob(f.root, id).workerPid, null);
   }
 });
+
+test('late worker writes cannot reverse manual pause or terminal completion', async t => {
+  const { saveJob, transition } = await import('../supervisor/core.mjs');
+  const f = fixture(t), job = await createJob(f.root, f.spec, defaultRegistry);
+  transition(f.root, job, 'running', 'started');
+  const stale = structuredClone(job);
+  transition(f.root, job, 'paused_manual', 'manual_pause');
+  stale.childPid = 99999; saveJob(f.root, stale);
+  assert.equal(readJob(f.root, job.id).status, 'paused_manual');
+  transition(f.root, stale, 'failed', 'crash');
+  assert.equal(readJob(f.root, job.id).status, 'paused_manual');
+  const recovered = recover(f.root, job.id, true);
+  transition(f.root, recovered, 'completed', 'completed');
+  transition(f.root, job, 'paused_manual', 'manual_pause');
+  assert.equal(readJob(f.root, job.id).status, 'completed');
+});
+
+test('explicit recovery audits a stale state lock and refuses an active owner', async t => {
+  const f = fixture(t), job = await createJob(f.root, f.spec, defaultRegistry);
+  const lock = path.join(f.root, 'job-locks', job.id);
+  fs.mkdirSync(lock, { recursive: true });
+  fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, start: 'not-the-current-process-start' }));
+  const recovered = recover(f.root, job.id, true);
+  assert.equal(recovered.status, 'queued'); assert.ok(!fs.existsSync(lock));
+  const events = fs.readFileSync(path.join(f.root, 'events', `${job.id}.jsonl`), 'utf8');
+  assert.ok(events.includes('stale_state_lock_recovered'));
+});
