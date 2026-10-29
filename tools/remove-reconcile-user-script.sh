@@ -6,7 +6,7 @@ plugin_root=${AI_SUPERVISOR_USER_SCRIPTS_ROOT:-/boot/config/plugins/user.scripts
 script_dir="$plugin_root/scripts/AI Supervisor Reconcile"
 schedule="$plugin_root/schedule.json"
 cron="$plugin_root/customSchedule.cron"
-[ "$(id -u)" = 0 ] || exit 2
+if [ -z "${AI_SUPERVISOR_RECONCILE_TEST:-}" ]; then [ "$(id -u)" = 0 ] || exit 2; fi
 [ -f "$schedule" ] && [ -f "$cron" ] && [ -f "$script_dir/script" ] || { printf 'reconcile installation missing\n' >&2; exit 2; }
 if [ -z "${AI_SUPERVISOR_RECONCILE_TEST:-}" ]; then
   backup_dir="/mnt/cache/ai-supervisor/backups/user-scripts-remove-$(date -u +%Y%m%dT%H%M%SZ)"
