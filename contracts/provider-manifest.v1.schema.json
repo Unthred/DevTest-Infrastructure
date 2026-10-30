@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Unthred/DevTest-Infrastructure/contracts/provider-manifest.v1.schema.json",
+  "title": "Agent provider manifest (contract v1, agent-proposal)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "display_name", "adapter_version", "launch", "capabilities", "billing"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "display_name": { "type": "string", "minLength": 1 },
+    "adapter_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "launch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "args"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env_allowlist": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" } }
+      }
+    },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["args"],
+      "properties": { "args": { "type": "array", "items": { "type": "string" } } }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["launch", "resume", "session_status", "usage_limit_detection", "reset_time_parsing", "checkpoint", "non_interactive"],
+      "properties": {
+        "launch": { "$ref": "#/$defs/support" },
+        "resume": { "$ref": "#/$defs/support" },
+        "session_status": { "$ref": "#/$defs/support" },
+        "usage_limit_detection": { "$ref": "#/$defs/support" },
+        "reset_time_parsing": { "$ref": "#/$defs/support" },
+        "checkpoint": { "$ref": "#/$defs/support" },
+        "non_interactive": { "$ref": "#/$defs/support" },
+        "structured_output": { "$ref": "#/$defs/support" }
+      }
+    },
+    "billing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "fallback_to_other_billing"],
+      "properties": {
+        "model": { "enum": ["subscription", "api", "unknown"] },
+        "fallback_to_other_billing": { "const": false }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": { "enum": ["usage_limit", "transient_rate_limit", "context_limit", "auth_error", "approval_required", "network_error", "crash"] }
+    }
+  },
+  "$defs": {
+    "support": { "enum": ["supported", "unsupported", "unverified"] }
+  }
+}

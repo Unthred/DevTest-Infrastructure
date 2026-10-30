@@ -1,0 +1,34 @@
+{
+  "contract": "dev-test-cli",
+  "contract_version": 1,
+  "status": "agent-proposal",
+  "binary": "dev-test",
+  "global_options": ["--json", "--run-dir", "--timeout", "--no-color"],
+  "commands": [
+    { "name": "version", "args": [], "track": "core" },
+    { "name": "help", "args": ["[command]"], "track": "core" },
+    { "name": "doctor", "args": [], "track": "core", "notes": "Read-only. Reports Docker, images, cache, OpenBao reachability and policy state." },
+    { "name": "dotnet build", "args": ["--sdk <8|9|10>", "--project <path>"], "track": "dotnet" },
+    { "name": "dotnet test", "args": ["--sdk <8|9|10>", "--project <path>", "[--coverage]"], "track": "dotnet" },
+    { "name": "web screenshot", "args": ["--url <url>", "--profile <name>"], "track": "browser" },
+    { "name": "web responsive", "args": ["--url <url>", "--profiles <list>", "[--assert <rule>...]"], "track": "browser" },
+    { "name": "report", "args": ["<run-id>"], "track": "core" },
+    { "name": "cleanup", "args": ["[--run-id <id>]", "[--older-than <duration>]", "[--dry-run]"], "track": "core" }
+  ],
+  "exit_codes": [
+    { "code": 0, "name": "ok", "meaning": "Command completed and every check passed." },
+    { "code": 1, "name": "subject_failed", "meaning": "The system under test failed: failing tests, failing assertions, a detected responsive defect. Infrastructure worked." },
+    { "code": 2, "name": "usage", "meaning": "Invalid command, option or argument. Nothing was started." },
+    { "code": 3, "name": "environment", "meaning": "A precondition is missing: Docker unavailable, pinned image absent, cache or run directory unwritable, OpenBao unreachable. Nothing ran." },
+    { "code": 4, "name": "policy_refused", "meaning": "The request violates a binding decision and was refused before any container started (disallowed mount, Docker socket, privileged, secret in arguments, unapproved target, mutating action)." },
+    { "code": 5, "name": "timeout", "meaning": "The run exceeded its time limit and its container was stopped and removed." },
+    { "code": 6, "name": "internal", "meaning": "dev-test or its runner failed unexpectedly. The result is not evidence about the subject." },
+    { "code": 7, "name": "cleanup_incomplete", "meaning": "The run finished but a container, volume or workspace could not be removed. Reported, never ignored." },
+    { "code": 130, "name": "interrupted", "meaning": "Interrupted by signal. Containers were stopped and removed." }
+  ],
+  "result_schema": {
+    "required": ["schema_version", "run_id", "command", "status", "exit_code", "started_at", "ended_at", "workspace", "artifacts", "cleanup"],
+    "status_values": ["passed", "failed", "error", "refused", "timeout", "interrupted"],
+    "artifact_kinds": ["log", "trx", "coverage", "screenshot", "report", "metadata"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "future-agent",
+  "display_name": "Any future CLI agent (launch and status only)",
+  "adapter_version": "0.1.0",
+  "launch": { "command": "future-agent", "args": [] },
+  "capabilities": {
+    "launch": "supported", "resume": "unsupported", "session_status": "supported",
+    "usage_limit_detection": "unsupported", "reset_time_parsing": "unsupported",
+    "checkpoint": "supported", "non_interactive": "unsupported"
+  },
+  "billing": { "model": "unknown", "fallback_to_other_billing": false }
+}
