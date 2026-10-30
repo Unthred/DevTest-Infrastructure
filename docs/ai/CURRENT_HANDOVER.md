@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with current main for PR #28. Each agent edits this file only on its own branch.
+Last updated: 2026-10-31 by Claude on `claude/issue-7-07-openbao-credentials`, rebased onto current main. Each agent edits this file only on its own branch.
 
 ## Completion states
 
@@ -21,7 +21,8 @@ Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with c
 
 | #6 Responsive profiles and visual evidence | yes; branch `claude/issue-6-responsive`, draft PR stacked on #27 | no; CI and Codex review pending | no | real Docker on Tower: broken fixture fails with every seeded defect, corrected fixture passes at 8 widths, in Chromium/Firefox/WebKit; no visual acceptance claimed |
 | #3 .NET SDK toolchain | implementation on PR #28 branch `codex/issue-3-dotnet-build`; PR ready for review | validator and 306/306 positive/negative tests passed; prior Tower SDK 8/9/10 cache-reuse smoke passed; fresh exact-head CI and opposite-agent review pending | no standalone `dev-test` installation | prior isolated restore/cache/build smoke passed; no production project changed |
-| #4, #7–#14 other issues | not started | no | no | no |
+| #7 OpenBao credentials | yes; branch `claude/issue-7-07-openbao-credentials` (broker, session reduction, mock backend, runner `secrets`, D-021 proposal, docs/secrets.md) | no; CI and Codex review pending | no | Tower: `tests/broker-smoke.mjs` real Docker with the mock backend and the live unauthenticated OpenBao health probe (2.6.1, unsealed). Authenticated retrieval from real OpenBao NOT verified: no scoped read-only identity exists |
+| #4, #8–#14 other issues | not started | no | no | no |
 | #64 Model per job type | yes; branch `claude/issue-64-choose-model-per`, see PR; `docs/model-routing.md` | no; CI and Codex review pending | no (installed supervisor not upgraded) | no; unit/fixture tests only (311/311 locally). Real `claude --model/--effort` and `codex -c model_reasoning_effort` flags checked against `--help` only; no live job run with them ; fix round 2 (Codex CHANGES at c21e147): the Codex manifest no longer accepts a `gpt-` pattern; only models listed in its `aliases` (from the local Codex models cache) are forwarded, so `gpt-not-a-real-model` is dropped with a warning. The list must be updated when Codex adds models |
 
 ## Ownership
@@ -107,6 +108,12 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Source: `listMergedPulls` + delivered-work skip in `supervisor/team.mjs`; `team.local.json` override loader (state root, restricted keys); `team.json` no longer lists #2 and #23; `tools/upgrade-supervisor.sh` refuses an override in the payload and verifies the copy with `diff -r`; `docs/team-loop.md` documents the override and upgrade procedure.
 - Tests: validator OK, 119/119 (new: delivered-work positive/negative, shipped config, override apply/refuse/survives-upgrade, script guards). Live read-only `team tick --dry-run` with a temp state root planned one review and no #2/#23 job.
 - Review and CI: Codex review pending. Installed: no. Deploy only after PASS and dispatcher merge, then create `/mnt/cache/ai-supervisor/team.local.json` (`{"enabled": true}`) and follow the procedure in docs/team-loop.md.
+
+## #7 OpenBao credentials (Claude, branch `claude/issue-7-07-openbao-credentials`)
+- Source: `broker/{openbao,mock,session,broker}.mjs`, `broker/policy.example.json`, runner `secrets` + `verifySecrets`, [docs/secrets.md](../secrets.md), D-021 (agent-proposal, answers OQ-1).
+- Tests: validator OK; full suite 154/154 including the 12 tests in `tests/broker.test.mjs` (positive and negative); Tower `node tests/broker-smoke.mjs`: BROKER SMOKE OK (secret readable, read-only, absent from env/argv, deliberate leak into /out caught, directories/mounts/containers at baseline).
+- Not done / homeowner actions: a read-only OpenBao policy+token file for `devtest/*`; a dedicated Home Assistant test identity (production login is refused by policy until a recorded decision). #8 must call `withSecrets` and `checkHealth`. Not deployed.
+- Review: Codex review pending; opposite agent must merge.
 
 ## #5 Playwright browser runtime (Claude, branch `claude/issue-5-playwright`)
 - Homeowner exception 2026-10-30: #5 was started before #2 was formally merged, stacked on #19 ("do not merge before #19"). #19 merged as `a8b944b` before this PR was opened, so the branch is based on main and no stacking remains.

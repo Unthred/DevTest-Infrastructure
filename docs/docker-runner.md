@@ -19,7 +19,7 @@ Run `node tools/validate-project.mjs` and `node --test 'tests/**/*.test.mjs'`. T
 
 ## Limits
 
-The runner has no OpenBao access because this foundation does not need credentials. Issue #7 designs scoped secret delivery. Issue #8 wires the single CLI and result contract. A host reboot, production application mutation, or new image pull is outside this smoke.
+The runner has no OpenBao access. Issue #7 adds a separate host-side broker ([secrets.md](secrets.md)); the runner only accepts `secrets: [names]` and bind-mounts the prepared, verified files read-only at `/secrets/<name>`. Issue #8 wires the single CLI and result contract. A host reboot, production application mutation, or new image pull is outside this smoke.
 
 ## Review corrections (Claude, PR #19 review)
 - **Disk budget (`diskMb`, `cacheMb`).** The trusted host creates fixed-size, sparse, no-COW ext4 loop images under its storage root. `/work` and `/out` share the `diskMb` image, so an over-limit aggregate write fails with `ENOSPC` inside the container. The cache has a separate `cacheMb` image and is writable only in the explicit `restore` phase. If image creation or mounting fails, the runner refuses to start the container. The per-file `fsize` ulimit remains a secondary check; no directory polling is needed. No pool-wide btrfs quota is enabled. Loop images use cache-pool disk; they do not reserve RAM like tmpfs. The small `/tmp` tmpfs is 64 MiB per container, plus configured shared memory.
