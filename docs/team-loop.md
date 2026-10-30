@@ -33,5 +33,5 @@ Interactive launcher (`/root/bin/ai-agent`): Codex `--dangerously-bypass-approva
 
 ## Evidence (2026-10-30, Tower)
 - Supervised Codex with `access: full`: `codex exec --dangerously-bypass-approvals-and-sandbox` ran `node --test "tests/**/*.test.mjs"` itself: exit 0, 35/35, session policy `danger-full-access`, approval `never`. This is the check that failed before with `bwrap: pivot_root`.
-- Supervised Claude (`--permission-mode auto`, identical to interactive) ran a Bash command without a permission prompt. Its test run reported 0 tests where Codex found 35 in the same directory; the cause is **unexplained**, so Claude's side of D-020 shows that commands run, not that the test run is equivalent.
+- Supervised Claude (`--permission-mode auto`, identical to interactive) with `access: full`: its Bash tool ran `node --test "tests/**/*.test.mjs"` without a prompt: exit 0, 35/35, in the worktree. The first attempt found 0 tests because a supervised Claude shell **starts in `/root`** (the shell profile changes directory; `pwd` printed `/root`), not in the job's worktree. Every job prompt now says to begin each command with `cd <worktree>` (tested); the Codex job did not have this problem.
 - Not live-verified: the dispatcher against real jobs, merge, restart after a real allowance limit, and the cron integration.

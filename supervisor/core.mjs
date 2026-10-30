@@ -208,6 +208,9 @@ export function checkpoint(root, job, clock = realClock) {
 }
 export function prompt(job, resume = false) {
   let head = `Selected launcher role: ${job.role}. Supervised issue #${job.issue} in ${job.worktree}. Approved scope: ${job.scope}. Allowed actions: ${job.allowedActions.join(', ')}. Preserve project and role governance. Do not purchase credits, switch to paid API billing, deploy, merge, reboot or change credentials without separate authorization.`;
+  // Observed 2026-10-30: a supervised Claude Bash tool starts in /root (the shell profile changes directory), so a bare
+  // `node --test` found no tests. Say so explicitly instead of assuming the process cwd carries over.
+  head += ` Your shell may start in another directory: begin every command with cd ${JSON.stringify(job.worktree)}.`;
   if (job.access === 'full') head += ' Launch mode: full access (decision D-020, selected by the homeowner), the same as the interactive agents. Project rules still apply: no reboot of Tower, no production Home Assistant change, no secret disclosure, no purchases, no merge of your own work.';
   if (job.handover) head += ` Read the handover at ${job.handover} and update it only when the approved actions permit edits.`;
   if (resume) head += ` Resume the SAME issue and worktree. Read issue, Git state and handover before changing anything. Last checkpoint HEAD: ${job.checkpoint?.head || 'unknown'}. Avoid duplicate actions.`;

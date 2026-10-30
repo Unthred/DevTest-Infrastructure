@@ -372,6 +372,12 @@ test('autoRestart is refused only without launch and non_interactive support; le
   await assert.rejects(createJob(d.root, { ...d.spec, provider: 'codex', autoRestart: false, autoResume: true }, real), /auto-resume requires verified/);
 });
 
+test('every job prompt tells the agent to cd into its worktree (observed: supervised Claude shells start in /root)', async t => {
+  const { prompt } = await import('../supervisor/core.mjs');
+  const w = jobWorld(t);
+  assert.ok(prompt({ ...validateSpec(w.spec), allowedActions: ['read'] }).includes(`begin every command with cd ${JSON.stringify(w.wt)}`));
+});
+
 test('D-020 access: explicit full mode only, only for allowed roles, argument sets come from the manifest', async t => {
   const w = jobWorld(t);
   assert.equal(validateSpec({ ...w.spec }).access, 'standard');                                 // never a silent default
