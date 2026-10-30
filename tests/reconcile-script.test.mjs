@@ -114,6 +114,11 @@ test('issue #35 reconcile exits nonzero when the team tick fails, so the generat
   assert.match(r.stdout, /"team":\{"error"/); assert.equal(r.status, 1);
 });
 
+test('issue #35 reconcile exits nonzero when the tick skips an item, so a failed dispatch is not logged as rc=0', t => {
+  const src = fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8');
+  assert.match(src, /Array\.isArray\(result\.team\?\.skipped\) && result\.team\.skipped\.length\) process\.exitCode = 1/);
+});
+
 test('issue #35 preflight passes the configured product repository, not the caller cwd, to the provider preflight', t => {
   const src = fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8');
   const block = src.slice(src.indexOf("command === 'preflight'"), src.indexOf("command === 'reconcile'"));

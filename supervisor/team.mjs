@@ -266,7 +266,10 @@ export class Team {
           const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — independent review by \`${j.agent}\` of exact head \`${j.head}\` (recorded by the dispatcher from job \`${id}\`; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- ${f}`).join('\n') || '_no findings_'}\n\nCommands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
           // The verdict becomes merge-eligible only after its public record is posted; a failed comment records nothing,
           // so the next tick retries the whole step and nothing can merge on an unposted PASS.
-          await this.gh.comment(j.pr, body);
+          // Not retried blindly: if an earlier attempt was accepted but its response was lost, this job/head marker is already
+          // on GitHub, so it is not posted twice.
+          const marker = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} `;
+          if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, body);
           this.s.verdicts[verdictKey(j.pr, j.head)] = { verdict: r.verdict.verdict, reviewer: j.agent, job: id, findings: r.verdict.findings, commandsRun: r.verdict.commandsRun, at: this.clock.now() };
           j.ingested = true; this.save();
           report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });

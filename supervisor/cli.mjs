@@ -166,7 +166,11 @@ async function main() {
     if (command === 'reconcile') {
       const result = reconcileOnce(root, registry);
       // The five-minute reconcile cron also runs the token-free team tick, when the team loop is enabled.
-      try { result.team = await teamTick(root, registry, false); } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
+      try {
+        result.team = await teamTick(root, registry, false);
+        // A skipped item (lease conflict, gh error) keeps the other items running but still makes the scheduled run fail visibly.
+        if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
+      } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
       console.log(JSON.stringify(result)); return;
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.

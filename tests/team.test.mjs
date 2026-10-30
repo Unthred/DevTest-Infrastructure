@@ -550,6 +550,24 @@ test('issue #30 upgrade script never touches the override and verifies the paylo
   assert.ok(!/(rm|mv|cp)[^\n]*team\.local\.json/.test(script));
 });
 
+test('issue #35 a lost comment response is not re-posted: the marker already on GitHub is detected, and gh never retries a comment', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [], commandsRun: ['x'] });
+  w.jobs.states[id].status = 'completed';
+  // GitHub accepts the comment, but the response is lost: the call throws after the comment exists
+  w.gh.hasComment = async (n, text) => w.calls.comments.some(c => c[0] === n && c[1].includes(text));
+  let lose = true; const post = w.gh.comment; w.gh.comment = async (n, b) => { await post(n, b); if (lose) { lose = false; throw new Error('response lost'); } };
+  await w.team.tick(); await w.team.tick();
+  assert.equal(w.calls.comments.filter(c => /devtest-verdict v1/.test(c[1])).length, 1);
+  assert.equal(w.team.s.jobs[id].ingested, true);
+  // transport: the comment command is sent once even for a transient error; reads still retry
+  let n = 0; const run = () => { n++; return { status: 1, stdout: '', stderr: 'error connecting to api.github.com' }; };
+  const c = githubClient(config(), ghRunner(run, { sleep() {} }));
+  await assert.rejects(c.comment(5, 'b')); assert.equal(n, 1);
+});
+
 // ---- issue #35: scheduled ticks must not fail silently or abort on one bad item
 test('issue #35 gh: a missing binary is named, transient transport errors are retried within bounds, others fail at once', () => {
   assert.throws(() => ghRunner(() => ({ status: null, error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) }))(['pr', 'list']), /required binary not found: gh/);
