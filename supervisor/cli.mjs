@@ -37,7 +37,8 @@ function reconcileOnce(root, registry) {
     const current = readJob(root, name.slice(0, -5));
     if (current.workerPid && processStart(current.workerPid) === current.workerStart) continue;
     const eligible = ['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].every(key => current.capabilities?.[key] === 'supported');
-    if (current.status === 'paused_limit' && current.autoResume && eligible && (current.nextAttemptAt || 0) <= Date.now()) {
+    const due = current.nextAttemptAt != null && current.nextAttemptAt <= Date.now();
+    if (['paused_limit', 'queued'].includes(current.status) && current.autoResume && eligible && due) {
       recover(root, current.id, false); startWorker(root, current.id, registry); resumed++;
     } else if (current.status === 'running') { transition(root, current, 'blocked', 'orphaned_worker'); blocked++; }
   }

@@ -1,11 +1,17 @@
 import { spawn } from 'node:child_process';
-import { checkpoint, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
+import { checkpoint, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
 export async function runProcess(root, job, config, adapter, clock, options = {}) {
   if (typeof adapter.preflight === 'function' && !adapter.preflight(job)) return { code: 1, event: 'auth_error' };
   const argv = adapter.command(config, job, job.attempts > 1);
   const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   let observed = null, resetAt = null, resetSource = 'none', verified = false, buffer = '';
+  const nonFatal = new Set(['transient_rate_limit', 'network_error']);
+  const observeEvent = result => {
+    if (!result.event || (observed && !nonFatal.has(observed) && nonFatal.has(result.event))) return;
+    observed = result.event; resetAt = result.resetAt || null;
+    resetSource = result.resetSource || 'none'; verified = result.verified === true;
+  };
   let stopping = false;
   const signalChild = signal => {
     if (!child.pid || stopping) return;
@@ -25,17 +31,21 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
       const line = buffer.slice(0, index).slice(0, 16384); buffer = buffer.slice(index + 1);
       const result = adapter.observe(line);
       if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
-      if (result.event) { observed = result.event; resetAt = result.resetAt || null; resetSource = result.resetSource || 'none'; verified = result.verified === true; }
+      observeEvent(result);
     }
   };
   child.stdout.on('data', onData); child.stderr.on('data', onData);
-  const interval = setInterval(() => { try { checkpoint(root, job, clock); } catch { signalChild('SIGINT'); } }, options.checkpointMs || 60000);
+  const interval = setInterval(() => { try { checkpoint(root, job, clock); } catch (error) {
+    const errorClass = String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48);
+    event(root, job, `checkpoint_exception:${errorClass}:message_redacted`, clock);
+    signalChild('SIGINT');
+  } }, options.checkpointMs || 60000);
   try {
     const result = await new Promise(resolve => {
       child.on('error', () => resolve({ code: 1, event: 'crash' }));
       child.on('close', code => resolve({ code: code ?? 1 }));
     });
-    if (buffer) { const last = adapter.observe(buffer.slice(0, 16384)); if (last.event) { observed = last.event; resetAt = last.resetAt || null; resetSource = last.resetSource || 'none'; verified = last.verified === true; } }
+    if (buffer) observeEvent(adapter.observe(buffer.slice(0, 16384)));
     const current = readJob(root, job.id);
     if (current.status === 'paused_manual' || current.status === 'stopped') job.status = current.status;
     job.childPid = null; saveJob(root, job, clock);

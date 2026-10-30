@@ -217,12 +217,18 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
     job.attempts++; job.currentAttemptId = crypto.randomUUID(); saveJob(root, job, clock);
     let result;
     try { result = await runOnce(config, adapter, job, clock); }
-    catch { result = { code: 1, event: 'crash' }; }
+    catch (error) {
+      const errorClass = String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48);
+      event(root, job, `run_exception:${errorClass}:message_redacted`, clock);
+      result = { code: 1, event: 'crash' };
+    }
     const external = readJob(root, job.id);
     if (external.status === 'paused_manual' || external.status === 'stopped') Object.assign(job, external);
     checkpoint(root, job, clock);
     if (job.status === 'paused_manual' || job.status === 'stopped') return job;
-    if (result.code === 0 && !result.event) { transition(root, job, 'completed', 'completed', clock); return job; }
+    if (result.code === 0 && (!result.event || ['transient_rate_limit', 'network_error'].includes(result.event))) {
+      transition(root, job, 'completed', 'completed', clock); return job;
+    }
     if (result.event === 'usage_limit' && config.manifest.capabilities.usage_limit_detection === 'supported' && job.autoResume) {
       if (job.attempts >= maxAttempts) { transition(root, job, 'blocked', 'retry_exhausted', clock); return job; }
       const now = clock.now();

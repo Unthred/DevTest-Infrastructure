@@ -1,9 +1,10 @@
 import * as base from './base.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { safeEnvironment } from '../core.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight() {
-  const result = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8', timeout: 10000, env: base.safeEnvironment?.() });
+  const result = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8', timeout: 10000, env: safeEnvironment() });
   try {
     const status = JSON.parse(result.stdout);
     return result.status === 0 && status.loggedIn === true && status.authMethod === 'claude.ai' && !!status.subscriptionType;
@@ -22,9 +23,11 @@ export function observe(line) {
   try { obj = JSON.parse(line); } catch { obj = null; }
   const errorObject = obj && (obj.type === 'error' || obj.is_error === true || obj.type === 'result' && obj.is_error === true);
   const sessionId = typeof obj?.session_id === 'string' ? obj.session_id : null;
-  const text = obj ? (errorObject ? String(obj.error?.message || obj.error || obj.message || '') : '') : line;
+  const text = obj ? (errorObject ? String(obj.error?.message || obj.error || obj.message || obj.result || '') : '') : line;
+  if (errorObject && obj.api_error_status === 401) return { event: 'auth_error', sessionId };
   if (/budget limit|spend limit|insufficient credits/i.test(text)) return { event: 'approval_required', sessionId };
   if (/usage limit|weekly limit|session limit|out of extra usage/i.test(text) && !/api key|billing/i.test(text))
     return { event: 'usage_limit', resetAt: base.resetTime(text), resetSource: 'provider_reported', verified: false, sessionId };
+  if (errorObject && obj.api_error_status === 429) return { event: 'transient_rate_limit', sessionId };
   return { ...base.observe(text), sessionId };
 }

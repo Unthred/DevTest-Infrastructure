@@ -55,6 +55,9 @@ test('adapter classification distinguishes limits, context, auth, transient, app
   assert.equal(claude.observe('Budget limit reached').event, 'approval_required');
   assert.equal(codex.observe('Reset your current usage limits').event, 'approval_required');
   assert.equal(claude.observe('Usage limit reached. Resets at 2026-10-30T05:00:00Z').resetAt, Date.parse('2026-10-30T05:00:00Z'));
+  assert.equal(claude.observe(JSON.stringify({ type: 'result', is_error: true, result: 'Usage limit reached', error: null, message: null, api_error_status: 429, terminal_reason: 'api_error' })).event, 'usage_limit');
+  assert.equal(claude.observe(JSON.stringify({ type: 'result', is_error: true, result: 'Temporary failure', error: null, message: null, api_error_status: 429, terminal_reason: 'api_error' })).event, 'transient_rate_limit');
+  assert.equal(claude.observe(JSON.stringify({ type: 'result', is_error: true, result: 'Temporary failure', error: null, message: null, api_error_status: 401, terminal_reason: 'api_error' })).event, 'auth_error');
 });
 
 test('usage-limit reset sleeps without model calls and resumes same issue/worktree', async t => {
@@ -114,6 +117,14 @@ test('safe job records and event logs do not contain provider output or API cred
   assert.ok(!combined.includes(output));
 });
 
+test('run exception records a redacted class without provider output', async t => {
+  const f = fixture(t), job = await createJob(f.root, { ...f.spec, autoResume: false }, f.registry);
+  await drive(f.root, job, f.registry, { now: () => Date.now() }, async () => { throw new TypeError('secret-provider-output'); });
+  const events = fs.readFileSync(path.join(f.root, 'events', `${job.id}.jsonl`), 'utf8');
+  assert.match(events, /run_exception:TypeError:message_redacted/);
+  assert.ok(!events.includes('secret-provider-output'));
+});
+
 test('real subprocess fixture classifies failure without raw log, then completes', async t => {
   const { runProcess } = await import('../supervisor/process.mjs');
   const f = fixture(t), job = await createJob(f.root, f.spec, f.registry);
@@ -126,6 +137,32 @@ test('real subprocess fixture classifies failure without raw log, then completes
   const files = fs.readdirSync(path.join(f.root, 'jobs'));
   assert.equal(files.length, 1);
   assert.ok(!fs.readFileSync(path.join(f.root, 'jobs', files[0]), 'utf8').includes('Usage limit reached'));
+});
+
+test('successful subprocess with a recovered transient rate limit completes once', async t => {
+  const { runProcess } = await import('../supervisor/process.mjs');
+  const f = fixture(t), job = await createJob(f.root, f.spec, f.registry);
+  const marker = path.join(path.dirname(f.repo), 'calls');
+  const adapter = { command: () => [process.execPath, new URL('./fake-agent.mjs', import.meta.url).pathname, 'recoverable-rate', marker], observe: codex.observe, preflight: () => true };
+  const result = await drive(f.root, job, f.registry, { now: () => Date.now(), sleep: async () => { throw new Error('unexpected retry'); } },
+    (_config, _adapter, active, clock) => runProcess(f.root, active, { manifest: { launch: { env_allowlist: ['HOME', 'PATH', 'LANG'] } } }, adapter, clock));
+  assert.equal(result.status, 'completed'); assert.equal(result.attempts, 1);
+  assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'called');
+});
+
+test('reconcile restarts a dead worker after queued crash backoff', async t => {
+  const f = fixture(t), job = await createJob(f.root, { ...f.spec, provider: 'fake' },
+    writeRegistry(path.dirname(f.repo), 'fake', 'base', [process.execPath, new URL('./fake-agent.mjs', import.meta.url).pathname, 'done', path.join(path.dirname(f.repo), 'calls')]));
+  const registry = path.join(path.dirname(f.repo), 'fake-registry.json');
+  job.status = 'queued'; job.nextAttemptAt = Date.now() - 1; job.workerPid = 99999999; job.workerStart = 'dead';
+  fs.writeFileSync(path.join(f.root, 'jobs', `${job.id}.json`), JSON.stringify(job));
+  const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+  const output = execFileSync(process.execPath, [cli, 'reconcile', '--state-root', f.root, '--registry', registry], { encoding: 'utf8' });
+  assert.equal(JSON.parse(output).resumed, 1);
+  const marker = path.join(path.dirname(f.repo), 'calls');
+  for (let i = 0; i < 100 && readJob(f.root, job.id).status !== 'completed'; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(readJob(f.root, job.id).status, 'completed');
+  assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'called');
 });
 
 test('new provider registers without core changes and reports unsupported auto-resume capability', async t => {

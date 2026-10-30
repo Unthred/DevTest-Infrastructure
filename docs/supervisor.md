@@ -35,6 +35,8 @@ Create a private JSON file outside Git:
 
 The `allowed_actions` values are a closed list: `read`, `edit`, `test`, `push_feature_branch`, `create_pr`, `update_issue`, `update_handover`. Run `ai-agent --supervisor dry-run --spec FILE`, then `ai-agent --supervisor start --spec FILE`. Use `status [ID]`, `logs ID`, `pause ID`, `stop ID`, `resume ID`, `auto-resume ID --no-auto-resume`, `reconcile` and `release ID`. `start --foreground` is for supervised testing. `release` only accepts terminal jobs. Never put credentials in the spec. The spec is operator supplied; its scope remains subject to project and role policy.
 
+`allowed_actions` constrains the supervisor's prompt and spec validation; it does not technically sandbox provider tool calls. Claude runs with its configured `--permission-mode auto` and Codex uses its configured profile. The provider's own approval, sandbox and execution controls remain authoritative. Review the selected role and profile before starting unattended work.
+
 ## Validation and limits
 
 Run `node --test tests/supervisor.test.mjs` and `node tests/real-smoke.mjs WORKTREE`. The latter performs one read-only prompt per installed subscription CLI and summarizes results without exposing provider output. Fake-clock tests cover verified and unverified resets, long waits, transient rate limit, auth, context, approval, network, crash, duplicate job, stale-worker and handover cases. Manifest negatives cover unknown fields, missing capabilities and billing fallback.
