@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { bridge, clip, isAllowed, redactUrl, PROFILES, STANDARD_PROFILES, EXIT } from './capture.mjs';
+import { bridge, clip, isAllowed, isAllowedSocket, redactUrl, PROFILES, STANDARD_PROFILES, EXIT } from './capture.mjs';
 import { layoutCheck } from './layout-check.mjs';
 import { parsePngSize, summarise, renderReport } from './responsive-lib.mjs';
 
@@ -51,6 +51,12 @@ export async function audit(o) {
           const url = route.request().url();
           if (isAllowed(url, port)) return route.continue();
           blocked.push(redactUrl(url)); return route.abort('blockedbyclient');
+        });
+        // context.route() does not see WebSocket handshakes (same rule as capture.mjs): only the bridged ws:// origin connects.
+        await context.routeWebSocket(/.*/, (ws) => {
+          const url = ws.url();
+          if (isAllowedSocket(url, port)) return ws.connectToServer();
+          blocked.push(redactUrl(url)); return ws.close({ code: 1008, reason: 'blocked' });
         });
         const page = await context.newPage();
         page.on('console', (m) => { if (m.type() === 'error') pageProblems++; });

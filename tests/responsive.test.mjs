@@ -60,3 +60,27 @@ test('the standard set is the issue\'s width ladder and arguments are validated'
     ['--target', 'f', '--browser', 'ie'], ['--target', 'f', '--name', '../x'], ['--target', 'f', '--timeout-ms', '1'], ['--target', 'f', '--x', '1'], ['--target', 'f', '--path']])
     assert.throws(() => parseResponsiveArguments(bad), Error, JSON.stringify(bad));
 });
+
+// ---- WebSocket handshakes are not seen by context.route(): the audit must refuse and record them like capture.mjs does
+test('responsive audit refuses an undeclared WebSocket, records it without its query string and exits blocked', async t => {
+  const { default: fsm } = await import('node:fs'), { default: osm } = await import('node:os'), { default: pathm } = await import('node:path'), { default: netm } = await import('node:net');
+  const { audit } = await import('../browser/responsive.mjs');
+  const dir = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'resp-ws-'));
+  const sockets = pathm.join(dir, 's'), out = pathm.join(dir, 'o'); fsm.mkdirSync(sockets); fsm.mkdirSync(out);
+  const server = netm.createServer(c => c.end()).listen(pathm.join(sockets, 'fixture.sock'));
+  await new Promise(r => server.once('listening', r));
+  t.after(() => { server.close(); fsm.rmSync(dir, { recursive: true, force: true }); });
+  const fake = pathm.join(dir, 'fake.mjs');
+  fsm.writeFileSync(fake, `let wsFn;
+globalThis.__ws = [];
+const page = { on() {}, async goto() { for (const u of ['ws://127.0.0.1:43210/undeclared?token=VALUE', 'wss://example.invalid/live']) await wsFn({ url: () => u, connectToServer: () => globalThis.__ws.push('connect ' + u), close: () => globalThis.__ws.push('close ' + u) }); return { status: () => 200 }; },
+  async evaluate() { return []; }, async screenshot() { return Buffer.from('PNGDATA'); } };
+const context = { route: async () => {}, routeWebSocket: async (_p, f) => { wsFn = f; }, newPage: async () => page, close: async () => {} };
+export const chromium = { launch: async () => ({ newContext: async () => context, close: async () => {} }) };
+`);
+  const o = parseResponsiveArguments(['--target', 'fixture', '--profiles', 'phone', '--out', out, '--socket-dir', sockets, '--playwright', fake]);
+  const r = await audit(o);
+  assert.equal(r.exit, 12);
+  assert.deepEqual(r.summary.blockedRequests, ['ws://127.0.0.1:43210/undeclared', 'wss://example.invalid/live']);
+  assert.ok(!JSON.stringify(r.summary).includes('VALUE'));
+});
