@@ -12,11 +12,11 @@ import { validateTeamConfig } from './team.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;     // the reconcile cron runs `*/5 * * * *` (tools/install-reconcile-user-script.sh)
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
-const KIND = { implement: 'implementing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI on' };
+const KIND = { implement: 'implementing', continue: 'continuing draft work for', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI on' };
 const hhmm = (ms, tz) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
 const dayOf = (ms, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(ms));
 const mins = ms => Math.round(ms / 60000);
-const ref = (type, n) => (['implement', 'issue'].includes(type) ? `issue #${n}` : `PR #${n}`);
+const ref = (type, n) => (['implement', 'continue', 'issue'].includes(type) ? `issue #${n}` : `PR #${n}`);
 
 export function readLeases(root) {
   const dir = path.join(root, 'leases'); const out = [];
@@ -59,9 +59,9 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
 
   // 1. agents
   const agents = view.agents.map(a => {
-    const j = a.job, what = j ? `${KIND[j.kind] || j.kind} ${j.kind === 'implement' ? `issue #${j.ref}` : `PR #${j.ref}`}` : null;
-    const text = a.state === 'running' ? `running: ${what}` : a.state === 'paused' ? `paused: ${what}${j.nextAttemptAt ? `, restarts about ${hhmm(j.nextAttemptAt, tz)}` : ''}` : a.state === 'blocked' ? `blocked: ${what}` : 'idle';
-    return { name: a.name, state: a.state, job: j ? { kind: j.kind, ref: j.ref } : null, text };
+    const j = a.job, what = j ? `${KIND[j.kind] || j.kind} ${['implement', 'continue'].includes(j.kind) ? `issue #${j.ref}` : `PR #${j.ref}`}` : null;
+    const text = a.state === 'running' ? `running: ${what}` : a.state === 'paused' ? `paused: ${what}${j.nextAttemptAt ? `, restarts about ${hhmm(j.nextAttemptAt, tz)}` : ''}` : a.state === 'blocked' ? `blocked: ${what}` : `idle${a.idleReason ? `: ${a.idleReason.text}` : ''}`;
+    return { name: a.name, state: a.state, idleReason: a.idleReason || null, job: j ? { kind: j.kind, ref: j.ref } : null, text };
   });
 
   // 2. what happens next

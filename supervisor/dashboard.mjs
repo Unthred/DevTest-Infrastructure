@@ -38,7 +38,7 @@ function cacheBackedTeam(config, root, cache, jobs, state) {
   const jobsApi = { listActive: async () => jobs.filter(j => ACTIVE.includes(j.status)).map(j => ({ id: j.id, provider: j.provider, status: j.status })) };
   const team = new Team({ config, root, gh, jobs: jobsApi, git: null });
   team.s = { ...team.s, ...state };      // the state the caller read, so the plan and the page agree
-  for (const k of ['verdicts', 'jobs', 'fixAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented']) team.s[k] ||= {};
+  for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented']) team.s[k] ||= {};
   return team;
 }
 
@@ -58,14 +58,14 @@ function reasons(team, cache, jobs, plan, states) {
     if (!author) continue;
     const other = Object.keys(c.agents).filter(n => n !== author);
     let reason;
-    if (pr.isDraft) reason = 'draft';
+    if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
     else if (checks === 'pending') reason = 'waiting on CI';
     else if (checks === 'red') reason = 'CI failing';
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? `PASS from ${v.reviewer}; merges on the next tick` : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
     else reason = `awaiting ${other.join('/')} review of ${sha7(pr.headRefOid)}`;
-    queues[author].push({ type: 'pr', ref: pr.number, title: pr.title, reason, next: planned.has(`${author}:fix:${pr.number}`), url: pr.url });
+    queues[author].push({ type: 'pr', ref: pr.number, title: pr.title, reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
     if (!pr.isDraft && checks === 'green' && !v) for (const reviewer of other) {
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
@@ -78,7 +78,7 @@ function reasons(team, cache, jobs, plan, states) {
     const deps = c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
     const open = deps.filter(d => byNo.get(d)?.state !== 'CLOSED');
     const hasPr = prs.some(p => agentOfBranch(c, p.headRefName) === agent && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName));
-    const running = activeJobs.some(j => j.kind === 'implement' && j.issue === n);
+    const running = activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n);
     let reason;
     if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
     else if (open.length) reason = `blocked by ${open.map(d => `#${d}`).join(', ')}`;
@@ -87,11 +87,53 @@ function reasons(team, cache, jobs, plan, states) {
     else if (S.implemented?.[n]) reason = 'started earlier; no PR yet';
     else if (planned.has(`${agent}:implement:${n}`)) reason = 'next: implement';
     else if (busy(agent)) reason = 'ready; waits behind the running job';
-    else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${ahead.type === 'implement' ? '#' : 'PR #'}${ahead.issue ?? ahead.pr}` : 'ready; waits for a free slot'; }
+    else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? '#' : 'PR #'}${ahead.issue ?? ahead.pr}` : 'ready; waits for a free slot'; }
     queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason, next: planned.has(`${agent}:implement:${n}`) });
   }
   for (const q of Object.values(queues)) q.sort((x, y) => (y.next - x.next) || (x.ref - y.ref));
   return queues;
+}
+
+// Why an idle agent is idle, in plain words (issue #50). Homeowner waits first, then what is in flight, then drafts, then blocked issues.
+// Returns { text, links } where links are { text, url } for the PRs and issues named; null when the agent is not idle or has a planned job.
+export function idleReason({ agent, config, team, cache, plan, state }) {
+  if (state !== 'idle') return null;
+  if (config.enabled === false) return { text: 'the team loop is switched off', links: [] };
+  const next = plan.find(a => a.agent === agent);
+  if (next) return { text: `about to start ${next.type === 'cifix' ? 'fix CI on' : next.type} ${['implement', 'continue'].includes(next.type) ? '#' : 'PR #'}${next.issue ?? next.pr} on the next tick`, links: [] };
+  const c = team.c, a = c.agents[agent], L = c.limits, S = team.s, prs = cache.pulls || [], issues = cache.issues || [];
+  const byNo = new Map(issues.map(i => [i.number, i]));
+  const url = (kind, n) => `https://github.com/${config.repository}/${kind}/${n}`;
+  const parts = [], links = [];
+  const part = (rank, text, kind, n) => { parts.push({ rank, text }); links.push({ text: `${kind === 'pull' ? 'PR' : 'issue'} #${n}`, url: url(kind, n) }); };
+  const mine = prs.filter(p => agentOfBranch(c, p.headRefName) === agent);
+  for (const p of mine) {
+    const v = S.verdicts?.[`${p.number}:${p.headRefOid}`], checks = checksState(p.statusCheckRollup);
+    if (p.isDraft) {
+      if ((S.continueAttempts?.[p.number] || 0) >= L.max_fix_attempts) part(0, `waiting for homeowner: continue limit reached on draft #${p.number}`, 'pull', p.number);
+      else part(2, `only work is draft #${p.number}`, 'pull', p.number);
+    } else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) part(0, `waiting for homeowner: fix limit reached on #${p.number}`, 'pull', p.number);
+    else if (p.mergeable === 'CONFLICTING') part(1, `waiting to rebase #${p.number}`, 'pull', p.number);
+    else if (checks === 'pending') part(1, `waiting on CI for #${p.number}`, 'pull', p.number);
+    else if (v?.verdict === 'PASS') part(1, `#${p.number} has a PASS and merges on the next tick`, 'pull', p.number);
+    else part(1, `waiting for review of #${p.number}`, 'pull', p.number);
+  }
+  const blockers = new Set();
+  let openIssues = 0;
+  for (const n of a.issues) {
+    const issue = byNo.get(n);
+    if (!issue || issue.state !== 'OPEN' || team.delivered?.has(n)) continue;
+    if (issue.labels.includes('needs-homeowner')) { part(0, `waiting for homeowner: #${n} needs the homeowner`, 'issue', n); continue; }
+    if (mine.some(p => new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName))) continue;
+    openIssues++;
+    const open = (c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => byNo.get(d)?.state !== 'CLOSED');
+    if (open.length) open.forEach(d => blockers.add(d));
+  }
+  if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => `#${d}`).join(', ')}` }); for (const d of blockers) links.push({ text: `issue #${d}`, url: url('issues', d) }); }
+  else if (openIssues) parts.push({ rank: 3, text: 'has an open issue but nothing started it yet (limits or a lease may be holding it)' });
+  if (!parts.length) return { text: 'no open issue or pull request is assigned to it', links: [] };
+  parts.sort((x, y) => x.rank - y.rank);
+  return { text: parts.slice(0, 3).map(x => x.text).join('; '), links: links.slice(0, 6) };
 }
 
 function attention({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled }) {
@@ -104,7 +146,7 @@ function attention({ config, cache, jobs, states, plan, snapshots, now, allowanc
   }
   for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner')) add(`homeowner-${i.number}`, `Issue #${i.number} needs the homeowner: ${i.title}`, { kind: 'issue', n: i.number });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0)))
-    add(`job-${j.id}`, `Job ${j.id.slice(0, 8)} (${j.provider} ${j.kind || 'job'} #${j.issue}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind: j.kind === 'implement' ? 'issue' : 'pull', n: j.issue });
+    add(`job-${j.id}`, `Job ${j.id.slice(0, 8)} (${j.provider} ${j.kind || 'job'} #${j.issue}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind: ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull', n: j.issue });
   for (const pr of cache?.pulls || []) if (!pr.isDraft && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on PR #${pr.number}: ${pr.title}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
   const recent = snapshots.filter(s => now - s.at <= 30 * 60000).sort((a, b) => a.at - b.at);
@@ -173,7 +215,7 @@ function graphs({ config, jobs, state, snapshots, now }) {
   for (const v of Object.values(state.verdicts || {})) if (verdicts[v.reviewer] && verdicts[v.reviewer][v.verdict] !== undefined) verdicts[v.reviewer][v.verdict]++;
   const merges = (state.mergeLog || []).map(m => ({ pr: m.pr, issue: m.issue, agent: m.agent, mergedAt: m.mergedAt, hours: m.startedAt && m.mergedAt >= m.startedAt ? (m.mergedAt - m.startedAt) / 3600000 : null }));
   const tokensPerPr = (state.mergeLog || []).map(m => {
-    const related = Object.entries(state.jobs || {}).filter(([, tj]) => (tj.kind === 'implement' && m.issue && tj.issue === m.issue) || (tj.kind === 'fix' && tj.pr === m.pr));
+    const related = Object.entries(state.jobs || {}).filter(([, tj]) => (['implement', 'continue'].includes(tj.kind) && m.issue && tj.issue === m.issue) || (tj.kind === 'fix' && tj.pr === m.pr));
     const used = related.map(([id]) => jobs.find(j => j.id === id)?.usage).filter(Boolean);
     return { pr: m.pr, agent: m.agent, tokens: used.length ? used.reduce((s, u) => s + u.inputTokens + u.outputTokens, 0) : null };
   });
@@ -184,7 +226,7 @@ function activity({ config, jobs, events, state, cache, snapshots, now }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: `${kind === 'pull' ? 'PR' : 'issue'} #${n}` } : null);
-  const jobLink = j => (j.kind === 'implement' ? link('issue', j.issue) : link('pull', j.issue));
+  const jobLink = j => (['implement', 'continue'].includes(j.kind) ? link('issue', j.issue) : link('pull', j.issue));
   const agentName = j => Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
   const names = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand' };
   for (const e of events) {
@@ -213,6 +255,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const agents = Object.entries(config.agents).map(([name, a]) => {
       const s = states[name], j = s.job;
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
+      base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state });
       if (j) base.job = { id: j.id.slice(0, 8), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });

@@ -74,9 +74,9 @@ export function renderPage(view, { refreshSeconds = 60 } = {}) {
   const header = `<p class="sub">Team loop ${view.teamEnabled ? 'enabled' : '<b>disabled</b>'} · last tick: ${tick ? `${esc(tick.status)} ${esc(ago(tick.at, now))}` : 'none recorded'} · GitHub data cached ${esc(ago(view.cacheFetchedAt, now))} · page built ${esc(utc(now))}, refreshes every ${refreshSeconds}s · read-only</p>`;
   const agents = view.agents.map(a => {
     const j = a.job;
-    let body = `<p class="muted">No current job.</p>`;
+    let body = `<p class="muted">No current job.</p>${a.idleReason ? `<p>Why idle: ${esc(a.idleReason.text)} ${a.idleReason.links.map(l => `<a href="${esc(l.url)}">${esc(l.text)}</a>`).join(' ')}</p>` : ''}`;
     if (j) {
-      body = `<table><tr><th>Job</th><td>${esc(j.kind)} ${j.kind === 'implement' ? refLink({ kind: 'issue', n: j.ref }) : refLink({ kind: 'pull', n: j.ref })} <span class="muted">${esc(j.id)}</span></td></tr>
+      body = `<table><tr><th>Job</th><td>${esc(j.kind)} ${['implement', 'continue'].includes(j.kind) ? refLink({ kind: 'issue', n: j.ref }) : refLink({ kind: 'pull', n: j.ref })} <span class="muted">${esc(j.id)}</span></td></tr>
 <tr><th>Branch</th><td>${esc(j.branch)}</td></tr><tr><th>Started</th><td>${esc(utc(j.startedAt))} · elapsed ${esc(dur(j.elapsedMs))}</td></tr>
 ${a.state === 'paused' ? `<tr><th>Paused by</th><td><b>${esc(j.lastEvent)}</b> (attempt ${j.attempts})</td></tr><tr><th>Reset</th><td>${j.resetAt ? esc(utc(j.resetAt)) : 'none reported'}</td></tr><tr><th>Next attempt</th><td>${j.nextAttemptAt ? `${esc(utc(j.nextAttemptAt))} (${esc(inFuture(j.nextAttemptAt, now))})` : 'by hand'}</td></tr>` : ''}
 ${a.state === 'blocked' ? `<tr><th>Stopped by</th><td><b>${esc(j.status)}</b>: ${esc(j.lastEvent)}</td></tr>` : ''}</table>`;

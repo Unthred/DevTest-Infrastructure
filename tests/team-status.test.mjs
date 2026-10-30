@@ -30,7 +30,7 @@ test('1. agents: running, paused with restart time, idle, with job kind and refe
   const s = await status({ jobs: [job(), job({ id: 'b'.repeat(32), provider: 'codex', kind: 'review', issue: 36, status: 'paused_limit', lastEvent: 'usage_limit', nextAttemptAt: NOW + 90 * MIN })] });
   assert.equal(s.agents.find(a => a.name === 'claude').text, 'running: implementing issue #30');
   assert.equal(s.agents.find(a => a.name === 'codex').text, 'paused: reviewing PR #36, restarts about 13:30');
-  assert.equal((await status()).agents[0].text, 'idle');
+  assert.match((await status()).agents[0].text, /^idle: about to start implement #30/);
 });
 
 test('2. next: the dispatcher plan is shown as agent → action', async () => {
@@ -157,4 +157,34 @@ test('install and upgrade scripts both provide a team-status wrapper that delega
     assert.match(s, /status_cmd=\/root\/bin\/team-status/); assert.match(s, /exec \/root\/bin\/ai-supervisor team status "\$@"/);
     assert.equal(spawnSync('bash', ['-n', new URL(`../tools/${f}`, import.meta.url).pathname]).status, 0);
   }
+});
+
+test('idle reasons (#50): each idle agent states why in plain words', async () => {
+  const idle = async (cache, state = {}, agent = 'codex') => (await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, merged: [], ...cache }, state })).agents.find(a => a.name === agent);
+  // fix limit reached -> waiting for homeowner, with a link
+  let a = await idle({ pulls: [pr(41, 'codex/issue-2-x', H(1))], issues: [issue(2), issue(3, 'CLOSED')] }, { verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'claude' } }, fixAttempts: { [`41:${H(0)}`]: 2 } });
+  assert.match(a.text, /waiting for homeowner: fix limit reached on #41/); assert.equal(a.idleReason.links[0].url, 'https://github.com/o/r/pull/41');
+  // only work is a draft whose issue is closed -> not continuable
+  a = await idle({ pulls: [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] });
+  assert.match(a.text, /only work is draft #28/);
+  // continue limit reached
+  a = await idle({ pulls: [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })], issues: [issue(2, 'CLOSED'), issue(3)] }, { continueAttempts: { 28: 2 } });
+  assert.match(a.text, /waiting for homeowner: continue limit reached on draft #28/);
+  // a continuable draft is planned, not reported as stuck
+  a = await idle({ pulls: [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })], issues: [issue(2, 'CLOSED'), issue(3)] });
+  assert.match(a.text, /about to start continue #3/);
+  // all issues blocked by #3
+  a = await idle({ pulls: [], issues: [issue(2, 'OPEN', 'Prerequisites: #3'), issue(3, 'OPEN', 'Prerequisites: #77'), issue(77)] });
+  assert.match(a.text, /all issues blocked by #3, #77/);
+  // waiting for review of #29
+  a = await idle({ pulls: [pr(29, 'codex/issue-2-x', H(3))], issues: [issue(2), issue(3, 'CLOSED')] });
+  assert.match(a.text, /waiting for review of #29/);
+  // needs-homeowner label; nothing assigned
+  a = await idle({ pulls: [], issues: [issue(2, 'OPEN', '', ['needs-homeowner']), issue(3, 'CLOSED')] });
+  assert.match(a.text, /waiting for homeowner: #2 needs the homeowner/);
+  a = await idle({ pulls: [], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] });
+  assert.match(a.text, /no open issue or pull request is assigned/);
+  // a running agent has no idle reason; the terminal rendering carries the reason
+  const s = await status({ jobs: [job()] }); assert.equal(s.agents.find(x => x.name === 'claude').idleReason, null);
+  assert.match(text(await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, merged: [], pulls: [], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] } })), /codex: idle: no open issue/);
 });
