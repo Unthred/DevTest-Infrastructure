@@ -39,7 +39,29 @@ export function buildCommand(options) {
   } else if (!within('/src', path.posix.normalize(project))) throw new DotnetCommandError('container project path must stay inside /src');
   const command = options.operation;
   if (!['build', 'test', 'restore'].includes(command)) throw new DotnetCommandError('operation must be build, test or restore');
+  if (options.noRestore === true) throw new DotnetCommandError('noRestore is unsupported; build and test perform an offline restore through the runner');
   const args = ['dotnet', command, project, '--verbosity', 'minimal'];
+  // The source mount is deliberately read-only. Keep every SDK-generated file on
+  // the bounded run volume, and keep each SDK line's package cache independent.
+  if (command === 'restore') args.push('--packages', `/cache/${sdk}`);
+  else args.push(`-p:RestorePackagesPath=/cache/${sdk}`);
+  if (command === 'build' || command === 'test') args.push('--source', '/work/empty-feed');
+  else if (options.packageSource !== undefined) {
+    let source = options.packageSource;
+    if (!SAFE_VALUE(source)) throw new DotnetCommandError('invalid package source');
+    if (options.projectRoot) {
+      const root = fs.realpathSync(options.projectRoot);
+      const resolved = path.resolve(source);
+      if (!within(root, resolved)) throw new DotnetCommandError('package source must be inside the mounted source');
+      const actual = fs.realpathSync(resolved);
+      if (!within(root, actual) || !fs.statSync(actual).isDirectory()) throw new DotnetCommandError('package source must be a directory inside the mounted source');
+      source = path.posix.join('/src', path.relative(root, actual).split(path.sep).join('/'));
+    }
+    if (!path.posix.isAbsolute(source) || !(source === '/src' || source.startsWith('/src/')))
+      throw new DotnetCommandError('package source must be inside /src');
+    args.push('--source', source);
+  }
+  args.push('--artifacts-path', '/work/artifacts');
   if (options.configuration !== undefined) {
     if (!['Debug', 'Release'].includes(options.configuration)) throw new DotnetCommandError('configuration must be Debug or Release');
     args.push('--configuration', options.configuration);
@@ -48,7 +70,5 @@ export function buildCommand(options) {
     if (!SAFE_VALUE(options.framework) || !/^net(?:coreapp|standard)?\d+(?:\.\d+)?$/.test(options.framework)) throw new DotnetCommandError('invalid target framework');
     args.push('--framework', options.framework);
   }
-  if (options.noRestore === true && command !== 'restore') args.push('--no-restore');
-  if (options.noRestore === true && command === 'restore') throw new DotnetCommandError('--no-restore cannot be used with restore');
   return { sdk, phase: command, command: args, workingDirectory: '/src' };
 }

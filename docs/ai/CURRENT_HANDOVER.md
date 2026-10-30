@@ -15,7 +15,7 @@ Last updated: 2026-10-30 by Codex on `codex/issue-3-dotnet-build`, based on merg
 | #2 Docker foundation | yes; PR #19 merged as `a8b944b` after PR #26 lifecycle fix | exact-head checks and Codex executable review passed | no standalone `dev-test` installation | Tower Docker and lifecycle smokes passed; CLI integration remains issue #8 |
 | #20 Allowance detection | yes; PR #21 merged as `67c8aabd78ee456e5b08c10db63ad0ec4a6cffd1` | Codex PASS at rebased head `7e4e6b4`; exact-head CI green | no | Codex interactive limit capture/reset parser covered; live supervised recovery unverified |
 | #23 Team loop | yes; PR #25 merged as `8f2e386` | Codex PASS at `09a1915`; exact-head CI green | no; Claude deploys after review | supervised full-access Codex job ran `node --test` at #25 head (115/115); live dispatcher tick/allowance recovery unverified |
-| #3 .NET SDK toolchain | draft PR #28, head `d327ba82e10075b1c5ab0ca06e4baf26140f3688` | validator OK; 119/119 tests; exact-head project-contract, test and GitGuardian checks green | no | no SDK container build yet; offline restore only |
+| #3 .NET SDK toolchain | implementation on PR #28 branch `codex/issue-3-dotnet-build` | validator OK; 123/123 tests; Tower SDK 8/9/10 builds and cache-reuse smoke passed; exact-head CI and opposite-agent review pending | no standalone `dev-test` installation | verified on Tower by isolated restore/cache/build smoke; no production project changed |
 | #4, #6–#14 other issues | not started | no | no | no |
 | #5 Browser runtime | yes; PR #27 head `1b3402b` | Codex PASS, 93/93 tests and exact-head CI green | no | niced Tower browser smoke passed after pinned cache preparation; TCP targets remain blocked on OQ-2 |
 
@@ -55,7 +55,7 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - #15 real subscription-limit wording, reset timestamp and post-limit resume are not captured. Production manifests mark those capabilities `unverified` and refuse `autoResume: true`. Simulated pause/resume is not a live auto-resume claim.
 - #2 source is merged; single `dev-test` CLI integration remains issue #8. Host-side runner smokes do not claim end-to-end CLI deployment.
 - Tower reboot persistence and host-restart recovery remain unverified; do not reboot Tower for this task.
-- #3 is a draft implementation: safe discovery/argv planning only. Pinned SDK container build/test and NuGet cache reuse remain. Networked restore is unavailable under the current runner policy.
+- #3 now wires command planning to the pinned SDK runner with per-SDK NuGet cache paths and has a real Tower build/cache-reuse smoke for all three SDK majors. Remote restore remains unavailable because every runner phase is network-disabled; test-project/TRX/coverage reporting belongs to #4.
 - #3 restore is currently offline only: the Docker runner disables networking, so package restore from an empty NuGet cache is not yet supported. D-016 networked restore needs its own reviewed phase policy.
 
 ## Review log
@@ -69,8 +69,14 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## Next actions
 1. Claude deploys PR #25 with `tools/upgrade-supervisor.sh`, verifies installed SHA, enables at most one job per agent and records the first live tick on #23.
-2. The supervisor dispatcher owns subsequent Codex work. Issue #3 remains open in draft PR #28: wire safe SDK plans to the runner, test the pinned SDK images and demonstrate NuGet cache reuse.
+2. PR #28 carries the #3 implementation; exact-head CI and independent Claude review are pending. Once CI is green, mark the PR ready so the dispatcher can assign review.
 3. Keep live provider-limit recovery unverified; do not reboot Tower.
+
+## #3 .NET SDK runner integration (PR #28)
+- Implemented: `dotnet/run.mjs` maps SDK 8/9/10 to locked image IDs and isolated `nuget-sdk-<major>` caches. Restore writes to `/cache/<major>`; build/test restore offline from an empty local feed with the cache read-only. `--artifacts-path /work/artifacts` keeps intermediates off read-only source. The runner clears the SDK image entrypoint, sets its writable home on `/work`, and uses a finite 3-TiB `fsize` ceiling for CoreCLR's sparse 2-TiB memfd; hard loop-image limits remain unchanged.
+- Local gates on the PR worktree: `node tools/validate-project.mjs` — exit 0; `node --test 'tests/**/*.test.mjs'` — 123/123, exit 0; `git diff --check` — exit 0.
+- Tower gate: `ionice -c 3 nice -n 19 node tests/dotnet-smoke.mjs` — exit 0. Each run used the pinned digest, subject exit 0 and complete cleanup. For SDK 8: restore/cache/build run IDs `c5893f62098a47ff`, `0a8f0577497a5324`, `092f7e0f3b03d202`; SDK 9: `f8f9b415a75309a1`, `bce3c09a5c249eda`, `79d88d0d2b282ed4`; SDK 10: `3acbb361c192e2a5`, `0caa059870a0cdce`, `00853f2fae5cace6`. The second restore for each SDK used an empty source and succeeded; each build reported `Build succeeded`.
+- Not deployed as a `dev-test` CLI; #8 owns that integration. Networked restore and actual test-project/TRX/coverage coverage remain outside this issue's current runner policy/scope.
 
 
 ## #2 mount lifecycle fix (PR #26, merged into #19 branch)

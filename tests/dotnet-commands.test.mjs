@@ -38,12 +38,28 @@ test('commands pin SDK selector and pass project paths as argv elements', t => {
   const root = project(t), csproj = path.join(root, 'App.csproj');
   fs.writeFileSync(csproj, '');
   assert.deepEqual(buildCommand({ sdk: '9', operation: 'build', projectRoot: root, configuration: 'Release', framework: 'net9.0' }), {
-    sdk: '9', phase: 'build', command: ['dotnet', 'build', '/src/App.csproj', '--verbosity', 'minimal', '--configuration', 'Release', '--framework', 'net9.0'], workingDirectory: '/src'
+    sdk: '9', phase: 'build', command: ['dotnet', 'build', '/src/App.csproj', '--verbosity', 'minimal', '-p:RestorePackagesPath=/cache/9', '--source', '/work/empty-feed', '--artifacts-path', '/work/artifacts', '--configuration', 'Release', '--framework', 'net9.0'], workingDirectory: '/src'
   });
-  assert.deepEqual(buildCommand({ sdk: 8, operation: 'test', project: '/src/A.csproj', noRestore: true }).command,
-    ['dotnet', 'test', '/src/A.csproj', '--verbosity', 'minimal', '--no-restore']);
+  assert.deepEqual(buildCommand({ sdk: 8, operation: 'test', project: '/src/A.csproj' }).command,
+    ['dotnet', 'test', '/src/A.csproj', '--verbosity', 'minimal', '-p:RestorePackagesPath=/cache/8', '--source', '/work/empty-feed', '--artifacts-path', '/work/artifacts']);
   assert.deepEqual(buildCommand({ sdk: 10, operation: 'restore', project: '/src/A.csproj' }).command,
-    ['dotnet', 'restore', '/src/A.csproj', '--verbosity', 'minimal']);
+    ['dotnet', 'restore', '/src/A.csproj', '--verbosity', 'minimal', '--packages', '/cache/10', '--artifacts-path', '/work/artifacts']);
+});
+
+test('all SDK versions use isolated writable restore caches and read-only build phases', t => {
+  const root = project(t), csproj = path.join(root, 'App.csproj');
+  fs.writeFileSync(csproj, '');
+  for (const sdk of ['8', '9', '10']) {
+    const restore = buildCommand({ sdk, operation: 'restore', project: csproj, projectRoot: root });
+    const build = buildCommand({ sdk, operation: 'build', project: csproj, projectRoot: root });
+    assert.ok(restore.command.includes(`/cache/${sdk}`));
+    assert.ok(build.command.includes('--source'));
+    assert.ok(build.command.includes('/work/artifacts'));
+    assert.ok(build.command.includes(`-p:RestorePackagesPath=/cache/${sdk}`));
+  }
+  const outside = project(t);
+  fs.symlinkSync(outside, path.join(root, 'outside-feed'));
+  assert.throws(() => buildCommand({ sdk: '8', operation: 'restore', project: csproj, projectRoot: root, packageSource: path.join(root, 'outside-feed') }), /inside the mounted source/);
 });
 
 test('unsafe or unsupported SDK/build options fail closed', t => {

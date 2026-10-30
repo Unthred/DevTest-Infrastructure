@@ -56,25 +56,36 @@ export function buildPlanForVerifiedPaths(spec, config, project, storage) {
   if (network !== 'none') throw new RunnerError('network access requires a later approved phase policy');
   const phase = spec.phase || 'build';
   if (!['restore', 'build', 'test'].includes(phase)) throw new RunnerError('invalid run phase');
+  const defaultCacheName = spec.image.startsWith('dotnet-') ? 'nuget' : 'playwright';
+  const cacheName = spec.cacheName || defaultCacheName;
+  if (!/^[a-z0-9-]{1,32}$/.test(cacheName)) throw new RunnerError('invalid cache name');
   const limits = config.limits || {};
   if (!(limits.cpus > 0 && limits.cpus <= 4) || !Number.isSafeInteger(limits.memoryMb) || limits.memoryMb < 128 || limits.memoryMb > 8192 ||
       !Number.isSafeInteger(limits.pids) || limits.pids < 16 || limits.pids > 512 || !Number.isSafeInteger(limits.shmMb) || limits.shmMb < 16 || limits.shmMb > 1024 ||
       !Number.isSafeInteger(limits.timeoutMs) || limits.timeoutMs < 1000 || limits.timeoutMs > 3600000 ||
       !Number.isSafeInteger(limits.diskMb) || limits.diskMb < 16 || limits.diskMb > 20480 || !Number.isSafeInteger(limits.cacheMb) || limits.cacheMb < 16 || limits.cacheMb > 20480) throw new RunnerError('resource limits are missing or outside the bounded policy');
+  // CoreCLR's W^X allocator ftruncates a sparse 2-TiB memfd. RLIMIT_FSIZE also
+  // applies to memfd, so SDK containers need a finite ceiling above that mapping;
+  // actual writable disk remains bounded by the fixed-size /work and /cache images.
+  const fileSizeBytes = spec.image.startsWith('dotnet-') ? 3 * 1024 ** 4 : limits.diskMb * 1048576;
   const workspace = path.join(storage, 'runs', spec.runId);
   const volume = path.join(workspace, 'volume');
   const work = path.join(volume, 'work'), out = path.join(volume, 'out');
-  const cache = path.join(storage, 'cache', spec.image.startsWith('dotnet-') ? 'nuget' : 'playwright');
+  const cache = path.join(storage, 'cache', cacheName);
   const workImage = path.join(workspace, 'volume.img');
   const cacheImage = `${cache}.img`;
   const name = `devtest-${spec.runId}`;
+  const dotnetHomeArgs = spec.image.startsWith('dotnet-')
+    ? ['--env', 'HOME=/work/home', '--env', 'DOTNET_CLI_HOME=/work/home', '--env', 'DOTNET_CLI_TELEMETRY_OPTOUT=1', '--env', 'DOTNET_NOLOGO=1']
+    : [];
   const args = ['run', '--init', '--pull=never', '--log-driver=none', '--name', name, '--label', `devtest.run-id=${spec.runId}`,
     '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--read-only', '--network=none',
-    '--cpus', String(limits.cpus), '--memory', `${limits.memoryMb}m`, '--memory-swap', `${limits.memoryMb}m`, '--ulimit', `fsize=${limits.diskMb * 1048576}:${limits.diskMb * 1048576}`, '--pids-limit', String(limits.pids), '--shm-size', `${limits.shmMb}m`,
-    '--user', `${config.uid}:${config.gid}`, '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m',
+    '--cpus', String(limits.cpus), '--memory', `${limits.memoryMb}m`, '--memory-swap', `${limits.memoryMb}m`, '--ulimit', `fsize=${fileSizeBytes}:${fileSizeBytes}`, '--pids-limit', String(limits.pids), '--shm-size', `${limits.shmMb}m`,
+    '--user', `${config.uid}:${config.gid}`, ...dotnetHomeArgs, '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m',
     '--mount', `type=bind,src=${project},dst=/src,readonly`,
     '--mount', `type=bind,src=${work},dst=/work`, '--mount', `type=bind,src=${out},dst=/out`,
-    '--mount', `type=bind,src=${cache},dst=/cache${phase === 'restore' ? '' : ',readonly'}`, '--workdir', '/work', image, ...spec.command];
+    '--mount', `type=bind,src=${cache},dst=/cache${phase === 'restore' ? '' : ',readonly'}`, '--workdir', '/work',
+    ...(spec.image.startsWith('dotnet-') ? ['--entrypoint='] : []), image, ...spec.command];
   return { runId: spec.runId, name, image, project, storage, workspace, volume, workImage, cacheImage, phase, work, out, cache, uid: config.uid, gid: config.gid, timeoutMs: limits.timeoutMs, diskBytes: limits.diskMb * 1048576, cacheBytes: limits.cacheMb * 1048576, logDir: path.join(workspace, 'logs'), args };
 }
 
@@ -218,7 +229,7 @@ export function ensureLoopVolumes(plan) {
       ensureLoopImage(plan.cacheImage, plan.cache, plan.cacheBytes);
     });
     ensureLoopImage(plan.workImage, plan.volume, plan.diskBytes);
-    for (const dir of [plan.work, plan.out]) {
+    for (const dir of [plan.work, plan.out, path.join(plan.work, 'empty-feed'), path.join(plan.work, 'home')]) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       fs.chownSync(dir, plan.uid, plan.gid);
       fs.chmodSync(dir, 0o700);
