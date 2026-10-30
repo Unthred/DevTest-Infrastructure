@@ -143,3 +143,7 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Run 41114613212 fails: commit `06160e3` carries an AI co-author trailer in its message. The validator is correct and unchanged; nothing in the tree can fix a commit message.
 - Only fix: reword `06160e3` (drop the trailer) and push the rewritten branch, which needs a force-push (`--force-with-lease`). The task forbids force-push, so this needs a homeowner or dispatcher decision. Alternative without rewriting: open a replacement PR from a branch with the commit reworded.
 - This commit only updates the handover; CI stays red until the rewrite.
+
+## PR #41 review fixes (2026-10-30)
+- Session output scanning now tracks values from retained origins' localStorage and sessionStorage as well as cookies. Scanning runs before cleanup, and cleanup plus lease revocation run even if scanning throws.
+- Regression tests cover both storage types leaking into output and a scan read error with a leased secret. `node tools/validate-project.mjs` passed; the full test suite passed (185/185). Implemented in this branch; exact-head CI and independent review are pending. No deployment or live OpenBao credential retrieval was performed.

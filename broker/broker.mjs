@@ -108,7 +108,11 @@ export async function materialize({ policy, names, backend, runId, root = DEFAUL
         let state = values.storage_state; if (typeof state === 'string') { try { state = JSON.parse(state); } catch { throw new BrokerError(`secret ${name}: stored session is not valid JSON`, 4); } }
         const reduced = reduceSession(state, { domains: e.domains, maxTtlSeconds: e.maxTtlSeconds, now });
         payload = JSON.stringify(reduced.state); until = reduced.expiresAt * 1000;
-        secretStrings = reduced.state.cookies.map(c => c.value);
+        secretStrings = [
+          ...reduced.state.cookies.map(c => c.value),
+          ...reduced.state.origins.flatMap(o => [o.localStorage, o.sessionStorage]
+            .flatMap(entries => Array.isArray(entries) ? entries.map(e => e?.value).filter(v => typeof v === 'string') : []))
+        ];
       } else {
         const wanted = e.fields ?? Object.keys(values);
         if (!wanted.length || !wanted.every(f => typeof values[f] === 'string' && values[f].length)) throw new BrokerError(`secret ${name}: expected fields are missing`, 4);
@@ -135,8 +139,9 @@ export async function withSecrets(options, fn, { outputRoots = [] } = {}) {
   const handle = await materialize(options);
   let result, thrown = null;
   try { result = await fn(handle); } catch (error) { thrown = error; }
-  const leak = handle.scan(outputRoots);   // before cleanup: cleanup forgets the values
-  const cleanup = await handle.cleanup();
+  let leak, cleanup;
+  try { leak = handle.scan(outputRoots); }   // before cleanup: cleanup forgets the values
+  finally { cleanup = await handle.cleanup(); }
   if (thrown) throw thrown;
   if (!leak.clean) throw new BrokerError(`a secret value was found in ${leak.findings.length} output file(s); the output must be discarded`, 8);
   if (cleanup.errors.length) throw new BrokerError('secret cleanup was incomplete', 7);
