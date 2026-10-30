@@ -96,7 +96,7 @@ test('run maps success, subject failure, timeout and cleanup failure', async t =
   for (const scenario of ['success', 'subject', 'timeout', 'cleanup']) {
     const f = fixture(t), plan = f.plan();
     if (scenario === 'timeout') plan.timeoutMs = 10;
-    let present = scenario === 'cleanup';
+    let present = false;
     const command = argv => {
       if (argv[0] === 'image') return { status: 0, stdout: 'sha256:local\n', stderr: '' };
       if (argv[1] === 'inspect') return present ? { status: 0, stdout: `${plan.runId}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'No such container' };
@@ -105,6 +105,7 @@ test('run maps success, subject failure, timeout and cleanup failure', async t =
     };
     const spawnRun = () => {
       const child = new EventEmitter();
+      if (scenario === 'cleanup') present = true;
       child.kill = () => { queueMicrotask(() => child.emit('close', 143)); return true; };
       if (scenario !== 'timeout') queueMicrotask(() => child.emit('close', scenario === 'subject' ? 1 : 0));
       return child;
@@ -113,4 +114,17 @@ test('run maps success, subject failure, timeout and cleanup failure', async t =
     assert.equal(result.exitCode, { success: 0, subject: 1, timeout: 5, cleanup: 7 }[scenario]);
     assert.equal(result.cleanup, scenario === 'cleanup' ? 'incomplete' : 'complete');
   }
+});
+
+test('a pre-existing run container is never started over or removed', async t => {
+  const f = fixture(t), plan = f.plan();
+  let spawned = false, removed = false;
+  const command = argv => {
+    if (argv[1] === 'inspect') return { status: 0, stdout: `${plan.runId}\n`, stderr: '' };
+    if (argv[1] === 'rm') removed = true;
+    throw new Error('unexpected command');
+  };
+  await assert.rejects(runContainer(plan, { command, spawnRun: () => { spawned = true; throw new Error('unexpected spawn'); } }), /already in use/);
+  assert.equal(spawned, false); assert.equal(removed, false);
+  assert.equal(fs.existsSync(plan.workspace), false);
 });

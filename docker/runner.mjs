@@ -138,6 +138,7 @@ export function cleanupContainer(plan, command = dockerCommand) {
 }
 
 export async function runContainer(plan, { command = dockerCommand, spawnRun = spawn } = {}) {
+  if (ownedContainer(plan, command)) throw new RunnerError('run container name is already in use', 7);
   prepareDirectories(plan);
   const localImage = command(['image', 'inspect', '--format', '{{.Id}}', plan.image]);
   if (localImage.status !== 0) throw new RunnerError('pinned image is not locally available; pull through a reviewed update path', 3);
