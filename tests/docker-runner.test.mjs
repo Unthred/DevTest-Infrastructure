@@ -40,6 +40,10 @@ test('planner applies every hardening boundary and keeps source read-only', t =>
   assert.ok(!args.includes(['docker', '.sock'].join('')));
   assert.equal(plan.name, 'devtest-abcdef0123456789');
   assert.equal(plan.image, lock.images['dotnet-8'].reference);
+  assert.ok(args.includes('dst=/cache,readonly'), 'build cache must be read-only');
+  assert.equal(plan.workImage, path.join(plan.workspace, 'volume.img'));
+  const restore = buildPlanForVerifiedPaths({ ...f.spec, phase: 'restore' }, f.config, f.project, f.storage);
+  assert.ok(restore.args.join(' ').includes('dst=/cache --workdir'), 'only restore may write cache');
 });
 
 test('planner refuses unsafe paths, IDs, limits, images, network and command shape', t => {
@@ -47,7 +51,7 @@ test('planner refuses unsafe paths, IDs, limits, images, network and command sha
   assert.throws(() => createPlan(f.spec, f.config), /under \/mnt\/user\/projects/);
   for (const mutation of [
     s => { s.runId = '../bad'; }, s => { s.image = 'unknown'; }, s => { s.network = 'host'; },
-    s => { s.command = ['sh', 'bad\narg']; }
+    s => { s.command = ['sh', 'bad\narg']; }, s => { s.phase = 'unknown'; }
   ]) { const s = structuredClone(f.spec); mutation(s); assert.throws(() => buildPlanForVerifiedPaths(s, f.config, f.project, f.storage)); }
   for (const mutation of [
     c => { c.uid = 0; }, c => { c.gid = 0; }, c => { c.limits.memoryMb = 0; }, c => { c.limits.pids = 10000; }, c => { c.limits.timeoutMs = 0; }, c => { delete c.limits.diskMb; }, c => { c.limits.diskMb = 99999; }, c => { c.limits.cacheMb = 1; }
@@ -121,7 +125,8 @@ async function runWith(t, options, mutatePlan = () => {}, runOptions = {}) {
   const h = harness(options);
   const originalCommand = h.command;
   const command = argv => { const r = originalCommand(argv.map(x => x === plan.name ? plan.name : x)); if (r.stdout === 'RUN\n') r.stdout = plan.runId + '\n'; return r; };
-  const result = await runContainer(plan, { command, spawnRun: () => h.spawnRun(plan), ...runOptions });
+  const result = await runContainer(plan, { command, spawnRun: () => h.spawnRun(plan),
+    ensureVolumes: p => { fs.mkdirSync(p.work); fs.mkdirSync(p.out); }, ...runOptions });
   return { result, plan, h };
 }
 
