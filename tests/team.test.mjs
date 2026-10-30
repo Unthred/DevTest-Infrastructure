@@ -790,3 +790,18 @@ test('max_fix_attempts counts fixes per PR across heads; at the limit one needs-
   ok.team.s.fixAttempts[`38:${H(1)}`] = 2; await ok.team.tick();
   assert.equal(ok.calls.comments.filter(x => /fix rounds/.test(x[1])).length, 0);
 });
+
+test('dashboard history (#32): plan() exposes what it read, and a merge is logged with issue start and merge time, bounded', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(2)] });
+  assert.equal(w.team.view, null);
+  w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude', job: 'j' };
+  w.team.s.implemented[2] = 400;
+  const plan = await w.team.plan();
+  assert.equal(w.team.view.prs.length, 1); assert.equal(w.team.view.issues.length, 1);
+  await w.team.execute(plan.find(a => a.type === 'merge'));
+  assert.deepEqual(w.team.s.mergeLog, [{ pr: 10, issue: 2, agent: 'codex', reviewer: 'claude', startedAt: 400, mergedAt: 1000 }]);
+  for (let i = 0; i < 600; i++) w.team.s.mergeLog.push({ pr: i });
+  w.gh.pulls = [pr(11, 'codex/issue-3-x', H(2))]; w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'PASS', reviewer: 'claude', job: 'j' };
+  await w.team.execute({ type: 'merge', pr: 11, head: H(2), base: 'main', reviewer: 'claude', job: 'j' });
+  assert.equal(w.team.s.mergeLog.length, 500); assert.equal(w.team.s.mergeLog.at(-1).pr, 11);
+});

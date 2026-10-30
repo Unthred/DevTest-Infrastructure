@@ -202,3 +202,12 @@ test('a REAL structured exhausted event after a long quoting line is still detec
   const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
   assert.equal(r.lastEvent, 'usage_limit'); assert.equal(r.allowance.windows[0].status, 'rejected');
 });
+
+test('token counts and the CLI cost estimate from the provider stream are recorded on the job, accumulated across attempts, with no message text', async t => {
+  const result = { type: 'result', result: 'PRIVATE-MODEL-TEXT', usage: { input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 90 }, total_cost_usd: 0.02 };
+  const s = sandbox(t, `${emit(result)}`), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'completed');
+  assert.deepEqual(r.usage, { inputTokens: 100, outputTokens: 4, costUsdEstimate: 0.02 });
+  assert.ok(!JSON.stringify(r).includes('PRIVATE-MODEL-TEXT'));
+});
