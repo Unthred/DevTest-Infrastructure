@@ -3,13 +3,49 @@
   "id": "codex",
   "display_name": "Codex CLI",
   "adapter_version": "0.1.0",
-  "launch": {"command": "codex", "args": [], "env_allowlist": ["HOME", "PATH", "LANG", "LC_ALL", "TERM"]},
-  "resume": {"args": ["resume"]},
-  "capabilities": {
-    "launch": "supported", "resume": "unverified", "session_status": "unverified",
-    "usage_limit_detection": "unverified", "reset_time_parsing": "unverified",
-    "checkpoint": "supported", "non_interactive": "supported", "structured_output": "supported"
+  "launch": {
+    "command": "codex",
+    "args": [],
+    "env_allowlist": [
+      "HOME",
+      "PATH",
+      "LANG",
+      "LC_ALL",
+      "TERM"
+    ]
   },
-  "billing": {"model": "subscription", "fallback_to_other_billing": false},
-  "events": ["usage_limit", "transient_rate_limit", "context_limit", "auth_error", "approval_required", "network_error", "crash"]
+  "resume": {
+    "args": [
+      "resume"
+    ]
+  },
+  "access": {
+    "standard": [],
+    "full": [
+      "--dangerously-bypass-approvals-and-sandbox"
+    ]
+  },
+  "capabilities": {
+    "launch": "supported",
+    "resume": "unverified",
+    "session_status": "unverified",
+    "usage_limit_detection": "unverified",
+    "reset_time_parsing": "unverified",
+    "checkpoint": "supported",
+    "non_interactive": "supported",
+    "structured_output": "supported"
+  },
+  "billing": {
+    "model": "subscription",
+    "fallback_to_other_billing": false
+  },
+  "events": [
+    "usage_limit",
+    "transient_rate_limit",
+    "context_limit",
+    "auth_error",
+    "approval_required",
+    "network_error",
+    "crash"
+  ]
 }

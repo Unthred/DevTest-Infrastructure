@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "full": {
+    "decision": "D-020",
+    "roles": ["devtest"],
+    "note": "Same effective access as the homeowner's interactive agents. Chosen explicitly per job; never a default."
+  }
+}

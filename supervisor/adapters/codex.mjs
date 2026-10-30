@@ -11,7 +11,7 @@ export function preflight(job) {
   return governed.status === 0;
 }
 export function command(config, job, resume) {
-  const args = [...config.command, 'exec', '--json', '--profile', `ai-rules-${base.contextForRole(job.role)}`, '--cd', job.worktree];
+  const args = [...config.command, 'exec', '--json', '--profile', `ai-rules-${base.contextForRole(job.role)}`, '--cd', job.worktree, ...base.accessArgs(config, job)];
   if (resume && job.sessionId && config.manifest.capabilities.resume === 'supported') args.push('resume', job.sessionId, '-');
   else args.push('-');
   return args;

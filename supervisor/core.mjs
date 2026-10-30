@@ -87,8 +87,19 @@ export function validateSpec(spec) {
   if (['main', 'master'].includes(branch)) throw new SupervisorError('job must use a feature branch');
   const handover = spec.handover ? path.resolve(worktree, spec.handover) : null;
   if (handover && !handover.startsWith(worktree + path.sep)) throw new SupervisorError('handover must be in worktree');
+  const kind = spec.kind ?? 'implement';
+  if (!['implement', 'review', 'fix'].includes(kind)) throw new SupervisorError('invalid job kind');
+  const access = spec.access ?? 'standard';
+  if (!['standard', 'full'].includes(access)) throw new SupervisorError('invalid access mode');
+  if (access === 'full') {
+    // D-020: an explicitly selected, named launch mode, limited to the roles listed in access.json. Never a default.
+    const allowed = JSON.parse(fs.readFileSync(new URL('./access.json', import.meta.url), 'utf8')).full;
+    if (!allowed.roles.includes(spec.role)) throw new SupervisorError(`full access is not permitted for role ${spec.role}`);
+  }
+  if (spec.postcondition !== undefined && !(spec.postcondition && typeof spec.postcondition === 'object' && /^[a-z_]{1,32}$/.test(spec.postcondition.kind || '')))
+    throw new SupervisorError('invalid postcondition');
   const { allowed_actions, ...rest } = spec;
-  return { ...rest, allowedActions: allowed_actions, repository, worktree, branch, handover };
+  return { ...rest, kind, access, allowedActions: allowed_actions, repository, worktree, branch, handover };
 }
 export async function provider(registry, id) {
   const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
@@ -107,7 +118,7 @@ export function validateManifest(m, id) {
     if (!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).some(key => !allowed.includes(key)) || required.some(key => !(key in object)))
       throw new SupervisorError(`invalid ${label}: unknown or missing field`);
   };
-  exact(m, ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'resume', 'capabilities', 'billing', 'events'],
+  exact(m, ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'resume', 'access', 'capabilities', 'billing', 'events'],
     ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'capabilities', 'billing'], 'provider manifest');
   if (m.schema_version !== 1 || m.id !== id || !/^[a-z][a-z0-9-]{1,31}$/.test(m.id) || !m.display_name || !/^\d+\.\d+\.\d+$/.test(m.adapter_version))
     throw new SupervisorError('invalid provider manifest identity/version');
@@ -115,6 +126,7 @@ export function validateManifest(m, id) {
   if (typeof m.launch.command !== 'string' || !m.launch.command || !Array.isArray(m.launch.args) || !m.launch.args.every(x => typeof x === 'string')) throw new SupervisorError('invalid launch command');
   if (m.launch.env_allowlist && (!Array.isArray(m.launch.env_allowlist) || !m.launch.env_allowlist.every(x => /^[A-Z_][A-Z0-9_]*$/.test(x)))) throw new SupervisorError('invalid env allowlist');
   if (m.resume) { exact(m.resume, ['args'], ['args'], 'resume'); if (!Array.isArray(m.resume.args) || !m.resume.args.every(x => typeof x === 'string')) throw new SupervisorError('invalid resume args'); }
+  if (m.access) { exact(m.access, ['standard', 'full'], [], 'access'); for (const mode of Object.values(m.access)) if (!Array.isArray(mode) || !mode.every(x => typeof x === 'string' && x.length > 0 && x.length <= 4096 && !/[\0\r\n]/.test(x))) throw new SupervisorError('invalid access arguments'); }
   const caps = ['launch', 'resume', 'session_status', 'usage_limit_detection', 'reset_time_parsing', 'checkpoint', 'non_interactive', 'structured_output'];
   exact(m.capabilities, caps, caps.slice(0, 7), 'capabilities');
   if (Object.values(m.capabilities).some(x => !['supported', 'unsupported', 'unverified'].includes(x)) || m.capabilities.launch !== 'supported' || m.capabilities.checkpoint !== 'supported')
@@ -125,15 +137,17 @@ export function validateManifest(m, id) {
 }
 export function leaseKeys(job) {
   // A shared repository may host parallel jobs; the issue and worktree are exclusive.
-  return [`issue:${job.repository}#${job.issue}`, `worktree:${job.worktree}`].map(v => crypto.createHash('sha256').update(v).digest('hex'));
+  return [`${job.kind === 'review' ? 'review' : 'issue'}:${job.repository}#${job.issue}`, `worktree:${job.worktree}`].map(v => crypto.createHash('sha256').update(v).digest('hex'));
 }
 export async function createJob(root, spec, registry = defaultRegistry, clock = realClock) {
   const checked = validateSpec(spec);
   const { config } = await provider(registry, checked.provider);
   const capabilities = config.manifest.capabilities;
+  if (spec.autoRestart === true && (capabilities.launch !== 'supported' || capabilities.non_interactive !== 'supported'))
+    throw new SupervisorError('auto-restart requires launch and non_interactive support');
   if (spec.autoResume === true && ['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].some(key => capabilities[key] !== 'supported'))
     throw new SupervisorError('auto-resume requires verified supported provider capabilities');
-  const job = { ...checked, id: crypto.randomBytes(16).toString('hex'), schemaVersion: 1, status: 'queued', autoResume: spec.autoResume === true,
+  const job = { ...checked, id: crypto.randomBytes(16).toString('hex'), schemaVersion: 1, status: 'queued', autoResume: spec.autoResume === true, autoRestart: spec.autoRestart === true, incompleteRetries: 0,
     createdAt: clock.now(), updatedAt: clock.now(), attempts: 0, resetAt: null, nextAttemptAt: null, sessionId: null,
     workerPid: null, workerStart: null, childPid: null, lastEvent: null, lastProgress: null, checkpoint: null, capabilities,
     currentAttemptId: null };
@@ -194,6 +208,7 @@ export function checkpoint(root, job, clock = realClock) {
 }
 export function prompt(job, resume = false) {
   let head = `Selected launcher role: ${job.role}. Supervised issue #${job.issue} in ${job.worktree}. Approved scope: ${job.scope}. Allowed actions: ${job.allowedActions.join(', ')}. Preserve project and role governance. Do not purchase credits, switch to paid API billing, deploy, merge, reboot or change credentials without separate authorization.`;
+  if (job.access === 'full') head += ' Launch mode: full access (decision D-020, selected by the homeowner), the same as the interactive agents. Project rules still apply: no reboot of Tower, no production Home Assistant change, no secret disclosure, no purchases, no merge of your own work.';
   if (job.handover) head += ` Read the handover at ${job.handover} and update it only when the approved actions permit edits.`;
   if (resume) head += ` Resume the SAME issue and worktree. Read issue, Git state and handover before changing anything. Last checkpoint HEAD: ${job.checkpoint?.head || 'unknown'}. Avoid duplicate actions.`;
   return head + '\n\n' + job.prompt;
@@ -207,7 +222,8 @@ export function transition(root, job, status, kind, clock = realClock) {
   job.status = status; job.lastEvent = kind; saveJob(root, job, clock);
   event(root, job, job.status === status ? kind : 'transition_ignored', clock);
 }
-export async function drive(root, job, registry = defaultRegistry, clock = realClock, runOnce, maxAttempts = 4) {
+export async function drive(root, job, registry = defaultRegistry, clock = realClock, runOnce, maxAttempts = 4, checkPostcondition = null) {
+  const restartable = () => job.autoResume || job.autoRestart;
   const { config, adapter } = await provider(registry, job.provider);
   while (true) {
     checkpoint(root, job, clock);
@@ -227,30 +243,39 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
     checkpoint(root, job, clock);
     if (job.status === 'paused_manual' || job.status === 'stopped') return job;
     if (result.code === 0 && (!result.event || ['transient_rate_limit', 'network_error'].includes(result.event))) {
-      transition(root, job, 'completed', 'completed', clock); return job;
+      // Exit 0 is not completion: a job with a post-condition is complete only when the post-condition holds.
+      let met = true;
+      if (job.postcondition) {
+        if (typeof checkPostcondition !== 'function') throw new SupervisorError('job has a post-condition but no checker was supplied');
+        try { met = (await checkPostcondition(job)) === true; }
+        catch (error) { event(root, job, `postcondition_exception:${String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48)}`, clock); met = false; }
+      }
+      if (met) { transition(root, job, 'completed', 'completed', clock); return job; }
+      if ((job.incompleteRetries || 0) < 1) { job.incompleteRetries = (job.incompleteRetries || 0) + 1; job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
+      transition(root, job, 'blocked', 'incomplete', clock); return job;
     }
-    if (result.event === 'usage_limit' && config.manifest.capabilities.usage_limit_detection === 'supported' && job.autoResume) {
+    if (result.event === 'usage_limit' && restartable() && (job.autoRestart || config.manifest.capabilities.usage_limit_detection === 'supported')) {
       if (job.attempts >= maxAttempts) { transition(root, job, 'blocked', 'retry_exhausted', clock); return job; }
       const now = clock.now();
       const verifiedReset = result.verified === true && result.resetSource === 'provider_reported' && result.resetAt > now;
-      const delay = verifiedReset ? Math.max(300000, result.resetAt + 120000 - now) : Math.min(86400000, 3600000 * 2 ** (job.attempts - 1));
+      const delay = verifiedReset ? Math.max(0, result.resetAt + 120000 - now) : Math.min(86400000, 3600000 * 2 ** (job.attempts - 1));
       job.resetAt = verifiedReset ? result.resetAt : null; job.nextAttemptAt = now + delay;
       transition(root, job, 'paused_limit', 'usage_limit', clock);
       await sleepUntil(clock, now + delay); // no CLI process or model invocation in the wait
       continue;
     }
-    if (result.event === 'transient_rate_limit' && job.autoResume && job.attempts < maxAttempts) {
+    if (result.event === 'transient_rate_limit' && restartable() && job.attempts < maxAttempts) {
       const delay = Math.min(1800000, 60000 * 2 ** (job.attempts - 1));
       job.nextAttemptAt = clock.now() + delay;
       transition(root, job, 'paused_limit', 'transient_rate_limit', clock);
       await clock.sleep(delay); continue;
     }
-    if (result.event === 'context_limit' && job.autoResume && job.attempts < maxAttempts) {
+    if (result.event === 'context_limit' && restartable() && job.attempts < maxAttempts) {
       // Due immediately: if this worker dies before relaunching, reconcile can still revive the job.
       job.sessionId = null; job.nextAttemptAt = clock.now(); saveJob(root, job, clock);
       transition(root, job, 'queued', 'context_fresh_session', clock); continue;
     }
-    if (['network_error', 'crash'].includes(result.event) && job.autoResume && job.attempts < maxAttempts) {
+    if (['network_error', 'crash'].includes(result.event) && restartable() && job.attempts < maxAttempts) {
       const delay = result.event === 'network_error' ? Math.min(300000, 30000 * 2 ** (job.attempts - 1)) : Math.min(120000, 10000 * 2 ** (job.attempts - 1));
       job.nextAttemptAt = clock.now() + delay;
       transition(root, job, 'queued', result.event, clock);

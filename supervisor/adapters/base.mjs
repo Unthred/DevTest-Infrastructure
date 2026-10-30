@@ -23,3 +23,5 @@ export function resetTime(line) {
   const time = Date.parse(match[1]);
   return Number.isFinite(time) ? time : null;
 }
+// Access arguments come from the manifest (D-012: no provider branches in core). Unknown modes yield none.
+export function accessArgs(config, job) { return config.manifest?.access?.[job.access || 'standard'] || []; }

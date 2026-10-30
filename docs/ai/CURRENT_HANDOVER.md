@@ -1,6 +1,6 @@
 # Current handover
 
-Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (D-006 and D-015–D-018 remain agent proposals). Issue [#23](https://github.com/Unthred/DevTest-Infrastructure/issues/23) records homeowner-approved D-019 and D-020 for addition to the register. Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
+Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
 Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged architecture and supervisor PRs. Each agent edits this file only on its own branch.
 
@@ -14,7 +14,7 @@ Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged arc
 | #15 regression follow-up | yes; PR #18 merged as `0240bc384bf9ee36ce6b0f87e1ea8f7f636fb9d7` | yes; Codex independent PASS at `df99dca65a0f3ea0c1f629d34ab54d91a093889c`, 42/42 local tests and exact-head CI green | not separately installed | context requeue crash window verified by fixture only |
 | #2 Docker foundation | yes on PR #19; PR #22 merged as base, then Codex hard-bound/log fixes `a96ea85`, `31f3c96`, `95f392a` | validator and 47/47 local tests pass; exact-head CI and Claude independent re-review pending | no standalone `dev-test` installation | Tower runner positive, subject-failure and hard work/output/cache limit probes passed; CLI integration remains issue #8 |
 | #20 Allowance detection | pending; Claude PR #21, head `2d3b5cfae69f05743b7d22521da5d8a76da493d1` | no; Codex requested changes for successful paid-overage event | no | simulated subprocess bug reproduced; live allowance recovery unverified |
-| #23 Team loop | not started | no | no | no |
+| #23 Team loop | yes; PR #25 (D-019 and D-020 recorded; dispatcher, trusted verdicts, post-conditions, restart and access modes) | no; CI green, Codex executable review pending | no | a supervised full-access Codex job ran `node --test` on Tower (35/35); dispatcher, merge, real-limit restart and cron path not live-verified |
 | #3–#14 other issues | not started | no | no | no |
 
 ## Ownership
@@ -43,6 +43,11 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Both agents use one GitHub account. Independent acceptance is recorded with reviewer identity, exact SHA, commands and decision in PR comments; it is not a formal GitHub approval.
 
 - Provider evidence: `docs/provider-observations.md` (static inspection of Claude Code 2.1.312 and Codex CLI 0.165.0; live captures still outstanding).
+
+## Standing facts
+- Launcher: `ai-agent` has a `devtest` role (workspace `/mnt/user/projects/DevTest-Infrastructure`). Never run `git fetch/pull` inside `/mnt/cache/cursor-workspace/ai-rules-live`; redeploy with `tools/deploy-codex-launcher.sh --source <clean checkout>`.
+- Supervised jobs: `access: full` (D-020) is per job and per allowed role; the dispatcher (`team tick`) ships disabled in `supervisor/team.json`.
+
 
 ## Blockers
 - #15 real subscription-limit wording, reset timestamp and post-limit resume are not captured. Production manifests mark those capabilities `unverified` and refuse `autoResume: true`. Simulated pause/resume is not a live auto-resume claim.
@@ -75,3 +80,8 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Source: `supervisor/allowance.mjs`, `supervisor/clocktext.mjs`, Claude `rate_limit_event` parsing, Codex rollout `postRun`, billing guard on every exit, Codex local-time reset parsing; `docs/allowance-evidence.md`; live fixtures in `tests/fixtures/allowance/` (allowed states and the first real Codex exhausted message).
 - Review and CI: Codex re-review pending at the head named on the PR. Installed: no.
 - Live status: the Codex interactive limit message and its `/status` window lines are captured and parsed (verified for those two shapes only). The `codex exec --json` form, session resume and all Claude exhausted states are uncaptured; manifests stay `unverified` and `autoResume` stays refused.
+
+## Issue #23 team loop (Claude, branch `claude/issue-23-team-loop`)
+- Source: dispatcher `supervisor/team.mjs`, `github.mjs`, `team.json` (disabled), `access.json`; post-conditions, `autoRestart` and D-019 timing in `core.mjs`; manifest `access` field; `docs/team-loop.md`; fake-GitHub/fake-provider tests.
+- Review and CI: exact-head CI green; Codex executable review pending. Installed: no. Deploy with `tools/upgrade-supervisor.sh` only after Codex's PASS, then enable `team.json` (an explicit act).
+- Live status: a supervised `access: full` Codex job ran the suite on Tower; dispatcher, merge, restart after a real limit and the cron path are not live-verified. Reset parsing stays unverified.
