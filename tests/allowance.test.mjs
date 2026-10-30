@@ -48,6 +48,11 @@ test('SIMULATED exhausted states: provider-reported reset used, never verified, 
   assert.equal(stale.resetAt, null); assert.equal(stale.resetSource, 'none');
 });
 
+test('an unfamiliar status after a failure is recorded but never claimed as a usage limit', () => {
+  const odd = claudeAllowance({ ...claudeLive.rate_limit_info, status: 'queued_for_review', unifiedWindows: { five_hour: { utilization: 0.4, resetsAt: 1793358600, status: 'something_new' } } });
+  assert.equal(limitFromAllowance(odd, NOW), null);
+});
+
 test('billing guard: overage use blocks for a human instead of waiting or retrying', () => {
   const overage = claudeAllowance({ ...claudeLive.rate_limit_info, status: 'rejected', isUsingOverage: true });
   assert.equal(billingRisk(overage), true);

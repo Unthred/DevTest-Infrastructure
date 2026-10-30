@@ -41,8 +41,11 @@ export function codexAllowance(limits) {
 // gets resetAt null and the supervisor's bounded conservative backoff applies.
 export function limitFromAllowance(allowance, now = Date.now()) {
   if (!allowance) return null;
-  const exhausted = allowance.windows.filter(w => (w.utilization !== null && w.utilization >= 1) || ['rejected', 'blocked', 'exhausted', 'limit_reached'].includes(w.status));
-  const flagged = allowance.status === 'limit_reached' || !['allowed', 'allowed_warning', 'unknown'].includes(allowance.status) || exhausted.length > 0;
+  // Only evidence of exhaustion counts: a known exhausted status or a full window. An unfamiliar status is recorded on
+  // the job but never claimed as a limit, so an unrelated failure cannot be misread as one.
+  const known = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
+  const exhausted = allowance.windows.filter(w => (w.utilization !== null && w.utilization >= 1) || known.includes(w.status));
+  const flagged = known.includes(allowance.status) || exhausted.length > 0;
   if (!flagged) return null;
   if (allowance.billing?.usingOverage) return { event: 'approval_required' };
   const times = (exhausted.length ? exhausted : allowance.windows).map(w => w.resetsAt).filter(t => t && t > now);
