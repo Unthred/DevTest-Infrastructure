@@ -214,3 +214,6 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Blocking 1 (secrets in artifacts): `layoutCheck` no longer reads `innerText`, input values or `aria-label`; findings carry only the markup label and numbers, and `responsive.mjs` also strips any `text` field it receives.
 - Blocking 2 (exit precedence): an undeclared request now yields exit 12 even after a navigation timeout, TLS or other failure, as in `capture.mjs`.
 - Regression tests added (222/222 locally, validator OK). Implemented in source; exact-head CI and opposite-agent re-review pending. Real-Docker smoke not re-run this round; not deployed.
+
+## #6 / PR #29 second conflict-only rebase (Claude)
+- Rebased onto origin/main `7eab868`; old head `7ce0a5d`. Only conflict: this handover (kept both sides). Validator OK; 257/257 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending.
