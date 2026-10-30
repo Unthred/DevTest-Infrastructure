@@ -321,3 +321,28 @@ test('recent activity includes every recorded tick in the 50-event ordering, not
   const many = Array.from({ length: 80 }, (_, i) => ({ at: NOW - i * 1000, status: 'ok', plan: [] }));
   assert.equal((await view(t, { snapshots: many, cache: { tick: okTick(), pulls: [], issues: [] } })).activity.length, 50);
 });
+
+test('dashboard serve applies team.local.json: the page reports the effective enabled state, not the shipped one (CLI path)', async t => {
+  const { spawn } = await import('node:child_process');
+  const ip = Object.values(os.networkInterfaces()).flat().find(i => i && i.family === 'IPv4' && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(i.address) && !/\.(0|255)$/.test(i.address))?.address;
+  if (!ip) return t.skip('no private LAN IPv4 on this machine');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const shipped = JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
+  assert.equal(shipped.enabled, false);
+  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+  const child = spawn(process.execPath, [cli, 'dashboard', 'serve', '--state-root', root, '--host', ip, '--port', String(port)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  let out = '';
+  await new Promise((resolve, reject) => {
+    child.stdout.on('data', d => { out += d; if (/listening/.test(out)) resolve(); });
+    child.stderr.on('data', d => { out += d; });
+    child.once('exit', () => reject(new Error(`dashboard exited: ${out}`)));
+  });
+  const view = await new Promise((resolve, reject) => http.get({ host: ip, port, path: '/api/view.json' }, res => {
+    let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve(JSON.parse(b)));
+  }).on('error', reject));
+  assert.equal(view.teamEnabled, true);
+});
