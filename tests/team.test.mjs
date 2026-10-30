@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
+import { Team, ciFixPrompt, rebasePrompt, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
 import { createJob, drive, readJob, stateRoot, validateSpec } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
@@ -115,12 +115,93 @@ test('rule 3 skips needs-homeowner, in-flight work, an open PR for the issue, an
   assert.deepEqual(acts.filter(a => a.agent === 'codex').map(a => a.issue), [3]);   // #2 has an open PR
 });
 
-test('priority is review, then fix, then implement', async t => {
+test('priority is fix, then review, then implement (no rebase or red CI here)', async t => {
   const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'claude/issue-23-y', H(2))], issues: [issue(23), issue(5)] });
   w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
+  assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'fix');
+  w.team.s.fixAttempts[`11:${H(2)}`] = 2;
   assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'review');
   w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };
-  assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'fix');
+  assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'implement');
+});
+
+const red = [{ status: 'COMPLETED', conclusion: 'SUCCESS', name: 'test' }, { status: 'COMPLETED', conclusion: 'FAILURE', name: 'project-contract' }, { status: 'COMPLETED', conclusion: 'FAILURE', name: 'bad;name$(x)' }];
+
+test('rule 12 red CI on my own PR: CI-fix job naming only the safe failing checks; bounded; not for drafts, pending or the other agent', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: red })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  assert.deepEqual([a.type, a.pr, a.head, a.checks], ['cifix', 38, H(3), ['project-contract']]);
+  assert.match(ciFixPrompt(a), /Failing checks: project-contract\./); assert.doesNotMatch(ciFixPrompt(a), /bad;name/);
+  await w.team.execute({ agent: 'claude', ...a });
+  const spec = w.calls.created[0];
+  assert.deepEqual([spec.kind, spec.postcondition.kind, spec.postcondition.baseHead, spec.issue], ['cifix', 'new_head', H(3), 38]);
+  assert.equal(w.team.s.ciFixAttempts[`38:${H(3)}`], 1);
+  assert.equal((await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix'), undefined);   // job in flight (busy)
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.ciFixAttempts[`38:${H(3)}`] = 2;
+  assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'cifix');   // max_fix_attempts reached
+  const none = [['a draft', pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: red, isDraft: true })],
+    ['the other agent\'s PR', pr(38, 'codex/issue-4-x', H(3), { statusCheckRollup: red })],
+    ['a PR whose checks are still all running', pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: [{ status: 'IN_PROGRESS' }] })]];
+  for (const [label, p] of none) {
+    const o = world(t, { pulls: [p], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+    assert.ok(!(await o.team.plan()).some(x => x.agent === 'claude' && x.type === 'cifix'), label);
+  }
+});
+
+test('rule 13 merge conflict on my own PR: conflict-only rebase job, bounded, first in priority; post-condition needs a new MERGEABLE head', async t => {
+  const conflicting = pr(36, 'claude/issue-32-x', H(4), { mergeable: 'CONFLICTING', statusCheckRollup: [] });
+  const w = world(t, { pulls: [conflicting, pr(37, 'claude/issue-5-y', H(5), { statusCheckRollup: red })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.team.s.verdicts[`36:${H(4)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  assert.deepEqual([a.type, a.pr, a.head, a.base], ['rebase', 36, H(4), 'main']);   // beats the red-CI PR and the CHANGES verdict
+  assert.match(rebasePrompt(a), /conflict-only rebase/); assert.match(rebasePrompt(a), /git range-diff origin\/main/);
+  await w.team.execute({ agent: 'claude', ...a });
+  const spec = w.calls.created[0];
+  assert.deepEqual([spec.kind, spec.postcondition.kind, spec.postcondition.baseHead], ['rebase', 'rebased', H(4)]);
+  assert.ok(spec.allowed_actions.includes('push_feature_branch') && !spec.allowed_actions.includes('merge'));
+  assert.equal(w.team.s.rebaseAttempts[`36:${H(4)}`], 1);
+  const post = w.team.postconditions(); const job = { postcondition: spec.postcondition };
+  const set = (head, mergeable) => { w.gh.pulls = [pr(36, 'claude/issue-32-x', head, { mergeable })]; };
+  set(H(4), 'MERGEABLE'); assert.equal(await post(job), false);       // same head
+  set(H(6), 'CONFLICTING'); assert.equal(await post(job), false);     // new head, still conflicting
+  set(H(6), 'MERGEABLE'); assert.equal(await post(job), true);
+  let polls = 0; w.team.sleep = async () => {};
+  w.gh.getPull = async () => pr(36, 'claude/issue-32-x', H(6), { mergeable: ++polls < 3 ? 'UNKNOWN' : 'MERGEABLE' });
+  assert.equal(await post(job), true); assert.equal(polls, 3);        // GitHub computes mergeability lazily
+  w.gh.getPull = async () => pr(36, 'claude/issue-32-x', H(6), { mergeable: 'UNKNOWN' });
+  assert.equal(await post(job), false);                               // bounded: never loops forever
+  // bounded attempts; draft PRs are left alone; the old verdict does not apply to the new head, so review is needed again
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.rebaseAttempts[`36:${H(4)}`] = 2;
+  assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'rebase');
+  const draft = world(t, { pulls: [pr(29, 'claude/issue-6-z', H(7), { mergeable: 'CONFLICTING', isDraft: true })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  assert.notEqual((await draft.team.plan()).find(x => x.agent === 'claude')?.type, 'rebase');
+});
+
+test('a conflicting PR is not reviewed, merged or counted green; after the rebase it is reviewed afresh on the new head', async t => {
+  const w = world(t, { pulls: [pr(36, 'claude/issue-32-x', H(4), { mergeable: 'CONFLICTING' })], issues: [issue(2, 'CLOSED'), issue(3, 'OPEN')] });
+  w.team.s.verdicts[`36:${H(4)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'j' };
+  const acts = await w.team.plan();
+  assert.equal(acts.find(a => a.type === 'merge'), undefined);
+  assert.equal(acts.find(a => a.agent === 'codex')?.type, 'implement');   // not 'review'
+  w.gh.pulls = [pr(36, 'claude/issue-32-x', H(6))];
+  const after = await w.team.plan();
+  assert.equal(after.find(a => a.type === 'merge'), undefined);           // the PASS was for the old head
+  assert.deepEqual(after.filter(a => a.agent === 'codex').map(a => [a.type, a.head]), [['review', H(6)]]);
+});
+
+test('priority per agent: rebase > CI fix > review fix > review > implement', async t => {
+  const pulls = [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'claude/issue-23-a', H(2)), pr(12, 'claude/issue-24-b', H(3), { statusCheckRollup: red }), pr(13, 'claude/issue-25-c', H(4), { mergeable: 'CONFLICTING' })];
+  const w = world(t, { pulls, issues: [issue(23), issue(5)] });
+  w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
+  const order = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (await w.team.plan()).find(x => x.agent === 'claude'); order.push(a.type);
+    if (a.type === 'rebase') w.gh.pulls = w.gh.pulls.filter(p => p.number !== 13);
+    else if (a.type === 'cifix') w.gh.pulls = w.gh.pulls.filter(p => p.number !== 12);
+    else if (a.type === 'fix') w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'PASS', reviewer: 'codex' };
+    else if (a.type === 'review') w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };
+  }
+  assert.deepEqual(order, ['rebase', 'cifix', 'fix', 'review', 'implement']);
 });
 
 test('concurrency: one active or paused job per agent, two overall', async t => {

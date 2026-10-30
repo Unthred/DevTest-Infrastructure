@@ -33,6 +33,8 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   process.on('SIGUSR1', onInt); process.on('SIGTERM', onTerm);
   // Publish the child only after the worker can accept a stop/pause signal.
   job.childPid = child.pid; saveJob(root, job, clock);
+  // A child that exits before reading its prompt closes the pipe; that is an exit status, not a supervisor crash.
+  child.stdin.on('error', () => {});
   child.stdin.end(prompt(job, job.attempts > 1));
   const onData = chunk => {
     buffer = (buffer + chunk.toString('utf8')).slice(-65536);
