@@ -144,6 +144,8 @@ export class Team {
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
+    this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
+    this.s.mergeLog ||= [];
     for (const k of ['verdicts', 'jobs', 'fixAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'released']) this.s[k] ||= {};
   }
   save() { atomicJson(this.file, this.s); }
@@ -156,6 +158,7 @@ export class Team {
   async plan() {
     const actions = [];
     const [prs, issues] = [await this.gh.listPulls(), await this.gh.listIssues()];
+    this.view = { prs, issues };
     const issueByNo = new Map(issues.map(i => [i.number, i]));
     // Delivered work: an issue with a merged PR linked to it (closing reference or its issue-<n> branch) is never re-planned.
     this.delivered = new Set();
@@ -345,8 +348,12 @@ export class Team {
     if (act.type === 'merge') {
       await this.gh.merge(act.pr, act.head);       // GitHub refuses unless the head still equals act.head
       this.s.merged[act.pr] = act.head;
-      const m = /issue-(\d+)/.exec((await this.gh.getPull(act.pr))?.headRefName || '');
+      const branch = (await this.gh.getPull(act.pr))?.headRefName || '';
+      const m = /issue-(\d+)/.exec(branch);
       const issue = m ? Number(m[1]) : null;
+      // Dashboard history (#32): who delivered, when the issue was started, when it merged. Bounded.
+      this.s.mergeLog.push({ pr: act.pr, issue, agent: agentOfBranch(this.c, branch), reviewer: act.reviewer, startedAt: issue ? (this.s.implemented[issue] ?? null) : null, mergedAt: this.clock.now() });
+      this.s.mergeLog = this.s.mergeLog.slice(-500);
       if (issue) {
         await this.gh.comment(issue, `PR #${act.pr} merged at \`${act.head}\` by the dispatcher. Gates: PASS from \`${act.reviewer}\` (job \`${act.job}\`) recorded for this exact head, all checks green, mergeable. Merged is not deployed or verified working.`);
         await this.gh.board(issue, act.base === 'main' ? 'done' : 'in_review');
