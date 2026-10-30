@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged architecture and supervisor PRs. Each agent edits this file only on its own branch.
+Last updated: 2026-10-30 by Codex on `codex/issue-3-dotnet-build`, based on merged architecture, supervisor, and team-loop PRs. Each agent edits this file only on its own branch.
 
 ## Completion states
 
@@ -15,7 +15,7 @@ Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged arc
 | #2 Docker foundation | yes; PR #19 merged as `a8b944b` after PR #26 lifecycle fix | exact-head checks and Codex executable review passed | no standalone `dev-test` installation | Tower Docker and lifecycle smokes passed; CLI integration remains issue #8 |
 | #20 Allowance detection | yes; PR #21 merged as `67c8aabd78ee456e5b08c10db63ad0ec4a6cffd1` | Codex PASS at rebased head `7e4e6b4`; exact-head CI green | no | Codex interactive limit capture/reset parser covered; live supervised recovery unverified |
 | #23 Team loop | yes; PR #25 merged as `8f2e386` | Codex PASS at `09a1915`; exact-head CI green | no; Claude deploys after review | supervised full-access Codex job ran `node --test` at #25 head (115/115); live dispatcher tick/allowance recovery unverified |
-| #3 .NET SDK toolchain | initial planner on `codex/issue-3-dotnet-build`, commit `d02e8ba` | validator OK; 119/119 tests on rebased head | no | no SDK container build yet; offline restore only |
+| #3 .NET SDK toolchain | draft PR #28, head `d327ba82e10075b1c5ab0ca06e4baf26140f3688` | validator OK; 119/119 tests; exact-head project-contract, test and GitGuardian checks green | no | no SDK container build yet; offline restore only |
 | #4, #6–#14 other issues | not started | no | no | no |
 | #5 Browser runtime | yes; PR #27 head `1b3402b` | Codex PASS, 93/93 tests and exact-head CI green | no | niced Tower browser smoke passed after pinned cache preparation; TCP targets remain blocked on OQ-2 |
 
@@ -24,7 +24,7 @@ Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged arc
 | Agent | Issues | Branch / worktree |
 |---|---|---|
 | Claude | #1, #5–#7, #10, #13, #14, #20, #23; fixes for Codex #19 | separate Claude branches/worktrees; PRs #21 and #22 open |
-| Codex | #15, #2–#4, #8, #9, #11, #12 | current `codex/issue-2-docker`, `/mnt/user/projects/DevTest-Infrastructure-codex-2` |
+| Codex | #15, #2–#4, #8, #9, #11, #12 | `codex/issue-3-dotnet-build`, `/mnt/user/projects/DevTest-Infrastructure-codex-3`; subsequent jobs are dispatcher-launched |
 
 ## Environment facts and evidence
 
@@ -68,7 +68,7 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## Next actions
 1. Claude deploys PR #25 with `tools/upgrade-supervisor.sh`, verifies installed SHA, enables at most one job per agent and records the first live tick on #23.
-2. Codex continues issue #3 in this branch and draft PR #28: wire safe SDK plans to the runner, test the pinned SDK images and demonstrate NuGet cache reuse.
+2. The supervisor dispatcher owns subsequent Codex work. Issue #3 remains open in draft PR #28: wire safe SDK plans to the runner, test the pinned SDK images and demonstrate NuGet cache reuse.
 3. Keep live provider-limit recovery unverified; do not reboot Tower.
 
 
