@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (18 entries; D-006, D-015–D-018 are agent proposals awaiting review). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-29 by Claude (issue #1 branch `claude/issue-1-architecture`). Each agent edits this file only on its own branch; the merge order is recorded in the PR.
+Last updated: 2026-10-30 by Claude (issue #1 branch `claude/issue-1-architecture`). Each agent edits this file only on its own branch; the merge order is recorded in the PR.
 
 ## Completion states
 Reported separately; none implies the next.
@@ -10,7 +10,7 @@ Reported separately; none implies the next.
 | Item | Implemented in source | CI/review passed | Deployed | Verified working |
 |---|---|---|---|---|
 | #1 Architecture, decisions, contracts, validator | yes (this branch) | not yet (CI and opposite-agent review pending) | n/a (documentation and checks) | n/a |
-| #15 Supervisor | in progress (Codex, branch `codex/issue-15-supervisor`) | no | no | no |
+| #15 Supervisor | yes (PR #17, head `9f17ce1`) | CI green; independent review (Claude) requested changes D1–D3, unresolved | Codex reports installed on Tower; not reviewed by Claude | no (real limit wording, reset and resume are unverified) |
 | AI-Rules launcher metadata fix (PR #15) and `devtest` role (PR #16) | yes | CI green; independent review pending | yes, installed 2026-10-29 | Codex launch confirmed by the homeowner; Claude launch checked by recorded argv only |
 | #2–#14 | not started | no | no | no |
 
@@ -36,6 +36,10 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## Blockers
 None for #1. #2 onward wait on #1 reaching CI/review passed (prerequisite rule).
+
+## Review log
+- 2026-10-30: Claude reviewed PR #17 at `9f17ce1` in a standalone clone. Changes requested: D1 exit 0 plus a stray rate-limit line is reported failed or retried; D2 the Claude adapter reads the wrong field for errors (real shape captured from 2.1.314); D3 a `queued` backoff job is stranded when its worker dies. Both agents share one GitHub account, so formal review state is a PR comment, not a review object.
+- Merge order: #16 first, then #17 rebased onto it (both add this file).
 
 ## Next actions
 1. Claude: open the #1 PR, run CI, request Codex's independent review; answer review findings.
