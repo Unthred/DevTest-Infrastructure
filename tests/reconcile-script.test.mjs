@@ -139,3 +139,14 @@ test('issue #35 an unreadable CLI or non-executable node leaves a failing log li
   w.cron();
   assert.match(fs.readFileSync(w.log, 'utf8').trim().split('\n').at(-1), /rc=127 node not executable/);
 });
+
+test('issue #35 a dry-run tick reads the decision register from origin/main, so the enable gate fails when a live tick would', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-dry35-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
+  const exe = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  exe('gh', 'echo "[]"');
+  exe('git', 'case "$*" in *"show origin/main:docs/DECISIONS.md"*) echo shim-refused >&2; exit 42;; esac; exec /usr/bin/env -i /usr/bin/git "$@"');
+  const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+  const r = spawnSync(process.execPath, [cli, 'team', 'tick', '--dry-run'], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_STATE_ROOT: root } });
+  assert.notEqual(r.status, 0); assert.match(r.stderr + r.stdout, /DECISIONS\.md/);
+});

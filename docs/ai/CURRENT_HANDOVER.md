@@ -119,3 +119,4 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 ## Issue #35 PR #38 review fix at head 5f09930 (Claude)
 - Codex CHANGES: the generated reconcile script exited 0 silently when `$CLI` was unreadable or `$NODE` not executable. Fixed: the log and lock are opened first, then a missing CLI or node logs `rc=127` with the reason; flock-skip stays silent by design. Regression test added in `tests/reconcile-script.test.mjs`.
 - Validator OK; 144/144 tests pass. Implemented only; exact-head CI and Codex re-review pending. Not deployed.
+- PR #38 verdict at `97f0227` (CHANGES): the enable gate's dry-run tick skipped the `origin/main:docs/DECISIONS.md` read a live tick needs. Fixed: `team tick --dry-run` now reads the register too, so the gate fails when a live tick would. Regression test with a git shim that refuses that read. Validator OK, 145/145 locally. Not live-verified on Tower; CI and opposite-agent re-review pending.

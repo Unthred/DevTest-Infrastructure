@@ -91,7 +91,8 @@ async function teamTick(root, registry, dryRun) {
   if (!config.enabled && !dryRun) return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' };
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };
-  try { return await (await teamFor(root, registry, config, !dryRun)).tick({ dryRun }); } finally { unlock(); }
+  // A dry run reads the decision register too, so the enable gate fails exactly when a live tick would.
+  try { return await (await teamFor(root, registry, config, true)).tick({ dryRun }); } finally { unlock(); }
 }
 async function main() {
   const command = process.argv[2] || 'help';
