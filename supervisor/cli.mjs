@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SupervisorError, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
-import { Team, tickLock } from './team.mjs';
+import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { spawnSync } from 'node:child_process';
 
@@ -75,7 +75,7 @@ function realGit(repoPath) {
     }
   };
 }
-async function teamFor(root, registry, config = JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), needRegister = true) {
+async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true) {
   // The decision register that counts is the one merged into main, not a working copy.
   let register = '';
   if (needRegister) {
@@ -86,8 +86,8 @@ async function teamFor(root, registry, config = JSON.parse(fs.readFileSync(teamC
   return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register });
 }
 async function teamTick(root, registry, dryRun) {
-  const config = JSON.parse(fs.readFileSync(teamConfigFile, 'utf8'));
-  if (!config.enabled && !dryRun) return { skipped: 'team loop is not enabled in supervisor/team.json' };
+  const config = loadTeamConfig(teamConfigFile, root);
+  if (!config.enabled && !dryRun) return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' };
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };
   try { return await (await teamFor(root, registry, config, !dryRun)).tick({ dryRun }); } finally { unlock(); }

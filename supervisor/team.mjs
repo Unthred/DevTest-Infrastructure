@@ -29,6 +29,35 @@ export function validateTeamConfig(c) {
   return c;
 }
 
+// Local override (issue #30): <state root>/team.local.json, outside versions/, so upgrades keep it and the installed
+// copy is never edited. Only operational knobs may be overridden; repository, paths, providers, access and board come
+// from the reviewed file in Git.
+export const LOCAL_OVERRIDE = 'team.local.json';
+export function applyLocalOverride(shipped, local) {
+  if (local == null) return shipped;
+  if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides'].includes(k));
+  if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
+  const out = structuredClone(shipped);
+  if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
+  if (local.limits) { if (typeof local.limits !== 'object') throw new SupervisorError('invalid team.local.json: limits'); out.limits = { ...out.limits, ...local.limits }; }
+  if (local.depends_on_overrides) out.depends_on_overrides = { ...out.depends_on_overrides, ...local.depends_on_overrides };
+  for (const [name, o] of Object.entries(local.agents || {})) {
+    if (!out.agents[name]) throw new SupervisorError(`invalid team.local.json: unknown agent ${name}`);
+    const extra = Object.keys(o || {}).filter(k => k !== 'issues');
+    if (extra.length) throw new SupervisorError(`invalid team.local.json: agent field not overridable: ${extra[0]}`);
+    if ('issues' in o) out.agents[name].issues = o.issues;
+  }
+  return out;
+}
+export function loadTeamConfig(shippedFile, root) {
+  const shipped = JSON.parse(fs.readFileSync(shippedFile, 'utf8'));
+  let local = null;
+  try { local = JSON.parse(fs.readFileSync(path.join(root, LOCAL_OVERRIDE), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw new SupervisorError(`unreadable ${LOCAL_OVERRIDE}`); }
+  return validateTeamConfig(applyLocalOverride(shipped, local));
+}
+
 // The access decision must be homeowner-approved in the register, or the dispatcher refuses to launch anything.
 export function decisionApproved(registerText, id) {
   const m = registerText.match(new RegExp(`^## ${id} [^\\n]*\\n((?:(?!^## ).*\\n?)*)`, 'm'));
@@ -106,6 +135,13 @@ export class Team {
     const actions = [];
     const [prs, issues] = [await this.gh.listPulls(), await this.gh.listIssues()];
     const issueByNo = new Map(issues.map(i => [i.number, i]));
+    // Delivered work: an issue with a merged PR linked to it (closing reference or its issue-<n> branch) is never re-planned.
+    this.delivered = new Set();
+    for (const m of await (this.gh.listMergedPulls?.() ?? [])) {
+      for (const r of m.closingIssuesReferences || []) if (Number.isSafeInteger(r.number)) this.delivered.add(r.number);
+      const b = /\/issue-(\d+)(\D|$)/.exec(m.headRefName || '');
+      if (b && agentOfBranch(this.c, m.headRefName)) this.delivered.add(Number(b[1]));
+    }
     const active = await this.jobs.listActive();
     const perAgent = Object.fromEntries(this.agents().map(([n]) => [n, 0]));
     for (const j of active) { const a = this.agentOfProvider(j.provider); if (a) perAgent[a]++; }
@@ -153,7 +189,7 @@ export class Team {
     // implement: next owned open issue whose prerequisites are closed and that has no work in flight
     for (const n of a.issues) {
       const issue = issueByNo.get(n);
-      if (!issue || issue.state !== 'OPEN' || issue.labels.includes('needs-homeowner')) continue;
+      if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || issue.labels.includes('needs-homeowner')) continue;
       const deps = this.c.depends_on_overrides?.[n] ?? prerequisites(issue.body);
       if (!deps.every(d => issueByNo.get(d)?.state === 'CLOSED')) continue;
       if (this.s.implemented[n] || prs.some(p => agentOfBranch(this.c, p.headRefName) === agent && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName))) continue;
