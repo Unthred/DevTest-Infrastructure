@@ -115,6 +115,29 @@ test('SIMULATED overage on a failed run blocks for approval and is not retried e
   assert.equal(r.status, 'blocked'); assert.equal(r.lastEvent, 'approval_required'); assert.equal(r.attempts, 1);
 });
 
+test('SIMULATED overage on a SUCCESSFUL exit still blocks for approval; no completion, no retry (real subprocess)', async t => {
+  // synthetic shape: status allowed, isUsingOverage true, exit 0. Not a live billing capture.
+  const over = { ...claudeLive, rate_limit_info: { ...claudeLive.rate_limit_info, isUsingOverage: true } };
+  for (const autoRestart of [false, true]) {
+    const s = sandbox(t, `${emit(over)} console.log('all done');`, {}, autoRestart), job = await createJob(s.root, { ...s.spec, autoRestart }, s.registry);
+    const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+    assert.equal(r.status, 'blocked'); assert.equal(r.lastEvent, 'approval_required'); assert.equal(r.attempts, 1);
+    assert.equal(r.allowance.billing.usingOverage, true);
+  }
+});
+
+test('overage outranks a reported usage limit: blocks for approval, never waits for a reset', async t => {
+  const over = { ...exhausted, rate_limit_info: { ...exhausted.rate_limit_info, isUsingOverage: true } };
+  const s = sandbox(t, `${emit(over)} process.exit(1);`), job = await createJob(s.root, { ...s.spec, autoRestart: true }, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.lastEvent, 'approval_required'); assert.equal(r.attempts, 1); assert.equal(r.resetAt, null);
+});
+
+test('without overage a successful run with allowance data still completes (guard is not over-broad)', async t => {
+  const s = sandbox(t, `${emit(claudeLive)} console.log('done');`), job = await createJob(s.root, s.spec, s.registry);
+  assert.equal((await drive(s.root, job, s.registry, clk, s.run(s.root, job))).status, 'completed');
+});
+
 test('Codex postRun hook feeds rollout evidence into a failed run', async t => {
   const reached = structuredClone(codexLive.payload.rate_limits); reached.rate_limit_reached_type = 'primary'; reached.primary.used_percent = 100; reached.primary.resets_at = Math.floor(Date.now() / 1000) + 3600;
   const s = sandbox(t, "console.error('turn failed'); process.exit(1);", { observe: () => ({}), postRun: () => codexAllowance(reached) });

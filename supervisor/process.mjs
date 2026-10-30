@@ -51,9 +51,12 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     if (buffer) observeEvent(adapter.observe(buffer.slice(0, 16384)));
     if (typeof adapter.postRun === 'function') { const late = adapter.postRun(job); if (late) allowance = late; }
     if (allowance) job.allowance = { ...allowance, observedAt: clock.now() };
-    // Structured allowance evidence only refines a failed run; it never turns a success into a limit.
-    if (result.code !== 0 && (!observed || nonFatal.has(observed))) {
-      const derived = billingRisk(allowance) ? { event: 'approval_required' } : limitFromAllowance(allowance, clock.now());
+    // Billing guard: spending beyond the subscription blocks for a human on ANY exit, and outranks every other event
+    // (including a clean exit), so a run that used paid overage is never recorded as plainly completed or retried.
+    if (billingRisk(allowance)) { observed = 'approval_required'; resetAt = null; resetSource = 'none'; verified = false; }
+    // Limit evidence only refines a failed run; it never turns a success into a limit.
+    else if (result.code !== 0 && (!observed || nonFatal.has(observed))) {
+      const derived = limitFromAllowance(allowance, clock.now());
       if (derived) { observed = null; observeEvent(derived); }
     }
     const current = readJob(root, job.id);
