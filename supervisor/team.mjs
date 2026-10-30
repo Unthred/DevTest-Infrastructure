@@ -36,10 +36,15 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
+  if ('alerts' in local) {
+    const cmd = local.alerts?.command;
+    if (!Array.isArray(cmd) || !cmd.length || !cmd.every(x => typeof x === 'string') || !path.isAbsolute(cmd[0]) || Object.keys(local.alerts).length !== 1) throw new SupervisorError('invalid team.local.json: alerts.command must be an absolute program plus arguments');
+    out.alerts = { command: cmd };
+  }
   if (local.limits) { if (typeof local.limits !== 'object') throw new SupervisorError('invalid team.local.json: limits'); out.limits = { ...out.limits, ...local.limits }; }
   if (local.depends_on_overrides) out.depends_on_overrides = { ...out.depends_on_overrides, ...local.depends_on_overrides };
   for (const [name, o] of Object.entries(local.agents || {})) {
