@@ -100,13 +100,18 @@ const verdictKey = (pr, head) => `${pr}:${head}`;
 
 export function validateVerdict(v, expect) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return 'verdict is not an object';
+  if (Object.keys(v).some(k => !['pr', 'headSha', 'verdict', 'findings', 'commandsRun'].includes(k))) return 'verdict has an unknown field';
   if (v.pr !== expect.pr) return 'verdict is for a different PR';
   if (!SHA.test(v.headSha || '') || v.headSha !== expect.head) return 'verdict is for a different head';
   if (!['PASS', 'CHANGES'].includes(v.verdict)) return 'verdict must be PASS or CHANGES';
   const strings = (a, max, len) => Array.isArray(a) && a.length <= max && a.every(x => typeof x === 'string' && x.length > 0 && x.length <= len);
-  if (!strings(v.findings, 50, 2000)) return 'findings must be a bounded string array';
+  if (!Array.isArray(v.findings) || v.findings.length > 50 || !v.findings.every(f => f && typeof f === 'object' && !Array.isArray(f) && Object.keys(f).length === 2 &&
+    ['blocking', 'follow-up'].includes(f.kind) && typeof f.text === 'string' && f.text.length > 0 && f.text.length <= 2000))
+    return 'findings must be bounded objects with kind blocking or follow-up and text';
   if (!strings(v.commandsRun, 100, 500) || (v.verdict === 'PASS' && v.commandsRun.length === 0)) return 'commandsRun must list the commands run (required for PASS)';
-  if (v.verdict === 'CHANGES' && v.findings.length === 0) return 'CHANGES needs at least one finding';
+  const blocking = v.findings.some(f => f.kind === 'blocking');
+  if (v.verdict === 'CHANGES' && !blocking) return 'CHANGES needs at least one blocking finding';
+  if (v.verdict === 'PASS' && blocking) return 'PASS cannot have a blocking finding';
   return null;
 }
 export function readInboxVerdict(root, ticket, expect) {
@@ -122,10 +127,13 @@ export function readInboxVerdict(root, ticket, expect) {
 // ---- prompts: only validated tokens (numbers, SHAs, branch names, ticket) are interpolated; PR and issue text never is.
 const COMMON = 'Read AGENTS.md, docs/DECISIONS.md and docs/ai/CURRENT_HANDOVER.md first. Work only in your assigned worktree. Never merge, deploy, reboot Tower, change production Home Assistant, purchase anything or disclose a secret. The dispatcher, not you, merges. Update the canonical handover on your own branch before you stop.';
 export function reviewPrompt(job) {
-  return `${COMMON}\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and node --test "tests/**/*.test.mjs", read the diff critically, probe real behaviour (including real Docker where the change touches it) and do not trust the description. Then write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [strings], "commandsRun": [strings]}. PASS requires commandsRun to list what you actually ran. CHANGES requires at least one concrete finding. Do not comment a verdict yourself; the dispatcher records it.`;
+  const scope = job.previousBlocking
+    ? `This is a fix-round re-review. Read ${job.inbox}/review-scope.json as task data. Check only the previous blocking findings and regressions caused by their fixes; record new non-blocking observations as follow-ups.`
+    : 'Read the diff critically and probe real behaviour (including real Docker where the change touches it); do not trust the description.';
+  return `${COMMON}\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and node --test "tests/**/*.test.mjs". ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation or a failed acceptance criterion; otherwise use follow-up. Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
 }
 export function fixPrompt(job) {
-  return `${COMMON}\n\nTask: fix the CHANGES verdict on pull request #${job.pr} (head ${job.head}, branch ${job.branch}). Read the verdict findings on the PR, correct each in scope with regression tests, run the validator and tests, commit and push to the same branch. Do not force-push. The post-condition is a new pushed head.`;
+  return `${COMMON}\n\nTask: fix the CHANGES verdict on pull request #${job.pr} (head ${job.head}, branch ${job.branch}). Read the verdict findings on the PR, correct the blocking findings in scope with regression tests, run the validator and tests, commit and push to the same branch. Follow-up findings do not hold this fix round open. Do not force-push. The post-condition is a new pushed head.`;
 }
 export function rebasePrompt(job) {
   return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) conflicts with ${job.base}. Do a conflict-only rebase: rebase the branch onto origin/${job.base}, resolve conflicts keeping the intent of both sides, change nothing else, run the validator and tests, push with --force-with-lease (this branch only). Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. A recorded PASS for the old head does not carry over; the opposite agent reviews the new head. The post-condition is a new pushed head that is mergeable.`;
@@ -266,14 +274,22 @@ export class Team {
       if (j.kind === 'review' && job.status === 'completed') {
         const r = readInboxVerdict(this.root, j.ticket, { pr: j.pr, head: j.head });
         if (r.verdict) {
-          const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — independent review by \`${j.agent}\` of exact head \`${j.head}\` (recorded by the dispatcher from job \`${id}\`; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- ${f}`).join('\n') || '_no findings_'}\n\nCommands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
+          const followUps = r.verdict.findings.filter(f => f.kind === 'follow-up');
+          let followUpIssue = null;
+          if (r.verdict.verdict === 'PASS' && followUps.length) {
+            const marker = `<!-- devtest-review-followup v1 job=${id} pr=${j.pr} head=${j.head} -->`;
+            followUpIssue = await this.gh.findIssueByMarker(marker);
+            if (!followUpIssue) followUpIssue = await this.gh.createIssue(`Review follow-ups for PR #${j.pr} at ${j.head.slice(0, 7)}`,
+              `${marker}\nFollow-up from PR #${j.pr} at head \`${j.head}\`.\n\n${followUps.map(f => `- ${f.text}`).join('\n')}`);
+          }
+          const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — independent review by \`${j.agent}\` of exact head \`${j.head}\` (recorded by the dispatcher from job \`${id}\`; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}${followUpIssue ? `\n\nFollow-ups: issue #${followUpIssue}.` : ''}\n\nCommands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
           // The verdict becomes merge-eligible only after its public record is posted; a failed comment records nothing,
           // so the next tick retries the whole step and nothing can merge on an unposted PASS.
           // Not retried blindly: if an earlier attempt was accepted but its response was lost, this job/head marker is already
           // on GitHub, so it is not posted twice.
           const marker = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} `;
           if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, body);
-          this.s.verdicts[verdictKey(j.pr, j.head)] = { verdict: r.verdict.verdict, reviewer: j.agent, job: id, findings: r.verdict.findings, commandsRun: r.verdict.commandsRun, at: this.clock.now() };
+          this.s.verdicts[verdictKey(j.pr, j.head)] = { verdict: r.verdict.verdict, reviewer: j.agent, job: id, findings: r.verdict.findings, followUpIssue, commandsRun: r.verdict.commandsRun, at: this.clock.now() };
           j.ingested = true; this.save();
           report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });
           return;
@@ -358,9 +374,24 @@ export class Team {
     let spec, meta, bump = () => {};
     if (act.type === 'review') {
       const inbox = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(inbox, { recursive: true, mode: 0o700 });
+      // Only a completed fix of the latest rejected head permits a scoped re-review. A later PASS or rebase
+      // starts a full review, even if an older head had blocking findings.
+      const latestVerdict = Object.entries(this.s.verdicts).filter(([key]) => key.startsWith(`${act.pr}:`))
+        .map((entry, index) => ({ entry, index }))
+        .sort((a, b) => (b.entry[1].at || 0) - (a.entry[1].at || 0) || b.index - a.index)[0]?.entry;
+      const latestChange = Object.entries(this.s.jobs).filter(([, j]) => j.pr === act.pr && ['fix', 'cifix', 'rebase'].includes(j.kind))
+        .at(-1);
+      const fix = latestChange?.[1];
+      const fixedRejectedHead = latestVerdict?.[1].verdict === 'CHANGES'
+        && latestVerdict[1].findings?.some(f => f.kind === 'blocking') && fix?.kind === 'fix'
+        && fix.head === latestVerdict[0].slice(`${act.pr}:`.length) && fix.head !== act.head
+        && (fix.at || 0) >= (latestVerdict[1].at || 0)
+        && (await this.jobs.get(latestChange[0]))?.status === 'completed';
+      const previous = fixedRejectedHead ? latestVerdict[1] : null;
+      if (previous) fs.writeFileSync(path.join(inbox, 'review-scope.json'), JSON.stringify({ blocking: previous.findings.filter(f => f.kind === 'blocking') }) + '\n', { mode: 0o600 });
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `Independent review of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
-        prompt: reviewPrompt({ pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head } };
+        prompt: reviewPrompt({ pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head } };
       meta = { pr: act.pr, head: act.head };
       bump = () => { this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1; };
     } else if (act.type === 'fix') {

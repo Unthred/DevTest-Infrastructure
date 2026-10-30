@@ -36,6 +36,14 @@ export function githubClient(config, gh = ghRunner()) {
     comment: async (n, body) => { gh(['issue', 'comment', String(n), '--repo', repo, '--body-file', '-'], body, { retry: false }); },
     // True when a comment on the issue or PR already contains the text (idempotency check before a non-retried write).
     hasComment: async (n, text) => (json(['issue', 'view', String(n), '--repo', repo, '--json', 'comments'])?.comments || []).some(c => String(c.body || '').includes(text)),
+    findIssueByMarker: async marker => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '1000', '--json', 'number,body'])
+      .find(i => String(i.body || '').includes(marker))?.number || null,
+    createIssue: async (title, body) => {
+      const url = gh(['issue', 'create', '--repo', repo, '--title', title, '--body-file', '-'], body, { retry: false }).trim();
+      const match = /\/issues\/(\d+)$/.exec(url);
+      if (!match) throw new SupervisorError('created follow-up issue number was not returned');
+      return Number(match[1]);
+    },
     addLabel: async (n, label) => {
       gh(['label', 'create', label, '--repo', repo, '--force', '--color', 'B60205', '--description', 'Needs a homeowner decision']);
       gh(['issue', 'edit', String(n), '--repo', repo, '--add-label', label]);
