@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { buildPlanForVerifiedPaths, cleanupContainer, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
+import { buildPlanForVerifiedPaths, cleanupContainer, containerState, treeBytes, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
 function fixture(t) {
@@ -15,7 +15,7 @@ function fixture(t) {
   fs.writeFileSync(path.join(project, 'README.md'), 'fixture\n');
   const spec = { project, runId: 'abcdef0123456789', image: 'dotnet-8', command: ['dotnet', '--version'] };
   const config = { allowedProjects: [project], storageRoot: storage, lock, uid: process.getuid() || 1000, gid: process.getgid() || 1000,
-    limits: { cpus: 1, memoryMb: 512, pids: 64, shmMb: 64, timeoutMs: 30000 } };
+    limits: { cpus: 1, memoryMb: 512, pids: 64, shmMb: 64, timeoutMs: 30000, diskMb: 16, cacheMb: 16 } };
   return { root, project, storage, spec, config, plan: () => buildPlanForVerifiedPaths(spec, config, project, storage) };
 }
 
@@ -33,8 +33,9 @@ test('locked official images have exact digests and unknown or malformed entries
 
 test('planner applies every hardening boundary and keeps source read-only', t => {
   const f = fixture(t), plan = f.plan(), args = plan.args.join(' ');
-  for (const expected of ['--rm', '--pull=never', '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--read-only', '--network=none',
-    '--cpus 1', '--memory 512m', '--pids-limit 64', '--shm-size 64m', '--user', 'dst=/src,readonly', 'dst=/work', 'dst=/out', 'dst=/cache']) assert.ok(args.includes(expected), expected);
+  for (const expected of ['--pull=never', '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--read-only', '--network=none',
+    '--cpus 1', '--memory 512m', '--pids-limit 64', '--shm-size 64m', '--user', 'dst=/src,readonly', 'dst=/work', 'dst=/out', 'dst=/cache', '--init', '--memory-swap 512m', 'fsize=16777216:16777216']) assert.ok(args.includes(expected), expected);
+  assert.ok(!args.includes('--rm'), 'exit state is read before removal');
   assert.ok(!args.includes(['--', 'privileged'].join('')));
   assert.ok(!args.includes(['docker', '.sock'].join('')));
   assert.equal(plan.name, 'devtest-abcdef0123456789');
@@ -49,7 +50,7 @@ test('planner refuses unsafe paths, IDs, limits, images, network and command sha
     s => { s.command = ['sh', 'bad\narg']; }
   ]) { const s = structuredClone(f.spec); mutation(s); assert.throws(() => buildPlanForVerifiedPaths(s, f.config, f.project, f.storage)); }
   for (const mutation of [
-    c => { c.uid = 0; }, c => { c.gid = 0; }, c => { c.limits.memoryMb = 0; }, c => { c.limits.pids = 10000; }, c => { c.limits.timeoutMs = 0; }
+    c => { c.uid = 0; }, c => { c.gid = 0; }, c => { c.limits.memoryMb = 0; }, c => { c.limits.pids = 10000; }, c => { c.limits.timeoutMs = 0; }, c => { delete c.limits.diskMb; }, c => { c.limits.diskMb = 99999; }, c => { c.limits.cacheMb = 1; }
   ]) { const c = structuredClone(f.config); mutation(c); assert.throws(() => buildPlanForVerifiedPaths(f.spec, c, f.project, f.storage)); }
 });
 
@@ -92,28 +93,110 @@ test('Docker environment supports a scoped rootless socket without forwarding se
   assert.throws(() => dockerEnvironment(source), /owner-only/);
 });
 
-test('run maps success, subject failure, timeout and cleanup failure', async t => {
-  for (const scenario of ['success', 'subject', 'timeout', 'cleanup']) {
-    const f = fixture(t), plan = f.plan();
-    if (scenario === 'timeout') plan.timeoutMs = 10;
-    let present = false;
-    const command = argv => {
-      if (argv[0] === 'image') return { status: 0, stdout: 'sha256:local\n', stderr: '' };
-      if (argv[1] === 'inspect') return present ? { status: 0, stdout: `${plan.runId}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'No such container' };
-      if (argv[1] === 'rm') return { status: scenario === 'cleanup' ? 1 : 0, stdout: '', stderr: '' };
-      throw new Error('unexpected command');
-    };
-    const spawnRun = () => {
-      const child = new EventEmitter();
-      if (scenario === 'cleanup') present = true;
-      child.kill = () => { queueMicrotask(() => child.emit('close', 143)); return true; };
-      if (scenario !== 'timeout') queueMicrotask(() => child.emit('close', scenario === 'subject' ? 1 : 0));
-      return child;
-    };
-    const result = await runContainer(plan, { command, spawnRun });
-    assert.equal(result.exitCode, { success: 0, subject: 1, timeout: 5, cleanup: 7 }[scenario]);
-    assert.equal(result.cleanup, scenario === 'cleanup' ? 'incomplete' : 'complete');
+const stateFormat = '{{.State.ExitCode}} {{.State.OOMKilled}}';
+function harness({ exit = 0, state = '0 false', tail = false, rmStatus = 0, onSpawn = () => {}, stdoutText = '', stderrText = '' }) {
+  let present = false;
+  const calls = [];
+  const command = argv => {
+    calls.push(argv);
+    if (argv[0] === 'image') return { status: 0, stdout: 'sha256:local\n', stderr: '' };
+    if (argv[1] === 'kill') { return { status: 0, stdout: '', stderr: '' }; }
+    if (argv[1] === 'inspect' && argv.includes(stateFormat)) return present && state !== null ? { status: 0, stdout: state + '\n', stderr: '' } : { status: 1, stdout: '', stderr: 'No such container' };
+    if (argv[1] === 'inspect') return present ? { status: 0, stdout: 'RUN\n', stderr: '' } : { status: 1, stdout: '', stderr: 'No such container' };
+    if (argv[1] === 'rm') { if (rmStatus === 0) present = false; return { status: rmStatus, stdout: '', stderr: '' }; }
+    throw new Error('unexpected command ' + argv.join(' '));
+  };
+  const spawnRun = plan => {
+    const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    present = state !== null || tail;
+    child.kill = () => { queueMicrotask(() => child.emit('close', 143)); return true; };
+    onSpawn(child, plan);
+    if (!tail) queueMicrotask(() => { if (stdoutText) child.stdout.emit('data', Buffer.from(stdoutText)); if (stderrText) child.stderr.emit('data', Buffer.from(stderrText)); child.emit('close', exit); });
+    return child;
+  };
+  return { command, spawnRun, calls };
+}
+async function runWith(t, options, mutatePlan = () => {}, runOptions = {}) {
+  const f = fixture(t), plan = f.plan(); mutatePlan(plan);
+  const h = harness(options);
+  const originalCommand = h.command;
+  const command = argv => { const r = originalCommand(argv.map(x => x === plan.name ? plan.name : x)); if (r.stdout === 'RUN\n') r.stdout = plan.runId + '\n'; return r; };
+  const result = await runContainer(plan, { command, spawnRun: () => h.spawnRun(plan), ...runOptions });
+  return { result, plan, h };
+}
+
+test('exit mapping uses the container state: subject failures are 1, only Docker failures are 6', async t => {
+  const cases = [
+    ['success', { exit: 0, state: '0 false' }, 0, null],
+    ['subject exit 1', { exit: 1, state: '1 false' }, 1, null],
+    ['command not found 127', { exit: 127, state: '127 false' }, 1, null],
+    ['cannot execute 126', { exit: 126, state: '126 false' }, 1, null],
+    ['memory kill 137', { exit: 137, state: '137 true' }, 1, 'memory_limit'],
+    ['docker failed before a container existed', { exit: 125, state: null }, 6, null]
+  ];
+  for (const [name, options, expected, reason] of cases) {
+    const { result } = await runWith(t, options);
+    assert.equal(result.exitCode, expected, name); assert.equal(result.reason, reason, name); assert.equal(result.cleanup, 'complete', name);
   }
+});
+
+test('timeout is 5 and an unremovable container is 7 with the error class recorded', async t => {
+  const timeout = await runWith(t, { tail: true, state: '143 false' }, plan => { plan.timeoutMs = 10; });
+  assert.equal(timeout.result.exitCode, 5); assert.equal(timeout.result.reason, 'timeout');
+  const cleanup = await runWith(t, { exit: 0, state: '0 false', rmStatus: 1 });
+  assert.equal(cleanup.result.exitCode, 7); assert.equal(cleanup.result.cleanup, 'incomplete');
+});
+
+test('container output is captured to bounded owner-only host logs outside the writable mounts', async t => {
+  const { result, plan } = await runWith(t, { exit: 3, state: '3 false', stdoutText: 'VISIBLE_STDOUT\n', stderrText: 'x'.repeat(2 * 1048576) });
+  assert.equal(result.exitCode, 1);
+  assert.equal(fs.readFileSync(result.logs.stdout.path, 'utf8'), 'VISIBLE_STDOUT\n');
+  assert.equal(result.logs.stderr.bytes, 1048576); assert.equal(result.logs.stderr.truncated, true);
+  for (const log of [result.logs.stdout.path, result.logs.stderr.path]) {
+    assert.equal(fs.statSync(log).mode & 0o777, 0o600);
+    assert.ok(!log.startsWith(plan.work) && !log.startsWith(plan.out), 'logs are not in a container-writable directory');
+  }
+});
+
+test('aggregate disk budget: an over-limit run is killed, reported as a subject failure and cleaned up', async t => {
+  let killed = false;
+  const { result, h } = await runWith(t, { tail: true, state: '137 false', onSpawn: (child, plan) => {
+    fs.writeFileSync(path.join(plan.out, 'big'), Buffer.alloc(17 * 1048576, 1));   // 17 MiB over a 16 MiB budget
+  } }, () => {}, { pollMs: 10 });
+  assert.equal(result.exitCode, 1); assert.equal(result.reason, 'disk_limit'); assert.equal(result.cleanup, 'complete');
+  assert.ok(h.calls.some(argv => argv[1] === 'kill'), 'container was killed by name');
+});
+
+test('a container that exits before the first poll is still measured', async t => {
+  const { result } = await runWith(t, { exit: 0, state: '0 false', onSpawn: (child, plan) => {
+    fs.writeFileSync(path.join(plan.out, 'big'), Buffer.alloc(17 * 1048576, 1));
+  } }, () => {}, { pollMs: 3600000 });
+  assert.equal(result.reason, 'disk_limit'); assert.equal(result.exitCode, 1); assert.equal(result.cleanup, 'complete');
+});
+
+test('cache budget is enforced separately', async t => {
+  const { result } = await runWith(t, { tail: true, state: '137 false', onSpawn: (child, plan) => {
+    fs.writeFileSync(path.join(plan.cache, 'pkg'), Buffer.alloc(17 * 1048576, 1));
+  } }, () => {}, { pollMs: 10 });
+  assert.equal(result.reason, 'cache_limit'); assert.equal(result.exitCode, 1);
+});
+
+test('treeBytes counts allocated bytes, never follows symlinks and stops early past the cap', t => {
+  const f = fixture(t), dir = path.join(f.root, 'tree'); fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'sub', 'a'), Buffer.alloc(100000, 1));
+  const outside = path.join(f.root, 'outside'); fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, 'huge'), Buffer.alloc(2 * 1048576, 1));
+  fs.symlinkSync(outside, path.join(dir, 'link'));
+  const total = treeBytes(dir, 1e9);
+  assert.ok(total >= 100000 && total < 1048576, 'symlinked tree not counted: ' + total);
+  assert.ok(treeBytes(dir, 1000) > 1000, 'returns as soon as the cap is passed');
+  assert.equal(treeBytes(path.join(f.root, 'absent'), 10), 0);
+});
+
+test('containerState parses exit code and OOM flag and returns null when no container exists', () => {
+  const plan = { name: 'n' };
+  assert.deepEqual(containerState(plan, () => ({ status: 0, stdout: '137 true\n' })), { exitCode: 137, oomKilled: true });
+  assert.equal(containerState(plan, () => ({ status: 1, stdout: '' })), null);
+  assert.equal(containerState(plan, () => ({ status: 0, stdout: 'garbage' })), null);
 });
 
 test('a pre-existing run container is never started over or removed', async t => {
