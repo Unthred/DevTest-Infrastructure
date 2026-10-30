@@ -41,5 +41,15 @@ exec /usr/local/bin/node '$install_root/supervisor/cli.mjs' "\$@"
 EOF
 chmod 755 "$wrapper"
 bash -n "$launcher" "$wrapper"
+# team-status delegates to whichever ai-supervisor is current, so it survives every later upgrade and rollback unchanged.
+status_cmd=/root/bin/team-status
+status_tmp=/root/bin/.team-status-$commit
+cat > "$status_tmp" <<'EOF'
+#!/usr/bin/env bash
+exec /root/bin/ai-supervisor team status "$@"
+EOF
+chmod 755 "$status_tmp"
+bash -n "$status_tmp"
+mv -f "$status_tmp" "$status_cmd"
 "$launcher" --supervisor help >/dev/null
 printf 'installed=%s backup=%s\n' "$commit" "$backup"

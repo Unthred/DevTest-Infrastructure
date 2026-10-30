@@ -29,7 +29,7 @@ export function githubClient(config, gh = ghRunner()) {
   const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,statusCheckRollup,url';
   return {
     listPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS]),
-    listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,headRefName,closingIssuesReferences']),
+    listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,closingIssuesReferences']),
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
     getPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', PR_FIELDS]),
     listIssues: async () => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '200', '--json', 'number,title,state,body,labels'])

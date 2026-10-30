@@ -175,7 +175,8 @@ export class Team {
     const issueByNo = new Map(issues.map(i => [i.number, i]));
     // Delivered work: an issue with a merged PR linked to it (closing reference or its issue-<n> branch) is never re-planned.
     this.delivered = new Set();
-    for (const m of await (this.gh.listMergedPulls?.() ?? [])) {
+    this.merged = await (this.gh.listMergedPulls?.() ?? []);
+    for (const m of this.merged) {
       for (const r of m.closingIssuesReferences || []) if (Number.isSafeInteger(r.number)) this.delivered.add(r.number);
       const b = /\/issue-(\d+)(\D|$)/.exec(m.headRefName || '');
       if (b && agentOfBranch(this.c, m.headRefName)) this.delivered.add(Number(b[1]));

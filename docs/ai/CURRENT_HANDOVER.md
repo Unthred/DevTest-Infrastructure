@@ -175,3 +175,8 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## PR #48 CHANGES fix (Claude, branch `claude/issue-47-supervisor-self-upgrade`)
 - Blocking finding fixed: `SelfUpgrade.eligibility` now requires the PR `state` to be `MERGED`; an OPEN or CLOSED PR with a matching head, PASS and green CI is refused. Regression test added. Exact-head CI and Codex re-review pending; not deployed.
+
+## #39 `team status` (Claude, branch `claude/issue-39-ai-supervisor-team`)
+- Implemented in source: `supervisor/teamstatus.mjs` (on `buildView`), `team status [--json] [--no-github]`, cached merged-PR list written by the tick, `team-status` wrapper in the install and upgrade scripts, `tests/team-status.test.mjs` (13 tests). Validator OK; full suite 245 tests.
+- Smoke: ran against the real Tower state read-only (no gh call, cache fresh); it correctly flagged a completed review job still holding a lease.
+- NOT done: the `team alert` part of the issue comments (event-driven Slack alerts via OpenBao webhook); needs its own PR. Not deployed; not installed; `tools/upgrade-supervisor.sh` changed, so the homeowner must run the reviewed upgrade by hand (the self-upgrader will not apply upgrader changes automatically). Codex review pending.

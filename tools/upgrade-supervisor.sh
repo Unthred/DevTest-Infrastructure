@@ -37,5 +37,15 @@ EOF
 chmod 755 "$temp"
 mv "$temp" "$wrapper"
 bash -n "$wrapper"
+# team-status delegates to whichever ai-supervisor is current, so it survives every later upgrade and rollback unchanged.
+status_cmd=/root/bin/team-status
+status_tmp=/root/bin/.team-status-$commit
+cat > "$status_tmp" <<'EOF'
+#!/usr/bin/env bash
+exec /root/bin/ai-supervisor team status "$@"
+EOF
+chmod 755 "$status_tmp"
+bash -n "$status_tmp"
+mv -f "$status_tmp" "$status_cmd"
 /root/bin/ai-agent --supervisor help >/dev/null
 printf 'upgraded=%s previous_wrapper=%s\n' "$commit" "$backup"
