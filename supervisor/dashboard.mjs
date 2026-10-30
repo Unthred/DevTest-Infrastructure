@@ -72,7 +72,7 @@ function reasons(team, cache, jobs, plan, states) {
   for (const [agent, a] of Object.entries(c.agents)) for (const n of a.issues) {
     const issue = byNo.get(n);
     if (!issue || issue.state !== 'OPEN') continue;
-    const deps = c.depends_on_overrides?.[n] ?? prerequisites(issue.body);
+    const deps = c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
     const open = deps.filter(d => byNo.get(d)?.state !== 'CLOSED');
     const hasPr = prs.some(p => agentOfBranch(c, p.headRefName) === agent && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName));
     const running = activeJobs.some(j => j.kind === 'implement' && j.issue === n);

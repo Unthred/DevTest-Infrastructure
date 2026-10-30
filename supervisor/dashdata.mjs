@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicJson } from './core.mjs';
-import { checksState } from './team.mjs';
+import { checksState, prerequisites } from './team.mjs';
 
 export const RETENTION_MS = 35 * 86400000;
 export const MAX_SNAPSHOTS = 12000;          // five-minute ticks for ~41 days; the age bound normally applies first
@@ -58,7 +58,7 @@ export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, tit
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
   statusCheckRollup: (p.statusCheckRollup || []).slice(0, 40).map(c => ({ name: redact(c.name || c.context || '', 80), status: c.status, conclusion: c.conclusion, state: c.state })) }));
 export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, 120), state: i.state, labels: (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
-  body: (/Prerequisites:\*{0,2}[^\n]*/i.exec(i.body || '') || [''])[0].slice(0, 200) }));
+  prerequisites: prerequisites(i.body) }));
 
 // idle | running | paused | blocked, per agent, from the supervisor's own job records.
 export function agentStates(config, jobs, now) {

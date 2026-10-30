@@ -200,7 +200,7 @@ test('recordTick stores a compact cache and a snapshot; issue bodies and comment
   const raw = fs.readFileSync(path.join(root, 'dashboard', 'cache.json'), 'utf8');
   assert.doesNotMatch(raw, /SECRET|ghp_|description|detailsUrl|token=abc/);
   const cache = readCache(root);
-  assert.equal(cache.issues[0].body, 'Prerequisites: #2'); assert.equal(cache.tick.status, 'ok');
+  assert.deepEqual(cache.issues[0].prerequisites, [2]); assert.equal(cache.issues[0].body, undefined); assert.equal(cache.tick.status, 'ok');
   const snaps = readSnapshots(root);
   assert.equal(snaps.length, 1); assert.deepEqual(snaps[0].redCi, [1]); assert.equal(snaps[0].agents.claude, 'paused'); assert.deepEqual(snaps[0].plan, [{ agent: 'claude', type: 'implement', ref: 5 }]);
   assert.equal(snaps[0].allowance.claude.windows[0].utilization, 0.34);
@@ -228,7 +228,10 @@ test('redact removes emails, tokens, bearer values and long opaque strings but k
   const out = redact(`x me@home.org ghp_1234567890abcdef Bearer abcdefghijkl sk-abcdefghijkl ${'Z'.repeat(45)} ${sha} \u0000z`, 500);
   assert.doesNotMatch(out, /me@home|ghp_|abcdefghijkl|ZZZZ|\u0000/); assert.match(out, new RegExp(sha));
   assert.equal(compactPulls([{ number: 1, title: 't', headRefName: 'b', headRefOid: H(1), baseRefName: 'main', url: 'https://u' }])[0].statusCheckRollup.length, 0);
-  assert.equal(compactIssues([{ number: 2, title: 't', state: 'OPEN', labels: [{ name: 'x' }].map(l => l.name), body: 'no prereq line' }])[0].body, '');
+  assert.deepEqual(compactIssues([{ number: 2, title: 't', state: 'OPEN', labels: [{ name: 'x' }].map(l => l.name), body: 'no prereq line' }])[0].prerequisites, []);
+  const many = Array.from({ length: 50 }, (_, k) => k + 100);
+  const c = compactIssues([{ number: 2, title: 't', state: 'OPEN', labels: [], body: `Prerequisites: ${many.map(n => '#' + n).join(', ')} mail me@home.org` }])[0];
+  assert.deepEqual(c.prerequisites, many); assert.doesNotMatch(JSON.stringify(c), /me@home/);
 });
 
 // ---- server

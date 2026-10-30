@@ -230,7 +230,7 @@ export class Team {
     for (const n of a.issues) {
       const issue = issueByNo.get(n);
       if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || issue.labels.includes('needs-homeowner')) continue;
-      const deps = this.c.depends_on_overrides?.[n] ?? prerequisites(issue.body);
+      const deps = this.c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
       if (!deps.every(d => issueByNo.get(d)?.state === 'CLOSED')) continue;
       if (this.s.implemented[n] || prs.some(p => agentOfBranch(this.c, p.headRefName) === agent && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName))) continue;
       if (busy('implement', String(n))) continue;
