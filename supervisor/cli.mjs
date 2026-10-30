@@ -9,6 +9,7 @@ import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { readJobs, recordTick, tickOutcome } from './dashdata.mjs';
 import { spawnSync } from 'node:child_process';
+import { SelfUpgrade, realDeps, runningSha } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
 function args(list) {
@@ -104,13 +105,46 @@ async function teamTick(root, registry, dryRun) {
     throw error;
   } finally { unlock(); }
 }
+// Self-upgrade (issue #47). Alerts are always appended to <state root>/team/alerts.jsonl; when team.local.json sets
+// alerts.command (an absolute program plus arguments), the text is also piped to it on stdin, so no secret is ever an argument.
+function alertSender(root, config) {
+  return async text => {
+    const dir = path.join(root, 'team'); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    let delivered = !config.alerts;
+    if (config.alerts) {
+      const [program, ...rest] = config.alerts.command;
+      const r = spawnSync(program, rest, { input: text, encoding: 'utf8', timeout: 30000, env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+      delivered = r.status === 0;
+    }
+    fs.appendFileSync(path.join(dir, 'alerts.jsonl'), JSON.stringify({ at: Date.now(), text, delivered }) + '\n', { mode: 0o600 });
+    if (!delivered) throw new SupervisorError('alert command failed');
+  };
+}
+function selfUpgradeFor(root, registry) {
+  const config = loadTeamConfig(teamConfigFile, root);
+  const verdictFor = (pr, head) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')).verdicts?.[`${pr}:${head}`] || null; } catch { return null; } };
+  const jobs = realJobs(root, registry);
+  return { config, upgrade: new SelfUpgrade({ root, deps: realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, sendAlert: alertSender(root, config) }) }) };
+}
+async function selfUpgradeStep(root, registry, tick) {
+  const { config, upgrade } = selfUpgradeFor(root, registry);
+  if (!config.enabled) return 'team-loop-disabled';
+  // A tick skipped because another one holds the lock is not a live tick and verifies nothing.
+  const live = !tick?.skipped || Array.isArray(tick.skipped);
+  const failed = tick?.error || (Array.isArray(tick?.skipped) && tick.skipped.length);
+  if (live) {
+    const verdict = await upgrade.verifyPending({ running: runningSha(self), ok: !failed, reason: tick?.error || tick?.skipped?.[0]?.reason });
+    if (verdict === 'rolled-back' || verdict === 'rollback-failed' || verdict === 'verified') return verdict;
+  }
+  return upgrade.step();
+}
 async function main() {
   const command = process.argv[2] || 'help';
   const a = args(process.argv.slice(3));
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | reconcile | daemon | release ID\n  team tick [--dry-run] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | daemon | release ID\n  team tick [--dry-run] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   if (command === 'dry-run' || command === 'start') {
@@ -168,6 +202,12 @@ async function main() {
     if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run]');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
   }
+  if (command === 'self-upgrade') {
+    const { upgrade } = selfUpgradeFor(root, registry);
+    if (a._[0] === 'clear-latch') { upgrade.clearLatch(); console.log('latch cleared'); return; }
+    if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|clear-latch');
+    console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, installed: upgrade.d.installed() }, null, 2)); return;
+  }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
       const result = reconcileOnce(root, registry);
@@ -177,6 +217,8 @@ async function main() {
         // A skipped item (lease conflict, gh error) keeps the other items running but still makes the scheduled run fail visibly.
         if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
       } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
+      // After the lock is released, so the new version's dry-run health check can take it. A failure here never fails the tick.
+      try { result.selfUpgrade = await selfUpgradeStep(root, registry, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
       console.log(JSON.stringify(result)); return;
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.

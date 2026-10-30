@@ -161,3 +161,17 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 ## PR #36 review fixes (2026-10-30)
 - Issue caching always retains needs-homeowner within the ten-label cap. Recent activity includes failed tick snapshots after later successful ticks.
 - Regression tests cover an eleventh-position needs-homeowner label and an error tick followed by an ok tick. `node tools/validate-project.mjs` passed; the full test suite passed (203/203). Implemented in this branch; exact-head CI and independent review are pending. No deployment or live dashboard screenshot verification was performed.
+
+## Issue #47 supervisor self-upgrade (Claude, branch `claude/issue-47-supervisor-self-upgrade`)
+- New `supervisor/upgrade.mjs`, run by `reconcile` after the team tick (lock released): detect `main` ahead of the installed SHA with `supervisor/` changes; refuse (and alert) any range touching `tools/upgrade-supervisor.sh`, `tools/rollback-supervisor.sh` or `supervisor/upgrade.mjs`; require every first-parent commit to be a PR merge whose merged head has a dispatcher-recorded PASS from the opposite agent and green CI; wait for no active job (max 30 min); validator plus full suite in a clean clone at the target; `tools/upgrade-supervisor.sh` from that clone; `team tick --dry-run` health check; the next live tick under the new version must raise no error, otherwise `rollback-supervisor.sh --supervisor NEW PREVIOUS` (new mode, original single-argument mode unchanged) restores the previous wrapper and `current`. One upgrade per hour; a rollback writes `<state root>/team/self-upgrade.latch`, which stops auto-upgrades until `ai-supervisor self-upgrade clear-latch`. Records go to `<state root>/team/upgrades.jsonl` for the dashboard (#32).
+- Alerts: there is no Slack mechanism in the repo (#39 is the team-status issue, not alerts). Alerts append to `<state root>/team/alerts.jsonl` and, if `team.local.json` sets `alerts.command` (absolute program plus arguments, text on stdin), are piped to it. The homeowner must point that at the AI Slack channel sender.
+- A live tick counts as failed if it throws or reports skipped items. A tick skipped because another holds the lock verifies nothing.
+- `tests/self-upgrade.test.mjs` (21 tests): every rule in the acceptance list with fakes, real git range parsing, real clean-checkout pre-checks, the real rollback script on temp dirs. Mutation checks on the upgrader guard and the self-review rule fail as expected. Validator OK, 198/198.
+- Implemented only. CI and Codex review pending. Not deployed: this PR changes the upgrader, so it needs a manual `tools/upgrade-supervisor.sh` once; the live automatic upgrade on Tower required by the acceptance list has not happened.
+
+## Issue #47 / PR #48 conflict-only rebase (Claude)
+- Rebased onto origin/main `94d4d0c`; old head `ec130ae`, rebased commit `6b90fca`. Conflicts in this handover and the `supervisor/cli.mjs` help text were resolved by keeping both sides. Validator OK, 231/231 tests. The PASS for the old head does not carry over; Codex must review the new head. Not merged, not deployed.
+
+
+## PR #48 CHANGES fix (Claude, branch `claude/issue-47-supervisor-self-upgrade`)
+- Blocking finding fixed: `SelfUpgrade.eligibility` now requires the PR `state` to be `MERGED`; an OPEN or CLOSED PR with a matching head, PASS and green CI is refused. Regression test added. Exact-head CI and Codex re-review pending; not deployed.
