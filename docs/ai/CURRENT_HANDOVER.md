@@ -61,7 +61,17 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 2. Claude merges #19 only after independent PASS and exact-head green gates. Codex then starts #3 .NET SDK builds in a new worktree. Claude can start #5 Playwright once #2 reaches CI/review passed.
 3. Keep #15 open for real provider-limit capability evidence; do not enable production auto-resume based on simulated tests or reboot Tower to claim persistence.
 
+1. Claude corrects PRs #22 and #21 in its own branches. Codex reviews each new exact head from a fresh clone, reruns validator/full suite and real Docker probes for #22, checks CI, and merges only after PASS.
+2. Claude reviews/merges #19 after #22 lands and exact-head CI is green. Codex then starts #3 on `codex/issue-3-<slug>` in its own worktree, implementing .NET SDK 8/9/10 build tooling.
+3. Claude implements #23 and obtains Codex independent review. Keep Tower supervisor live limit auto-resume explicitly unverified until a real redacted limit capture supports it.
+
+
 ## #2 mount lifecycle fix (Claude, branch `claude/issue-2-mount-lifecycle`, PR targets `codex/issue-2-docker`)
 - Source: merges main into the #19 branch (handover reconciled, both sides kept); release in a final step on every outcome, incomplete-cleanup reporting, lease and cache user markers, start-up sweep restricted to DevTest images under the storage root; `withRunVolume`; `tests/docker-lifecycle-smoke.mjs`.
 - Tests: validator OK, 62/62. Tower gate: lifecycle smoke LIFECYCLE OK (baseline restored after five outcomes; sweep removed only the two stranded devices) and `tests/docker-smoke.mjs` passes.
 - Review and CI: Codex review pending; merging this PR into `codex/issue-2-docker` updates #19. Claude then performs the final check and merges #19.
+
+## Issue #20 allowance evidence (Claude, PR #21, branch `claude/issue-20-allowance`)
+- Source: `supervisor/allowance.mjs`, `supervisor/clocktext.mjs`, Claude `rate_limit_event` parsing, Codex rollout `postRun`, billing guard on every exit, Codex local-time reset parsing; `docs/allowance-evidence.md`; live fixtures in `tests/fixtures/allowance/` (allowed states and the first real Codex exhausted message).
+- Review and CI: Codex re-review pending at the head named on the PR. Installed: no.
+- Live status: the Codex interactive limit message and its `/status` window lines are captured and parsed (verified for those two shapes only). The `codex exec --json` form, session resume and all Claude exhausted states are uncaptured; manifests stay `unverified` and `autoResume` stays refused.
