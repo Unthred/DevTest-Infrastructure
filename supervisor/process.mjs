@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { billingRisk, limitFromAllowance } from './allowance.mjs';
 import { checkpoint, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
 export async function runProcess(root, job, config, adapter, clock, options = {}) {
@@ -7,7 +8,9 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   let observed = null, resetAt = null, resetSource = 'none', verified = false, buffer = '';
   const nonFatal = new Set(['transient_rate_limit', 'network_error']);
+  let allowance = null;
   const observeEvent = result => {
+    if (result.allowance) allowance = result.allowance;
     if (!result.event || (observed && !nonFatal.has(observed) && nonFatal.has(result.event))) return;
     observed = result.event; resetAt = result.resetAt || null;
     resetSource = result.resetSource || 'none'; verified = result.verified === true;
@@ -46,6 +49,13 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
       child.on('close', code => resolve({ code: code ?? 1 }));
     });
     if (buffer) observeEvent(adapter.observe(buffer.slice(0, 16384)));
+    if (typeof adapter.postRun === 'function') { const late = adapter.postRun(job); if (late) allowance = late; }
+    if (allowance) job.allowance = { ...allowance, observedAt: clock.now() };
+    // Structured allowance evidence only refines a failed run; it never turns a success into a limit.
+    if (result.code !== 0 && (!observed || nonFatal.has(observed))) {
+      const derived = billingRisk(allowance) ? { event: 'approval_required' } : limitFromAllowance(allowance, clock.now());
+      if (derived) { observed = null; observeEvent(derived); }
+    }
     const current = readJob(root, job.id);
     if (current.status === 'paused_manual' || current.status === 'stopped') job.status = current.status;
     job.childPid = null; saveJob(root, job, clock);

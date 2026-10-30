@@ -1,6 +1,7 @@
 import * as base from './base.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { claudeAllowance } from '../allowance.mjs';
 import { safeEnvironment } from '../core.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight() {
@@ -23,6 +24,7 @@ export function observe(line) {
   try { obj = JSON.parse(line); } catch { obj = null; }
   const errorObject = obj && (obj.type === 'error' || obj.is_error === true || obj.type === 'result' && obj.is_error === true);
   const sessionId = typeof obj?.session_id === 'string' ? obj.session_id : null;
+  if (obj?.type === 'rate_limit_event') return { sessionId, allowance: claudeAllowance(obj.rate_limit_info) };
   const text = obj ? (errorObject ? String(obj.error?.message || obj.error || obj.message || obj.result || '') : '') : line;
   if (errorObject && obj.api_error_status === 401) return { event: 'auth_error', sessionId };
   if (/budget limit|spend limit|insufficient credits/i.test(text)) return { event: 'approval_required', sessionId };

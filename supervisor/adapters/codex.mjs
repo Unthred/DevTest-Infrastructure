@@ -1,5 +1,6 @@
 import * as base from './base.mjs';
 import { spawnSync } from 'node:child_process';
+import { codexAllowanceFromRollout, codexRolloutFile } from '../allowance.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight(job) {
   const status = spawnSync('codex', ['login', 'status'], { encoding: 'utf8', timeout: 10000 });
@@ -25,3 +26,5 @@ export function observe(line) {
     return { event: 'usage_limit', resetAt: base.resetTime(text), resetSource: 'provider_reported', verified: false, sessionId };
   return { ...base.observe(text), sessionId };
 }
+// Codex's exec stream carries no limit data; the thread's rollout file does. Read after the process exits.
+export function postRun(job) { return codexAllowanceFromRollout(codexRolloutFile(job.sessionId)); }
