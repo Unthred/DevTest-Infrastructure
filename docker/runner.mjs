@@ -123,7 +123,7 @@ function mountedSource(target) {
   return { source, type };
 }
 
-function ensureLoopImage(image, target, bytes) {
+function ensureLoopImage(image, target, bytes, readOnly = false) {
   const existing = mountedSource(target);
   if (existing) {
     const st = fs.lstatSync(image);
@@ -144,38 +144,137 @@ function ensureLoopImage(image, target, bytes) {
     if (!st.isFile() || st.isSymbolicLink() || st.uid !== process.getuid() || (st.mode & 0o077) !== 0 || st.size !== bytes)
       throw new RunnerError('bounded storage image size or owner mismatch', 4);
   }
-  hostCommand('mount', ['-t', 'ext4', '-o', 'loop,nosuid,nodev', image, target]);
+  hostCommand('mount', ['-t', 'ext4', '-o', readOnly ? 'loop,ro,nosuid,nodev,noexec' : 'loop,nosuid,nodev', image, target]);
   if (!mountedSource(target)) throw new RunnerError('bounded storage mount was not established', 3);
 }
 
-// A finite ext4 loop image supplies the hard ENOSPC ceiling before a write can exceed the budget.
-// Cache remains mounted for reuse; the run volume remains mounted until the caller has collected evidence.
-export function ensureLoopVolumes(plan) {
-  ensureLoopImage(plan.cacheImage, plan.cache, plan.cacheBytes);
-  ensureLoopImage(plan.workImage, plan.volume, plan.diskBytes);
-  for (const dir of [plan.work, plan.out]) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.chownSync(dir, plan.uid, plan.gid);
-    fs.chmodSync(dir, 0o700);
+// ---- bounded-storage lifecycle -------------------------------------------------------------------------------------
+// A finite ext4 loop image supplies the hard ENOSPC ceiling. Every run owns a lease (its PID and start time) so a sweep can
+// tell a live run from a dead one, and a mount is released in a finally on every outcome. The shared cache image is mounted
+// while at least one live run uses it and unmounted by the last one to finish.
+function processStart(pid) {
+  try { return fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[21]; }
+  catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') return null; throw error; }
+}
+const alive = owner => !!owner && processStart(owner.pid) === owner.start;
+function readOwner(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return null; throw error; }
+}
+const ownerNow = () => ({ pid: process.pid, start: processStart(process.pid) });
+const leaseFile = plan => path.join(plan.workspace, 'lease.json');
+const cacheUsers = cache => `${cache}.users`;
+
+function withCacheLock(cache, fn) {
+  const lock = `${cache}.lock`;
+  let held = false;
+  for (let attempt = 0; attempt < 200 && !held; attempt++) {
+    try { fs.mkdirSync(lock, { mode: 0o700 }); held = true; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (!alive(readOwner(path.join(lock, 'owner.json')))) { fs.rmSync(lock, { recursive: true, force: true }); continue; }   // dead holder
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
   }
-  fs.chownSync(plan.cache, plan.uid, plan.gid);
-  fs.chmodSync(plan.cache, 0o700);
+  if (!held) throw new RunnerError('cache lock is busy', 3);
+  try { fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify(ownerNow()), { mode: 0o600 }); return fn(); }
+  finally { fs.rmSync(lock, { recursive: true, force: true }); }
 }
 
+function mountedAs(target, image) {
+  const mounted = mountedSource(target);
+  if (!mounted) return null;
+  if (mounted.type !== 'ext4' || !mounted.source.startsWith('/dev/loop') || hostCommand('losetup', ['-n', '-O', 'BACK-FILE', mounted.source]) !== image)
+    throw new RunnerError('refusing to touch a foreign mount', 4);
+  return mounted;
+}
 export function releaseRunVolume(plan) {
-  const mounted = mountedSource(plan.volume);
-  if (!mounted) return;
-  if (mounted.type !== 'ext4' || hostCommand('losetup', ['-n', '-O', 'BACK-FILE', mounted.source]) !== plan.workImage)
-    throw new RunnerError('refusing to unmount foreign run volume', 4);
-  hostCommand('umount', [plan.volume]);
+  if (mountedAs(plan.volume, plan.workImage)) hostCommand('umount', [plan.volume]);
+}
+export function releaseCacheVolume(plan) {
+  if (mountedAs(plan.cache, plan.cacheImage)) hostCommand('umount', [plan.cache]);
 }
 
-export function releaseCacheVolume(plan) {
-  const mounted = mountedSource(plan.cache);
-  if (!mounted) return;
-  if (mounted.type !== 'ext4' || hostCommand('losetup', ['-n', '-O', 'BACK-FILE', mounted.source]) !== plan.cacheImage)
-    throw new RunnerError('refusing to unmount foreign cache volume', 4);
-  hostCommand('umount', [plan.cache]);
+export function releaseVolumes(plan, ops = { releaseRun: releaseRunVolume, releaseCache: releaseCacheVolume }) {
+  const failed = [];
+  try { ops.releaseRun(plan); fs.rmSync(leaseFile(plan), { force: true }); } catch (error) { failed.push(errorClass(error)); }
+  try {
+    withCacheLock(plan.cache, () => {
+      const users = cacheUsers(plan.cache);
+      fs.rmSync(path.join(users, plan.runId), { force: true });
+      const live = fs.existsSync(users) ? fs.readdirSync(users).filter(n => alive(readOwner(path.join(users, n)))) : [];
+      if (!live.length) ops.releaseCache(plan);
+    });
+  } catch (error) { failed.push(errorClass(error)); }
+  if (failed.length) throw new RunnerError(`bounded storage release incomplete (${failed.join(', ')})`, 7);
+}
+
+export function ensureLoopVolumes(plan) {
+  fs.writeFileSync(leaseFile(plan), JSON.stringify(ownerNow()), { mode: 0o600 });
+  try {
+    withCacheLock(plan.cache, () => {
+      fs.mkdirSync(cacheUsers(plan.cache), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(cacheUsers(plan.cache), plan.runId), JSON.stringify(ownerNow()), { mode: 0o600 });
+      ensureLoopImage(plan.cacheImage, plan.cache, plan.cacheBytes);
+    });
+    ensureLoopImage(plan.workImage, plan.volume, plan.diskBytes);
+    for (const dir of [plan.work, plan.out]) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.chownSync(dir, plan.uid, plan.gid);
+      fs.chmodSync(dir, 0o700);
+    }
+    fs.chownSync(plan.cache, plan.uid, plan.gid);
+    fs.chmodSync(plan.cache, 0o700);
+  } catch (error) {
+    try { releaseVolumes(plan); } catch (releaseError) { error.releaseFailed = true; }    // never leave a half-acquired mount behind
+    throw error;
+  }
+}
+
+// Read the evidence of a finished run: mount its image read-only (no exec), call fn, always unmount.
+export function withRunVolume(plan, fn) {
+  ensureLoopImage(plan.workImage, plan.volume, plan.diskBytes, true);
+  try { return fn(plan); } finally { releaseRunVolume(plan); }
+}
+
+// Start-up sweep. It touches ONLY loop devices whose backing file is a DevTest image under this storage root
+// (runs/<id>/volume.img or cache/<name>.img). Docker's, libvirt's and the boot loop devices are never considered.
+const defaultHost = {
+  listLoops: () => hostCommand('losetup', ['-n', '-O', 'NAME,BACK-FILE']).split('\n').filter(Boolean).map(l => { const i = l.indexOf(' '); return { name: l.slice(0, i), file: l.slice(i).trim() }; }),
+  mountedSource,
+  umount: target => hostCommand('umount', [target]),
+  detach: device => hostCommand('losetup', ['-d', device]),
+  containerExists: (name, command) => { const r = command(['container', 'inspect', '--format', '{{.Id}}', name]); return r.status === 0; }
+};
+export function sweepStaleVolumes(storageRoot, command = dockerCommand, host = defaultHost) {
+  const root = fs.realpathSync(storageRoot);
+  const result = { released: [], skipped: [], errors: [] };
+  const runImage = new RegExp(`^${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/runs/([a-f0-9]{16,32})/volume\\.img$`);
+  const cacheImage = new RegExp(`^${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/cache/([a-z0-9-]{1,32})\\.img$`);
+  for (const loop of host.listLoops()) {
+    try {
+      let m;
+      if ((m = runImage.exec(loop.file))) {
+        const id = m[1], workspace = path.join(root, 'runs', id), target = path.join(workspace, 'volume');
+        if (alive(readOwner(path.join(workspace, 'lease.json'))) || host.containerExists(`devtest-${id}`, command)) { result.skipped.push(loop.name); continue; }
+        const mounted = host.mountedSource(target);
+        if (mounted && mounted.source === loop.name) host.umount(target);
+        if (host.listLoops().some(l => l.name === loop.name && l.file === loop.file)) host.detach(loop.name);
+        result.released.push(loop.name);
+      } else if ((m = cacheImage.exec(loop.file))) {
+        const target = path.join(root, 'cache', m[1]), users = cacheUsers(target);
+        if (fs.existsSync(users)) for (const n of fs.readdirSync(users)) {
+          if (!alive(readOwner(path.join(users, n))) && !host.containerExists(`devtest-${n}`, command)) fs.rmSync(path.join(users, n), { force: true });
+        }
+        if (fs.existsSync(users) && fs.readdirSync(users).length) { result.skipped.push(loop.name); continue; }
+        const mounted = host.mountedSource(target);
+        if (mounted && mounted.source === loop.name) host.umount(target);
+        if (host.listLoops().some(l => l.name === loop.name && l.file === loop.file)) host.detach(loop.name);
+        result.released.push(loop.name);
+      }
+    } catch (error) { result.errors.push(`${loop.name}:${errorClass(error)}`); }
+  }
+  return result;
 }
 
 export function dockerCommand(argv, timeout = 10000) {
@@ -240,12 +339,31 @@ export function containerState(plan, command = dockerCommand) {
   return Number.isInteger(Number(code)) ? { exitCode: Number(code), oomKilled: oom === 'true' } : null;
 }
 
-export async function runContainer(plan, { command = dockerCommand, spawnRun = spawn, ensureVolumes = ensureLoopVolumes } = {}) {
+export async function runContainer(plan, { command = dockerCommand, spawnRun = spawn, ensureVolumes = ensureLoopVolumes, releaseVolumes: release = releaseVolumes, sweep = sweepStaleVolumes, keepVolume = false } = {}) {
   if (ownedContainer(plan, command)) throw new RunnerError('run container name is already in use', 7);
   const localImage = command(['image', 'inspect', '--format', '{{.Id}}', plan.image]);
   if (localImage.status !== 0) throw new RunnerError('pinned image is not locally available; pull through a reviewed update path', 3);
   prepareDirectories(plan);
-  ensureVolumes(plan);
+  let swept;
+  try { swept = sweep(plan.storage, command); } catch (error) { swept = { error: errorClass(error) }; }   // a failed sweep never blocks a run
+  let outcome, thrown = null;
+  try {
+    ensureVolumes(plan);
+    outcome = await executeRun(plan, command, spawnRun);
+  } catch (error) { thrown = error; }
+  // Released on every outcome, including a failed start. keepVolume lets the caller read evidence first and then call
+  // releaseVolumes(plan) itself; the default never leaves a mount or loop device behind.
+  let volume = { released: !keepVolume || !!thrown, retained: keepVolume && !thrown, error: null };
+  if (!keepVolume || thrown) {
+    try { release(plan); volume = { released: true, retained: false, error: null }; }
+    catch (error) { volume = { released: false, retained: false, error: errorClass(error) }; }
+  }
+  if (thrown) throw thrown;
+  const incomplete = !volume.released && !volume.retained;
+  return { ...outcome, exitCode: incomplete ? 7 : outcome.exitCode, cleanup: incomplete || outcome.cleanup !== 'complete' ? 'incomplete' : 'complete', volume, sweep: swept };
+}
+
+async function executeRun(plan, command, spawnRun) {
   const stdout = logSink(), stderr = logSink();
   const child = spawnRun('docker', plan.args, { stdio: ['ignore', 'pipe', 'pipe'], env: dockerEnvironment() });
   child.stdout?.on('data', chunk => stdout.write(chunk)); child.stderr?.on('data', chunk => stderr.write(chunk));

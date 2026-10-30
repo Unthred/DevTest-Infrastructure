@@ -246,7 +246,8 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       await clock.sleep(delay); continue;
     }
     if (result.event === 'context_limit' && job.autoResume && job.attempts < maxAttempts) {
-      job.sessionId = null; saveJob(root, job, clock);
+      // Due immediately: if this worker dies before relaunching, reconcile can still revive the job.
+      job.sessionId = null; job.nextAttemptAt = clock.now(); saveJob(root, job, clock);
       transition(root, job, 'queued', 'context_fresh_session', clock); continue;
     }
     if (['network_error', 'crash'].includes(result.event) && job.autoResume && job.attempts < maxAttempts) {

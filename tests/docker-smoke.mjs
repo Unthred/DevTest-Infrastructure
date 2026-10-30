@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createPlan, runContainer, ownedContainer, releaseRunVolume, releaseCacheVolume } from '../docker/runner.mjs';
+import { createPlan, runContainer, ownedContainer, releaseVolumes } from '../docker/runner.mjs';
 
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const storageRoot = path.join('/mnt/cache/appdata/devtest-infrastructure/smoke', crypto.randomBytes(8).toString('hex'));
@@ -27,7 +27,7 @@ try {
     const plan = createPlan({ project, runId, image: 'dotnet-8', phase: probe.phase, command: probe.command }, config);
     lastPlan = plan;
     try {
-      const result = await runContainer(plan);
+      const result = await runContainer(plan, { keepVolume: true });   // keep the run volume mounted to inspect the evidence, then release it below
       const marker = path.join(plan.out, 'marker');
       const markerOk = probe.name !== 'success' || fs.existsSync(marker) && fs.readFileSync(marker, 'utf8') === 'SMOKE_OK';
       const containerGone = !ownedContainer(plan);
@@ -39,7 +39,7 @@ try {
       console.log(JSON.stringify({ probe: probe.name, runId, image: plan.image, exitCode: result.exitCode, subjectExit: result.subjectExit, cleanup: result.cleanup, markerOk, hardLimitOk, containerGone }));
       if (result.exitCode !== probe.expectedExit || !markerOk || !hardLimitOk || !containerGone) process.exitCode = 1;
     } finally {
-      releaseRunVolume(plan);
+      releaseVolumes(plan);
       if (fs.existsSync(plan.workspace)) fs.rmSync(plan.workspace, { recursive: true, force: true });
     }
   }
@@ -48,7 +48,7 @@ try {
   process.exitCode = 1;
 } finally {
   if (lastPlan) {
-    try { releaseCacheVolume(lastPlan); fs.rmSync(storageRoot, { recursive: true, force: true }); }
+    try { fs.rmSync(storageRoot, { recursive: true, force: true }); }
     catch (error) { console.error(`docker-smoke cleanup: ${error.name}: ${error.message}`); process.exitCode = 1; }
   }
 }
