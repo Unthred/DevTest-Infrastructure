@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Unthred/DevTest-Infrastructure/contracts/verdict.v1.schema.json",
+  "title": "Review verdict v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pr", "headSha", "verdict", "findings", "commandsRun"],
+  "properties": {
+    "pr": { "type": "integer", "minimum": 1 },
+    "headSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "verdict": { "enum": ["PASS", "CHANGES"] },
+    "findings": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "text"],
+        "properties": {
+          "kind": { "enum": ["blocking", "follow-up"] },
+          "text": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        }
+      }
+    },
+    "commandsRun": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
+  },
+  "allOf": [
+    { "if": { "properties": { "verdict": { "const": "CHANGES" } } }, "then": { "properties": { "findings": { "contains": { "properties": { "kind": { "const": "blocking" } } } } } } },
+    { "if": { "properties": { "verdict": { "const": "PASS" } } }, "then": { "properties": { "findings": { "not": { "contains": { "properties": { "kind": { "const": "blocking" } } } } }, "commandsRun": { "minItems": 1 } } } }
+  ]
+}

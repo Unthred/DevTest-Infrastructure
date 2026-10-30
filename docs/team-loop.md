@@ -17,7 +17,7 @@ Status: implemented in source on `claude/issue-23-team-loop`; not deployed. Deci
 `team tick --dry-run` prints the planned actions and writes nothing.
 
 ## Trust
-- A review job writes `verdict.json` into its own inbox directory (`<state>/team/inbox/<ticket>/`): `{pr, headSha, verdict: PASS|CHANGES, findings[], commandsRun[]}`. PASS requires `commandsRun`; CHANGES requires a finding.
+- A review job writes `verdict.json` into its own inbox directory (`<state>/team/inbox/<ticket>/`) using `contracts/verdict.v1.schema.json`: `{pr, headSha, verdict: PASS|CHANGES, findings: [{kind: blocking|follow-up, text}], commandsRun[]}`. Blocking means correctness, security, data loss, scope violation or a failed acceptance criterion. CHANGES requires a blocking finding; PASS has no blocking findings and may have follow-ups. PASS follow-ups create one linked issue per review round, using a stable marker to avoid duplicates on retry. Fix-round re-reviews check the previous blocking findings and regressions caused by the fixes; new non-blocking observations become follow-ups.
 - The dispatcher records a verdict only from a **finished** job it created, for the job's own PR and head. **Comment text is never read**, so a comment on the shared account cannot approve anything. An agent cannot accept its own PR: the recorded reviewer must differ from the branch's author agent.
 - Prompts contain only validated tokens (numbers, SHAs, branch names, ticket). Issue and PR text never enters a prompt or a scope.
 

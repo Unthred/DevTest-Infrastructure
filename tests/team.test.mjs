@@ -26,11 +26,13 @@ const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-
 
 function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = config() } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const calls = { comments: [], labels: [], merges: [], board: [], created: [] };
+  const calls = { comments: [], labels: [], merges: [], board: [], created: [], issues: [] };
   const gh = {
     pulls, issues,
     listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues,
     comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]),
+    findIssueByMarker: async marker => gh.issues.find(i => i.body?.includes(marker))?.number || null,
+    createIssue: async (title, body) => { const number = 100 + gh.issues.length; gh.issues.push(issue(number, 'OPEN', body)); calls.issues.push([number, title, body]); return number; },
     merge: async (n, head) => { const p = gh.pulls.find(x => x.number === n); if (!p || p.headRefOid !== head) throw new Error('head moved'); calls.merges.push([n, head]); },
     board: async (n, s) => calls.board.push([n, s]), merged: [], listMergedPulls: async () => gh.merged
   };
@@ -52,9 +54,67 @@ test('helpers: checks state, prerequisites, branch ownership, verdict shape', ()
   const ok = { pr: 5, headSha: H(1), verdict: 'PASS', findings: [], commandsRun: ['node --test'] };
   assert.equal(validateVerdict(ok, { pr: 5, head: H(1) }), null);
   for (const [mut, part] of [[v => { v.pr = 6; }, 'different PR'], [v => { v.headSha = H(2); }, 'different head'], [v => { v.verdict = 'LGTM'; }, 'PASS or CHANGES'],
-    [v => { v.commandsRun = []; }, 'commandsRun'], [v => { v.verdict = 'CHANGES'; }, 'at least one finding'], [v => { v.findings = [1]; }, 'findings']]) {
+    [v => { v.commandsRun = []; }, 'commandsRun'], [v => { v.verdict = 'CHANGES'; }, 'at least one blocking'], [v => { v.findings = [1]; }, 'findings']]) {
     const v = structuredClone(ok); mut(v); assert.match(validateVerdict(v, { pr: 5, head: H(1) }), new RegExp(part));
   }
+});
+
+test('verdict classifications require blocking findings for CHANGES and allow PASS follow-ups', () => {
+  const base = { pr: 5, headSha: H(1), commandsRun: ['node --test'] };
+  const follow = { kind: 'follow-up', text: 'Improve the status wording later' };
+  const block = { kind: 'blocking', text: 'Acceptance criterion fails' };
+  assert.equal(validateVerdict({ ...base, verdict: 'PASS', findings: [follow] }, { pr: 5, head: H(1) }), null);
+  assert.equal(validateVerdict({ ...base, verdict: 'CHANGES', findings: [block, follow] }, { pr: 5, head: H(1) }), null);
+  assert.match(validateVerdict({ ...base, verdict: 'CHANGES', findings: [follow] }, { pr: 5, head: H(1) }), /blocking/);
+  assert.match(validateVerdict({ ...base, verdict: 'PASS', findings: [block] }, { pr: 5, head: H(1) }), /blocking/);
+  for (const invalid of ['plain text', { kind: 'other', text: 'x' }, { kind: 'blocking', text: '' }])
+    assert.match(validateVerdict({ ...base, verdict: 'PASS', findings: [invalid] }, { pr: 5, head: H(1) }), /findings/);
+  assert.match(validateVerdict({ ...base, verdict: 'PASS', findings: [], extra: true }, { pr: 5, head: H(1) }), /unknown field/);
+  const schema = JSON.parse(fs.readFileSync(new URL('../contracts/verdict.v1.schema.json', import.meta.url), 'utf8'));
+  assert.deepEqual(schema.properties.findings.items.required, ['kind', 'text']);
+  assert.deepEqual(schema.properties.findings.items.properties.kind.enum, ['blocking', 'follow-up']);
+});
+
+test('PASS follow-ups open one linked issue even if verdict comment posting is retried', async t => {
+  const w = reviewWorld(t); await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [{ kind: 'follow-up', text: 'Improve the status wording' }], commandsRun: ['node --test'] });
+  w.jobs.states[id].status = 'completed';
+  let fail = true; const post = w.gh.comment;
+  w.gh.comment = async (n, body) => { if (fail) { fail = false; throw new Error('temporary comment failure'); } return post(n, body); };
+  await assert.rejects(w.team.ingest({ ingested: [] }), /temporary comment failure/);
+  assert.equal(w.calls.issues.length, 1); assert.deepEqual(w.team.s.verdicts, {});
+  await w.team.ingest({ ingested: [] });
+  assert.equal(w.calls.issues.length, 1);
+  assert.equal(w.team.s.verdicts[`10:${H(1)}`].followUpIssue, w.calls.issues[0][0]);
+  assert.match(w.calls.comments.at(-1)[1], new RegExp(`Follow-ups: issue #${w.calls.issues[0][0]}`));
+  assert.match(w.calls.issues[0][2], /PR #10/);
+});
+
+test('a lost issue-create response reuses the issue on the next ingest', async t => {
+  const w = reviewWorld(t); await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [{ kind: 'follow-up', text: 'Document an optional status detail' }], commandsRun: ['x'] });
+  w.jobs.states[id].status = 'completed';
+  const create = w.gh.createIssue;
+  w.gh.createIssue = async (...args) => { await create(...args); throw new Error('response lost'); };
+  await assert.rejects(w.team.ingest({ ingested: [] }), /response lost/);
+  assert.equal(w.calls.issues.length, 1);
+  await w.team.ingest({ ingested: [] });
+  assert.equal(w.calls.issues.length, 1);
+  assert.equal(w.team.s.verdicts[`10:${H(1)}`].verdict, 'PASS');
+});
+
+test('fix-round review prompt scopes to previous blocking findings and regressions', async t => {
+  const w = reviewWorld(t, H(2));
+  w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'claude', at: 1,
+    findings: [{ kind: 'blocking', text: 'Broken acceptance' }, { kind: 'follow-up', text: 'Optional polish' }] };
+  await w.team.execute((await w.team.plan())[0]);
+  const spec = w.calls.created[0];
+  assert.match(spec.prompt, /fix-round re-review.*previous blocking findings and regressions/s);
+  const scope = JSON.parse(fs.readFileSync(path.join(w.team.dir, 'inbox', spec.postcondition.ticket, 'review-scope.json'), 'utf8'));
+  assert.deepEqual(scope.blocking, [{ kind: 'blocking', text: 'Broken acceptance' }]);
+  assert.doesNotMatch(spec.prompt, /Broken acceptance|Optional polish/);
 });
 
 test('team config: the shipped file is valid, disabled by default and cites D-020; bad configs are refused', () => {
@@ -406,7 +466,7 @@ test('real post-conditions: verdict file, new pushed head, PR opened; none reads
   const rec = Object.values(w.team.s.jobs)[0], pc = w.team.postconditions();
   const spec = w.calls.created[0].postcondition;
   assert.equal(await pc({ postcondition: spec }), false);
-  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'CHANGES', findings: ['f'], commandsRun: [] });
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'f' }], commandsRun: [] });
   assert.equal(await pc({ postcondition: spec }), true);
   assert.equal(await pc({ postcondition: { kind: 'new_head', pr: 10, baseHead: H(1) } }), false);
   w.gh.pulls = [pr(10, 'codex/issue-2-x', H(7))];
@@ -608,7 +668,7 @@ test('issue #35 notices and verdicts are posted once even when later work in the
   const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   await w.team.execute((await w.team.plan())[0]);
   const [id, rec] = Object.entries(w.team.s.jobs)[0];
-  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'CHANGES', findings: ['f'], commandsRun: ['x'] });
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'f' }], commandsRun: ['x'] });
   w.jobs.states[id].status = 'completed';
   const again = () => new Team({ config: config(), root: w.team.root, gh: w.gh, jobs: w.jobs, git: w.git, register: REGISTER, clock: { now: () => 1000 } });
   for (let i = 0; i < 3; i++) { const team = again(); await team.tick(); }     // three scheduled ticks over the same state
