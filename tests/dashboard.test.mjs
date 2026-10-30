@@ -346,6 +346,22 @@ test('recent activity includes every recorded tick in the 50-event ordering, not
   assert.equal((await view(t, { snapshots: many, cache: { tick: okTick(), pulls: [], issues: [] } })).activity.length, 50);
 });
 
+test('needs-homeowner survives the issue label cap for attention and queue planning', async t => {
+  const labels = [...Array.from({ length: 10 }, (_, i) => `label-${i}`), 'needs-homeowner'];
+  const cached = compactIssues([issue(32, 'OPEN', '', labels)]);
+  assert.equal(cached[0].labels.length, 10);
+  assert.ok(cached[0].labels.includes('needs-homeowner'));
+  const v = await view(t, { cache: { tick: okTick(), pulls: [], issues: cached } });
+  assert.ok(v.attention.some(a => a.id === 'homeowner-32'));
+  assert.ok(!v.plan.some(a => a.issue === 32));
+});
+
+test('recent activity retains a failed tick after a later successful tick', async t => {
+  const snapshots = [{ at: NOW - 2000, status: 'error', plan: [] }, { at: NOW - 1000, status: 'ok', plan: [] }];
+  const v = await view(t, { snapshots, cache: { tick: okTick(NOW - 1000), pulls: [], issues: [] } });
+  assert.deepEqual(v.activity.filter(r => r.text.startsWith('tick ')).map(r => r.text), ['tick ok, nothing to dispatch', 'tick error']);
+});
+
 test('dashboard serve applies team.local.json: the page reports the effective enabled state, not the shipped one (CLI path)', async t => {
   const { spawn } = await import('node:child_process');
   const ip = Object.values(os.networkInterfaces()).flat().find(i => i && i.family === 'IPv4' && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(i.address) && !/\.(0|255)$/.test(i.address))?.address;

@@ -57,7 +57,10 @@ export function readSnapshots(root) {
 export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
   statusCheckRollup: (p.statusCheckRollup || []).slice(0, 40).map(c => ({ name: redact(c.name || c.context || '', 80), status: c.status, conclusion: c.conclusion, state: c.state })) }));
-export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, 120), state: i.state, labels: (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
+export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, 120), state: i.state,
+  labels: (i.labels || []).includes('needs-homeowner')
+    ? ['needs-homeowner', ...(i.labels || []).filter(l => l !== 'needs-homeowner').slice(0, 9).map(l => redact(l, 40))]
+    : (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
   prerequisites: prerequisites(i.body) }));
 
 // idle | running | paused | blocked, per agent, from the supervisor's own job records.
