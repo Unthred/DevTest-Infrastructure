@@ -95,8 +95,8 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
     repository: team?.c.repository ?? prev.repository ?? null };
-  if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.fetchedAt = now; }
-  else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.fetchedAt = prev.fetchedAt ?? null; }
+  if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.fetchedAt = now; }
+  else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.fetchedAt = prev.fetchedAt ?? null; }
   atomicJson(cacheFile(root), cache);
   if (status !== 'ok' || !team) return cache;
   const states = agentStates(team.c, jobs, now);

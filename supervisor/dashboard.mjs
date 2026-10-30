@@ -31,7 +31,9 @@ export function pauseDisagreement(job, allowance, now) {
 }
 
 function cacheBackedTeam(config, root, cache, jobs, state) {
-  const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })) };
+  const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })),
+    // delivered-work issue numbers the tick cached, in the shape Team.plan() reads, so the page matches `team tick --dry-run`
+    listMergedPulls: async () => [{ headRefName: '', closingIssuesReferences: (cache.delivered || []).map(number => ({ number })) }] };
   const jobsApi = { listActive: async () => jobs.filter(j => ACTIVE.includes(j.status)).map(j => ({ id: j.id, provider: j.provider, status: j.status })) };
   const team = new Team({ config, root, gh, jobs: jobsApi, git: null });
   team.s = { ...team.s, ...state };      // the state the caller read, so the plan and the page agree
@@ -71,7 +73,7 @@ function reasons(team, cache, jobs, plan, states) {
   }
   for (const [agent, a] of Object.entries(c.agents)) for (const n of a.issues) {
     const issue = byNo.get(n);
-    if (!issue || issue.state !== 'OPEN') continue;
+    if (!issue || issue.state !== 'OPEN' || team.delivered?.has(n)) continue;
     const deps = c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
     const open = deps.filter(d => byNo.get(d)?.state !== 'CLOSED');
     const hasPr = prs.some(p => agentOfBranch(c, p.headRefName) === agent && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName));
@@ -191,8 +193,8 @@ function activity({ config, jobs, events, state, cache, snapshots, now }) {
   }
   for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on PR #${pr} at ${sha7(head)}`, link: link('pull', Number(pr)) }); }
   for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged PR #${m.pr}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
-  // ticks: only changes of outcome, plus the most recent, so five-minute ticks do not bury everything else
-  const ok = snapshots.filter(s => s.status === 'ok').slice(-3).map(s => ({ at: s.at, text: `tick ok${s.plan?.length ? `, plan: ${s.plan.map(a => `${a.agent || ''} ${a.type} #${a.ref}`.trim()).join('; ')}` : ', nothing to dispatch'}` }));
+  // ticks take part in the same newest-first ordering and 50-event bound as every other event (issue #32)
+  const ok = snapshots.filter(s => s.status === 'ok').map(s => ({ at: s.at, text: `tick ok${s.plan?.length ? `, plan: ${s.plan.map(a => `${a.agent || ''} ${a.type} #${a.ref}`.trim()).join('; ')}` : ', nothing to dispatch'}` }));
   rows.push(...ok);
   if (cache?.tick && cache.tick.status !== 'ok') rows.push({ at: cache.tick.at, text: `tick ${cache.tick.status}${cache.tick.error ? `: ${cache.tick.error}` : ''}` });
   return rows.filter(r => Number.isFinite(r.at)).sort((a, b) => b.at - a.at).slice(0, 50).map(r => ({ ...r, text: redact(r.text, 300) }));
