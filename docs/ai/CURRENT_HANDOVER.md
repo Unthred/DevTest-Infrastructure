@@ -4,6 +4,8 @@ Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D
 
 Last updated: 2026-10-30 by Claude on `claude/issue-5-playwright` (based on main at the merge of #19). Each agent edits this file only on its own branch.
 
+Last updated: 2026-10-30 by Claude on `claude/issue-35-scheduled-ticks-fail` (issue #35 section at the end). Each agent edits this file only on its own branch.
+
 ## Completion states
 
 | Item | Implemented in source | CI/review passed | Deployed | Verified working |
@@ -104,3 +106,8 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Not done, blocked on OQ-2: reaching a real TCP service (needs a firewall rule or trusted forwarder; no firewall change was made). No .NET in this track. Not deployed; CLI integration is #8.
 - Codex verdict CHANGES on `fcbf9c1` (2026-10-30), both findings fixed in the next head: (1) `static-server.mjs` now compares `realpath` with the joined path, so a symlinked directory component anywhere returns 403 (tests: `/linked/…`, `/real/deep/…`); (2) `capture.mjs` strips query/fragment from the reported `path` and reduces every URL inside console/page/navigation error text to scheme+host+path (test with a canary). Validator OK, 129/129. Real-Docker smoke not rerun; CI and Codex re-review pending.
 - Codex verdict CHANGES on `a784af7` (2026-10-30): `context.route` does not see WebSocket handshakes, so `ws://127.0.0.1:43210/undeclared` was attempted (exit 10, nothing recorded). Fixed in the next head: `context.routeWebSocket` in `capture.mjs` connects only `ws://` to the bridged origin (`isAllowedSocket`); everything else is closed unconnected, recorded without query, exit 12. Tests: fake-Playwright cases plus `tests/browser-smoke.mjs` now runs `browser/fixture/websocket.html` on Chromium, Firefox and WebKit (all exit 12, token absent). Validator OK, 142/142, BROWSER SMOKE OK (cleanup 4/0/0). CI and Codex re-review pending.
+
+## Issue #35 scheduled ticks fail silently (Claude, branch `claude/issue-35-scheduled-ticks-fail`)
+- Implemented in source: pinned PATH/HOME, `flock` and a bounded log in the generated reconcile script; `tools/verify-reconcile-env.sh` and `ai-supervisor preflight` as the enable gate (installer refuses, exit 3); named `gh` missing error and bounded retry of transient GitHub errors; `preflight_failed` instead of `auth_error` for a missing provider binary; per-action tick skipping with reasons; post-once verdict and needs-homeowner notices; automatic lease release for completed/stopped dispatcher jobs. Docs: `docs/supervisor.md`, `docs/team-loop.md`.
+- Tests: validator OK, 135/135 locally, including `env -i` runs of the generated script with fake `gh`/`node`, log trim and lock, enable-gate refusal, retry bounds, lease conflict skip, once-only posting across ticks.
+- Not done / not verified: dashboard indicators and stale-lease attention items (issue #32); the already hot-fixed script on Tower is not replaced (reinstall needs the homeowner: remove, then install); the cron path is **not** marked verified working until a scheduled (not hand-run) tick has started a job. CI and Codex review pending.

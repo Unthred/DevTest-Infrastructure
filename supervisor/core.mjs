@@ -133,7 +133,7 @@ export function validateManifest(m, id) {
     throw new SupervisorError('invalid provider capabilities');
   exact(m.billing, ['model', 'fallback_to_other_billing'], ['model', 'fallback_to_other_billing'], 'billing');
   if (!['subscription', 'api', 'unknown'].includes(m.billing.model) || m.billing.fallback_to_other_billing !== false) throw new SupervisorError('billing fallback must be false');
-  if (m.events && (!Array.isArray(m.events) || !m.events.every(x => ['usage_limit', 'transient_rate_limit', 'context_limit', 'auth_error', 'approval_required', 'network_error', 'crash'].includes(x)))) throw new SupervisorError('invalid events');
+  if (m.events && (!Array.isArray(m.events) || !m.events.every(x => ['usage_limit', 'transient_rate_limit', 'context_limit', 'auth_error', 'preflight_failed', 'approval_required', 'network_error', 'crash'].includes(x)))) throw new SupervisorError('invalid events');
 }
 export function leaseKeys(job) {
   // A shared repository may host parallel jobs; the issue and worktree are exclusive.
@@ -284,7 +284,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       transition(root, job, 'queued', result.event, clock);
       await clock.sleep(delay); continue;
     }
-    const blocked = ['auth_error', 'approval_required', 'context_limit', 'usage_limit'].includes(result.event);
+    const blocked = ['auth_error', 'preflight_failed', 'approval_required', 'context_limit', 'usage_limit'].includes(result.event);
     transition(root, job, blocked ? 'blocked' : 'failed', result.event || 'crash', clock);
     return job;
   }

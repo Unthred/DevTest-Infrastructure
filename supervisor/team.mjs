@@ -125,7 +125,7 @@ export class Team {
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'released']) this.s[k] ||= {};
   }
   save() { atomicJson(this.file, this.s); }
   agents() { return Object.entries(this.c.agents); }
@@ -203,42 +203,74 @@ export class Team {
   async tick({ dryRun = false } = {}) {
     if (!dryRun && this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
       throw new SupervisorError(`${this.c.access.decision} is not homeowner-approved in the decision register; refusing to launch jobs`);
-    const report = { ingested: [], notified: [], actions: [] };
-    if (!dryRun) { await this.ingest(report); await this.notifyBlocked(report); }
+    const report = { ingested: [], notified: [], actions: [], skipped: [] };
+    // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).
+    const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
+    if (!dryRun) { await this.ingest(report, guard); await this.notifyBlocked(report, guard); await this.releaseFinished(report, guard); }
     const actions = await this.plan();
     report.actions = actions;
     if (dryRun) return report;
-    for (const act of actions) await this.execute(act);
+    for (const act of actions) await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.execute(act));
     this.save();
     return report;
   }
 
-  async ingest(report) {
+  async ingest(report, guard = (_, fn) => fn()) {
     for (const [id, j] of Object.entries(this.s.jobs)) {
       if (j.ingested) continue;
+      await guard(`ingest ${id}`, () => this.ingestOne(id, j, report));
+    }
+  }
+  // Each effect is recorded and saved BEFORE it is posted, so a later failure in the same tick can never make the next tick
+  // post it again (verdict and needs-homeowner comments were repeated every five minutes while the tick kept aborting).
+  async ingestOne(id, j, report) {
       const job = await this.jobs.get(id);
-      if (!job || !TERMINAL.has(job.status)) continue;
+      if (!job || !TERMINAL.has(job.status)) return;
       if (j.kind === 'review' && job.status === 'completed') {
         const r = readInboxVerdict(this.root, j.ticket, { pr: j.pr, head: j.head });
         if (r.verdict) {
           this.s.verdicts[verdictKey(j.pr, j.head)] = { verdict: r.verdict.verdict, reviewer: j.agent, job: id, findings: r.verdict.findings, commandsRun: r.verdict.commandsRun, at: this.clock.now() };
           const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — independent review by \`${j.agent}\` of exact head \`${j.head}\` (recorded by the dispatcher from job \`${id}\`; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- ${f}`).join('\n') || '_no findings_'}\n\nCommands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
-          await this.gh.comment(j.pr, body);
+          j.ingested = true; this.save();
+          try { await this.gh.comment(j.pr, body); }
+          catch (error) { j.ingested = false; this.save(); throw error; }
           report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });
+          return;
         } else report.ingested.push({ job: id, pr: j.pr, error: r.error });
       }
-      j.ingested = true;
+      j.ingested = true; this.save();
+  }
+  async notifyBlocked(report, guard = (_, fn) => fn()) {
+    for (const [id, j] of Object.entries(this.s.jobs)) {
+      await guard(`notify ${id}`, () => this.notifyOne(id, j, report));
     }
   }
-  async notifyBlocked(report) {
-    for (const [id, j] of Object.entries(this.s.jobs)) {
+  // Once per job and state: a changed state (blocked -> failed) is a new notice; an unchanged one is never repeated.
+  async notifyOne(id, j, report) {
       const job = await this.jobs.get(id);
-      if (!job || !['blocked', 'failed'].includes(job.status) || this.s.notified[id]) continue;
-      this.s.notified[id] = this.clock.now();
+      if (!job || !['blocked', 'failed'].includes(job.status)) return;
+      const nkey = `${id}:${job.status}`;
+      if (this.s.notified[nkey]) return;
+      this.s.notified[nkey] = this.clock.now(); this.save();
       const target = j.issue ?? j.pr;
+      try {
       await this.gh.addLabel(target, 'needs-homeowner');
       await this.gh.comment(target, `**Needs the homeowner.** Supervised ${j.kind} job \`${id}\` (${j.agent}) stopped as \`${job.status}\` (last event: \`${job.lastEvent}\`). Required: inspect \`ai-agent --supervisor status ${id}\` and \`logs ${id}\`, then decide whether to \`resume\`, reassign or close. Other agents keep working.`);
+      } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
       report.notified.push({ job: id, target });
+  }
+  // The dispatcher's own finished jobs free their issue/worktree leases, including jobs the homeowner resumed by hand.
+  // Blocked and failed jobs keep theirs: they are resumable and the lease stops a duplicate job on the same issue.
+  async releaseFinished(report, guard = (_, fn) => fn()) {
+    for (const id of Object.keys(this.s.jobs)) {
+      await guard(`release ${id}`, async () => {
+        const job = await this.jobs.get(id);
+        if (!job || !this.jobs.release) return;
+        if (!TERMINAL.has(job.status)) { delete this.s.released[id]; return; }
+        if (!['completed', 'stopped'].includes(job.status) || this.s.released[id]) return;
+        await this.jobs.release(id);
+        this.s.released[id] = this.clock.now(); this.save(); (report.released ||= []).push(id);
+      });
     }
   }
 
@@ -256,32 +288,32 @@ export class Team {
     }
     const a = this.c.agents[act.agent], base = this.c.worktree_base, ticket = crypto.randomBytes(16).toString('hex');
     const common = { role: 'devtest', provider: a.provider, repository: this.c.repo_path, access: this.c.access?.mode === 'full' ? 'full' : 'standard', autoRestart: true, handover: 'docs/ai/CURRENT_HANDOVER.md' };
-    let spec, meta;
+    let spec, meta, bump = () => {};
     if (act.type === 'review') {
       const inbox = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(inbox, { recursive: true, mode: 0o700 });
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `Independent review of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
         prompt: reviewPrompt({ pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head } };
       meta = { pr: act.pr, head: act.head };
-      this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1;
+      bump = () => { this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1; };
     } else if (act.type === 'fix') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-fix-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, scope: `Fix the CHANGES verdict on PR #${act.pr}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue', 'update_handover'],
         prompt: fixPrompt({ pr: act.pr, head: act.head, branch: act.branch }), postcondition: { kind: 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head };
-      this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1;
+      bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; };
     } else {
       const branch = `${a.branch_prefix}issue-${act.issue}-${slug(act.title)}`;
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch, base: 'origin/main' });
       spec = { ...common, kind: 'implement', worktree: wt, issue: act.issue, scope: `Implement issue #${act.issue} on ${branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue', 'update_handover'],
         prompt: implementPrompt({ issue: act.issue, branch }), postcondition: { kind: 'pr_opened', branch } };
       meta = { issue: act.issue, branch };
-      this.s.implemented[act.issue] = this.clock.now();
-      await this.gh.board(act.issue, 'in_progress');
+      bump = async () => { this.s.implemented[act.issue] = this.clock.now(); await this.gh.board(act.issue, 'in_progress'); };
     }
-    const job = await this.jobs.create(spec);
+    const job = await this.jobs.create(spec);   // a lease conflict throws here, before any attempt is counted
     this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, ...meta, ingested: false, at: this.clock.now() };
     this.save();
+    await bump(); this.save();
   }
 
   // Post-conditions are evaluated by the supervisor worker through drive(); none of them reads comment text.

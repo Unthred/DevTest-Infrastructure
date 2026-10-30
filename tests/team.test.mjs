@@ -10,6 +10,7 @@ import { createJob, drive, readJob, stateRoot, validateSpec } from '../superviso
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
 import { ghRunner, githubClient } from '../supervisor/github.mjs';
+import { runProcess } from '../supervisor/process.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
@@ -465,4 +466,74 @@ test('issue #30 upgrade script never touches the override and verifies the paylo
   assert.match(script, /diff -r "\$source_root\/supervisor" "\$install_root\/supervisor"/);
   assert.match(script, /team\.local\.json must not be in the versioned payload/);
   assert.ok(!/(rm|mv|cp)[^\n]*team\.local\.json/.test(script));
+});
+
+// ---- issue #35: scheduled ticks must not fail silently or abort on one bad item
+test('issue #35 gh: a missing binary is named, transient transport errors are retried within bounds, others fail at once', () => {
+  assert.throws(() => ghRunner(() => ({ status: null, error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) }))(['pr', 'list']), /required binary not found: gh/);
+  const sleeps = []; let calls = 0;
+  const flaky = ghRunner(() => (++calls < 3 ? { status: 1, stdout: '', stderr: 'error connecting to api.github.com' } : { status: 0, stdout: 'ok', stderr: '' }), { sleep: ms => sleeps.push(ms), backoffMs: 10 });
+  assert.equal(flaky(['issue', 'list']), 'ok'); assert.equal(calls, 3); assert.deepEqual(sleeps, [10, 20]);
+  calls = 0;
+  assert.throws(() => ghRunner(() => { calls++; return { status: 1, stdout: '', stderr: 'error connecting to api.github.com' }; }, { sleep() {} })(['issue', 'list']), /gh issue list failed: error connecting/);
+  assert.equal(calls, 3);
+  calls = 0;
+  assert.throws(() => ghRunner(() => { calls++; return { status: 1, stdout: '', stderr: 'HTTP 404: Not Found' }; }, { sleep() {} })(['pr', 'view']), /404/);
+  assert.equal(calls, 1);
+});
+
+test('issue #35 one failing action (lease conflict) is skipped with a reason; the other agent still gets work and no attempt is burned', async t => {
+  const w = world(t, { issues: [issue(23), issue(2)] });
+  const create = w.jobs.create;
+  w.jobs.create = async spec => { if (spec.provider === 'claude') throw new Error('issue or worktree already leased; stale lease requires explicit recovery'); return create(spec); };
+  const report = await w.team.tick();
+  assert.equal(report.skipped.length, 1); assert.match(report.skipped[0].reason, /already leased/);
+  assert.deepEqual(w.calls.created.map(s => s.provider), ['codex']);
+  assert.equal(w.team.s.implemented[23], undefined);          // not counted as started
+  assert.deepEqual(w.calls.board.filter(b => b[0] === 23), []);
+});
+
+test('issue #35 notices and verdicts are posted once even when later work in the tick fails', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'CHANGES', findings: ['f'], commandsRun: ['x'] });
+  w.jobs.states[id].status = 'completed';
+  const again = () => new Team({ config: config(), root: w.team.root, gh: w.gh, jobs: w.jobs, git: w.git, register: REGISTER, clock: { now: () => 1000 } });
+  for (let i = 0; i < 3; i++) { const team = again(); await team.tick(); }     // three scheduled ticks over the same state
+  assert.equal(w.calls.comments.filter(c => /devtest-verdict v1/.test(c[1])).length, 1);
+  // blocked: one notice per job and state; a state change is a new notice, a failed post is retried
+  w.jobs.states[id].status = 'blocked'; w.jobs.states[id].lastEvent = 'preflight_failed';
+  for (let i = 0; i < 3; i++) await again().tick();
+  assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 1);
+  w.jobs.states[id].status = 'failed';
+  await again().tick();
+  assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 2);
+  const w2 = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w2.team.execute((await w2.team.plan())[0]);
+  const [id2] = Object.keys(w2.team.s.jobs); w2.jobs.states[id2].status = 'blocked';
+  let fail = true; const post = w2.gh.comment; w2.gh.comment = async (n, b) => { if (fail) throw new Error('gh down'); return post(n, b); };
+  const r = await w2.team.tick(); assert.match(r.skipped[0].reason, /gh down/);
+  fail = false; await w2.team.tick();
+  assert.equal(w2.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 1);
+});
+
+test('issue #35 finished dispatcher jobs release their leases, including ones resumed by hand; blocked jobs keep theirs', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  const released = []; w.jobs.release = async id => { released.push(id); };
+  await w.team.execute((await w.team.plan())[0]);
+  const [id] = Object.keys(w.team.s.jobs);
+  w.jobs.states[id].status = 'blocked'; await w.team.tick(); assert.deepEqual(released, []);
+  w.jobs.states[id].status = 'completed'; await w.team.tick(); await w.team.tick(); assert.deepEqual(released, [id]);   // once
+  w.jobs.states[id].status = 'running'; await w.team.tick();                                                            // resumed by hand
+  w.jobs.states[id].status = 'completed'; await w.team.tick(); assert.deepEqual(released, [id, id]);
+});
+
+test('issue #35 a missing provider binary is preflight_failed, never auth_error', async () => {
+  const run = pf => runProcess('/nonexistent', {}, { manifest: { launch: {} } }, { preflight: () => pf }, null);
+  assert.deepEqual(await run('not_found'), { code: 1, event: 'preflight_failed' });
+  assert.deepEqual(await run(false), { code: 1, event: 'auth_error' });
+  const saved = process.env.PATH; process.env.PATH = '/nonexistent-35';
+  try { assert.equal(codex.preflight({ role: 'devtest', worktree: '/x' }), 'not_found'); assert.equal(claude.preflight(), 'not_found'); }
+  finally { process.env.PATH = saved; }
 });

@@ -6,6 +6,7 @@ import { safeEnvironment } from '../core.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight() {
   const result = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8', timeout: 10000, env: safeEnvironment() });
+  if (result.error?.code === 'ENOENT') return 'not_found';
   try {
     const status = JSON.parse(result.stdout);
     return result.status === 0 && status.loggedIn === true && status.authMethod === 'claude.ai' && !!status.subscriptionType;

@@ -59,6 +59,7 @@ function realJobs(root, registry) {
       return out;
     },
     get: async id => { try { return readJob(root, id); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } },
+    release: async id => releaseLeases(root, readJob(root, id)),
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
 }
@@ -148,6 +149,15 @@ async function main() {
   if (command === 'team') {
     if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run]');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
+  }
+  if (command === 'preflight') {
+    // Run by the enable/upgrade procedure under the cron environment (env -i + the script's PATH): every binary the tick and
+    // the supervised jobs need must resolve there, or enabling is refused. Exit 3 on any failure.
+    const out = { gh: spawnSync('gh', ['--version'], { encoding: 'utf8' }).error ? 'not_found' : 'ok', git: spawnSync('git', ['--version'], { encoding: 'utf8' }).error ? 'not_found' : 'ok' };
+    for (const id of ['claude', 'codex']) { const { adapter } = await provider(registry, id); const r = adapter.preflight ? adapter.preflight({ role: 'devtest', worktree: process.cwd() }) : true; out[id] = r === 'not_found' ? 'not_found' : r ? 'ok' : 'auth_or_governance_failed'; }
+    console.log(JSON.stringify({ preflight: out }));
+    if (Object.values(out).some(v => v !== 'ok')) process.exitCode = 3;
+    return;
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {

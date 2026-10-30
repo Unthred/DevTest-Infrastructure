@@ -2,11 +2,22 @@
 import { spawnSync } from 'node:child_process';
 import { SupervisorError } from './core.mjs';
 
-export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding: 'utf8', input, timeout: 60000, maxBuffer: 8 * 1024 * 1024 })) {
+const TRANSIENT = /error connecting to|connection (reset|refused|timed out)|timeout|timed out|temporarily unavailable|\bEOF\b|TLS handshake|HTTP 5\d\d|could not resolve host/i;
+export const isTransient = text => TRANSIENT.test(String(text || ''));
+const realSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// A missing gh is named, not reported as an empty failure (issue #35). Transient transport errors are retried within the
+// tick (bounded: `tries` attempts with doubling backoff) before the call fails; other failures fail at once.
+export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding: 'utf8', input, timeout: 60000, maxBuffer: 8 * 1024 * 1024 }), { tries = 3, backoffMs = 1000, sleep = realSleep } = {}) {
   return (args, input) => {
-    const r = run(args, input);
-    if (r.status !== 0) throw new SupervisorError(`gh ${args.slice(0, 2).join(' ')} failed: ${String(r.stderr || '').split('\n')[0].slice(0, 200)}`);
-    return r.stdout;
+    for (let attempt = 1; ; attempt++) {
+      const r = run(args, input);
+      if (r.error?.code === 'ENOENT') throw new SupervisorError(`required binary not found: gh (PATH=${String(process.env.PATH || '').slice(0, 200)})`);
+      if (r.status === 0) return r.stdout;
+      const detail = String(r.stderr || r.error?.message || '').split('\n')[0].slice(0, 200);
+      if (attempt < tries && isTransient(detail)) { sleep(backoffMs * 2 ** (attempt - 1)); continue; }
+      throw new SupervisorError(`gh ${args.slice(0, 2).join(' ')} failed: ${detail}`);
+    }
   };
 }
 

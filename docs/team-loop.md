@@ -52,3 +52,6 @@ Only `enabled`, `limits`, `depends_on_overrides` and each agent's `issues` can b
 4. Verify: `diff -r supervisor /mnt/cache/ai-supervisor/current/supervisor` is empty (the override is not in the payload, so nothing needs excluding), `team.local.json` is unchanged, `ai-agent --supervisor team tick --dry-run` plans no job for #2 or #23.
 5. Rollback: re-point `current` to the previous `versions/<sha>` and restore the wrapper backup the script prints; the override is untouched.
 The temporary hand edit of the previous payload (`versions/8f2e386…/supervisor/team.json`) is superseded by this change; the old `current` version stays as rollback.
+
+## Tick resilience (issue #35)
+A failure of one item (a lease conflict, one `gh` error, a failed comment) is recorded in the tick report under `skipped` with a reason, and the tick continues with the other agents and items; attempt counters and the "implemented" mark are only set after the job was created. Verdict and needs-homeowner comments are recorded in state and saved before they are posted (and un-recorded if the post fails), so each is posted once per job and head, or once per job and state, however many later ticks fail. The dispatcher releases the leases of its own jobs that reach `completed` or `stopped`, including ones resumed by hand; `blocked` and `failed` jobs keep their lease until the homeowner decides.
