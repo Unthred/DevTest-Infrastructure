@@ -88,7 +88,7 @@ export function validateSpec(spec) {
   const handover = spec.handover ? path.resolve(worktree, spec.handover) : null;
   if (handover && !handover.startsWith(worktree + path.sep)) throw new SupervisorError('handover must be in worktree');
   const kind = spec.kind ?? 'implement';
-  if (!['implement', 'review', 'fix', 'rebase', 'cifix'].includes(kind)) throw new SupervisorError('invalid job kind');
+  if (!['implement', 'continue', 'review', 'fix', 'rebase', 'cifix'].includes(kind)) throw new SupervisorError('invalid job kind');
   const access = spec.access ?? 'standard';
   if (!['standard', 'full'].includes(access)) throw new SupervisorError('invalid access mode');
   if (access === 'full') {

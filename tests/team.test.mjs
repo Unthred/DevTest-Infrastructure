@@ -805,3 +805,52 @@ test('dashboard history (#32): plan() exposes what it read, and a merge is logge
   await w.team.execute({ type: 'merge', pr: 11, head: H(2), base: 'main', reviewer: 'claude', job: 'j' });
   assert.equal(w.team.s.mergeLog.length, 500); assert.equal(w.team.s.mergeLog.at(-1).pr, 11);
 });
+
+test('continue (#50): an agent continues its own draft PR, bounded by max_fix_attempts; drafts of others, closed or blocked issues are not continued', async t => {
+  const draft = pr(28, 'codex/issue-3-x', H(1), { isDraft: true });
+  const w = world(t, { pulls: [draft], issues: [issue(3), issue(2, 'CLOSED')] });
+  const a = (await w.team.plan()).find(x => x.agent === 'codex');
+  assert.equal(a.type, 'continue'); assert.equal(a.pr, 28); assert.equal(a.issue, 3); assert.equal(a.branch, 'codex/issue-3-x');
+  await w.team.execute({ agent: 'codex', ...a });
+  const spec = w.calls.created[0];
+  assert.equal(spec.kind, 'continue'); assert.equal(spec.issue, 3); assert.equal(spec.postcondition.kind, 'continued');
+  assert.match(spec.prompt, /draft pull request #28/); assert.ok(!spec.allowed_actions.includes('merge'));
+  assert.equal(w.team.s.continueAttempts[28], 1);
+  // in flight: not planned twice
+  assert.notEqual((await w.team.plan()).find(x => x.agent === 'codex')?.type, 'continue');
+  // bound reached
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.continueAttempts[28] = 2;
+  assert.equal((await w.team.plan()).find(x => x.agent === 'codex'), undefined);
+  // negative cases
+  const claudeDraft = world(t, { pulls: [pr(28, 'claude/issue-3-x', H(1), { isDraft: true })], issues: [issue(3), issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  assert.notEqual((await claudeDraft.team.plan()).find(x => x.agent === 'codex')?.pr, 28);       // issue 3 is codex's but the draft is claude's
+  assert.equal((await claudeDraft.team.plan()).find(x => x.agent === 'claude')?.type === 'continue', false);  // issue 3 is not claude's
+  const closed = world(t, { pulls: [draft], issues: [issue(3, 'CLOSED')] });
+  assert.equal((await closed.team.plan()).find(x => x.agent === 'codex'), undefined);
+  const blocked = world(t, { pulls: [draft], issues: [issue(3, 'OPEN', 'Prerequisites: #9'), issue(9)] });
+  assert.equal((await blocked.team.plan()).find(x => x.agent === 'codex'), undefined);
+  const held = world(t, { pulls: [draft], issues: [issue(3, 'OPEN', '', ['needs-homeowner'])] });
+  assert.equal((await held.team.plan()).find(x => x.agent === 'codex'), undefined);
+  // post-condition: new head or no longer a draft; an unchanged draft is not enough
+  const pc = w.team.postconditions();
+  w.gh.pulls = [draft]; assert.equal(await pc({ postcondition: { kind: 'continued', pr: 28, baseHead: H(1) } }), false);
+  w.gh.pulls = [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })]; assert.equal(await pc({ postcondition: { kind: 'continued', pr: 28, baseHead: H(1) } }), true);
+  w.gh.pulls = [pr(28, 'codex/issue-3-x', H(1), { isDraft: false })]; assert.equal(await pc({ postcondition: { kind: 'continued', pr: 28, baseHead: H(1) } }), true);
+});
+
+test('fix limit (#50): the AI-channel alert is sent once with the PR link and the decision needed; a failing channel does not undo or repeat the notice', async t => {
+  const sent = [];
+  const w = world(t, { pulls: [pr(41, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  w.team.alert = async text => { sent.push(text); };
+  w.team.s.verdicts[`41:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' }; w.team.s.fixAttempts[`41:${H(0)}`] = 2;
+  await w.team.tick(); await w.team.tick();
+  assert.equal(sent.length, 1); assert.match(sent[0], /PR #41/); assert.match(sent[0], /github\.com\/o\/r\/pull\/41/); assert.match(sent[0], /Decision needed/);
+  const f = world(t, { pulls: [pr(41, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  let tries = 0; f.team.alert = async () => { tries++; throw new Error('channel down'); };
+  f.team.s.verdicts[`41:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' }; f.team.s.fixAttempts[`41:${H(0)}`] = 2;
+  const r = await f.team.tick(); await f.team.tick();
+  assert.equal(tries, 1); assert.equal(f.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 1); assert.ok(r.skipped.some(x => /alert fix-limit/.test(x.what)));
+  // not rejected: no alert
+  const ok = world(t, { pulls: [pr(41, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  let n = 0; ok.team.alert = async () => { n++; }; ok.team.s.fixAttempts[`41:${H(0)}`] = 2; await ok.team.tick(); assert.equal(n, 0);
+});

@@ -86,7 +86,7 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
     if (shown.status !== 0) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main');
     register = shown.stdout;
   }
-  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register });
+  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config) });
 }
 async function teamTick(root, registry, dryRun) {
   const config = loadTeamConfig(teamConfigFile, root);

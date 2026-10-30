@@ -180,3 +180,9 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Implemented in source: `supervisor/teamstatus.mjs` (on `buildView`), `team status [--json] [--no-github]`, cached merged-PR list written by the tick, `team-status` wrapper in the install and upgrade scripts, `tests/team-status.test.mjs` (13 tests). Validator OK; full suite 245 tests.
 - Smoke: ran against the real Tower state read-only (no gh call, cache fresh); it correctly flagged a completed review job still holding a lease.
 - NOT done: the `team alert` part of the issue comments (event-driven Slack alerts via OpenBao webhook); needs its own PR. Not deployed; not installed; `tools/upgrade-supervisor.sh` changed, so the homeowner must run the reviewed upgrade by hand (the self-upgrader will not apply upgrader changes automatically). Codex review pending.
+
+## Issue #50 — team loop continues own drafts, explains idle agents (Claude, `claude/issue-50-team-loop-continue`)
+
+- Implemented in source: `continue` job kind (own draft PR, bounded by `max_fix_attempts`, post-condition new head or ready), plain-English idle reasons in the dashboard view model and `team status`, and an event-driven fix-limit alert through the existing `alerts.command` channel. See `docs/supervisor.md`.
+- Tests: validator OK; `node --test "tests/**/*.test.mjs"` 248/248 locally (new cases for continue, its negatives and bound, idle reasons, alert once / failing channel).
+- Not done: CI/review (Codex), deployment, live verification. The Slack delivery itself depends on `alerts.command` being configured with the OpenBao-backed webhook (separate piece of work, #39); until then alerts go to `team/alerts.jsonl` only.
