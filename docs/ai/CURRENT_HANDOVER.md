@@ -15,7 +15,7 @@ Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged arc
 | #2 Docker foundation | yes; PR #19 merged as `a8b944b` after PR #26 lifecycle fix | exact-head checks and Codex executable review passed | no standalone `dev-test` installation | Tower Docker and lifecycle smokes passed; CLI integration remains issue #8 |
 | #20 Allowance detection | yes; PR #21 merged as `67c8aabd78ee456e5b08c10db63ad0ec4a6cffd1` | Codex PASS at rebased head `7e4e6b4`; exact-head CI green | no | Codex interactive limit capture/reset parser covered; live supervised recovery unverified |
 | #23 Team loop | yes; PR #25 merged as `8f2e386` | Codex PASS at `09a1915`; exact-head CI green | no; Claude deploys after review | supervised full-access Codex job ran `node --test` at #25 head (115/115); live dispatcher tick/allowance recovery unverified |
-| #3 .NET SDK toolchain | initial planner on `codex/issue-3-dotnet-build`, commit `817a74d` | validator OK; 66/66 tests before handover rebase; rerun on new head | no | no SDK container build yet; offline restore only |
+| #3 .NET SDK toolchain | initial planner on `codex/issue-3-dotnet-build`, commit `d02e8ba` | validator OK; 119/119 tests on rebased head | no | no SDK container build yet; offline restore only |
 | #4, #6–#14 other issues | not started | no | no | no |
 | #5 Browser runtime | yes; PR #27 head `1b3402b` | Codex PASS, 93/93 tests and exact-head CI green | no | niced Tower browser smoke passed after pinned cache preparation; TCP targets remain blocked on OQ-2 |
 
@@ -72,17 +72,16 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 3. Keep live provider-limit recovery unverified; do not reboot Tower.
 
 
-## #2 mount lifecycle fix (Claude, branch `claude/issue-2-mount-lifecycle`, PR targets `codex/issue-2-docker`)
-- Source: merges main into the #19 branch (handover reconciled, both sides kept); release in a final step on every outcome, incomplete-cleanup reporting, lease and cache user markers, start-up sweep restricted to DevTest images under the storage root; `withRunVolume`; `tests/docker-lifecycle-smoke.mjs`.
-- Tests: validator OK, 62/62. Tower gate: lifecycle smoke LIFECYCLE OK (baseline restored after five outcomes; sweep removed only the two stranded devices) and `tests/docker-smoke.mjs` passes.
-- Review and CI: Codex review pending; merging this PR into `codex/issue-2-docker` updates #19. Claude then performs the final check and merges #19.
+## #2 mount lifecycle fix (PR #26, merged into #19 branch)
+- Source includes final-step mount release, lease/cache user markers and startup sweep restricted to DevTest loop-image paths.
+- Codex exact-head review PASS at `ce738f4`; validator OK, 62/62 tests, niced Docker/lifecycle smokes passed. Loop devices/mounts/containers returned to baseline after SIGKILL recovery. PR #19 later merged by Claude as `a8b944b`.
 
-## Issue #20 allowance evidence (Claude, PR #21, branch `claude/issue-20-allowance`)
+## Issue #20 allowance evidence (Claude, PR #21, merged)
 - Source: `supervisor/allowance.mjs`, `supervisor/clocktext.mjs`, Claude `rate_limit_event` parsing, Codex rollout `postRun`, billing guard on every exit, Codex local-time reset parsing; `docs/allowance-evidence.md`; live fixtures in `tests/fixtures/allowance/` (allowed states and the first real Codex exhausted message).
-- Review and CI: Codex re-review pending at the head named on the PR. Installed: no.
+- Review and CI: Codex PASS at rebased head `7e4e6b4`; exact-head CI green; merged as `67c8aab`. Installed: no.
 - Live status: the Codex interactive limit message and its `/status` window lines are captured and parsed (verified for those two shapes only). The `codex exec --json` form, session resume and all Claude exhausted states are uncaptured; manifests stay `unverified` and `autoResume` stays refused.
 
-## Issue #23 team loop (Claude, branch `claude/issue-23-team-loop`, stacked on #21: its diff includes #21 until #21 merges)
+## Issue #23 team loop (Claude, PR #25, merged)
 - Source: dispatcher `supervisor/team.mjs`, `github.mjs`, `team.json` (disabled), `access.json`; post-conditions, `autoRestart` and D-019 timing in `core.mjs`; manifest `access` field; `docs/team-loop.md`; fake-GitHub/fake-provider tests.
-- Review and CI: exact-head CI green; Codex executable review pending. Installed: no. Deploy with `tools/upgrade-supervisor.sh` only after Codex's PASS, then enable `team.json` (an explicit act).
-- Live status: a supervised `access: full` Codex job ran the suite on Tower; dispatcher, merge, restart after a real limit and the cron path are not live-verified. Reset parsing stays unverified.
+- Review and CI: Codex PASS at `09a1915`, exact-head CI green; merged as `8f2e386`. Installed: no; Claude owns deployment and first tick.
+- Live status: supervised full-access Codex job at PR #25 head ran the suite in its linked worktree (115/115; clean worktree). Dispatcher production tick, merge, real-limit restart and cron dispatch are not live-verified. Reset parsing stays unverified.
