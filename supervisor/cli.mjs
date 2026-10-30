@@ -7,7 +7,7 @@ import { SupervisorError, claimWorker, createJob, defaultRegistry, drive, jobFil
 import { runProcess } from './process.mjs';
 import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
-import { readJobs, recordTick } from './dashdata.mjs';
+import { readJobs, recordTick, tickOutcome } from './dashdata.mjs';
 import { spawnSync } from 'node:child_process';
 
 const self = fileURLToPath(import.meta.url);
@@ -97,7 +97,7 @@ async function teamTick(root, registry, dryRun) {
   try {
     const team = await teamFor(root, registry, config, !dryRun);
     const report = await team.tick({ dryRun });
-    if (!dryRun) record({ status: 'ok', team, actions: report.actions });
+    if (!dryRun) record({ ...tickOutcome(report), team, actions: report.actions });
     return report;
   } catch (error) {
     if (!dryRun) record({ status: 'error', error: error?.message });

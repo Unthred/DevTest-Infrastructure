@@ -23,7 +23,8 @@ export function pauseDisagreement(job, allowance, now) {
   if (!allowance || !Array.isArray(allowance.windows) || !allowance.windows.length) return { kind: 'unverifiable', text: 'paused on a usage limit but the provider has reported no allowance data to confirm it' };
   const known = allowance.windows.filter(w => Number.isFinite(w.utilization));
   const exhausted = allowance.windows.some(w => (Number.isFinite(w.utilization) && w.utilization >= EXHAUSTED) || ['rejected', 'blocked', 'exhausted', 'limit_reached'].includes(w.status));
-  if (exhausted || allowance.status === 'limit_reached') return null;
+  // Same exhausted-status semantics as limitFromAllowance(): a rejected/blocked/exhausted allowance confirms the pause.
+  if (exhausted || ['rejected', 'blocked', 'exhausted', 'limit_reached'].includes(allowance.status)) return null;
   if (!known.length) return { kind: 'unverifiable', text: 'paused on a usage limit but the reported allowance has no utilisation figures to confirm it' };
   const used = known.map(w => `${windowLabel(w, allowance.provider)} ${Math.round(w.utilization * 100)}%`).join(', ');
   const at = allowance.observedAt ? ` (reported ${new Date(allowance.observedAt).toISOString().slice(11, 16)} UTC)` : '';
