@@ -1,0 +1,17 @@
+{
+  "_note": "The 13:15 case from issue #32, reconstructed from the real supervisor record of job 7829a980 (claude, issue #30): status paused_limit, lastEvent usage_limit, no reset reported, one-hour backoff (nextAttemptAt = pause + 1h). The allowance figures are those the homeowner read from Claude's own /usage at the time: 34% of the 5-hour session and 18% of the week. The stored record at job end showed 40% / 18%. Session id, prompt and paths removed.",
+  "id": "7829a9802fab4e74f2657c4042f8c29d",
+  "provider": "claude", "kind": "implement", "issue": 30, "branch": "claude/issue-30-team-loop-delivered",
+  "status": "paused_limit", "lastEvent": "usage_limit", "attempts": 1,
+  "createdAt": 1793366112622, "updatedAt": 1793366236825, "lastProgress": 1793366236811,
+  "resetAt": null, "nextAttemptAt": 1793369836811,
+  "allowance": {
+    "provider": "claude", "status": "allowed",
+    "windows": [
+      { "type": "five_hour", "utilization": 0.34, "resetsAt": 1793376600000, "status": "allowed" },
+      { "type": "seven_day", "utilization": 0.18, "resetsAt": 1793851200000, "status": "allowed" }
+    ],
+    "billing": { "overageStatus": "rejected", "usingOverage": false },
+    "observedAt": 1793366236800
+  }
+}

@@ -7,6 +7,7 @@ import { SupervisorError, claimWorker, createJob, defaultRegistry, drive, jobFil
 import { runProcess } from './process.mjs';
 import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
+import { readJobs, recordTick, tickOutcome } from './dashdata.mjs';
 import { spawnSync } from 'node:child_process';
 
 const self = fileURLToPath(import.meta.url);
@@ -88,10 +89,20 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
 }
 async function teamTick(root, registry, dryRun) {
   const config = loadTeamConfig(teamConfigFile, root);
-  if (!config.enabled && !dryRun) return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' };
+  // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
+  const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
+  if (!config.enabled && !dryRun) { record({ status: 'disabled' }); return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' }; }
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };
-  try { return await (await teamFor(root, registry, config, !dryRun)).tick({ dryRun }); } finally { unlock(); }
+  try {
+    const team = await teamFor(root, registry, config, !dryRun);
+    const report = await team.tick({ dryRun });
+    if (!dryRun) record({ ...tickOutcome(report), team, actions: report.actions });
+    return report;
+  } catch (error) {
+    if (!dryRun) record({ status: 'error', error: error?.message });
+    throw error;
+  } finally { unlock(); }
 }
 async function main() {
   const command = process.argv[2] || 'help';
@@ -99,7 +110,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | reconcile | daemon | release ID');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | reconcile | daemon | release ID\n  team tick [--dry-run] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   if (command === 'dry-run' || command === 'start') {
@@ -145,6 +156,13 @@ async function main() {
       }
     }
     return;
+  }
+  if (command === 'dashboard') {
+    if (a._[0] !== 'serve') throw new SupervisorError('usage: dashboard serve --host LAN_IPV4 [--port N]');
+    const { serve, DEFAULT_PORT } = await import('./dashserver.mjs');
+    const server = await serve({ root, config: loadTeamConfig(teamConfigFile, root), host: a.host || process.env.DASHBOARD_HOST, port: Number(a.port || process.env.DASHBOARD_PORT || DEFAULT_PORT) });
+    console.log(`dashboard listening on http://${server.address().address}:${server.address().port}/ (read-only)`);
+    return;   // the server keeps the process alive
   }
   if (command === 'team') {
     if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run]');

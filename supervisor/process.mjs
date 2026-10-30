@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { billingRisk, limitFromAllowance } from './allowance.mjs';
+import { addUsage, usageFromLine } from './usage.mjs';
 import { checkpoint, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
 export async function runProcess(root, job, config, adapter, clock, options = {}) {
@@ -13,7 +14,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   let observed = null, resetAt = null, resetSource = 'none', verified = false, buffer = '';
   const nonFatal = new Set(['transient_rate_limit', 'network_error']);
-  let allowance = null;
+  let allowance = null, usage = null;
   const observeEvent = result => {
     if (result.allowance) allowance = result.allowance;
     if (!result.event || (observed && !nonFatal.has(observed) && nonFatal.has(result.event))) return;
@@ -41,6 +42,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     let index;
     while ((index = buffer.indexOf('\n')) !== -1) {
       const line = buffer.slice(0, index).slice(0, 16384); buffer = buffer.slice(index + 1);
+      usage = addUsage(usage, usageFromLine(line));
       const result = adapter.observe(line, clock.now());
       if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
       observeEvent(result);
@@ -59,6 +61,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     });
     if (buffer) observeEvent(adapter.observe(buffer.slice(0, 16384), clock.now()));
     if (typeof adapter.postRun === 'function') { const late = adapter.postRun(job); if (late) allowance = late; }
+    if (usage) job.usage = addUsage(job.usage, usage);
     if (allowance) job.allowance = { ...allowance, observedAt: clock.now() };
     // Billing guard: spending beyond the subscription blocks for a human on ANY exit, and outranks every other event
     // (including a clean exit), so a run that used paid overage is never recorded as plainly completed or retried.
