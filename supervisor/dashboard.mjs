@@ -195,9 +195,11 @@ function activity({ config, jobs, events, state, cache, snapshots, now }) {
   for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on PR #${pr} at ${sha7(head)}`, link: link('pull', Number(pr)) }); }
   for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged PR #${m.pr}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
   // ticks take part in the same newest-first ordering and 50-event bound as every other event (issue #32)
-  const ok = snapshots.filter(s => s.status === 'ok').map(s => ({ at: s.at, text: `tick ok${s.plan?.length ? `, plan: ${s.plan.map(a => `${a.agent || ''} ${a.type} #${a.ref}`.trim()).join('; ')}` : ', nothing to dispatch'}` }));
-  rows.push(...ok);
-  if (cache?.tick && cache.tick.status !== 'ok') rows.push({ at: cache.tick.at, text: `tick ${cache.tick.status}${cache.tick.error ? `: ${cache.tick.error}` : ''}` });
+  rows.push(...snapshots.map(s => ({ at: s.at, text: s.status === 'ok'
+    ? `tick ok${s.plan?.length ? `, plan: ${s.plan.map(a => `${a.agent || ''} ${a.type} #${a.ref}`.trim()).join('; ')}` : ', nothing to dispatch'}`
+    : `tick ${s.status}${cache?.tick?.at === s.at && cache.tick.error ? `: ${cache.tick.error}` : ''}` })));
+  if (cache?.tick && cache.tick.status !== 'ok' && !snapshots.some(s => s.at === cache.tick.at))
+    rows.push({ at: cache.tick.at, text: `tick ${cache.tick.status}${cache.tick.error ? `: ${cache.tick.error}` : ''}` });
   return rows.filter(r => Number.isFinite(r.at)).sort((a, b) => b.at - a.at).slice(0, 50).map(r => ({ ...r, text: redact(r.text, 300) }));
 }
 
