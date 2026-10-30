@@ -126,6 +126,9 @@ function mountedSource(target) {
 function ensureLoopImage(image, target, bytes) {
   const existing = mountedSource(target);
   if (existing) {
+    const st = fs.lstatSync(image);
+    if (!st.isFile() || st.isSymbolicLink() || st.uid !== process.getuid() || (st.mode & 0o077) !== 0 || st.size !== bytes)
+      throw new RunnerError('bounded storage image size or owner mismatch', 4);
     if (existing.type !== 'ext4' || !existing.source.startsWith('/dev/loop')) throw new RunnerError('foreign storage mount refused', 4);
     const backing = hostCommand('losetup', ['-n', '-O', 'BACK-FILE', existing.source]);
     if (backing !== image) throw new RunnerError('storage mount backing image mismatch', 4);
