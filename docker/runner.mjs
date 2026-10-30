@@ -49,6 +49,11 @@ export function containerCanRead(dir, uid, gid) {
   return true;
 }
 
+export function assertContainerCanRead(project, config) {
+  if (Number.isSafeInteger(config.uid) && Number.isSafeInteger(config.gid) && !containerCanRead(project, config.uid, config.gid))
+    throw new RunnerError(`project directory is not readable by the container user (uid ${config.uid}); it needs mode 0755 (a 0700 clone fails inside the container as exit 2)`);
+}
+
 export function createPlan(spec, config) {
   const project = exactDirectory(spec.project, 'project');
   const allowlist = config.allowedProjects?.map(p => exactDirectory(p, 'allowlisted project')) || [];
@@ -56,8 +61,7 @@ export function createPlan(spec, config) {
   if (!inside('/mnt/user/projects', project)) throw new RunnerError('project must be under /mnt/user/projects');
   const storage = exactDirectory(config.storageRoot, 'storage root');
   if (!inside('/mnt/cache', storage)) throw new RunnerError('storage root must be on /mnt/cache');
-  if (Number.isSafeInteger(config.uid) && Number.isSafeInteger(config.gid) && !containerCanRead(project, config.uid, config.gid))
-    throw new RunnerError(`project directory is not readable by the container user (uid ${config.uid}); it needs mode 0755 (a 0700 clone fails inside the container as exit 2)`);
+  assertContainerCanRead(project, config);
   return buildPlanForVerifiedPaths(spec, config, project, storage);
 }
 
