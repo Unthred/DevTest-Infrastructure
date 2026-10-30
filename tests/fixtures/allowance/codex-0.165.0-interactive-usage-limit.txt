@@ -1,0 +1,9 @@
+Captured live from the homeowner's interactive Codex CLI 0.165.0 (Plus plan) on 2026-10-30 about 09:25 UK, after a normal
+git push. Redacted: account email and session id. This is the interactive TUI, NOT `codex exec --json`.
+
+■ You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 11:44 AM.
+
+/status immediately afterwards:
+5h limit:     [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 11:44 AM)
+Weekly limit: [██████████░░░░░░░░░░] 51% left (resets 7:18 AM on 4 Nov)
+Permissions:  Full Access

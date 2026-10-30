@@ -1,6 +1,7 @@
 import * as base from './base.mjs';
 import { spawnSync } from 'node:child_process';
 import { codexAllowanceFromRollout, codexRolloutFile } from '../allowance.mjs';
+import { parseStatusWindow, parseTryAgain } from '../clocktext.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight(job) {
   const status = spawnSync('codex', ['login', 'status'], { encoding: 'utf8', timeout: 10000 });
@@ -15,15 +16,26 @@ export function command(config, job, resume) {
   else args.push('-');
   return args;
 }
-export function observe(line) {
+// `now` is injected so reset times resolve against the supervisor's clock. The message shapes below were captured from the
+// interactive Codex CLI 0.165.0 on 2026-10-30; the `codex exec --json` wording of the same condition is NOT yet captured,
+// so these results are marked verified only because the text matches a captured shape, not because exec output was seen.
+export function observe(line, now = Date.now()) {
   let obj;
   try { obj = JSON.parse(line); } catch { obj = null; }
   const sessionId = obj?.type === 'thread.started' && typeof obj.thread_id === 'string' ? obj.thread_id : null;
   const errorObject = obj && (obj.type === 'error' || obj.type === 'turn.failed');
   const text = obj ? (errorObject ? String(obj.error?.message || obj.message || obj.error || '') : '') : line;
   if (/reset your current usage limits|switch(?:ing|ed)? models? due to usage limits/i.test(text)) return { event: 'approval_required', sessionId };
-  if (/usage limit|you(?:'ve| have) hit your limit/i.test(text) && !/api key|billing/i.test(text))
+  // "... or try again at 11:44 AM." The text also offers "purchase more credits"; that is an upsell, never consent to paid
+  // usage: it stays a plain usage_limit and no billing action is taken.
+  const tryAgain = parseTryAgain(text, now);
+  if (/usage limit|you(?:'ve| have) hit your limit/i.test(text) && !/api key|billing/i.test(text)) {
+    if (tryAgain) return { event: 'usage_limit', resetAt: tryAgain, resetSource: 'provider_reported', verified: true, sessionId };
     return { event: 'usage_limit', resetAt: base.resetTime(text), resetSource: 'provider_reported', verified: false, sessionId };
+  }
+  // /status window lines. Only an exhausted window (0% left) is a limit; the process keeps the later of several.
+  const window = parseStatusWindow(text, now);
+  if (window && window.percentLeft === 0) return { event: 'usage_limit', resetAt: window.resetsAt, resetSource: 'provider_reported', verified: true, sessionId };
   return { ...base.observe(text), sessionId };
 }
 // Codex's exec stream carries no limit data; the thread's rollout file does. Read after the process exits.

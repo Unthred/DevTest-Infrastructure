@@ -17,8 +17,16 @@ Inspected: Codex session rollouts for 2026-10-30 (event types and rate-limit fie
 
 These give provider-reported reset times without parsing prose. `supervisor/allowance.mjs` reads them: Claude from the stream, Codex from the rollout tail after the process exits (message text is never read into state). A failed run whose allowance shows exhaustion becomes `usage_limit` with the reported reset; overage use becomes `approval_required` on **any** exit, including a clean one, and outranks every other event (never retried). Apart from that guard, a successful run is never reclassified as a limit. Every derived limit is `verified: false`.
 
+## First real exhausted state (Codex CLI 0.165.0, interactive, 2026-10-30 ~09:25 UK)
+Captured by the homeowner's interactive session and passed on redacted; fixture `tests/fixtures/allowance/codex-0.165.0-interactive-usage-limit.txt`.
+- Message: `You've hit your usage limit. Upgrade to Pro (...), visit .../settings/usage to purchase more credits or try again at 11:44 AM.` and `/status`: `5h limit ... 0% left (resets 11:44 AM)`, `Weekly limit ... 51% left (resets 7:18 AM on 4 Nov)`.
+- `supervisor/clocktext.mjs` reads `try again at H:MM AM|PM` and `(resets H:MM AM[ on D Mon])` in the host's local zone (Europe/London, BST/GMT via Intl), rolling to the next day (or next year for a dated reset) if already past. Malformed times, 31 Feb and unknown month names give no reset.
+- The Codex adapter returns `verified: true` **only** for these two captured shapes. With D-019 the restart waits for the reset plus 2 minutes. "Purchase more credits" is an upsell: the event stays a plain `usage_limit` and no billing action is taken (tested).
+- Several windows: only a window at 0% left counts, and the later reset wins in either order (the process keeps the later `usage_limit` reset).
+- **Still unverified:** the `codex exec --json` wording of this condition, session resume, and everything for Claude. The production manifests keep `usage_limit_detection`, `reset_time_parsing` and `resume` as `unverified` and `autoResume` is still refused.
+
 ## Not known (blocks enabling auto-resume)
-1. The exhausted-state values: Claude `status` strings other than `allowed`, Codex `rate_limit_reached_type` values, and the exact exit code/stream shape when a request is refused.
+1. The exhausted-state values still uncaptured: Claude `status` strings other than `allowed`, Codex `rate_limit_reached_type` values, and the exit code and `exec --json` shape when a request is refused (the interactive Codex message is now captured, above).
 2. Whether `claude --resume <id>` and `codex exec resume <id>` continue the same session after a reset.
 3. Whether Codex's in-product credits or model switching act silently when a limit is reached (must remain blocked).
 
