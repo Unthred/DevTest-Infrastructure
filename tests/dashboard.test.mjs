@@ -156,7 +156,9 @@ test('usage: allowance windows come from provider records; absent data is "unkno
 // ---- tokens
 test('usageFromLine reads counts and the CLI cost estimate only; addUsage sums', () => {
   assert.deepEqual(usageFromLine(JSON.stringify({ type: 'result', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 }, total_cost_usd: 0.25, result: 'secret text' })), { inputTokens: 110, outputTokens: 5, costUsdEstimate: 0.25 });
-  assert.deepEqual(usageFromLine(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 7, cached_input_tokens: 3, output_tokens: 2 } })), { inputTokens: 10, outputTokens: 2, costUsdEstimate: null });
+  assert.deepEqual(usageFromLine(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 7, cached_input_tokens: 3, output_tokens: 2 } })), { inputTokens: 7, outputTokens: 2, costUsdEstimate: null });
+  // Real-format Codex event: cached input is a subset of input_tokens, never added.
+  assert.deepEqual(usageFromLine(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 9911, cached_input_tokens: 8960, output_tokens: 5 } })), { inputTokens: 9911, outputTokens: 5, costUsdEstimate: null });
   assert.equal(usageFromLine('not json'), null); assert.equal(usageFromLine(JSON.stringify({ type: 'assistant', usage: { input_tokens: 1 } })), null);
   assert.equal(usageFromLine(JSON.stringify({ type: 'result', usage: { input_tokens: -4, output_tokens: 'x' } })).inputTokens, 0);
   assert.deepEqual(addUsage({ inputTokens: 1, outputTokens: 2, costUsdEstimate: null }, { inputTokens: 3, outputTokens: 4, costUsdEstimate: 0.5 }), { inputTokens: 4, outputTokens: 6, costUsdEstimate: 0.5 });
