@@ -124,3 +124,18 @@ test('issue #35 preflight passes the configured product repository, not the call
   const r = spawnSync(process.execPath, [new URL('../supervisor/cli.mjs', import.meta.url).pathname, 'preflight'], { cwd, encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
   assert.doesNotMatch(r.stdout + r.stderr, new RegExp(cwd));
 });
+
+test('issue #35 an unreadable CLI or non-executable node leaves a failing log line instead of a silent exit', t => {
+  const w = cronWorld(t);
+  execFileSync('bash', [install], { env: w.env, stdio: 'ignore' });
+  const text = fs.readFileSync(w.script, 'utf8');
+  const cli = text.match(/^CLI=(.*)$/m)[1].replace(/\\/g, '');
+  fs.renameSync(cli, cli + '.hidden');
+  w.cron();
+  assert.match(fs.readFileSync(w.log, 'utf8').trim().split('\n').at(-1), /rc=127 supervisor cli unreadable/);
+  fs.renameSync(cli + '.hidden', cli);
+  const node = text.match(/^NODE=(.*)$/m)[1].replace(/\\/g, '');
+  fs.chmodSync(node, 0o600);
+  w.cron();
+  assert.match(fs.readFileSync(w.log, 'utf8').trim().split('\n').at(-1), /rc=127 node not executable/);
+});

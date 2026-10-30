@@ -38,14 +38,17 @@ printf 'Bounded recovery check for opt-in AI supervisor jobs; no model call unle
   printf '#!/bin/bash\n# BEGIN-ENV\nPATH=%q\nHOME=%q\nNODE=%q\nCLI=%q\nLOG=%q\n# END-ENV\n' "$run_path" "$run_home" "$node_bin" "$cli" "$log"
   cat <<'SCRIPT'
 export PATH HOME
-[ -r "$CLI" ] || exit 0
-[ -x "$NODE" ] || exit 0
 mkdir -p "$(dirname "$LOG")"
 # One run at a time; an overlapping run skips instead of racing the log trim.
 exec 9>"$LOG.lock"
 flock -n 9 || exit 0
-out=$("$NODE" "$CLI" reconcile 2>&1 | tail --bytes=2000 | tr '\n' ' '; exit "${PIPESTATUS[0]}")
-rc=$?
+# A missing CLI or node must leave a failing log line, never a silent skip.
+if [ ! -r "$CLI" ]; then rc=127; out="supervisor cli unreadable: $CLI"
+elif [ ! -x "$NODE" ]; then rc=127; out="node not executable: $NODE"
+else
+  out=$("$NODE" "$CLI" reconcile 2>&1 | tail --bytes=2000 | tr '\n' ' '; exit "${PIPESTATUS[0]}")
+  rc=$?
+fi
 printf '%s rc=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$out" >> "$LOG"
 # Trim only above the threshold, under the lock held above.
 if [ "$(stat -c %s "$LOG")" -gt 1048576 ]; then tail --bytes=262144 "$LOG" | tail -n +2 > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
