@@ -31,7 +31,7 @@ The host-side Docker foundation for issue #2 is implemented in [`docker/runner.m
 |---|---|---|
 | Image | official `mcr.microsoft.com/dotnet/sdk` 8, 9, 10 | official Playwright image |
 | Pinning | digest recorded in the lock file (D-004) | digest recorded in the lock file |
-| Network | restore: package sources only; build/test: none (D-016) | declared targets only (OQ-2) |
+| Network | restore: package sources only; build/test: none (D-016) | declared targets only: host-side sockets enforced; TCP targets blocked on OQ-2 ([browser-runner.md](browser-runner.md)) |
 | Output | build log, TRX, coverage | screenshots per profile, DOM/console report |
 | Depends on the other track | no | no (no .NET runtime) |
 

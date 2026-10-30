@@ -190,6 +190,6 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7).
-- OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate).
+- OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.
 - OQ-3: Whether Docker-dependent tests run in GitHub-hosted CI or only on Tower's runner (issue #12).
 - OQ-4: Evidence retention period (issue #12/#13).

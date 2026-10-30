@@ -3,9 +3,31 @@
   "observed_on": "2026-10-30",
   "source": "Tower docker image inspect RepoDigests; local observation, not a registry freshness claim",
   "images": {
-    "dotnet-8": { "tag": "mcr.microsoft.com/dotnet/sdk:8.0", "reference": "mcr.microsoft.com/dotnet/sdk@sha256:78235e09001f52b6592c458ac010775ebac6725422e80cd0c1650590f67b2743" },
-    "dotnet-9": { "tag": "mcr.microsoft.com/dotnet/sdk:9.0", "reference": "mcr.microsoft.com/dotnet/sdk@sha256:24fe7c00719afc72e2b67cace264dea2ee39ae45f5b553bd59493fe3ddfc920f" },
-    "dotnet-10": { "tag": "mcr.microsoft.com/dotnet/sdk:10.0", "reference": "mcr.microsoft.com/dotnet/sdk@sha256:e1fc6e423f543119c406d24e2e687d67c569f18f04a37a8b0005d80ad0dcee80" },
-    "playwright": { "tag": "mcr.microsoft.com/playwright:v1.55.0-jammy", "reference": "mcr.microsoft.com/playwright@sha256:55db7b712a981e9cc1ec757a4511cd01c5ed4e20bd7c84b2dee4e1d320102b9d" }
+    "dotnet-8": {
+      "tag": "mcr.microsoft.com/dotnet/sdk:8.0",
+      "reference": "mcr.microsoft.com/dotnet/sdk@sha256:78235e09001f52b6592c458ac010775ebac6725422e80cd0c1650590f67b2743"
+    },
+    "dotnet-9": {
+      "tag": "mcr.microsoft.com/dotnet/sdk:9.0",
+      "reference": "mcr.microsoft.com/dotnet/sdk@sha256:24fe7c00719afc72e2b67cace264dea2ee39ae45f5b553bd59493fe3ddfc920f"
+    },
+    "dotnet-10": {
+      "tag": "mcr.microsoft.com/dotnet/sdk:10.0",
+      "reference": "mcr.microsoft.com/dotnet/sdk@sha256:e1fc6e423f543119c406d24e2e687d67c569f18f04a37a8b0005d80ad0dcee80"
+    },
+    "playwright": {
+      "tag": "mcr.microsoft.com/playwright:v1.64.1-noble",
+      "resolved_on": "2026-10-30",
+      "reference": "mcr.microsoft.com/playwright@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea",
+      "note": "Newest official stable tag in the MCR tag list on the resolved date; browsers chromium-1248, firefox-1555, webkit-2370; Node 24. No .NET in this image."
+    }
+  },
+  "packages": {
+    "playwright-core": {
+      "version": "1.64.1",
+      "integrity": "sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==",
+      "resolved_on": "2026-10-30",
+      "source": "npm registry dist.integrity; must match the Playwright version of the pinned image"
+    }
   }
 }
