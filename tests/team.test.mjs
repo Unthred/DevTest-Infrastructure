@@ -838,6 +838,20 @@ test('continue (#50): an agent continues its own draft PR, bounded by max_fix_at
   w.gh.pulls = [pr(28, 'codex/issue-3-x', H(1), { isDraft: false })]; assert.equal(await pc({ postcondition: { kind: 'continued', pr: 28, baseHead: H(1) } }), true);
 });
 
+test('alert sender (#50): no configured channel is a failed delivery, never a silent success', async t => {
+  const { alertSender } = await import('../supervisor/alert.mjs');
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alert-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const log = () => fs.readFileSync(path.join(root, 'team', 'alerts.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  await assert.rejects(alertSender(root, {}, { notify: '/nonexistent/notify' })('x'), /no alert channel/);
+  assert.equal(log().at(-1).delivered, false);
+  const calls = [];
+  await alertSender(root, {}, { notify: process.execPath, run: (p, a) => (calls.push([p, a]), { status: 0 }) })('hello');
+  assert.equal(log().at(-1).delivered, true); assert.equal(calls[0][0], process.execPath); assert.ok(calls[0][1].includes('hello'));
+  await assert.rejects(alertSender(root, {}, { notify: process.execPath, run: () => ({ status: 1 }) })('x'), /failed/);
+  await alertSender(root, { alerts: { command: ['/bin/true'] } }, { run: () => ({ status: 0 }) })('y'); assert.equal(log().at(-1).delivered, true);
+});
+
 test('fix limit (#50): the AI-channel alert is sent once with the PR link and the decision needed; a failing channel does not undo or repeat the notice', async t => {
   const sent = [];
   const w = world(t, { pulls: [pr(41, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
@@ -849,7 +863,9 @@ test('fix limit (#50): the AI-channel alert is sent once with the PR link and th
   let tries = 0; f.team.alert = async () => { tries++; throw new Error('channel down'); };
   f.team.s.verdicts[`41:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' }; f.team.s.fixAttempts[`41:${H(0)}`] = 2;
   const r = await f.team.tick(); await f.team.tick();
-  assert.equal(tries, 1); assert.equal(f.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 1); assert.ok(r.skipped.some(x => /alert fix-limit/.test(x.what)));
+  assert.equal(tries, 2); assert.equal(f.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 1); assert.ok(r.skipped.some(x => /alert fix-limit/.test(x.what)));
+  // an undelivered alert is retried until the channel accepts it, then not repeated
+  f.team.alert = async () => { tries++; }; await f.team.tick(); await f.team.tick(); assert.equal(tries, 3); assert.equal(f.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 1);
   // not rejected: no alert
   const ok = world(t, { pulls: [pr(41, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   let n = 0; ok.team.alert = async () => { n++; }; ok.team.s.fixAttempts[`41:${H(0)}`] = 2; await ok.team.tick(); assert.equal(n, 0);

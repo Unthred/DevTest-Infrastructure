@@ -362,19 +362,26 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.fixCount(pr.number) < this.c.limits.max_fix_attempts) continue;
       const rejected = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'CHANGES' || checksState(pr.statusCheckRollup) === 'red';
-      const nkey = `fixlimit:${pr.number}`;
-      if (!rejected || this.s.notified[nkey]) continue;
-      await guard(`fix-limit ${pr.number}`, async () => {
-        this.s.notified[nkey] = this.clock.now(); this.save();
+      const nkey = `fixlimit:${pr.number}`, akey = `fixlimit-alert:${pr.number}`;
+      if (!rejected) continue;
+      if (!this.s.notified[nkey]) {
+        await guard(`fix-limit ${pr.number}`, async () => {
+          this.s.notified[nkey] = this.clock.now(); this.save();
+          try {
+            await this.gh.addLabel(pr.number, 'needs-homeowner');
+            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads) have not cleared the rejection of this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide whether to change the approach, fix it by hand, or raise \`max_fix_attempts\` in team.local.json.`);
+          } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
+          (report.notified ||= []).push({ pr: pr.number, fixLimit: true });
+        });
+      }
+      // Immediate alert to the AI channel (#50, #39): recorded as sent only when the channel accepted it, so an undelivered
+      // alert is retried on the next tick; a failing channel never undoes the notice.
+      if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.gh.addLabel(pr.number, 'needs-homeowner');
-          await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads) have not cleared the rejection of this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide whether to change the approach, fix it by hand, or raise \`max_fix_attempts\` in team.local.json.`);
-        } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
-        (report.notified ||= []).push({ pr: pr.number, fixLimit: true });
-        // Event-driven alert to the AI channel (#50, #39): sent once, right after the notice is recorded; a failed channel never re-sends
-        // and never undoes the notice (the alert log keeps the failure).
-        if (this.alert) { try { await this.alert(`Needs the homeowner: PR #${pr.number} is still rejected after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed: change the approach, fix it by hand, or raise max_fix_attempts in team.local.json.`); } catch { (report.skipped ||= []).push({ what: `alert fix-limit ${pr.number}`, reason: 'alert delivery failed' }); } }
-      });
+          await this.alert(`Needs the homeowner: PR #${pr.number} is still rejected after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed: change the approach, fix it by hand, or raise max_fix_attempts in team.local.json.`);
+          this.s.notified[akey] = this.clock.now(); this.save();
+        } catch { (report.skipped ||= []).push({ what: `alert fix-limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
+      }
     }
   }
   // The dispatcher's own finished jobs free their issue/worktree leases, including jobs the homeowner resumed by hand.

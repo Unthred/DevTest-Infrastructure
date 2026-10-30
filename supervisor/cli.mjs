@@ -7,6 +7,7 @@ import { SupervisorError, claimWorker, createJob, defaultRegistry, drive, jobFil
 import { runProcess } from './process.mjs';
 import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
+import { alertSender } from './alert.mjs';
 import { readJobs, recordTick, tickOutcome } from './dashdata.mjs';
 import { spawnSync } from 'node:child_process';
 import { SelfUpgrade, realDeps, runningSha } from './upgrade.mjs';
@@ -104,21 +105,6 @@ async function teamTick(root, registry, dryRun) {
     if (!dryRun) record({ status: 'error', error: error?.message });
     throw error;
   } finally { unlock(); }
-}
-// Self-upgrade (issue #47). Alerts are always appended to <state root>/team/alerts.jsonl; when team.local.json sets
-// alerts.command (an absolute program plus arguments), the text is also piped to it on stdin, so no secret is ever an argument.
-function alertSender(root, config) {
-  return async text => {
-    const dir = path.join(root, 'team'); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    let delivered = !config.alerts;
-    if (config.alerts) {
-      const [program, ...rest] = config.alerts.command;
-      const r = spawnSync(program, rest, { input: text, encoding: 'utf8', timeout: 30000, env: { PATH: process.env.PATH, HOME: process.env.HOME } });
-      delivered = r.status === 0;
-    }
-    fs.appendFileSync(path.join(dir, 'alerts.jsonl'), JSON.stringify({ at: Date.now(), text, delivered }) + '\n', { mode: 0o600 });
-    if (!delivered) throw new SupervisorError('alert command failed');
-  };
 }
 function selfUpgradeFor(root, registry) {
   const config = loadTeamConfig(teamConfigFile, root);
