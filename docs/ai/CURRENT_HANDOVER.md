@@ -251,3 +251,6 @@ Implemented: `supervisor/models.mjs`, manifest `models` section (claude, codex),
 
 ## #7 conflict-only rebase onto main 0d32015 (Claude, 2026-10-30)
 - Rebased old head `5c2e230` (includes the merged Codex fixes from #43) onto main `0d32015`. Only conflicts were in this file (kept both sides); no code conflicts. Earlier PASS verdicts do not carry over; the opposite agent reviews the new head. Validator OK, 192/192. No commit message on the branch carries an AI trailer now, so the "red CI: commit-attribution" note above is stale; a fresh exact-head CI run decides. Not merged, not deployed.
+
+## #7 conflict-only rebase onto main 94d4d0c (Claude, 2026-10-30)
+- Rebased old head `0aadb8b` onto main `94d4d0c`. Only conflicts were table rows in this file (kept both sides: #32 and #7). Earlier PASS verdicts do not carry over; the opposite agent reviews the new head.
