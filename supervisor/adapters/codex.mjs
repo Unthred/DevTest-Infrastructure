@@ -22,6 +22,7 @@ export function command(config, job, resume) {
 export function observe(line, now = Date.now()) {
   let obj;
   try { obj = JSON.parse(line); } catch { obj = null; }
+  if (obj === null && base.isTruncatedPayload(line)) return {};
   const sessionId = obj?.type === 'thread.started' && typeof obj.thread_id === 'string' ? obj.thread_id : null;
   const errorObject = obj && (obj.type === 'error' || obj.type === 'turn.failed');
   const text = obj ? (errorObject ? String(obj.error?.message || obj.message || obj.error || '') : '') : line;
