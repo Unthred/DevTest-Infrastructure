@@ -7,4 +7,7 @@ script=${1:?usage: verify-reconcile-env.sh GENERATED_SCRIPT}
 # shellcheck disable=SC1090
 eval "$(sed -n '/^# BEGIN-ENV$/,/^# END-ENV$/p' "$script")"
 [ -x "$NODE" ] && [ -r "$CLI" ] || { printf 'node or supervisor cli missing in pinned environment\n' >&2; exit 2; }
-exec env -i PATH="$PATH" HOME="$HOME" "$NODE" "$CLI" preflight
+run() { env -i PATH="$PATH" HOME="$HOME" "$NODE" "$CLI" "$@"; }
+run preflight
+# A dispatcher tick in dry-run: it reads GitHub and plans, launches and mutates nothing, and fails if a tick cannot run here.
+run team tick --dry-run >/dev/null

@@ -618,3 +618,20 @@ test('issue #35 a missing provider binary is preflight_failed, never auth_error'
   try { assert.equal(codex.preflight({ role: 'devtest', worktree: '/x' }), 'not_found'); assert.equal(claude.preflight(), 'not_found'); }
   finally { process.env.PATH = saved; }
 });
+
+test('issue #35 a PASS is not merge-eligible until its public comment is posted; the retry is idempotent', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [], commandsRun: ['x'] });
+  w.jobs.states[id].status = 'completed';
+  let fail = true; const post = w.gh.comment; w.gh.comment = async (n, b) => { if (fail) throw new Error('gh down'); return post(n, b); };
+  const r = await w.team.tick();
+  assert.match(r.skipped[0].reason, /gh down/);
+  assert.equal(w.calls.merges.length, 0);                       // no merge on an unrecorded PASS
+  assert.equal(w.team.s.verdicts[`10:${H(1)}`] ?? w.team.s.verdicts[Object.keys(w.team.s.verdicts)[0]], undefined);
+  assert.equal(w.team.s.jobs[id].ingested, false);
+  fail = false; await w.team.tick();
+  assert.equal(w.calls.comments.filter(c => /devtest-verdict v1/.test(c[1])).length, 1);   // posted once
+  assert.equal(w.calls.merges.length, 1);
+});

@@ -263,11 +263,12 @@ export class Team {
       if (j.kind === 'review' && job.status === 'completed') {
         const r = readInboxVerdict(this.root, j.ticket, { pr: j.pr, head: j.head });
         if (r.verdict) {
-          this.s.verdicts[verdictKey(j.pr, j.head)] = { verdict: r.verdict.verdict, reviewer: j.agent, job: id, findings: r.verdict.findings, commandsRun: r.verdict.commandsRun, at: this.clock.now() };
           const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — independent review by \`${j.agent}\` of exact head \`${j.head}\` (recorded by the dispatcher from job \`${id}\`; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- ${f}`).join('\n') || '_no findings_'}\n\nCommands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
+          // The verdict becomes merge-eligible only after its public record is posted; a failed comment records nothing,
+          // so the next tick retries the whole step and nothing can merge on an unposted PASS.
+          await this.gh.comment(j.pr, body);
+          this.s.verdicts[verdictKey(j.pr, j.head)] = { verdict: r.verdict.verdict, reviewer: j.agent, job: id, findings: r.verdict.findings, commandsRun: r.verdict.commandsRun, at: this.clock.now() };
           j.ingested = true; this.save();
-          try { await this.gh.comment(j.pr, body); }
-          catch (error) { j.ingested = false; this.save(); throw error; }
           report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });
           return;
         } else report.ingested.push({ job: id, pr: j.pr, error: r.error });

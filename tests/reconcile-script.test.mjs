@@ -36,7 +36,7 @@ function cronWorld(t, { nodeBody } = {}) {
   fs.mkdirSync(bin); fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
   const exe = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   exe('gh', 'echo "[]"'); exe('git', 'echo git');
-  exe('node', nodeBody || 'case "$2" in preflight) command -v gh >/dev/null || exit 3; echo \'{"preflight":{"gh":"ok"}}\';; reconcile) gh pr list >/dev/null || exit 4; echo \'{"team":{"actions":[]}}\';; esac');
+  exe('node', nodeBody || 'case "$2" in preflight) command -v gh >/dev/null || exit 3; echo \'{"preflight":{"gh":"ok"}}\';; team) gh pr list >/dev/null || exit 5;; reconcile) gh pr list >/dev/null || exit 4; echo \'{"team":{"actions":[]}}\';; esac');
   fs.writeFileSync(path.join(root, 'cli.mjs'), '');
   fs.writeFileSync(path.join(plugin, 'schedule.json'), '{}'); fs.writeFileSync(path.join(plugin, 'customSchedule.cron'), '# x\n');
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_USER_SCRIPTS_ROOT: plugin, AI_SUPERVISOR_RECONCILE_TEST: '1',
@@ -95,4 +95,21 @@ test('issue #35 installing refuses when a required binary cannot be found for th
   const r = spawnSync('/bin/bash', [install], { env, encoding: 'utf8' });
   if (spawnSync('sh', ['-c', 'command -v gh'], { env: { PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' } }).status === 0) return;   // gh is in a default dir on this host
   assert.equal(r.status, 2); assert.match(r.stderr, /required binary not found/);
+});
+
+test('issue #35 enable gate also runs a dispatcher tick: preflight passing but the tick failing schedules nothing', t => {
+  const bad = cronWorld(t, { nodeBody: 'case "$2" in preflight) echo ok;; team) echo tick failed >&2; exit 5;; esac' });
+  const r = spawnSync('bash', [install], { env: { ...bad.env, AI_SUPERVISOR_VERIFY: '1' }, encoding: 'utf8' });
+  assert.equal(r.status, 3); assert.match(r.stderr, /nothing was scheduled/);
+  assert.equal(fs.readFileSync(path.join(bad.plugin, 'schedule.json'), 'utf8'), '{}');
+});
+
+test('issue #35 reconcile exits nonzero when the team tick fails, so the generated script logs a failing rc', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-rc35-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
+  const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+  const r = spawnSync(process.execPath, [cli, 'reconcile'], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_STATE_ROOT: root } });
+  assert.match(r.stdout, /"team":\{"error"/); assert.equal(r.status, 1);
 });
