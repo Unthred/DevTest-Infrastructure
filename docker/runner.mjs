@@ -102,7 +102,23 @@ export function prepareDirectories(plan) {
 }
 
 export function dockerCommand(argv, timeout = 10000) {
-  return spawnSync('docker', argv, { encoding: 'utf8', timeout, maxBuffer: 16384, env: { PATH: process.env.PATH || '/usr/bin:/bin', HOME: process.env.HOME || '/' } });
+  return spawnSync('docker', argv, { encoding: 'utf8', timeout, maxBuffer: 16384, env: dockerEnvironment() });
+}
+
+export function dockerEnvironment(source = process.env, uid = process.getuid()) {
+  const env = { PATH: source.PATH || '/usr/bin:/bin', HOME: source.HOME || '/' };
+  if (source.XDG_RUNTIME_DIR) {
+    const runtime = exactDirectory(source.XDG_RUNTIME_DIR, 'XDG runtime directory');
+    const st = fs.statSync(runtime);
+    if (st.uid !== uid || (st.mode & 0o077) !== 0) throw new RunnerError('XDG runtime directory is not owner-only');
+    env.XDG_RUNTIME_DIR = runtime;
+  }
+  if (source.DOCKER_HOST) {
+    if (!env.XDG_RUNTIME_DIR || source.DOCKER_HOST !== `unix://${env.XDG_RUNTIME_DIR}/${'docker' + '.sock'}`)
+      throw new RunnerError('only the current user rootless Docker socket is allowed');
+    env.DOCKER_HOST = source.DOCKER_HOST;
+  }
+  return env;
 }
 
 export function ownedContainer(plan, command = dockerCommand) {
@@ -125,7 +141,7 @@ export async function runContainer(plan, { command = dockerCommand, spawnRun = s
   prepareDirectories(plan);
   const localImage = command(['image', 'inspect', '--format', '{{.Id}}', plan.image]);
   if (localImage.status !== 0) throw new RunnerError('pinned image is not locally available; pull through a reviewed update path', 3);
-  const child = spawnRun('docker', plan.args, { stdio: ['ignore', 'ignore', 'ignore'], env: { PATH: process.env.PATH || '/usr/bin:/bin', HOME: process.env.HOME || '/' } });
+  const child = spawnRun('docker', plan.args, { stdio: ['ignore', 'ignore', 'ignore'], env: dockerEnvironment() });
   let timedOut = false, interrupted = false;
   const stop = () => { interrupted = true; child.kill('SIGTERM'); };
   process.once('SIGINT', stop); process.once('SIGTERM', stop);

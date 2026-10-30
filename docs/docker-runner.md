@@ -10,6 +10,8 @@ The trusted host caller provides an exact allowlist of real project roots under 
 
 Each run uses a unique name and run-id label, drops every Linux capability, denies privilege gain, makes the root filesystem read-only and uses an explicit tmpfs. The host runner starts Docker without a shell. On success, subject failure, timeout or interruption it verifies container ownership by label and removes only its own leftover container. An unverifiable Docker daemon or foreign name collision reports incomplete cleanup; it never removes another container. Run workspaces remain under the cache pool for later evidence handling; the smoke removes its own fixture workspace.
 
+The Docker CLI subprocess gets only `PATH`, `HOME` and, for a rootless daemon, an owner-only `XDG_RUNTIME_DIR` with its matching Unix `DOCKER_HOST` socket. TCP Docker endpoints and other host environment values are refused or omitted. The container receives no host environment values.
+
 ## Validation
 
 Run `node tools/validate-project.mjs` and `node --test 'tests/**/*.test.mjs'`. The Docker tests cover malformed digests, foreign images, exact allowlists, unsafe paths/IDs/limits/network/argv, hardening flags, foreign-container refusal, success, subject failure, timeout and incomplete cleanup. On Tower, `node tests/docker-smoke.mjs` runs positive and failing-subject probes through the local pinned .NET SDK image with no network, checks the positive marker, then verifies neither test container remains. It touches only generated cache-pool run workspaces and does not alter a production service. Keep the command result and image digest on issue #2; do not treat a simulated unit test as a real Docker smoke.

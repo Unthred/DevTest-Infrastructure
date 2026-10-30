@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { buildPlanForVerifiedPaths, cleanupContainer, createPlan, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
+import { buildPlanForVerifiedPaths, cleanupContainer, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
 function fixture(t) {
@@ -80,6 +80,16 @@ test('run preparation refuses symlinked parents and reused workspaces', t => {
   fs.unlinkSync(path.join(f.storage, 'runs'));
   prepareDirectories(plan);
   assert.throws(() => prepareDirectories(plan), /already has a workspace/);
+});
+
+test('Docker environment supports a scoped rootless socket without forwarding secrets', t => {
+  const f = fixture(t), runtime = path.join(f.root, 'runtime');
+  fs.mkdirSync(runtime, { mode: 0o700 });
+  const source = { PATH: '/usr/bin', HOME: f.root, XDG_RUNTIME_DIR: runtime, DOCKER_HOST: `unix://${runtime}/${'docker' + '.sock'}`, TEST_API_KEY: 'hidden' };
+  assert.deepEqual(dockerEnvironment(source), { PATH: '/usr/bin', HOME: f.root, XDG_RUNTIME_DIR: runtime, DOCKER_HOST: source.DOCKER_HOST });
+  assert.throws(() => dockerEnvironment({ ...source, DOCKER_HOST: 'tcp://example.invalid:2375' }), /rootless Docker socket/);
+  fs.chmodSync(runtime, 0o777);
+  assert.throws(() => dockerEnvironment(source), /owner-only/);
 });
 
 test('run maps success, subject failure, timeout and cleanup failure', async t => {
