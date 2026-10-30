@@ -235,7 +235,7 @@ export class Team {
 
   // ---- execution
   async tick({ dryRun = false } = {}) {
-    if (!dryRun && this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
+    if (this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
       throw new SupervisorError(`${this.c.access.decision} is not homeowner-approved in the decision register; refusing to launch jobs`);
     const report = { ingested: [], notified: [], actions: [], skipped: [] };
     // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).

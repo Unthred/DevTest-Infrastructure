@@ -340,6 +340,7 @@ test('the dispatcher refuses to launch under an access decision that is not home
   const w = world(t, { issues: [issue(23)] });
   w.team.register = REGISTER.replace('homeowner-approved', 'agent-proposal');
   await assert.rejects(w.team.tick(), /not homeowner-approved/);
+  await assert.rejects(w.team.tick({ dryRun: true }), /not homeowner-approved/);   // the enable gate's dry run must fail whenever a live tick would
   assert.equal(w.calls.created.length, 0);
   assert.equal(decisionApproved(REGISTER, 'D-020'), true); assert.equal(decisionApproved(REGISTER, 'D-021'), false); assert.equal(decisionApproved(REGISTER, 'D-099'), false);
   const real = fs.readFileSync(new URL('../docs/DECISIONS.md', import.meta.url), 'utf8');
