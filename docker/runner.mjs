@@ -16,6 +16,7 @@ const digest = /^[a-z0-9./-]+@sha256:[0-9a-f]{64}$/;
 const runId = /^[a-f0-9]{16,32}$/;
 const targetName = /^[a-z][a-z0-9-]{0,31}$/;
 export const targetSocketDirectory = (storage, id) => path.join(storage, 'sockets', id);
+export const secretMountPath = (root, id, name) => path.join(root, id, name);
 export const targetSocketPath = (storage, id, name) => path.join(targetSocketDirectory(storage, id), `${name}.sock`);
 const safeArg = value => typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\0\r\n]/.test(value);
 const inside = (base, candidate) => candidate === base || candidate.startsWith(base + path.sep);
@@ -62,6 +63,12 @@ export function buildPlanForVerifiedPaths(spec, config, project, storage) {
   const names = spec.targets ?? [];
   if (!Array.isArray(names) || names.length > 4 || !names.every(n => targetName.test(n)) || new Set(names).size !== names.length) throw new RunnerError('targets must be up to four unique simple names');
   const targets = names.map(name => ({ name, host: targetSocketPath(storage, spec.runId, name), container: `/targets/${name}.sock` }));
+  // Secrets are file bind mounts prepared by the host-side broker (broker/broker.mjs): never argv, never environment.
+  const secretNames = spec.secrets ?? [];
+  if (!Array.isArray(secretNames) || secretNames.length > 4 || !secretNames.every(n => targetName.test(n)) || new Set(secretNames).size !== secretNames.length) throw new RunnerError('secrets must be up to four unique simple names');
+  const secretRoot = config.secretRoot ?? '/dev/shm/devtest-secrets';
+  if (secretNames.length && (!path.isAbsolute(secretRoot) || path.resolve(secretRoot) !== secretRoot || !inside('/dev/shm', secretRoot) || /[,\0\r\n]/.test(secretRoot))) throw new RunnerError('secret root must be an absolute path on tmpfs under /dev/shm');
+  const secrets = secretNames.map(name => ({ name, host: secretMountPath(secretRoot, spec.runId, name), container: `/secrets/${name}` }));
   const phase = spec.phase || 'build';
   if (!['restore', 'build', 'test'].includes(phase)) throw new RunnerError('invalid run phase');
   const limits = config.limits || {};
@@ -83,8 +90,8 @@ export function buildPlanForVerifiedPaths(spec, config, project, storage) {
     '--mount', `type=bind,src=${project},dst=/src,readonly`,
     '--mount', `type=bind,src=${work},dst=/work`, '--mount', `type=bind,src=${out},dst=/out`,
     '--mount', `type=bind,src=${cache},dst=/cache${phase === 'restore' ? '' : ',readonly'}`,
-    ...targets.flatMap(t => ['--mount', `type=bind,src=${t.host},dst=${t.container},readonly`]), '--workdir', '/work', image, ...spec.command];
-  return { runId: spec.runId, name, image, targets, project, storage, workspace, volume, workImage, cacheImage, phase, work, out, cache, uid: config.uid, gid: config.gid, timeoutMs: limits.timeoutMs, diskBytes: limits.diskMb * 1048576, cacheBytes: limits.cacheMb * 1048576, logDir: path.join(workspace, 'logs'), args };
+    ...targets.flatMap(t => ['--mount', `type=bind,src=${t.host},dst=${t.container},readonly`]), ...secrets.flatMap(t => ['--mount', `type=bind,src=${t.host},dst=${t.container},readonly`]), '--workdir', '/work', image, ...spec.command];
+  return { runId: spec.runId, name, image, targets, secrets, project, storage, workspace, volume, workImage, cacheImage, phase, work, out, cache, uid: config.uid, gid: config.gid, timeoutMs: limits.timeoutMs, diskBytes: limits.diskMb * 1048576, cacheBytes: limits.cacheMb * 1048576, logDir: path.join(workspace, 'logs'), args };
 }
 
 // The caller (host side) starts each target server before the run. Refuse anything that is not a real socket in a private,
@@ -96,6 +103,18 @@ export function verifyTargets(plan) {
     const st = fs.lstatSync(t.host, { throwIfNoEntry: false });
     if (!st || !st.isSocket()) throw new RunnerError(`target ${t.name}: no host-side socket is listening`);
     if (st.uid !== plan.uid && st.uid !== process.getuid()) throw new RunnerError(`target ${t.name}: socket owner is unexpected`);
+  }
+}
+
+// Secret files must be prepared regular files (no symlink, single link), in a private run directory, unreadable to anyone but the
+// container user. Nothing else is ever mounted as a secret.
+export function verifySecrets(plan) {
+  for (const s of plan.secrets) {
+    const dir = fs.lstatSync(path.dirname(s.host), { throwIfNoEntry: false });
+    if (!dir || !dir.isDirectory() || dir.isSymbolicLink() || dir.uid !== process.getuid() || (dir.mode & 0o077) !== 0) throw new RunnerError(`secret ${s.name}: directory is missing or unsafe`, 3);
+    const st = fs.lstatSync(s.host, { throwIfNoEntry: false });
+    if (!st || !st.isFile() || st.isSymbolicLink() || st.nlink !== 1) throw new RunnerError(`secret ${s.name}: not a prepared regular file`, 3);
+    if ((st.mode & 0o177) !== 0 || (st.uid !== plan.uid && st.uid !== process.getuid())) throw new RunnerError(`secret ${s.name}: file mode or owner is unsafe`, 3);
   }
 }
 
@@ -365,6 +384,7 @@ export async function runContainer(plan, { command = dockerCommand, spawnRun = s
   const localImage = command(['image', 'inspect', '--format', '{{.Id}}', plan.image]);
   if (localImage.status !== 0) throw new RunnerError('pinned image is not locally available; pull through a reviewed update path', 3);
   verifyTargets(plan);
+  verifySecrets(plan);
   prepareDirectories(plan);
   let swept;
   try { swept = sweep(plan.storage, command); } catch (error) { swept = { error: errorClass(error) }; }   // a failed sweep never blocks a run

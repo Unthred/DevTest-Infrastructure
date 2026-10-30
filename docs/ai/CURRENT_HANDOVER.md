@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-30 by Claude on `claude/issue-5-playwright` (based on main at the merge of #19). Each agent edits this file only on its own branch.
+Last updated: 2026-10-30 by Claude on `claude/issue-7-07-openbao-credentials` (based on main at the merge of #27). Each agent edits this file only on its own branch.
 
 Last updated: 2026-10-30 by Claude on `claude/issue-35-scheduled-ticks-fail` (issue #35 section at the end). Each agent edits this file only on its own branch.
 
@@ -18,6 +18,7 @@ Last updated: 2026-10-30 by Claude on `claude/issue-35-scheduled-ticks-fail` (is
 | #20 Allowance detection | pending; Claude PR #21, head `2d3b5cfae69f05743b7d22521da5d8a76da493d1` | no; Codex requested changes for successful paid-overage event | no | simulated subprocess bug reproduced; live allowance recovery unverified |
 | #23 Team loop | yes; PR #25 (D-019 and D-020 recorded; dispatcher, trusted verdicts, post-conditions, restart and access modes) | no; CI green, Codex executable review pending | no | a supervised full-access Codex job ran `node --test` on Tower (35/35); dispatcher, merge, real-limit restart and cron path not live-verified |
 | #5 Playwright browser runtime | yes; branch `claude/issue-5-playwright` | no; CI and Codex review pending | no | real Docker on Tower: Chromium, Firefox and WebKit screenshots, broken-page and external-request detection, cleanup to baseline (`tests/browser-smoke.mjs`); TCP targets blocked on OQ-2 |
+| #7 OpenBao credentials | yes; branch `claude/issue-7-07-openbao-credentials` (broker, session reduction, mock backend, runner `secrets`, D-021 proposal, docs/secrets.md) | no; CI and Codex review pending | no | Tower: `tests/broker-smoke.mjs` real Docker with the mock backend and the live unauthenticated OpenBao health probe (2.6.1, unsealed). Authenticated retrieval from real OpenBao NOT verified: no scoped read-only identity exists |
 | #3–#14 other issues | not started | no | no | no |
 
 ## Ownership
@@ -98,6 +99,12 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Source: `listMergedPulls` + delivered-work skip in `supervisor/team.mjs`; `team.local.json` override loader (state root, restricted keys); `team.json` no longer lists #2 and #23; `tools/upgrade-supervisor.sh` refuses an override in the payload and verifies the copy with `diff -r`; `docs/team-loop.md` documents the override and upgrade procedure.
 - Tests: validator OK, 119/119 (new: delivered-work positive/negative, shipped config, override apply/refuse/survives-upgrade, script guards). Live read-only `team tick --dry-run` with a temp state root planned one review and no #2/#23 job.
 - Review and CI: Codex review pending. Installed: no. Deploy only after PASS and dispatcher merge, then create `/mnt/cache/ai-supervisor/team.local.json` (`{"enabled": true}`) and follow the procedure in docs/team-loop.md.
+
+## #7 OpenBao credentials (Claude, branch `claude/issue-7-07-openbao-credentials`)
+- Source: `broker/{openbao,mock,session,broker}.mjs`, `broker/policy.example.json`, runner `secrets` + `verifySecrets`, [docs/secrets.md](../secrets.md), D-021 (agent-proposal, answers OQ-1).
+- Tests: validator OK; full suite 154/154 including the 12 tests in `tests/broker.test.mjs` (positive and negative); Tower `node tests/broker-smoke.mjs`: BROKER SMOKE OK (secret readable, read-only, absent from env/argv, deliberate leak into /out caught, directories/mounts/containers at baseline).
+- Not done / homeowner actions: a read-only OpenBao policy+token file for `devtest/*`; a dedicated Home Assistant test identity (production login is refused by policy until a recorded decision). #8 must call `withSecrets` and `checkHealth`. Not deployed.
+- Review: Codex review pending; opposite agent must merge.
 
 ## #5 Playwright browser runtime (Claude, branch `claude/issue-5-playwright`)
 - Homeowner exception 2026-10-30: #5 was started before #2 was formally merged, stacked on #19 ("do not merge before #19"). #19 merged as `a8b944b` before this PR was opened, so the branch is based on main and no stacking remains.
