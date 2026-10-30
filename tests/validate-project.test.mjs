@@ -75,6 +75,7 @@ test('entry points: CLAUDE.md pointer and AGENTS.md rules are required', () => {
   expectFinding((a) => a.edit('AGENTS.md', 'One writer per worktree', 'Share worktrees'), 'entrypoints', 'worktree rule');
   expectFinding((a) => a.edit('AGENTS.md', 'OpenBao only', 'Anything'), 'entrypoints', 'secrets rule');
   expectFinding((a) => a.edit('AGENTS.md', 'No Docker socket, no privileged containers', 'Containers are fine'), 'entrypoints', 'Docker socket rule');
+  expectFinding((a) => a.edit('AGENTS.md', 'No AI attribution', 'Credit is fine'), 'entrypoints', 'attribution rule');
 });
 
 test('contracts: exit-code table and JSON must agree and be unique', () => {
