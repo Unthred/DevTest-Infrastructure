@@ -35,3 +35,20 @@ Interactive launcher (`/root/bin/ai-agent`): Codex `--dangerously-bypass-approva
 - Supervised Codex with `access: full`: `codex exec --dangerously-bypass-approvals-and-sandbox` ran `node --test "tests/**/*.test.mjs"` itself: exit 0, 35/35, session policy `danger-full-access`, approval `never`. This is the check that failed before with `bwrap: pivot_root`.
 - Supervised Claude (`--permission-mode auto`, identical to interactive) with `access: full`: its Bash tool ran `node --test "tests/**/*.test.mjs"` without a prompt: exit 0, 35/35, in the worktree. The first attempt found 0 tests because a supervised Claude shell **starts in `/root`** (the shell profile changes directory; `pwd` printed `/root`), not in the job's worktree. Every job prompt now says to begin each command with `cd <worktree>` (tested); the Codex job did not have this problem.
 - Not live-verified: the dispatcher against real jobs, merge, restart after a real allowance limit, and the cron integration.
+
+## Local configuration and upgrades (issue #30)
+`supervisor/team.json` is the reviewed, versioned file (shipped `enabled: false`). **Never edit the installed copy** under `/mnt/cache/ai-supervisor/versions/<sha>/`: the next upgrade replaces it, and the payload would no longer match the reviewed commit. Local settings go in **`/mnt/cache/ai-supervisor/team.local.json`** (state root, outside `versions/`, mode 0600). Upgrades never read, write or replace it. Example:
+```json
+{ "enabled": true, "limits": { "overall": 2 }, "agents": { "claude": { "issues": [5, 6] } } }
+```
+Only `enabled`, `limits`, `depends_on_overrides` and each agent's `issues` can be overridden; repository, paths, providers, access mode and board always come from Git. An unknown key, a bad type or an unparsable file makes the tick fail closed with an error naming the file (never its contents).
+
+**Delivered work.** Before planning an implement job the dispatcher lists merged PRs. An issue is skipped when it is closed, or a merged PR from a configured agent branch `<agent>/issue-<n>-…` or a merged PR whose closing reference names it exists. Issue #23 stays open until verified working but is not in any agent's `issues` list, so it is never dispatched.
+
+**Upgrade procedure** (after Codex PASS and the dispatcher merge; Claude/Codex never run it unattended):
+1. From a clean checkout of the merged commit on Tower: `node tools/validate-project.mjs && node --test "tests/**/*.test.mjs"`.
+2. `ls -l /mnt/cache/ai-supervisor/team.local.json`; if missing, create it with `{"enabled": true}` (mode 0600) to keep the loop on.
+3. `bash tools/upgrade-supervisor.sh` (it refuses a payload containing `team.local.json`, copies `supervisor/`, then runs `diff -r` source vs. installed and aborts on any difference).
+4. Verify: `diff -r supervisor /mnt/cache/ai-supervisor/current/supervisor` is empty (the override is not in the payload, so nothing needs excluding), `team.local.json` is unchanged, `ai-agent --supervisor team tick --dry-run` plans no job for #2 or #23.
+5. Rollback: re-point `current` to the previous `versions/<sha>` and restore the wrapper backup the script prints; the override is untouched.
+The temporary hand edit of the previous payload (`versions/8f2e386…/supervisor/team.json`) is superseded by this change; the old `current` version stays as rollback.

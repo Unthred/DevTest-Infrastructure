@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
+import { Team, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
 import { createJob, drive, readJob, stateRoot, validateSpec } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
@@ -31,7 +31,7 @@ function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = 
     listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues,
     comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]),
     merge: async (n, head) => { const p = gh.pulls.find(x => x.number === n); if (!p || p.headRefOid !== head) throw new Error('head moved'); calls.merges.push([n, head]); },
-    board: async (n, s) => calls.board.push([n, s])
+    board: async (n, s) => calls.board.push([n, s]), merged: [], listMergedPulls: async () => gh.merged
   };
   const jobs = { active, states: jobStates, seq: 0,
     listActive: async () => jobs.active, get: async id => jobs.states[id] || null,
@@ -419,4 +419,50 @@ test('GitHub client: gh with argument arrays only, merge pins the head, board an
   await c.board(99, 'done');   // unknown issue: no edit
   assert.equal(seen.filter(s => s.args[1] === 'item-edit').length, 1);
   assert.throws(() => ghRunner(() => ({ status: 1, stdout: '', stderr: 'boom' }))(['pr', 'list']), /gh pr list failed: boom/);
+});
+
+test('issue #30 delivered work: no implement job for a closed issue or one with a merged linked PR', async t => {
+  const cfg = config({ agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [23, 5, 6] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [2, 3] } } });
+  const w = world(t, { cfg, issues: [issue(23), issue(5), issue(6, 'CLOSED'), issue(2), issue(3)] });
+  w.gh.merged = [{ number: 25, headRefName: 'claude/issue-23-team-loop', closingIssuesReferences: [] }, { number: 30, headRefName: 'codex/other', closingIssuesReferences: [{ number: 2 }] }];
+  const actions = await w.team.plan();
+  assert.equal(actions.find(a => a.agent === 'claude').issue, 5);   // not 23 (merged PR via branch), not closed 6
+  assert.equal(actions.find(a => a.agent === 'codex').issue, 3);    // not 2 (merged PR via closing reference)
+  const w2 = world(t, { cfg, issues: [issue(23), issue(5), issue(6, 'CLOSED'), issue(2), issue(3)] });   // negative: nothing merged => 23 is planned
+  assert.equal((await w2.team.plan()).find(a => a.agent === 'claude').issue, 23);
+});
+
+test('issue #30 shipped team.json: #2 and #23 are not dispatched; #23 stays out of every list', () => {
+  const shipped = JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
+  const all = Object.values(shipped.agents).flatMap(a => a.issues);
+  assert.ok(!all.includes(2) && !all.includes(23)); validateTeamConfig(shipped);
+  assert.equal(shipped.enabled, false);
+});
+
+test('issue #30 local override: allowed knobs apply, everything else is refused, and an upgrade keeps it', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'team-cfg-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const shippedFile = new URL('../supervisor/team.json', import.meta.url).pathname;
+  assert.equal(loadTeamConfig(shippedFile, root).enabled, false);                         // no override file: shipped values
+  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true, limits: { overall: 3 }, agents: { claude: { issues: [5] } } }));
+  const c = loadTeamConfig(shippedFile, root);
+  assert.equal(c.enabled, true); assert.equal(c.limits.overall, 3); assert.equal(c.limits.per_agent, 1); assert.deepEqual(c.agents.claude.issues, [5]);
+  assert.deepEqual(c.agents.codex.issues, [3, 4, 8, 9, 11, 12]);
+  // simulated upgrade: a different code directory holding another shipped version, same state root
+  const v2 = fs.mkdtempSync(path.join(os.tmpdir(), 'team-v2-')); t.after(() => fs.rmSync(v2, { recursive: true, force: true }));
+  const shipped2 = JSON.parse(fs.readFileSync(shippedFile, 'utf8')); shipped2.agents.codex.issues = [3]; fs.writeFileSync(path.join(v2, 'team.json'), JSON.stringify(shipped2));
+  const after = loadTeamConfig(path.join(v2, 'team.json'), root);
+  assert.equal(after.enabled, true); assert.deepEqual(after.agents.codex.issues, [3]); assert.deepEqual(after.agents.claude.issues, [5]);
+  const shipped = JSON.parse(fs.readFileSync(shippedFile, 'utf8'));
+  for (const bad of [{ repo_path: '/x' }, { access: { mode: 'standard' } }, { enabled: 'yes' }, { agents: { ghost: { issues: [1] } } }, { agents: { claude: { provider: 'codex' } } }, []])
+    assert.throws(() => applyLocalOverride(shipped, bad), /team\.local\.json/);
+  assert.throws(() => applyLocalOverride(shipped, { agents: { claude: { issues: [3] } } }) && validateTeamConfig(applyLocalOverride(shipped, { agents: { claude: { issues: [3] } } })), /two owners/);
+  fs.writeFileSync(path.join(root, 'team.local.json'), '{broken');
+  assert.throws(() => loadTeamConfig(shippedFile, root), /unreadable/);
+});
+
+test('issue #30 upgrade script never touches the override and verifies the payload byte-for-byte', () => {
+  const script = fs.readFileSync(new URL('../tools/upgrade-supervisor.sh', import.meta.url), 'utf8');
+  assert.match(script, /diff -r "\$source_root\/supervisor" "\$install_root\/supervisor"/);
+  assert.match(script, /team\.local\.json must not be in the versioned payload/);
+  assert.ok(!/(rm|mv|cp)[^\n]*team\.local\.json/.test(script));
 });
