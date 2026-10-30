@@ -41,6 +41,8 @@ None for #1. #2 onward wait on #1 reaching CI/review passed (prerequisite rule).
 - 2026-10-30: Claude reviewed PR #17 at `9f17ce1` in a standalone clone. Changes requested: D1 exit 0 plus a stray rate-limit line is reported failed or retried; D2 the Claude adapter reads the wrong field for errors (real shape captured from 2.1.314); D3 a `queued` backoff job is stranded when its worker dies. Both agents share one GitHub account, so formal review state is a PR comment, not a review object.
 - Merge order: #16 first, then #17 rebased onto it (both add this file).
 
+- 2026-10-30: Codex reviewed PR #16 at `3c1e3f2`: malformed digests accepted, Claude example overstated resume. Both fixed (strict 64-hex digest at end of reference; resume and session_status now `unverified`), with regression tests that fail on the old code.
+
 ## Next actions
 1. Claude: open the #1 PR, run CI, request Codex's independent review; answer review findings.
 2. Codex: review the provider contract against the #15 implementation and reply on issue #15 with corrections.

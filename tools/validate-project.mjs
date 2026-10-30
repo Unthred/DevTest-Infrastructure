@@ -173,7 +173,7 @@ export function validate(root) {
       let ref;
       if (/^Dockerfile/.test(base)) ref = (line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)/i) || [])[1];
       else if (ext === '.yml' || ext === '.yaml') ref = (line.match(/^\s*(?:-\s*)?image:\s*["']?([^\s"']+)/) || [])[1];
-      if (ref && ref.toLowerCase() !== 'scratch' && !ref.includes('@sha256:') && !ref.startsWith('$') && !/^[A-Za-z_][\w-]*$/.test(ref)) add('image-pinning', `${at}: image "${ref}" is not pinned by digest`);
+      if (ref && ref.toLowerCase() !== 'scratch' && !/@sha256:[0-9a-f]{64}$/.test(ref) && !ref.startsWith('$') && !/^[A-Za-z_][\w-]*$/.test(ref)) add('image-pinning', `${at}: image "${ref}" is not pinned by digest`);
     });
   }
   return findings;

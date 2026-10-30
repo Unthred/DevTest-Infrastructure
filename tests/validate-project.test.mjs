@@ -117,9 +117,19 @@ test('image pinning: tags without a digest are rejected', () => {
   const digest = `sha256:${'a'.repeat(64)}`;
   expectFinding((a) => a.write('docker/Dockerfile', ['FROM', 'mcr.example/dotnet/sdk:8.0'].join(' ') + '\n'), 'image-pinning', 'dotnet/sdk:8.0');
   expectFinding((a) => a.write('run/compose.yml', ['  image:', 'mcr.example/pw:v1'].join(' ') + '\n'), 'image-pinning');
+  for (const bad of ['sha256:abc', `sha256:${'a'.repeat(63)}`, `sha256:${'a'.repeat(65)}`, `sha256:${'A'.repeat(64)}`, `sha256:${'g'.repeat(64)}`])
+    expectFinding((a) => a.write('docker/Dockerfile', ['FROM', `mcr.example/dotnet/sdk:8.0@${bad}`].join(' ') + '\n'), 'image-pinning', 'not pinned');
+  expectFinding((a) => a.write('run/compose.yml', ['  image:', `mcr.example/pw:v1@sha256:${'a'.repeat(64)}extra`].join(' ') + '\n'), 'image-pinning');
   expectClean((a) => a.write('docker/Dockerfile', ['FROM', `mcr.example/dotnet/sdk:8.0@${digest}`].join(' ') + '\n'));
   expectClean((a) => a.write('docker/Dockerfile', ['FROM', 'scratch'].join(' ') + '\n'));
   expectClean((a) => a.write('docker/Dockerfile', ['ARG', 'BASE'].join(' ') + '\n' + ['FROM', '$BASE'].join(' ') + '\n'));
+});
+
+test('example manifests never claim an unverified capability as supported (D-012)', () => {
+  const claude = JSON.parse(fs.readFileSync(path.join(repo, 'contracts/examples/claude.provider.json'), 'utf8'));
+  assert.equal(claude.capabilities.resume, 'unverified');
+  assert.equal(claude.capabilities.session_status, 'unverified');
+  assert.equal(claude.capabilities.usage_limit_detection, 'unverified');
 });
 
 test('CLI exit codes: 0 valid, 1 findings, 2 bad usage', () => {
