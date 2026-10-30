@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { buildPlanForVerifiedPaths, cleanupContainer, containerState, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
+import { RunnerError, buildPlanForVerifiedPaths, cleanupContainer, releaseVolumes, sweepStaleVolumes, containerState, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
 function fixture(t) {
@@ -126,7 +126,7 @@ async function runWith(t, options, mutatePlan = () => {}, runOptions = {}) {
   const originalCommand = h.command;
   const command = argv => { const r = originalCommand(argv.map(x => x === plan.name ? plan.name : x)); if (r.stdout === 'RUN\n') r.stdout = plan.runId + '\n'; return r; };
   const result = await runContainer(plan, { command, spawnRun: () => h.spawnRun(plan),
-    ensureVolumes: p => { fs.mkdirSync(p.work); fs.mkdirSync(p.out); }, ...runOptions });
+    ensureVolumes: p => { fs.mkdirSync(p.work); fs.mkdirSync(p.out); }, releaseVolumes: () => {}, sweep: () => null, ...runOptions });
   return { result, plan, h };
 }
 
@@ -168,7 +168,7 @@ test('a bounded-storage failure refuses the run before Docker starts', async t =
     ? { status: 0, stdout: 'sha256:local\n', stderr: '' }
     : { status: 1, stdout: '', stderr: 'No such container' };
   await assert.rejects(runContainer(plan, { command,
-    ensureVolumes: () => { throw new Error('mount refused'); },
+    ensureVolumes: () => { throw new Error('mount refused'); }, releaseVolumes: () => {}, sweep: () => null,
     spawnRun: () => { spawned = true; throw new Error('unexpected spawn'); } }), /mount refused/);
   assert.equal(spawned, false);
 });
@@ -191,4 +191,123 @@ test('a pre-existing run container is never started over or removed', async t =>
   await assert.rejects(runContainer(plan, { command, spawnRun: () => { spawned = true; throw new Error('unexpected spawn'); } }), /already in use/);
   assert.equal(spawned, false); assert.equal(removed, false);
   assert.equal(fs.existsSync(plan.workspace), false);
+});
+
+// ---- mount lifecycle (PR #19 review B1)
+function lifecycle(t, options, runOptions = {}, mutatePlan = () => {}) {
+  const f = fixture(t), plan = f.plan(); mutatePlan(plan);
+  const events = [], h = harness(options), original = h.command;
+  const command = argv => { events.push(argv[0] === 'container' ? `docker:${argv[1]}` : `docker:${argv[0]}`); const r = original(argv); if (r.stdout === 'RUN\n') r.stdout = plan.runId + '\n'; return r; };
+  const release = () => events.push('release');
+  return { plan, events, run: () => runContainer(plan, { command, spawnRun: () => h.spawnRun(plan), ensureVolumes: p => { events.push('acquire'); fs.mkdirSync(p.work); fs.mkdirSync(p.out); }, releaseVolumes: release, sweep: () => null, ...runOptions }) };
+}
+
+test('the volume is released after the container is gone on every outcome', async t => {
+  const outcomes = [['success', { exit: 0, state: '0 false' }, 0], ['subject failure', { exit: 1, state: '1 false' }, 1], ['command not found', { exit: 127, state: '127 false' }, 1],
+    ['docker failure', { exit: 125, state: null }, 6], ['timeout', { tail: true, state: '143 false' }, 5]];
+  for (const [name, options, expected] of outcomes) {
+    const l = lifecycle(t, options, {}, name === 'timeout' ? p => { p.timeoutMs = 10; } : () => {});
+    const r = await l.run();
+    assert.equal(r.exitCode, expected, name); assert.equal(r.cleanup, 'complete', name); assert.deepEqual(r.volume, { released: true, retained: false, error: null }, name);
+    assert.equal(l.events.filter(e => e === 'release').length, 1, name);
+    assert.ok(l.events.lastIndexOf('docker:rm') < l.events.indexOf('release'), `${name}: released only after the container was removed`);
+  }
+});
+
+test('SIGINT: the runner reports 130 and still releases the volume', async t => {
+  const l = lifecycle(t, { tail: true, state: '143 false', onSpawn: () => { setTimeout(() => process.emit('SIGINT'), 5); } });
+  const r = await l.run();
+  assert.equal(r.exitCode, 130); assert.equal(r.reason, 'interrupted'); assert.equal(r.cleanup, 'complete');
+  assert.equal(l.events.filter(e => e === 'release').length, 1);
+});
+
+test('a failed start still releases whatever was acquired, and the original error is kept', async t => {
+  const l = lifecycle(t, { exit: 0, state: '0 false' }, { ensureVolumes: () => { throw new RangeError('mount refused'); } });
+  await assert.rejects(l.run(), /mount refused/);
+  assert.equal(l.events.filter(e => e === 'release').length, 1);
+  const spawnFails = lifecycle(t, { exit: 0, state: '0 false' }, { spawnRun: () => { throw new TypeError('spawn blew up'); } });
+  await assert.rejects(spawnFails.run(), /spawn blew up/);
+  assert.equal(spawnFails.events.filter(e => e === 'release').length, 1);
+});
+
+test('an unmount that fails is reported as incomplete cleanup (exit 7) with the error class, never as complete', async t => {
+  const l = lifecycle(t, { exit: 0, state: '0 false' }, { releaseVolumes: () => { throw new RunnerError('bounded storage release incomplete (RunnerError)', 7); } });
+  const r = await l.run();
+  assert.equal(r.exitCode, 7); assert.equal(r.cleanup, 'incomplete'); assert.deepEqual(r.volume, { released: false, retained: false, error: 'RunnerError' });
+  // a subject failure with a failed unmount is still 7: the infrastructure problem outranks the test result
+  const bad = lifecycle(t, { exit: 1, state: '1 false' }, { releaseVolumes: () => { throw new Error('x'); } });
+  assert.equal((await bad.run()).exitCode, 7);
+});
+
+test('keepVolume leaves release to the caller, who can then release it exactly once', async t => {
+  const l = lifecycle(t, { exit: 0, state: '0 false' }, { keepVolume: true });
+  const r = await l.run();
+  assert.equal(r.exitCode, 0); assert.deepEqual(r.volume, { released: false, retained: true, error: null });
+  assert.equal(l.events.filter(e => e === 'release').length, 0);
+});
+
+test('cache volume is unmounted only by the last live user; dead users are pruned; a failed unmount is reported', t => {
+  const f = fixture(t), a = f.plan(), b = buildPlanForVerifiedPaths({ ...f.spec, runId: 'bbbbbbbbbbbbbbbb' }, f.config, f.project, f.storage);
+  fs.mkdirSync(path.dirname(a.cache), { recursive: true });
+  const users = a.cache + '.users'; fs.mkdirSync(users, { recursive: true });
+  const me = { pid: process.pid, start: fs.readFileSync('/proc/self/stat', 'utf8').split(' ')[21] };
+  fs.writeFileSync(path.join(users, a.runId), JSON.stringify(me)); fs.writeFileSync(path.join(users, b.runId), JSON.stringify(me));
+  fs.writeFileSync(path.join(users, 'cccccccccccccccc'), JSON.stringify({ pid: 999999, start: '1' }));            // dead user
+  fs.mkdirSync(a.workspace, { recursive: true }); fs.writeFileSync(path.join(a.workspace, 'lease.json'), '{}');
+  const calls = [], ops = { releaseRun: () => calls.push('run'), releaseCache: () => calls.push('cache') };
+  releaseVolumes(a, ops);
+  assert.deepEqual(calls, ['run']);                                  // b is still alive: cache stays mounted
+  assert.equal(fs.existsSync(path.join(users, a.runId)), false); assert.equal(fs.existsSync(path.join(a.workspace, 'lease.json')), false);
+  releaseVolumes(b, ops);
+  assert.deepEqual(calls, ['run', 'run', 'cache']);                  // last user out unmounts it
+  assert.throws(() => releaseVolumes(b, { releaseRun: () => {}, releaseCache: () => { throw new RunnerError('x'); } }), /release incomplete \(RunnerError\)/);
+  assert.throws(() => releaseVolumes(b, { releaseRun: () => { throw new RunnerError('x'); }, releaseCache: () => {} }), error => error.exitCode === 7);
+  assert.equal(fs.existsSync(a.cache + '.lock'), false, 'the cache lock is always released');
+});
+
+test('sweep touches only stale DevTest volumes under the storage root, never Docker, libvirt or boot loop devices', t => {
+  const f = fixture(t), root = fs.realpathSync(f.storage);
+  const ids = { stale: '1111111111111111', liveLease: '2222222222222222', liveContainer: '3333333333333333', staleCacheUser: 'dddddddddddddddd', other: '4444444444444444' };
+  const me = { pid: process.pid, start: fs.readFileSync('/proc/self/stat', 'utf8').split(' ')[21] };
+  for (const id of [ids.stale, ids.liveLease, ids.liveContainer]) fs.mkdirSync(path.join(root, 'runs', id, 'volume'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'runs', ids.liveLease, 'lease.json'), JSON.stringify(me));
+  fs.writeFileSync(path.join(root, 'runs', ids.stale, 'lease.json'), JSON.stringify({ pid: 999999, start: '1' }));
+  fs.mkdirSync(path.join(root, 'cache', 'nuget'), { recursive: true }); fs.mkdirSync(path.join(root, 'cache', 'nuget.users'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'cache', 'nuget.users', ids.staleCacheUser), JSON.stringify({ pid: 999999, start: '1' }));
+  fs.mkdirSync(path.join(root, 'cache', 'playwright'), { recursive: true }); fs.mkdirSync(path.join(root, 'cache', 'playwright.users'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'cache', 'playwright.users', ids.liveLease), JSON.stringify(me));
+  let loops = [
+    { name: '/dev/loop0', file: '/boot/bzfirmware' }, { name: '/dev/loop2', file: '/mnt/cache/system/docker/docker.img' }, { name: '/dev/loop3', file: '/mnt/cache/system/libvirt/libvirt.img' },
+    { name: '/dev/loop4', file: `${root}/runs/${ids.stale}/volume.img` }, { name: '/dev/loop5', file: `${root}/runs/${ids.liveLease}/volume.img` }, { name: '/dev/loop6', file: `${root}/runs/${ids.liveContainer}/volume.img` },
+    { name: '/dev/loop7', file: `${root}/cache/nuget.img` }, { name: '/dev/loop8', file: `${root}/cache/playwright.img` },
+    { name: '/dev/loop9', file: `${root}/runs/${ids.other}/other.img` },                     // under the root but not a DevTest volume image
+    { name: '/dev/loop10', file: `/elsewhere${root}/runs/${ids.stale}/volume.img` }          // same tail, different root
+  ];
+  const touched = [];
+  const host = {
+    listLoops: () => loops,
+    mountedSource: target => { const l = loops.find(x => target.endsWith('/volume') ? x.file.endsWith(`/${path.basename(path.dirname(target))}/volume.img`) && x.file.startsWith(root) : x.file === `${target}.img`); return l ? { source: l.name, type: 'ext4' } : null; },
+    umount: target => touched.push(['umount', target]), detach: device => { touched.push(['detach', device]); loops = loops.filter(l => l.name !== device); },
+    containerExists: name => name === `devtest-${ids.liveContainer}`
+  };
+  const result = sweepStaleVolumes(root, () => ({ status: 1 }), host);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.released.sort(), ['/dev/loop4', '/dev/loop7']);                       // stale run volume + cache whose only user was dead
+  assert.deepEqual(result.skipped.sort(), ['/dev/loop5', '/dev/loop6', '/dev/loop8']);          // live lease, live container, cache with a live user
+  const devices = touched.map(x => x[1]).join(' ');
+  for (const never of ['/dev/loop0', '/dev/loop2', '/dev/loop3', '/dev/loop9', '/dev/loop10', 'docker.img', 'libvirt', 'bzfirmware']) assert.ok(!devices.includes(never), never);
+  assert.ok(touched.some(x => x[0] === 'umount' && x[1] === `${root}/runs/${ids.stale}/volume`)); assert.ok(touched.some(x => x[0] === 'umount' && x[1] === `${root}/cache/nuget`));
+  assert.equal(fs.existsSync(path.join(root, 'cache', 'nuget.users', ids.staleCacheUser)), false);
+});
+
+test('sweep reports a per-device failure without touching anything else, and a sweep failure does not block the run', async t => {
+  const f = fixture(t), root = fs.realpathSync(f.storage);
+  fs.mkdirSync(path.join(root, 'runs', 'aaaaaaaaaaaaaaaa', 'volume'), { recursive: true });
+  const host = { listLoops: () => [{ name: '/dev/loop4', file: `${root}/runs/aaaaaaaaaaaaaaaa/volume.img` }, { name: '/dev/loop2', file: '/mnt/cache/system/docker/docker.img' }],
+    mountedSource: () => ({ source: '/dev/loop4', type: 'ext4' }), umount: () => { throw new RunnerError('busy'); }, detach: () => { throw new Error('no'); }, containerExists: () => false };
+  const result = sweepStaleVolumes(root, () => ({ status: 1 }), host);
+  assert.deepEqual(result.errors, ['/dev/loop4:RunnerError']); assert.deepEqual(result.released, []);
+  const l = lifecycle(t, { exit: 0, state: '0 false' }, { sweep: () => { throw new SyntaxError('sweep bug'); } });
+  const r = await l.run();
+  assert.equal(r.exitCode, 0); assert.deepEqual(r.sweep, { error: 'SyntaxError' });
 });

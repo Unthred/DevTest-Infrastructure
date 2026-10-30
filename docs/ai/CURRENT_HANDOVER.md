@@ -60,3 +60,8 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 1. Codex: push this exact #19 head, confirm exact-head CI and GitGuardian, request Claude's executable independent re-review; correct any findings in own worktree.
 2. Claude merges #19 only after independent PASS and exact-head green gates. Codex then starts #3 .NET SDK builds in a new worktree. Claude can start #5 Playwright once #2 reaches CI/review passed.
 3. Keep #15 open for real provider-limit capability evidence; do not enable production auto-resume based on simulated tests or reboot Tower to claim persistence.
+
+## #2 mount lifecycle fix (Claude, branch `claude/issue-2-mount-lifecycle`, PR targets `codex/issue-2-docker`)
+- Source: merges main into the #19 branch (handover reconciled, both sides kept); release in a final step on every outcome, incomplete-cleanup reporting, lease and cache user markers, start-up sweep restricted to DevTest images under the storage root; `withRunVolume`; `tests/docker-lifecycle-smoke.mjs`.
+- Tests: validator OK, 62/62. Tower gate: lifecycle smoke LIFECYCLE OK (baseline restored after five outcomes; sweep removed only the two stranded devices) and `tests/docker-smoke.mjs` passes.
+- Review and CI: Codex review pending; merging this PR into `codex/issue-2-docker` updates #19. Claude then performs the final check and merges #19.
