@@ -57,19 +57,20 @@ export function buildPlanForVerifiedPaths(spec, config, project, storage) {
   const limits = config.limits || {};
   if (!(limits.cpus > 0 && limits.cpus <= 4) || !Number.isSafeInteger(limits.memoryMb) || limits.memoryMb < 128 || limits.memoryMb > 8192 ||
       !Number.isSafeInteger(limits.pids) || limits.pids < 16 || limits.pids > 512 || !Number.isSafeInteger(limits.shmMb) || limits.shmMb < 16 || limits.shmMb > 1024 ||
-      !Number.isSafeInteger(limits.timeoutMs) || limits.timeoutMs < 1000 || limits.timeoutMs > 3600000) throw new RunnerError('resource limits are missing or outside the bounded policy');
+      !Number.isSafeInteger(limits.timeoutMs) || limits.timeoutMs < 1000 || limits.timeoutMs > 3600000 ||
+      !Number.isSafeInteger(limits.diskMb) || limits.diskMb < 16 || limits.diskMb > 20480 || !Number.isSafeInteger(limits.cacheMb) || limits.cacheMb < 16 || limits.cacheMb > 20480) throw new RunnerError('resource limits are missing or outside the bounded policy');
   const workspace = path.join(storage, 'runs', spec.runId);
   const work = path.join(workspace, 'work'), out = path.join(workspace, 'out');
   const cache = path.join(storage, 'cache', spec.image.startsWith('dotnet-') ? 'nuget' : 'playwright');
   const name = `devtest-${spec.runId}`;
-  const args = ['run', '--rm', '--pull=never', '--name', name, '--label', `devtest.run-id=${spec.runId}`,
+  const args = ['run', '--init', '--pull=never', '--name', name, '--label', `devtest.run-id=${spec.runId}`,
     '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--read-only', '--network=none',
-    '--cpus', String(limits.cpus), '--memory', `${limits.memoryMb}m`, '--pids-limit', String(limits.pids), '--shm-size', `${limits.shmMb}m`,
+    '--cpus', String(limits.cpus), '--memory', `${limits.memoryMb}m`, '--memory-swap', `${limits.memoryMb}m`, '--ulimit', `fsize=${limits.diskMb * 1048576}:${limits.diskMb * 1048576}`, '--pids-limit', String(limits.pids), '--shm-size', `${limits.shmMb}m`,
     '--user', `${config.uid}:${config.gid}`, '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m',
     '--mount', `type=bind,src=${project},dst=/src,readonly`,
     '--mount', `type=bind,src=${work},dst=/work`, '--mount', `type=bind,src=${out},dst=/out`,
     '--mount', `type=bind,src=${cache},dst=/cache`, '--workdir', '/work', image, ...spec.command];
-  return { runId: spec.runId, name, image, project, storage, workspace, work, out, cache, uid: config.uid, gid: config.gid, timeoutMs: limits.timeoutMs, args };
+  return { runId: spec.runId, name, image, project, storage, workspace, work, out, cache, uid: config.uid, gid: config.gid, timeoutMs: limits.timeoutMs, diskBytes: limits.diskMb * 1048576, cacheBytes: limits.cacheMb * 1048576, logDir: path.join(workspace, 'logs'), args };
 }
 
 export function prepareDirectories(plan) {
@@ -83,7 +84,7 @@ export function prepareDirectories(plan) {
   fs.mkdirSync(runs, { recursive: true, mode: 0o700 });
   safeParent(runs);
   if (fs.existsSync(plan.workspace)) throw new RunnerError('run id already has a workspace');
-  for (const dir of [plan.workspace, plan.work, plan.out]) {
+  for (const dir of [plan.workspace, plan.work, plan.out, plan.logDir]) {
     fs.mkdirSync(dir, { mode: 0o700 });
     if (fs.lstatSync(dir).isSymbolicLink()) throw new RunnerError('run directory may not be a symlink');
   }
@@ -137,24 +138,89 @@ export function cleanupContainer(plan, command = dockerCommand) {
   return !ownedContainer(plan, command);
 }
 
-export async function runContainer(plan, { command = dockerCommand, spawnRun = spawn } = {}) {
+const LOG_CAP = 1048576;
+const errorClass = error => String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48);
+
+// Allocated bytes under a directory, never following symlinks; stops counting once the cap is passed.
+export function treeBytes(dir, cap) {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const current = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      let st;
+      try { st = fs.lstatSync(full); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      total += st.blocks * 512;
+      if (total > cap) return total;
+      if (st.isDirectory()) stack.push(full);
+    }
+  }
+  return total;
+}
+
+function logSink(file) {
+  const fd = fs.openSync(file, 'wx', 0o600);
+  let bytes = 0, truncated = false;
+  return {
+    write(chunk) {
+      if (bytes >= LOG_CAP) { truncated = true; return; }
+      const piece = chunk.subarray(0, LOG_CAP - bytes);
+      fs.writeSync(fd, piece); bytes += piece.length;
+      if (piece.length < chunk.length) truncated = true;
+    },
+    close() { fs.closeSync(fd); return { bytes, truncated }; }
+  };
+}
+
+// Exit state is read before removal (the container is not started with --rm) so a missing binary, a kill and a
+// memory-limit kill are subject outcomes, and only a Docker-level failure is an internal error.
+export function containerState(plan, command = dockerCommand) {
+  const r = command(['container', 'inspect', '--format', '{{.State.ExitCode}} {{.State.OOMKilled}}', plan.name]);
+  if (r.status !== 0) return null;
+  const [code, oom] = r.stdout.trim().split(' ');
+  return Number.isInteger(Number(code)) ? { exitCode: Number(code), oomKilled: oom === 'true' } : null;
+}
+
+export async function runContainer(plan, { command = dockerCommand, spawnRun = spawn, pollMs = 200 } = {}) {
   if (ownedContainer(plan, command)) throw new RunnerError('run container name is already in use', 7);
   prepareDirectories(plan);
   const localImage = command(['image', 'inspect', '--format', '{{.Id}}', plan.image]);
   if (localImage.status !== 0) throw new RunnerError('pinned image is not locally available; pull through a reviewed update path', 3);
-  const child = spawnRun('docker', plan.args, { stdio: ['ignore', 'ignore', 'ignore'], env: dockerEnvironment() });
-  let timedOut = false, interrupted = false;
+  const stdout = logSink(path.join(plan.logDir, 'stdout.log')), stderr = logSink(path.join(plan.logDir, 'stderr.log'));
+  const child = spawnRun('docker', plan.args, { stdio: ['ignore', 'pipe', 'pipe'], env: dockerEnvironment() });
+  child.stdout?.on('data', chunk => stdout.write(chunk)); child.stderr?.on('data', chunk => stderr.write(chunk));
+  let timedOut = false, interrupted = false, limit = null, pollError = null;
   const stop = () => { interrupted = true; child.kill('SIGTERM'); };
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
   const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, plan.timeoutMs);
+  // Bind mounts cannot carry a size limit, so the runner measures them and kills the container when over budget.
+  // RLIMIT_FSIZE (--ulimit fsize) bounds any single file; this bounds the sum.
+  const poller = setInterval(() => {
+    if (limit) return;
+    try {
+      if (treeBytes(plan.work, plan.diskBytes) + treeBytes(plan.out, plan.diskBytes) > plan.diskBytes) limit = 'disk';
+      else if (treeBytes(plan.cache, plan.cacheBytes) > plan.cacheBytes) limit = 'cache';
+    } catch (error) { pollError = errorClass(error); limit = 'disk_unmeasurable'; }
+    if (limit) { try { command(['container', 'kill', plan.name]); } catch (error) { pollError = errorClass(error); } child.kill('SIGTERM'); }
+  }, pollMs);
   let code;
   try {
     code = await new Promise(resolve => { child.once('error', () => resolve(125)); child.once('close', value => resolve(value ?? 125)); });
   } finally {
-    clearTimeout(timer); process.off('SIGINT', stop); process.off('SIGTERM', stop);
+    clearTimeout(timer); clearInterval(poller); process.off('SIGINT', stop); process.off('SIGTERM', stop);
   }
+  const logs = { stdout: { path: path.join(plan.logDir, 'stdout.log'), ...stdout.close() }, stderr: { path: path.join(plan.logDir, 'stderr.log'), ...stderr.close() } };
+  let state = null, cleanupError = null;
+  try { state = containerState(plan, command); } catch (error) { cleanupError = errorClass(error); }
   let clean;
-  try { clean = cleanupContainer(plan, command); } catch { clean = false; }
-  const exitCode = !clean ? 7 : interrupted ? 130 : timedOut ? 5 : code >= 125 ? 6 : code === 0 ? 0 : 1;
-  return { runId: plan.runId, image: plan.image, exitCode, cleanup: clean ? 'complete' : 'incomplete', timedOut, interrupted };
+  try { clean = cleanupContainer(plan, command); } catch (error) { clean = false; cleanupError = errorClass(error); }
+  // 125 is Docker's own failure; with no container state it is internal. Any other code is the subject's.
+  const internal = state === null && code >= 125;
+  const reason = limit ? `${limit}_limit` : state?.oomKilled ? 'memory_limit' : timedOut ? 'timeout' : interrupted ? 'interrupted' : null;
+  const exitCode = !clean ? 7 : interrupted ? 130 : timedOut ? 5 : limit ? 1 : internal ? 6 : (state ? state.exitCode : code) === 0 && !state?.oomKilled ? 0 : 1;
+  return { runId: plan.runId, image: plan.image, exitCode, reason, subjectExit: state?.exitCode ?? null, cleanup: clean ? 'complete' : 'incomplete', cleanupError, pollError, timedOut, interrupted, logs };
 }

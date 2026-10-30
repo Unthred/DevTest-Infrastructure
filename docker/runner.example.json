@@ -8,6 +8,8 @@
     "memoryMb": 1024,
     "pids": 128,
     "shmMb": 64,
-    "timeoutMs": 120000
+    "timeoutMs": 120000,
+    "diskMb": 2048,
+    "cacheMb": 4096
   }
 }

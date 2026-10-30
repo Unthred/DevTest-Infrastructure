@@ -138,7 +138,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Status: agent-proposal
 - Date: 2026-10-29
 - Source: issue #1 (Claude); builds on D-007
-- Decision: Every run container uses a non-root user, `--cap-drop ALL`, `no-new-privileges`, a read-only root filesystem with explicit tmpfs/volumes, bounded CPU, memory and PIDs, a wall-clock limit, and a unique name carrying the run id. The runner verifies these before start and refuses with exit code 4 otherwise.
+- Decision: Every run container uses a non-root user, `--cap-drop ALL`, `no-new-privileges`, a read-only root filesystem with explicit tmpfs/volumes, bounded CPU, memory, PIDs and disk (per-file ulimit plus a measured aggregate budget), a wall-clock limit, and a unique name carrying the run id. The runner verifies these before start and refuses with exit code 4 otherwise.
 - Rationale: Limits what untrusted project code can do or consume.
 - Rejected: Relaxing the baseline per project without a recorded decision.
 - Superseded-by: none
