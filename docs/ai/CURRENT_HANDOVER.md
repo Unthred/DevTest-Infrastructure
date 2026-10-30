@@ -168,3 +168,6 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - A live tick counts as failed if it throws or reports skipped items. A tick skipped because another holds the lock verifies nothing.
 - `tests/self-upgrade.test.mjs` (21 tests): every rule in the acceptance list with fakes, real git range parsing, real clean-checkout pre-checks, the real rollback script on temp dirs. Mutation checks on the upgrader guard and the self-review rule fail as expected. Validator OK, 198/198.
 - Implemented only. CI and Codex review pending. Not deployed: this PR changes the upgrader, so it needs a manual `tools/upgrade-supervisor.sh` once; the live automatic upgrade on Tower required by the acceptance list has not happened.
+
+## Issue #47 / PR #48 conflict-only rebase (Claude)
+- Rebased onto origin/main `94d4d0c`; old head `ec130ae`, rebased commit `6b90fca`. Conflicts in this handover and the `supervisor/cli.mjs` help text were resolved by keeping both sides. Validator OK, 231/231 tests. The PASS for the old head does not carry over; Codex must review the new head. Not merged, not deployed.
