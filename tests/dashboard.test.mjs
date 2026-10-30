@@ -135,7 +135,8 @@ test('queue reasons: waiting on CI, blocked by #n, awaiting review of sha, draft
 test('the queue is the dispatcher\'s own plan(): identical actions to Team.plan on the same data', async t => {
   const cache = { tick: okTick(), issues: [issue(30), issue(2)], pulls: [pr(13, 'claude/issue-7-x', H(3))] };
   const root = setup(t);
-  const v = await buildView({ config: config(), root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW });
+  const cfg = config({ agents: { ...config().agents, claude: { ...config().agents.claude, issues: [5, 30] } } });
+  const v = await buildView({ config: cfg, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW });
   const team = new Team({ config: config(), root, gh: { listPulls: async () => cache.pulls, listIssues: async () => cache.issues.map(i => ({ ...i, labels: [] })) }, jobs: { listActive: async () => [] }, git: null });
   assert.deepEqual(v.plan, await team.plan());
 });
@@ -291,4 +292,32 @@ test('the dashboard modules import no GitHub client, process spawner or network 
 test('a lone issue is "next: implement" when its agent has nothing ahead of it', async t => {
   const v = await view(t, { cache: { tick: okTick(), issues: [issue(2)], pulls: [] } });
   assert.equal(v.queues.codex[0].reason, 'next: implement'); assert.equal(v.queues.codex[0].next, true);
+});
+
+// ---- verdict fixes on 2e35220
+test('delivered work: the page plans and queues what team tick would, with an open issue whose PR already merged excluded', async t => {
+  const root = setup(t);
+  const issues = [issue(5, 'OPEN', ''), issue(30, 'OPEN', '')];
+  const delivered = new Set([5]);
+  recordTick(root, { now: NOW, status: 'ok', team: { c: config(), view: { prs: [], issues }, delivered }, jobs: [], actions: [] });
+  const cache = readCache(root);
+  assert.deepEqual(cache.delivered, [5]);
+  const cfg = config({ agents: { ...config().agents, claude: { ...config().agents.claude, issues: [5, 30] } } });
+  const v = await buildView({ config: cfg, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW });
+  assert.ok(!v.plan.some(a => a.issue === 5), 'issue 5 is not planned');
+  assert.ok(v.plan.some(a => a.issue === 30), 'the next issue is planned instead');
+  assert.ok(!Object.values(v.queues).flat().some(q => q.type === 'issue' && q.ref === 5));
+  // without the delivered data the old behaviour would have planned #5
+  const bare = await buildView({ config: cfg, root, jobs: [], events: [], state: {}, cache: { ...cache, delivered: [] }, snapshots: [], now: NOW });
+  assert.ok(bare.plan.some(a => a.issue === 5));
+  // a failed tick keeps the last delivered list
+  recordTick(root, { now: NOW + 1, status: 'error', error: 'x' });
+  assert.deepEqual(readCache(root).delivered, [5]);
+});
+test('recent activity includes every recorded tick in the 50-event ordering, not only the last three', async t => {
+  const snapshots = Array.from({ length: 10 }, (_, i) => ({ at: NOW - (10 - i) * 1000, status: 'ok', plan: [] }));
+  const v = await view(t, { snapshots, cache: { tick: okTick(), pulls: [], issues: [] } });
+  assert.equal(v.activity.filter(r => /^tick ok/.test(r.text)).length, 10);
+  const many = Array.from({ length: 80 }, (_, i) => ({ at: NOW - i * 1000, status: 'ok', plan: [] }));
+  assert.equal((await view(t, { snapshots: many, cache: { tick: okTick(), pulls: [], issues: [] } })).activity.length, 50);
 });
