@@ -38,6 +38,28 @@ test('each AI attribution shape in a commit message fails, naming only the offen
   }
 });
 
+test('other AI-tool session links and bot e-mails fail in a commit and in the PR body', t => {
+  const lines = [`https://${j('chat', 'gpt.com')}/share/example-session`, `https://${j('chat.open', 'ai.com')}/share/abc`, `https://${j('gemini.google', '.com')}/share/abc`,
+    `https://${j('claude', '.ai')}/share/abc`, `Signed-off-by: x <${j('no', 'reply@openai.com')}>`, `Signed-off-by: x <${j('co', 'dex-bot@openai.com')}>`];
+  for (const line of lines) {
+    const r = repoWith(t, [`Fix thing\n\nunrelated body line\n${line}`]);
+    assert.equal(run(r).status, 1, line); assert.equal(run(r, { body: `Closes #1\n${line}` }).status, 1, line);
+  }
+});
+
+test('an unresolvable ref is fatal, never a green check', t => {
+  const r = repoWith(t, ['clean']);
+  for (const args of [[r.base, 'no-such-ref'], ['no-such-ref', 'HEAD']]) {
+    const x = spawnSync('bash', [script, ...args], { cwd: r.dir, encoding: 'utf8' });
+    assert.equal(x.status, 1, args.join(' ')); assert.match(x.stderr, /not a commit/); assert.ok(!x.stdout.includes('OK:'));
+  }
+});
+
+test('the diagnostic never echoes the commit subject', t => {
+  const x = run(repoWith(t, [`Unrelated subject marker\n\n${j('Gener', 'ated with')} ${j('Claude ', 'Code')}`]));
+  assert.equal(x.status, 1); assert.ok(!x.stderr.includes('Unrelated subject marker'), x.stderr);
+});
+
 test('clean history and ordinary mentions pass', t => {
   const ok = [
     'Fix the Claude adapter parser for truncated lines',

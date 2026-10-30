@@ -16,7 +16,14 @@ if [[ -z "${BASE}" ]]; then
 fi
 
 AI='claude|anthropic|codex|openai|cursor|chatgpt|copilot|gemini|\bAI\b'
-PAT="^[[:space:]_*>]*co-authored-by:.*(${AI})|^[[:space:]_*>]*(made-with|generated-by):.*(${AI})|^[[:space:]_*>]*(🤖[[:space:]]*)?(generated|made|created|written)[[:space:]]+(with|by)[[:space:]].*(${AI})|claude\\.ai/code|claude\\.com/claude-code|noreply@anthropic\\.com|cursoragent@cursor\\.com"
+LINKS='claude\.ai/(code|chat|share)|claude\.com/claude-code|(chatgpt\.com|chat\.openai\.com)/(share|c/|codex|s/)|gemini\.google\.com/(share|app)|g\.co/gemini/share|copilot\.microsoft\.com/shares|cursor\.com/(agents|background-agent)'
+BOTS='noreply@(anthropic|openai)\.com|cursoragent@cursor\.com|(codex|chatgpt|copilot|gemini|claude)[^[:space:]@]*@(users\.noreply\.github\.com|openai\.com|anthropic\.com)'
+PAT="^[[:space:]_*>]*co-authored-by:.*(${AI})|^[[:space:]_*>]*(made-with|generated-by):.*(${AI})|^[[:space:]_*>]*(🤖[[:space:]]*)?(generated|made|created|written)[[:space:]]+(with|by)[[:space:]].*(${AI})|${LINKS}|${BOTS}"
+
+for ref in "${BASE}" "${HEAD}"; do
+  git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null || { echo "FAIL: ref '${ref:0:80}' is not a commit; the range was not scanned" >&2; exit 1; }
+done
+SHAS="$(git rev-list "${BASE}..${HEAD}")" || { echo "FAIL: git rev-list ${BASE:0:12}..${HEAD} failed; the range was not scanned" >&2; exit 1; }
 
 failures=0
 scan() { # label, text
@@ -30,8 +37,8 @@ scan() { # label, text
 
 while IFS= read -r sha; do
   [[ -z "${sha}" ]] && continue
-  scan "commit ${sha:0:12} ($(git log -1 --format=%s "${sha}" | cut -c1-60))" "$(git log -1 --format=%B "${sha}")"
-done < <(git rev-list "${BASE}..${HEAD}")
+  scan "commit ${sha:0:12}" "$(git log -1 --format=%B "${sha}")"
+done <<< "${SHAS}"
 
 if [[ -n "${PR_BODY:-}" ]]; then scan "the pull request body" "${PR_BODY}"; fi
 
