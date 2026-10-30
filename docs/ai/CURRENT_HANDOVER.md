@@ -248,3 +248,6 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## Issue #64 (Claude, `claude/issue-64-choose-model-per`)
 Implemented: `supervisor/models.mjs`, manifest `models` section (claude, codex), `models` table in `team.json` and `team.local.json`, escalation (incomplete job; CHANGES twice), allowance threshold, invalid-model fallback with warning, job fields and dashboard columns. Not done / unverified: live job with the new flags, behaviour of a real exhausted allowance, deployment (needs `tools/upgrade-supervisor.sh` after merge). Token-per-model figures only appear for jobs created after deployment. Review needed from Codex.
+
+## #7 conflict-only rebase onto main 0d32015 (Claude, 2026-10-30)
+- Rebased old head `5c2e230` (includes the merged Codex fixes from #43) onto main `0d32015`. Only conflicts were in this file (kept both sides); no code conflicts. Earlier PASS verdicts do not carry over; the opposite agent reviews the new head. Validator OK, 192/192. No commit message on the branch carries an AI trailer now, so the "red CI: commit-attribution" note above is stale; a fresh exact-head CI run decides. Not merged, not deployed.
