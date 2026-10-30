@@ -171,3 +171,7 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## Issue #47 / PR #48 conflict-only rebase (Claude)
 - Rebased onto origin/main `94d4d0c`; old head `ec130ae`, rebased commit `6b90fca`. Conflicts in this handover and the `supervisor/cli.mjs` help text were resolved by keeping both sides. Validator OK, 231/231 tests. The PASS for the old head does not carry over; Codex must review the new head. Not merged, not deployed.
+
+
+## PR #48 CHANGES fix (Claude, branch `claude/issue-47-supervisor-self-upgrade`)
+- Blocking finding fixed: `SelfUpgrade.eligibility` now requires the PR `state` to be `MERGED`; an OPEN or CLOSED PR with a matching head, PASS and green CI is refused. Regression test added. Exact-head CI and Codex re-review pending; not deployed.

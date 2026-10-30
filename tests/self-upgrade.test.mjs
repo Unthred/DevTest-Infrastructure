@@ -17,7 +17,7 @@ function world(t, over = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const log = [];
   const state = { now: 10_000_000, active: 0, files: ['supervisor/team.mjs'], target: TO, installed: FROM,
-    commits: [{ sha: H('c'), pr: 7, head: H('d') }], pulls: { 7: { headRefName: 'claude/issue-9-x', headRefOid: H('d'), statusCheckRollup: green } },
+    commits: [{ sha: H('c'), pr: 7, head: H('d') }], pulls: { 7: { state: 'MERGED', headRefName: 'claude/issue-9-x', headRefOid: H('d'), statusCheckRollup: green } },
     verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'codex' } }, pre: { ok: true }, up: { ok: true }, dry: { ok: true }, rb: { ok: true }, ancestor: true, ...over };
   const deps = {
     config,
@@ -81,21 +81,29 @@ test('not reviewed: no PASS, PASS from the author, PASS at another head, unknown
   // a direct commit to main, and a PR whose merged head does not match GitHub, are refused as well
   let w = world(t, { commits: [{ sha: H('c'), pr: null, head: null }] });
   assert.equal(await w.up.step(), 'not-eligible'); assert.match(w.alerts()[0], /not a reviewed pull request merge/);
-  w = world(t, { pulls: { 7: { headRefName: 'claude/x', headRefOid: H('f'), statusCheckRollup: green } } });
+  w = world(t, { pulls: { 7: { state: 'MERGED', headRefName: 'claude/x', headRefOid: H('f'), statusCheckRollup: green } } });
   assert.equal(await w.up.step(), 'not-eligible'); assert.match(w.alerts()[0], /could not be matched/);
-  w = world(t, { pulls: { 7: { headRefName: 'feature/x', headRefOid: H('d'), statusCheckRollup: green } } });
+  w = world(t, { pulls: { 7: { state: 'MERGED', headRefName: 'feature/x', headRefOid: H('d'), statusCheckRollup: green } } });
   assert.equal(await w.up.step(), 'not-eligible');
+});
+
+test('an OPEN or CLOSED PR with a matching head, PASS and green CI is refused', async t => {
+  for (const state of ['OPEN', 'CLOSED', undefined]) {
+    const w = world(t, { pulls: { 7: { state, headRefName: 'claude/x', headRefOid: H('d'), statusCheckRollup: green } } });
+    assert.equal(await w.up.step(), 'not-eligible', String(state)); assert.match(w.alerts()[0], /could not be matched/);
+    assert.equal(w.log.some(x => ['pre', 'upgrade'].includes(x[0])), false);
+  }
 });
 
 test('CI red, pending or absent on the merged head refuses; one bad PR among several refuses all', async t => {
   for (const rollup of [[{ status: 'COMPLETED', conclusion: 'FAILURE' }], [{ status: 'IN_PROGRESS' }], []]) {
-    const w = world(t, { pulls: { 7: { headRefName: 'claude/x', headRefOid: H('d'), statusCheckRollup: rollup } } });
+    const w = world(t, { pulls: { 7: { state: 'MERGED', headRefName: 'claude/x', headRefOid: H('d'), statusCheckRollup: rollup } } });
     assert.equal(await w.up.step(), 'not-eligible'); assert.match(w.alerts()[0], /CI was not green on PR #7/);
     assert.equal(w.log.some(x => x[0] === 'upgrade'), false);
   }
   const w = world(t, {
     commits: [{ sha: H('1'), pr: 7, head: H('d') }, { sha: H('2'), pr: 8, head: H('e') }],
-    pulls: { 7: { headRefName: 'claude/x', headRefOid: H('d'), statusCheckRollup: green }, 8: { headRefName: 'codex/y', headRefOid: H('e'), statusCheckRollup: green } },
+    pulls: { 7: { state: 'MERGED', headRefName: 'claude/x', headRefOid: H('d'), statusCheckRollup: green }, 8: { state: 'MERGED', headRefName: 'codex/y', headRefOid: H('e'), statusCheckRollup: green } },
     verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'codex' } } });
   assert.equal(await w.up.step(), 'not-eligible'); assert.match(w.alerts()[0], /PR #8/);
   // both reviewed: both PRs are named in the alert

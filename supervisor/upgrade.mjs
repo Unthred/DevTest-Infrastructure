@@ -143,7 +143,7 @@ export class SelfUpgrade {
       if (!c.pr || !SHA.test(c.head || '')) return { ok: false, prs, reason: `commit ${short(c.sha)} on main is not a reviewed pull request merge` };
       const pull = await this.d.mergedPull(c.pr);
       const author = agentOfBranch(this.d.config, pull?.headRefName);
-      if (!pull || pull.headRefOid !== c.head || !author) return { ok: false, prs, reason: `PR #${c.pr} could not be matched to its merged head` };
+      if (!pull || pull.state !== 'MERGED' || pull.headRefOid !== c.head || !author) return { ok: false, prs, reason: `PR #${c.pr} could not be matched to its merged head` };
       prs.push(c.pr);
       const v = this.d.verdict(c.pr, c.head);
       if (v?.verdict !== 'PASS' || v.reviewer === author || !this.d.config.agents[v.reviewer])
