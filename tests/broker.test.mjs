@@ -219,6 +219,35 @@ test('withSecrets: cleans on success and on failure; the scan catches a leak in 
   assert.deepEqual(fs.readdirSync(root), [], 'cleaned on failure too');
 });
 
+test('session storage values from allowed origins are included in the output leak scan', async () => {
+  const root = secretRoot(), out = tmp();
+  const local = canary('local'), session = canary('session');
+  const state = { cookies: [], origins: [{ origin: 'https://app.fixture.test',
+    localStorage: [{ name: 'auth', value: local }], sessionStorage: [{ name: 'transient', value: session }] }] };
+  const backend = { kind: 'openbao', assertReadOnly: async () => {},
+    read: async () => ({ values: { storage_state: state }, leaseId: null }), revoke: async () => {} };
+  const opts = { policy, names: ['fixture-session'], backend, root, ...me };
+  for (const [i, value] of [local, session].entries()) {
+    const runId = String(i + 1).repeat(16);
+    await assert.rejects(withSecrets({ ...opts, runId }, async () => {
+      fs.writeFileSync(path.join(out, `leak-${i}`), value);
+    }, { outputRoots: [out] }), e => e.exitCode === 8 && !e.message.includes(value));
+    assert.equal(fs.existsSync(path.join(root, runId)), false);
+    fs.unlinkSync(path.join(out, `leak-${i}`));
+  }
+});
+
+test('scan failure still removes secret files and revokes the lease', async () => {
+  const root = secretRoot(), revoked = [];
+  const backend = { kind: 'openbao', assertReadOnly: async () => {},
+    read: async () => ({ values: { username: 'u', password: canary('scan') }, leaseId: 'test-lease' }),
+    revoke: async id => { revoked.push(id); } };
+  await assert.rejects(withSecrets({ policy, names: ['fixture-login'], backend, runId: RUN, root, ...me },
+    async () => 'finished', { outputRoots: ['/proc/self/mem'] }));
+  assert.equal(fs.existsSync(path.join(root, RUN)), false);
+  assert.deepEqual(revoked, ['test-lease']);
+});
+
 test('isolation between runs: distinct directories, an existing run directory is refused, traces are refused', async () => {
   const root = secretRoot(); const backend = createMockBackend();
   const a = await materialize({ policy, names: ['fixture-login'], backend, runId: 'a'.repeat(16), root, ...me });
