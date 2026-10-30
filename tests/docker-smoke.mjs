@@ -16,21 +16,26 @@ const config = { allowedProjects: [project], storageRoot, uid, gid, lock,
 const probes = [
   { name: 'success', expectedExit: 0, command: ['sh', '-c', 'test -r /src/README.md && ! touch /src/.devtest-smoke-denied 2>/dev/null && ! touch /cache/.devtest-smoke-denied 2>/dev/null && printf SMOKE_OK > /out/marker && test -w /work'] },
   { name: 'subject-failure', expectedExit: 1, command: ['sh', '-c', 'exit 7'] },
-  { name: 'hard-disk-limit', expectedExit: 1, command: ['sh', '-c', 'dd if=/dev/zero of=/out/overfill bs=1M count=96 status=none 2>/dev/null && exit 88; exit 37'] }
+  { name: 'hard-disk-limit', expectedExit: 1, command: ['sh', '-c', 'dd if=/dev/zero of=/out/overfill bs=1M count=96 status=none 2>/dev/null && exit 88; exit 37'] },
+  { name: 'hard-cache-limit', phase: 'restore', expectedExit: 1, command: ['sh', '-c', 'dd if=/dev/zero of=/cache/overfill bs=1M count=96 status=none 2>/dev/null && exit 88; exit 37'] }
 ];
 let lastPlan;
 try {
   fs.mkdirSync(storageRoot, { recursive: true, mode: 0o700 });
   for (const probe of probes) {
     const runId = crypto.randomBytes(8).toString('hex');
-    const plan = createPlan({ project, runId, image: 'dotnet-8', command: probe.command }, config);
+    const plan = createPlan({ project, runId, image: 'dotnet-8', phase: probe.phase, command: probe.command }, config);
     lastPlan = plan;
     try {
       const result = await runContainer(plan);
       const marker = path.join(plan.out, 'marker');
       const markerOk = probe.name !== 'success' || fs.existsSync(marker) && fs.readFileSync(marker, 'utf8') === 'SMOKE_OK';
       const containerGone = !ownedContainer(plan);
-      const hardLimitOk = probe.name !== 'hard-disk-limit' || result.subjectExit === 37 && fs.statSync(path.join(plan.out, 'overfill')).size < 64 * 1048576;
+      const hardLimitOk = probe.name === 'hard-disk-limit'
+        ? result.subjectExit === 37 && fs.statSync(path.join(plan.out, 'overfill')).size < 64 * 1048576
+        : probe.name === 'hard-cache-limit'
+          ? result.subjectExit === 37 && fs.statSync(path.join(plan.cache, 'overfill')).size < 64 * 1048576
+          : true;
       console.log(JSON.stringify({ probe: probe.name, runId, image: plan.image, exitCode: result.exitCode, subjectExit: result.subjectExit, cleanup: result.cleanup, markerOk, hardLimitOk, containerGone }));
       if (result.exitCode !== probe.expectedExit || !markerOk || !hardLimitOk || !containerGone) process.exitCode = 1;
     } finally {

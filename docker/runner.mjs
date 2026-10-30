@@ -214,27 +214,6 @@ export function cleanupContainer(plan, command = dockerCommand) {
 const LOG_CAP = 1048576;
 const errorClass = error => String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48);
 
-// Allocated bytes under a directory, never following symlinks; stops counting once the cap is passed.
-export function treeBytes(dir, cap) {
-  let total = 0;
-  const stack = [dir];
-  while (stack.length) {
-    const current = stack.pop();
-    let entries;
-    try { entries = fs.readdirSync(current, { withFileTypes: true }); }
-    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-    for (const entry of entries) {
-      const full = path.join(current, entry.name);
-      let st;
-      try { st = fs.lstatSync(full); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      total += st.blocks * 512;
-      if (total > cap) return total;
-      if (st.isDirectory()) stack.push(full);
-    }
-  }
-  return total;
-}
-
 function logSink() {
   let bytes = 0, truncated = false;
   return {
@@ -258,7 +237,7 @@ export function containerState(plan, command = dockerCommand) {
   return Number.isInteger(Number(code)) ? { exitCode: Number(code), oomKilled: oom === 'true' } : null;
 }
 
-export async function runContainer(plan, { command = dockerCommand, spawnRun = spawn, pollMs = 200, ensureVolumes = ensureLoopVolumes } = {}) {
+export async function runContainer(plan, { command = dockerCommand, spawnRun = spawn, ensureVolumes = ensureLoopVolumes } = {}) {
   if (ownedContainer(plan, command)) throw new RunnerError('run container name is already in use', 7);
   const localImage = command(['image', 'inspect', '--format', '{{.Id}}', plan.image]);
   if (localImage.status !== 0) throw new RunnerError('pinned image is not locally available; pull through a reviewed update path', 3);
@@ -267,32 +246,15 @@ export async function runContainer(plan, { command = dockerCommand, spawnRun = s
   const stdout = logSink(), stderr = logSink();
   const child = spawnRun('docker', plan.args, { stdio: ['ignore', 'pipe', 'pipe'], env: dockerEnvironment() });
   child.stdout?.on('data', chunk => stdout.write(chunk)); child.stderr?.on('data', chunk => stderr.write(chunk));
-  let timedOut = false, interrupted = false, limit = null, pollError = null;
+  let timedOut = false, interrupted = false;
   const stop = () => { interrupted = true; child.kill('SIGTERM'); };
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
   const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, plan.timeoutMs);
-  // Bind mounts cannot carry a size limit, so the runner measures them and kills the container when over budget.
-  // RLIMIT_FSIZE (--ulimit fsize) bounds any single file; this bounds the sum.
-  const poller = setInterval(() => {
-    if (limit) return;
-    try {
-      if (treeBytes(plan.work, plan.diskBytes) + treeBytes(plan.out, plan.diskBytes) > plan.diskBytes) limit = 'disk';
-      else if (treeBytes(plan.cache, plan.cacheBytes) > plan.cacheBytes) limit = 'cache';
-    } catch (error) { pollError = errorClass(error); limit = 'disk_unmeasurable'; }
-    if (limit) { try { command(['container', 'kill', plan.name]); } catch (error) { pollError = errorClass(error); } child.kill('SIGTERM'); }
-  }, pollMs);
   let code;
   try {
     code = await new Promise(resolve => { child.once('error', () => resolve(125)); child.once('close', value => resolve(value ?? 125)); });
   } finally {
-    clearTimeout(timer); clearInterval(poller); process.off('SIGINT', stop); process.off('SIGTERM', stop);
-  }
-  // A container can exit before the first poll, so measure once more after exit.
-  if (!limit) {
-    try {
-      if (treeBytes(plan.work, plan.diskBytes) + treeBytes(plan.out, plan.diskBytes) > plan.diskBytes) limit = 'disk';
-      else if (treeBytes(plan.cache, plan.cacheBytes) > plan.cacheBytes) limit = 'cache';
-    } catch (error) { pollError = errorClass(error); limit = 'disk_unmeasurable'; }
+    clearTimeout(timer); process.off('SIGINT', stop); process.off('SIGTERM', stop);
   }
   const logs = { stdout: stdout.close(), stderr: stderr.close() };
   let state = null, cleanupError = null;
@@ -301,7 +263,7 @@ export async function runContainer(plan, { command = dockerCommand, spawnRun = s
   try { clean = cleanupContainer(plan, command); } catch (error) { clean = false; cleanupError = errorClass(error); }
   // 125 is Docker's own failure; with no container state it is internal. Any other code is the subject's.
   const internal = state === null && code >= 125;
-  const reason = limit ? `${limit}_limit` : state?.oomKilled ? 'memory_limit' : timedOut ? 'timeout' : interrupted ? 'interrupted' : null;
-  const exitCode = !clean ? 7 : interrupted ? 130 : timedOut ? 5 : limit ? 1 : internal ? 6 : (state ? state.exitCode : code) === 0 && !state?.oomKilled ? 0 : 1;
-  return { runId: plan.runId, image: plan.image, exitCode, reason, subjectExit: state?.exitCode ?? null, cleanup: clean ? 'complete' : 'incomplete', cleanupError, pollError, timedOut, interrupted, logs };
+  const reason = state?.oomKilled ? 'memory_limit' : timedOut ? 'timeout' : interrupted ? 'interrupted' : null;
+  const exitCode = !clean ? 7 : interrupted ? 130 : timedOut ? 5 : internal ? 6 : (state ? state.exitCode : code) === 0 && !state?.oomKilled ? 0 : 1;
+  return { runId: plan.runId, image: plan.image, exitCode, reason, subjectExit: state?.exitCode ?? null, cleanup: clean ? 'complete' : 'incomplete', cleanupError, timedOut, interrupted, logs };
 }

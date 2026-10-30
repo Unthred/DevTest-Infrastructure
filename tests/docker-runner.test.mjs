@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { buildPlanForVerifiedPaths, cleanupContainer, containerState, treeBytes, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
+import { buildPlanForVerifiedPaths, cleanupContainer, containerState, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
 function fixture(t) {
@@ -161,38 +161,16 @@ test('subject output is consumed without persisting possible secrets', async t =
   assert.equal(fs.readdirSync(plan.logDir).length, 0);
 });
 
-test('aggregate disk budget: an over-limit run is killed, reported as a subject failure and cleaned up', async t => {
-  let killed = false;
-  const { result, h } = await runWith(t, { tail: true, state: '137 false', onSpawn: (child, plan) => {
-    fs.writeFileSync(path.join(plan.out, 'big'), Buffer.alloc(17 * 1048576, 1));   // 17 MiB over a 16 MiB budget
-  } }, () => {}, { pollMs: 10 });
-  assert.equal(result.exitCode, 1); assert.equal(result.reason, 'disk_limit'); assert.equal(result.cleanup, 'complete');
-  assert.ok(h.calls.some(argv => argv[1] === 'kill'), 'container was killed by name');
-});
-
-test('a container that exits before the first poll is still measured', async t => {
-  const { result } = await runWith(t, { exit: 0, state: '0 false', onSpawn: (child, plan) => {
-    fs.writeFileSync(path.join(plan.out, 'big'), Buffer.alloc(17 * 1048576, 1));
-  } }, () => {}, { pollMs: 3600000 });
-  assert.equal(result.reason, 'disk_limit'); assert.equal(result.exitCode, 1); assert.equal(result.cleanup, 'complete');
-});
-
-test('cache budget is enforced separately', async t => {
-  const { result } = await runWith(t, { tail: true, state: '137 false', onSpawn: (child, plan) => {
-    fs.writeFileSync(path.join(plan.cache, 'pkg'), Buffer.alloc(17 * 1048576, 1));
-  } }, () => {}, { pollMs: 10 });
-  assert.equal(result.reason, 'cache_limit'); assert.equal(result.exitCode, 1);
-});
-
-test('treeBytes counts allocated bytes, never follows symlinks and stops early past the cap', t => {
-  const f = fixture(t), dir = path.join(f.root, 'tree'); fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'sub', 'a'), Buffer.alloc(100000, 1));
-  const outside = path.join(f.root, 'outside'); fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, 'huge'), Buffer.alloc(2 * 1048576, 1));
-  fs.symlinkSync(outside, path.join(dir, 'link'));
-  const total = treeBytes(dir, 1e9);
-  assert.ok(total >= 100000 && total < 1048576, 'symlinked tree not counted: ' + total);
-  assert.ok(treeBytes(dir, 1000) > 1000, 'returns as soon as the cap is passed');
-  assert.equal(treeBytes(path.join(f.root, 'absent'), 10), 0);
+test('a bounded-storage failure refuses the run before Docker starts', async t => {
+  const f = fixture(t), plan = f.plan();
+  let spawned = false;
+  const command = argv => argv[0] === 'image'
+    ? { status: 0, stdout: 'sha256:local\n', stderr: '' }
+    : { status: 1, stdout: '', stderr: 'No such container' };
+  await assert.rejects(runContainer(plan, { command,
+    ensureVolumes: () => { throw new Error('mount refused'); },
+    spawnRun: () => { spawned = true; throw new Error('unexpected spawn'); } }), /mount refused/);
+  assert.equal(spawned, false);
 });
 
 test('containerState parses exit code and OOM flag and returns null when no container exists', () => {
