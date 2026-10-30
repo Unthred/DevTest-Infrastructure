@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pauseDisagreement, buildView } from '../supervisor/dashboard.mjs';
 import { renderPage } from '../supervisor/dashrender.mjs';
-import { MAX_SNAPSHOTS, appendSnapshot, compactIssues, compactPulls, readCache, readSnapshots, recordTick, redact } from '../supervisor/dashdata.mjs';
+import { MAX_SNAPSHOTS, appendSnapshot, compactIssues, compactPulls, readCache, readSnapshots, recordTick, redact, tickOutcome } from '../supervisor/dashdata.mjs';
 import { handler, validateBind, currentView } from '../supervisor/dashserver.mjs';
 import { Team } from '../supervisor/team.mjs';
 import { addUsage, usageFromLine } from '../supervisor/usage.mjs';
@@ -46,6 +46,14 @@ test('the real 13:15 case: paused_limit while the provider reports 34% session a
   const j = v.agents.find(a => a.name === 'claude').job;
   assert.equal(j.lastEvent, 'usage_limit'); assert.equal(j.resetAt, null); assert.equal(j.nextAttemptAt, fx.nextAttemptAt);
   assert.match(renderPage(v), /provider reports capacity left/);
+});
+test('a pause is consistent with a top-level rejected, blocked or exhausted allowance status (PR #36 review)', () => {
+  for (const status of ['rejected', 'blocked', 'exhausted', 'limit_reached']) {
+    const a = structuredClone(fx.allowance); a.status = status;
+    assert.equal(pauseDisagreement(fx, a, NOW), null, status);
+  }
+  const ok = structuredClone(fx.allowance); ok.status = 'allowed';
+  assert.equal(pauseDisagreement(fx, ok, NOW).kind, 'disagrees');
 });
 test('a pause is consistent with a genuinely exhausted window, a rejected status, or a Codex reached limit', () => {
   const full = structuredClone(fx.allowance); full.windows[0].utilization = 1;
@@ -215,6 +223,20 @@ test('recordTick stores a compact cache and a snapshot; issue bodies and comment
   assert.doesNotMatch(JSON.stringify(after), /ghp_|bob@/); assert.equal(readSnapshots(root).length, 1);
   recordTick(root, { now: NOW + 2, status: 'disabled' });
   assert.equal(readCache(root).tick.status, 'disabled'); assert.equal(readSnapshots(root).length, 1);
+});
+test('a tick that skipped an action is recorded as an error with the reason, not as ok (PR #36 review)', async t => {
+  const root = setup(t);
+  const team = { c: config(), view: { prs: [], issues: [] } };
+  recordTick(root, { now: NOW, status: 'ok', team, jobs: [fx] });
+  assert.deepEqual(tickOutcome({ skipped: [] }), { status: 'ok' });
+  const out = tickOutcome({ skipped: [{ what: 'claude implement #5', reason: 'lease conflict' }] });
+  assert.equal(out.status, 'error'); assert.match(out.error, /1 action\(s\) skipped: claude implement #5: lease conflict/);
+  recordTick(root, { now: NOW + 1, ...out, team, jobs: [fx], actions: [] });
+  const cache = readCache(root);
+  assert.equal(cache.tick.status, 'error'); assert.match(cache.tick.error, /lease conflict/); assert.equal(cache.tick.lastOkAt, NOW);
+  assert.equal(readSnapshots(root).at(-1).status, 'error');
+  const v = await buildView({ config: config(), root, jobs: [fx], events: [], state: {}, cache, snapshots: readSnapshots(root), now: NOW + 2 });
+  assert.ok(v.attention.some(i => i.id === 'tick-failed' && /lease conflict/.test(i.text)));
 });
 test('history retention is bounded by age and size and survives a rewrite', t => {
   const root = setup(t);

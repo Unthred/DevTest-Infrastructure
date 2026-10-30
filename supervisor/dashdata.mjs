@@ -90,6 +90,13 @@ export function latestAllowance(jobs) {
 
 const rollup = pr => checksState(pr.statusCheckRollup);
 
+// A skipped action (lease conflict, gh error) is a partial failure: the dashboard must not show it as a successful tick.
+export function tickOutcome(report) {
+  const skipped = Array.isArray(report?.skipped) ? report.skipped : [];
+  if (!skipped.length) return { status: 'ok' };
+  return { status: 'error', error: `${skipped.length} action(s) skipped: ${skipped.map(s => `${s.what}: ${s.reason}`).join('; ')}`.slice(0, 300) };
+}
+
 // Written by the tick (never by the dashboard server). `error` is the failure of this tick, if any.
 export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [] }) {
   const prev = readCache(root) || {};
@@ -98,7 +105,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.fetchedAt = now; }
   else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.fetchedAt = prev.fetchedAt ?? null; }
   atomicJson(cacheFile(root), cache);
-  if (status !== 'ok' || !team) return cache;
+  if (!team || (status !== 'ok' && status !== 'error')) return cache;
   const states = agentStates(team.c, jobs, now);
   const allowance = latestAllowance(jobs);
   const snap = { at: now, status,
