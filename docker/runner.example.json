@@ -1,0 +1,15 @@
+{
+  "allowedProjects": ["/mnt/user/projects/YourProject"],
+  "storageRoot": "/mnt/cache/appdata/devtest-infrastructure",
+  "uid": 99,
+  "gid": 100,
+  "limits": {
+    "cpus": 1,
+    "memoryMb": 1024,
+    "pids": 128,
+    "shmMb": 64,
+    "timeoutMs": 120000,
+    "diskMb": 2048,
+    "cacheMb": 4096
+  }
+}

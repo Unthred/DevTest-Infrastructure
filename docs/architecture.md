@@ -24,6 +24,8 @@ agent / human
 
 The **supervisor** for unattended agents (issue #15) is a separate component. It launches agents; it does not run builds. Agents inside it call `dev-test` like anyone else.
 
+The host-side Docker foundation for issue #2 is implemented in [`docker/runner.mjs`](../docker/runner.mjs) with an immutable [image lock](../docker/images.lock.json). It is a module for the future `dev-test` CLI, not a second command surface. See [docker-runner.md](docker-runner.md) for its current limits and Tower smoke evidence.
+
 ## Tracks (D-002)
 | | Track A: .NET | Track B: Browser |
 |---|---|---|
@@ -37,7 +39,7 @@ The **supervisor** for unattended agents (issue #15) is a separate component. It
 1. Validate the request against policy; refuse with exit code 4 before starting anything.
 2. Create `runs/<run-id>/{src,work,out}`. Source is mounted read-only; the container writes only to `work` and `out` (separate per run, never a shared mutable tree).
 3. Start the container with the hardening baseline (D-015), a unique name carrying the run id, resource and time limits.
-4. Stream bounded, redacted logs; never put secrets in arguments or logs (D-008).
+4. Consume bounded stdout/stderr without persisting raw subject output; Docker logging is disabled. Never put secrets in arguments, logs or exported artifacts (D-008).
 5. Always stop and remove the container, on success, failure, timeout and interrupt (D-003). Report leftovers as exit code 7.
 6. Move artifacts to `evidence/<run-id>` with checksums and write the JSON result.
 
