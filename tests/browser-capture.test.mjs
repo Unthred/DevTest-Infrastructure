@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { capture, EXIT } from '../browser/capture.mjs';
+import { capture, isAllowedSocket, EXIT } from '../browser/capture.mjs';
 
 function world(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-capture-'));
@@ -20,18 +20,20 @@ function world(t) {
 function fakePlaywright(dir, scenario) {
   const file = path.join(dir, `fake-${Math.random().toString(16).slice(2)}.mjs`);
   fs.writeFileSync(file, `const s = ${JSON.stringify(scenario)};
-const handlers = {}; let routeFn;
+const handlers = {}; let routeFn; let wsFn;
 const page = { on: (e, f) => { handlers[e] = f; },
   async goto(url) {
     if (s.gotoError) throw new Error(s.gotoError);
     for (const u of s.requests || []) await routeFn({ request: () => ({ url: () => u }), continue: () => {}, abort: () => {} });
+    for (const u of s.sockets || []) { const ws = { url: () => u, connectToServer: () => { globalThis.__ws.push('connect ' + u); }, close: () => { globalThis.__ws.push('close ' + u); } }; await wsFn(ws); }
     for (const m of s.console || []) handlers.console?.({ type: () => 'error', text: () => m });
     for (const m of s.pageErrors || []) handlers.pageerror?.({ message: m });
     for (const r of s.responses || []) handlers.response?.({ status: () => r.status, url: () => r.url });
     return { status: () => s.status ?? 200 };
   },
   async screenshot() { return Buffer.from('PNGDATA'); } };
-const context = { route: async (_p, f) => { routeFn = f; }, tracing: { start: async () => {}, stop: async ({ path }) => { (await import('node:fs')).writeFileSync(path, 'zip'); } }, newPage: async () => page, close: async () => {} };
+globalThis.__ws = [];
+const context = { route: async (_p, f) => { routeFn = f; }, routeWebSocket: async (_p, f) => { wsFn = f; }, tracing: { start: async () => {}, stop: async ({ path }) => { (await import('node:fs')).writeFileSync(path, 'zip'); } }, newPage: async () => page, close: async () => {} };
 const browser = { version: () => 'fake-1', newContext: async () => context, close: async () => {} };
 export const chromium = { launch: async () => { if (s.launchError) throw new Error(s.launchError); return browser; } };
 `);
@@ -65,6 +67,19 @@ test('an undeclared destination wins over page errors and is recorded without it
   assert.equal(r.exit, EXIT.blocked);
   assert.deepEqual(r.report.blockedRequests, ['http://198.51.100.7/beacon', 'https://example.invalid/a.js']);
   assert.ok(!JSON.stringify(r.report).includes('VALUE'));
+});
+
+test('an undeclared WebSocket is refused, recorded without its query string and exits blocked', async t => {
+  const r = await run(t, { sockets: ['ws://127.0.0.1:43210/undeclared?token=VALUE', 'wss://example.invalid/live'] });
+  assert.equal(r.exit, EXIT.blocked);
+  assert.deepEqual(r.report.blockedRequests, ['ws://127.0.0.1:43210/undeclared', 'wss://example.invalid/live']);
+  assert.ok(!JSON.stringify(r.report).includes('VALUE'));
+  assert.deepEqual(globalThis.__ws.filter(e => e.startsWith('connect')), [], 'no refused socket was connected');
+});
+
+test('only a ws:// socket to the bridged origin is allowed', () => {
+  assert.equal(isAllowedSocket('ws://127.0.0.1:5/x', 5), true);
+  for (const u of ['ws://127.0.0.1:6/x', 'wss://127.0.0.1:5/x', 'ws://localhost:5/x', 'ws://192.0.2.1:5/x', 'nonsense']) assert.equal(isAllowedSocket(u, 5), false, u);
 });
 
 test('timeouts, TLS errors, other navigation failures and launch failures have their own exit codes', async t => {

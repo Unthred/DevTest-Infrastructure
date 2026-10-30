@@ -54,6 +54,12 @@ export function isAllowed(raw, port) {
   return u.protocol === 'http:' && u.hostname === '127.0.0.1' && Number(u.port) === port;
 }
 
+// WebSocket handshakes are not seen by context.route(), so they are routed separately. Only a ws:// socket to the bridged origin is allowed.
+export function isAllowedSocket(raw, port) {
+  let u; try { u = new URL(raw); } catch { return false; }
+  return u.protocol === 'ws:' && u.hostname === '127.0.0.1' && Number(u.port) === port;
+}
+
 function bridge(socketPath) {
   const server = net.createServer((client) => {
     const upstream = net.connect(socketPath);
@@ -85,6 +91,13 @@ export async function capture(o) {
       if (isAllowed(url, port)) return route.continue();
       report.blockedRequests.push(redactUrl(url));
       return route.abort('blockedbyclient');
+    });
+    // Intercepted without connectToServer() the socket is a mock: a refused one never reaches the network.
+    await context.routeWebSocket(/.*/, (ws) => {
+      const url = ws.url();
+      if (isAllowedSocket(url, port)) return ws.connectToServer();
+      report.blockedRequests.push(redactUrl(url));
+      return ws.close({ code: 1008, reason: 'blocked' });
     });
     if (o.trace) await context.tracing.start({ screenshots: false, snapshots: true });
     const page = await context.newPage();

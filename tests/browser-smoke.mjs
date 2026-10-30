@@ -69,6 +69,12 @@ try {
   const ext = JSON.parse(external.text);
   check('external requests refused and recorded', external.result.subjectExit === 12 && ext.blockedRequests.length >= 3 && !external.text.includes('SHOULD_NOT_APPEAR'), { blocked: ext.blockedRequests });
 
+  for (const engine of ['chromium', 'firefox', 'webkit']) {
+    const sock = await run(`websocket-${engine}`, { phase: 'test', command: capture('--path', '/websocket.html', '--name', 'ws', '--browser', engine) }, {
+      inspect: plan => ({ text: fs.readFileSync(path.join(plan.out, `ws-desktop-${engine}.report.json`), 'utf8') }) });
+    const wsr = JSON.parse(sock.text);
+    check(`${engine}: undeclared WebSocket refused and recorded`, sock.result.subjectExit === 12 && wsr.blockedRequests.includes('ws://127.0.0.1:43210/undeclared') && !sock.text.includes('SHOULD_NOT_APPEAR'), { blocked: wsr.blockedRequests });
+  }
   for (const engine of ['firefox', 'webkit']) {
     const other = await run(`index-desktop-${engine}`, { phase: 'test', command: capture('--path', '/', '--name', 'index', '--browser', engine) }, {
       inspect: plan => ({ shot: png(path.join(plan.out, `index-desktop-${engine}.png`)) }) });
