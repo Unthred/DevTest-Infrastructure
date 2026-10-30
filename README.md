@@ -33,6 +33,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 | [docs/agent-provider-contract.md](docs/agent-provider-contract.md) | Provider adapter contract shared with the supervisor (#15) |
 | [docs/docker-runner.md](docs/docker-runner.md) | Host-side pinned-image Docker foundation and Tower smoke (issue #2) |
 | [docs/provider-observations.md](docs/provider-observations.md) | What the installed Claude and Codex CLIs expose about limits and resume (static evidence) |
+- [docs/team-loop.md](docs/team-loop.md) — dispatcher, trusted verdicts, merging, post-conditions, D-019 restart, D-020 access.
 | [docs/acceptance-gates.md](docs/acceptance-gates.md) | Completion states, gates and per-issue evidence |
 | [docs/ai/CURRENT_HANDOVER.md](docs/ai/CURRENT_HANDOVER.md) | Canonical current state |
 | [contracts/](contracts/) | Machine-readable CLI and provider contracts, with examples |

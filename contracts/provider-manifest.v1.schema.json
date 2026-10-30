@@ -26,6 +26,14 @@
       "required": ["args"],
       "properties": { "args": { "type": "array", "items": { "type": "string" } } }
     },
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "standard": { "type": "array", "items": { "type": "string" } },
+        "full": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "capabilities": {
       "type": "object",
       "additionalProperties": false,

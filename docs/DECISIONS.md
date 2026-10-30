@@ -170,6 +170,24 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Reusing a worktree across issues.
 - Superseded-by: none
 
+## D-019 — Bounded automatic restart after allowance limits
+- Status: homeowner-approved
+- Date: 2026-10-30
+- Source: homeowner decision 2026-10-30, given to the overseer; issue #23
+- Decision: When a supervised job stops on a usage limit, restart it *fresh* from issue, Git and handover state. Never resume a provider session unless its resume capability is verified. If the CLI reported a reset time and it parsed: wait until reset + 2 minutes. Otherwise: wait 1 hour, then 2 hours, then 4 hours, then block for the homeowner. That is at most three small launch attempts. No provider call while waiting. No paid fallback, no credit purchases. This supersedes the current refusal of `autoResume` for unverified providers, for this restart behaviour only. The first real limit hit for each provider must be captured, redacted, as a fixture. The reset parser stays `unverified` until it has been.
+- Rationale: Unattended progress across allowance resets, with a bound on launches and cost.
+- Rejected: Resuming unverified provider sessions; paid or credit fallback; polling a model while waiting.
+- Superseded-by: none
+
+## D-020 — Supervised jobs run with the same access as the homeowner's interactive agents
+- Status: homeowner-approved
+- Date: 2026-10-30
+- Source: homeowner decision 2026-10-30, given to the overseer; issue #23
+- Decision: The homeowner's agents on Tower intentionally have full access, and supervised jobs must keep it. Supervised Codex currently runs `codex exec --profile ai-rules-devtest` under the profile sandbox. Bubblewrap fails on Tower (`pivot_root: Invalid argument`), so every shell command is refused. Read the homeowner's launcher (`ai` → `/root/bin/ai-agent`, plus `/usr/local/bin/ai-rules-codex` and the deployed profiles) and launch supervised Claude and Codex with the **same effective access** as the interactive sessions. For Codex `exec` that means an explicit full-access sandbox setting. This is an explicitly selected, clearly named supervisor launch mode chosen by the homeowner (the AI-Rules "elevated mode selected by a Human" clause). It must not become a silent default for other roles. Project rules still apply: D-007, D-009, D-010, no reboots, no production Home Assistant changes and no secret disclosure.
+- Rationale: The sandbox cannot start on Tower, so a sandboxed supervised job cannot run any command.
+- Rejected: A silent or default elevated mode; weakening project rules.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7).
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate).

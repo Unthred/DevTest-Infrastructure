@@ -47,3 +47,6 @@ These refine Codex's comment on #15; none removes anything from it.
 
 ## Required tests
 Using fixtures for Claude, Codex and a generic future agent, with an injected clock: normal completion; usage limit with a verified reset; rate limit without a reset; context limit; crash; network loss; auth error; permission request; forced stop; supervisor restart mid-wait and mid-resume; duplicate job attempt; unknown provider with unsupported auto-resume. Negative cases: manifest with an unknown field, with `fallback_to_other_billing: true`, and with a missing required capability must be rejected.
+
+## Access modes and restart (issue #23)
+A manifest may carry `access: { standard: [args], full: [args] }`. The adapter appends the list for the job's `access` mode; core has no provider branch. `full` is selected per job, only for roles in `supervisor/access.json`, under D-020. D-019 adds `autoRestart`: a fresh restart after a usage limit that needs only `launch` and `non_interactive` support; session resume still needs a `supported` resume capability.
