@@ -20,8 +20,8 @@ function args(list) {
   return out;
 }
 function print(job) {
-  const { id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities } = job;
-  console.log(JSON.stringify({ id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities }, null, 2));
+  const { id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities, allowance } = job;
+  console.log(JSON.stringify({ id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities, allowance }, null, 2));
 }
 function startWorker(root, id, registry) {
   const child = spawn(process.execPath, [self, 'worker', id, '--state-root', root, '--registry', registry],
