@@ -1,0 +1,21 @@
+# Reference equivalent of the host runner's container boundary. Invoke runs through dev-test.
+# DEVTEST_IMAGE must be read from images.lock.json by the trusted host runner.
+services:
+  subject:
+    image: ${DEVTEST_IMAGE:?}
+    user: "${DEVTEST_UID:?}:${DEVTEST_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    pids_limit: 128
+    mem_limit: 1024m
+    cpus: 1
+    shm_size: 64m
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=64m"]
+    volumes:
+      - "${DEVTEST_PROJECT:?}:/src:ro"
+      - "${DEVTEST_WORK:?}:/work:rw"
+      - "${DEVTEST_OUT:?}:/out:rw"
+      - "${DEVTEST_CACHE:?}:/cache:rw"
+    working_dir: /work

@@ -31,6 +31,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Binding decisions, status, rejected alternatives, open questions |
 | [docs/cli-contract.md](docs/cli-contract.md) | `dev-test` commands, exit codes, result schema |
 | [docs/agent-provider-contract.md](docs/agent-provider-contract.md) | Provider adapter contract shared with the supervisor (#15) |
+| [docs/docker-runner.md](docs/docker-runner.md) | Host-side pinned-image Docker foundation and Tower smoke (issue #2) |
 | [docs/provider-observations.md](docs/provider-observations.md) | What the installed Claude and Codex CLIs expose about limits and resume (static evidence) |
 | [docs/acceptance-gates.md](docs/acceptance-gates.md) | Completion states, gates and per-issue evidence |
 | [docs/ai/CURRENT_HANDOVER.md](docs/ai/CURRENT_HANDOVER.md) | Canonical current state |

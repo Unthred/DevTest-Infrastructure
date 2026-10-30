@@ -24,6 +24,8 @@ agent / human
 
 The **supervisor** for unattended agents (issue #15) is a separate component. It launches agents; it does not run builds. Agents inside it call `dev-test` like anyone else.
 
+The host-side Docker foundation for issue #2 is implemented in [`docker/runner.mjs`](../docker/runner.mjs) with an immutable [image lock](../docker/images.lock.json). It is a module for the future `dev-test` CLI, not a second command surface. See [docker-runner.md](docker-runner.md) for its current limits and Tower smoke evidence.
+
 ## Tracks (D-002)
 | | Track A: .NET | Track B: Browser |
 |---|---|---|
