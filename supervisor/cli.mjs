@@ -18,7 +18,7 @@ function args(list) {
     const arg = list[i];
     if (!arg.startsWith('--')) { out._.push(arg); continue; }
     const key = arg.slice(2);
-    if (['auto-resume', 'foreground', 'force', 'dry-run'].includes(key)) out[key] = true;
+    if (['auto-resume', 'foreground', 'force', 'dry-run', 'json', 'no-github'].includes(key)) out[key] = true;
     else if (key === 'no-auto-resume') out[key] = false;
     else out[key] = list[++i];
   }
@@ -144,7 +144,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | daemon | release ID\n  team tick [--dry-run] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | daemon | release ID\n  team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   if (command === 'dry-run' || command === 'start') {
@@ -199,7 +199,13 @@ async function main() {
     return;   // the server keeps the process alive
   }
   if (command === 'team') {
-    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run]');
+    if (a._[0] === 'status') {
+      const { currentStatus, renderStatus } = await import('./teamstatus.mjs');
+      const config = loadTeamConfig(teamConfigFile, root);
+      const status = await currentStatus({ root, config, gh: a['no-github'] ? null : githubClient(config) });
+      console.log(a.json === true ? JSON.stringify(status, null, 2) : renderStatus(status).trimEnd()); return;
+    }
+    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json]');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
   }
   if (command === 'self-upgrade') {

@@ -57,6 +57,9 @@ export function readSnapshots(root) {
 export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
   statusCheckRollup: (p.statusCheckRollup || []).slice(0, 40).map(c => ({ name: redact(c.name || c.context || '', 80), status: c.status, conclusion: c.conclusion, state: c.state })) }));
+// Recently merged PRs (number, title, time) for the "merged today" section of `team status`.
+export const compactMerged = merged => (merged || []).filter(m => Number.isSafeInteger(m.number) && typeof m.mergedAt === 'string')
+  .sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).slice(0, 30).map(m => ({ number: m.number, title: redact(m.title, 120), mergedAt: m.mergedAt }));
 export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, 120), state: i.state,
   labels: (i.labels || []).includes('needs-homeowner')
     ? ['needs-homeowner', ...(i.labels || []).filter(l => l !== 'needs-homeowner').slice(0, 9).map(l => redact(l, 40))]
@@ -105,8 +108,8 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
     repository: team?.c.repository ?? prev.repository ?? null };
-  if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.fetchedAt = now; }
-  else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.fetchedAt = prev.fetchedAt ?? null; }
+  if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.fetchedAt = now; }
+  else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.merged = prev.merged || []; cache.fetchedAt = prev.fetchedAt ?? null; }
   atomicJson(cacheFile(root), cache);
   if (!team || (status !== 'ok' && status !== 'error')) return cache;
   const states = agentStates(team.c, jobs, now);
