@@ -9,11 +9,15 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createPlan, runContainer, ownedContainer, releaseVolumes, targetSocketPath } from '../docker/runner.mjs';
 import { createStaticServer, listenOnSocket } from '../browser/static-server.mjs';
+import { stageProject } from './stage-project.mjs';
 
-const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const sourceProject = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const storageRoot = path.join('/mnt/cache/appdata/devtest-infrastructure/browser-smoke', crypto.randomBytes(6).toString('hex'));
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
 const uid = process.getuid() === 0 ? 99 : process.getuid(), gid = process.getgid() === 0 ? 100 : process.getgid();
+const stage = stageProject(sourceProject, uid, gid);   // a project the container user cannot read is staged, never chmod-ed
+const project = stage.project;
+if (stage.staged) console.log(JSON.stringify({ note: 'project directory not readable by the container user; using a staged copy', project }));
 const config = { allowedProjects: [project], storageRoot, uid, gid, lock,
   limits: { cpus: 2, memoryMb: 2048, pids: 256, shmMb: 256, timeoutMs: 120000, diskMb: 128, cacheMb: 64 } };
 const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }).stdout;
@@ -86,7 +90,7 @@ try {
   console.error(`browser-smoke: ${error.name}: ${error.message}`); failed = true;
 } finally {
   socketsLeft = fs.existsSync(path.join(storageRoot, 'sockets')) && fs.readdirSync(path.join(storageRoot, 'sockets')).length > 0;
-  fs.rmSync(storageRoot, { recursive: true, force: true });
+  fs.rmSync(storageRoot, { recursive: true, force: true }); stage.cleanup();
 }
 const after = state();
 const back = JSON.stringify(after) === JSON.stringify(baseline);

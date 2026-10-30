@@ -38,6 +38,17 @@ export function validateLock(lock) {
   return lock;
 }
 
+// The container user must be able to read the project directory and traverse every ancestor of it. A 0700 clone (what mktemp -d
+// makes) fails inside the container as a confusing exit 2 of the subject; refuse it up front with the real reason. Mode bits only:
+// the runner never changes the permissions of a project.
+export function containerCanRead(dir, uid, gid) {
+  const allowed = (st, bit) => { const m = st.mode; return (st.uid === uid ? m >> 6 : st.gid === gid ? m >> 3 : m) & bit; };
+  let p = fs.realpathSync(dir);
+  if (!allowed(fs.statSync(p), 5)) return false;           // r-x on the project itself
+  while (p !== path.dirname(p)) { p = path.dirname(p); if (!allowed(fs.statSync(p), 1)) return false; }   // --x on every ancestor
+  return true;
+}
+
 export function createPlan(spec, config) {
   const project = exactDirectory(spec.project, 'project');
   const allowlist = config.allowedProjects?.map(p => exactDirectory(p, 'allowlisted project')) || [];
@@ -45,6 +56,8 @@ export function createPlan(spec, config) {
   if (!inside('/mnt/user/projects', project)) throw new RunnerError('project must be under /mnt/user/projects');
   const storage = exactDirectory(config.storageRoot, 'storage root');
   if (!inside('/mnt/cache', storage)) throw new RunnerError('storage root must be on /mnt/cache');
+  if (Number.isSafeInteger(config.uid) && Number.isSafeInteger(config.gid) && !containerCanRead(project, config.uid, config.gid))
+    throw new RunnerError(`project directory is not readable by the container user (uid ${config.uid}); it needs mode 0755 (a 0700 clone fails inside the container as exit 2)`);
   return buildPlanForVerifiedPaths(spec, config, project, storage);
 }
 
