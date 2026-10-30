@@ -24,7 +24,7 @@ const line = `*/5 * * * * /usr/local/emhttp/plugins/user.scripts/startCustom.php
 const cron = fs.readFileSync(cronFile, 'utf8');
 if (cron.split('\n').filter(x => x === line).length !== 1) throw new Error('cron entry changed; manual review required');
 const source = fs.readFileSync(script, 'utf8');
-if (!source.includes('/mnt/cache/ai-supervisor/current/supervisor/cli.mjs reconcile')) throw new Error('script changed; manual review required');
+if (!source.includes('/mnt/cache/ai-supervisor/current/supervisor/cli.mjs reconcile') && !(source.includes('# BEGIN-ENV') && source.includes('"$NODE" "$CLI" reconcile'))) throw new Error('script changed; manual review required');
 function atomic(file, content) { const temp = `${file}.ai-supervisor-${process.pid}`; fs.writeFileSync(temp, content, { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
 delete schedules[script];
 atomic(scheduleFile, JSON.stringify(schedules, null, 2) + '\n');

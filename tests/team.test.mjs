@@ -5,11 +5,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
+import { Team, ciFixPrompt, rebasePrompt, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
 import { createJob, drive, readJob, stateRoot, validateSpec } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
 import { ghRunner, githubClient } from '../supervisor/github.mjs';
+import { runProcess } from '../supervisor/process.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
@@ -114,12 +115,93 @@ test('rule 3 skips needs-homeowner, in-flight work, an open PR for the issue, an
   assert.deepEqual(acts.filter(a => a.agent === 'codex').map(a => a.issue), [3]);   // #2 has an open PR
 });
 
-test('priority is review, then fix, then implement', async t => {
+test('priority is fix, then review, then implement (no rebase or red CI here)', async t => {
   const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'claude/issue-23-y', H(2))], issues: [issue(23), issue(5)] });
   w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
+  assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'fix');
+  w.team.s.fixAttempts[`11:${H(2)}`] = 2;
   assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'review');
   w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };
-  assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'fix');
+  assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'implement');
+});
+
+const red = [{ status: 'COMPLETED', conclusion: 'SUCCESS', name: 'test' }, { status: 'COMPLETED', conclusion: 'FAILURE', name: 'project-contract' }, { status: 'COMPLETED', conclusion: 'FAILURE', name: 'bad;name$(x)' }];
+
+test('rule 12 red CI on my own PR: CI-fix job naming only the safe failing checks; bounded; not for drafts, pending or the other agent', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: red })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  assert.deepEqual([a.type, a.pr, a.head, a.checks], ['cifix', 38, H(3), ['project-contract']]);
+  assert.match(ciFixPrompt(a), /Failing checks: project-contract\./); assert.doesNotMatch(ciFixPrompt(a), /bad;name/);
+  await w.team.execute({ agent: 'claude', ...a });
+  const spec = w.calls.created[0];
+  assert.deepEqual([spec.kind, spec.postcondition.kind, spec.postcondition.baseHead, spec.issue], ['cifix', 'new_head', H(3), 38]);
+  assert.equal(w.team.s.fixAttempts[`38:${H(3)}`], 1);
+  assert.equal((await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix'), undefined);   // job in flight (busy)
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.fixAttempts[`38:${H(3)}`] = 2;
+  assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'cifix');   // max_fix_attempts reached
+  const none = [['a draft', pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: red, isDraft: true })],
+    ['the other agent\'s PR', pr(38, 'codex/issue-4-x', H(3), { statusCheckRollup: red })],
+    ['a PR whose checks are still all running', pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: [{ status: 'IN_PROGRESS' }] })]];
+  for (const [label, p] of none) {
+    const o = world(t, { pulls: [p], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+    assert.ok(!(await o.team.plan()).some(x => x.agent === 'claude' && x.type === 'cifix'), label);
+  }
+});
+
+test('rule 13 merge conflict on my own PR: conflict-only rebase job, bounded, first in priority; post-condition needs a new MERGEABLE head', async t => {
+  const conflicting = pr(36, 'claude/issue-32-x', H(4), { mergeable: 'CONFLICTING', statusCheckRollup: [] });
+  const w = world(t, { pulls: [conflicting, pr(37, 'claude/issue-5-y', H(5), { statusCheckRollup: red })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.team.s.verdicts[`36:${H(4)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  assert.deepEqual([a.type, a.pr, a.head, a.base], ['rebase', 36, H(4), 'main']);   // beats the red-CI PR and the CHANGES verdict
+  assert.match(rebasePrompt(a), /conflict-only rebase/); assert.match(rebasePrompt(a), /git range-diff origin\/main/);
+  await w.team.execute({ agent: 'claude', ...a });
+  const spec = w.calls.created[0];
+  assert.deepEqual([spec.kind, spec.postcondition.kind, spec.postcondition.baseHead], ['rebase', 'rebased', H(4)]);
+  assert.ok(spec.allowed_actions.includes('push_feature_branch') && !spec.allowed_actions.includes('merge'));
+  assert.equal(w.team.s.rebaseAttempts[`36:${H(4)}`], 1);
+  const post = w.team.postconditions(); const job = { postcondition: spec.postcondition };
+  const set = (head, mergeable) => { w.gh.pulls = [pr(36, 'claude/issue-32-x', head, { mergeable })]; };
+  set(H(4), 'MERGEABLE'); assert.equal(await post(job), false);       // same head
+  set(H(6), 'CONFLICTING'); assert.equal(await post(job), false);     // new head, still conflicting
+  set(H(6), 'MERGEABLE'); assert.equal(await post(job), true);
+  let polls = 0; w.team.sleep = async () => {};
+  w.gh.getPull = async () => pr(36, 'claude/issue-32-x', H(6), { mergeable: ++polls < 3 ? 'UNKNOWN' : 'MERGEABLE' });
+  assert.equal(await post(job), true); assert.equal(polls, 3);        // GitHub computes mergeability lazily
+  w.gh.getPull = async () => pr(36, 'claude/issue-32-x', H(6), { mergeable: 'UNKNOWN' });
+  assert.equal(await post(job), false);                               // bounded: never loops forever
+  // bounded attempts; draft PRs are left alone; the old verdict does not apply to the new head, so review is needed again
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.rebaseAttempts[`36:${H(4)}`] = 2;
+  assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'rebase');
+  const draft = world(t, { pulls: [pr(29, 'claude/issue-6-z', H(7), { mergeable: 'CONFLICTING', isDraft: true })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  assert.notEqual((await draft.team.plan()).find(x => x.agent === 'claude')?.type, 'rebase');
+});
+
+test('a conflicting PR is not reviewed, merged or counted green; after the rebase it is reviewed afresh on the new head', async t => {
+  const w = world(t, { pulls: [pr(36, 'claude/issue-32-x', H(4), { mergeable: 'CONFLICTING' })], issues: [issue(2, 'CLOSED'), issue(3, 'OPEN')] });
+  w.team.s.verdicts[`36:${H(4)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'j' };
+  const acts = await w.team.plan();
+  assert.equal(acts.find(a => a.type === 'merge'), undefined);
+  assert.equal(acts.find(a => a.agent === 'codex')?.type, 'implement');   // not 'review'
+  w.gh.pulls = [pr(36, 'claude/issue-32-x', H(6))];
+  const after = await w.team.plan();
+  assert.equal(after.find(a => a.type === 'merge'), undefined);           // the PASS was for the old head
+  assert.deepEqual(after.filter(a => a.agent === 'codex').map(a => [a.type, a.head]), [['review', H(6)]]);
+});
+
+test('priority per agent: rebase > CI fix > review fix > review > implement', async t => {
+  const pulls = [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'claude/issue-23-a', H(2)), pr(12, 'claude/issue-24-b', H(3), { statusCheckRollup: red }), pr(13, 'claude/issue-25-c', H(4), { mergeable: 'CONFLICTING' })];
+  const w = world(t, { pulls, issues: [issue(23), issue(5)] });
+  w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
+  const order = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (await w.team.plan()).find(x => x.agent === 'claude'); order.push(a.type);
+    if (a.type === 'rebase') w.gh.pulls = w.gh.pulls.filter(p => p.number !== 13);
+    else if (a.type === 'cifix') w.gh.pulls = w.gh.pulls.filter(p => p.number !== 12);
+    else if (a.type === 'fix') w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'PASS', reviewer: 'codex' };
+    else if (a.type === 'review') w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };
+  }
+  assert.deepEqual(order, ['rebase', 'cifix', 'fix', 'review', 'implement']);
 });
 
 test('concurrency: one active or paused job per agent, two overall', async t => {
@@ -465,4 +547,145 @@ test('issue #30 upgrade script never touches the override and verifies the paylo
   assert.match(script, /diff -r "\$source_root\/supervisor" "\$install_root\/supervisor"/);
   assert.match(script, /team\.local\.json must not be in the versioned payload/);
   assert.ok(!/(rm|mv|cp)[^\n]*team\.local\.json/.test(script));
+});
+
+test('issue #35 a lost comment response is not re-posted: the marker already on GitHub is detected, and gh never retries a comment', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [], commandsRun: ['x'] });
+  w.jobs.states[id].status = 'completed';
+  // GitHub accepts the comment, but the response is lost: the call throws after the comment exists
+  w.gh.hasComment = async (n, text) => w.calls.comments.some(c => c[0] === n && c[1].includes(text));
+  let lose = true; const post = w.gh.comment; w.gh.comment = async (n, b) => { await post(n, b); if (lose) { lose = false; throw new Error('response lost'); } };
+  await w.team.tick(); await w.team.tick();
+  assert.equal(w.calls.comments.filter(c => /devtest-verdict v1/.test(c[1])).length, 1);
+  assert.equal(w.team.s.jobs[id].ingested, true);
+  // transport: the comment command is sent once even for a transient error; reads still retry
+  let n = 0; const run = () => { n++; return { status: 1, stdout: '', stderr: 'error connecting to api.github.com' }; };
+  const c = githubClient(config(), ghRunner(run, { sleep() {} }));
+  await assert.rejects(c.comment(5, 'b')); assert.equal(n, 1);
+});
+
+test('issue #35 a needs-homeowner notice whose response was lost is not posted again on the next tick', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w.team.execute((await w.team.plan())[0]);
+  const [id] = Object.entries(w.team.s.jobs)[0];
+  w.jobs.states[id].status = 'blocked';
+  w.gh.hasComment = async (n, text) => w.calls.comments.some(c => c[0] === n && c[1].includes(text));
+  let lose = true; const post = w.gh.comment; w.gh.comment = async (n, b) => { await post(n, b); if (lose) { lose = false; throw new Error('response lost'); } };
+  await w.team.notifyBlocked({ notified: [] }, async (_, fn) => { try { await fn(); } catch {} });
+  await w.team.notifyBlocked({ notified: [] });
+  assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 1);
+});
+
+// ---- issue #35: scheduled ticks must not fail silently or abort on one bad item
+test('issue #35 gh: a missing binary is named, transient transport errors are retried within bounds, others fail at once', () => {
+  assert.throws(() => ghRunner(() => ({ status: null, error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) }))(['pr', 'list']), /required binary not found: gh/);
+  const sleeps = []; let calls = 0;
+  const flaky = ghRunner(() => (++calls < 3 ? { status: 1, stdout: '', stderr: 'error connecting to api.github.com' } : { status: 0, stdout: 'ok', stderr: '' }), { sleep: ms => sleeps.push(ms), backoffMs: 10 });
+  assert.equal(flaky(['issue', 'list']), 'ok'); assert.equal(calls, 3); assert.deepEqual(sleeps, [10, 20]);
+  calls = 0;
+  assert.throws(() => ghRunner(() => { calls++; return { status: 1, stdout: '', stderr: 'error connecting to api.github.com' }; }, { sleep() {} })(['issue', 'list']), /gh issue list failed: error connecting/);
+  assert.equal(calls, 3);
+  calls = 0;
+  assert.throws(() => ghRunner(() => { calls++; return { status: 1, stdout: '', stderr: 'HTTP 404: Not Found' }; }, { sleep() {} })(['pr', 'view']), /404/);
+  assert.equal(calls, 1);
+});
+
+test('issue #35 one failing action (lease conflict) is skipped with a reason; the other agent still gets work and no attempt is burned', async t => {
+  const w = world(t, { issues: [issue(23), issue(2)] });
+  const create = w.jobs.create;
+  w.jobs.create = async spec => { if (spec.provider === 'claude') throw new Error('issue or worktree already leased; stale lease requires explicit recovery'); return create(spec); };
+  const report = await w.team.tick();
+  assert.equal(report.skipped.length, 1); assert.match(report.skipped[0].reason, /already leased/);
+  assert.deepEqual(w.calls.created.map(s => s.provider), ['codex']);
+  assert.equal(w.team.s.implemented[23], undefined);          // not counted as started
+  assert.deepEqual(w.calls.board.filter(b => b[0] === 23), []);
+});
+
+test('issue #35 notices and verdicts are posted once even when later work in the tick fails', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'CHANGES', findings: ['f'], commandsRun: ['x'] });
+  w.jobs.states[id].status = 'completed';
+  const again = () => new Team({ config: config(), root: w.team.root, gh: w.gh, jobs: w.jobs, git: w.git, register: REGISTER, clock: { now: () => 1000 } });
+  for (let i = 0; i < 3; i++) { const team = again(); await team.tick(); }     // three scheduled ticks over the same state
+  assert.equal(w.calls.comments.filter(c => /devtest-verdict v1/.test(c[1])).length, 1);
+  // blocked: one notice per job and state; a state change is a new notice, a failed post is retried
+  w.jobs.states[id].status = 'blocked'; w.jobs.states[id].lastEvent = 'preflight_failed';
+  for (let i = 0; i < 3; i++) await again().tick();
+  assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 1);
+  w.jobs.states[id].status = 'failed';
+  await again().tick();
+  assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 2);
+  const w2 = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w2.team.execute((await w2.team.plan())[0]);
+  const [id2] = Object.keys(w2.team.s.jobs); w2.jobs.states[id2].status = 'blocked';
+  let fail = true; const post = w2.gh.comment; w2.gh.comment = async (n, b) => { if (fail) throw new Error('gh down'); return post(n, b); };
+  const r = await w2.team.tick(); assert.match(r.skipped[0].reason, /gh down/);
+  fail = false; await w2.team.tick();
+  assert.equal(w2.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 1);
+});
+
+test('issue #35 finished dispatcher jobs release their leases, including ones resumed by hand; blocked jobs keep theirs', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  const released = []; w.jobs.release = async id => { released.push(id); };
+  await w.team.execute((await w.team.plan())[0]);
+  const [id] = Object.keys(w.team.s.jobs);
+  w.jobs.states[id].status = 'blocked'; await w.team.tick(); assert.deepEqual(released, []);
+  w.jobs.states[id].status = 'completed'; await w.team.tick(); await w.team.tick(); assert.deepEqual(released, [id]);   // once
+  w.jobs.states[id].status = 'running'; await w.team.tick();                                                            // resumed by hand
+  w.jobs.states[id].status = 'completed'; await w.team.tick(); assert.deepEqual(released, [id, id]);
+});
+
+test('issue #35 a missing provider binary is preflight_failed, never auth_error', async () => {
+  const run = pf => runProcess('/nonexistent', {}, { manifest: { launch: {} } }, { preflight: () => pf }, null);
+  assert.deepEqual(await run('not_found'), { code: 1, event: 'preflight_failed' });
+  assert.deepEqual(await run(false), { code: 1, event: 'auth_error' });
+  const saved = process.env.PATH; process.env.PATH = '/nonexistent-35';
+  try { assert.equal(codex.preflight({ role: 'devtest', worktree: '/x' }), 'not_found'); assert.equal(claude.preflight(), 'not_found'); }
+  finally { process.env.PATH = saved; }
+});
+
+test('issue #35 a PASS is not merge-eligible until its public comment is posted; the retry is idempotent', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [], commandsRun: ['x'] });
+  w.jobs.states[id].status = 'completed';
+  let fail = true; const post = w.gh.comment; w.gh.comment = async (n, b) => { if (fail) throw new Error('gh down'); return post(n, b); };
+  const r = await w.team.tick();
+  assert.match(r.skipped[0].reason, /gh down/);
+  assert.equal(w.calls.merges.length, 0);                       // no merge on an unrecorded PASS
+  assert.equal(w.team.s.verdicts[`10:${H(1)}`] ?? w.team.s.verdicts[Object.keys(w.team.s.verdicts)[0]], undefined);
+  assert.equal(w.team.s.jobs[id].ingested, false);
+  fail = false; await w.team.tick();
+  assert.equal(w.calls.comments.filter(c => /devtest-verdict v1/.test(c[1])).length, 1);   // posted once
+  assert.equal(w.calls.merges.length, 1);
+});
+
+test('max_fix_attempts counts fixes per PR across heads; at the limit one needs-homeowner notice, then no more fix jobs', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  const reject = (head) => { w.gh.pulls = [pr(38, 'claude/issue-35-x', head)]; w.team.s.verdicts[`38:${head}`] = { verdict: 'CHANGES', reviewer: 'codex' }; };
+  // round 1 on head 1, round 2 on a NEW head 2: the budget is shared, so a third CHANGES on head 3 gets no fix job
+  reject(H(1)); let a = (await w.team.plan()).find(x => x.agent === 'claude'); assert.equal(a.type, 'fix'); await w.team.execute({ agent: 'claude', ...a });
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true;
+  reject(H(2)); a = (await w.team.plan()).find(x => x.agent === 'claude'); assert.equal(a.type, 'fix'); await w.team.execute({ agent: 'claude', ...a });
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[1]].ingested = true;
+  assert.equal(w.team.fixCount(38), 2);
+  reject(H(3)); assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'fix');
+  const r1 = await w.team.tick(); const r2 = await w.team.tick();
+  const notices = w.calls.comments.filter(c => c[0] === 38 && /fix rounds/.test(c[1]));
+  assert.equal(notices.length, 1); assert.deepEqual(w.calls.labels.filter(l => l[0] === 38), [[38, 'needs-homeowner']]);   // once, not every tick
+  assert.deepEqual(r1.notified.map(n => n.pr), [38]); assert.equal(r2.notified.length, 0);
+  // red CI draws on the same per-PR budget
+  const c = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'test' }] })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  c.team.s.fixAttempts[`38:${H(1)}`] = 1; c.team.s.fixAttempts[`38:${H(2)}`] = 1;
+  assert.notEqual((await c.team.plan()).find(x => x.agent === 'claude')?.type, 'cifix');
+  // not rejected any more (green, no CHANGES): no notice even though the budget is spent
+  const ok = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(5))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  ok.team.s.fixAttempts[`38:${H(1)}`] = 2; await ok.team.tick();
+  assert.equal(ok.calls.comments.filter(x => /fix rounds/.test(x[1])).length, 0);
 });

@@ -16,16 +16,45 @@ if [ -z "${AI_SUPERVISOR_RECONCILE_TEST:-}" ]; then
   chmod 700 "$backup_dir"
   cp -p "$schedule" "$cron" "$backup_dir/"
 fi
+# The cron environment has almost no PATH (issue #35: gh and codex were not found and every tick failed silently).
+# Build an explicit PATH from where each required binary actually is today, then pin it in the generated script.
+node_bin=${AI_SUPERVISOR_NODE:-$(command -v node || true)}
+cli=${AI_SUPERVISOR_CLI:-/mnt/cache/ai-supervisor/current/supervisor/cli.mjs}
+log=${AI_SUPERVISOR_LOG:-/mnt/cache/ai-supervisor/reconcile.log}
+run_home=${AI_SUPERVISOR_RUN_HOME:-/root}
+[ -n "$node_bin" ] && [ -x "$node_bin" ] || { printf 'node not found\n' >&2; exit 2; }
+run_path=""
+for bin in "$node_bin" "$(command -v gh || true)" "$(command -v git || true)" "$(command -v codex || true)" "$(command -v claude || true)" "$(command -v flock || true)"; do
+  [ -n "$bin" ] || continue
+  d=$(dirname "$bin"); case ":$run_path:" in *":$d:"*) ;; *) run_path="${run_path:+$run_path:}$d" ;; esac
+done
+for d in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do case ":$run_path:" in *":$d:"*) ;; *) run_path="$run_path:$d" ;; esac; done
+for need in gh git flock; do PATH="$run_path" command -v "$need" >/dev/null || { printf 'required binary not found for the cron PATH: %s\n' "$need" >&2; exit 2; }; done
 mkdir "$script_dir"
 chmod 700 "$script_dir"
 printf 'AI Supervisor Reconcile\n' > "$script_dir/name"
 printf 'Bounded recovery check for opt-in AI supervisor jobs; no model call unless a verified eligible job is due.\n' > "$script_dir/description"
-cat > "$script_dir/script" <<'SCRIPT'
-#!/bin/bash
-[ -r /mnt/cache/ai-supervisor/current/supervisor/cli.mjs ] || exit 0
-[ -x /usr/local/bin/node ] || exit 0
-/usr/local/bin/node /mnt/cache/ai-supervisor/current/supervisor/cli.mjs reconcile
+{
+  printf '#!/bin/bash\n# BEGIN-ENV\nPATH=%q\nHOME=%q\nNODE=%q\nCLI=%q\nLOG=%q\n# END-ENV\n' "$run_path" "$run_home" "$node_bin" "$cli" "$log"
+  cat <<'SCRIPT'
+export PATH HOME
+mkdir -p "$(dirname "$LOG")"
+# One run at a time; an overlapping run skips instead of racing the log trim.
+exec 9>"$LOG.lock"
+flock -n 9 || exit 0
+# A missing CLI or node must leave a failing log line, never a silent skip.
+if [ ! -r "$CLI" ]; then rc=127; out="supervisor cli unreadable: $CLI"
+elif [ ! -x "$NODE" ]; then rc=127; out="node not executable: $NODE"
+else
+  out=$("$NODE" "$CLI" reconcile 2>&1 | tail --bytes=2000 | tr '\n' ' '; exit "${PIPESTATUS[0]}")
+  rc=$?
+fi
+printf '%s rc=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$out" >> "$LOG"
+# Trim only above the threshold, under the lock held above.
+if [ "$(stat -c %s "$LOG")" -gt 1048576 ]; then tail --bytes=262144 "$LOG" | tail -n +2 > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
+exit 0
 SCRIPT
+} > "$script_dir/script"
 chmod 600 "$script_dir"/*
 node - "$plugin_root" "$script_dir/script" <<'NODE'
 const fs = require('fs'), path = require('path');
@@ -46,7 +75,6 @@ if (root === '/boot/config/plugins/user.scripts' && fs.existsSync('/tmp/user.scr
 NODE
 if [ -z "${AI_SUPERVISOR_RECONCILE_TEST:-}" ]; then
   /usr/local/sbin/update_cron
-  bash "$script_dir/script" >/dev/null
   crontab -c /etc/cron.d -l | grep -Fq "$script_dir/script"
   printf 'reconcile schedule installed; backup=%s\n' "$backup_dir"
 else

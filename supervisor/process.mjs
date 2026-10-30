@@ -3,7 +3,12 @@ import { billingRisk, limitFromAllowance } from './allowance.mjs';
 import { checkpoint, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
 export async function runProcess(root, job, config, adapter, clock, options = {}) {
-  if (typeof adapter.preflight === 'function' && !adapter.preflight(job)) return { code: 1, event: 'auth_error' };
+  if (typeof adapter.preflight === 'function') {
+    const ok = adapter.preflight(job);
+    // A missing provider binary is a PATH/install fault, not a login problem: never tell the homeowner to log in again.
+    if (ok === 'not_found') return { code: 1, event: 'preflight_failed' };
+    if (!ok) return { code: 1, event: 'auth_error' };
+  }
   const argv = adapter.command(config, job, job.attempts > 1);
   const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   let observed = null, resetAt = null, resetSource = 'none', verified = false, buffer = '';
@@ -28,6 +33,8 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   process.on('SIGUSR1', onInt); process.on('SIGTERM', onTerm);
   // Publish the child only after the worker can accept a stop/pause signal.
   job.childPid = child.pid; saveJob(root, job, clock);
+  // A child that exits before reading its prompt closes the pipe; that is an exit status, not a supervisor crash.
+  child.stdin.on('error', () => {});
   child.stdin.end(prompt(job, job.attempts > 1));
   const onData = chunk => {
     buffer = (buffer + chunk.toString('utf8')).slice(-65536);

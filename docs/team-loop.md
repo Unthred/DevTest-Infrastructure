@@ -8,9 +8,11 @@ Status: implemented in source on `claude/issue-23-team-loop`; not deployed. Deci
 1. **Ingests verdicts** from finished review jobs and posts them as a PR comment with a machine marker.
 2. **Notifies** for blocked or failed jobs: label `needs-homeowner` plus one comment saying what is needed. Other agents keep working.
 3. **Plans at most one merge**, then **dispatches** per agent (first rule that applies; at most 1 active, queued or paused job per agent, 2 overall, counting manual jobs):
-   1. *Review* an open PR by another agent with all checks green and no verdict from this agent for that exact head (max 2 attempts per head).
-   2. *Fix* this agent's own PR that has a CHANGES verdict on its current head (max 2 attempts).
-   3. *Implement* the next owned open issue whose prerequisites (parsed from the issue's `Prerequisites:` line, numbers only) are closed, with no open PR or job already on it and no `needs-homeowner` label. Branch `<agent>/issue-<n>-<slug>`, worktree `DevTest-Infrastructure-<agent>-<n>` (D-018).
+   1. *Rebase* this agent's own open, non-draft PR that conflicts with its base (max `max_fix_attempts` per head). GitHub runs no `pull_request` CI on a conflicting PR, so this comes first. The job is a conflict-only rebase, pushed with `--force-with-lease`, with a `git range-diff` comment. Post-condition: a new head that GitHub reports mergeable (it is asked up to four times, because mergeability is computed lazily). A recorded PASS belongs to the old head and never carries over automatically: the new head is reviewed again by the opposite agent, who also checks the range-diff.
+   2. *CI fix* this agent's own open, non-draft PR with a completed failing check on its current head (shares the per-PR `max_fix_attempts` budget with CHANGES fixes). The prompt names the failing checks (only names that pass a strict character check). Post-condition: a new pushed head.
+   3. *Fix* this agent's own PR that has a CHANGES verdict on its current head. `max_fix_attempts` (default 2) is counted per PR across heads; when it is reached while the PR is still rejected, the dispatcher posts one `needs-homeowner` notice and starts no further fix jobs for that PR.
+   4. *Review* an open PR by another agent with all checks green, no merge conflict and no verdict from this agent for that exact head (max 2 attempts per head).
+   5. *Implement* the next owned open issue whose prerequisites (parsed from the issue's `Prerequisites:` line, numbers only) are closed, with no open PR or job already on it and no `needs-homeowner` label. Branch `<agent>/issue-<n>-<slug>`, worktree `DevTest-Infrastructure-<agent>-<n>` (D-018).
 
 `team tick --dry-run` prints the planned actions and writes nothing.
 
@@ -52,3 +54,6 @@ Only `enabled`, `limits`, `depends_on_overrides` and each agent's `issues` can b
 4. Verify: `diff -r supervisor /mnt/cache/ai-supervisor/current/supervisor` is empty (the override is not in the payload, so nothing needs excluding), `team.local.json` is unchanged, `ai-agent --supervisor team tick --dry-run` plans no job for #2 or #23.
 5. Rollback: re-point `current` to the previous `versions/<sha>` and restore the wrapper backup the script prints; the override is untouched.
 The temporary hand edit of the previous payload (`versions/8f2e386…/supervisor/team.json`) is superseded by this change; the old `current` version stays as rollback.
+
+## Tick resilience (issue #35)
+A failure of one item (a lease conflict, one `gh` error, a failed comment) is recorded in the tick report under `skipped` with a reason, and the tick continues with the other agents and items; attempt counters and the "implemented" mark are only set after the job was created. Verdict and needs-homeowner comments are recorded in state and saved before they are posted (and un-recorded if the post fails), so each is posted once per job and head, or once per job and state, however many later ticks fail. The dispatcher releases the leases of its own jobs that reach `completed` or `stopped`, including ones resumed by hand; `blocked` and `failed` jobs keep their lease until the homeowner decides.
