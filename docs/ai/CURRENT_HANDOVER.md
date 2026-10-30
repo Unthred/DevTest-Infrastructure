@@ -151,6 +151,10 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Fix for the Codex CHANGES verdict on PR #42 (head `6eca932`): (1) session/share links of other AI tools (ChatGPT, OpenAI, Gemini, Copilot, Cursor, claude.ai share/chat) and OpenAI/AI bot e-mails now fail; (2) both refs are verified as commits and a failing `git rev-list` is fatal, so an unscanned range can no longer pass; (3) the diagnostic names the short SHA only, never the subject. Three regression tests added. Validator OK, 170/170. Needs a fresh Codex review of the new head; not merged, not deployed.
 - 2026-10-30 conflict-only rebase onto main `02208ec` (only conflict: `supervisor/process.mjs`, main already carried the same EPIPE fix, main's version kept). Earlier PASS for `69ed349` does not carry over; Codex reviews the new head. Validator OK, 183/183.
 
+## #7 red CI: commit-attribution (blocked on history rewrite)
+- Run 41114613212 fails: commit `06160e3` carries an AI co-author trailer in its message. The validator is correct and unchanged; nothing in the tree can fix a commit message.
+- Only fix: reword `06160e3` (drop the trailer) and push the rewritten branch, which needs a force-push (`--force-with-lease`). The task forbids force-push, so this needs a homeowner or dispatcher decision. Alternative without rewriting: open a replacement PR from a branch with the commit reworded.
+- This commit only updates the handover; CI stays red until the rewrite.
 ## Issue #45 review findings and follow-ups (2026-10-30)
 - The review inbox contract now classifies each finding as blocking or follow-up. CHANGES requires a blocking finding; PASS permits follow-ups and creates one linked issue per review round, with a marker for retry safety. Fix-round review prompts read previous blocking findings from a private scope file and check those fixes plus regressions.
 - `contracts/verdict.v1.schema.json`, prompt, dispatcher, GitHub client and tests are updated. `node tools/validate-project.mjs` passed; the full test suite passed (174/174). Implemented in source; exact-head CI and independent review are pending. Not deployed or verified in a live dispatcher tick.
