@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createOpenBaoBackend, checkHealth, checkAddress, readTokenFile, safeSecretPath, BrokerError } from '../broker/openbao.mjs';
 import { createMockBackend, MOCK_PREFIX } from '../broker/mock.mjs';
 import { reduceSession, domainAllowed } from '../broker/session.mjs';
-import { materialize, withSecrets, validatePolicy, assertAllowed } from '../broker/broker.mjs';
+import { materialize, withSecrets, validatePolicy, assertAllowed, decisionApproved } from '../broker/broker.mjs';
 import { buildPlanForVerifiedPaths, verifySecrets, RunnerError } from '../docker/runner.mjs';
 
 const policy = JSON.parse(fs.readFileSync(new URL('../broker/policy.example.json', import.meta.url), 'utf8'));
@@ -137,8 +137,44 @@ test('live Home Assistant login is refused until a dedicated devtest- identity i
   await assert.rejects(materialize({ policy: wrongId, names: ['ha-test-login'], backend, runId: RUN, root, ...me }), /refused/);
   assert.deepEqual(fs.readdirSync(root), []);
   assert.equal(policy.productionIdentity.confirmed, false, 'the shipped example never confirms a production identity');
-  const ok = structuredClone(policy); ok.productionIdentity = { confirmed: true, decision: 'D-022' };
-  assert.doesNotThrow(() => assertAllowed(ok, 'ha-test-login'));
+  const ok = structuredClone(policy); ok.productionIdentity = { confirmed: true, decision: 'D-020' };
+  assert.doesNotThrow(() => assertAllowed(ok, 'ha-test-login', REGISTER));
+});
+
+// PR #41 review: a syntactically valid decision id is not enough. It must be homeowner-approved in the register.
+const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n\n## D-022 — y\n- Status: agent-proposal\n';
+test('production login needs a homeowner-approved decision in the register, not any valid-looking id', async () => {
+  const mk = (decision) => { const p = structuredClone(policy); p.productionIdentity = { confirmed: true, decision }; return p; };
+  const approved = REGISTER.replace('D-022 — y\n- Status: agent-proposal', 'D-022 — y\n- Status: homeowner-approved');
+  assert.equal(decisionApproved(REGISTER, 'D-020'), true);
+  assert.equal(decisionApproved(REGISTER, 'D-022'), false, 'an agent proposal');
+  assert.equal(decisionApproved(REGISTER, 'D-999'), false, 'not in the register');
+  assert.equal(decisionApproved('', 'D-020'), false); assert.equal(decisionApproved(undefined, 'D-020'), false); assert.equal(decisionApproved(REGISTER, 'D-02'), false);
+  for (const decision of ['D-999', 'D-022']) assert.throws(() => assertAllowed(mk(decision), 'ha-test-login', REGISTER), /not a homeowner-approved decision/, decision);
+  assert.throws(() => assertAllowed(mk('D-020'), 'ha-test-login', ''), /not a homeowner-approved decision/, 'an unreadable register refuses');
+  assert.doesNotThrow(() => assertAllowed(mk('D-020'), 'ha-test-login', REGISTER));
+  assert.doesNotThrow(() => assertAllowed(mk('D-022'), 'ha-test-login', approved));
+  const root = secretRoot(), backend = createMockBackend();
+  await assert.rejects(materialize({ policy: mk('D-999'), names: ['ha-test-login'], backend, runId: RUN, root, decisions: REGISTER, ...me }), /not a homeowner-approved/);
+  assert.deepEqual(fs.readdirSync(root), []);
+  // the shipped register: D-022 is still an agent proposal, so it cannot unlock production
+  assert.throws(() => assertAllowed(mk('D-022'), 'ha-test-login'), /not a homeowner-approved decision/);
+});
+
+test('withSecrets: a leak or an incomplete cleanup is reported even when the subject also fails', async () => {
+  const root = secretRoot(), out = tmp();
+  const value = canary('pw2');
+  const mkBackend = (revoke) => ({ kind: 'openbao', assertReadOnly: async () => {}, read: async () => ({ values: { username: 'u', password: value }, leaseId: 'lease-1' }), revoke });
+  const base = { policy, names: ['fixture-login'], root, ...me };
+  await assert.rejects(withSecrets({ ...base, backend: mkBackend(async () => {}), runId: '1'.repeat(16) }, async () => { fs.writeFileSync(path.join(out, 'copied.txt'), value); throw new Error(`subject failure ${value}`); }, { outputRoots: [out] }),
+    e => e.exitCode === 8 && /secret value was found/.test(e.message) && /subject also failed \(Error\)/.test(e.message) && !e.message.includes(value) && e.subjectFailed === true);
+  assert.equal(fs.existsSync(path.join(root, '1'.repeat(16))), false);
+  await assert.rejects(withSecrets({ ...base, backend: mkBackend(async () => { throw new Error(`revoke boom ${value}`); }), runId: '2'.repeat(16) }, async () => { throw new Error('subject failure'); }),
+    e => e.exitCode === 7 && /cleanup was incomplete/.test(e.message) && /subject also failed/.test(e.message) && !e.message.includes(value));
+  await assert.rejects(withSecrets({ ...base, backend: mkBackend(async () => { throw new Error('boom'); }), runId: '3'.repeat(16) }, async () => { fs.writeFileSync(path.join(out, 'again.txt'), value); throw new Error('x'); }, { outputRoots: [out] }),
+    e => e.exitCode === 8 && /secret value was found/.test(e.message) && /cleanup was incomplete/.test(e.message));
+  const clean = tmp();
+  await assert.rejects(withSecrets({ ...base, backend: mkBackend(async () => {}), runId: '4'.repeat(16) }, async () => { throw new Error('plain subject failure'); }, { outputRoots: [clean] }), /plain subject failure/);
 });
 
 test('dry-run mock backend: documented, random, labelled, valid nowhere, and it needs no OpenBao or credential', async () => {

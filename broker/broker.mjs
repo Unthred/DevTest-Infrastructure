@@ -8,6 +8,16 @@ import { reduceSession, validDomain } from './session.mjs';
 
 const nameRe = /^[a-z][a-z0-9-]{0,31}$/;
 export const DEFAULT_SECRET_ROOT = '/dev/shm/devtest-secrets';
+// The recorded decision that confirms a production identity must be homeowner-approved in the decision register. A missing or
+// unreadable register refuses, and an agent proposal (or an id that is not in the register) never counts.
+export function decisionApproved(registerText, id) {
+  if (typeof registerText !== 'string' || !/^D-\d{3}$/.test(id ?? '')) return false;
+  const m = registerText.match(new RegExp(`^## ${id} [^\\n]*\\n((?:(?!^## ).*\\n?)*)`, 'm'));
+  return !!m && /^- Status: homeowner-approved\s*$/m.test(m[1]);
+}
+export function readDecisionRegister(file = new URL('../docs/DECISIONS.md', import.meta.url)) {
+  try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
+}
 export const secretRunDirectory = (root, id) => path.join(root, id);
 export const secretFilePath = (root, id, name) => path.join(secretRunDirectory(root, id), name);
 export const secretContainerPath = (name) => `/secrets/${name}`;
@@ -27,13 +37,15 @@ export function validatePolicy(policy) {
 
 // Live Home Assistant (or any entry marked production) is refused until a dedicated, least-privilege test identity has been
 // confirmed. Confirmation is a recorded homeowner act (a dated decision), not something an agent can infer.
-export function assertAllowed(policy, name) {
+export function assertAllowed(policy, name, register = readDecisionRegister()) {
   const e = policy.secrets[name];
   if (!e) throw new BrokerError(`secret ${JSON.stringify(name)} is not declared in the policy`, 4);
   if (e.production) {
     const c = policy.productionIdentity;
     if (!c || c.confirmed !== true || typeof c.decision !== 'string' || !/^D-\d{3}$/.test(c.decision) || !/^devtest-/.test(e.identity ?? ''))
       throw new BrokerError(`secret ${name}: production login is refused until a dedicated least-privilege devtest- identity is confirmed by a recorded decision`, 4);
+    if (!decisionApproved(register, c.decision))
+      throw new BrokerError(`secret ${name}: production login is refused: ${c.decision} is not a homeowner-approved decision in the decision register`, 4);
   }
   return e;
 }
@@ -83,12 +95,12 @@ export class SecretHandle {
 }
 
 // Resolves and writes the requested secrets. On any failure everything already written is removed before the error leaves.
-export async function materialize({ policy, names, backend, runId, root = DEFAULT_SECRET_ROOT, uid = process.getuid(), gid = process.getgid(), now = Date.now(), trace = false }) {
+export async function materialize({ policy, names, backend, runId, root = DEFAULT_SECRET_ROOT, uid = process.getuid(), gid = process.getgid(), now = Date.now(), trace = false, decisions = readDecisionRegister() }) {
   validatePolicy(policy);
   if (!/^[a-f0-9]{16,32}$/.test(runId ?? '')) throw new BrokerError('invalid run id', 4);
   if (!Array.isArray(names) || !names.length || names.length > 4 || new Set(names).size !== names.length) throw new BrokerError('request one to four unique secret names', 4);
   if (trace) throw new BrokerError('traces keep request bodies and cannot be scanned; they are refused on a run that holds secrets', 4);
-  const entries = names.map(n => [n, assertAllowed(policy, n)]);   // every name checked before anything is read or written
+  const entries = names.map(n => [n, assertAllowed(policy, n, decisions)]);   // every name checked before anything is read or written
   if (process.getuid() !== 0 && uid !== process.getuid()) throw new BrokerError('cannot give the container user ownership; run as root or use the same uid', 3);
   const dir = secretRunDirectory(root, runId);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -142,8 +154,15 @@ export async function withSecrets(options, fn, { outputRoots = [] } = {}) {
   let leak, cleanup;
   try { leak = handle.scan(outputRoots); }   // before cleanup: cleanup forgets the values
   finally { cleanup = await handle.cleanup(); }
+  // A leaked output or an incomplete cleanup outranks a subject failure: the run is refused and the problem is reported, never masked.
+  const problems = [];
+  if (!leak.clean) problems.push({ code: 8, text: `a secret value was found in ${leak.findings.length} output file(s); the output must be discarded` });
+  if (cleanup.errors.length) problems.push({ code: 7, text: 'secret cleanup was incomplete' });
+  if (problems.length) {
+    const error = new BrokerError(problems.map(p => p.text).join('; ') + (thrown ? `; the subject also failed (${String(thrown?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48)})` : ''), problems[0].code);
+    error.subjectFailed = !!thrown;   // the subject's own message is not copied: it could carry a secret
+    throw error;
+  }
   if (thrown) throw thrown;
-  if (!leak.clean) throw new BrokerError(`a secret value was found in ${leak.findings.length} output file(s); the output must be discarded`, 8);
-  if (cleanup.errors.length) throw new BrokerError('secret cleanup was incomplete', 7);
   return { result, cleanup, leak };
 }

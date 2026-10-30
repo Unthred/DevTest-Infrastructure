@@ -24,7 +24,7 @@ A `session` secret holds a Playwright `storage_state`. Before it is written, `br
 When OpenBao is unavailable use `createMockBackend()` (`broker/mock.mjs`): random per-call values prefixed `MOCK-NOT-A-SECRET-`, valid nowhere. It never requests or invents a real credential. `handle.dryRun` is true so a result can say so.
 
 ## Live Home Assistant
-Entries marked `production` are refused unless the policy has `productionIdentity.confirmed: true` with a decision id **and** the entry's identity starts with `devtest-`. The shipped example keeps `confirmed: false`. Setting it needs a dated homeowner decision after a dedicated least-privilege test identity exists; nothing here logs in to Home Assistant.
+Entries marked `production` are refused unless the policy has `productionIdentity.confirmed: true` with a decision id, that decision is `homeowner-approved` in `docs/DECISIONS.md` (an agent proposal, an unknown id or an unreadable register refuses), **and** the entry's identity starts with `devtest-`. The shipped example keeps `confirmed: false`. Setting it needs a dated homeowner decision after a dedicated least-privilege test identity exists; nothing here logs in to Home Assistant.
 
 ## Homeowner actions needed (not done by an agent)
 - Create a dedicated read-only OpenBao policy and token (or AppRole) limited to `kv/data/devtest/*` read, and place the token in the file named by `openbao.tokenFile` (0600). Then run the live retrieval check.
