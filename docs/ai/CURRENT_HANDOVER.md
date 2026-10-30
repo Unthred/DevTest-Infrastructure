@@ -1,30 +1,30 @@
 # Current handover
 
-Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (18 entries; D-006, D-015–D-018 are agent proposals awaiting review). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
+Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (D-006 and D-015–D-018 remain agent proposals). Issue [#23](https://github.com/Unthred/DevTest-Infrastructure/issues/23) records homeowner-approved D-019 and D-020 for addition to the register. Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
 Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged architecture and supervisor PRs. Each agent edits this file only on its own branch.
 
 ## Completion states
-Reported separately; none implies the next.
 
 | Item | Implemented in source | CI/review passed | Deployed | Verified working |
 |---|---|---|---|---|
 | #1 Architecture, decisions, contracts, validator | yes (PR #16, merged as `77d7e228113e09a0a0d94edbec030f5dc3d3ec09`) | yes: exact-head CI and GitGuardian green; Codex independent PASS on `ff46a80` | n/a (documentation and checks) | n/a |
 | #15 Supervisor | yes (PR #17 merged as `69f88000798a3a55224171e15d3f8af7b2d12e37`) | yes: exact-head CI/GitGuardian green; Claude independent PASS on `baba983` | merged commit `69f8800` installed on Tower; wrapper and payload bytes verified | normal launcher/CLI smoke passed; real usage-limit reset and post-limit resume unverified |
 | AI-Rules launcher metadata fix (PR #15) and `devtest` role (PR #16) | yes | CI green; independent review pending | yes, installed 2026-10-29 | Codex launch confirmed by the homeowner; Claude launch checked by recorded argv only |
+| #15 regression follow-up | yes; PR #18 merged as `0240bc384bf9ee36ce6b0f87e1ea8f7f636fb9d7` | yes; Codex independent PASS at `df99dca65a0f3ea0c1f629d34ab54d91a093889c`, 42/42 local tests and exact-head CI green | not separately installed | context requeue crash window verified by fixture only |
 | #2 Docker foundation | yes on PR #19; PR #22 merged as base, then Codex hard-bound/log fixes `a96ea85`, `31f3c96`, `95f392a` | validator and 47/47 local tests pass; exact-head CI and Claude independent re-review pending | no standalone `dev-test` installation | Tower runner positive, subject-failure and hard work/output/cache limit probes passed; CLI integration remains issue #8 |
-| #3–#14 | not started | no | no | no |
+| #20 Allowance detection | pending; Claude PR #21, head `2d3b5cfae69f05743b7d22521da5d8a76da493d1` | no; Codex requested changes for successful paid-overage event | no | simulated subprocess bug reproduced; live allowance recovery unverified |
+| #23 Team loop | not started | no | no | no |
+| #3–#14 other issues | not started | no | no | no |
 
 ## Ownership
+
 | Agent | Issues | Branch / worktree |
 |---|---|---|
-| Claude | #1, then #5–#7, #10, #13, #14; independent review of #15 | `claude/issue-1-architecture`, `/mnt/user/projects/DevTest-Infrastructure-claude-1` |
+| Claude | #1, #5–#7, #10, #13, #14, #20, #23; fixes for Codex #19 | separate Claude branches/worktrees; PRs #21 and #22 open |
 | Codex | #15, #2–#4, #8, #9, #11, #12 | current `codex/issue-2-docker`, `/mnt/user/projects/DevTest-Infrastructure-codex-2` |
 
-## Environment facts (checked 2026-10-29)
-- Tower: Docker 29.5.1, storage driver btrfs, cgroup v2; Node 22.18; `jq` present. **Not installed on the host:** `dotnet`, `pwsh`, `shellcheck`. Tests and validators here therefore use Node and bash; .NET work runs in containers.
-- `/mnt/cache/appdata` exists; cache pool has about 353 GB free.
-- Launcher: `ai-agent` has a `devtest` role (workspace `/mnt/user/projects/DevTest-Infrastructure`, Unraid host-safety rules). Do not run `git fetch/pull` inside `/mnt/cache/cursor-workspace/ai-rules-live`; redeploy with `tools/deploy-codex-launcher.sh --source <clean checkout>`.
+## Environment facts and evidence
 
 ## Open questions
 OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall change would need explicit approval), OQ-3 where Docker-dependent CI runs (#12), OQ-4 evidence retention.
@@ -38,6 +38,9 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Docker foundation #2: Tower read-only `docker info` showed Docker 29.5.1, btrfs driver, cgroup v2. Local official image RepoDigests were recorded in `docker/images.lock.json` on 2026-10-30. On the branch rebased onto merged #17, `node tools/validate-project.mjs`: OK; `node --test 'tests/**/*.test.mjs'`: 43/43 pass (eight Docker, 21 supervisor and 14 architecture tests). `node tests/docker-smoke.mjs` ran positive and deliberate subject-failure probes with pinned .NET 8 digest `sha256:78235e09001f52b6592c458ac010775ebac6725422e80cd0c1650590f67b2743`; exit codes 0 and 1 respectively, both `cleanup: complete`, both containers gone, and `docker ps -a` found no `devtest-` container. No production service changed. The rootless correction permits only an owner-only XDG runtime directory and matching Unix Docker host; other host environment values remain excluded. The pre-start collision check refuses a container with the selected run name, even if it bears the same label.
 - #2 exact-head [CI 41019934693](https://github.com/Unthred/DevTest-Infrastructure/actions/runs/41019934693), [Supervisor 41019934752](https://github.com/Unthred/DevTest-Infrastructure/actions/runs/41019934752), and GitGuardian passed on `7420e9b203d020b0f190434e40971430e37d92a2`. A new exact-head run is required after this handover update.
 - #2 2026-10-30 correction: Codex [reviewed PR #22](https://github.com/Unthred/DevTest-Infrastructure/pull/22#issuecomment-6518406474), then [merged it as a base under explicit homeowner direction](https://github.com/Unthred/DevTest-Infrastructure/pull/22#issuecomment-6519062895). On own PR #19 branch, Codex added fixed-size no-COW ext4 loop images for aggregate work/output and restore cache bounds, read-only cache in build/test, fail-closed mount setup, `--log-driver=none` and no persisted stdout/stderr. D-015 now describes the actual controls and kernel swap-limit gap. `node tools/validate-project.mjs`: OK; `node --test 'tests/**/*.test.mjs'`: 47/47 pass. Low-priority `ionice -c 3 nice -n 19 node tests/docker-smoke.mjs`: positive exit 0, deliberate subject failure exit 7 mapped to 1, 96 MiB writes to each 64 MiB work/output and restore-cache filesystem failed inside the container with distinct subject exit 37; all four containers removed and temporary mounts/images cleaned. No new kernel warnings were observed; the earlier memory-cgroup OOM warning at 07:59:50 was from the prior memory probe. Exact-head CI and independent Claude review still pending.
+
+- PR #18 review at `df99dca65a0f3ea0c1f629d34ab54d91a093889c`: fresh clone validator OK, full suite 42/42, exact-head project-contract/test/GitGuardian SUCCESS and merge state CLEAN. Some tests overlap #17; context requeue crash-window coverage adds value. [Codex PASS](https://github.com/Unthred/DevTest-Infrastructure/pull/18#issuecomment-6518490816); merged as `0240bc384bf9ee36ce6b0f87e1ea8f7f636fb9d7`.
+- Both agents use one GitHub account. Independent acceptance is recorded with reviewer identity, exact SHA, commands and decision in PR comments; it is not a formal GitHub approval.
 
 - Provider evidence: `docs/provider-observations.md` (static inspection of Claude Code 2.1.312 and Codex CLI 0.165.0; live captures still outstanding).
 
