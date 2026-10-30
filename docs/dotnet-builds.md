@@ -1,0 +1,5 @@
+# .NET SDK command planning (issue #3)
+
+The `dotnet/commands.mjs` module prepares argv arrays for the trusted runner; it does not invoke Docker or expose a second CLI. Select SDK `8`, `9`, or `10`, choose `restore`, `build`, or `test`, then resolve a single solution/project in the selected working directory. Ambiguous discovery fails with a request for an explicit project. Host paths are translated to `/src/...`; project and working-directory symlink escapes are rejected.
+
+The host caller supplies the corresponding exact image key (`dotnet-8`, `dotnet-9`, or `dotnet-10`) from `docker/images.lock.json` and passes the returned phase and argv to `runContainer`. Restore currently runs with the runner's network-disabled policy. It can use packages already present in the bounded NuGet cache; networked package restore remains unavailable until its policy is implemented and reviewed. Build and test use the cache read-only. The single `dev-test` user-facing CLI and TRX/coverage reporting belong to issue #8/#4 respectively.

@@ -12,10 +12,12 @@ Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged arc
 | #15 Supervisor | yes (PR #17 merged as `69f88000798a3a55224171e15d3f8af7b2d12e37`) | yes: exact-head CI/GitGuardian green; Claude independent PASS on `baba983` | merged commit `69f8800` installed on Tower; wrapper and payload bytes verified | normal launcher/CLI smoke passed; real usage-limit reset and post-limit resume unverified |
 | AI-Rules launcher metadata fix (PR #15) and `devtest` role (PR #16) | yes | CI green; independent review pending | yes, installed 2026-10-29 | Codex launch confirmed by the homeowner; Claude launch checked by recorded argv only |
 | #15 regression follow-up | yes; PR #18 merged as `0240bc384bf9ee36ce6b0f87e1ea8f7f636fb9d7` | yes; Codex independent PASS at `df99dca65a0f3ea0c1f629d34ab54d91a093889c`, 42/42 local tests and exact-head CI green | not separately installed | context requeue crash window verified by fixture only |
-| #2 Docker foundation | yes on PR #19; PR #22 merged as base, then Codex hard-bound/log fixes `a96ea85`, `31f3c96`, `95f392a` | validator and 47/47 local tests pass; exact-head CI and Claude independent re-review pending | no standalone `dev-test` installation | Tower runner positive, subject-failure and hard work/output/cache limit probes passed; CLI integration remains issue #8 |
-| #20 Allowance detection | pending; Claude PR #21, head `2d3b5cfae69f05743b7d22521da5d8a76da493d1` | no; Codex requested changes for successful paid-overage event | no | simulated subprocess bug reproduced; live allowance recovery unverified |
-| #23 Team loop | yes; PR #25 (D-019 and D-020 recorded; dispatcher, trusted verdicts, post-conditions, restart and access modes) | no; CI green, Codex executable review pending | no | a supervised full-access Codex job ran `node --test` on Tower (35/35); dispatcher, merge, real-limit restart and cron path not live-verified |
-| #3–#14 other issues | not started | no | no | no |
+| #2 Docker foundation | yes; PR #19 merged as `a8b944b` after PR #26 lifecycle fix | exact-head checks and Codex executable review passed | no standalone `dev-test` installation | Tower Docker and lifecycle smokes passed; CLI integration remains issue #8 |
+| #20 Allowance detection | yes; PR #21 merged as `67c8aabd78ee456e5b08c10db63ad0ec4a6cffd1` | Codex PASS at rebased head `7e4e6b4`; exact-head CI green | no | Codex interactive limit capture/reset parser covered; live supervised recovery unverified |
+| #23 Team loop | yes; PR #25 merged as `8f2e386` | Codex PASS at `09a1915`; exact-head CI green | no; Claude deploys after review | supervised full-access Codex job ran `node --test` at #25 head (115/115); live dispatcher tick/allowance recovery unverified |
+| #3 .NET SDK toolchain | initial planner on `codex/issue-3-dotnet-build`, commit `817a74d` | validator OK; 66/66 tests before handover rebase; rerun on new head | no | no SDK container build yet; offline restore only |
+| #4, #6–#14 other issues | not started | no | no | no |
+| #5 Browser runtime | yes; PR #27 head `1b3402b` | Codex PASS, 93/93 tests and exact-head CI green | no | niced Tower browser smoke passed after pinned cache preparation; TCP targets remain blocked on OQ-2 |
 
 ## Ownership
 
@@ -51,24 +53,23 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## Blockers
 - #15 real subscription-limit wording, reset timestamp and post-limit resume are not captured. Production manifests mark those capabilities `unverified` and refuse `autoResume: true`. Simulated pause/resume is not a live auto-resume claim.
-- #2 still needs exact-head CI, Claude's independent review, and integration through the single `dev-test` CLI in issue #8. The host-side runner smoke is not a deployed end-to-end CLI claim.
+- #2 source is merged; single `dev-test` CLI integration remains issue #8. Host-side runner smokes do not claim end-to-end CLI deployment.
 - Tower reboot persistence and host-restart recovery remain unverified; do not reboot Tower for this task.
+- #3 is a draft implementation: safe discovery/argv planning only. Pinned SDK container build/test and NuGet cache reuse remain. Networked restore is unavailable under the current runner policy.
+- #3 restore is currently offline only: the Docker runner disables networking, so package restore from an empty NuGet cache is not yet supported. D-016 networked restore needs its own reviewed phase policy.
 
 ## Review log
 - 2026-10-30: Claude reviewed PR #17 at `9f17ce1`, requested D1–D3/S1–S3 corrections, then independently accepted rebased `baba983` after fresh-clone tests. Both agents share one GitHub account, so independent acceptance is recorded in PR comments, not formal review objects.
 - Merge order: #16 merged first; #17 rebased onto merge commit `77d7e22`, then merged as `69f8800` and installed on Tower.
 
 - 2026-10-30: Codex reviewed PR #16 at `3c1e3f2`: malformed digests accepted, Claude example overstated resume. Both fixed on `ff46a80` (strict 64-hex digest at end of reference; resume and session_status now `unverified`), independently retested and accepted. PR #16 merged by Codex.
-- 2026-10-30: Codex reviewed #22 at `a2f5a1a` and requested hard disk and secret-safe logs; homeowner directed merge as a base and Codex corrected these on #19. #21 at `2d3b5cf` remains CHANGES REQUESTED because successful paid-overage output was marked completed. #18 passed independent review and merged as `0240bc384bf9ee36ce6b0f87e1ea8f7f636fb9d7`. Codex's separate review handover is PR #24 and needs Claude review; do not self-merge it.
+- 2026-10-30: Codex re-reviewed #21 conflict-only rebase `c2f2244` → `7e4e6b4` (four functional commits patch-identical; handover conflict reconciled), posted PASS and merged as `67c8aab`. Reviewed and merged #25 at `09a1915` as `8f2e386`; 115/115 tests and the supervised full-access D-020 Codex proof passed. Draft #3 is PR #28.
+- 2026-10-30: Codex independently reviewed #27 at `1b3402b`: validator OK, 93/93 tests, niced browser smoke `BROWSER SMOKE OK`, no-network probe passed, and OQ-2 TCP target limits are documented as blocked. [Review PASS](https://github.com/Unthred/DevTest-Infrastructure/pull/27#issuecomment-6523222052).
 
 ## Next actions
-1. Codex: push this exact #19 head, confirm exact-head CI and GitGuardian, request Claude's executable independent re-review; correct any findings in own worktree.
-2. Claude merges #19 only after independent PASS and exact-head green gates. Codex then starts #3 .NET SDK builds in a new worktree. Claude can start #5 Playwright once #2 reaches CI/review passed.
-3. Keep #15 open for real provider-limit capability evidence; do not enable production auto-resume based on simulated tests or reboot Tower to claim persistence.
-
-1. Claude corrects PRs #22 and #21 in its own branches. Codex reviews each new exact head from a fresh clone, reruns validator/full suite and real Docker probes for #22, checks CI, and merges only after PASS.
-2. Claude reviews/merges #19 after #22 lands and exact-head CI is green. Codex then starts #3 on `codex/issue-3-<slug>` in its own worktree, implementing .NET SDK 8/9/10 build tooling.
-3. Claude implements #23 and obtains Codex independent review. Keep Tower supervisor live limit auto-resume explicitly unverified until a real redacted limit capture supports it.
+1. Claude deploys PR #25 with `tools/upgrade-supervisor.sh`, verifies installed SHA, enables at most one job per agent and records the first live tick on #23.
+2. Codex continues issue #3 in this branch and draft PR #28: wire safe SDK plans to the runner, test the pinned SDK images and demonstrate NuGet cache reuse.
+3. Keep live provider-limit recovery unverified; do not reboot Tower.
 
 
 ## #2 mount lifecycle fix (Claude, branch `claude/issue-2-mount-lifecycle`, PR targets `codex/issue-2-docker`)

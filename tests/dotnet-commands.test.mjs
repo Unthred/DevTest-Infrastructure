@@ -28,13 +28,17 @@ test('discovery rejects missing or ambiguous project inputs', t => {
   fs.writeFileSync(path.join(root, 'A.sln'), '');
   fs.writeFileSync(path.join(root, 'B.slnx'), '');
   assert.throws(() => discoverProject(root), /multiple solutions/);
+  const outside = project(t);
+  fs.writeFileSync(path.join(outside, 'Outside.csproj'), '');
+  fs.symlinkSync(outside, path.join(root, 'escape'));
+  assert.throws(() => discoverProject(root, 'escape'), /resolves outside/);
 });
 
 test('commands pin SDK selector and pass project paths as argv elements', t => {
   const root = project(t), csproj = path.join(root, 'App.csproj');
   fs.writeFileSync(csproj, '');
   assert.deepEqual(buildCommand({ sdk: '9', operation: 'build', projectRoot: root, configuration: 'Release', framework: 'net9.0' }), {
-    sdk: '9', phase: 'build', command: ['dotnet', 'build', csproj, '--verbosity', 'minimal', '--configuration', 'Release', '--framework', 'net9.0'], workingDirectory: '/src'
+    sdk: '9', phase: 'build', command: ['dotnet', 'build', '/src/App.csproj', '--verbosity', 'minimal', '--configuration', 'Release', '--framework', 'net9.0'], workingDirectory: '/src'
   });
   assert.deepEqual(buildCommand({ sdk: 8, operation: 'test', project: '/src/A.csproj', noRestore: true }).command,
     ['dotnet', 'test', '/src/A.csproj', '--verbosity', 'minimal', '--no-restore']);
@@ -49,6 +53,7 @@ test('unsafe or unsupported SDK/build options fail closed', t => {
     { sdk: 7, operation: 'build', project: projectFile },
     { sdk: 8, operation: 'publish', project: projectFile },
     { sdk: 8, operation: 'build', project: `${root}/../outside.csproj`, projectRoot: root },
+    { sdk: 8, operation: 'build', project: '/src/../../etc/passwd' },
     { sdk: 8, operation: 'build', project: projectFile, configuration: 'Production' },
     { sdk: 8, operation: 'build', project: projectFile, framework: 'net8.0;rm -rf /' },
     { sdk: 8, operation: 'restore', project: projectFile, noRestore: true }
