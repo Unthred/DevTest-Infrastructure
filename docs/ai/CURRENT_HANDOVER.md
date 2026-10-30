@@ -257,3 +257,6 @@ Implemented: `supervisor/models.mjs`, manifest `models` section (claude, codex),
 
 ## #7 / PR #41 conflict-only rebase onto main a947ea9 (Claude, 2026-10-30)
 - Rebased old head `fc72154` onto origin/main `a947ea9`. The only conflict was this file (kept both sides). Validator OK, 247/247 tests. The PASS for the old head does not carry over; the opposite agent reviews the new head. Not merged, not deployed.
+
+## #7 conflict-only rebase onto main 7eab868 (Claude, 2026-10-30)
+- Rebased old head `22b21a0` onto main `7eab868`. Only conflict was in this file (kept both sides: #39 section and the earlier #7 rebase notes). Validator OK, 260/260. Earlier PASS verdicts do not carry over; the opposite agent reviews the new head.
