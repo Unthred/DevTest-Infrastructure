@@ -213,6 +213,13 @@ export async function runContainer(plan, { command = dockerCommand, spawnRun = s
   } finally {
     clearTimeout(timer); clearInterval(poller); process.off('SIGINT', stop); process.off('SIGTERM', stop);
   }
+  // A container can exit before the first poll, so measure once more after exit.
+  if (!limit) {
+    try {
+      if (treeBytes(plan.work, plan.diskBytes) + treeBytes(plan.out, plan.diskBytes) > plan.diskBytes) limit = 'disk';
+      else if (treeBytes(plan.cache, plan.cacheBytes) > plan.cacheBytes) limit = 'cache';
+    } catch (error) { pollError = errorClass(error); limit = 'disk_unmeasurable'; }
+  }
   const logs = { stdout: { path: path.join(plan.logDir, 'stdout.log'), ...stdout.close() }, stderr: { path: path.join(plan.logDir, 'stderr.log'), ...stderr.close() } };
   let state = null, cleanupError = null;
   try { state = containerState(plan, command); } catch (error) { cleanupError = errorClass(error); }

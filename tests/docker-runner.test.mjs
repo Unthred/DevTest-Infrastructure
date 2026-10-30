@@ -167,6 +167,13 @@ test('aggregate disk budget: an over-limit run is killed, reported as a subject 
   assert.ok(h.calls.some(argv => argv[1] === 'kill'), 'container was killed by name');
 });
 
+test('a container that exits before the first poll is still measured', async t => {
+  const { result } = await runWith(t, { exit: 0, state: '0 false', onSpawn: (child, plan) => {
+    fs.writeFileSync(path.join(plan.out, 'big'), Buffer.alloc(17 * 1048576, 1));
+  } }, () => {}, { pollMs: 3600000 });
+  assert.equal(result.reason, 'disk_limit'); assert.equal(result.exitCode, 1); assert.equal(result.cleanup, 'complete');
+});
+
 test('cache budget is enforced separately', async t => {
   const { result } = await runWith(t, { tail: true, state: '137 false', onSpawn: (child, plan) => {
     fs.writeFileSync(path.join(plan.cache, 'pkg'), Buffer.alloc(17 * 1048576, 1));
