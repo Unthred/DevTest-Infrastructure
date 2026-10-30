@@ -154,7 +154,9 @@ async function main() {
     // Run by the enable/upgrade procedure under the cron environment (env -i + the script's PATH): every binary the tick and
     // the supervised jobs need must resolve there, or enabling is refused. Exit 3 on any failure.
     const out = { gh: spawnSync('gh', ['--version'], { encoding: 'utf8' }).error ? 'not_found' : 'ok', git: spawnSync('git', ['--version'], { encoding: 'utf8' }).error ? 'not_found' : 'ok' };
-    for (const id of ['claude', 'codex']) { const { adapter } = await provider(registry, id); const r = adapter.preflight ? adapter.preflight({ role: 'devtest', worktree: process.cwd() }) : true; out[id] = r === 'not_found' ? 'not_found' : r ? 'ok' : 'auth_or_governance_failed'; }
+    // The governed launcher needs a Git root under /mnt/user/projects, so use the configured product repository, never the caller's cwd.
+    const worktree = loadTeamConfig(teamConfigFile, root).repo_path;
+    for (const id of ['claude', 'codex']) { const { adapter } = await provider(registry, id); const r = adapter.preflight ? adapter.preflight({ role: 'devtest', worktree }) : true; out[id] = r === 'not_found' ? 'not_found' : r ? 'ok' : 'auth_or_governance_failed'; }
     console.log(JSON.stringify({ preflight: out }));
     if (Object.values(out).some(v => v !== 'ok')) process.exitCode = 3;
     return;

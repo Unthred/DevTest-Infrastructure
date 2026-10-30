@@ -113,3 +113,14 @@ test('issue #35 reconcile exits nonzero when the team tick fails, so the generat
   const r = spawnSync(process.execPath, [cli, 'reconcile'], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_STATE_ROOT: root } });
   assert.match(r.stdout, /"team":\{"error"/); assert.equal(r.status, 1);
 });
+
+test('issue #35 preflight passes the configured product repository, not the caller cwd, to the provider preflight', t => {
+  const src = fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8');
+  const block = src.slice(src.indexOf("command === 'preflight'"), src.indexOf("command === 'reconcile'"));
+  assert.doesNotMatch(block, /process\.cwd\(\)/); assert.match(block, /loadTeamConfig\(teamConfigFile, root\)\.repo_path/);
+  // behavioural: run from a non-repository directory with a fake governed codex that demands the configured repo path
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-pf35-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, 'elsewhere'); fs.mkdirSync(cwd);
+  const r = spawnSync(process.execPath, [new URL('../supervisor/cli.mjs', import.meta.url).pathname, 'preflight'], { cwd, encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+  assert.doesNotMatch(r.stdout + r.stderr, new RegExp(cwd));
+});
