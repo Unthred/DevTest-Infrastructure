@@ -65,6 +65,15 @@ test('a real usage limit wins over a stray transient rate limit in either order'
   }
 });
 
+test('a child that exits without reading its prompt does not crash the supervisor (EPIPE)', async t => {
+  for (let i = 0; i < 5; i++) {
+    const f = fixture(t), job = await createJob(f.root, f.spec, f.registry);
+    job.prompt = 'x'.repeat(1 << 20);
+    const r = await drive(f.root, job, f.registry, realClock, scripted(f, "console.error('Usage limit reached'); process.exit(1);"));
+    assert.equal(r.lastEvent, 'usage_limit');
+  }
+});
+
 test('Claude error-result parsing uses the real "result" field and ignores non-errors', () => {
   const limit = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your usage limit. It resets at 2026-10-30T05:00:00Z", error: null, message: null });
   const parsed = claude.observe(limit);
