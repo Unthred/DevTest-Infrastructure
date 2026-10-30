@@ -63,7 +63,7 @@ export function buildPlanForVerifiedPaths(spec, config, project, storage) {
   const work = path.join(workspace, 'work'), out = path.join(workspace, 'out');
   const cache = path.join(storage, 'cache', spec.image.startsWith('dotnet-') ? 'nuget' : 'playwright');
   const name = `devtest-${spec.runId}`;
-  const args = ['run', '--init', '--pull=never', '--name', name, '--label', `devtest.run-id=${spec.runId}`,
+  const args = ['run', '--init', '--pull=never', '--log-driver=none', '--name', name, '--label', `devtest.run-id=${spec.runId}`,
     '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--read-only', '--network=none',
     '--cpus', String(limits.cpus), '--memory', `${limits.memoryMb}m`, '--memory-swap', `${limits.memoryMb}m`, '--ulimit', `fsize=${limits.diskMb * 1048576}:${limits.diskMb * 1048576}`, '--pids-limit', String(limits.pids), '--shm-size', `${limits.shmMb}m`,
     '--user', `${config.uid}:${config.gid}`, '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m',
@@ -162,17 +162,17 @@ export function treeBytes(dir, cap) {
   return total;
 }
 
-function logSink(file) {
-  const fd = fs.openSync(file, 'wx', 0o600);
+function logSink() {
   let bytes = 0, truncated = false;
   return {
     write(chunk) {
       if (bytes >= LOG_CAP) { truncated = true; return; }
       const piece = chunk.subarray(0, LOG_CAP - bytes);
-      fs.writeSync(fd, piece); bytes += piece.length;
+      // Subject output can contain credentials. Never persist it, even before a scan.
+      bytes += piece.length;
       if (piece.length < chunk.length) truncated = true;
     },
-    close() { fs.closeSync(fd); return { bytes, truncated }; }
+    close() { return { bytes, truncated, persisted: false }; }
   };
 }
 
@@ -190,7 +190,7 @@ export async function runContainer(plan, { command = dockerCommand, spawnRun = s
   prepareDirectories(plan);
   const localImage = command(['image', 'inspect', '--format', '{{.Id}}', plan.image]);
   if (localImage.status !== 0) throw new RunnerError('pinned image is not locally available; pull through a reviewed update path', 3);
-  const stdout = logSink(path.join(plan.logDir, 'stdout.log')), stderr = logSink(path.join(plan.logDir, 'stderr.log'));
+  const stdout = logSink(), stderr = logSink();
   const child = spawnRun('docker', plan.args, { stdio: ['ignore', 'pipe', 'pipe'], env: dockerEnvironment() });
   child.stdout?.on('data', chunk => stdout.write(chunk)); child.stderr?.on('data', chunk => stderr.write(chunk));
   let timedOut = false, interrupted = false, limit = null, pollError = null;
@@ -220,7 +220,7 @@ export async function runContainer(plan, { command = dockerCommand, spawnRun = s
       else if (treeBytes(plan.cache, plan.cacheBytes) > plan.cacheBytes) limit = 'cache';
     } catch (error) { pollError = errorClass(error); limit = 'disk_unmeasurable'; }
   }
-  const logs = { stdout: { path: path.join(plan.logDir, 'stdout.log'), ...stdout.close() }, stderr: { path: path.join(plan.logDir, 'stderr.log'), ...stderr.close() } };
+  const logs = { stdout: stdout.close(), stderr: stderr.close() };
   let state = null, cleanupError = null;
   try { state = containerState(plan, command); } catch (error) { cleanupError = errorClass(error); }
   let clean;

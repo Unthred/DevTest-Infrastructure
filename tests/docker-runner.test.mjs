@@ -33,7 +33,7 @@ test('locked official images have exact digests and unknown or malformed entries
 
 test('planner applies every hardening boundary and keeps source read-only', t => {
   const f = fixture(t), plan = f.plan(), args = plan.args.join(' ');
-  for (const expected of ['--pull=never', '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--read-only', '--network=none',
+  for (const expected of ['--pull=never', '--log-driver=none', '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--read-only', '--network=none',
     '--cpus 1', '--memory 512m', '--pids-limit 64', '--shm-size 64m', '--user', 'dst=/src,readonly', 'dst=/work', 'dst=/out', 'dst=/cache', '--init', '--memory-swap 512m', 'fsize=16777216:16777216']) assert.ok(args.includes(expected), expected);
   assert.ok(!args.includes('--rm'), 'exit state is read before removal');
   assert.ok(!args.includes(['--', 'privileged'].join('')));
@@ -147,15 +147,13 @@ test('timeout is 5 and an unremovable container is 7 with the error class record
   assert.equal(cleanup.result.exitCode, 7); assert.equal(cleanup.result.cleanup, 'incomplete');
 });
 
-test('container output is captured to bounded owner-only host logs outside the writable mounts', async t => {
+test('subject output is consumed without persisting possible secrets', async t => {
   const { result, plan } = await runWith(t, { exit: 3, state: '3 false', stdoutText: 'VISIBLE_STDOUT\n', stderrText: 'x'.repeat(2 * 1048576) });
   assert.equal(result.exitCode, 1);
-  assert.equal(fs.readFileSync(result.logs.stdout.path, 'utf8'), 'VISIBLE_STDOUT\n');
+  assert.equal(result.logs.stdout.bytes, 15);
   assert.equal(result.logs.stderr.bytes, 1048576); assert.equal(result.logs.stderr.truncated, true);
-  for (const log of [result.logs.stdout.path, result.logs.stderr.path]) {
-    assert.equal(fs.statSync(log).mode & 0o777, 0o600);
-    assert.ok(!log.startsWith(plan.work) && !log.startsWith(plan.out), 'logs are not in a container-writable directory');
-  }
+  assert.equal(result.logs.stdout.persisted, false); assert.equal(result.logs.stderr.persisted, false);
+  assert.equal(fs.readdirSync(plan.logDir).length, 0);
 });
 
 test('aggregate disk budget: an over-limit run is killed, reported as a subject failure and cleaned up', async t => {
