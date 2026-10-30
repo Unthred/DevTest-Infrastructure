@@ -109,12 +109,53 @@ test('fix-round review prompt scopes to previous blocking findings and regressio
   const w = reviewWorld(t, H(2));
   w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'claude', at: 1,
     findings: [{ kind: 'blocking', text: 'Broken acceptance' }, { kind: 'follow-up', text: 'Optional polish' }] };
+  w.team.s.jobs.fix1 = { kind: 'fix', pr: 10, head: H(1), at: 2 };
+  w.jobs.states.fix1 = { status: 'completed' };
   await w.team.execute((await w.team.plan())[0]);
   const spec = w.calls.created[0];
   assert.match(spec.prompt, /fix-round re-review.*previous blocking findings and regressions/s);
   const scope = JSON.parse(fs.readFileSync(path.join(w.team.dir, 'inbox', spec.postcondition.ticket, 'review-scope.json'), 'utf8'));
   assert.deepEqual(scope.blocking, [{ kind: 'blocking', text: 'Broken acceptance' }]);
   assert.doesNotMatch(spec.prompt, /Broken acceptance|Optional polish/);
+});
+
+test('a rebase after PASS gets a full review despite an older CHANGES verdict', async t => {
+  const w = reviewWorld(t, H(3));
+  w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'claude', at: 1,
+    findings: [{ kind: 'blocking', text: 'Old finding' }] };
+  w.team.s.jobs.fix1 = { kind: 'fix', pr: 10, head: H(1), at: 2 };
+  w.jobs.states.fix1 = { status: 'completed' };
+  w.team.s.verdicts[`10:${H(2)}`] = { verdict: 'PASS', reviewer: 'claude', at: 3, findings: [] };
+  w.team.s.jobs.rebase1 = { kind: 'rebase', pr: 10, head: H(2), at: 4 };
+  w.jobs.states.rebase1 = { status: 'completed' };
+  await w.team.execute((await w.team.plan())[0]);
+  const spec = w.calls.created[0];
+  assert.doesNotMatch(spec.prompt, /fix-round re-review/);
+  assert.equal(fs.existsSync(path.join(w.team.dir, 'inbox', spec.postcondition.ticket, 'review-scope.json')), false);
+});
+
+test('a new head without a completed fix gets a full review', async t => {
+  const w = reviewWorld(t, H(2));
+  w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'claude', at: 1,
+    findings: [{ kind: 'blocking', text: 'Old finding' }] };
+  w.team.s.jobs.fix1 = { kind: 'fix', pr: 10, head: H(1), at: 2 };
+  w.jobs.states.fix1 = { status: 'failed' };
+  await w.team.execute((await w.team.plan())[0]);
+  const spec = w.calls.created[0];
+  assert.doesNotMatch(spec.prompt, /fix-round re-review/);
+  assert.equal(fs.existsSync(path.join(w.team.dir, 'inbox', spec.postcondition.ticket, 'review-scope.json')), false);
+});
+
+test('a rebase after CHANGES gets a full review', async t => {
+  const w = reviewWorld(t, H(2));
+  w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'claude', at: 1,
+    findings: [{ kind: 'blocking', text: 'Old finding' }] };
+  w.team.s.jobs.rebase1 = { kind: 'rebase', pr: 10, head: H(1), at: 2 };
+  w.jobs.states.rebase1 = { status: 'completed' };
+  await w.team.execute((await w.team.plan())[0]);
+  const spec = w.calls.created[0];
+  assert.doesNotMatch(spec.prompt, /fix-round re-review/);
+  assert.equal(fs.existsSync(path.join(w.team.dir, 'inbox', spec.postcondition.ticket, 'review-scope.json')), false);
 });
 
 test('team config: the shipped file is valid, disabled by default and cites D-020; bad configs are refused', () => {

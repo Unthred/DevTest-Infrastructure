@@ -374,8 +374,20 @@ export class Team {
     let spec, meta, bump = () => {};
     if (act.type === 'review') {
       const inbox = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(inbox, { recursive: true, mode: 0o700 });
-      const previous = Object.entries(this.s.verdicts).filter(([key, v]) => key.startsWith(`${act.pr}:`) && v.verdict === 'CHANGES' && v.findings?.some(f => f.kind === 'blocking'))
-        .sort((a, b) => (b[1].at || 0) - (a[1].at || 0))[0]?.[1];
+      // Only a completed fix of the latest rejected head permits a scoped re-review. A later PASS or rebase
+      // starts a full review, even if an older head had blocking findings.
+      const latestVerdict = Object.entries(this.s.verdicts).filter(([key]) => key.startsWith(`${act.pr}:`))
+        .map((entry, index) => ({ entry, index }))
+        .sort((a, b) => (b.entry[1].at || 0) - (a.entry[1].at || 0) || b.index - a.index)[0]?.entry;
+      const latestChange = Object.entries(this.s.jobs).filter(([, j]) => j.pr === act.pr && ['fix', 'cifix', 'rebase'].includes(j.kind))
+        .at(-1);
+      const fix = latestChange?.[1];
+      const fixedRejectedHead = latestVerdict?.[1].verdict === 'CHANGES'
+        && latestVerdict[1].findings?.some(f => f.kind === 'blocking') && fix?.kind === 'fix'
+        && fix.head === latestVerdict[0].slice(`${act.pr}:`.length) && fix.head !== act.head
+        && (fix.at || 0) >= (latestVerdict[1].at || 0)
+        && (await this.jobs.get(latestChange[0]))?.status === 'completed';
+      const previous = fixedRejectedHead ? latestVerdict[1] : null;
       if (previous) fs.writeFileSync(path.join(inbox, 'review-scope.json'), JSON.stringify({ blocking: previous.findings.filter(f => f.kind === 'blocking') }) + '\n', { mode: 0o600 });
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `Independent review of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
