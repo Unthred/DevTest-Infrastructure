@@ -106,7 +106,9 @@ export async function capture(o) {
       fs.writeFileSync(path.join(o.out, file), buffer, { mode: 0o600 });
       report.screenshot = { file, bytes: buffer.length };
     }
-    if (o.trace) { const file = `${o.name}-${o.profile}-${o.browser}.trace.zip`; await context.tracing.stop({ path: path.join(o.out, file) }); report.trace = file; }
+    if (o.trace) { const file = `${o.name}-${o.profile}-${o.browser}.trace.zip`; const traceFile = path.join(o.out, file); await context.tracing.stop({ path: traceFile }); fs.chmodSync(traceFile, 0o600);
+      // Unlike the report, a Playwright trace keeps full URLs (query strings included) and DOM snapshots. Say so, never imply redaction.
+      report.trace = { file, redacted: false, contains: 'full request URLs with query strings and DOM snapshots' }; }
   } finally {
     await context?.close().catch(() => {}); await browser?.close().catch(() => {}); server.close();
   }

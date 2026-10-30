@@ -54,8 +54,8 @@ try {
   check('container has no route and cannot reach an external address', probe.result.subjectExit === 0);
 
   const desktop = await run('index-desktop-chromium', { phase: 'test', command: capture('--path', '/', '--name', 'index', '--profile', 'desktop', '--full-page', '--trace') }, {
-    inspect: plan => ({ shot: png(path.join(plan.out, 'index-desktop-chromium.png')), rep: report(plan, 'index-desktop-chromium.report.json'), trace: fs.existsSync(path.join(plan.out, 'index-desktop-chromium.trace.zip')) }) });
-  check('desktop screenshot', desktop.result.subjectExit === 0 && desktop.shot?.width === 1280 && desktop.shot.bytes > 1000 && desktop.rep.ok && desktop.trace, { shot: desktop.shot, browserVersion: desktop.rep.browserVersion });
+    inspect: plan => ({ shot: png(path.join(plan.out, 'index-desktop-chromium.png')), rep: report(plan, 'index-desktop-chromium.report.json'), trace: fs.existsSync(path.join(plan.out, 'index-desktop-chromium.trace.zip')) && (fs.statSync(path.join(plan.out, 'index-desktop-chromium.trace.zip')).mode & 0o777) === 0o600 }) });
+  check('desktop screenshot', desktop.result.subjectExit === 0 && desktop.shot?.width === 1280 && desktop.shot.bytes > 1000 && desktop.rep.ok && desktop.trace && desktop.rep.trace.redacted === false, { shot: desktop.shot, browserVersion: desktop.rep.browserVersion });
 
   const phone = await run('index-phone-chromium', { phase: 'test', command: capture('--path', '/', '--name', 'index', '--profile', 'phone') }, {
     inspect: plan => ({ shot: png(path.join(plan.out, 'index-phone-chromium.png')), rep: report(plan, 'index-phone-chromium.report.json') }) });
