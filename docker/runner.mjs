@@ -62,6 +62,8 @@ export function buildPlanForVerifiedPaths(spec, config, project, storage) {
   const names = spec.targets ?? [];
   if (!Array.isArray(names) || names.length > 4 || !names.every(n => targetName.test(n)) || new Set(names).size !== names.length) throw new RunnerError('targets must be up to four unique simple names');
   const targets = names.map(name => ({ name, host: targetSocketPath(storage, spec.runId, name), container: `/targets/${name}.sock` }));
+  // sun_path holds 107 bytes; longer paths are silently truncated by listen(), so refuse them before anything starts.
+  if (targets.some(t => Buffer.byteLength(t.host) > 107)) throw new RunnerError('target socket path is too long; use a shorter storage root');
   const phase = spec.phase || 'build';
   if (!['restore', 'build', 'test'].includes(phase)) throw new RunnerError('invalid run phase');
   const limits = config.limits || {};

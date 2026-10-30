@@ -7,11 +7,21 @@ import net from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const EXIT = { ok: 0, usage: 2, problems: 10, timeout: 11, blocked: 12, tls: 13, launch: 14 };
+export const EXIT = { ok: 0, usage: 2, problems: 10, timeout: 11, blocked: 12, tls: 13, launch: 14, layout: 15 };
+// Viewport profiles (issue #6). `phone` and `desktop` are the original #5 names and keep their meaning. The STANDARD set is the
+// width ladder 360 / 390 / 430 / 768 / 1024 / 1280 / 1440 / 1920; the rest are orientation, touch and pixel-ratio variants.
+const touch = (width, height, deviceScaleFactor) => ({ viewport: { width, height }, deviceScaleFactor, isMobile: true, hasTouch: true });
+const pointer = (width, height, deviceScaleFactor = 1) => ({ viewport: { width, height }, deviceScaleFactor, isMobile: false, hasTouch: false });
 export const PROFILES = {
-  phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
-  desktop: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false }
+  phone: touch(390, 844, 2),
+  desktop: pointer(1280, 800),
+  'phone-360': touch(360, 800, 2), 'phone-390': touch(390, 844, 2), 'phone-430': touch(430, 932, 2),
+  'tablet-768': touch(768, 1024, 2), 'tablet-1024': touch(1024, 768, 2),
+  'desktop-1280': pointer(1280, 800), 'desktop-1440': pointer(1440, 900), 'desktop-1920': pointer(1920, 1080),
+  'phone-390-landscape': touch(844, 390, 2), 'tablet-768-landscape': touch(1024, 768, 2), 'tablet-1024-portrait': touch(768, 1024, 2),
+  'desktop-1280-hidpi': pointer(1280, 800, 2), 'desktop-1280-touch': { ...pointer(1280, 800), hasTouch: true }
 };
+export const STANDARD_PROFILES = ['phone-360', 'phone-390', 'phone-430', 'tablet-768', 'tablet-1024', 'desktop-1280', 'desktop-1440', 'desktop-1920'];
 const BROWSERS = ['chromium', 'firefox', 'webkit'];
 const WAITS = ['load', 'domcontentloaded', 'networkidle'];
 const safeName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -45,7 +55,7 @@ export const redactUrl = (raw) => { try { const u = new URL(raw); return u.proto
 // Free text (console, page and navigation errors) can embed full URLs, so every URL in it is reduced the same way as a URL field.
 const redactText = (s) => String(s).replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"<>)\]]+/gi, (u) => redactUrl(u));
 const redactPath = (p) => String(p).replace(/[?#].*$/s, '');
-const clip = (s) => redactText(String(s).replace(/\s+/g, ' ')).slice(0, 500);
+export const clip = (s) => redactText(String(s).replace(/\s+/g, ' ')).slice(0, 500);
 
 // A request is allowed only to the bridged target (and inline data/blob/about URLs, which are not network).
 export function isAllowed(raw, port) {
@@ -60,7 +70,7 @@ export function isAllowedSocket(raw, port) {
   return u.protocol === 'ws:' && u.hostname === '127.0.0.1' && Number(u.port) === port;
 }
 
-function bridge(socketPath) {
+export function bridge(socketPath) {
   const server = net.createServer((client) => {
     const upstream = net.connect(socketPath);
     client.pipe(upstream); upstream.pipe(client);

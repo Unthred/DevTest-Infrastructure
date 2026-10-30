@@ -20,6 +20,8 @@ Last updated: 2026-10-30 by Claude on `claude/issue-35-scheduled-ticks-fail` (is
 | #5 Playwright browser runtime | yes; branch `claude/issue-5-playwright` | no; CI and Codex review pending | no | real Docker on Tower: Chromium, Firefox and WebKit screenshots, broken-page and external-request detection, cleanup to baseline (`tests/browser-smoke.mjs`); TCP targets blocked on OQ-2 |
 
 | #32 Team dashboard | yes; Claude branch `claude/issue-32-p0-team-dashboard` (see PR); `docs/dashboard.md` | no; PR CI and Codex review pending | no (not installed, not served) | no; page checked only against a copy of the real Tower state on a temporary LAN listener (removed); screenshots at desktop and phone width NOT captured (browser runtime #5 / PR #27 unmerged) |
+
+| #6 Responsive profiles and visual evidence | yes; branch `claude/issue-6-responsive`, draft PR stacked on #27 | no; CI and Codex review pending | no | real Docker on Tower: broken fixture fails with every seeded defect, corrected fixture passes at 8 widths, in Chromium/Firefox/WebKit; no visual acceptance claimed |
 | #3–#14 other issues | not started | no | no | no |
 
 ## Ownership
@@ -197,3 +199,8 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Tests: validator OK; full suite 278/278 (new `tests/dashboard-v2.test.mjs`: sorting, pagination, footer totals, filter, range, severity mapping, health, idle-reason text on the page, routes/404, drill-downs, layout per breakpoint, contrast of tokens, static whitelist). Mutation checks on sort direction, severity map, pagination and footer fail the tests.
 - Screenshots: 40 captures (10 pages x light/dark x desktop/phone) taken with the project browser runtime (#5) from a realistic fixture, stored in `/mnt/cache/appdata/devtest-infrastructure/evidence/issue-54/` (not in Git, D-005). NOT yet attached to issue #54 (the gh CLI cannot upload images); tablet width has no runtime profile, so it is not captured. Drag, resize and the live countdown are script behaviour and were not exercised in a real browser session; their pure logic is unit-tested.
 - Not deployed, not served. Reviewer: Codex. Deploy via the supervisor self-upgrade after PASS and merge.
+
+## #6 Responsive profiles and visual evidence (Claude, branch `claude/issue-6-responsive`)
+- Started before #5 merged (homeowner exception 2026-10-30). #27 has merged; this branch is now a conflict-only rebase onto main and no longer stacked.
+- Source: viewport ladder and variants in `browser/capture.mjs`; `browser/responsive.mjs`, `browser/layout-check.mjs`, `browser/responsive-lib.mjs`; broken and corrected fixtures; runner and static server now refuse a socket path over the 107-byte Unix socket limit (found while running this gate); [docs/responsive-audit.md](../responsive-audit.md).
+- Tests: `tests/responsive.test.mjs`, `tests/browser.test.mjs`; Tower gate `tests/responsive-smoke.mjs` (output in the PR). Not claimed: visual acceptance, pixel baselines, CLI integration (#8), TCP/authenticated targets (OQ-2, #10).
