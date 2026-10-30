@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "providers": {
+    "claude": {"adapter": "claude", "manifest": "providers/claude.json"},
+    "codex": {"adapter": "codex", "manifest": "providers/codex.json"}
+  }
+}
