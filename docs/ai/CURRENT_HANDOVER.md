@@ -81,7 +81,7 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Review and CI: Codex re-review pending at the head named on the PR. Installed: no.
 - Live status: the Codex interactive limit message and its `/status` window lines are captured and parsed (verified for those two shapes only). The `codex exec --json` form, session resume and all Claude exhausted states are uncaptured; manifests stay `unverified` and `autoResume` stays refused.
 
-## Issue #23 team loop (Claude, branch `claude/issue-23-team-loop`)
+## Issue #23 team loop (Claude, branch `claude/issue-23-team-loop`, stacked on #21: its diff includes #21 until #21 merges)
 - Source: dispatcher `supervisor/team.mjs`, `github.mjs`, `team.json` (disabled), `access.json`; post-conditions, `autoRestart` and D-019 timing in `core.mjs`; manifest `access` field; `docs/team-loop.md`; fake-GitHub/fake-provider tests.
 - Review and CI: exact-head CI green; Codex executable review pending. Installed: no. Deploy with `tools/upgrade-supervisor.sh` only after Codex's PASS, then enable `team.json` (an explicit act).
 - Live status: a supervised `access: full` Codex job ran the suite on Tower; dispatcher, merge, restart after a real limit and the cron path are not live-verified. Reset parsing stays unverified.
