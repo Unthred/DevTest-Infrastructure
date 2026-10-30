@@ -79,6 +79,12 @@ test('the static server serves files below its root only', async t => {
     assert.equal((await get(socket, '/missing')).status, 404);
     assert.equal((await get(socket, '/dir')).status, 404, 'no directory listing');
     assert.equal((await get(socket, '/link.txt')).status, 403, 'symlinks are not followed');
+    fs.writeFileSync(path.join(outside, 'marker.txt'), 'OUTSIDE_CANARY');
+    fs.symlinkSync(outside, path.join(root, 'linked'));
+    fs.mkdirSync(path.join(root, 'real')); fs.symlinkSync(outside, path.join(root, 'real', 'deep'));
+    for (const viaDir of ['/linked/marker.txt', '/real/deep/marker.txt']) {
+      const r = await get(socket, viaDir); assert.equal(r.status, 403, `symlinked directory component: ${viaDir}`); assert.ok(!r.body.includes('OUTSIDE_CANARY'), viaDir);
+    }
     for (const bad of ['/../secret.txt', '/%2e%2e/secret.txt', '/..%2f..%2fetc/passwd', `/${path.relative(root, path.join(outside, 'secret.txt'))}`]) {
       const r = await get(socket, bad); assert.notEqual(r.status, 200, bad); assert.ok(!r.body.includes('SECRET'), bad);
     }

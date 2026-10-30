@@ -87,3 +87,11 @@ test('a trace is written 0600 and the report says it is NOT redacted', async t =
   assert.equal(r.report.trace.redacted, false); assert.match(r.report.trace.contains, /query strings/);
   assert.equal(fs.statSync(path.join(r.out, r.report.trace.file)).mode & 0o777, 0o600);
 });
+
+test('a query string or fragment in --path, and URLs inside error text, never reach the report', async t => {
+  const r = await run(t, { gotoError: 'page.goto: net::ERR_FAILED at http://127.0.0.1:1234/index.html?session=CANARY_VALUE#frag_CANARY', console: ['load failed https://x.test/a?k=CANARY_VALUE'], pageErrors: ['bad http://127.0.0.1:9/p?k=CANARY_VALUE'] },
+    { path: '/index.html?session=CANARY_VALUE#frag_CANARY' });
+  const text = JSON.stringify(r.report);
+  assert.ok(!text.includes('CANARY'), text);
+  assert.equal(r.report.path, '/index.html');
+});

@@ -33,7 +33,7 @@ The container always has `--network=none`: no interface except loopback and no r
 | 13 | TLS error: certificate validation is never bypassed |
 | 14 | The browser could not be launched |
 
-Output in `/out`: `<name>-<profile>-<browser>.png`, `.report.json` (schema_version 1: status, durations, console/page/HTTP/failed/blocked lists, no query strings), and with `--trace` a `.trace.zip`. Profiles: `phone` 390x844 @2x touch, `desktop` 1280x800 @1x.
+Output in `/out`: `<name>-<profile>-<browser>.png`, `.report.json` (schema_version 1: status, durations, console/page/HTTP/failed/blocked lists, no query strings or fragments, including in `path` and in console/page/navigation error text, where URLs are reduced to scheme, host and path; other page-authored text is clipped but not otherwise redacted), and with `--trace` a `.trace.zip`. Profiles: `phone` 390x844 @2x touch, `desktop` 1280x800 @1x.
 
 ## Known limits
 - Chromium runs with Playwright's default `--no-sandbox` inside the container; the container hardening is the boundary, not the browser sandbox.

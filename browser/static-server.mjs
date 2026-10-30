@@ -19,7 +19,9 @@ export function createStaticServer(root) {
     const relative = pathname.endsWith('/') ? `${pathname}index.html` : pathname;
     const file = path.join(base, relative);
     if (file !== base && !file.startsWith(base + path.sep)) return deny(403);
-    let st; try { st = fs.lstatSync(file); } catch { return deny(404); }
+    let st, real; try { st = fs.lstatSync(file); real = fs.realpathSync(file); } catch { return deny(404); }
+    // base is a real path, so a symlinked component anywhere (not just the last) makes the resolved path differ from the joined one.
+    if (real !== file) return deny(403);
     if (!st.isFile()) return deny(st.isSymbolicLink() ? 403 : 404);
     res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream', 'content-length': st.size, 'cache-control': 'no-store' });
     if (req.method === 'HEAD') return res.end();

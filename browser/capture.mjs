@@ -42,7 +42,10 @@ export function parseArguments(argv) {
 
 // Query strings and fragments can carry tokens, so reports keep only origin-less path information.
 export const redactUrl = (raw) => { try { const u = new URL(raw); return u.protocol === 'data:' ? 'data:' : `${u.protocol}//${u.host}${u.pathname}`; } catch { return 'invalid-url'; } };
-const clip = (s) => String(s).replace(/\s+/g, ' ').slice(0, 500);
+// Free text (console, page and navigation errors) can embed full URLs, so every URL in it is reduced the same way as a URL field.
+const redactText = (s) => String(s).replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"<>)\]]+/gi, (u) => redactUrl(u));
+const redactPath = (p) => String(p).replace(/[?#].*$/s, '');
+const clip = (s) => redactText(String(s).replace(/\s+/g, ' ')).slice(0, 500);
 
 // A request is allowed only to the bridged target (and inline data/blob/about URLs, which are not network).
 export function isAllowed(raw, port) {
@@ -62,7 +65,7 @@ function bridge(socketPath) {
 }
 
 export async function capture(o) {
-  const report = { schema_version: 1, ok: false, target: o.target, path: o.path, browser: o.browser, profile: o.profile, wait: o.wait, fullPage: o.fullPage,
+  const report = { schema_version: 1, ok: false, target: o.target, path: redactPath(o.path), browser: o.browser, profile: o.profile, wait: o.wait, fullPage: o.fullPage,
     navigation: { status: null, durationMs: null }, screenshot: null, consoleErrors: [], pageErrors: [], httpErrors: [], failedRequests: [], blockedRequests: [], problems: [] };
   let exit = EXIT.ok;
   const socketPath = path.join(o.socketDir, `${o.target}.sock`);
