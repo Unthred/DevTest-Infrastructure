@@ -144,3 +144,6 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Live check: copied Tower job/event/team state to a temp dir, seeded the cache from a read-only GitHub read, served on the LAN address 192.168.13.1:8731 briefly: HTTP 200, plausible agents, queue, attention. Server stopped, temp state deleted. Production state and the live tick were not touched.
 - Observed, not fixed here: the planner still proposes implementing #23 (already delivered, issue open); that is the #30 delivered-work problem.
 - Open for the homeowner: choose the Tower LAN address; install the User Scripts "At Startup of Array" entry (docs/dashboard.md); HAProxy exposure needs separate approval; deploy requires `tools/upgrade-supervisor.sh` after merge. Screenshots to be posted on #32 once #5 is merged and the page is served.
+
+## #32 dashboard CHANGES fix (Claude, PR #36)
+- Codex CHANGES at `5b1a729` (cached Prerequisites line unredacted; 200-char truncation dropped dependencies from the dashboard plan) fixed: the cache now stores only parsed `prerequisites` numbers (no free text), and `Team.plan`/dashboard use them. Regression tests: 50 dependencies preserved, email in the issue body never cached. Validator OK, 141/141 tests. Codex re-review of the new head pending; not merged.
