@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged architecture and supervisor PRs. Each agent edits this file only on its own branch.
+Last updated: 2026-10-30 by Claude on `claude/issue-5-playwright` (based on main at the merge of #19). Each agent edits this file only on its own branch.
 
 ## Completion states
 
@@ -12,9 +12,10 @@ Last updated: 2026-10-30 by Codex on `codex/issue-2-docker`, based on merged arc
 | #15 Supervisor | yes (PR #17 merged as `69f88000798a3a55224171e15d3f8af7b2d12e37`) | yes: exact-head CI/GitGuardian green; Claude independent PASS on `baba983` | merged commit `69f8800` installed on Tower; wrapper and payload bytes verified | normal launcher/CLI smoke passed; real usage-limit reset and post-limit resume unverified |
 | AI-Rules launcher metadata fix (PR #15) and `devtest` role (PR #16) | yes | CI green; independent review pending | yes, installed 2026-10-29 | Codex launch confirmed by the homeowner; Claude launch checked by recorded argv only |
 | #15 regression follow-up | yes; PR #18 merged as `0240bc384bf9ee36ce6b0f87e1ea8f7f636fb9d7` | yes; Codex independent PASS at `df99dca65a0f3ea0c1f629d34ab54d91a093889c`, 42/42 local tests and exact-head CI green | not separately installed | context requeue crash window verified by fixture only |
-| #2 Docker foundation | yes on PR #19; PR #22 merged as base, then Codex hard-bound/log fixes `a96ea85`, `31f3c96`, `95f392a` | validator and 47/47 local tests pass; exact-head CI and Claude independent re-review pending | no standalone `dev-test` installation | Tower runner positive, subject-failure and hard work/output/cache limit probes passed; CLI integration remains issue #8 |
+| #2 Docker foundation | yes on PR #19; PR #22 merged as base, then Codex hard-bound/log fixes `a96ea85`, `31f3c96`, `95f392a` | yes: PR #19 merged as `a8b944b` after Codex PASS on #26 (`ce738f4`) and Claude final check at `aaa76cc` (62/62, exact-head CI green, both Docker smokes) | no standalone `dev-test` installation | Tower runner positive, subject-failure and hard work/output/cache limit probes passed; CLI integration remains issue #8 |
 | #20 Allowance detection | pending; Claude PR #21, head `2d3b5cfae69f05743b7d22521da5d8a76da493d1` | no; Codex requested changes for successful paid-overage event | no | simulated subprocess bug reproduced; live allowance recovery unverified |
 | #23 Team loop | yes; PR #25 (D-019 and D-020 recorded; dispatcher, trusted verdicts, post-conditions, restart and access modes) | no; CI green, Codex executable review pending | no | a supervised full-access Codex job ran `node --test` on Tower (35/35); dispatcher, merge, real-limit restart and cron path not live-verified |
+| #5 Playwright browser runtime | yes; branch `claude/issue-5-playwright` | no; CI and Codex review pending | no | real Docker on Tower: Chromium, Firefox and WebKit screenshots, broken-page and external-request detection, cleanup to baseline (`tests/browser-smoke.mjs`); TCP targets blocked on OQ-2 |
 | #3–#14 other issues | not started | no | no | no |
 
 ## Ownership
@@ -62,8 +63,8 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - 2026-10-30: Codex reviewed #22 at `a2f5a1a` and requested hard disk and secret-safe logs; homeowner directed merge as a base and Codex corrected these on #19. #21 at `2d3b5cf` remains CHANGES REQUESTED because successful paid-overage output was marked completed. #18 passed independent review and merged as `0240bc384bf9ee36ce6b0f87e1ea8f7f636fb9d7`. Codex's separate review handover is PR #24 and needs Claude review; do not self-merge it.
 
 ## Next actions
-1. Codex: push this exact #19 head, confirm exact-head CI and GitGuardian, request Claude's executable independent re-review; correct any findings in own worktree.
-2. Claude merges #19 only after independent PASS and exact-head green gates. Codex then starts #3 .NET SDK builds in a new worktree. Claude can start #5 Playwright once #2 reaches CI/review passed.
+1. Codex: review PR #21 (`c2f2244`) and PR #25, then start #3 (.NET) now that #19 is merged; review the #5 PR when requested.
+2. Claude: continue #5 until Codex reviews it; then #6, #7 (OpenBao), #10, #13, #14 as prerequisites reach CI/review passed.
 3. Keep #15 open for real provider-limit capability evidence; do not enable production auto-resume based on simulated tests or reboot Tower to claim persistence.
 
 1. Claude corrects PRs #22 and #21 in its own branches. Codex reviews each new exact head from a fresh clone, reruns validator/full suite and real Docker probes for #22, checks CI, and merges only after PASS.
@@ -95,3 +96,11 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Source: `listMergedPulls` + delivered-work skip in `supervisor/team.mjs`; `team.local.json` override loader (state root, restricted keys); `team.json` no longer lists #2 and #23; `tools/upgrade-supervisor.sh` refuses an override in the payload and verifies the copy with `diff -r`; `docs/team-loop.md` documents the override and upgrade procedure.
 - Tests: validator OK, 119/119 (new: delivered-work positive/negative, shipped config, override apply/refuse/survives-upgrade, script guards). Live read-only `team tick --dry-run` with a temp state root planned one review and no #2/#23 job.
 - Review and CI: Codex review pending. Installed: no. Deploy only after PASS and dispatcher merge, then create `/mnt/cache/ai-supervisor/team.local.json` (`{"enabled": true}`) and follow the procedure in docs/team-loop.md.
+
+## #5 Playwright browser runtime (Claude, branch `claude/issue-5-playwright`)
+- Homeowner exception 2026-10-30: #5 was started before #2 was formally merged, stacked on #19 ("do not merge before #19"). #19 merged as `a8b944b` before this PR was opened, so the branch is based on main and no stacking remains.
+- Source: image `mcr.microsoft.com/playwright:v1.64.1-noble` pinned by digest with tag and resolved date in `docker/images.lock.json`; `playwright-core` 1.64.1 pinned by npm integrity (`browser/prepare-cache.mjs`); `browser/capture.mjs`; `browser/static-server.mjs`; runner `targets` (host-side Unix socket mounts, verified before start); [docs/browser-runner.md](../browser-runner.md).
+- Tests: `tests/browser.test.mjs` (positive and negative, one mutation check on the allow-list). Tower gate `tests/browser-smoke.mjs`: see the PR for the output.
+- Not done, blocked on OQ-2: reaching a real TCP service (needs a firewall rule or trusted forwarder; no firewall change was made). No .NET in this track. Not deployed; CLI integration is #8.
+- Codex verdict CHANGES on `fcbf9c1` (2026-10-30), both findings fixed in the next head: (1) `static-server.mjs` now compares `realpath` with the joined path, so a symlinked directory component anywhere returns 403 (tests: `/linked/…`, `/real/deep/…`); (2) `capture.mjs` strips query/fragment from the reported `path` and reduces every URL inside console/page/navigation error text to scheme+host+path (test with a canary). Validator OK, 129/129. Real-Docker smoke not rerun; CI and Codex re-review pending.
+- Codex verdict CHANGES on `a784af7` (2026-10-30): `context.route` does not see WebSocket handshakes, so `ws://127.0.0.1:43210/undeclared` was attempted (exit 10, nothing recorded). Fixed in the next head: `context.routeWebSocket` in `capture.mjs` connects only `ws://` to the bridged origin (`isAllowedSocket`); everything else is closed unconnected, recorded without query, exit 12. Tests: fake-Playwright cases plus `tests/browser-smoke.mjs` now runs `browser/fixture/websocket.html` on Chromium, Firefox and WebKit (all exit 12, token absent). Validator OK, 142/142, BROWSER SMOKE OK (cleanup 4/0/0). CI and Codex re-review pending.

