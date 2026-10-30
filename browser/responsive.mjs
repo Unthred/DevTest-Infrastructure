@@ -65,7 +65,8 @@ export async function audit(o) {
         const entry = { name, profile, findings: [], png: null, screenshot: null, pageProblems: 0 };
         try { await page.goto(`http://127.0.0.1:${port}${o.path}`, { waitUntil: o.wait, timeout: o.timeoutMs }); }
         catch (error) { exit = /Timeout/i.test(error.message) ? EXIT.timeout : /ERR_CERT|SSL|TLS/i.test(error.message) ? EXIT.tls : EXIT.problems; problem = clip(error.message); results.push(entry); continue; }
-        entry.findings = await page.evaluate(layoutCheck, { touch: profile.hasTouch });
+        // Nothing the page controls except the markup label and numbers may reach the artifacts (D-008).
+        entry.findings = (await page.evaluate(layoutCheck, { touch: profile.hasTouch })).map(({ text, ...f }) => f);
         const file = `${o.name}-${name}-${o.browser}.png`;
         const buffer = await page.screenshot({ fullPage: true, type: 'png', timeout: o.timeoutMs });
         fs.writeFileSync(path.join(o.out, file), buffer, { mode: 0o600 });
@@ -77,9 +78,10 @@ export async function audit(o) {
   } finally { await browser?.close().catch(() => {}); server.close(); }
   const summary = summarise({ target: o.target, path: o.path, browser: o.browser, name: o.name, results });
   summary.blockedRequests = blocked;
-  if (exit === EXIT.ok) {
-    if (blocked.length) exit = EXIT.blocked;
-    else if (summary.failures.length || summary.profiles.some((p) => !p.rendered)) exit = EXIT.layout;
+  // An undeclared destination outranks every other outcome, as in capture.mjs.
+  if (blocked.length) exit = EXIT.blocked;
+  else if (exit === EXIT.ok) {
+    if (summary.failures.length || summary.profiles.some((p) => !p.rendered)) exit = EXIT.layout;
     else if (summary.profiles.some((p) => p.pageProblems)) exit = EXIT.problems;
   }
   summary.ok = summary.ok && exit === EXIT.ok;

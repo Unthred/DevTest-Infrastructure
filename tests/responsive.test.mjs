@@ -84,3 +84,42 @@ export const chromium = { launch: async () => ({ newContext: async () => context
   assert.deepEqual(r.summary.blockedRequests, ['ws://127.0.0.1:43210/undeclared', 'wss://example.invalid/live']);
   assert.ok(!JSON.stringify(r.summary).includes('VALUE'));
 });
+
+// ---- review round on PR #29: page text must not reach artifacts; a blocked destination outranks a navigation failure
+async function auditWithFake(t, pageSource) {
+  const { default: fsm } = await import('node:fs'), { default: osm } = await import('node:os'), { default: pathm } = await import('node:path'), { default: netm } = await import('node:net');
+  const { audit } = await import('../browser/responsive.mjs');
+  const dir = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'resp-rv-'));
+  const sockets = pathm.join(dir, 's'), out = pathm.join(dir, 'o'); fsm.mkdirSync(sockets); fsm.mkdirSync(out);
+  const server = netm.createServer(c => c.end()).listen(pathm.join(sockets, 'fixture.sock'));
+  await new Promise(r => server.once('listening', r));
+  t.after(() => { server.close(); fsm.rmSync(dir, { recursive: true, force: true }); });
+  const fake = pathm.join(dir, 'fake.mjs');
+  fsm.writeFileSync(fake, `let wsFn;
+const page = { on() {}, ${pageSource}, async screenshot() { return Buffer.from('PNGDATA'); } };
+const context = { route: async () => {}, routeWebSocket: async (_p, f) => { wsFn = f; }, newPage: async () => page, close: async () => {} };
+export const chromium = { launch: async () => ({ newContext: async () => context, close: async () => {} }) };
+`);
+  const o = parseResponsiveArguments(['--target', 'fixture', '--profiles', 'phone', '--out', out, '--socket-dir', sockets, '--playwright', fake]);
+  const r = await audit(o);
+  const files = fsm.readdirSync(out).map(f => fsm.readFileSync(pathm.join(out, f)).toString('latin1')).join('\n');
+  return { r, files };
+}
+
+test('a navigation timeout together with an undeclared request still exits blocked (12)', async t => {
+  const { r } = await auditWithFake(t, `async goto() { await wsFn({ url: () => 'wss://example.invalid/x', connectToServer() {}, close() {} }); throw new Error('Timeout 5000ms exceeded'); }, async evaluate() { return []; }`);
+  assert.equal(r.exit, 12);
+  assert.deepEqual(r.summary.blockedRequests, ['wss://example.invalid/x']);
+});
+
+test('page text, input values and aria-labels never reach the layout JSON, summary or report', async t => {
+  const { r, files } = await auditWithFake(t, `async goto() { return { status: () => 200 }; }, async evaluate() { return [{ check: 'clipped', severity: 'fail', element: 'div.x', text: 'CANARY_SECRET', width: 5 }]; }`);
+  assert.equal(r.exit, 15);
+  assert.equal(r.summary.failures[0].check, 'clipped');
+  assert.ok(!JSON.stringify(r.summary).includes('CANARY_SECRET') && !renderReport(r.summary).includes('CANARY_SECRET') && !files.includes('CANARY_SECRET'));
+});
+
+test('layoutCheck itself never reads page text, values or aria-labels', async () => {
+  const { layoutCheck } = await import('../browser/layout-check.mjs');
+  assert.ok(!/innerText|textContent|\.value\b|aria-label/.test(layoutCheck.toString()));
+});

@@ -209,3 +209,8 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## #6 / PR #29 conflict-only rebase (Claude)
 - Rebased onto origin/main `94d4d0c`; old head `665128e`. Only conflict: this handover (status table and section list), resolved by keeping both sides. Validator OK, 219/219 tests. A recorded PASS for the old head does not carry over; the opposite agent reviews the new head.
+
+## PR #29 CHANGES fix round (Claude, branch `claude/issue-6-responsive`, from head `bc7cb37`)
+- Blocking 1 (secrets in artifacts): `layoutCheck` no longer reads `innerText`, input values or `aria-label`; findings carry only the markup label and numbers, and `responsive.mjs` also strips any `text` field it receives.
+- Blocking 2 (exit precedence): an undeclared request now yields exit 12 even after a navigation timeout, TLS or other failure, as in `capture.mjs`.
+- Regression tests added (222/222 locally, validator OK). Implemented in source; exact-head CI and opposite-agent re-review pending. Real-Docker smoke not re-run this round; not deployed.

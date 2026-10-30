@@ -1,13 +1,12 @@
 // Runs INSIDE the page via page.evaluate, so it must be self-contained (no imports, no closures over module state).
-// Returns findings { check, severity: 'fail' | 'warn', element, text, ...detail }. See responsive-lib.mjs CHECKS for the meanings.
+// Returns findings { check, severity: 'fail' | 'warn', element, ...detail }. Page text, input values and aria-labels are never copied out (D-008). See responsive-lib.mjs CHECKS for the meanings.
 export function layoutCheck(options) {
   const tol = 1, minTarget = 24, comfortable = 44;
   const doc = document.documentElement, vw = doc.clientWidth;
   const findings = [];
   const label = (el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${typeof el.className === 'string' && el.className.trim() ? `.${el.className.trim().split(/\s+/)[0]}` : ''}`;
-  const textOf = (el) => (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0, 40);
   const shown = (el) => { const r = el.getBoundingClientRect(), c = getComputedStyle(el); return r.width > 0 && r.height > 0 && c.visibility !== 'hidden' && c.display !== 'none' && c.opacity !== '0'; };
-  const add = (check, severity, el, detail = {}) => findings.push({ check, severity, element: label(el), text: textOf(el), ...detail });
+  const add = (check, severity, el, detail = {}) => findings.push({ check, severity, element: label(el), ...detail });
   const scroller = (el) => { for (let p = el.parentElement; p; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if (o === 'auto' || o === 'scroll') return p; } return null; };
 
   if (doc.scrollWidth > doc.clientWidth + tol) add('document-overflow', 'fail', document.body, { scrollWidth: doc.scrollWidth, clientWidth: doc.clientWidth });
