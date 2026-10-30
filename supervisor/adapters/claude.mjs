@@ -22,6 +22,7 @@ export function command(config, job, resume) {
 export function observe(line) {
   let obj;
   try { obj = JSON.parse(line); } catch { obj = null; }
+  if (obj === null && base.isTruncatedPayload(line)) return {};
   const errorObject = obj && (obj.type === 'error' || obj.is_error === true || obj.type === 'result' && obj.is_error === true);
   const sessionId = typeof obj?.session_id === 'string' ? obj.session_id : null;
   if (obj?.type === 'rate_limit_event') return { sessionId, allowance: claudeAllowance(obj.rate_limit_info) };

@@ -151,3 +151,54 @@ test('production manifests still refuse auto-resume: nothing here marks a capabi
   const registry = new URL('../supervisor/providers.json', import.meta.url).pathname;
   for (const provider of ['claude', 'codex']) await assert.rejects(createJob(s.root, { ...s.spec, provider, autoResume: true, issue: provider === 'claude' ? 21 : 22 }, registry), /auto-resume requires verified/);
 });
+
+// Issue #33: the supervisor cuts each output line to 16 KiB; a cut JSON line used to be scanned as plain text, so an agent that merely
+// READ a file mentioning "usage limit" paused its own job (false pause of job 7829a980…, issue #30).
+const shape = JSON.parse(fixture('claude-2.1.314-stream-tool_result.shape.json'));
+const longToolResult = (phrase, padTo = 40000) => { const e = structuredClone(shape); e.message.content[0].content = `${phrase} ${'x'.repeat(padTo)}`; return JSON.stringify(e); };
+const cut = line => line.slice(0, 16384);   // exactly what process.mjs hands the adapter
+
+test('a truncated structured line is never limit, auth, context, approval or rate evidence (Claude and Codex)', () => {
+  for (const phrase of ['usage limit', 'weekly limit', 'session limit', 'out of extra usage', 'rate limit', 'context window', 'not logged in', 'approval required', 'you have hit your limit']) {
+    const line = cut(longToolResult(`Docs say: ${phrase}.`));
+    assert.throws(() => JSON.parse(line), 'the fixture really is an unparseable fragment');
+    assert.deepEqual(claude.observe(line), {}, `claude: ${phrase}`);
+    assert.deepEqual(codex.observe(line), {}, `codex: ${phrase}`);
+  }
+  assert.deepEqual(claude.observe('  [{"cut array quoting usage limit'), {});
+});
+
+test('the fix is narrow: whole JSON lines, structured errors and plain stderr text classify exactly as before', () => {
+  assert.equal(claude.observe(JSON.stringify(shape)).event, undefined, 'an intact tool_result quoting the phrase was already ignored');
+  assert.equal(claude.observe('Claude AI usage limit reached').event, 'usage_limit');                         // plain text line (stderr)
+  assert.equal(claude.observe(JSON.stringify({ type: 'error', error: { message: 'You hit your weekly limit' } })).event, 'usage_limit');
+  assert.equal(codex.observe("You've hit your usage limit. Upgrade to Pro or try again at 11:44 AM.").event, 'usage_limit');
+  assert.equal(claude.observe(JSON.stringify({ type: 'result', is_error: true, api_error_status: 401, result: 'x' })).event, 'auth_error');
+});
+
+for (const [name, adapter] of [['claude', claude], ['codex', codex]]) {
+  test(`${name}: a long tool result quoting "usage limit" does not pause a run that completed (real subprocess, exit 0)`, async t => {
+    const s = sandbox(t, `process.stdout.write(${JSON.stringify(longToolResult('The usage limit and weekly limit are documented here.'))} + '\\n'); console.log('done');`, { observe: adapter.observe }), job = await createJob(s.root, s.spec, s.registry);
+    const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+    assert.equal(r.status, 'completed'); assert.notEqual(r.lastEvent, 'usage_limit'); assert.equal(r.attempts, 1);
+  });
+}
+
+test('the same long line on a failed run is a plain failure, not a limit', async t => {
+  const s = sandbox(t, `process.stdout.write(${JSON.stringify(longToolResult('usage limit'))} + '\\n'); process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'failed'); assert.notEqual(r.lastEvent, 'usage_limit');
+});
+
+test('the overage guard is untouched: an overage event after a long quoting line still blocks for approval', async t => {
+  const over = { ...claudeLive, rate_limit_info: { ...claudeLive.rate_limit_info, isUsingOverage: true } };
+  const s = sandbox(t, `process.stdout.write(${JSON.stringify(longToolResult('usage limit'))} + '\\n'); ${emit(over)} console.log('done');`, { observe: claude.observe }), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'blocked'); assert.equal(r.lastEvent, 'approval_required'); assert.equal(r.attempts, 1);
+});
+
+test('a REAL structured exhausted event after a long quoting line is still detected', async t => {
+  const s = sandbox(t, `process.stdout.write(${JSON.stringify(longToolResult('usage limit'))} + '\\n'); ${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.lastEvent, 'usage_limit'); assert.equal(r.allowance.windows[0].status, 'rejected');
+});

@@ -8,6 +8,10 @@ export function contextForRole(role) {
 export function command(config, job, resume) {
   return [...config.command, ...(config.arguments || []), ...(resume && job.sessionId ? [...(config.resumeArguments || []), job.sessionId] : [])];
 }
+// process.mjs cuts every output line to 16 KiB. A structured (JSON) line cut in the middle no longer parses, but it is still a
+// payload (a tool result, a message), not something the provider CLI said about itself. Its text can quote anything the agent
+// read, including this project's own talk of usage limits, so it is never evidence of a limit, auth, context or approval event.
+export const isTruncatedPayload = (line) => /^\s*[{\[]/.test(line);
 export function observe(line) {
   const text = line.toLowerCase();
   if (/permission required|approval required|requires approval/.test(text)) return { event: 'approval_required' };
