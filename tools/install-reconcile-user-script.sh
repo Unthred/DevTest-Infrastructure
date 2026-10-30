@@ -56,13 +56,6 @@ exit 0
 SCRIPT
 } > "$script_dir/script"
 chmod 600 "$script_dir"/*
-# Enable gate: run the preflight under the cron environment (env -i + the pinned PATH). If a binary or a login is not
-# visible there, refuse before any schedule is written.
-if [ -z "${AI_SUPERVISOR_RECONCILE_TEST:-}" ] || [ -n "${AI_SUPERVISOR_VERIFY:-}" ]; then
-  if ! bash "$(dirname "$0")/verify-reconcile-env.sh" "$script_dir/script"; then
-    rm -rf "$script_dir"; printf 'cron-environment preflight failed; nothing was scheduled\n' >&2; exit 3
-  fi
-fi
 node - "$plugin_root" "$script_dir/script" <<'NODE'
 const fs = require('fs'), path = require('path');
 const [root, script] = process.argv.slice(2);

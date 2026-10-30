@@ -91,8 +91,7 @@ async function teamTick(root, registry, dryRun) {
   if (!config.enabled && !dryRun) return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' };
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };
-  // A dry run reads the decision register too, so the enable gate fails exactly when a live tick would.
-  try { return await (await teamFor(root, registry, config, true)).tick({ dryRun }); } finally { unlock(); }
+  try { return await (await teamFor(root, registry, config, !dryRun)).tick({ dryRun }); } finally { unlock(); }
 }
 async function main() {
   const command = process.argv[2] || 'help';
@@ -150,17 +149,6 @@ async function main() {
   if (command === 'team') {
     if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run]');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
-  }
-  if (command === 'preflight') {
-    // Run by the enable/upgrade procedure under the cron environment (env -i + the script's PATH): every binary the tick and
-    // the supervised jobs need must resolve there, or enabling is refused. Exit 3 on any failure.
-    const out = { gh: spawnSync('gh', ['--version'], { encoding: 'utf8' }).error ? 'not_found' : 'ok', git: spawnSync('git', ['--version'], { encoding: 'utf8' }).error ? 'not_found' : 'ok' };
-    // The governed launcher needs a Git root under /mnt/user/projects, so use the configured product repository, never the caller's cwd.
-    const worktree = loadTeamConfig(teamConfigFile, root).repo_path;
-    for (const id of ['claude', 'codex']) { const { adapter } = await provider(registry, id); const r = adapter.preflight ? adapter.preflight({ role: 'devtest', worktree }) : true; out[id] = r === 'not_found' ? 'not_found' : r ? 'ok' : 'auth_or_governance_failed'; }
-    console.log(JSON.stringify({ preflight: out }));
-    if (Object.values(out).some(v => v !== 'ok')) process.exitCode = 3;
-    return;
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {

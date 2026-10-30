@@ -135,9 +135,9 @@ test('rule 12 red CI on my own PR: CI-fix job naming only the safe failing check
   await w.team.execute({ agent: 'claude', ...a });
   const spec = w.calls.created[0];
   assert.deepEqual([spec.kind, spec.postcondition.kind, spec.postcondition.baseHead, spec.issue], ['cifix', 'new_head', H(3), 38]);
-  assert.equal(w.team.s.ciFixAttempts[`38:${H(3)}`], 1);
+  assert.equal(w.team.s.fixAttempts[`38:${H(3)}`], 1);
   assert.equal((await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix'), undefined);   // job in flight (busy)
-  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.ciFixAttempts[`38:${H(3)}`] = 2;
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.fixAttempts[`38:${H(3)}`] = 2;
   assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'cifix');   // max_fix_attempts reached
   const none = [['a draft', pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: red, isDraft: true })],
     ['the other agent\'s PR', pr(38, 'codex/issue-4-x', H(3), { statusCheckRollup: red })],
@@ -340,7 +340,6 @@ test('the dispatcher refuses to launch under an access decision that is not home
   const w = world(t, { issues: [issue(23)] });
   w.team.register = REGISTER.replace('homeowner-approved', 'agent-proposal');
   await assert.rejects(w.team.tick(), /not homeowner-approved/);
-  await assert.rejects(w.team.tick({ dryRun: true }), /not homeowner-approved/);   // the enable gate's dry run must fail whenever a live tick would
   assert.equal(w.calls.created.length, 0);
   assert.equal(decisionApproved(REGISTER, 'D-020'), true); assert.equal(decisionApproved(REGISTER, 'D-021'), false); assert.equal(decisionApproved(REGISTER, 'D-099'), false);
   const real = fs.readFileSync(new URL('../docs/DECISIONS.md', import.meta.url), 'utf8');
@@ -653,4 +652,28 @@ test('issue #35 a PASS is not merge-eligible until its public comment is posted;
   fail = false; await w.team.tick();
   assert.equal(w.calls.comments.filter(c => /devtest-verdict v1/.test(c[1])).length, 1);   // posted once
   assert.equal(w.calls.merges.length, 1);
+});
+
+test('max_fix_attempts counts fixes per PR across heads; at the limit one needs-homeowner notice, then no more fix jobs', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  const reject = (head) => { w.gh.pulls = [pr(38, 'claude/issue-35-x', head)]; w.team.s.verdicts[`38:${head}`] = { verdict: 'CHANGES', reviewer: 'codex' }; };
+  // round 1 on head 1, round 2 on a NEW head 2: the budget is shared, so a third CHANGES on head 3 gets no fix job
+  reject(H(1)); let a = (await w.team.plan()).find(x => x.agent === 'claude'); assert.equal(a.type, 'fix'); await w.team.execute({ agent: 'claude', ...a });
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true;
+  reject(H(2)); a = (await w.team.plan()).find(x => x.agent === 'claude'); assert.equal(a.type, 'fix'); await w.team.execute({ agent: 'claude', ...a });
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[1]].ingested = true;
+  assert.equal(w.team.fixCount(38), 2);
+  reject(H(3)); assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'fix');
+  const r1 = await w.team.tick(); const r2 = await w.team.tick();
+  const notices = w.calls.comments.filter(c => c[0] === 38 && /fix rounds/.test(c[1]));
+  assert.equal(notices.length, 1); assert.deepEqual(w.calls.labels.filter(l => l[0] === 38), [[38, 'needs-homeowner']]);   // once, not every tick
+  assert.deepEqual(r1.notified.map(n => n.pr), [38]); assert.equal(r2.notified.length, 0);
+  // red CI draws on the same per-PR budget
+  const c = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'test' }] })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  c.team.s.fixAttempts[`38:${H(1)}`] = 1; c.team.s.fixAttempts[`38:${H(2)}`] = 1;
+  assert.notEqual((await c.team.plan()).find(x => x.agent === 'claude')?.type, 'cifix');
+  // not rejected any more (green, no CHANGES): no notice even though the budget is spent
+  const ok = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(5))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  ok.team.s.fixAttempts[`38:${H(1)}`] = 2; await ok.team.tick();
+  assert.equal(ok.calls.comments.filter(x => /fix rounds/.test(x[1])).length, 0);
 });

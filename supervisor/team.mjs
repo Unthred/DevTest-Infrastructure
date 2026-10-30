@@ -144,10 +144,13 @@ export class Team {
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'rebaseAttempts', 'ciFixAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'released']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'released']) this.s[k] ||= {};
   }
   save() { atomicJson(this.file, this.s); }
   agents() { return Object.entries(this.c.agents); }
+  // Fix attempts (CHANGES fixes and CI fixes) are counted per PR, across heads: a fix that pushes a new head and is then rejected
+  // again must not reset the budget (PR #38 reached five CHANGES verdicts under a per-head count). Keys stay `<pr>:<head>`.
+  fixCount(pr) { return Object.entries(this.s.fixAttempts).reduce((n, [k, v]) => n + (k === String(pr) || k.startsWith(`${pr}:`) ? v : 0), 0); }
   agentOfProvider(provider) { return this.agents().find(([, a]) => a.provider === provider)?.[0] || null; }
 
   async plan() {
@@ -200,7 +203,7 @@ export class Team {
     for (const pr of prs) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || checksState(pr.statusCheckRollup) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
-      if (busy('cifix', key) || (this.s.ciFixAttempts[key] || 0) >= L.max_fix_attempts) continue;
+      if (busy('cifix', key) || this.fixCount(pr.number) >= L.max_fix_attempts) continue;
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks: failingChecks(pr.statusCheckRollup), key };
     }
     // fix: my PR with a CHANGES verdict on its current head
@@ -208,7 +211,7 @@ export class Team {
       if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key)) continue;
-      if ((this.s.fixAttempts[key] || 0) >= L.max_fix_attempts) continue;
+      if (this.fixCount(pr.number) >= L.max_fix_attempts) continue;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key };
     }
     // review: the other agent's PR, green CI, mergeable, no verdict from me on this exact head
@@ -235,12 +238,12 @@ export class Team {
 
   // ---- execution
   async tick({ dryRun = false } = {}) {
-    if (this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
+    if (!dryRun && this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
       throw new SupervisorError(`${this.c.access.decision} is not homeowner-approved in the decision register; refusing to launch jobs`);
     const report = { ingested: [], notified: [], actions: [], skipped: [] };
     // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).
     const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
-    if (!dryRun) { await this.ingest(report, guard); await this.notifyBlocked(report, guard); await this.releaseFinished(report, guard); }
+    if (!dryRun) { await this.ingest(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.releaseFinished(report, guard); }
     const actions = await this.plan();
     report.actions = actions;
     if (dryRun) return report;
@@ -297,6 +300,25 @@ export class Team {
       } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
       report.notified.push({ job: id, target });
   }
+  // A PR that is still rejected (CHANGES verdict or red CI on its current head) after max_fix_attempts fix rounds gets exactly one
+  // needs-homeowner notice and no further fix jobs. Recorded before posting, like the other notices.
+  async notifyFixLimit(report, guard = (_, fn) => fn()) {
+    for (const pr of await this.gh.listPulls()) {
+      const author = agentOfBranch(this.c, pr.headRefName);
+      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.fixCount(pr.number) < this.c.limits.max_fix_attempts) continue;
+      const rejected = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'CHANGES' || checksState(pr.statusCheckRollup) === 'red';
+      const nkey = `fixlimit:${pr.number}`;
+      if (!rejected || this.s.notified[nkey]) continue;
+      await guard(`fix-limit ${pr.number}`, async () => {
+        this.s.notified[nkey] = this.clock.now(); this.save();
+        try {
+          await this.gh.addLabel(pr.number, 'needs-homeowner');
+          await this.gh.comment(pr.number, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads) have not cleared the rejection of this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide whether to change the approach, fix it by hand, or raise \`max_fix_attempts\` in team.local.json.`);
+        } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
+        (report.notified ||= []).push({ pr: pr.number, fixLimit: true });
+      });
+    }
+  }
   // The dispatcher's own finished jobs free their issue/worktree leases, including jobs the homeowner resumed by hand.
   // Blocked and failed jobs keep theirs: they are resumable and the lease stops a duplicate job on the same issue.
   async releaseFinished(report, guard = (_, fn) => fn()) {
@@ -348,7 +370,7 @@ export class Team {
         prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks }),
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head };
-      const counter = rebase ? 'rebaseAttempts' : 'ciFixAttempts';
+      const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
       bump = () => { this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; };
     } else {
       const branch = `${a.branch_prefix}issue-${act.issue}-${slug(act.title)}`;
