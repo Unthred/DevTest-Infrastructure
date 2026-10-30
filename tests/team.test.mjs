@@ -567,6 +567,18 @@ test('issue #35 a lost comment response is not re-posted: the marker already on 
   await assert.rejects(c.comment(5, 'b')); assert.equal(n, 1);
 });
 
+test('issue #35 a needs-homeowner notice whose response was lost is not posted again on the next tick', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  await w.team.execute((await w.team.plan())[0]);
+  const [id] = Object.entries(w.team.s.jobs)[0];
+  w.jobs.states[id].status = 'blocked';
+  w.gh.hasComment = async (n, text) => w.calls.comments.some(c => c[0] === n && c[1].includes(text));
+  let lose = true; const post = w.gh.comment; w.gh.comment = async (n, b) => { await post(n, b); if (lose) { lose = false; throw new Error('response lost'); } };
+  await w.team.notifyBlocked({ notified: [] }, async (_, fn) => { try { await fn(); } catch {} });
+  await w.team.notifyBlocked({ notified: [] });
+  assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 1);
+});
+
 // ---- issue #35: scheduled ticks must not fail silently or abort on one bad item
 test('issue #35 gh: a missing binary is named, transient transport errors are retried within bounds, others fail at once', () => {
   assert.throws(() => ghRunner(() => ({ status: null, error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) }))(['pr', 'list']), /required binary not found: gh/);

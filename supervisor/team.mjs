@@ -286,6 +286,13 @@ export class Team {
       await guard(`notify ${id}`, () => this.notifyOne(id, j, report));
     }
   }
+  // A notice carries a stable marker and is never retried blindly: if GitHub accepted an earlier attempt but the response
+  // was lost, the marker is already there and nothing is posted twice (same approach as verdict ingestion).
+  async postNotice(target, key, text) {
+    const marker = `<!-- devtest-notice v1 ${key} -->`;
+    if (await this.gh.hasComment?.(target, marker)) return;
+    await this.gh.comment(target, `${marker}\n${text}`);
+  }
   // Once per job and state: a changed state (blocked -> failed) is a new notice; an unchanged one is never repeated.
   async notifyOne(id, j, report) {
       const job = await this.jobs.get(id);
@@ -296,7 +303,7 @@ export class Team {
       const target = j.issue ?? j.pr;
       try {
       await this.gh.addLabel(target, 'needs-homeowner');
-      await this.gh.comment(target, `**Needs the homeowner.** Supervised ${j.kind} job \`${id}\` (${j.agent}) stopped as \`${job.status}\` (last event: \`${job.lastEvent}\`). Required: inspect \`ai-agent --supervisor status ${id}\` and \`logs ${id}\`, then decide whether to \`resume\`, reassign or close. Other agents keep working.`);
+      await this.postNotice(target, `job=${id} status=${job.status}`, `**Needs the homeowner.** Supervised ${j.kind} job \`${id}\` (${j.agent}) stopped as \`${job.status}\` (last event: \`${job.lastEvent}\`). Required: inspect \`ai-agent --supervisor status ${id}\` and \`logs ${id}\`, then decide whether to \`resume\`, reassign or close. Other agents keep working.`);
       } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
       report.notified.push({ job: id, target });
   }
@@ -313,7 +320,7 @@ export class Team {
         this.s.notified[nkey] = this.clock.now(); this.save();
         try {
           await this.gh.addLabel(pr.number, 'needs-homeowner');
-          await this.gh.comment(pr.number, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads) have not cleared the rejection of this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide whether to change the approach, fix it by hand, or raise \`max_fix_attempts\` in team.local.json.`);
+          await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads) have not cleared the rejection of this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide whether to change the approach, fix it by hand, or raise \`max_fix_attempts\` in team.local.json.`);
         } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
         (report.notified ||= []).push({ pr: pr.number, fixLimit: true });
       });
