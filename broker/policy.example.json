@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "openbao": { "address": "http://127.0.0.1:8200", "mount": "kv", "tokenFile": "/mnt/cache/appdata/devtest-infrastructure/state/openbao.token" },
+  "productionIdentity": { "confirmed": false, "decision": null },
+  "secrets": {
+    "fixture-login": { "path": "devtest/browser/fixture-login", "kind": "credential", "fields": ["username", "password"], "domains": ["fixture.test"], "maxTtlSeconds": 900 },
+    "fixture-session": { "path": "devtest/browser/fixture-session", "kind": "session", "domains": ["fixture.test"], "maxTtlSeconds": 3600 },
+    "ha-test-login": { "path": "devtest/browser/ha-test-login", "kind": "credential", "domains": ["homeassistant.local"], "maxTtlSeconds": 900, "production": true, "identity": "devtest-ha-readonly" }
+  }
+}
