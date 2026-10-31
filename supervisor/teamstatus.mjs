@@ -4,7 +4,7 @@
 // Everything shown passes through redact(): no secrets, e-mail addresses or raw provider output.
 import fs from 'node:fs';
 import path from 'node:path';
-import { STALE_TICK_MS, compactIssues, compactMerged, compactPulls, readCache, readEvents, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
+import { STALE_TICK_MS, compactIssues, compactMerged, compactPulls, readCache, readEvents, readJobs, readLeases, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { buildView } from './dashboard.mjs';
 import { checksState } from './team.mjs';
 import { defaultZone } from './clocktext.mjs';
@@ -18,13 +18,7 @@ const dayOf = (ms, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).for
 const mins = ms => Math.round(ms / 60000);
 const ref = (type, n) => (['implement', 'continue', 'issue'].includes(type) ? `issue #${n}` : `PR #${n}`);
 
-export function readLeases(root) {
-  const dir = path.join(root, 'leases'); const out = [];
-  for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
-    try { const l = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); if (typeof l.job === 'string') out.push({ job: l.job, at: l.at }); } catch (error) { if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error; }
-  }
-  return out;
-}
+export { readLeases };
 
 // Refresh the parts of the cache the tick has not refreshed recently. One gh call per section; a failure keeps the cached data.
 export async function refreshIfStale({ cache, gh, now }) {

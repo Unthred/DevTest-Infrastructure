@@ -4,6 +4,7 @@ import { Team, agentOfBranch, checksState, prerequisites } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { severityOf } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
+import { attentionOverseer, cardOverseer, supervisorHealth } from './suphealth.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -328,7 +329,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
-    const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver });
+    const sup = supervisorHealth({ root, config, jobs, now });
+    const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });
     return {
       ...extra,
       generatedAt: now, repository: config.repository, teamEnabled: config.enabled !== false,
@@ -365,7 +367,7 @@ export function freshness(tickAt, now) {
 const findingText = f => redact(typeof f === 'string' ? f : (f?.summary || f?.title || f?.message || JSON.stringify(f ?? '')), 240);
 const sumKeys = (obj, pr) => Object.entries(obj || {}).filter(([k]) => k.split(':')[0] === String(pr)).reduce((s, [, c]) => s + (Number(c) || 0), 0);
 
-function dashExtras({ config, cache, jobs, state, states, plan, queues, attention, now, ver }) {
+function dashExtras({ config, cache, jobs, state, states, plan, queues, attention, now, ver, sup }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
@@ -374,7 +376,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     id: j.id.slice(0, 8), fullId: j.id, agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), branch: redact(j.branch || '', 100) }));
-  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), reviewer: v.reviewer || null, verdict: v.verdict || null, at: v.at ?? null,
+  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
@@ -400,12 +402,17 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
       dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [] };
   });
   const tickAt = cache.tick?.at ?? null;
-  const needsYou = attention.filter(a => a.severity === 'action').map(a => ({ ...a, why: a.text, decision: NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.',
-    command: COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor job ${a.id.slice(4, 36)}` : null) }));
+  const ctx = { ticks: sup.ticks, jobs, state, cache, now };
+  const needsYou = attention.filter(a => a.severity === 'action').map(a => {
+    // `ai-supervisor status <id>` prints the job record (there is no `job` command).
+    const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
+    return { ...a, why: a.text, decision: NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
+  });
+  const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver,
     panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr })) },
-    jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues
+    jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
   };
 }

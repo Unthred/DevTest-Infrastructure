@@ -1,0 +1,13 @@
+2026-10-30T13:43:03+00:00
+{"resumed":0,"blocked":0,"team":{"error":"gh issue list failed: error connecting to api.github.com"}}
+2026-10-30T13:45:02+00:00
+{"resumed":0,"blocked":0,"team":{"skipped":"another tick is running"}}
+2026-10-31T09:00:03+00:00 tick
+/mnt/cache/ai-supervisor/bin/team-alert: line 15: /mnt/cache/ai-supervisor/alert.state: No such file or directory
+{"resumed":0,"blocked":0,"team":{"error":"issue or worktree already leased; stale lease requires explicit recovery"}}
+2026-10-31T12:00:02+00:00 tick
+{"resumed":0,"blocked":0,"team":{"ingested":[],"notified":[],"actions":[{"agent":"codex","type":"continue","pr":28,"issue":3,"head":"f142bef47a30f971a1c312abe5b05d31c39fc0d5","branch":"codex/issue-3-dotnet-build","key":"28"}],"skipped":[{"what":"continue 28 (codex)","reason":"ENOENT: no such file or directory, lstat '/mnt/user/projects/DevTest-Infrastructure-codex-3'"}]},"selfUpgrade":"current"}
+2026-10-31T17:55:01Z rc=127 supervisor cli unreadable: /mnt/cache/ai-supervisor/current/supervisor/cli.mjs
+2026-10-31T18:00:04+00:00 tick
+{"resumed":0,"blocked":0,"team":{"ingested":[{"job":"b485512f78df4a50af28f7b192a30710","pr":41,"verdict":"CHANGES"}],"notified":[],"actions":[{"agent":"claude","type":"rebase","pr":41,"head":"72aac81308545dc94d738a7e71a35e189e24026b","base":"main","branch":"claude/issue-7-07-openbao-credentials","key":"41:72aac81308545dc94d738a7e71a35e189e24026b"}],"skipped":[],"released":["59b92c7bea69194a36edd8ce3f53f302"]},"selfUpgrade":"current"}
+2026-10-31T18:05:02Z rc=0 {"resumed":0,"blocked":0,"team":{"ingested":[],"notified":[],"actions":[{"agent":"claude","type":"implement","issue":72,"title":"Dashboard: Supervisor health area and copy buttons","key":"72"}],"skipped":[],"released":["c1cc512d9ef865b285e9de000cada877"]},"selfUpgrade":"no-supervisor-change"}

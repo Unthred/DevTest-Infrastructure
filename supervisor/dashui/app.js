@@ -1,7 +1,7 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, and drag/resize/reorder of cards (saved per breakpoint,
 // in this browser only). It reads nothing from the network and sends nothing.
-import { applyLayout, breakpointOf, moveItem } from './logic.mjs';
+import { COPY_FEEDBACK_MS, applyLayout, breakpointOf, copyFeedback, copyMethods, moveItem } from './logic.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -47,8 +47,51 @@ for (const b of $$('[data-expand]')) b.addEventListener('click', () => {
 });
 addEventListener('keydown', e => { if (e.key === 'Escape') collapse(); });
 
-// phone: tap a table row to open it
-for (const tr of $$('tr[tabindex]')) tr.addEventListener('click', () => tr.classList.toggle('open'));
+// phone: tap a table row to open it (but not when the tap was on a button, link or the detail toggle inside it)
+for (const tr of $$('tr[tabindex]')) tr.addEventListener('click', e => { if (!e.target.closest('button,a,summary,details')) tr.classList.toggle('open'); });
+
+// copy buttons (issue #72): the text is in data-copy. Plain HTTP on the LAN is not a secure context, so the Clipboard API is
+// often absent: fall back to a selected textarea and execCommand('copy'), and finally to a dialog with the text selected.
+function execCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('inputmode', 'none');
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px';   // 16px: no zoom on iOS
+  document.body.append(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+  let ok = false; try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove(); return ok;
+}
+function manualCopy(text, back) {
+  $('.copy-manual')?.remove();
+  const box = document.createElement('div'); box.className = 'copy-manual'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Copy this text');
+  const ta = document.createElement('textarea'); ta.value = text; ta.readOnly = true;
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'btn'; close.textContent = 'Close';
+  close.addEventListener('click', () => { box.remove(); back?.focus(); });
+  box.append(ta, close); document.body.append(box); ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+}
+async function copyText(text) {
+  const methods = copyMethods({ secure: window.isSecureContext === true, clipboard: !!navigator.clipboard?.writeText, execCommand: typeof document.execCommand === 'function' });
+  for (const m of methods) {
+    if (m === 'clipboard') { try { await navigator.clipboard.writeText(text); return true; } catch { /* try the next method */ } }
+    if (m === 'exec' && execCopy(text)) return true;
+  }
+  return false;
+}
+const live = $('#copy-status');
+for (const b of $$('button[data-copy]')) {
+  b.hidden = false;
+  const label = $('[data-copy-label]', b), original = label?.textContent;
+  let timer = null;
+  b.addEventListener('click', async e => {
+    e.stopPropagation();
+    const text = b.dataset.copy, ok = await copyText(text), fb = copyFeedback(ok);
+    if (!ok) manualCopy(text, b);
+    b.dataset.state = fb.state; if (label) label.textContent = fb.label; b.setAttribute('aria-label', fb.label);
+    if (live) live.textContent = fb.announce;
+    clearTimeout(timer);
+    timer = setTimeout(() => { delete b.dataset.state; if (label) label.textContent = original; b.setAttribute('aria-label', b.title); if (live) live.textContent = ''; }, COPY_FEEDBACK_MS);
+  });
+}
+addEventListener('keydown', e => { if (e.key === 'Escape') $('.copy-manual')?.remove(); });
 
 // movable cards
 const grid = $('.cards[data-layout]');

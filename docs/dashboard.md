@@ -34,3 +34,22 @@ See the handover and the PR. A live screenshot needs the browser runtime of #5 (
 
 ## v2 (issue #54)
 Seven navigable pages with drill-downs, a status bar, sortable and paginated tables with footers, larger charts with range selector, legend toggles and expand, and movable cards. See [dashboard-design.md](dashboard-design.md). View model additions: `health`, `freshness`, `nextTickAt`, `version` (from `team/upgrades.jsonl`), `panels` (needs you, warnings, next), `jobs`, `verdicts`, `prs`, `issues`; attention items carry a `severity`.
+
+## Supervisor area and copy buttons (issue #72)
+Everything the overseer used to check by hand on Tower, on the page. Source: `supervisor/suphealth.mjs` (read-only: it reads files only and starts no `git`, `gh` or model process).
+
+| Card | Source | Amber / red when |
+|---|---|---|
+| Version | `current` symlink (installed), `config.repo_path` `refs/remotes/origin/main` (as of the upgrader's last fetch), `team/upgrades.jsonl` (last result and reason), `team/self-upgrade.json` `prechecked` (latched targets with when they latched), `team/self-upgrade.latch`, the last tick's `selfUpgrade` step | amber: pre-check failed, not eligible, upgrader changed, diverged, origin/main latched; red: rollback latch, rolled back, rollback failed |
+| Last tick | `reconcile.log` (both formats: `<time> tick` + JSON line, and the installer's `<time> rc=<n> <output>`) | red: no tick for more than two five-minute intervals, or the tick failed; amber: a skipped item or no result line |
+| Leases | `leases/*` grouped by job, with agent, kind, age | red: a lease whose job is missing, completed or stopped (stale; blocks new jobs); amber: held by a blocked/failed job |
+| Errors | non-JSON lines, `team.error`, self-upgrade errors, skipped reasons and non-zero `rc` in `reconcile.log` since the later of the install time and the last upgrade/rollback record | amber: any; red: the latest tick still has one |
+| Local repo drift | `config.repo_path` `refs/heads/main` vs `refs/remotes/origin/main`, checked-out branch | amber: different, or not on `main` (relevant until #69) |
+
+Drill-downs: `/supervisor/ticks` (one row per tick, sortable, filterable, paginated; `ticks.open=<time>` expands a row to every ingested verdict, action, skipped item and error) and `/supervisor/upgrades` (`team/upgrades.jsonl`, newest first). The reconcile log is read from its last 2 MiB only.
+
+Copy buttons (all pages): next to every command shown, job and commit IDs (the full value is copied), and error messages. "Copy for overseer" on each Action needed item and each health card copies a plain-text block: what is wrong, the job record summary (status, kind, provider, ref, attempts, last event, postcondition), the PR's latest review verdict, and related `reconcile.log` lines. Worktree paths, prompts, session ids, postcondition tickets and provider output are never included. Log text passes through `redact()` plus IPv4 removal. The Action needed command for a job is now `ai-supervisor status <id>` (there is no `job` command).
+
+The page is served over plain HTTP on the LAN, which is not a secure context, so the Clipboard API is usually unavailable. The script copies through a selected textarea and `execCommand('copy')`; if that fails it opens a dialog with the text selected. The button shows "Copied" (or "Select and copy") for 1.6 s and announces it through a live region. The buttons are hidden until the script runs. Phone: 44 px copy targets, full-width overseer buttons, stacked facts.
+
+Gate: `tests/dashboard-supervisor.test.mjs` (unit, handler and fake-DOM tests); on Tower, `ionice -c 3 nice -n 19 node tests/supervisor-page-smoke.mjs` renders the pages from a fixture and runs the #6 layout audit at all eight standard widths in the pinned Playwright container (evidence under `/mnt/cache/appdata/devtest-infrastructure/evidence/issue-72/`).
