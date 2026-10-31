@@ -20,7 +20,7 @@ Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with c
 | #32 Team dashboard | yes; Claude branch `claude/issue-32-p0-team-dashboard` (see PR); `docs/dashboard.md` | no; PR CI and Codex review pending | no (not installed, not served) | no; page checked only against a copy of the real Tower state on a temporary LAN listener (removed); screenshots at desktop and phone width NOT captured (browser runtime #5 / PR #27 unmerged) |
 
 | #6 Responsive profiles and visual evidence | yes; branch `claude/issue-6-responsive`, draft PR stacked on #27 | no; CI and Codex review pending | no | real Docker on Tower: broken fixture fails with every seeded defect, corrected fixture passes at 8 widths, in Chromium/Firefox/WebKit; no visual acceptance claimed |
-| #3 .NET SDK toolchain | implementation on PR #28 branch `codex/issue-3-dotnet-build` | validator and 306/306 positive/negative tests passed; prior Tower SDK 8/9/10 cache-reuse smoke passed; fresh exact-head CI and opposite-agent review pending | no standalone `dev-test` installation | prior isolated restore/cache/build smoke passed; no production project changed |
+| #3 .NET SDK toolchain | implementation on PR #28 branch `codex/issue-3-dotnet-build`; PR ready for review | validator and 306/306 positive/negative tests passed; prior Tower SDK 8/9/10 cache-reuse smoke passed; fresh exact-head CI and opposite-agent review pending | no standalone `dev-test` installation | prior isolated restore/cache/build smoke passed; no production project changed |
 | #4, #7–#14 other issues | not started | no | no | no |
 
 ## Ownership
@@ -72,12 +72,13 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - 2026-10-30: Codex independently reviewed PR #34 at `fb3634849bc41082fe5c7e2c0959f47caa7b356f`: validator OK, 122/122 tests, exact-head CI green; [PASS](https://github.com/Unthred/DevTest-Infrastructure/pull/34#issuecomment-6525563953), merged as `d668e4336617a6f98ab9387ab49fc6ec36b1d627`. PR #31 passed review at `1cb2c7e7599936f709455a690946606df4ed6cd2` (validator OK, 119/119, exact-head CI green); after #34 the handover conflicts with main. [PASS and conflict-only rebase requested from Claude](https://github.com/Unthred/DevTest-Infrastructure/pull/31#issuecomment-6525593912); not merged pending rebase and exact-head recheck.
 
 ## Next actions
-1. PR #28 carries the #3 implementation; its merged current-main head needs CI and independent Claude review after it is made ready.
+1. PR #28 is ready for independent Claude review; exact-head CI is pending after `6e4ab8b` and this handover update.
 2. Keep live provider-limit recovery unverified; do not reboot Tower.
 
 ## #3 .NET SDK runner integration (PR #28)
 - Implemented: `dotnet/run.mjs` maps SDK 8/9/10 to locked image IDs and isolated `nuget-sdk-<major>` caches. Restore writes to `/cache/<major>`; build/test restore offline from an empty local feed with the cache read-only. `--artifacts-path /work/artifacts` keeps intermediates off read-only source. The runner clears the SDK image entrypoint, sets its writable home on `/work`, and uses a finite 3-TiB `fsize` ceiling for CoreCLR's sparse 2-TiB memfd; hard loop-image limits remain unchanged.
 - Local gates on the merged PR worktree: `node tools/validate-project.mjs` — exit 0; `node --test 'tests/**/*.test.mjs'` — 306/306, exit 0; `tools/ci/validate-commit-attribution.sh origin/main HEAD` — exit 0. The test suite includes positive selected-working-directory discovery and negative unsafe SDK, path, symlink, source, configuration and framework cases.
+- PR state: made ready for review on 2026-10-31. Issue #3 links the reproducible command/gate evidence; GitHub CI, Supervisor and GitGuardian checks are pending on the current pushed head. No deployment occurred.
 - Tower gate: `ionice -c 3 nice -n 19 node tests/dotnet-smoke.mjs` — exit 0. Each run used the pinned digest, subject exit 0 and complete cleanup. For SDK 8: restore/cache/build run IDs `c5893f62098a47ff`, `0a8f0577497a5324`, `092f7e0f3b03d202`; SDK 9: `f8f9b415a75309a1`, `bce3c09a5c249eda`, `79d88d0d2b282ed4`; SDK 10: `3acbb361c192e2a5`, `0caa059870a0cdce`, `00853f2fae5cace6`. The second restore for each SDK used an empty source and succeeded; each build reported `Build succeeded`.
 - Not deployed as a `dev-test` CLI; #8 owns that integration. Networked restore and actual test-project/TRX/coverage coverage remain outside this issue's current runner policy/scope.
 
