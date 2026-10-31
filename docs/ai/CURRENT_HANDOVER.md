@@ -267,3 +267,6 @@ Implemented: `supervisor/models.mjs`, manifest `models` section (claude, codex),
 
 ## #7 / PR #41 conflict-only rebase onto main 9a5bbe6 (Claude, 2026-10-31)
 - Rebased old head `f6163a9` onto origin/main `9a5bbe6`. The only conflict was this file (kept both sides: #54 section and the earlier #7 rebase notes). Validator OK, 295/295 tests. The PASS for the old head does not carry over; the opposite agent reviews the new head. Not merged, not deployed.
+
+## #7 / PR #41 conflict-only rebase onto main c0a0449 (Claude, 2026-10-31)
+- Rebased old head `2214ad8` onto origin/main `c0a0449` (merged #64 model routing and #28 .NET toolchain). Only conflicts: this handover (completion-state table kept both the #7 and #64 rows, with "#4, #8–#14" as the not-started row; appended sections kept both sides). No code conflicts and no other change. Validator OK; 339/339 tests. A PASS recorded for the old head does not carry over; Codex reviews the new head. Implemented only; CI/review pending.
