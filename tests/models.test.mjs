@@ -58,6 +58,12 @@ test('arguments come from the manifest and are single argv entries; bad values n
   assert.deepEqual(modelArgs(claudeModels, { model: 'nonsense', effort: '$(id)' }), []);
   assert.deepEqual(modelArgs(codexModels, { model: 'unknown-model-123' }), [], 'an unknown Codex model is dropped, not forwarded');
   assert.deepEqual(modelArgs(codexModels, { model: 'gpt-5.6-terra' }), ['--model', 'gpt-5.6-terra']);
+  for (const bad of ['gpt-not-a-real-model', 'gpt-definitely-unknown-9999']) {
+    assert.deepEqual(modelArgs(codexModels, { model: bad }), [], `${bad} is not a listed Codex model`);
+    const c = codex.command({ command: ['codex'], manifest: manifest('codex') }, { role: 'devtest', worktree: '/w', access: 'standard', model: bad }, false);
+    assert.ok(!c.includes('--model'), 'adapter argv has no --model for an invented gpt- name');
+    assert.equal(checkEntry({ model: bad }, codexModels).warnings.length, 1);
+  }
   const unk = checkEntry({ model: 'unknown-model-123' }, codexModels);
   assert.equal(unk.model, null); assert.equal(unk.warnings.length, 1);
   const cu = codex.command({ command: ['codex'], manifest: manifest('codex') }, { role: 'devtest', worktree: '/w', access: 'standard', model: 'unknown-model-123' }, false);
