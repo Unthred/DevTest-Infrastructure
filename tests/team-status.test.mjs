@@ -188,3 +188,15 @@ test('idle reasons (#50): each idle agent states why in plain words', async () =
   const s = await status({ jobs: [job()] }); assert.equal(s.agents.find(x => x.name === 'claude').idleReason, null);
   assert.match(text(await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, merged: [], pulls: [], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] } })), /codex: idle: no open issue/);
 });
+
+test('issue #83 upgrade accepts both launcher forms that exec /root/bin/ai-supervisor and refuses any other', t => {
+  const script = fs.readFileSync(new URL('../tools/upgrade-supervisor.sh', import.meta.url), 'utf8');
+  const lines = script.split('\n'); const i = lines.findIndex(l => l.startsWith('grep -Fq -e'));
+  assert.ok(lines[i].endsWith("' /root/bin/ai-agent || { printf 'launcher integration missing\\n' >&2; exit 2; }"));
+  const check = lines[i].replace(' /root/bin/ai-agent ', ' "$AI_AGENT_LAUNCHER_CHECK" ');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'launcher-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const probe = body => { const f = path.join(dir, 'ai-agent'); fs.writeFileSync(f, `case x in\n${body}\nesac\n`); return spawnSync('bash', ['-c', check], { env: { ...process.env, AI_AGENT_LAUNCHER_CHECK: f }, encoding: 'utf8' }); };
+  assert.equal(probe('    --supervisor) shift; exec /root/bin/ai-supervisor "$@" ;;').status, 0);
+  assert.equal(probe('    --supervisor) shift; exec "${AI_AGENT_SUPERVISOR:-/root/bin/ai-supervisor}" "$@" ;;').status, 0);
+  const bad = probe('    --supervisor) shift; exec /tmp/evil "$@" ;;'); assert.equal(bad.status, 2); assert.match(bad.stderr, /launcher integration missing/);
+});

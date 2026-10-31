@@ -8,7 +8,9 @@ commit=$(git rev-parse HEAD)
 [ "$(id -u)" = 0 ] || exit 2
 wrapper=/root/bin/ai-supervisor
 [ -f "$wrapper" ] && [ -x "$wrapper" ] || { printf 'supervisor is not installed\n' >&2; exit 2; }
-grep -Fq '    --supervisor) shift; exec /root/bin/ai-supervisor "$@" ;;' /root/bin/ai-agent || { printf 'launcher integration missing\n' >&2; exit 2; }
+# The launcher dispatches --supervisor to /root/bin/ai-supervisor, either directly (as install-supervisor.sh patched it) or
+# through the AI_AGENT_SUPERVISOR override that the AI-Rules launcher has used since 2026-10-31 (issue #83).
+grep -Fq -e '    --supervisor) shift; exec /root/bin/ai-supervisor "$@" ;;' -e '    --supervisor) shift; exec "${AI_AGENT_SUPERVISOR:-/root/bin/ai-supervisor}" "$@" ;;' /root/bin/ai-agent || { printf 'launcher integration missing\n' >&2; exit 2; }
 node --test "$source_root/tests/supervisor.test.mjs" >/dev/null
 for directory in /mnt/cache/ai-supervisor /mnt/cache/ai-supervisor/versions; do
   [ ! -L "$directory" ] || { printf 'unsafe supervisor directory symlink\n' >&2; exit 2; }
