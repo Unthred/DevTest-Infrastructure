@@ -8,7 +8,7 @@ import { runProcess } from './process.mjs';
 import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { alertSender } from './alert.mjs';
-import { readJobs, recordTick, tickOutcome, latestAllowance } from './dashdata.mjs';
+import { readJobs, readSnapshots, recordTick, tickOutcome, latestAllowance } from './dashdata.mjs';
 import { weeklyUtilization } from './models.mjs';
 import { spawnSync } from 'node:child_process';
 import { SelfUpgrade, realDeps, runningSha } from './upgrade.mjs';
@@ -97,8 +97,11 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   // Model routing (issue #64): what each CLI accepts comes from its manifest; the weekly allowance is the freshest the provider reported.
   const providerModels = {};
   for (const a of Object.values(config.agents)) providerModels[a.provider] = (await provider(registry, a.provider)).config.manifest.models ?? null;
-  const allowanceOf = agent => weeklyUtilization(latestAllowance(readJobs(root))[config.agents[agent].provider]);
-  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf });
+  const jobRecords = readJobs(root), allowance = latestAllowance(jobRecords);
+  const allowanceOf = agent => weeklyUtilization(allowance[config.agents[agent].provider]);
+  // Allowance-aware scheduling (issue #56): provider-reported allowance, the jobs' token counts and the tick history.
+  const usage = { allowance, jobs: jobRecords, snapshots: readSnapshots(root) };
+  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, usage });
 }
 async function teamTick(root, registry, dryRun) {
   const config = loadTeamConfig(teamConfigFile, root);

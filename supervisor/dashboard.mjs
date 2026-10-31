@@ -3,6 +3,7 @@
 import { Team, agentOfBranch, checksState, prerequisites } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { severityOf } from './dashui/logic.mjs';
+import { MODE_LABEL } from './budget.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -32,14 +33,15 @@ export function pauseDisagreement(job, allowance, now) {
   return { kind: 'disagrees', text: `paused on a usage limit but the provider reports capacity left: ${used} used${at}` };
 }
 
-function cacheBackedTeam(config, root, cache, jobs, state) {
+function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now()) {
   const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })),
     // delivered-work issue numbers the tick cached, in the shape Team.plan() reads, so the page matches `team tick --dry-run`
     listMergedPulls: async () => [{ headRefName: '', closingIssuesReferences: (cache.delivered || []).map(number => ({ number })) }] };
   const jobsApi = { listActive: async () => jobs.filter(j => ACTIVE.includes(j.status)).map(j => ({ id: j.id, provider: j.provider, status: j.status })) };
-  const team = new Team({ config, root, gh, jobs: jobsApi, git: null });
+  // Same usage data as the tick (issue #56), so the page shows the same allowance modes and reassignments as `team tick --dry-run`.
+  const team = new Team({ config, root, gh, jobs: jobsApi, git: null, usage: { allowance: latestAllowance(jobs), jobs, snapshots }, clock: { now: () => now } });
   team.s = { ...team.s, ...state };      // the state the caller read, so the plan and the page agree
-  for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented']) team.s[k] ||= {};
+  for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable']) team.s[k] ||= {};
   return team;
 }
 
@@ -78,15 +80,23 @@ function reasons(team, cache, jobs, plan, states) {
     if (!issue || issue.state !== 'OPEN' || team.delivered?.has(n)) continue;
     const deps = c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
     const open = deps.filter(d => byNo.get(d)?.state !== 'CLOSED');
-    const hasPr = prs.some(p => agentOfBranch(c, p.headRefName) === agent && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName));
+    const prOf = prs.find(p => agentOfBranch(c, p.headRefName) && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName));
+    const hasPr = !!prOf && agentOfBranch(c, prOf.headRefName) === agent;
+    const taker = plan.find(x => x.type === 'implement' && x.issue === n && x.reassignedFrom === agent);
+    const moved = Object.values(S.jobs || {}).find(j => j.kind === 'implement' && j.issue === n && j.reassignedFrom === agent);
+    const mode = team.modes?.[agent];
     const running = activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n);
     let reason;
     if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
     else if (open.length) reason = `blocked by ${open.map(d => `#${d}`).join(', ')}`;
     else if (running) reason = 'being implemented now';
     else if (hasPr) reason = 'PR open';
+    else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; PR #${prOf.number} open` : ''}`;
     else if (S.implemented?.[n]) reason = 'started earlier; no PR yet';
+    else if (taker) reason = `next: reassigned for allowance to ${taker.agent} (${agent} is ${MODE_LABEL[mode?.mode] || 'low'})`;
     else if (planned.has(`${agent}:implement:${n}`)) reason = 'next: implement';
+    else if (mode && mode.mode !== 'normal') reason = `waits: ${agent} is ${MODE_LABEL[mode.mode]} (${mode.reason}); no agent with headroom can take it`;
+    else if (team.held?.[agent]?.implement) reason = `waits: ${team.held[agent].implement}`;
     else if (busy(agent)) reason = 'ready; waits behind the running job';
     else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? '#' : 'PR #'}${ahead.issue ?? ahead.pr}` : 'ready; waits for a free slot'; }
     queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason, next: planned.has(`${agent}:implement:${n}`) });
@@ -106,6 +116,8 @@ export function idleReason({ agent, config, team, cache, plan, state }) {
   const byNo = new Map(issues.map(i => [i.number, i]));
   const url = (kind, n) => `https://github.com/${config.repository}/${kind}/${n}`;
   const parts = [], links = [];
+  const m = team.modes?.[agent];
+  if (m && m.mode !== 'normal') parts.push({ rank: 0, text: `${MODE_LABEL[m.mode]}: ${m.reason}` });
   const part = (rank, text, kind, n) => { parts.push({ rank, text }); links.push({ text: `${kind === 'pull' ? 'PR' : 'issue'} #${n}`, url: url(kind, n) }); };
   const mine = prs.filter(p => agentOfBranch(c, p.headRefName) === agent);
   for (const p of mine) {
@@ -131,7 +143,7 @@ export function idleReason({ agent, config, team, cache, plan, state }) {
     if (open.length) open.forEach(d => blockers.add(d));
   }
   if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => `#${d}`).join(', ')}` }); for (const d of blockers) links.push({ text: `issue #${d}`, url: url('issues', d) }); }
-  else if (openIssues) parts.push({ rank: 3, text: 'has an open issue but nothing started it yet (limits or a lease may be holding it)' });
+  else if (openIssues && !(m && m.mode !== 'normal')) parts.push({ rank: 3, text: 'has an open issue but nothing started it yet (limits or a lease may be holding it)' });
   if (!parts.length) return { text: 'no open issue or pull request is assigned to it', links: [] };
   parts.sort((x, y) => x.rank - y.rank);
   return { text: parts.slice(0, 3).map(x => x.text).join('; '), links: links.slice(0, 6) };
@@ -259,11 +271,23 @@ function activity({ config, jobs, events, state, cache, snapshots, now }) {
   return rows.filter(r => Number.isFinite(r.at)).sort((a, b) => b.at - a.at).slice(0, 50).map(r => ({ ...r, text: redact(r.text, 300) }));
 }
 
+// Weekly burn and scheduling mode per agent, as the planner sees it (issue #56). Figures are the provider's own readings.
+export function budgetView(team) {
+  const out = {};
+  for (const [name, m] of Object.entries(team.modes || {})) {
+    const typical = m.costs?.cost ? { implement: m.costs.cost('implement'), review: m.costs.cost('review'), fix: m.costs.cost('fix') } : {};
+    out[name] = { mode: m.mode, label: MODE_LABEL[m.mode], reason: redact(m.reason || '', 300), until: m.until ?? null, known: m.known, used: m.used, resetsAt: m.resetsAt, hoursLeft: m.hoursLeft, ratePerHour: m.ratePerHour, rateSource: m.rateSource,
+      projected: m.projected, runsOutAt: m.runsOutAt, shortWindow: m.shortWindow, overage: m.overage, creditsAvailable: m.creditsAvailable, jobCost: typical,
+      held: Object.fromEntries(Object.entries(team.held?.[name] || {}).map(([k, v]) => [k, redact(v, 300)])) };
+  }
+  return out;
+}
+
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs);
   const c = cache || { pulls: [], issues: [] };
-  const team = cacheBackedTeam(config, root, c, jobs, state);
+  const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now);
   return team.plan().then(plan => {
     const queues = reasons(team, c, jobs, plan, states);
     const agents = Object.entries(config.agents).map(([name, a]) => {
@@ -282,6 +306,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       generatedAt: now, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan,
+      budget: budgetView(team),
       attention,
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots, now }),
@@ -321,7 +346,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
   const jobRows = jobs.filter(j => j.createdAt).sort((a, b) => b.createdAt - a.createdAt).slice(0, 300).map(j => ({
     id: j.id.slice(0, 8), fullId: j.id, agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
-    cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), branch: redact(j.branch || '', 100) }));
+    cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100) }));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), reviewer: v.reviewer || null, verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
@@ -353,7 +378,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
   return {
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver,
-    panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr })) },
+    panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
     jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues
   };
 }

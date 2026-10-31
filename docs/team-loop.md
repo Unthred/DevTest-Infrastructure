@@ -7,7 +7,8 @@ Status: implemented in source on `claude/issue-23-team-loop`; not deployed. Deci
 
 1. **Ingests verdicts** from finished review jobs and posts them as a PR comment with a machine marker.
 2. **Notifies** for blocked or failed jobs: label `needs-homeowner` plus one comment saying what is needed. Other agents keep working.
-3. **Plans at most one merge**, then **dispatches** per agent (first rule that applies; at most 1 active, queued or paused job per agent, 2 overall, counting manual jobs):
+3. **Allowance modes** (issue #56, [allowance-scheduling.md](allowance-scheduling.md)): each agent is `normal`, `reviews_only` or `waiting` from its provider-reported weekly burn; a mode change is recorded and alerted once. A `reviews_only` agent starts only reviews and fixes on its own PRs, a `waiting` one nothing; their unstarted issues may be implemented by an agent with headroom ("reassigned for allowance").
+4. **Plans at most one merge**, then **dispatches** per agent (first rule that applies; at most 1 active, queued or paused job per agent, 2 overall, counting manual jobs):
    1. *Rebase* this agent's own open, non-draft PR that conflicts with its base (max `max_fix_attempts` per head). GitHub runs no `pull_request` CI on a conflicting PR, so this comes first. The job is a conflict-only rebase, pushed with `--force-with-lease`, with a `git range-diff` comment. Post-condition: a new head that GitHub reports mergeable (it is asked up to four times, because mergeability is computed lazily). A recorded PASS belongs to the old head and never carries over automatically: the new head is reviewed again by the opposite agent, who also checks the range-diff.
    2. *CI fix* this agent's own open, non-draft PR with a completed failing check on its current head (shares the per-PR `max_fix_attempts` budget with CHANGES fixes). The prompt names the failing checks (only names that pass a strict character check). Post-condition: a new pushed head.
    3. *Fix* this agent's own PR that has a CHANGES verdict on its current head. `max_fix_attempts` (default 2) is counted per PR across heads; when it is reached while the PR is still rejected, the dispatcher posts one `needs-homeowner` notice and starts no further fix jobs for that PR.
@@ -43,7 +44,7 @@ Interactive launcher (`/root/bin/ai-agent`): Codex `--dangerously-bypass-approva
 ```json
 { "enabled": true, "limits": { "overall": 2 }, "agents": { "claude": { "issues": [5, 6] } } }
 ```
-Only `enabled`, `limits`, `depends_on_overrides` and each agent's `issues` can be overridden; repository, paths, providers, access mode and board always come from Git. An unknown key, a bad type or an unparsable file makes the tick fail closed with an error naming the file (never its contents).
+Only `enabled`, `limits`, `depends_on_overrides`, `alerts`, `models`, `budget` and each agent's `issues` can be overridden; repository, paths, providers, access mode and board always come from Git. An unknown key, a bad type or an unparsable file makes the tick fail closed with an error naming the file (never its contents).
 
 **Delivered work.** Before planning an implement job the dispatcher lists merged PRs. An issue is skipped when it is closed, or a merged PR from a configured agent branch `<agent>/issue-<n>-…` or a merged PR whose closing reference names it exists. Issue #23 stays open until verified working but is not in any agent's `issues` list, so it is never dispatched.
 

@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with current main for PR #28. Each agent edits this file only on its own branch.
+Last updated: 2026-10-31 by Claude on `claude/issue-56-allowance-aware-scheduling` (issue #56). Previous update: Codex on `codex/issue-3-dotnet-build` for PR #28. Each agent edits this file only on its own branch.
 
 ## Completion states
 
@@ -23,6 +23,7 @@ Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with c
 | #3 .NET SDK toolchain | implementation on PR #28 branch `codex/issue-3-dotnet-build`; PR ready for review | validator and 306/306 positive/negative tests passed; prior Tower SDK 8/9/10 cache-reuse smoke passed; fresh exact-head CI and opposite-agent review pending | no standalone `dev-test` installation | prior isolated restore/cache/build smoke passed; no production project changed |
 | #4, #7–#14 other issues | not started | no | no | no |
 | #64 Model per job type | yes; branch `claude/issue-64-choose-model-per`, see PR; `docs/model-routing.md` | no; CI and Codex review pending | no (installed supervisor not upgraded) | no; unit/fixture tests only (311/311 locally). Real `claude --model/--effort` and `codex -c model_reasoning_effort` flags checked against `--help` only; no live job run with them ; fix round 2 (Codex CHANGES at c21e147): the Codex manifest no longer accepts a `gpt-` pattern; only models listed in its `aliases` (from the local Codex models cache) are forwarded, so `gpt-not-a-real-model` is dropped with a warning. The list must be updated when Codex adds models |
+| #56 Allowance-aware scheduling | yes; branch `claude/issue-56-allowance-aware-scheduling`, see PR; `supervisor/budget.mjs`, `docs/allowance-scheduling.md` | no; validator OK and 338/338 tests locally; CI and Codex review pending | no (installed supervisor not upgraded) | no; fixture tests only (including the 31 Oct numbers). A read-only assessment against the real Tower state root gave Claude weekly 60% / 4.6 days left and Codex 96% / 3.8 days left, both projected above 100% at reset: with the shipped settings both would be reviews-only (no new implementation) until a reset. No live tick has run with it |
 
 ## Ownership
 
@@ -73,6 +74,7 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - 2026-10-30: Codex independently reviewed PR #34 at `fb3634849bc41082fe5c7e2c0959f47caa7b356f`: validator OK, 122/122 tests, exact-head CI green; [PASS](https://github.com/Unthred/DevTest-Infrastructure/pull/34#issuecomment-6525563953), merged as `d668e4336617a6f98ab9387ab49fc6ec36b1d627`. PR #31 passed review at `1cb2c7e7599936f709455a690946606df4ed6cd2` (validator OK, 119/119, exact-head CI green); after #34 the handover conflicts with main. [PASS and conflict-only rebase requested from Claude](https://github.com/Unthred/DevTest-Infrastructure/pull/31#issuecomment-6525593912); not merged pending rebase and exact-head recheck.
 
 ## Next actions
+- #56: Codex review of the allowance-scheduling PR. Before deploying, the homeowner should confirm `budget.projected_limit` (shipped 1.0, the literal "runs out before reset" rule): on 2026-10-31 real figures both agents would be reviews-only. A decision-register entry (agent-proposal: reassigned work runs on the taker's branch so D-011 holds; drafts are not reassigned; overage/credits never used) is not added yet because D-021 is already used on the #7 branches; add it with the next free number after #7 merges.
 1. PR #28 is ready for independent Claude review; exact-head CI is pending after `6e4ab8b` and this handover update.
 2. Keep live provider-limit recovery unverified; do not reboot Tower.
 
