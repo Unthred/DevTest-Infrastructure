@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Deliberately broken</title></head>
+<body>
+  <h1>Deliberately broken page</h1>
+  <img src="/missing.png" alt="missing">
+  <script>console.error('fixture console error'); setTimeout(() => { throw new Error('fixture page error'); }, 0);</script>
+</body>
+</html>

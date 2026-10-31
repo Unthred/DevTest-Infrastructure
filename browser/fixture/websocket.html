@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Opens an undeclared WebSocket</title></head>
+<body>
+  <h1>Tries to open a WebSocket to an undeclared destination</h1>
+  <script>try { new WebSocket('ws://127.0.0.1:43210/undeclared?token=SHOULD_NOT_APPEAR'); } catch (e) {}</script>
+</body>
+</html>

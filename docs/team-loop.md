@@ -8,16 +8,18 @@ Status: implemented in source on `claude/issue-23-team-loop`; not deployed. Deci
 1. **Ingests verdicts** from finished review jobs and posts them as a PR comment with a machine marker.
 2. **Notifies** for blocked or failed jobs: label `needs-homeowner` plus one comment saying what is needed. Other agents keep working.
 3. **Plans at most one merge**, then **dispatches** per agent (first rule that applies; at most 1 active, queued or paused job per agent, 2 overall, counting manual jobs):
-   1. *Review* an open PR by another agent with all checks green and no verdict from this agent for that exact head (max 2 attempts per head).
-   2. *Fix* this agent's own PR that has a CHANGES verdict on its current head (max 2 attempts).
-   3. *Implement* the next owned open issue whose prerequisites (parsed from the issue's `Prerequisites:` line, numbers only) are closed, with no open PR or job already on it and no `needs-homeowner` label. Branch `<agent>/issue-<n>-<slug>`, worktree `DevTest-Infrastructure-<agent>-<n>` (D-018).
+   1. *Rebase* this agent's own open, non-draft PR that conflicts with its base (max `max_fix_attempts` per head). GitHub runs no `pull_request` CI on a conflicting PR, so this comes first. The job is a conflict-only rebase, pushed with `--force-with-lease`, with a `git range-diff` comment. Post-condition: a new head that GitHub reports mergeable (it is asked up to four times, because mergeability is computed lazily). A recorded PASS belongs to the old head and never carries over automatically: the new head is reviewed again by the opposite agent, who also checks the range-diff.
+   2. *CI fix* this agent's own open, non-draft PR with a completed failing check on its current head (shares the per-PR `max_fix_attempts` budget with CHANGES fixes). The prompt names the failing checks (only names that pass a strict character check). Post-condition: a new pushed head.
+   3. *Fix* this agent's own PR that has a CHANGES verdict on its current head. `max_fix_attempts` (default 2) is counted per PR across heads; when it is reached while the PR is still rejected, the dispatcher posts one `needs-homeowner` notice and starts no further fix jobs for that PR.
+   4. *Review* an open PR by another agent with all checks green, no merge conflict and no verdict from this agent for that exact head (max 2 attempts per head).
+   5. *Implement* the next owned open issue whose prerequisites (parsed from the issue's `Prerequisites:` line, numbers only) are closed, with no open PR or job already on it and no `needs-homeowner` label. Branch `<agent>/issue-<n>-<slug>`, worktree `DevTest-Infrastructure-<agent>-<n>` (D-018).
 
 `team tick --dry-run` prints the planned actions and writes nothing.
 
 ## Trust
-- A review job writes `verdict.json` into its own inbox directory (`<state>/team/inbox/<ticket>/`): `{pr, headSha, verdict: PASS|CHANGES, findings[], commandsRun[]}`. PASS requires `commandsRun`; CHANGES requires a finding.
+- A review job writes `verdict.json` into its own inbox directory (`<state>/team/inbox/<ticket>/`) using `contracts/verdict.v1.schema.json`: `{pr, headSha, verdict: PASS|CHANGES, findings: [{kind: blocking|follow-up, text}], commandsRun[]}`. Blocking means correctness, security, data loss, scope violation or a failed acceptance criterion. CHANGES requires a blocking finding; PASS has no blocking findings and may have follow-ups. PASS follow-ups create one linked issue per review round, using a stable marker to avoid duplicates on retry. Fix-round re-reviews check the previous blocking findings and regressions caused by the fixes; new non-blocking observations become follow-ups.
 - The dispatcher records a verdict only from a **finished** job it created, for the job's own PR and head. **Comment text is never read**, so a comment on the shared account cannot approve anything. An agent cannot accept its own PR: the recorded reviewer must differ from the branch's author agent.
-- Prompts contain only validated tokens (numbers, SHAs, branch names, ticket). Issue and PR text never enters a prompt or a scope.
+- Prompts contain validated tokens (numbers, SHAs, branch names, ticket). A fix-round `review-scope.json` contains the previous reviewer's validated, length-bounded blocking finding text as task data; it is not an instruction or an approval signal. Issue and PR text never enters a prompt or a scope. A rebase after either verdict receives a full review.
 
 ## Merging
 The dispatcher merges, not an agent, and only when **all** hold: a recorded PASS from the opposite agent for the **exact** current head, every check on that head completed green, the PR is mergeable and not a draft, and the branch belongs to a configured agent. The merge passes `--match-head-commit`, so GitHub refuses it if the head moved after the verdict. PRs that target another agent's branch (e.g. a fix PR) follow the same rule. After a merge the dispatcher comments on the linked issue and moves the board card (`done` for merges into `main`, otherwise `in review`). Issue closure stays with GitHub `Closes #n` keywords. **Merged is not deployed and not verified working.**
@@ -35,3 +37,26 @@ Interactive launcher (`/root/bin/ai-agent`): Codex `--dangerously-bypass-approva
 - Supervised Codex with `access: full`: `codex exec --dangerously-bypass-approvals-and-sandbox` ran `node --test "tests/**/*.test.mjs"` itself: exit 0, 35/35, session policy `danger-full-access`, approval `never`. This is the check that failed before with `bwrap: pivot_root`.
 - Supervised Claude (`--permission-mode auto`, identical to interactive) with `access: full`: its Bash tool ran `node --test "tests/**/*.test.mjs"` without a prompt: exit 0, 35/35, in the worktree. The first attempt found 0 tests because a supervised Claude shell **starts in `/root`** (the shell profile changes directory; `pwd` printed `/root`), not in the job's worktree. Every job prompt now says to begin each command with `cd <worktree>` (tested); the Codex job did not have this problem.
 - Not live-verified: the dispatcher against real jobs, merge, restart after a real allowance limit, and the cron integration.
+
+## Local configuration and upgrades (issue #30)
+`supervisor/team.json` is the reviewed, versioned file (shipped `enabled: false`). **Never edit the installed copy** under `/mnt/cache/ai-supervisor/versions/<sha>/`: the next upgrade replaces it, and the payload would no longer match the reviewed commit. Local settings go in **`/mnt/cache/ai-supervisor/team.local.json`** (state root, outside `versions/`, mode 0600). Upgrades never read, write or replace it. Example:
+```json
+{ "enabled": true, "limits": { "overall": 2 }, "agents": { "claude": { "issues": [5, 6] } } }
+```
+Only `enabled`, `limits`, `depends_on_overrides` and each agent's `issues` can be overridden; repository, paths, providers, access mode and board always come from Git. An unknown key, a bad type or an unparsable file makes the tick fail closed with an error naming the file (never its contents).
+
+**Delivered work.** Before planning an implement job the dispatcher lists merged PRs. An issue is skipped when it is closed, or a merged PR from a configured agent branch `<agent>/issue-<n>-…` or a merged PR whose closing reference names it exists. Issue #23 stays open until verified working but is not in any agent's `issues` list, so it is never dispatched.
+
+**Upgrade procedure** (after Codex PASS and the dispatcher merge; Claude/Codex never run it unattended):
+1. From a clean checkout of the merged commit on Tower: `node tools/validate-project.mjs && node --test "tests/**/*.test.mjs"`.
+2. `ls -l /mnt/cache/ai-supervisor/team.local.json`; if missing, create it with `{"enabled": true}` (mode 0600) to keep the loop on.
+3. `bash tools/upgrade-supervisor.sh` (it refuses a payload containing `team.local.json`, copies `supervisor/`, then runs `diff -r` source vs. installed and aborts on any difference).
+4. Verify: `diff -r supervisor /mnt/cache/ai-supervisor/current/supervisor` is empty (the override is not in the payload, so nothing needs excluding), `team.local.json` is unchanged, `ai-agent --supervisor team tick --dry-run` plans no job for #2 or #23.
+5. Rollback: re-point `current` to the previous `versions/<sha>` and restore the wrapper backup the script prints; the override is untouched.
+The temporary hand edit of the previous payload (`versions/8f2e386…/supervisor/team.json`) is superseded by this change; the old `current` version stays as rollback.
+
+## Tick resilience (issue #35)
+A failure of one item (a lease conflict, one `gh` error, a failed comment) is recorded in the tick report under `skipped` with a reason, and the tick continues with the other agents and items; attempt counters and the "implemented" mark are only set after the job was created. Verdict and needs-homeowner comments are recorded in state and saved before they are posted (and un-recorded if the post fails), so each is posted once per job and head, or once per job and state, however many later ticks fail. The dispatcher releases the leases of its own jobs that reach `completed` or `stopped`, including ones resumed by hand; `blocked` and `failed` jobs keep their lease until the homeowner decides.
+
+## Checkouts that are not linked worktrees (issue #57)
+A job's worktree must be a linked worktree of the configured repository. The check resolves the git directory from the worktree's own absolute path (`git -C <worktree> rev-parse --git-common-dir`, resolved against that directory), never from the process working directory, so it behaves the same under cron, from `/`, or from a directory with no `.git`. A standalone clone (for example an agent's own `git clone` at the path the dispatcher would use) is not accepted. This is a condition for the homeowner, not a failed tick: the action is reported under `blocked` (not `skipped`), a "Needs the homeowner" notice is posted once on the PR, the action is not planned again for an hour, and the other agents and items carry on. Fix it by moving the work to a linked worktree (`git worktree add`) or removing the checkout.

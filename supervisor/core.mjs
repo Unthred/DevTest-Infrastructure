@@ -9,6 +9,17 @@ export const defaultRegistry = new URL('./providers.json', import.meta.url).path
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped']);
 export const allowedActions = new Set(['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue', 'update_handover']);
 export class SupervisorError extends Error {}
+// A directory the dispatcher was told to use as a worktree is not a linked worktree of the repository (for example a standalone
+// clone). A condition for the homeowner to fix, not a crash: the dispatcher records it once instead of failing every tick.
+export class WorktreeUnusable extends SupervisorError {
+  constructor(message, worktree) { super(message); this.worktree = worktree; }
+}
+// The git common directory of a checkout, as an absolute real path. `git -C <dir> rev-parse --git-common-dir` prints a path relative
+// to <dir> for a standalone clone (".git"), so it is always resolved against <dir>, never against the process working directory.
+export function gitCommonDir(dir) {
+  const raw = git(dir, 'rev-parse', '--git-common-dir');
+  return fs.realpathSync(path.resolve(dir, raw));
+}
 export const realClock = { now: () => Date.now(), sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) };
 export async function sleepUntil(clock, target) {
   while (clock.now() < target) await clock.sleep(Math.min(86400000, target - clock.now()));
@@ -81,14 +92,13 @@ export function validateSpec(spec) {
   const repository = fs.realpathSync(spec.repository), worktree = fs.realpathSync(spec.worktree);
   if (repository === worktree || git(repository, 'rev-parse', '--show-toplevel') !== repository || git(worktree, 'rev-parse', '--show-toplevel') !== worktree)
     throw new SupervisorError('repository and dedicated worktree must be distinct Git roots');
-  const common = fs.realpathSync(git(worktree, 'rev-parse', '--git-common-dir'));
-  if (common !== fs.realpathSync(path.join(repository, '.git'))) throw new SupervisorError('worktree does not belong to repository');
+  if (gitCommonDir(worktree) !== fs.realpathSync(path.join(repository, '.git'))) throw new WorktreeUnusable(`${worktree} is not a linked worktree of ${repository}`, worktree);
   const branch = git(worktree, 'symbolic-ref', '--short', 'HEAD');
   if (['main', 'master'].includes(branch)) throw new SupervisorError('job must use a feature branch');
   const handover = spec.handover ? path.resolve(worktree, spec.handover) : null;
   if (handover && !handover.startsWith(worktree + path.sep)) throw new SupervisorError('handover must be in worktree');
   const kind = spec.kind ?? 'implement';
-  if (!['implement', 'review', 'fix'].includes(kind)) throw new SupervisorError('invalid job kind');
+  if (!['implement', 'continue', 'review', 'fix', 'rebase', 'cifix'].includes(kind)) throw new SupervisorError('invalid job kind');
   const access = spec.access ?? 'standard';
   if (!['standard', 'full'].includes(access)) throw new SupervisorError('invalid access mode');
   if (access === 'full') {
@@ -133,7 +143,7 @@ export function validateManifest(m, id) {
     throw new SupervisorError('invalid provider capabilities');
   exact(m.billing, ['model', 'fallback_to_other_billing'], ['model', 'fallback_to_other_billing'], 'billing');
   if (!['subscription', 'api', 'unknown'].includes(m.billing.model) || m.billing.fallback_to_other_billing !== false) throw new SupervisorError('billing fallback must be false');
-  if (m.events && (!Array.isArray(m.events) || !m.events.every(x => ['usage_limit', 'transient_rate_limit', 'context_limit', 'auth_error', 'approval_required', 'network_error', 'crash'].includes(x)))) throw new SupervisorError('invalid events');
+  if (m.events && (!Array.isArray(m.events) || !m.events.every(x => ['usage_limit', 'transient_rate_limit', 'context_limit', 'auth_error', 'preflight_failed', 'approval_required', 'network_error', 'crash'].includes(x)))) throw new SupervisorError('invalid events');
 }
 export function leaseKeys(job) {
   // A shared repository may host parallel jobs; the issue and worktree are exclusive.
@@ -284,7 +294,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       transition(root, job, 'queued', result.event, clock);
       await clock.sleep(delay); continue;
     }
-    const blocked = ['auth_error', 'approval_required', 'context_limit', 'usage_limit'].includes(result.event);
+    const blocked = ['auth_error', 'preflight_failed', 'approval_required', 'context_limit', 'usage_limit'].includes(result.event);
     transition(root, job, blocked ? 'blocked' : 'failed', result.event || 'crash', clock);
     return job;
   }

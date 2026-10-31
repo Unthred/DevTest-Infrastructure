@@ -3,11 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { SupervisorError, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
+import { SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
-import { Team, tickLock } from './team.mjs';
+import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
+import { alertSender } from './alert.mjs';
+import { readJobs, recordTick, tickOutcome } from './dashdata.mjs';
 import { spawnSync } from 'node:child_process';
+import { SelfUpgrade, realDeps, runningSha } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
 function args(list) {
@@ -16,7 +19,7 @@ function args(list) {
     const arg = list[i];
     if (!arg.startsWith('--')) { out._.push(arg); continue; }
     const key = arg.slice(2);
-    if (['auto-resume', 'foreground', 'force', 'dry-run'].includes(key)) out[key] = true;
+    if (['auto-resume', 'foreground', 'force', 'dry-run', 'json', 'no-github'].includes(key)) out[key] = true;
     else if (key === 'no-auto-resume') out[key] = false;
     else out[key] = list[++i];
   }
@@ -59,6 +62,7 @@ function realJobs(root, registry) {
       return out;
     },
     get: async id => { try { return readJob(root, id); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } },
+    release: async id => releaseLeases(root, readJob(root, id)),
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
 }
@@ -67,7 +71,13 @@ function realGit(repoPath) {
   return {
     worktreeFor: async branch => { const out = git('worktree', 'list', '--porcelain').split('\n\n'); const hit = out.find(b => b.includes(`branch refs/heads/${branch}`)); return hit ? hit.split('\n')[0].replace('worktree ', '') : null; },
     ensureWorktree: async ({ path: wt, branch, base }) => {
-      if (fs.existsSync(wt)) return wt;
+      if (fs.existsSync(wt)) {
+        // An existing directory is reused only if it is a linked worktree of THIS repository (resolved from its own absolute path).
+        let common = null;
+        try { common = gitCommonDir(wt); } catch { /* not a git checkout at all */ }
+        if (common !== fs.realpathSync(path.join(repoPath, '.git'))) throw new WorktreeUnusable(`${wt} is not a linked worktree of ${repoPath}`, wt);
+        return wt;
+      }
       git('fetch', '--quiet', 'origin');
       const exists = spawnSync('git', ['-C', repoPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).status === 0;
       if (exists) git('worktree', 'add', wt, branch); else git('worktree', 'add', '-b', branch, wt, base);
@@ -75,7 +85,7 @@ function realGit(repoPath) {
     }
   };
 }
-async function teamFor(root, registry, config = JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), needRegister = true) {
+async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true) {
   // The decision register that counts is the one merged into main, not a working copy.
   let register = '';
   if (needRegister) {
@@ -83,14 +93,42 @@ async function teamFor(root, registry, config = JSON.parse(fs.readFileSync(teamC
     if (shown.status !== 0) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main');
     register = shown.stdout;
   }
-  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register });
+  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config) });
 }
 async function teamTick(root, registry, dryRun) {
-  const config = JSON.parse(fs.readFileSync(teamConfigFile, 'utf8'));
-  if (!config.enabled && !dryRun) return { skipped: 'team loop is not enabled in supervisor/team.json' };
+  const config = loadTeamConfig(teamConfigFile, root);
+  // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
+  const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
+  if (!config.enabled && !dryRun) { record({ status: 'disabled' }); return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' }; }
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };
-  try { return await (await teamFor(root, registry, config, !dryRun)).tick({ dryRun }); } finally { unlock(); }
+  try {
+    const team = await teamFor(root, registry, config, !dryRun);
+    const report = await team.tick({ dryRun });
+    if (!dryRun) record({ ...tickOutcome(report), team, actions: report.actions });
+    return report;
+  } catch (error) {
+    if (!dryRun) record({ status: 'error', error: error?.message });
+    throw error;
+  } finally { unlock(); }
+}
+function selfUpgradeFor(root, registry) {
+  const config = loadTeamConfig(teamConfigFile, root);
+  const verdictFor = (pr, head) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')).verdicts?.[`${pr}:${head}`] || null; } catch { return null; } };
+  const jobs = realJobs(root, registry);
+  return { config, upgrade: new SelfUpgrade({ root, deps: realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, sendAlert: alertSender(root, config) }) }) };
+}
+async function selfUpgradeStep(root, registry, tick) {
+  const { config, upgrade } = selfUpgradeFor(root, registry);
+  if (!config.enabled) return 'team-loop-disabled';
+  // A tick skipped because another one holds the lock is not a live tick and verifies nothing.
+  const live = !tick?.skipped || Array.isArray(tick.skipped);
+  const failed = tick?.error || (Array.isArray(tick?.skipped) && tick.skipped.length);
+  if (live) {
+    const verdict = await upgrade.verifyPending({ running: runningSha(self), ok: !failed, reason: tick?.error || tick?.skipped?.[0]?.reason });
+    if (verdict === 'rolled-back' || verdict === 'rollback-failed' || verdict === 'verified') return verdict;
+  }
+  return upgrade.step();
 }
 async function main() {
   const command = process.argv[2] || 'help';
@@ -98,7 +136,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | reconcile | daemon | release ID');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | daemon | release ID\n  team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   if (command === 'dry-run' || command === 'start') {
@@ -145,15 +183,40 @@ async function main() {
     }
     return;
   }
+  if (command === 'dashboard') {
+    if (a._[0] !== 'serve') throw new SupervisorError('usage: dashboard serve --host LAN_IPV4 [--port N]');
+    const { serve, DEFAULT_PORT } = await import('./dashserver.mjs');
+    const server = await serve({ root, config: loadTeamConfig(teamConfigFile, root), host: a.host || process.env.DASHBOARD_HOST, port: Number(a.port || process.env.DASHBOARD_PORT || DEFAULT_PORT) });
+    console.log(`dashboard listening on http://${server.address().address}:${server.address().port}/ (read-only)`);
+    return;   // the server keeps the process alive
+  }
   if (command === 'team') {
-    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run]');
+    if (a._[0] === 'status') {
+      const { currentStatus, renderStatus } = await import('./teamstatus.mjs');
+      const config = loadTeamConfig(teamConfigFile, root);
+      const status = await currentStatus({ root, config, gh: a['no-github'] ? null : githubClient(config) });
+      console.log(a.json === true ? JSON.stringify(status, null, 2) : renderStatus(status).trimEnd()); return;
+    }
+    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json]');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
+  }
+  if (command === 'self-upgrade') {
+    const { upgrade } = selfUpgradeFor(root, registry);
+    if (a._[0] === 'clear-latch') { upgrade.clearLatch(); console.log('latch cleared'); return; }
+    if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|clear-latch');
+    console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, installed: upgrade.d.installed() }, null, 2)); return;
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
       const result = reconcileOnce(root, registry);
       // The five-minute reconcile cron also runs the token-free team tick, when the team loop is enabled.
-      try { result.team = await teamTick(root, registry, false); } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; }
+      try {
+        result.team = await teamTick(root, registry, false);
+        // A skipped item (lease conflict, gh error) keeps the other items running but still makes the scheduled run fail visibly.
+        if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
+      } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
+      // After the lock is released, so the new version's dry-run health check can take it. A failure here never fails the tick.
+      try { result.selfUpgrade = await selfUpgradeStep(root, registry, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
       console.log(JSON.stringify(result)); return;
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.

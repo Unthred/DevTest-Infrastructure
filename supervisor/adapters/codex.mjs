@@ -5,6 +5,7 @@ import { parseStatusWindow, parseTryAgain } from '../clocktext.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight(job) {
   const status = spawnSync('codex', ['login', 'status'], { encoding: 'utf8', timeout: 10000 });
+  if (status.error?.code === 'ENOENT') return 'not_found';
   if (status.status !== 0 || !/logged in using chatgpt/i.test(`${status.stdout}\n${status.stderr}`)) return false;
   // The governed launcher validates its installed profile and the selected product root.
   const governed = spawnSync('/usr/local/bin/ai-rules-codex', ['--session-name', base.contextForRole(job.role), job.worktree], { encoding: 'utf8', timeout: 15000 });
@@ -22,6 +23,7 @@ export function command(config, job, resume) {
 export function observe(line, now = Date.now()) {
   let obj;
   try { obj = JSON.parse(line); } catch { obj = null; }
+  if (obj === null && base.isTruncatedPayload(line)) return {};
   const sessionId = obj?.type === 'thread.started' && typeof obj.thread_id === 'string' ? obj.thread_id : null;
   const errorObject = obj && (obj.type === 'error' || obj.type === 'turn.failed');
   const text = obj ? (errorObject ? String(obj.error?.message || obj.message || obj.error || '') : '') : line;

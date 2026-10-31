@@ -6,6 +6,7 @@ import { safeEnvironment } from '../core.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight() {
   const result = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8', timeout: 10000, env: safeEnvironment() });
+  if (result.error?.code === 'ENOENT') return 'not_found';
   try {
     const status = JSON.parse(result.stdout);
     return result.status === 0 && status.loggedIn === true && status.authMethod === 'claude.ai' && !!status.subscriptionType;
@@ -22,6 +23,7 @@ export function command(config, job, resume) {
 export function observe(line) {
   let obj;
   try { obj = JSON.parse(line); } catch { obj = null; }
+  if (obj === null && base.isTruncatedPayload(line)) return {};
   const errorObject = obj && (obj.type === 'error' || obj.is_error === true || obj.type === 'result' && obj.is_error === true);
   const sessionId = typeof obj?.session_id === 'string' ? obj.session_id : null;
   if (obj?.type === 'rate_limit_event') return { sessionId, allowance: claudeAllowance(obj.rate_limit_info) };

@@ -18,7 +18,10 @@ install_root="/mnt/cache/ai-supervisor/versions/$commit"
 mkdir -p "$install_root"
 chmod 700 /mnt/cache/ai-supervisor /mnt/cache/ai-supervisor/versions "$install_root"
 [ "$(stat -c '%u:%a' /mnt/cache/ai-supervisor)" = 0:700 ] || { printf 'unsafe supervisor state root\n' >&2; exit 2; }
+# Local configuration lives in /mnt/cache/ai-supervisor/team.local.json (outside versions/); an upgrade never reads, writes or replaces it.
+[ ! -e "$source_root/supervisor/team.local.json" ] || { printf 'team.local.json must not be in the versioned payload\n' >&2; exit 2; }
 cp -a "$source_root/supervisor" "$install_root/"
+diff -r "$source_root/supervisor" "$install_root/supervisor" >/dev/null || { printf 'installed payload differs from the reviewed commit\n' >&2; exit 2; }
 chmod -R go-rwx "$install_root"
 current=/mnt/cache/ai-supervisor/current
 if [ -e "$current" ] && [ ! -L "$current" ]; then printf 'current supervisor path is not a symlink\n' >&2; exit 2; fi
@@ -34,5 +37,15 @@ EOF
 chmod 755 "$temp"
 mv "$temp" "$wrapper"
 bash -n "$wrapper"
+# team-status delegates to whichever ai-supervisor is current, so it survives every later upgrade and rollback unchanged.
+status_cmd=/root/bin/team-status
+status_tmp=/root/bin/.team-status-$commit
+cat > "$status_tmp" <<'EOF'
+#!/usr/bin/env bash
+exec /root/bin/ai-supervisor team status "$@"
+EOF
+chmod 755 "$status_tmp"
+bash -n "$status_tmp"
+mv -f "$status_tmp" "$status_cmd"
 /root/bin/ai-agent --supervisor help >/dev/null
 printf 'upgraded=%s previous_wrapper=%s\n' "$commit" "$backup"

@@ -10,7 +10,7 @@ export const REQUIRED_FILES = [
   'README.md', 'AGENTS.md', 'CLAUDE.md',
   'docs/architecture.md', 'docs/DECISIONS.md', 'docs/cli-contract.md',
   'docs/agent-provider-contract.md', 'docs/acceptance-gates.md', 'docs/ai/CURRENT_HANDOVER.md',
-  'contracts/cli.v1.json', 'contracts/provider-manifest.v1.schema.json'
+  'contracts/cli.v1.json', 'contracts/provider-manifest.v1.schema.json', 'contracts/verdict.v1.schema.json'
 ];
 const STATUSES = new Set(['homeowner-approved', 'agent-proposal', 'temporary-note']);
 const SKIP_DIRS = new Set(['.git', 'node_modules']);
@@ -116,7 +116,7 @@ export function validate(root) {
   if (has('AGENTS.md')) {
     const text = read(root, 'AGENTS.md');
     for (const [needle, why] of [['docs/DECISIONS.md', 'decision register'], ['docs/ai/CURRENT_HANDOVER.md', 'canonical handover'], ['One writer per worktree', 'worktree rule'],
-      ['OpenBao', 'secrets rule'], ['Docker socket', 'Docker socket rule'], ['Opposite-agent review', 'review rule'], ['dev-test', 'single CLI']]) {
+      ['OpenBao', 'secrets rule'], ['Docker socket', 'Docker socket rule'], ['Opposite-agent review', 'review rule'], ['dev-test', 'single CLI'], ['No AI attribution', 'attribution rule']]) {
       if (!text.includes(needle)) add('entrypoints', `AGENTS.md must state the ${why} ("${needle}")`);
     }
   }

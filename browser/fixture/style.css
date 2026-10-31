@@ -1,0 +1,4 @@
+body { font-family: sans-serif; margin: 0; background: #0b3d5c; color: #fff; }
+main { padding: 2rem; max-width: 40rem; }
+h1 { font-size: 1.6rem; }
+#state { padding: .5rem 1rem; background: #1b7a3d; display: inline-block; border-radius: .25rem; }

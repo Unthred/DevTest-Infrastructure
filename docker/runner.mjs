@@ -14,6 +14,9 @@ const imageRepositories = {
 };
 const digest = /^[a-z0-9./-]+@sha256:[0-9a-f]{64}$/;
 const runId = /^[a-f0-9]{16,32}$/;
+const targetName = /^[a-z][a-z0-9-]{0,31}$/;
+export const targetSocketDirectory = (storage, id) => path.join(storage, 'sockets', id);
+export const targetSocketPath = (storage, id, name) => path.join(targetSocketDirectory(storage, id), `${name}.sock`);
 const safeArg = value => typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\0\r\n]/.test(value);
 const inside = (base, candidate) => candidate === base || candidate.startsWith(base + path.sep);
 
@@ -35,6 +38,22 @@ export function validateLock(lock) {
   return lock;
 }
 
+// The container user must be able to read the project directory and traverse every ancestor of it. A 0700 clone (what mktemp -d
+// makes) fails inside the container as a confusing exit 2 of the subject; refuse it up front with the real reason. Mode bits only:
+// the runner never changes the permissions of a project.
+export function containerCanRead(dir, uid, gid) {
+  const allowed = (st, bit) => { const m = st.mode; return (st.uid === uid ? m >> 6 : st.gid === gid ? m >> 3 : m) & bit; };
+  let p = fs.realpathSync(dir);
+  if (!allowed(fs.statSync(p), 5)) return false;           // r-x on the project itself
+  while (p !== path.dirname(p)) { p = path.dirname(p); if (!allowed(fs.statSync(p), 1)) return false; }   // --x on every ancestor
+  return true;
+}
+
+export function assertContainerCanRead(project, config) {
+  if (Number.isSafeInteger(config.uid) && Number.isSafeInteger(config.gid) && !containerCanRead(project, config.uid, config.gid))
+    throw new RunnerError(`project directory is not readable by the container user (uid ${config.uid}); it needs mode 0755 (a 0700 clone fails inside the container as exit 2)`);
+}
+
 export function createPlan(spec, config) {
   const project = exactDirectory(spec.project, 'project');
   const allowlist = config.allowedProjects?.map(p => exactDirectory(p, 'allowlisted project')) || [];
@@ -42,6 +61,7 @@ export function createPlan(spec, config) {
   if (!inside('/mnt/user/projects', project)) throw new RunnerError('project must be under /mnt/user/projects');
   const storage = exactDirectory(config.storageRoot, 'storage root');
   if (!inside('/mnt/cache', storage)) throw new RunnerError('storage root must be on /mnt/cache');
+  assertContainerCanRead(project, config);
   return buildPlanForVerifiedPaths(spec, config, project, storage);
 }
 
@@ -54,6 +74,13 @@ export function buildPlanForVerifiedPaths(spec, config, project, storage) {
   if (!Array.isArray(spec.command) || !spec.command.length || !spec.command.every(safeArg)) throw new RunnerError('command must be a bounded argv array');
   const network = spec.network || 'none';
   if (network !== 'none') throw new RunnerError('network access requires a later approved phase policy');
+  // Declared targets are the ONLY way out of a network-none container: each is a host-side Unix socket mounted at
+  // /targets/<name>.sock. The container gets no network interface and no route, so nothing else is reachable.
+  const names = spec.targets ?? [];
+  if (!Array.isArray(names) || names.length > 4 || !names.every(n => targetName.test(n)) || new Set(names).size !== names.length) throw new RunnerError('targets must be up to four unique simple names');
+  const targets = names.map(name => ({ name, host: targetSocketPath(storage, spec.runId, name), container: `/targets/${name}.sock` }));
+  // sun_path holds 107 bytes; longer paths are silently truncated by listen(), so refuse them before anything starts.
+  if (targets.some(t => Buffer.byteLength(t.host) > 107)) throw new RunnerError('target socket path is too long; use a shorter storage root');
   const phase = spec.phase || 'build';
   if (!['restore', 'build', 'test'].includes(phase)) throw new RunnerError('invalid run phase');
   const defaultCacheName = spec.image.startsWith('dotnet-') ? 'nuget' : 'playwright';
@@ -84,9 +111,22 @@ export function buildPlanForVerifiedPaths(spec, config, project, storage) {
     '--user', `${config.uid}:${config.gid}`, ...dotnetHomeArgs, '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m',
     '--mount', `type=bind,src=${project},dst=/src,readonly`,
     '--mount', `type=bind,src=${work},dst=/work`, '--mount', `type=bind,src=${out},dst=/out`,
-    '--mount', `type=bind,src=${cache},dst=/cache${phase === 'restore' ? '' : ',readonly'}`, '--workdir', '/work',
+    '--mount', `type=bind,src=${cache},dst=/cache${phase === 'restore' ? '' : ',readonly'}`,
+    ...targets.flatMap(t => ['--mount', `type=bind,src=${t.host},dst=${t.container},readonly`]), '--workdir', '/work',
     ...(spec.image.startsWith('dotnet-') ? ['--entrypoint='] : []), image, ...spec.command];
-  return { runId: spec.runId, name, image, project, storage, workspace, volume, workImage, cacheImage, phase, work, out, cache, uid: config.uid, gid: config.gid, timeoutMs: limits.timeoutMs, diskBytes: limits.diskMb * 1048576, cacheBytes: limits.cacheMb * 1048576, logDir: path.join(workspace, 'logs'), args };
+  return { runId: spec.runId, name, image, targets, project, storage, workspace, volume, workImage, cacheImage, phase, work, out, cache, uid: config.uid, gid: config.gid, timeoutMs: limits.timeoutMs, diskBytes: limits.diskMb * 1048576, cacheBytes: limits.cacheMb * 1048576, logDir: path.join(workspace, 'logs'), args };
+}
+
+// The caller (host side) starts each target server before the run. Refuse anything that is not a real socket in a private,
+// run-specific directory, so a swapped file or a symlink can never be mounted into the container.
+export function verifyTargets(plan) {
+  for (const t of plan.targets) {
+    const dir = fs.lstatSync(path.dirname(t.host), { throwIfNoEntry: false });
+    if (!dir || !dir.isDirectory() || dir.isSymbolicLink() || dir.uid !== process.getuid() || (dir.mode & 0o077) !== 0) throw new RunnerError(`target ${t.name}: socket directory is missing or unsafe`);
+    const st = fs.lstatSync(t.host, { throwIfNoEntry: false });
+    if (!st || !st.isSocket()) throw new RunnerError(`target ${t.name}: no host-side socket is listening`);
+    if (st.uid !== plan.uid && st.uid !== process.getuid()) throw new RunnerError(`target ${t.name}: socket owner is unexpected`);
+}
 }
 
 export function prepareDirectories(plan) {
@@ -354,6 +394,7 @@ export async function runContainer(plan, { command = dockerCommand, spawnRun = s
   if (ownedContainer(plan, command)) throw new RunnerError('run container name is already in use', 7);
   const localImage = command(['image', 'inspect', '--format', '{{.Id}}', plan.image]);
   if (localImage.status !== 0) throw new RunnerError('pinned image is not locally available; pull through a reviewed update path', 3);
+  verifyTargets(plan);
   prepareDirectories(plan);
   let swept;
   try { swept = sweep(plan.storage, command); } catch (error) { swept = { error: errorClass(error) }; }   // a failed sweep never blocks a run

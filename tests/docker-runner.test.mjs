@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { RunnerError, buildPlanForVerifiedPaths, cleanupContainer, releaseVolumes, sweepStaleVolumes, containerState, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
+import { RunnerError, assertContainerCanRead, containerCanRead, buildPlanForVerifiedPaths, cleanupContainer, releaseVolumes, sweepStaleVolumes, containerState, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
 function fixture(t) {
@@ -329,4 +329,44 @@ test('sweep reports a per-device failure without touching anything else, and a s
   const l = lifecycle(t, { exit: 0, state: '0 false' }, { sweep: () => { throw new SyntaxError('sweep bug'); } });
   const r = await l.run();
   assert.equal(r.exitCode, 0); assert.deepEqual(r.sweep, { error: 'SyntaxError' });
+});
+
+// PR #29 review: a 0700 project directory (a mktemp -d clone) made every browser run fail inside the container as exit 2.
+test('containerCanRead: the container user needs r-x on the project and --x on its ancestors; mode bits only', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-perm-'));
+  t.after(() => { fs.chmodSync(root, 0o755); fs.rmSync(root, { recursive: true, force: true }); });
+  const project = path.join(root, 'p'); fs.mkdirSync(project);
+  const other = { uid: 99, gid: 100 };
+  fs.chmodSync(root, 0o755); fs.chmodSync(project, 0o755);
+  assert.equal(containerCanRead(project, other.uid, other.gid), true, '0755 is readable by a different user');
+  fs.chmodSync(project, 0o700);
+  assert.equal(containerCanRead(project, other.uid, other.gid), false, 'a 0700 project is not readable by a different user');
+  assert.equal(containerCanRead(project, process.getuid(), process.getgid()), true, 'the owner can read it');
+  fs.chmodSync(project, 0o755); fs.chmodSync(root, 0o700);
+  assert.equal(containerCanRead(project, other.uid, other.gid), false, 'an untraversable ancestor refuses');
+  fs.chmodSync(root, 0o755); fs.chmodSync(project, 0o750);
+  assert.equal(containerCanRead(project, other.uid, other.gid), false, 'group-only mode refuses a user outside the group');
+});
+
+test('the runner refuses a project the container user cannot read, with the real reason', t => {
+  const f = fixture(t);
+  const config = { ...f.config, uid: 99, gid: 100 };
+  fs.chmodSync(f.root, 0o755);   // mkdtemp makes the fixture root 0700, which would hide the project permission under test
+  fs.chmodSync(f.project, 0o700);
+  assert.throws(() => assertContainerCanRead(f.project, config), /not readable by the container user \(uid 99\).*0755/);
+  fs.chmodSync(f.project, 0o755);
+  assert.doesNotThrow(() => assertContainerCanRead(f.project, config));
+});
+
+// createPlan itself enforces /mnt/user/projects and /mnt/cache, which exist on Tower only.
+test('createPlan applies the readability check (Tower only)', { skip: !fs.existsSync('/mnt/user/projects') || !fs.existsSync('/mnt/cache') }, t => {
+  const f = fixture(t);
+  const proj = fs.mkdtempSync('/mnt/user/projects/.devtest-perm-'), storage = fs.mkdtempSync('/mnt/cache/.devtest-perm-st-');
+  t.after(() => { fs.rmSync(proj, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); });
+  fs.chmodSync(storage, 0o700);
+  const config = { ...f.config, uid: 99, gid: 100, allowedProjects: [proj], storageRoot: storage };
+  fs.chmodSync(proj, 0o700);
+  assert.throws(() => createPlan({ ...f.spec, project: proj }, config), /not readable by the container user/);
+  fs.chmodSync(proj, 0o755);
+  assert.doesNotThrow(() => createPlan({ ...f.spec, project: proj }, config));
 });

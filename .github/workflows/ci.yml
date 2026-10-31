@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]   # edited: the PR body is checked too
   push:
     branches: [main]
 
@@ -25,3 +26,16 @@ jobs:
         run: node tools/validate-project.mjs
       - name: Positive and negative validator tests
         run: node --test "tests/**/*.test.mjs"
+
+  commit-attribution:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No AI attribution in commit messages or the pull request body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash tools/ci/validate-commit-attribution.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"

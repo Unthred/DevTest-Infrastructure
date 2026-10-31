@@ -19,6 +19,16 @@ test('discover one project or prefer a single solution in the selected directory
   assert.equal(discoverProject(root), path.join(root, 'App.sln'));
 });
 
+test('selected working directory discovers and translates its single project', t => {
+  const root = project(t);
+  const nested = path.join(root, 'src', 'Tool');
+  fs.mkdirSync(nested, { recursive: true });
+  fs.writeFileSync(path.join(nested, 'Tool.csproj'), '<Project />');
+  assert.equal(discoverProject(root, 'src/Tool'), path.join(nested, 'Tool.csproj'));
+  const planned = buildCommand({ sdk: '10', operation: 'build', projectRoot: root, workingDirectory: 'src/Tool' });
+  assert.equal(planned.command[2], '/src/src/Tool/Tool.csproj');
+});
+
 test('discovery rejects missing or ambiguous project inputs', t => {
   const root = project(t);
   assert.throws(() => discoverProject(root), /no solution or project/);
