@@ -159,13 +159,15 @@ dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px var(--sp4);marg
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media print{.nav,.statusbar .theme{display:none}}
 
-/* ---- thin themed scrollbars (issue #58): invisible until the pointer is over the scroller or it is scrolling; the same standard
-   properties in Chrome, Edge and Firefox; keyboard and touch scrolling are untouched (only the bar's look changes) */
+/* ---- thin themed overlay scrollbars (issue #58): once the script has started (html.sb-overlay) the native bars are hidden (wheel,
+   keyboard and touch scrolling are untouched) and a thin thumb is drawn OVER the content, taking no layout space; it shows only on
+   hover or while scrolling. Same look in Chrome, Edge and Firefox. Without the script the native bars stay. */
 :root{--thumb:color-mix(in srgb,var(--mut) 70%,transparent)}
-*{scrollbar-width:thin;scrollbar-color:transparent transparent}
-*:hover,*:focus-within,.is-scrolling{scrollbar-color:var(--thumb) transparent}
-html{scrollbar-color:transparent transparent}html:hover,html.is-scrolling{scrollbar-color:var(--thumb) transparent}
-@media(hover:none){*{scrollbar-color:var(--thumb) transparent}}
+html.sb-overlay,html.sb-overlay *{scrollbar-width:none}
+.sb-thumb{position:fixed;z-index:60;border-radius:4px;background:var(--thumb);opacity:0;pointer-events:none;transition:opacity .15s;touch-action:none}
+.sb-thumb.show{opacity:1;pointer-events:auto}
+.sb-thumb:hover,.sb-thumb.drag{background:var(--mut)}
+@media(prefers-reduced-motion:reduce){.sb-thumb{transition:none}}
 /* ---- dockable navigation (issue #58); top is the default, a phone always keeps the fixed bottom tab bar */
 .dockbar{display:flex;align-items:center;gap:var(--sp1);font-size:var(--fs-sm)}.dockbar .k{color:var(--mut);margin-right:var(--sp1)}
 .dockbtn{width:auto;padding:0 10px;font-size:var(--fs-xs);border-color:var(--line)}.dockbtn[aria-pressed=true]{background:var(--link);color:var(--surface);border-color:var(--link)}

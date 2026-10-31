@@ -50,13 +50,68 @@ addEventListener('keydown', e => { if (e.key === 'Escape') collapse(); });
 // phone: tap a table row to open it
 for (const tr of $$('tr[tabindex]')) tr.addEventListener('click', () => tr.classList.toggle('open'));
 
-// scrollbars appear while a scroller is moving (hover is handled in CSS)
-const scrollTimers = new WeakMap();
-addEventListener('scroll', e => {
-  const el = e.target === document ? document.documentElement : e.target; if (!el.classList) return;
-  el.classList.add('is-scrolling'); clearTimeout(scrollTimers.get(el));
-  scrollTimers.set(el, setTimeout(() => el.classList.remove('is-scrolling'), 900));
-}, { capture: true, passive: true });
+// Thin overlay scrollbars: native bars are hidden (html.sb-overlay) and a thumb is drawn over the scroller's edge, only while the
+// pointer is over it or it is scrolling. Wheel, keyboard and touch scrolling stay native. Thumbs are fixed-position: no layout space.
+document.documentElement.classList.add('sb-overlay');
+const SB = 4, SBMIN = 24;
+const thumbs = new Map(); // scroller -> { v, h, timer, hover }
+const isDoc = el => el === document.documentElement || el === document.body;
+const boxOf = el => isDoc(el) ? document.documentElement : el;
+const rectOf = el => isDoc(el) ? { left: 0, top: 0, right: innerWidth, bottom: innerHeight } : el.getBoundingClientRect();
+function mkThumb(axis) { const t = document.createElement('div'); t.className = 'sb-thumb'; t.dataset.axis = axis; t.setAttribute('aria-hidden', 'true'); document.body.append(t); return t; }
+function place(el) {
+  const rec = thumbs.get(el); if (!rec) return;
+  const r = rectOf(el), box = boxOf(el);
+  for (const [vert, t] of [[true, rec.v], [false, rec.h]]) {
+    const client = vert ? box.clientHeight : box.clientWidth, total = vert ? box.scrollHeight : box.scrollWidth, pos = vert ? box.scrollTop : box.scrollLeft;
+    if (total <= client + 1) { t.classList.remove('show'); t.style.display = 'none'; continue; }
+    t.style.display = '';
+    const len = vert ? r.bottom - r.top : r.right - r.left, size = Math.max(SBMIN, len * client / total), off = (len - size) * (pos / (total - client));
+    if (vert) Object.assign(t.style, { width: SB + 'px', height: size + 'px', left: r.right - SB - 2 + 'px', top: r.top + off + 'px' });
+    else Object.assign(t.style, { height: SB + 'px', width: size + 'px', top: r.bottom - SB - 2 + 'px', left: r.left + off + 'px' });
+  }
+}
+function reveal(el, ms) {
+  let rec = thumbs.get(el);
+  if (!rec) { rec = { v: mkThumb('y'), h: mkThumb('x'), timer: 0, hover: false }; thumbs.set(el, rec); dragify(el, rec); }
+  place(el); clearTimeout(rec.timer);
+  for (const t of [rec.v, rec.h]) if (t.style.display !== 'none') t.classList.add('show');
+  rec.timer = setTimeout(() => {
+    if (rec.hover || rec.v.classList.contains('drag') || rec.h.classList.contains('drag')) return reveal(el, ms);
+    for (const t of [rec.v, rec.h]) t.classList.remove('show');
+  }, ms);
+}
+function dragify(el, rec) {
+  for (const t of [rec.v, rec.h]) {
+    t.addEventListener('pointerenter', () => { rec.hover = true; }); t.addEventListener('pointerleave', () => { rec.hover = false; });
+    t.addEventListener('pointerdown', e => {
+      e.preventDefault(); t.setPointerCapture(e.pointerId); t.classList.add('drag');
+      const vert = t.dataset.axis === 'y', box = boxOf(el), start = vert ? e.clientY : e.clientX, from = vert ? box.scrollTop : box.scrollLeft;
+      const move = ev => {
+        const r = rectOf(el), len = vert ? r.bottom - r.top : r.right - r.left;
+        const client = vert ? box.clientHeight : box.clientWidth, total = vert ? box.scrollHeight : box.scrollWidth, size = Math.max(SBMIN, len * client / total);
+        const next = from + ((vert ? ev.clientY : ev.clientX) - start) * (total - client) / Math.max(1, len - size);
+        if (vert) box.scrollTop = next; else box.scrollLeft = next;
+      };
+      const up = () => { t.classList.remove('drag'); t.removeEventListener('pointermove', move); t.removeEventListener('pointerup', up); t.removeEventListener('pointercancel', up); };
+      t.addEventListener('pointermove', move); t.addEventListener('pointerup', up); t.addEventListener('pointercancel', up);
+    });
+  }
+}
+const scrollerOf = n => { // nearest ancestor (or the page) that can scroll
+  for (let el = n instanceof Element ? n : null; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+    const cs = getComputedStyle(el);
+    if ((/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1) || (/(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1)) return el;
+  }
+  return document.documentElement;
+};
+addEventListener('scroll', e => { const el = e.target === document ? document.documentElement : e.target; if (el instanceof Element) reveal(el, 900); }, { capture: true, passive: true });
+addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch' || !(e.target instanceof Element) || e.target.classList.contains('sb-thumb')) return;
+  const el = scrollerOf(e.target), box = boxOf(el);
+  if (thumbs.has(el) || box.scrollHeight > box.clientHeight + 1 || box.scrollWidth > box.clientWidth + 1) reveal(el, 1200);
+}, { passive: true });
+addEventListener('resize', () => { for (const el of thumbs.keys()) place(el); });
 
 // Back: the browser's own history is used when we came from this dashboard (so filters, sort, page and scroll come back
 // exactly); otherwise the link goes to the parent page, which also works without script.
