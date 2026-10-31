@@ -123,3 +123,23 @@ test('layoutCheck itself never reads page text, values or aria-labels', async ()
   const { layoutCheck } = await import('../browser/layout-check.mjs');
   assert.ok(!/innerText|textContent|\.value\b|aria-label/.test(layoutCheck.toString()));
 });
+
+test('layoutCheck labels elements structurally: page-controlled ids, classes and tag names never reach a finding', async () => {
+  const { layoutCheck } = await import('../browser/layout-check.mjs');
+  const canary = 'CANARY-pw-9Q2x';
+  const mk = (tagName, extra = {}) => ({ nodeType: 1, tagName, children: [], parentElement: null, id: canary, className: `${canary} other`, hasAttribute: () => false, scrollWidth: 0, clientWidth: 0, getBoundingClientRect: () => ({ width: 1, height: 1, left: 0, right: 1, top: 0, bottom: 1 }), ...extra });
+  const body = mk('BODY'), main = mk('MAIN', { parentElement: body }), widget = mk('X-' + canary.toUpperCase(), { parentElement: main });
+  body.children = [main]; main.children = [mk('DIV', { parentElement: main }), widget];
+  widget.getBoundingClientRect = () => ({ width: 50, height: 20, left: 90, right: 140, top: 0, bottom: 20 });
+  const saved = { document: globalThis.document, getComputedStyle: globalThis.getComputedStyle, scrollTo: globalThis.scrollTo, innerHeight: globalThis.innerHeight };
+  globalThis.scrollTo = () => {}; globalThis.innerHeight = 600;
+  globalThis.document = { documentElement: { clientWidth: 100, scrollWidth: 100 }, body: { ...body, querySelectorAll: () => [widget] }, querySelectorAll: () => [], elementFromPoint: () => null };
+  globalThis.getComputedStyle = () => ({ visibility: 'visible', display: 'block', opacity: '1', overflowX: 'visible', position: 'static' });
+  try {
+    const findings = layoutCheck({ touch: false });
+    assert.ok(findings.length >= 1);
+    for (const f of findings) assert.match(f.element, /^[a-z0-9>\[\]]+$/);
+    assert.equal(findings[0].element, 'body>main[0]>other[1]');
+    assert.ok(!JSON.stringify(findings).toUpperCase().includes(canary.toUpperCase()));
+  } finally { Object.assign(globalThis, saved); if (saved.document === undefined) delete globalThis.document; if (saved.scrollTo === undefined) delete globalThis.scrollTo; }
+});

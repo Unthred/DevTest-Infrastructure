@@ -4,7 +4,17 @@ export function layoutCheck(options) {
   const tol = 1, minTarget = 24, comfortable = 44;
   const doc = document.documentElement, vw = doc.clientWidth;
   const findings = [];
-  const label = (el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${typeof el.className === 'string' && el.className.trim() ? `.${el.className.trim().split(/\s+/)[0]}` : ''}`;
+  // The label is structural only: standard tag names and child positions. Page-controlled ids, classes and custom tag names
+  // are never copied, so a secret placed in any of them cannot reach the artifacts (D-008).
+  const TAGS = new Set('a article aside body button details dialog div footer form h1 h2 h3 h4 h5 h6 header iframe img input label li main nav ol option p section select span summary svg table tbody td textarea th thead tr ul video'.split(' '));
+  const label = (el) => {
+    const parts = [];
+    for (let n = el, depth = 0; n && n.nodeType === 1 && depth < 5; n = n.parentElement, depth++) {
+      const tag = String(n.tagName).toLowerCase();
+      parts.unshift(`${TAGS.has(tag) ? tag : 'other'}${n.parentElement ? `[${Array.prototype.indexOf.call(n.parentElement.children, n)}]` : ''}`);
+    }
+    return parts.join('>');
+  };
   const shown = (el) => { const r = el.getBoundingClientRect(), c = getComputedStyle(el); return r.width > 0 && r.height > 0 && c.visibility !== 'hidden' && c.display !== 'none' && c.opacity !== '0'; };
   const add = (check, severity, el, detail = {}) => findings.push({ check, severity, element: label(el), ...detail });
   const scroller = (el) => { for (let p = el.parentElement; p; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if (o === 'auto' || o === 'scroll') return p; } return null; };
