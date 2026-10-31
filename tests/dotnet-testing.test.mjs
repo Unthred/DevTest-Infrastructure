@@ -6,7 +6,8 @@ import path from 'node:path';
 import { buildCommand, DotnetCommandError } from '../dotnet/commands.mjs';
 import { dotnetRunSpec } from '../dotnet/run.mjs';
 import { buildPlanForVerifiedPaths } from '../docker/runner.mjs';
-import { parseTrx, trxToJunit, classify, pruneRuns, runDotnetTests } from '../dotnet/testing.mjs';
+import crypto from 'node:crypto';
+import { parseTrx, trxToJunit, classify, pruneRuns, runDotnetTests, collectArtifacts } from '../dotnet/testing.mjs';
 
 const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-dt-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 const TRX = (failed) => `<?xml version="1.0"?><TestRun><Results>
@@ -133,4 +134,24 @@ test('a run directory is never reused', async t => {
   await assert.rejects(runDotnetTests({ sdk: '8', projectRoot: root, project: path.join(root, 'T.csproj'), runId: 'abcdef0123456789' }, config,
     { runsRoot, planner, runner: async () => { ran = true; }, now: () => new Date('2026-10-31T12:00:00Z') }), /EEXIST/);
   assert.equal(ran, false);
+});
+
+test('persisted TRX, JUnit and summary never carry raw output or credentials', t => {
+  const pw = 'hunter' + '2-sec' + 'ret', aws = 'AK' + 'IAABCDEFGHIJKL', gh = 'gh' + 'p_abcdefghijklmnop1234', jwt = 'ey' + 'JhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc', dsn = 'user:pw' + '123@db.local';
+  const secrets = [pw, aws, gh, jwt, dsn, 'STDOUTLEAK', 'at Secret.Stack'];
+  const raw = '<?xml version="1.0"?><TestRun><Results>' +
+    '<UnitTestResult testName="A.Fails" outcome="Failed" duration="00:00:01"><Output><StdOut>STDOUTLEAK token=' + pw + '</StdOut><ErrorInfo><Message>password=' + pw + ' key ' + aws + ' ' + gh + ' Bearer ' + jwt + ' postgres://' + dsn + '/x</Message><StackTrace>at Secret.Stack</StackTrace></ErrorInfo></Output></UnitTestResult>' +
+    '<UnitTestResult testName="B.Passes" outcome="Passed" duration="00:00:01"><Output><StdOut>STDOUTLEAK</StdOut></Output></UnitTestResult>' +
+    '</Results><ResultSummary outcome="Completed"><Counters total="2" executed="2" passed="1" failed="1" /></ResultSummary></TestRun>';
+  const root = tmp(t), out = path.join(root, 'out'), runDir = path.join(root, 'run');
+  fs.mkdirSync(path.join(out, 'results'), { recursive: true }); fs.mkdirSync(runDir);
+  fs.writeFileSync(path.join(out, 'results', 'results.trx'), raw);
+  const { artifacts, summary } = collectArtifacts(out, runDir, 'T');
+  assert.equal(summary.failed, 1);
+  const all = artifacts.map(a => fs.readFileSync(path.join(runDir, a.path), 'utf8')).join('\n') + JSON.stringify(summary);
+  for (const s of secrets) assert.ok(!all.includes(s), 'leaked ' + s);
+  assert.match(all, /\[REDACTED\]/);
+  const trxFile = path.join(runDir, 'artifacts', 'results.trx');
+  assert.equal(parseTrx(fs.readFileSync(trxFile, 'utf8')).failed, 1);
+  assert.equal(artifacts.find(a => a.kind === 'trx').sha256, crypto.createHash('sha256').update(fs.readFileSync(trxFile)).digest('hex'));
 });
