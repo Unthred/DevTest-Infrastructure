@@ -211,3 +211,22 @@ test('token counts and the CLI cost estimate from the provider stream are record
   assert.deepEqual(r.usage, { inputTokens: 100, outputTokens: 4, costUsdEstimate: 0.02 });
   assert.ok(!JSON.stringify(r).includes('PRIVATE-MODEL-TEXT'));
 });
+
+test('issue #68: a clean exit with "requires approval" on stderr and an allowed allowance completes; the cause is recorded redacted', async t => {
+  const s = sandbox(t, `${emit(claudeLive)} console.error('step requires approval'); console.log('all done');`), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'completed'); assert.equal(r.attempts, 1);
+  const log = fs.readFileSync(path.join(s.root, 'events', `${job.id}.jsonl`), 'utf8');
+  assert.match(log, /classified:approval_required:stderr:non-json/); assert.match(log, /approval_ignored:clean_exit_allowance_allowed:stderr:non-json/);
+  assert.doesNotMatch(log, /requires approval/);
+});
+
+test('issue #68: a FAILED run with the same stderr text and an allowed allowance still blocks; overage still blocks on a clean exit', async t => {
+  const s = sandbox(t, `${emit(claudeLive)} console.error('step requires approval'); process.exit(1);`), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'blocked'); assert.equal(r.lastEvent, 'approval_required');
+  const over = { ...claudeLive, rate_limit_info: { ...claudeLive.rate_limit_info, isUsingOverage: true } };
+  const o = sandbox(t, `${emit(over)} console.error('step requires approval'); console.log('done');`), oj = await createJob(o.root, o.spec, o.registry);
+  const ro = await drive(o.root, oj, o.registry, clk, o.run(o.root, oj));
+  assert.equal(ro.status, 'blocked'); assert.equal(ro.lastEvent, 'approval_required');
+});

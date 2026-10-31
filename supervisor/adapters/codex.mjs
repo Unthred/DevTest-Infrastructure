@@ -27,7 +27,9 @@ export function observe(line, now = Date.now()) {
   const sessionId = obj?.type === 'thread.started' && typeof obj.thread_id === 'string' ? obj.thread_id : null;
   const errorObject = obj && (obj.type === 'error' || obj.type === 'turn.failed');
   const text = obj ? (errorObject ? String(obj.error?.message || obj.message || obj.error || '') : '') : line;
-  if (/reset your current usage limits|switch(?:ing|ed)? models? due to usage limits/i.test(text)) return { event: 'approval_required', sessionId };
+  // Approval is blocking and drops the verdict, so it comes only from a structured error/turn.failed object. A plain line
+  // (stderr, tool output) can quote these words and is never approval evidence (issue #68, same principle as #33).
+  if (errorObject && /reset your current usage limits|switch(?:ing|ed)? models? due to usage limits/i.test(text)) return { event: 'approval_required', sessionId };
   // "... or try again at 11:44 AM." The text also offers "purchase more credits"; that is an upsell, never consent to paid
   // usage: it stays a plain usage_limit and no billing action is taken.
   const tryAgain = parseTryAgain(text, now);
@@ -38,7 +40,9 @@ export function observe(line, now = Date.now()) {
   // /status window lines. Only an exhausted window (0% left) is a limit; the process keeps the later of several.
   const window = parseStatusWindow(text, now);
   if (window && window.percentLeft === 0) return { event: 'usage_limit', resetAt: window.resetsAt, resetSource: 'provider_reported', verified: true, sessionId };
-  return { ...base.observe(text), sessionId };
+  const rest = base.observe(text);
+  if (!errorObject && rest.event === 'approval_required') return { sessionId };
+  return { ...rest, sessionId };
 }
 // Codex's exec stream carries no limit data; the thread's rollout file does. Read after the process exits.
 export function postRun(job) { return codexAllowanceFromRollout(codexRolloutFile(job.sessionId)); }

@@ -47,13 +47,13 @@ test('adapter classification distinguishes limits, context, auth, transient, app
     assert.equal(adapter.observe('Context window exceeded').event, 'context_limit');
     assert.equal(adapter.observe('Authentication failed').event, 'auth_error');
     assert.equal(adapter.observe('Rate limit 429').event, 'transient_rate_limit');
-    assert.equal(adapter.observe('Approval required').event, 'approval_required');
+    assert.equal(adapter.observe(JSON.stringify({ type: 'error', message: 'Approval required' })).event, 'approval_required');
     assert.equal(adapter.observe('Network error').event, 'network_error');
   }
   assert.equal(base.observe('Usage limit reached').event, undefined);
   assert.equal(codex.observe('API key billing usage limit').event, undefined);
   assert.equal(claude.observe('Budget limit reached').event, 'approval_required');
-  assert.equal(codex.observe('Reset your current usage limits').event, 'approval_required');
+  assert.equal(codex.observe(JSON.stringify({ type: 'error', message: 'Reset your current usage limits' })).event, 'approval_required');
   assert.equal(claude.observe('Usage limit reached. Resets at 2026-10-30T05:00:00Z').resetAt, Date.parse('2026-10-30T05:00:00Z'));
   assert.equal(claude.observe(JSON.stringify({ type: 'result', is_error: true, result: 'Usage limit reached', error: null, message: null, api_error_status: 429, terminal_reason: 'api_error' })).event, 'usage_limit');
   assert.equal(claude.observe(JSON.stringify({ type: 'result', is_error: true, result: 'Temporary failure', error: null, message: null, api_error_status: 429, terminal_reason: 'api_error' })).event, 'transient_rate_limit');

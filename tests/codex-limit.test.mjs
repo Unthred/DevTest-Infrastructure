@@ -67,7 +67,11 @@ test('the real limit line is a plain usage_limit: reset parsed and verified for 
   const wrapped = codex.observe(JSON.stringify({ type: 'error', message: LIMIT.replace('■ ', '') }), at('2026-10-30T09:25:00Z'));
   assert.equal(wrapped.event, 'usage_limit'); assert.equal(wrapped.resetAt, at('2026-10-30T11:44:00Z'));
   // the explicit reset-limits upsell and model switching remain approval_required
-  assert.equal(codex.observe('Reset your current usage limits to continue', 0).event, 'approval_required');
+  assert.equal(codex.observe(JSON.stringify({ type: 'error', message: 'Reset your current usage limits to continue' }), 0).event, 'approval_required');
+  // issue #68: the same words on a plain (stderr/tool) line are never approval evidence
+  assert.notEqual(codex.observe('Reset your current usage limits to continue', 0).event, 'approval_required');
+  assert.equal(codex.observe('this step requires approval', 0).event, undefined);
+  assert.equal(codex.observe(JSON.stringify({ type: 'error', message: 'this step requires approval' }), 0).event, 'approval_required');
   // an unparsable reset is unreported, never invented, and not verified
   const none = codex.observe("You've hit your usage limit. Try again sometime.", at('2026-10-30T09:25:00Z'));
   assert.equal(none.event, 'usage_limit'); assert.ok(!none.resetAt); assert.equal(none.verified, false);
