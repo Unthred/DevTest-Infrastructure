@@ -3,6 +3,7 @@
 // the team config only says which alias/effort each agent uses for each job type. Aliases are used, never version strings.
 // An unknown or invalid value never fails a job: it is dropped (the CLI default applies) and a warning is returned.
 import { SupervisorError } from './core.mjs';
+import { windowExpired } from './allowance.mjs';
 
 // 'interim-review' (D-021): a same-provider review while every other agent is out of allowance; falls back to the review entry.
 export const JOB_TYPES = ['implement', 'fix', 'review', 'rebase', 'ci-fix', 'continue', 'interim-review'];
@@ -55,7 +56,7 @@ export function checkEntry(entry, spec) {
 
 // Weekly utilisation 0..1 from a provider-reported allowance record, or null when unknown or the window has already reset.
 export function weeklyUtilization(allowance, now = Date.now()) {
-  const w = (allowance?.windows || []).find(x => Number.isFinite(x.utilization) && (/^seven_day|week/.test(x.type || '') || x.windowMinutes >= 10000) && !(x.resetsAt && x.resetsAt < now));
+  const w = (allowance?.windows || []).find(x => Number.isFinite(x.utilization) && (/^seven_day|week/.test(x.type || '') || x.windowMinutes >= 10000) && !windowExpired(x, now));
   return w ? w.utilization : null;
 }
 

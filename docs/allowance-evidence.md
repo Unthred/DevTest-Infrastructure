@@ -25,6 +25,10 @@ Captured by the homeowner's interactive session and passed on redacted; fixture 
 - Several windows: only a window at 0% left counts, and the later reset wins in either order (the process keeps the later `usage_limit` reset).
 - **Still unverified:** the `codex exec --json` wording of this condition, session resume, and everything for Claude. The production manifests keep `usage_limit_detection`, `reset_time_parsing` and `resume` as `unverified` and `autoResume` is still refused.
 
+## First `codex exec` limit hit (Codex CLI 0.166.0, supervised, 2026-10-31 22:55 UTC, issue #75)
+- The rollout's last `token_count` record had `rate_limits.primary: null`, `secondary: null`, `rate_limit_reached_type: null` (`tests/fixtures/allowance/codex-0.166.0-exec-limit-hit.token_count.json`). At the moment of the limit the CLI reports no reading; `codexAllowance` now returns status `unknown` with no windows for that shape, instead of `allowed`. The job's limit came from the structured `error`/`turn.failed` path (issue #68); the wording was not persisted.
+- The last real reading before it (14:41 UTC, another session's rollout) was weekly 100%, 5-hour 26%. The dashboard probe (`codexAllowanceProbe`) finds it without any model call.
+
 ## Not known (blocks enabling auto-resume)
 1. The exhausted-state values still uncaptured: Claude `status` strings other than `allowed`, Codex `rate_limit_reached_type` values, and the exit code and `exec --json` shape when a request is refused (the interactive Codex message is now captured, above).
 2. Whether `claude --resume <id>` and `codex exec resume <id>` continue the same session after a reset.

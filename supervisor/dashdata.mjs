@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { atomicJson } from './core.mjs';
 import { checksState, prerequisites } from './team.mjs';
+import { hasReading } from './allowance.mjs';
 
 export const RETENTION_MS = 35 * 86400000;
 export const MAX_SNAPSHOTS = 12000;          // five-minute ticks for ~41 days; the age bound normally applies first
@@ -84,14 +85,30 @@ export function agentStates(config, jobs, now) {
   return out;
 }
 
-// The freshest allowance record the provider itself reported, per provider. Never an estimate.
-export function latestAllowance(jobs) {
+// The freshest allowance READING the provider itself reported, per provider: from job records and from the tick's
+// model-free probes (`probes`: provider → record, see codexAllowanceProbe). Never an estimate. A record with no windows
+// (e.g. Codex at the moment it hits its limit, issue #75) is not a reading and never hides an older one that has figures.
+export function latestAllowance(jobs, probes = {}) {
   const best = {};
-  for (const j of jobs) if (j.allowance && Array.isArray(j.allowance.windows)) {
-    const at = j.allowance.observedAt || 0;
-    if (!best[j.provider] || at > best[j.provider].observedAt) best[j.provider] = { ...j.allowance, observedAt: at };
-  }
+  const offer = (provider, a, source) => {
+    if (!hasReading(a)) return;
+    const at = a.observedAt || 0;
+    if (!best[provider] || at > best[provider].observedAt) best[provider] = { ...a, observedAt: at, source: a.source || source };
+  };
+  for (const j of jobs) offer(j.provider, j.allowance, 'job');
+  for (const [provider, a] of Object.entries(probes || {})) offer(provider, a, 'session-log');
   return best;
+}
+// Keep the newer of the previous and the new probe reading per provider, so a probe that finds nothing keeps the last one.
+export function mergeProbes(prev = {}, next = {}) {
+  const out = {};
+  for (const [provider, a] of [...Object.entries(prev || {}), ...Object.entries(next || {})]) {
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(provider) || !hasReading(a)) continue;
+    const clean = { provider, status: String(a.status || 'unknown').slice(0, 32), observedAt: Number(a.observedAt) || 0, source: 'session-log',
+      windows: a.windows.slice(0, 8).map(w => ({ type: String(w.type || '').slice(0, 24), windowMinutes: Number.isFinite(w.windowMinutes) ? w.windowMinutes : null, utilization: Number.isFinite(w.utilization) ? w.utilization : null, resetsAt: Number.isFinite(w.resetsAt) ? w.resetsAt : null, status: String(w.status || 'unknown').slice(0, 32) })) };
+    if (!out[provider] || clean.observedAt > out[provider].observedAt) out[provider] = clean;
+  }
+  return out;
 }
 
 const rollup = pr => checksState(pr.statusCheckRollup);
@@ -104,16 +121,16 @@ export function tickOutcome(report) {
 }
 
 // Written by the tick (never by the dashboard server). `error` is the failure of this tick, if any.
-export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [] }) {
+export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {} }) {
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
-    repository: team?.c.repository ?? prev.repository ?? null };
+    repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
   if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.fetchedAt = now; }
   else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.merged = prev.merged || []; cache.fetchedAt = prev.fetchedAt ?? null; }
   atomicJson(cacheFile(root), cache);
   if (!team || (status !== 'ok' && status !== 'error')) return cache;
   const states = agentStates(team.c, jobs, now);
-  const allowance = latestAllowance(jobs);
+  const allowance = latestAllowance(jobs, cache.probes);
   const snap = { at: now, status,
     plan: actions.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.interim ? { interim: true } : {}), ...(a.postMerge ? { postMerge: true } : {}) })),
     agents: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])),

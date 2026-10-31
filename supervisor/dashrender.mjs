@@ -108,7 +108,7 @@ const fmtAxisTime = (t, range) => new Date(t).toISOString().slice(range === '24h
 function legend(items) {
   return `<div class="legend" role="group" aria-label="Series">${items.map(s => `<button type="button" aria-pressed="true" data-series="${esc(s.key)}"><i style="background:${s.colour}"></i>${esc(s.label)}</button>`).join('')}</div>`;
 }
-function lineChart({ series, resets = [], now, range, title }) {
+function lineChart({ series, resets = [], expected = [], now, range, title }) {
   const pts = series.flatMap(s => s.points);
   if (!pts.length) return empty('No allowance history in this range', 'The chart fills in as ticks record what the providers report.', 'chart');
   const W = 900, H = 320, L = 44, B = 28, T = 12, R = 14;
@@ -117,12 +117,16 @@ function lineChart({ series, resets = [], now, range, title }) {
   let g = [0, 0.25, 0.5, 0.75, 1].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="gridline"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v * 100}%</text>`).join('');
   for (let i = 0; i <= 4; i++) { const t = t0 + ((t1 - t0) * i) / 4; g += `<text x="${x(t)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}" class="ax">${esc(fmtAxisTime(t, range))}</text>`; }
   for (const r of resets.filter(r => r.at >= t0)) g += `<line x1="${x(r.at)}" x2="${x(r.at)}" y1="${T}" y2="${H - B}" class="reset" data-series="reset"><title>${esc(r.window)} window reset ${esc(utc(r.at))}</title></line>`;
+  const shownExpected = expected.filter(r => r.at >= t0 && r.at <= t1);
+  for (const r of shownExpected) g += `<line x1="${x(r.at).toFixed(1)}" x2="${x(r.at).toFixed(1)}" y1="${T}" y2="${H - B}" class="reset expected" data-series="expected"><title>${esc(r.window)} window expected to reset ${esc(utc(r.at))}: the reading before it has expired</title></line>`;
   for (const s of series) {
     if (!s.points.length) continue;
-    g += `<g data-series="${esc(s.key)}"><polyline fill="none" stroke="${s.colour}" stroke-width="2.5" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ''} points="${s.points.map(p => `${x(p.at).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ')}"/>`
+    // a gap (reading expired, then a new one) splits the line: nothing is drawn across the time no reading was current
+    const segments = s.points.reduce((acc, p) => { if (p.gap || !acc.length) acc.push([]); acc.at(-1).push(p); return acc; }, []);
+    g += `<g data-series="${esc(s.key)}">${segments.map(seg => `<polyline fill="none" stroke="${s.colour}" stroke-width="2.5" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ''} points="${seg.map(p => `${x(p.at).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ')}"/>`).join('')}`
       + s.points.filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0).map(p => `<circle class="pt" tabindex="0" cx="${x(p.at).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="5" fill="${s.colour}"><title>${esc(s.label)}: ${pct(p.v)} at ${esc(utc(p.at))}</title></circle>`).join('') + '</g>';
   }
-  const items = [...series.filter(s => s.points.length).map(s => ({ key: s.key, label: s.label, colour: s.colour })), ...(resets.length ? [{ key: 'reset', label: 'Window reset', colour: 'var(--action)' }] : [])];
+  const items = [...series.filter(s => s.points.length).map(s => ({ key: s.key, label: s.label, colour: s.colour })), ...(resets.length ? [{ key: 'reset', label: 'Window reset', colour: 'var(--action)' }] : []), ...(shownExpected.length ? [{ key: 'expected', label: 'Expected reset (reading expired)', colour: 'var(--mut)' }] : [])];
   return `<figure class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">${g}</svg>${legend(items)}</figure>`;
 }
 function stackedChart({ days, title, range, now }) {
@@ -170,6 +174,7 @@ function allowanceSeries(view, range) {
   return out;
 }
 const allResets = (view, range) => Object.values(view.graphs.allowance).flatMap(g => g.resets).filter(r => inRange(r.at, view.generatedAt, range));
+const allExpected = view => Object.entries(view.graphs.allowance).flatMap(([agent, g]) => (g.expected || []).map(r => ({ ...r, window: `${agent} ${r.window}` })));
 
 // ---- card shell
 function card({ id, title, span = 6, body, href, tools = '', cls = '', movable = true, expandable = false }) {
@@ -241,7 +246,7 @@ function overview(view, query) {
     kpi({ id: 'k-fresh', label: 'Data age', value: view.freshness.ageMs === null ? 'none' : dur(view.freshness.ageMs), href: '/system' })
   ].join('');
   const charts = [
-    card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), now, range, title: 'allowance used over time' }), cls: 'chart-card' }),
+    card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card' })
   ].join('');
   return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', panels + kpis + charts)}`, bodyClass: 'overview' };
@@ -320,12 +325,23 @@ function activityPage(view, query, path) {
   return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (last ${rows.length})`, span: 12, movable: false, body: table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text'],
     cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'text', label: 'What' }, { key: 'link', label: 'Link', sortable: false, html: r => (r.link ? ext(r.link.url, r.link.text) : '') }], totals: { text: 'count' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') }) })) };
 }
+// One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
+// marked and never shown as current; a limit pause says when it resets and on what basis.
+const SOURCE = { job: 'reported to a supervised job', 'session-log': 'read from the local Codex session log (no model call)' };
+function allowanceBody(u, now) {
+  const l = u.limit;
+  const limit = l ? `<p class="limit">${badge('action', 'Limit reached')} ${l.resetsAt ? `resets <b>${esc(utc(l.resetsAt))}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
+  if (!u.windows.length) return `${limit}<p>Allowance: <b>unknown</b></p>${empty('No allowance reported', 'The provider has never reported a limit window to the supervisor.', 'info')}`;
+  const used = w => (Number.isFinite(w.utilization) ? `<div class="bar${w.expired ? ' expired' : ''}" role="img" aria-label="${pct(w.utilization)} used${w.expired ? ', expired' : ''}"><b style="width:${Math.min(100, w.utilization * 100)}%"></b></div> ${pct(w.utilization)}${w.expired ? ' <span class="muted">(expired)</span>' : ''}` : 'unknown');
+  const resets = w => (!w.resetsAt ? 'unknown' : w.expired ? `reset ${esc(dur(now - w.resetsAt))} ago; current use unknown` : esc(inFuture(w.resetsAt, now)));
+  const rows = u.windows.map(w => `<tr${w.expired ? ' class="expired"' : ''}><td>${esc(w.label)}</td><td>${used(w)}</td><td>${resets(w)}</td></tr>`).join('');
+  const note = u.allExpired ? `<p class="sub">${badge('warning', 'Expired')} Every window in this reading has reset since; current use is unknown until the provider reports again.</p>` : '';
+  return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${esc(utc(u.observedAt))}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>`;
+}
 function usagePage(view, query, path) {
   const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
-  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: u.windows.length
-    ? `<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${u.windows.map(w => `<tr><td>${esc(w.label)}</td><td>${Number.isFinite(w.utilization) ? `<div class="bar" role="img" aria-label="${pct(w.utilization)} used"><b style="width:${Math.min(100, w.utilization * 100)}%"></b></div> ${pct(w.utilization)}` : 'unknown'}</td><td>${w.resetsAt ? esc(inFuture(w.resetsAt, now)) : 'unknown'}${w.stale ? ' (reset time passed; reading is old)' : ''}</td></tr>`).join('')}</tbody></table><p class="sub">Reported by the provider ${esc(ago(u.observedAt, now))}.</p>`
-    : `<p>Allowance: <b>unknown</b></p>${empty('No allowance reported', 'The provider has not reported a limit window yet.', 'info')}` })).join('');
-  const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), now, range, title: 'allowance used over time' }) });
+  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: allowanceBody(u, now) })).join('');
+  const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }) });
   const toks = view.graphs.tokensPerPr.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.tokens, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
   const tokChart = card({ id: 'u-tok', title: 'Tokens per merged PR', span: 12, expandable: true, movable: true, body: barChart({ rows: toks, title: 'tokens per merged PR', emptyTitle: 'No merged PR has recorded tokens' }) });
   const usd = n => (Number.isFinite(n) ? `$${(Math.round(n * 100) / 100).toFixed(2)}` : '–');

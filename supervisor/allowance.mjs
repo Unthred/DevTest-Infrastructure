@@ -33,7 +33,10 @@ export function codexAllowance(limits) {
     windows.push({ type, windowMinutes: Number.isFinite(w.window_minutes) ? w.window_minutes : null, utilization: fraction(w.used_percent / 100), resetsAt: seconds(w.resets_at), status: 'unknown' });
   }
   const reached = typeof limits.rate_limit_reached_type === 'string' ? limits.rate_limit_reached_type.slice(0, 48) : null;
-  return { provider: 'codex', status: reached ? 'limit_reached' : 'allowed', reachedType: reached, windows,
+  // Captured live 2026-10-31 (Codex CLI 0.166.0, a supervised `codex exec` job that hit its limit): the rollout's last
+  // rate_limits had `primary: null, secondary: null` and no reached type. That is no reading at all, so it is `unknown`,
+  // never `allowed` (issue #75): an empty record must not pass for evidence of capacity.
+  return { provider: 'codex', status: reached ? 'limit_reached' : windows.length ? 'allowed' : 'unknown', reachedType: reached, windows,
     billing: { creditsAvailable: limits.credits?.has_credits === true || limits.credits?.unlimited === true, usingOverage: false } };
 }
 
@@ -53,6 +56,12 @@ export function limitFromAllowance(allowance, now = Date.now()) {
   return { event: 'usage_limit', resetAt, resetSource: resetAt ? 'provider_reported' : 'none', verified: false };
 }
 
+// A window whose provider-reported reset time has passed: its utilisation describes a window that no longer exists, so it
+// is neither evidence of a limit nor of capacity (issue #75). The one rule every surface uses.
+export const windowExpired = (w, now) => Number.isFinite(w?.resetsAt) && w.resetsAt > 0 && w.resetsAt <= now;
+// A record that carries at least one window, i.e. an actual reading (an empty record only says "the CLI reported nothing").
+export const hasReading = allowance => Array.isArray(allowance?.windows) && allowance.windows.length > 0;
+
 // Billing guard that applies even when the limit evidence itself is ambiguous: a run that failed while the account was
 // spending beyond its subscription must never be retried automatically.
 export function billingRisk(allowance) { return allowance?.billing?.usingOverage === true; }
@@ -69,16 +78,54 @@ export function codexRolloutFile(threadId, home = process.env.HOME || os.homedir
   }
   return null;
 }
-export function codexAllowanceFromRollout(file, tailBytes = 262144) {
-  if (!file) return null;
+function tailText(file, tailBytes) {
   const size = fs.statSync(file).size, start = Math.max(0, size - tailBytes), fd = fs.openSync(file, 'r');
-  let text;
-  try { const buffer = Buffer.alloc(size - start); fs.readSync(fd, buffer, 0, buffer.length, start); text = buffer.toString('utf8'); } finally { fs.closeSync(fd); }
-  let found = null;
-  for (const line of text.split('\n')) {
+  try { const buffer = Buffer.alloc(size - start); fs.readSync(fd, buffer, 0, buffer.length, start); return buffer.toString('utf8'); } finally { fs.closeSync(fd); }
+}
+// Every token_count rate_limits record in the tail, oldest first, with its own timestamp (ms or null). Never message text.
+function rateLimitRecords(file, tailBytes) {
+  const out = [];
+  for (const line of tailText(file, tailBytes).split('\n')) {
     if (!line.includes('rate_limits')) continue;
     let record; try { record = JSON.parse(line); } catch (error) { if (error instanceof SyntaxError) continue; throw error; }
-    if (record?.payload?.type === 'token_count' && record.payload.rate_limits) found = record.payload.rate_limits;
+    if (record?.payload?.type === 'token_count' && record.payload.rate_limits) {
+      const at = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN;
+      out.push({ at: Number.isFinite(at) ? at : null, limits: record.payload.rate_limits });
+    }
   }
-  return codexAllowance(found);
+  return out;
+}
+export function codexAllowanceFromRollout(file, tailBytes = 262144) {
+  if (!file) return null;
+  return codexAllowance(rateLimitRecords(file, tailBytes).at(-1)?.limits ?? null);
+}
+
+// Model-free periodic probe (issue #75). A paused agent runs no job, so its reading would never refresh. Codex records the
+// account's rate_limits in the rollout of EVERY session on this host (supervised or interactive), so the newest reading is a
+// bounded local file read: the newest few rollouts of the last two days, their tails only, the rate_limits counts only.
+// observedAt is the record's own timestamp, so the age shown is the age of the reading, not of the probe. Returns null
+// when no rollout holds a reading. Claude Code has no model-free source: its limits arrive only in a live stream.
+export function codexAllowanceProbe({ home = process.env.HOME || os.homedir(), now = Date.now(), maxFiles = 12, tailBytes = 262144 } = {}) {
+  const files = [];
+  for (let back = 0; back < 2; back++) {
+    const day = new Date(now - back * 86400000);
+    const dir = path.join(home, '.codex', 'sessions', String(day.getUTCFullYear()), String(day.getUTCMonth() + 1).padStart(2, '0'), String(day.getUTCDate()).padStart(2, '0'));
+    let names; try { names = fs.readdirSync(dir); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue; throw error; }
+    for (const n of names) {
+      if (!/^rollout-[\w.-]{1,160}\.jsonl$/.test(n)) continue;
+      const file = path.join(dir, n);
+      let st; try { st = fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (st.isFile()) files.push({ file, mtime: st.mtimeMs });
+    }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  let best = null;
+  for (const { file, mtime } of files.slice(0, maxFiles)) {
+    if (best && mtime < best.observedAt) break;          // an older file cannot hold a newer record
+    for (const r of rateLimitRecords(file, tailBytes)) {
+      const a = codexAllowance(r.limits), at = Math.min(r.at ?? mtime, now);
+      if (hasReading(a) && (!best || at > best.observedAt)) best = { ...a, observedAt: at, source: 'session-log' };
+    }
+  }
+  return best;
 }
