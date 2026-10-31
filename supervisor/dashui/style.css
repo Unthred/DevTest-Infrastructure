@@ -46,29 +46,45 @@ h1{font-size:var(--fs-xl);margin:0 0 var(--sp3);line-height:1.2}h2{font-size:var
 .nav a{display:flex;align-items:center;gap:var(--sp2);padding:0 var(--sp4);min-height:var(--nav-h);color:var(--mut);text-decoration:none;font-weight:600;border-bottom:3px solid transparent;white-space:nowrap}
 .nav a:hover{color:var(--fg)}.nav a[aria-current=page]{color:var(--fg);border-bottom-color:var(--link)}
 main{max-width:1500px;margin:0 auto;padding:var(--sp4)}
-.crumbs{font-size:var(--fs-sm);margin-bottom:var(--sp2)}
+.pagehead{display:flex;align-items:center;gap:var(--sp3);margin-bottom:var(--sp2);flex-wrap:wrap}
+.crumbs ol{display:flex;flex-wrap:wrap;gap:var(--sp1);list-style:none;margin:0;padding:0;font-size:var(--fs-sm)}
+.crumbs li{display:inline-flex;gap:var(--sp1);align-items:center}.crumbs .sep{color:var(--mut)}.crumbs [aria-current=page]{font-weight:650}
+.btn.back{gap:var(--sp1);padding:4px 12px;min-height:36px}
 /* cards + grid */
-.cards{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--sp3);align-items:start}
-.card{grid-column:span var(--span,6);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:var(--sp4);min-width:0;position:relative}
+.cards{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--sp3);align-items:stretch;grid-auto-flow:row dense}
+.cards.fit{align-items:start}
+.card{grid-column:span var(--span,6);min-height:var(--h,0);display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:var(--sp4);min-width:0;position:relative}
 .card>header{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2);margin-bottom:var(--sp3);min-height:32px}
 .card>header h2{flex:1;min-width:8ch}
+.card>header{flex:none}
 .tools{display:flex;gap:var(--sp1)}
 .tbtn{background:none;border:1px solid transparent;color:var(--mut);border-radius:var(--r-sm);min-width:32px;min-height:32px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .tbtn:hover{border-color:var(--line);color:var(--fg)}
 .card.dragging{opacity:.5}.card.dropping{outline:2px dashed var(--link)}
-.resize{position:absolute;right:2px;bottom:2px;width:18px;height:18px;cursor:nwse-resize;color:var(--mut);touch-action:none}
+/* resize handles on every edge and corner (issue #58); the SE corner also carries the visible grip and the keyboard slider */
+.resize{position:absolute;touch-action:none;z-index:2}
+.rz-n,.rz-s{left:12px;right:12px;height:8px;cursor:ns-resize}.rz-e,.rz-w{top:12px;bottom:12px;width:8px;cursor:ew-resize}
+.rz-n{top:-4px}.rz-s{bottom:-4px}.rz-e{right:-4px}.rz-w{left:-4px}
+.rz-ne,.rz-nw,.rz-se,.rz-sw{width:16px;height:16px}
+.rz-ne{top:-4px;right:-4px;cursor:nesw-resize}.rz-sw{bottom:-4px;left:-4px;cursor:nesw-resize}.rz-nw{top:-4px;left:-4px;cursor:nwse-resize}.rz-se{bottom:-4px;right:-4px;cursor:nwse-resize}
+.rz-key{right:2px;bottom:2px;width:24px;height:24px;align-items:center;justify-content:center;cursor:nwse-resize;color:var(--mut);display:inline-flex}
+.card.resizing .resize.active{background:color-mix(in srgb,var(--link) 35%,transparent);border-radius:4px}
+@media(min-width:1100px){.resize:hover:not(.rz-key){background:color-mix(in srgb,var(--link) 35%,transparent);border-radius:4px}}
+.card.resizing{user-select:none;outline:2px solid var(--link);z-index:3}
+body.resizing{user-select:none;cursor:grabbing}
+.card.resizing .scroll,.card.resizing figure{pointer-events:none}
 .link-card{color:inherit;text-decoration:none}
 .panel-list{list-style:none;margin:0;padding:0;display:grid;gap:var(--sp2)}
 .panel-list li{padding:var(--sp2) var(--sp3);border-radius:var(--r-sm);background:var(--surface2);border-left:4px solid var(--line)}
 .panel-list li.sev-action{border-left-color:var(--action)}.panel-list li.sev-warning{border-left-color:var(--warning)}.panel-list li.sev-ok{border-left-color:var(--ok)}.panel-list li.sev-info{border-left-color:var(--info)}
 .panel-list .t{font-weight:650}
 .cmd{display:block;margin-top:var(--sp1);padding:var(--sp1) var(--sp2);background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);user-select:all}
-.scroll{overflow:auto;max-height:100%}
 /* KPI tiles */
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--sp3)}
 .kpi{display:block;text-decoration:none;color:inherit;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:var(--sp3) var(--sp4);box-shadow:var(--shadow)}
 .kpi:hover{border-color:var(--link)}
-.kpi .v{font-size:var(--fs-kpi);font-weight:700;line-height:1.1}.kpi .l{color:var(--mut);font-size:var(--fs-sm)}.kpi svg.spark{width:100%;height:28px;margin-top:var(--sp1)}
+.kpi .v{font-size:var(--fs-kpi);font-weight:700;line-height:1.1}.kpi .l{color:var(--mut);font-size:var(--fs-sm)}.kpi .spark-slot{margin-top:auto;padding-top:var(--sp1);min-height:calc(28px + var(--sp1))}.kpi svg.spark{width:100%;height:28px;display:block}
+.card.kpi{padding:var(--sp3) var(--sp4)}
 /* empty / error / skeleton */
 .empty{display:flex;flex-direction:column;align-items:center;gap:var(--sp1);padding:var(--sp5) var(--sp3);text-align:center;color:var(--mut)}
 .empty .icon{width:28px;height:28px}.empty b{color:var(--fg)}
@@ -91,8 +107,9 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .pager a,.pager span.cur{padding:6px 12px;border:1px solid var(--line);border-radius:var(--r-sm);text-decoration:none;min-height:36px;display:inline-flex;align-items:center}
 .pager span.dis{opacity:.4;padding:6px 12px;border:1px solid var(--line);border-radius:var(--r-sm)}
 /* charts */
-figure.chart{margin:0}
-figure.chart svg{width:100%;height:auto;display:block;max-height:340px}
+figure.chart{margin:0;flex:1;display:flex;flex-direction:column;min-height:0}
+figure.chart svg{width:100%;height:auto;display:block;flex:none}
+.card.chart-card .empty{flex:1;justify-content:center}
 .chart .gridline{stroke:var(--line);stroke-width:1}.chart .ax{fill:var(--mut);font-size:11px}
 .chart .reset{stroke:var(--action);stroke-dasharray:4 4;opacity:.7}
 .chart [data-series].off{display:none}
@@ -105,30 +122,19 @@ figure.chart svg{width:100%;height:auto;display:block;max-height:340px}
 .ranges a:first-child{border-radius:var(--r-sm) 0 0 var(--r-sm)}.ranges a:last-child{border-radius:0 var(--r-sm) var(--r-sm) 0}
 .ranges a[aria-current=true]{background:var(--link);color:var(--surface);border-color:var(--link)}
 .card.expanded{position:fixed;inset:3vh 3vw;z-index:50;box-shadow:var(--shadow-lg);overflow:auto;grid-column:auto}
-.card.expanded figure.chart svg{max-height:70vh}
+.card.expanded figure.chart svg{max-height:70vh;width:auto;max-width:100%;margin:0 auto}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40}
 .bar{height:10px;background:var(--line);border-radius:5px;overflow:hidden;min-width:80px}.bar b{display:block;height:100%;background:var(--link)}
 dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px var(--sp4);margin:0}dl.kv dt{color:var(--mut)}dl.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .tl{list-style:none;margin:0;padding:0 0 0 var(--sp4);border-left:2px solid var(--line)}.tl li{margin:0 0 var(--sp3);position:relative}.tl li::before{content:"";position:absolute;left:calc(-1 * var(--sp4) - 6px);top:6px;width:10px;height:10px;border-radius:50%;background:var(--link)}
 .agent-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
 .agent-claude{--agent:var(--claude)}.agent-codex{--agent:var(--codex)}
-/* ---- desktop overview: one screen, no page scroll; long panels scroll inside their card */
-@media(min-width:1100px){
-  body.overview{height:100vh;overflow:hidden;display:flex;flex-direction:column}
-  body.overview main{flex:1;min-height:0;width:100%;padding-top:var(--sp3);padding-bottom:var(--sp3)}
-  body.overview h1{display:none}
-  body.overview .toolrow{position:absolute;z-index:5;right:var(--sp4);top:calc(var(--bar-h) + 8px)}
-  body.overview .cards{grid-auto-rows:min-content}
-  body.overview .card.panel{height:min(36vh,290px);overflow:auto}
-  body.overview .card.chart-card{height:min(30vh,250px);overflow:hidden}
-  body.overview .card.chart-card svg{max-height:min(16vh,140px)}
-  body.overview .card.kpi{padding:var(--sp2) var(--sp3)}
-  body.overview .kpi .v{font-size:22px}body.overview .kpi svg.spark{height:16px}
-}
+/* ---- overview: default sizes fit their content (issue #58); nothing is clipped behind an inner scroll */
+.scroll{overflow:auto;max-height:100%}
 .toolrow{display:flex;justify-content:flex-end;margin-bottom:var(--sp2)}
 .sr{display:inline-flex;gap:var(--sp2);align-items:center}
 /* ---- tablet */
-@media(max-width:1099px){.card{grid-column:span min(var(--span,6),12)}.cards{grid-template-columns:repeat(6,minmax(0,1fr))}.card{grid-column:span min(calc(var(--span,6) / 2 + 3),6)}}
+@media(max-width:1099px){.cards{grid-template-columns:repeat(6,minmax(0,1fr))}.card{grid-column:span min(var(--tspan,var(--span,6)),6)}}
 /* ---- phone: separate design, bottom tab bar, tables become cards */
 @media(max-width:639px){
   main{padding:var(--sp3);padding-bottom:calc(var(--nav-h) + var(--sp5))}
@@ -152,3 +158,50 @@ dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px var(--sp4);marg
 @media(prefers-reduced-motion:no-preference){.card,.kpi,.btn{transition:border-color .15s,box-shadow .15s}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media print{.nav,.statusbar .theme{display:none}}
+
+/* ---- thin themed overlay scrollbars (issue #58): once the script has started (html.sb-overlay) the native bars are hidden (wheel,
+   keyboard and touch scrolling are untouched) and a thin thumb is drawn OVER the content, taking no layout space; it shows only on
+   hover or while scrolling. Same look in Chrome, Edge and Firefox. Without the script the native bars stay. */
+:root{--thumb:color-mix(in srgb,var(--mut) 70%,transparent)}
+html.sb-overlay,html.sb-overlay *{scrollbar-width:none}
+.sb-thumb{position:fixed;z-index:60;border-radius:4px;background:var(--thumb);opacity:0;pointer-events:none;transition:opacity .15s;touch-action:none}
+.sb-thumb.show{opacity:1;pointer-events:auto}
+.sb-thumb:hover,.sb-thumb.drag{background:var(--mut)}
+@media(prefers-reduced-motion:reduce){.sb-thumb{transition:none}}
+/* ---- dockable navigation (issue #58); top is the default, a phone always keeps the fixed bottom tab bar */
+.dockbar{display:flex;align-items:center;gap:var(--sp1);font-size:var(--fs-sm)}.dockbar .k{color:var(--mut);margin-right:var(--sp1)}
+.dockbtn{width:auto;padding:0 10px;font-size:var(--fs-xs);border-color:var(--line)}.dockbtn[aria-pressed=true]{background:var(--link);color:var(--surface);border-color:var(--link)}
+.dock-handle,.nav-collapse{display:none}
+.dock-handle{cursor:grab;color:var(--mut);align-items:center;padding:0 var(--sp2);touch-action:none}
+.nav-collapse{background:none;border:0;color:var(--mut);font:inherit;font-weight:600;cursor:pointer;align-items:center;gap:var(--sp2);min-height:var(--nav-h);padding:0 var(--sp4)}
+.dock-zones{position:fixed;inset:0;z-index:60;pointer-events:none}
+.dock-zones i{position:absolute;background:color-mix(in srgb,var(--link) 28%,transparent);border:2px dashed var(--link);opacity:.5}
+.dock-zones i.on{opacity:1}
+.dock-zones .z-top{left:0;right:0;top:0;height:64px}.dock-zones .z-bottom{left:0;right:0;bottom:0;height:64px}
+.dock-zones .z-left{top:0;bottom:0;left:0;width:64px}.dock-zones .z-right{top:0;bottom:0;right:0;width:64px}
+/* the seven top-nav items must all fit at tablet width: tighter padding and type, shrinkable items, no clipping */
+@media(min-width:640px) and (max-width:1023px){
+  html:not([data-dock=left]):not([data-dock=right]) .nav{gap:0;padding:0 var(--sp2)}
+  html:not([data-dock=left]):not([data-dock=right]) .nav a{flex:1 1 auto;justify-content:center;gap:var(--sp1);padding:0 var(--sp2);font-size:var(--fs-sm)}
+}
+@media(min-width:640px){
+  .dock-handle{display:inline-flex}
+  html[data-dock=bottom] body{display:flex;flex-direction:column;min-height:100vh}
+  html[data-dock=bottom] main{flex:1;padding-bottom:calc(var(--nav-h) + var(--sp4))}
+  html[data-dock=bottom] .nav{position:fixed;bottom:0;left:0;right:0;z-index:30;border-top:1px solid var(--line);border-bottom:0;box-shadow:0 -2px 8px rgba(0,0,0,.1)}
+  html[data-dock=bottom] .nav a{border-bottom:0;border-top:3px solid transparent}html[data-dock=bottom] .nav a[aria-current=page]{border-top-color:var(--link)}
+  html[data-dock=left] body,html[data-dock=right] body{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
+  html[data-dock=right] body{grid-template-columns:minmax(0,1fr) auto}
+  html[data-dock=left] .statusbar,html[data-dock=right] .statusbar{grid-column:1/-1;grid-row:1}
+  html[data-dock=left] .nav,html[data-dock=right] .nav{grid-row:2;flex-direction:column;align-items:stretch;overflow:visible;padding:var(--sp2);gap:var(--sp1);border-bottom:0;min-width:56px;position:sticky;top:0;align-self:start;max-height:100vh}
+  html[data-dock=left] .nav{grid-column:1;border-right:1px solid var(--line)}html[data-dock=right] .nav{grid-column:2;border-left:1px solid var(--line)}
+  html[data-dock=left] main,html[data-dock=right] main{grid-row:2;width:100%}html[data-dock=left] main{grid-column:2}html[data-dock=right] main{grid-column:1}
+  html[data-dock=left] .nav a,html[data-dock=right] .nav a{border-bottom:0;border-radius:var(--r-sm);padding:0 var(--sp3)}
+  html[data-dock=left] .nav a[aria-current=page]{box-shadow:inset 3px 0 var(--link)}html[data-dock=right] .nav a[aria-current=page]{box-shadow:inset -3px 0 var(--link)}
+  html[data-dock=left] .nav-collapse,html[data-dock=right] .nav-collapse{display:inline-flex;padding:0 var(--sp3)}
+  html[data-dock=left] .dock-handle,html[data-dock=right] .dock-handle{justify-content:center;min-height:32px}
+  html[data-rail=collapsed][data-dock=left] .nav a span,html[data-rail=collapsed][data-dock=right] .nav a span,
+  html[data-rail=collapsed][data-dock=left] .nav-collapse span,html[data-rail=collapsed][data-dock=right] .nav-collapse span{position:absolute;left:-9999px}
+  html[data-rail=collapsed][data-dock=left] .nav a,html[data-rail=collapsed][data-dock=right] .nav a{justify-content:center;padding:0}
+}
+@media(max-width:639px){.dockbar,.dock-handle,.nav-collapse{display:none!important}}

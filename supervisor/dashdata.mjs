@@ -3,6 +3,7 @@
 // provider output, no session ids, no tokens, no account details.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { atomicJson } from './core.mjs';
 import { checksState, prerequisites } from './team.mjs';
 
@@ -137,13 +138,25 @@ export function appendSnapshot(root, snap, now) {
   fs.renameSync(temp, file);
 }
 
-// Installed-versus-main from the self-upgrade records the tick already writes (no git, no network here).
-// drift is true while the newest record names a main commit that is not the installed one.
-export function readVersion(root) {
-  let text; try { text = fs.readFileSync(path.join(root, 'team', 'upgrades.jsonl'), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+// Version badge data (no git, no network here). installed: the commit the `current` link points at right now, so a manual upgrade
+// is reflected at once; the self-upgrade records are only the fallback and the source of "main" (the newest commit they saw).
+// running: the commit this very process was loaded from; when it differs from installed the server needs a restart.
+const SHA40 = /^[0-9a-f]{40}$/;
+export function codeVersion(url = import.meta.url) { const m = /\/versions\/([0-9a-f]{40})\//.exec(fileURLToPath(url)); return m ? m[1] : null; }
+export function readVersion(root, { running = codeVersion() } = {}) {
   let last = null;
-  for (const line of text.split('\n')) { try { const r = JSON.parse(line); if (r && typeof r.to === 'string') last = r; } catch (error) { if (!(error instanceof SyntaxError)) throw error; } }
-  if (!last) return null;
-  const installed = ['upgraded', 'verified'].includes(last.result) ? last.to : last.from;
-  return { installed: String(installed || '').slice(0, 40), main: last.to.slice(0, 40), drift: !!installed && installed !== last.to, result: String(last.result || '').slice(0, 24), at: last.at ?? null };
+  try {
+    for (const line of fs.readFileSync(path.join(root, 'team', 'upgrades.jsonl'), 'utf8').split('\n')) { try { const r = JSON.parse(line); if (r && typeof r.to === 'string') last = r; } catch (error) { if (!(error instanceof SyntaxError)) throw error; } }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let linked = null, linkedAt = null;
+  try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); if (m) { linked = m[1]; linkedAt = fs.lstatSync(path.join(root, 'current')).mtimeMs; } } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'EINVAL') throw error; }
+  if (!last && !linked) return null;
+  const fromRecords = last ? (['upgraded', 'verified'].includes(last.result) ? last.to : last.from) : null;
+  const installed = linked || fromRecords || '';
+  // The records name main only as far as they went. If the link was moved after the newest record (a manual upgrade), they say
+  // nothing about main beyond what is installed, so no drift is claimed.
+  const stale = last && linked && linked !== last.to && Number.isFinite(last.at) && linkedAt > last.at;
+  const main = !last || stale ? installed : last.to;
+  const run = SHA40.test(running || '') ? running : null;
+  return { installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
 }

@@ -70,14 +70,76 @@ export const inRange = (at, now, range) => Number.isFinite(at) && now - at <= ra
 // ---- layout: saved per breakpoint, never shared between them
 export const BREAKPOINTS = { phone: 0, tablet: 640, desktop: 1100 };
 export const breakpointOf = width => (width >= BREAKPOINTS.desktop ? 'desktop' : width >= BREAKPOINTS.tablet ? 'tablet' : 'phone');
-// Apply a saved { order: [ids], span: {id: n} } to the card ids actually present. Unknown saved ids are dropped, new cards appended.
+// Apply a saved { order: [ids], span: {id: n}, h: {id: px} } to the card ids actually present. Unknown saved ids are dropped, new
+// cards appended. Sizes are saved per breakpoint, in that breakpoint's own column units; on a phone only the order applies.
 export function applyLayout(ids, saved, bp) {
   const order = Array.isArray(saved?.order) ? saved.order.filter(i => ids.includes(i)) : [];
   const full = [...order, ...ids.filter(i => !order.includes(i))];
-  const span = {};
-  if (bp !== 'phone') for (const [k, v] of Object.entries(saved?.span || {})) if (ids.includes(k) && Number.isInteger(v) && v >= 1 && v <= 12) span[k] = v;   // phone: reorder only
-  return { order: full, span };
+  const span = {}, h = {};
+  if (bp !== 'phone') {
+    for (const [k, v] of Object.entries(saved?.span || {})) if (ids.includes(k) && Number.isInteger(v) && v >= 1 && v <= 12) span[k] = v;
+    for (const [k, v] of Object.entries(saved?.h || {})) if (ids.includes(k) && Number.isInteger(v) && v >= ROW_STEP && v <= 4000) h[k] = v;
+  }
+  return { order: full, span, h };
 }
+
+// ---- card resizing (issue #58): snap to the grid, limits per card type, never smaller than the content
+export const ROW_STEP = 40;   // px: card heights snap to this step
+// Width is in grid columns (12 on desktop, 6 on tablet). A saved height is a min-height, so content can never be clipped.
+// vlock: the card's height is its content (charts scale with their width, KPI tiles are one fixed shape).
+export const CARD_LIMITS = {
+  panel: { minSpan: 3, maxSpan: 12, maxH: 800 },
+  kpi: { minSpan: 2, maxSpan: 4, vlock: true },
+  chart: { minSpan: 4, maxSpan: 12, vlock: true },
+  queue: { minSpan: 3, maxSpan: 12, maxH: 800 },
+  table: { minSpan: 6, maxSpan: 12, maxH: 1200 },
+  info: { minSpan: 3, maxSpan: 12, maxH: 800 }
+};
+export const limitsOf = type => CARD_LIMITS[type] || CARD_LIMITS.info;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// Column limits for a breakpoint. Tablet has 6 columns, so the limits are halved (at least 2, at most 6).
+export function spanLimits(type, bp) {
+  const l = limitsOf(type);
+  if (bp === 'tablet') return { cols: 6, min: clamp(Math.ceil(l.minSpan / 2), 2, 6), max: clamp(Math.ceil(l.maxSpan / 2), 2, 6) };
+  return { cols: 12, min: l.minSpan, max: l.maxSpan };
+}
+// A drag from one of the 8 edges/corners (n s e w ne nw se sw); dx, dy are pointer movement in px. Dragging the west or north
+// edge outward (left/up) grows the card, as in a window; the grid keeps its order. natH is the content's own height at that width.
+export function resizeBox({ edge, dx, dy, span, h, natH = 0, colW, type, bp = 'desktop' }) {
+  const l = limitsOf(type), sl = spanLimits(type, bp), e = String(edge);
+  let nSpan = span;
+  if (e.includes('e')) nSpan = span + Math.round(dx / colW);
+  if (e.includes('w')) nSpan = span - Math.round(dx / colW);
+  nSpan = clamp(nSpan, sl.min, sl.max);
+  let nH = h;
+  if (!l.vlock && (e.includes('s') || e.includes('n'))) {
+    const floor = Math.max(ROW_STEP, Math.ceil(natH / ROW_STEP) * ROW_STEP);
+    nH = clamp(Math.round((h + (e.includes('s') ? dy : -dy)) / ROW_STEP) * ROW_STEP, floor, Math.max(floor, l.maxH));
+  }
+  return { span: nSpan, h: l.vlock ? null : nH };
+}
+
+// ---- dockable navigation (issue #58). Saved per breakpoint; a phone always keeps the fixed bottom tab bar.
+export const DOCKS = ['top', 'bottom', 'left', 'right'];
+export const dockOf = v => (DOCKS.includes(v) ? v : 'top');
+export const effectiveDock = (saved, bp) => (bp === 'phone' ? 'bottom' : dockOf(saved));
+// The window edge nearest to a point (x, y) in a w x h window: where a dragged navigation bar would dock.
+export function dockFromPoint(x, y, w, h) {
+  if (!(w > 0 && h > 0)) return 'top';
+  const d = { top: y / h, bottom: (h - y) / h, left: x / w, right: (w - x) / w };
+  return DOCKS.reduce((best, k) => (d[k] < d[best] ? k : best), 'top');
+}
+
+// ---- back navigation (issue #58)
+export const TOP_PAGES = { agents: 'Agents', work: 'Work', activity: 'Activity', usage: 'Usage & cost', reviews: 'Reviews', system: 'System' };
+// The trail for a page: Overview > Work > PR #41. [href, label]; the last item has no link. Overview itself has no trail.
+export function trail(page, extra = []) {
+  if (page === 'overview') return [];
+  if (TOP_PAGES[page]) return [['/', 'Overview'], [null, TOP_PAGES[page]]];
+  return [['/', 'Overview'], ...extra];
+}
+// Scroll position to restore: a positive finite number, clamped to what the page can scroll; anything else is ignored.
+export const restorableScroll = (saved, maxY) => (Number.isFinite(saved) && saved > 0 ? Math.min(Math.round(saved), Math.max(0, maxY)) : 0);
 export function moveItem(order, id, delta) {
   const i = order.indexOf(id), j = i + delta;
   if (i < 0 || j < 0 || j >= order.length) return order.slice();
