@@ -136,7 +136,9 @@ export class SelfUpgrade {
   }
 
   // Every first-parent commit in (from, to] must be a merged PR whose merged head has a dispatcher-recorded PASS from the
-  // opposite agent and green CI. A direct commit to main, or any missing proof, makes the range ineligible.
+  // opposite agent and green CI. A direct commit to main, or any missing proof, makes the range ineligible. An interim
+  // (D-021) PASS from the author's own provider counts while interim review is enabled; the dispatcher records that flag
+  // only after checking D-021 is homeowner-approved, and the post-merge review still follows.
   async eligibility(from, to) {
     const prs = [];
     for (const c of this.d.mainCommits(from, to)) {
@@ -146,7 +148,8 @@ export class SelfUpgrade {
       if (!pull || pull.state !== 'MERGED' || pull.headRefOid !== c.head || !author) return { ok: false, prs, reason: `PR #${c.pr} could not be matched to its merged head` };
       prs.push(c.pr);
       const v = this.d.verdict(c.pr, c.head);
-      if (v?.verdict !== 'PASS' || v.reviewer === author || !this.d.config.agents[v.reviewer])
+      const interim = v?.interim === true && this.d.config.interim_review?.enabled === true;
+      if (v?.verdict !== 'PASS' || (v.reviewer === author && !interim) || !this.d.config.agents[v.reviewer])
         return { ok: false, prs, reason: `PR #${c.pr} has no recorded PASS from the opposite agent at merged head ${short(c.head)}` };
       if (checksState(pull.statusCheckRollup) !== 'green') return { ok: false, prs, reason: `CI was not green on PR #${c.pr} at merged head ${short(c.head)}` };
     }

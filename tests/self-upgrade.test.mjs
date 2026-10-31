@@ -68,7 +68,8 @@ test('not reviewed: no PASS, PASS from the author, PASS at another head, unknown
     'CHANGES verdict': { verdicts: { [`7:${H('d')}`]: { verdict: 'CHANGES', reviewer: 'codex' } } },
     'self review': { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude' } } },
     'PASS at an older head': { verdicts: { [`7:${H('e')}`]: { verdict: 'PASS', reviewer: 'codex' } } },
-    'unknown reviewer': { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'mallory' } } }
+    'unknown reviewer': { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'mallory' } } },
+    'interim PASS while interim review is not enabled': { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude', interim: true } } }
   };
   for (const [name, over] of Object.entries(cases)) {
     const w = world(t, over);
@@ -319,4 +320,11 @@ test('rollback script --supervisor refuses bad input without changing anything',
 test('rollback script keeps the original single-argument launcher behaviour', t => {
   assert.notEqual(spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname], { encoding: 'utf8' }).status, 0);
   assert.notEqual(spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname, 'nothex'], { encoding: 'utf8' }).status, 0);
+});
+
+test('an interim (D-021) PASS from the author counts while interim review is enabled', async t => {
+  const w = world(t, { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude', interim: true } } });
+  w.up.d.config = { ...config, interim_review: { enabled: true, decision: 'D-021' } };
+  assert.notEqual(await w.up.step(), 'not-eligible');
+  assert.ok(w.log.some(x => x[0] === 'pre'));
 });
