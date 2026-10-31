@@ -14,41 +14,98 @@ const attr = (tag, name) => new RegExp(`\\b${name}="([^"]*)"`).exec(tag)?.[1];
 const unescapeXml = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 const escapeXml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-// Test output can contain credentials (D-008). Persisted artifacts never carry raw TRX output: stdout/stderr/stack
-// traces are dropped, and the one failure message kept per test is pattern-redacted and capped. Pattern redaction is
-// best effort, not a guarantee, so the message stays short and the rest of the output is removed entirely.
-const SECRET_PATTERNS = [
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[REDACTED]'],
-  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@'"<>]*@/gi, '$1[REDACTED]@'],
-  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]{8,}/gi, '$1 [REDACTED]'],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?/g, '[REDACTED]'],
-  [/\b([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|auth|cookie|connectionstring)[A-Za-z0-9_.-]*)(\s*[:=]\s*|\s+is\s+)("[^"]*"|'[^']*'|[^\s;,&]+)/gi, '$1$2[REDACTED]'],
-  [/\b(?:AKIA|ASIA|ghp_|gho_|ghs_|github_pat_|glpat-|xox[abprs]-|sk-|hvs\.)[A-Za-z0-9_-]{8,}/g, '[REDACTED]'],
-  [/\b[A-Fa-f0-9]{32,}\b/g, '[REDACTED]'],
-  [/\b[A-Za-z0-9+\/_-]{40,}={0,2}/g, '[REDACTED]']
-];
-export const redactSecrets = text => SECRET_PATTERNS.reduce((t, [re, to]) => t.replace(re, to), String(text));
-const safeMessage = raw => redactSecrets(raw.replace(/\s+/g, ' ')).slice(0, 500);
+// Test output can contain credentials (D-008), and no pattern list recognises every secret. So nothing free-form from
+// the raw TRX is ever persisted: the persisted TRX, the JUnit file and result.json are rebuilt from allowlisted fields
+// only. Names must be code identifiers, outcomes, durations and counters must match fixed formats, and a failure is
+// reported as one of a closed set of constant reasons. Message text, stdout/stderr, stack traces, run infos, computer
+// and user names, and theory arguments are dropped, never copied or redacted.
+const OUTCOMES = new Set(['Passed', 'Failed', 'NotExecuted', 'Inconclusive', 'Timeout', 'Aborted', 'Error', 'Warning', 'Completed', 'InProgress',
+  'Pending', 'Disconnected', 'PassedButRunAborted', 'NotRunnable']);
+const ASSERTS = new Set(['Equal', 'NotEqual', 'True', 'False', 'Null', 'NotNull', 'Empty', 'NotEmpty', 'Contains', 'DoesNotContain', 'Throws',
+  'ThrowsAsync', 'ThrowsAny', 'ThrowsAnyAsync', 'Same', 'NotSame', 'InRange', 'NotInRange', 'IsType', 'IsNotType', 'IsAssignableFrom', 'Single',
+  'All', 'Collection', 'Matches', 'DoesNotMatch', 'StartsWith', 'EndsWith', 'Equivalent', 'Fail', 'AreEqual', 'AreNotEqual', 'AreSame',
+  'AreNotSame', 'IsTrue', 'IsFalse', 'IsNull', 'IsNotNull', 'IsInstanceOfType', 'ThrowsException', 'ThrowsExceptionAsync', 'That', 'Inconclusive',
+  'Greater', 'Less', 'Zero', 'NotZero']);
+const EXCEPTIONS = new Set(['Exception', 'NullReferenceException', 'InvalidOperationException', 'ArgumentException', 'ArgumentNullException',
+  'ArgumentOutOfRangeException', 'KeyNotFoundException', 'NotImplementedException', 'NotSupportedException', 'IndexOutOfRangeException',
+  'FormatException', 'TimeoutException', 'TaskCanceledException', 'OperationCanceledException', 'IOException', 'FileNotFoundException',
+  'DirectoryNotFoundException', 'UnauthorizedAccessException', 'HttpRequestException', 'JsonException', 'DivideByZeroException',
+  'InvalidCastException', 'OverflowException', 'ObjectDisposedException', 'AggregateException']);
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]*(?:[.+][A-Za-z_][A-Za-z0-9_]*)*(?:`\d+)?$/;
+const DURATION = /^\d{1,2}:\d{2}:\d{2}(?:\.\d{1,7})?$/;
+const safeName = s => (typeof s === 'string' && s.length <= 300 && IDENT.test(s) ? s : undefined);
+const safeOutcome = s => (OUTCOMES.has(s) ? s : 'Unknown');
+const REASONS = new Set(['test failed (no message)', 'test failed (message not persisted)', 'test timed out', 'assertion failed', 'exception thrown',
+  ...[...ASSERTS].map(a => `assertion failed: Assert.${a}`), ...[...EXCEPTIONS].map(e => `exception thrown: ${e}`)]);
+const tagAttr = (tag, name) => { const v = attr(tag, name); return v === undefined ? undefined : unescapeXml(v); };
 
-// Returns TRX text safe to persist: every <Output> block is replaced by a single redacted, capped message.
-export function sanitizeTrx(xml) {
-  return xml.replace(/<Output\b[^>]*?(?:\/>|>[\s\S]*?<\/Output>)/g, block => {
-    const message = /<Message>([\s\S]*?)<\/Message>/.exec(block)?.[1];
-    return message === undefined ? '' : '<Output><ErrorInfo><Message>' + escapeXml(safeMessage(unescapeXml(message))) + '</Message></ErrorInfo></Output>';
-  }).replace(/<(StdOut|StdErr|DebugTrace|TextMessages)\b[^>]*>[\s\S]*?<\/\1>/g, '');
+// Maps a raw failure message to a constant reason. Only this closed vocabulary can come out; the input is never echoed.
+export function failureReason(raw) {
+  if (raw === undefined) return 'test failed (no message)';
+  const text = String(raw);
+  if (REASONS.has(text)) return text;   // already sanitized (the persisted TRX is parsed again)
+  const asserted = /^\s*Assert\.([A-Za-z]+)\b/.exec(text)?.[1];
+  if (asserted) return ASSERTS.has(asserted) ? `assertion failed: Assert.${asserted}` : 'assertion failed';
+  if (/^\s*Expected\b/m.test(text) && /^\s*(?:But was|Actual)\s*:/m.test(text)) return 'assertion failed';
+  const thrown = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)*([A-Za-z_][A-Za-z0-9_]*Exception)\s*:/.exec(text)?.[1];
+  if (thrown) return EXCEPTIONS.has(thrown) ? `exception thrown: ${thrown}` : 'exception thrown';
+  if (/\btim(?:ed|e) ?out\b/i.test(text)) return 'test timed out';
+  return 'test failed (message not persisted)';
 }
 
+// Parses a TRX into allowlisted structured data. Raw message text never leaves this function; only failureReason() output does.
 export function parseTrx(xml) {
   const counters = /<Counters\b[^>]*>/.exec(xml)?.[0];
   if (!counters) return null;
-  const n = name => Number(attr(counters, name) ?? 0);
-  const results = [];
-  for (const m of xml.matchAll(/<UnitTestResult\b([^>]*?)(?:\/>|>([\s\S]*?)<\/UnitTestResult>)/g)) {
-    const message = /<Message>([\s\S]*?)<\/Message>/.exec(m[2] ?? '')?.[1];
-    results.push({ name: unescapeXml(attr(m[1], 'testName') ?? ''), outcome: attr(m[1], 'outcome') ?? 'Unknown', duration: attr(m[1], 'duration') ?? '',
-      message: message === undefined ? undefined : safeMessage(unescapeXml(message)) });
+  const n = name => { const v = Number(attr(counters, name) ?? 0); return Number.isSafeInteger(v) && v >= 0 ? v : 0; };
+  const methods = new Map();
+  for (const m of xml.matchAll(/<UnitTest\b([^>]*)>([\s\S]*?)<\/UnitTest>/g)) {
+    const id = attr(m[1], 'id'), method = /<TestMethod\b[^>]*>/.exec(m[2])?.[0];
+    if (id && method) methods.set(id, [tagAttr(method, 'className'), tagAttr(method, 'name')]);
   }
-  return { total: n('total'), executed: n('executed'), passed: n('passed'), failed: n('failed'), results };
+  const results = [], seen = new Map();
+  for (const m of xml.matchAll(/<UnitTestResult\b([^>]*?)(?:\/>|>([\s\S]*?)<\/UnitTestResult>)/g)) {
+    const [cls, meth] = methods.get(attr(m[1], 'testId')) ?? [];
+    const fromMethod = safeName(cls) && safeName(meth) ? `${cls}.${meth}` : undefined;
+    const fromName = safeName(tagAttr(m[1], 'testName')?.replace(/\s*\([\s\S]*$/, ''));   // theory arguments can carry runtime data
+    let name = fromMethod ?? fromName ?? `test-${results.length + 1}`;
+    const count = (seen.get(name) ?? 0) + 1;
+    seen.set(name, count);
+    if (count > 1) name = `${name}#${count}`;
+    const outcome = safeOutcome(attr(m[1], 'outcome')), duration = attr(m[1], 'duration') ?? '';
+    const message = /<Message>([\s\S]*?)<\/Message>/.exec(m[2] ?? '')?.[1];
+    results.push({ name, outcome, duration: DURATION.test(duration) ? duration : '',
+      message: outcome === 'Failed' ? failureReason(message === undefined ? undefined : unescapeXml(message)) : undefined });
+  }
+  const resultSummary = /<ResultSummary\b[^>]*>/.exec(xml)?.[0];
+  return { total: n('total'), executed: n('executed'), passed: n('passed'), failed: n('failed'),
+    outcome: safeOutcome(resultSummary && attr(resultSummary, 'outcome')), results };
+}
+
+// Returns a TRX that is safe to persist, rebuilt from parseTrx() data only: no free-form byte of the raw file is copied.
+// Ids are derived deterministically from the position and sanitized name, so they carry no raw content either.
+const guid = h => `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+const TEST_LIST = '8c84fa94-04c1-424b-9868-57a2d4851a1d', UNIT_TEST_TYPE = '13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b';
+export function sanitizeTrx(xml) {
+  const s = parseTrx(xml);
+  if (!s) return null;
+  const rows = s.results.map((r, i) => {
+    const h = crypto.createHash('sha256').update(`${i}:${r.name}`).digest('hex');
+    const base = r.name.replace(/#\d+$/, ''), dot = base.lastIndexOf('.');
+    return { r, testId: guid(h), executionId: guid(h.slice(32)), className: dot > 0 ? base.slice(0, dot) : '', method: base.slice(dot + 1) };
+  });
+  const results = rows.map(({ r, testId, executionId }) => {
+    const head = `<UnitTestResult executionId="${executionId}" testId="${testId}" testName="${escapeXml(r.name)}"` +
+      (r.duration ? ` duration="${r.duration}"` : '') + ` outcome="${r.outcome}" testType="${UNIT_TEST_TYPE}" testListId="${TEST_LIST}"`;
+    return r.message === undefined ? `${head} />` : `${head}><Output><ErrorInfo><Message>${escapeXml(r.message)}</Message></ErrorInfo></Output></UnitTestResult>`;
+  });
+  const defs = rows.map(({ r, testId, executionId, className, method }) => `<UnitTest name="${escapeXml(r.name)}" id="${testId}">` +
+    `<Execution id="${executionId}" /><TestMethod className="${escapeXml(className)}" name="${escapeXml(method)}" /></UnitTest>`);
+  const entries = rows.map(({ testId, executionId }) => `<TestEntry testId="${testId}" executionId="${executionId}" testListId="${TEST_LIST}" />`);
+  return '<?xml version="1.0" encoding="utf-8"?>\n<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">\n' +
+    `<Results>\n${results.join('\n')}\n</Results>\n<TestDefinitions>\n${defs.join('\n')}\n</TestDefinitions>\n` +
+    `<TestEntries>\n${entries.join('\n')}\n</TestEntries>\n<TestLists><TestList name="Results Not in a List" id="${TEST_LIST}" /></TestLists>\n` +
+    `<ResultSummary outcome="${s.outcome}"><Counters total="${s.total}" executed="${s.executed}" passed="${s.passed}" failed="${s.failed}" /></ResultSummary>\n</TestRun>\n`;
 }
 
 export function trxToJunit(summary, suite = 'dotnet-test') {
@@ -93,10 +150,11 @@ export function collectArtifacts(outDir, runDir, suite) {
   const resultsDir = path.join(outDir, 'results');
   const trx = findFiles(resultsDir, '.trx')[0];
   if (trx && fs.statSync(trx).size <= MAX_ARTIFACT_BYTES) {
-    fs.writeFileSync(path.join(dest, 'results.trx'), sanitizeTrx(fs.readFileSync(trx, 'utf8')), { flag: 'wx' });   // the raw TRX is never copied
-    artifacts.push(record('trx', path.join(dest, 'results.trx'), runDir));
-    summary = parseTrx(fs.readFileSync(path.join(dest, 'results.trx'), 'utf8'));
-    if (summary) {
+    const clean = sanitizeTrx(fs.readFileSync(trx, 'utf8'));   // the raw TRX is never copied
+    if (clean !== null) {
+      fs.writeFileSync(path.join(dest, 'results.trx'), clean, { flag: 'wx' });
+      artifacts.push(record('trx', path.join(dest, 'results.trx'), runDir));
+      summary = parseTrx(clean);
       fs.writeFileSync(path.join(dest, 'results.junit.xml'), trxToJunit(summary, suite), { flag: 'wx' });
       artifacts.push(record('report', path.join(dest, 'results.junit.xml'), runDir));
     }
