@@ -65,6 +65,10 @@ test('out of allowance: provider windows, weekly threshold and the latest job ar
   const job = (status, lastEvent, updatedAt = NOW - 1000, id = 'a'.repeat(32)) => ({ id, provider: 'codex', status, lastEvent, updatedAt });
   const codex = { provider: 'codex', now: NOW, allowance: { status: 'allowed', windows: [] } };
   assert.equal(outOfAllowance({ ...codex, jobs: [job('paused_limit', 'usage_limit')] }).out, true);
+  // review of 66876af: a transient rate limit pauses a job too, but is not an allowance limit; a passed reset is not evidence
+  assert.equal(outOfAllowance({ ...codex, jobs: [job('paused_limit', 'transient_rate_limit')] }).out, false);
+  assert.equal(outOfAllowance({ ...codex, jobs: [{ ...job('paused_limit', 'usage_limit'), resetAt: NOW - 1 }] }).out, false);
+  assert.equal(outOfAllowance({ ...codex, jobs: [{ ...job('paused_limit', 'usage_limit'), resetAt: NOW + 60000 }] }).out, true);
   assert.equal(outOfAllowance({ ...codex, jobs: [job('blocked', 'retry_exhausted')], hadLimit: () => true }).out, true);
   assert.equal(outOfAllowance({ ...codex, jobs: [job('blocked', 'retry_exhausted')], hadLimit: () => false }).out, false);
   // 31 Oct Claude shape: paused on the five-hour limit, which the provider said resets at 21:40; after that it is not out
@@ -121,7 +125,11 @@ test('interim PASS merges, labels post-merge-review, and the regular reviewer re
   const merge = (await w.team.plan()).find(a => a.type === 'merge');
   assert.equal(merge.interim, true); assert.equal(merge.reviewer, 'claude');
   await w.team.execute(merge);
-  assert.deepEqual(w.calls.merges, [[77, H(5)]]); assert.deepEqual(w.calls.labels.at(-1), [77, 'post-merge-review']);
+  assert.deepEqual(w.calls.merges, [[77, H(5)]]);
+  // a refused interim merge leaves no post-merge debt
+  const v = world(t); v.team.s.verdicts[`77:${H(5)}`] = { verdict: 'PASS', reviewer: 'claude', job: 'j', interim: true };
+  const m = (await v.team.plan()).find(a => a.type === 'merge'); v.gh.pulls[0].headRefOid = H(6);
+  await assert.rejects(v.team.execute(m), /head moved/); assert.deepEqual(v.team.s.postMerge, {}); assert.deepEqual(w.calls.labels.at(-1), [77, 'post-merge-review']);
   assert.equal(w.team.s.postMerge[77].author, 'claude');
   // the merged PR leaves the open list; while codex is out no post-merge review starts
   w.gh.pulls = [];

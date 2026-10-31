@@ -488,10 +488,12 @@ export class Team {
 
   async execute(act, report = {}) {
     if (act.type === 'merge') {
-      await this.gh.merge(act.pr, act.head);       // GitHub refuses unless the head still equals act.head
-      this.s.merged[act.pr] = act.head;
-      // D-021: an interim merge owes the regular reviewer a post-merge review. Recorded before anything else can fail.
+      // D-021: an interim merge owes the regular reviewer a post-merge review. Recorded before the merge, so a crash after it
+      // cannot lose the debt; a refused merge removes it again.
       if (act.interim) { this.s.postMerge[act.pr] = { head: act.head, branch: act.branch, author: act.author, interimReviewer: act.reviewer, interimJob: act.job, at: this.clock.now() }; this.save(); }
+      try { await this.gh.merge(act.pr, act.head); }      // GitHub refuses unless the head still equals act.head
+      catch (error) { if (act.interim) { delete this.s.postMerge[act.pr]; this.save(); } throw error; }
+      this.s.merged[act.pr] = act.head;
       const branch = (await this.gh.getPull(act.pr))?.headRefName || '';
       const m = /issue-(\d+)/.exec(branch);
       const issue = m ? Number(m[1]) : null;

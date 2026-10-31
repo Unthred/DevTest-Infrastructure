@@ -32,7 +32,10 @@ export function outOfAllowance({ provider, jobs = [], allowance = null, weeklyAt
   const pausedOnResetLimit = latest && resetSince !== null && resetSince >= (latest.updatedAt || 0) - 300000;
   if (latest && now - (latest.updatedAt || 0) < WEEK && !pausedOnResetLimit) {
     const id = String(latest.id || '').slice(0, 8);
-    if (latest.status === 'paused_limit' || (latest.status !== 'completed' && latest.lastEvent === 'usage_limit'))
+    // Only a usage limit counts: a transient rate limit also pauses a job (paused_limit) but says nothing about allowance.
+    // A job whose recorded reset time has passed is not evidence any more.
+    const resetPassed = Number.isFinite(latest.resetAt) && latest.resetAt <= now;
+    if (latest.status !== 'completed' && latest.lastEvent === 'usage_limit' && !resetPassed)
       return { out: true, reason: `${provider} job ${id} is paused on a usage limit`, until: Number.isFinite(latest.resetAt) ? latest.resetAt : null };
     if (latest.status === 'blocked' && latest.lastEvent === 'retry_exhausted' && hadLimit(latest.id))
       return { out: true, reason: `${provider} job ${id} ran out of retries on usage limits`, until: null };
