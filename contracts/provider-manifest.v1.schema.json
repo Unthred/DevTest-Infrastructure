@@ -34,6 +34,18 @@
         "full": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["efforts", "model_args", "effort_args"],
+      "properties": {
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "pattern": { "type": "string" },
+        "efforts": { "type": "array", "items": { "type": "string" } },
+        "model_args": { "type": "array", "items": { "type": "string" } },
+        "effort_args": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "capabilities": {
       "type": "object",
       "additionalProperties": false,

@@ -184,6 +184,19 @@ function usageView(config, jobs, states, allowance, now) {
   return out;
 }
 
+// Tokens per job type and model, so the homeowner can see whether the routing pays off (issue #64). Counts only.
+export function modelUsage(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    const key = `${r.kind}|${r.model || ''}|${r.effort || ''}`;
+    const g = groups.get(key) || { kind: r.kind, model: r.model || 'CLI default', effort: r.effort || 'default', jobs: 0, inTokens: 0, outTokens: 0, cost: null };
+    g.jobs++; g.inTokens += r.inTokens || 0; g.outTokens += r.outTokens || 0;
+    if (Number.isFinite(r.cost)) g.cost = (g.cost || 0) + r.cost;
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => (b.inTokens + b.outTokens) - (a.inTokens + a.outTokens));
+}
+
 const DAY = 86400000;
 function graphs({ config, jobs, state, snapshots, now }) {
   const agents = Object.keys(config.agents);
@@ -308,7 +321,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
   const jobRows = jobs.filter(j => j.createdAt).sort((a, b) => b.createdAt - a.createdAt).slice(0, 300).map(j => ({
     id: j.id.slice(0, 8), fullId: j.id, agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
-    cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, branch: redact(j.branch || '', 100) }));
+    cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), branch: redact(j.branch || '', 100) }));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), reviewer: v.reviewer || null, verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
@@ -341,6 +354,6 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver,
     panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr })) },
-    jobs: jobRows, verdicts: verdictRows, prs, issues
+    jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues
   };
 }

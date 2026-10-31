@@ -25,6 +25,32 @@
       "--dangerously-bypass-approvals-and-sandbox"
     ]
   },
+  "models": {
+    "aliases": [
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-6-astra",
+      "gpt-6-luna",
+      "gpt-6-sol",
+      "gpt-6.1-sol",
+      "gpt-6.1-terra"
+    ],
+    "efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "model_args": [
+      "--model",
+      "{model}"
+    ],
+    "effort_args": [
+      "-c",
+      "model_reasoning_effort={effort}"
+    ]
+  },
   "capabilities": {
     "launch": "supported",
     "resume": "unverified",

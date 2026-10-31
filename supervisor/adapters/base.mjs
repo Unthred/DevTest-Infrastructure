@@ -1,3 +1,4 @@
+import { modelArgs as modelArgsOf } from '../models.mjs';
 export const capabilities = { resumeSession: false, usageReset: false };
 export function preflight() { return true; }
 export function contextForRole(role) {
@@ -29,3 +30,5 @@ export function resetTime(line) {
 }
 // Access arguments come from the manifest (D-012: no provider branches in core). Unknown modes yield none.
 export function accessArgs(config, job) { return config.manifest?.access?.[job.access || 'standard'] || []; }
+// Model and effort arguments come from the manifest's `models` templates; a value the manifest does not accept is dropped.
+export const modelArgs = (config, job) => modelArgsOf(config.manifest?.models, job);

@@ -22,6 +22,7 @@ Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with c
 | #6 Responsive profiles and visual evidence | yes; branch `claude/issue-6-responsive`, draft PR stacked on #27 | no; CI and Codex review pending | no | real Docker on Tower: broken fixture fails with every seeded defect, corrected fixture passes at 8 widths, in Chromium/Firefox/WebKit; no visual acceptance claimed |
 | #3 .NET SDK toolchain | implementation on PR #28 branch `codex/issue-3-dotnet-build`; PR ready for review | validator and 306/306 positive/negative tests passed; prior Tower SDK 8/9/10 cache-reuse smoke passed; fresh exact-head CI and opposite-agent review pending | no standalone `dev-test` installation | prior isolated restore/cache/build smoke passed; no production project changed |
 | #4, #7–#14 other issues | not started | no | no | no |
+| #64 Model per job type | yes; branch `claude/issue-64-choose-model-per`, see PR; `docs/model-routing.md` | no; CI and Codex review pending | no (installed supervisor not upgraded) | no; unit/fixture tests only (311/311 locally). Real `claude --model/--effort` and `codex -c model_reasoning_effort` flags checked against `--help` only; no live job run with them ; fix round 2 (Codex CHANGES at c21e147): the Codex manifest no longer accepts a `gpt-` pattern; only models listed in its `aliases` (from the local Codex models cache) are forwarded, so `gpt-not-a-real-model` is dropped with a warning. The list must be updated when Codex adds models |
 
 ## Ownership
 
@@ -228,3 +229,6 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## #6 / PR #29 fourth conflict-only rebase (Claude)
 - Rebased onto origin/main `9a5bbe6`; old head `4f2a7dd`. Only conflict: this handover (kept both sides). Validator OK; 293/293 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending.
+
+## Issue #64 (Claude, `claude/issue-64-choose-model-per`)
+Implemented: `supervisor/models.mjs`, manifest `models` section (claude, codex), `models` table in `team.json` and `team.local.json`, escalation (incomplete job; CHANGES twice), allowance threshold, invalid-model fallback with warning, job fields and dashboard columns. Not done / unverified: live job with the new flags, behaviour of a real exhausted allowance, deployment (needs `tools/upgrade-supervisor.sh` after merge). Token-per-model figures only appear for jobs created after deployment. Review needed from Codex.

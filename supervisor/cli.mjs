@@ -8,7 +8,8 @@ import { runProcess } from './process.mjs';
 import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { alertSender } from './alert.mjs';
-import { readJobs, recordTick, tickOutcome } from './dashdata.mjs';
+import { readJobs, recordTick, tickOutcome, latestAllowance } from './dashdata.mjs';
+import { weeklyUtilization } from './models.mjs';
 import { spawnSync } from 'node:child_process';
 import { SelfUpgrade, realDeps, runningSha } from './upgrade.mjs';
 
@@ -26,8 +27,8 @@ function args(list) {
   return out;
 }
 function print(job) {
-  const { id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities, allowance, kind, access, autoRestart, incompleteRetries, postcondition } = job;
-  console.log(JSON.stringify({ id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities, allowance, kind, access, autoRestart, incompleteRetries, postcondition }, null, 2));
+  const { id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities, allowance, kind, access, autoRestart, incompleteRetries, postcondition, model, effort, modelSource, modelReason, modelWarning } = job;
+  console.log(JSON.stringify({ id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities, allowance, kind, access, autoRestart, incompleteRetries, postcondition, model, effort, modelSource, modelReason, modelWarning }, null, 2));
 }
 function startWorker(root, id, registry) {
   const child = spawn(process.execPath, [self, 'worker', id, '--state-root', root, '--registry', registry],
@@ -93,7 +94,11 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
     if (shown.status !== 0) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main');
     register = shown.stdout;
   }
-  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config) });
+  // Model routing (issue #64): what each CLI accepts comes from its manifest; the weekly allowance is the freshest the provider reported.
+  const providerModels = {};
+  for (const a of Object.values(config.agents)) providerModels[a.provider] = (await provider(registry, a.provider)).config.manifest.models ?? null;
+  const allowanceOf = agent => weeklyUtilization(latestAllowance(readJobs(root))[config.agents[agent].provider]);
+  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf });
 }
 async function teamTick(root, registry, dryRun) {
   const config = loadTeamConfig(teamConfigFile, root);
