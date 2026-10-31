@@ -16,7 +16,7 @@ export function command(config, job, resume) {
   const context = base.contextForRole(job.role);
   const ruleFile = `/mnt/cache/cursor-workspace/ai-rules-live/adapters/generated/claude/${context}/CLAUDE.md`;
   const governance = fs.readFileSync(ruleFile, 'utf8');
-  const args = [...config.command, '--print', '--verbose', '--output-format', 'stream-json', ...base.accessArgs(config, job), '--append-system-prompt', `${governance}\nSelected role: ${job.role}. Follow its project and host safety instructions.`];
+  const args = [...config.command, '--print', '--verbose', '--output-format', 'stream-json', ...base.accessArgs(config, job), ...base.modelArgs(config, job), '--append-system-prompt', `${governance}\nSelected role: ${job.role}. Follow its project and host safety instructions.`];
   if (resume && job.sessionId && config.manifest.capabilities.resume === 'supported') args.push('--resume', job.sessionId);
   return args;
 }

@@ -260,6 +260,7 @@ function jobCols(view, { agent = true } = {}) {
     ...(agent ? [{ key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }] : []),
     { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? jobRef(r, view) : '–') },
     { key: 'status', label: 'Status', html: r => badge(({ completed: 'ok', running: 'ok', queued: 'info', paused_limit: 'warning', paused_manual: 'warning', blocked: 'action', failed: 'action' })[r.status] || 'info', r.status) },
+    { key: 'model', label: 'Model', html: r => esc(r.model || 'default'), more: true }, { key: 'effort', label: 'Effort', html: r => esc(r.effort || 'default'), more: true },
     { key: 'attempts', label: 'Attempts', num: true, more: true, totals: 'avg' }, { key: 'startedAt', label: 'Started', num: true, html: r => esc(utc(r.startedAt)), more: true },
     { key: 'elapsedMs', label: 'Elapsed', num: true, html: r => esc(dur(r.elapsedMs)), more: true },
     { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true, total: 'sum' }
@@ -333,7 +334,12 @@ function usagePage(view, query, path) {
     { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd, more: true }];
   const table_ = card({ id: 'u-jobs', title: 'Tokens per job', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: view.jobs, searchKeys: ['id', 'agent', 'kind', 'status'], totals: { id: 'count', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: ucols,
     emptyState: empty('No jobs recorded', 'Token counts appear after a job finishes.', 'chart') }) + '<p class="sub">*Token counts and the CLI cost estimate are what the CLI reported, not billing. Subscription use is not billed per token.</p>' });
-  return { title: 'Usage & cost', body: grid('usage', win + chart + tokChart + table_) };
+  const mcols = [{ key: 'kind', label: 'Job type' }, { key: 'model', label: 'Model' }, { key: 'effort', label: 'Effort' }, { key: 'jobs', label: 'Jobs', num: true },
+    { key: 'inTokens', label: 'Input tokens', num: true, html: r => esc(num(r.inTokens)) }, { key: 'outTokens', label: 'Output tokens', num: true, html: r => esc(num(r.outTokens)) },
+    { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd }];
+  const byModel = card({ id: 'u-models', title: 'Tokens per job type and model', span: 12, movable: false, body: table({ id: 'models', path, query, noun: 'groups', rows: view.modelUsage || [], searchKeys: ['kind', 'model', 'effort'], totals: { jobs: 'sum', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: mcols,
+    emptyState: empty('No model usage recorded', 'Token counts appear per job type and model after jobs finish.', 'chart') }) });
+  return { title: 'Usage & cost', body: grid('usage', win + chart + tokChart + byModel + table_) };
 }
 function reviewsPage(view, query, path) {
   const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE;

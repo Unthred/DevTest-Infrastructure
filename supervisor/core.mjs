@@ -108,8 +108,14 @@ export function validateSpec(spec) {
   }
   if (spec.postcondition !== undefined && !(spec.postcondition && typeof spec.postcondition === 'object' && /^[a-z_]{1,32}$/.test(spec.postcondition.kind || '')))
     throw new SupervisorError('invalid postcondition');
+  // Model routing fields are advisory (issue #64): anything malformed is dropped with a warning, never a refused job.
+  const extra = {}, drop = [];
+  for (const k of ['model', 'effort']) if (spec[k] !== undefined && !(typeof spec[k] === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(spec[k]))) drop.push(k);
+  for (const k of ['modelReason', 'modelWarning', 'modelSource']) if (spec[k] !== undefined) extra[k] = String(spec[k]).replace(/[\0\r\n]/g, ' ').slice(0, 200);
+  if (drop.length) extra.modelWarning = `invalid ${drop.join(' and ')} dropped; CLI default used`;
   const { allowed_actions, ...rest } = spec;
-  return { ...rest, kind, access, allowedActions: allowed_actions, repository, worktree, branch, handover };
+  for (const k of drop) delete rest[k];
+  return { ...rest, ...extra, kind, access, allowedActions: allowed_actions, repository, worktree, branch, handover };
 }
 export async function provider(registry, id) {
   const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
@@ -128,7 +134,7 @@ export function validateManifest(m, id) {
     if (!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).some(key => !allowed.includes(key)) || required.some(key => !(key in object)))
       throw new SupervisorError(`invalid ${label}: unknown or missing field`);
   };
-  exact(m, ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'resume', 'access', 'capabilities', 'billing', 'events'],
+  exact(m, ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'resume', 'access', 'models', 'capabilities', 'billing', 'events'],
     ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'capabilities', 'billing'], 'provider manifest');
   if (m.schema_version !== 1 || m.id !== id || !/^[a-z][a-z0-9-]{1,31}$/.test(m.id) || !m.display_name || !/^\d+\.\d+\.\d+$/.test(m.adapter_version))
     throw new SupervisorError('invalid provider manifest identity/version');
@@ -137,6 +143,13 @@ export function validateManifest(m, id) {
   if (m.launch.env_allowlist && (!Array.isArray(m.launch.env_allowlist) || !m.launch.env_allowlist.every(x => /^[A-Z_][A-Z0-9_]*$/.test(x)))) throw new SupervisorError('invalid env allowlist');
   if (m.resume) { exact(m.resume, ['args'], ['args'], 'resume'); if (!Array.isArray(m.resume.args) || !m.resume.args.every(x => typeof x === 'string')) throw new SupervisorError('invalid resume args'); }
   if (m.access) { exact(m.access, ['standard', 'full'], [], 'access'); for (const mode of Object.values(m.access)) if (!Array.isArray(mode) || !mode.every(x => typeof x === 'string' && x.length > 0 && x.length <= 4096 && !/[\0\r\n]/.test(x))) throw new SupervisorError('invalid access arguments'); }
+  if (m.models) {
+    exact(m.models, ['aliases', 'pattern', 'efforts', 'model_args', 'effort_args'], ['efforts', 'model_args', 'effort_args'], 'models');
+    const strs = a => Array.isArray(a) && a.every(x => typeof x === 'string' && x.length > 0 && x.length <= 128 && !/[\0\r\n]/.test(x));
+    if (!strs(m.models.efforts) || !strs(m.models.model_args) || !strs(m.models.effort_args) || (m.models.aliases && !strs(m.models.aliases)) || !m.models.model_args.some(x => x.includes('{model}')) || !m.models.effort_args.some(x => x.includes('{effort}')))
+      throw new SupervisorError('invalid model arguments');
+    if (m.models.pattern !== undefined) { try { new RegExp(m.models.pattern); } catch { throw new SupervisorError('invalid model pattern'); } }
+  }
   const caps = ['launch', 'resume', 'session_status', 'usage_limit_detection', 'reset_time_parsing', 'checkpoint', 'non_interactive', 'structured_output'];
   exact(m.capabilities, caps, caps.slice(0, 7), 'capabilities');
   if (Object.values(m.capabilities).some(x => !['supported', 'unsupported', 'unverified'].includes(x)) || m.capabilities.launch !== 'supported' || m.capabilities.checkpoint !== 'supported')

@@ -25,6 +25,23 @@
       "--dangerously-bypass-approvals-and-sandbox"
     ]
   },
+  "models": {
+    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+    "efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "model_args": [
+      "--model",
+      "{model}"
+    ],
+    "effort_args": [
+      "-c",
+      "model_reasoning_effort={effort}"
+    ]
+  },
   "capabilities": {
     "launch": "supported",
     "resume": "unverified",

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, atomicJson, processStart } from './core.mjs';
+import { validateModelsConfig, mergeModelsConfig, resolveModel, repeatedChanges, isRepair, typeOfKind } from './models.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
@@ -25,6 +26,7 @@ export function validateTeamConfig(c) {
     for (const n of a.issues) { if (seen.has(n)) throw new SupervisorError(`issue ${n} has two owners`); seen.add(n); }
   }
   if (new Set(agents.map(([, a]) => a.provider)).size !== agents.length) throw new SupervisorError('two agents share a provider');
+  validateModelsConfig(c.models, agents.map(([n]) => n));
   if (c.access?.mode === 'full' && c.access.decision !== 'D-020') throw new SupervisorError('full access must cite D-020');
   return c;
 }
@@ -36,7 +38,7 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
@@ -45,6 +47,7 @@ export function applyLocalOverride(shipped, local) {
     if (!Array.isArray(cmd) || !cmd.length || !cmd.every(x => typeof x === 'string') || !path.isAbsolute(cmd[0]) || Object.keys(local.alerts).length !== 1) throw new SupervisorError('invalid team.local.json: alerts.command must be an absolute program plus arguments');
     out.alerts = { command: cmd };
   }
+  if ('models' in local) { validateModelsConfig(local.models, Object.keys(out.agents)); out.models = mergeModelsConfig(out.models, local.models); }
   if (local.limits) { if (typeof local.limits !== 'object') throw new SupervisorError('invalid team.local.json: limits'); out.limits = { ...out.limits, ...local.limits }; }
   if (local.depends_on_overrides) out.depends_on_overrides = { ...out.depends_on_overrides, ...local.depends_on_overrides };
   for (const [name, o] of Object.entries(local.agents || {})) {
@@ -155,16 +158,27 @@ export function implementPrompt(job) {
 }
 
 export class Team {
-  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false }) {
+  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, allowanceOf = () => null }) {
+    this.providerModels = providerModels; this.allowanceOf = allowanceOf;
     this.c = validateTeamConfig(config); this.root = root; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations']) this.s[k] ||= {};
   }
   save() { atomicJson(this.file, this.s); }
+  // Model and effort for one job (issue #64). Escalation: an earlier attempt of the same work ended incomplete on the cheaper
+  // model, or the PR has drawn CHANGES twice. Allowance: reported weekly use at or above the threshold keeps the cheap model
+  // for everything but implement/continue. Both reasons are stored on the job. Invalid values degrade to the CLI default.
+  modelFor(act, kind, report) {
+    const escalation = this.s.escalations[`${kind}:${act.key ?? act.pr}`] || (act.pr && isRepair(typeOfKind(kind)) && repeatedChanges(this.s.verdicts, act.pr) ? { reason: `PR #${act.pr} has drawn CHANGES twice` } : null);
+    const provider = this.c.agents[act.agent].provider;
+    const { fields, warnings } = resolveModel({ modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider], escalation, utilization: this.allowanceOf(act.agent) });
+    if (warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: warnings.join('; ') });
+    return fields;
+  }
   agents() { return Object.entries(this.c.agents); }
   // Fix attempts (CHANGES fixes and CI fixes) are counted per PR, across heads: a fix that pushes a new head and is then rejected
   // again must not reset the budget (PR #38 reached five CHANGES verdicts under a per-head count). Keys stay `<pr>:<head>`.
@@ -303,6 +317,11 @@ export class Team {
   async ingestOne(id, j, report) {
       const job = await this.jobs.get(id);
       if (!job || !TERMINAL.has(job.status)) return;
+      // An attempt that ended incomplete on a non-escalated model makes the next attempt of the same work use the stronger one.
+      if (job.status !== 'completed' && job.lastEvent === 'incomplete' && j.modelSource !== 'escalated' && this.c.models?.agents?.[j.agent]) {
+        this.s.escalations[`${j.kind}:${j.key ?? j.pr}`] = { reason: `the previous ${j.kind} job ${id.slice(0, 8)} ended incomplete on ${j.model || 'the default model'}`, job: id, at: this.clock.now() };
+        this.save();
+      }
       if (j.kind === 'review' && job.status === 'completed') {
         const r = readInboxVerdict(this.root, j.ticket, { pr: j.pr, head: j.head });
         if (r.verdict) {
@@ -339,7 +358,7 @@ export class Team {
   // A directory that is not a linked worktree of the repository is a condition for the homeowner, not a failed tick: it is
   // recorded and announced once on the PR, reported under `blocked`, and the other actions carry on.
   async runAction(act, report) {
-    try { await this.execute(act); } catch (error) {
+    try { await this.execute(act, report); } catch (error) {
       if (!(error instanceof WorktreeUnusable)) throw error;
       this.s.unusable[`${act.type}:${act.key}`] = { worktree: error.worktree, at: this.clock.now() }; this.save();
       (report.blocked ||= []).push({ what: `${act.type} ${act.pr ?? act.issue} (${act.agent})`, reason: error.message.slice(0, 200) });
@@ -411,7 +430,7 @@ export class Team {
     }
   }
 
-  async execute(act) {
+  async execute(act, report = {}) {
     if (act.type === 'merge') {
       await this.gh.merge(act.pr, act.head);       // GitHub refuses unless the head still equals act.head
       this.s.merged[act.pr] = act.head;
@@ -482,8 +501,9 @@ export class Team {
       meta = { issue: act.issue, branch };
       bump = async () => { this.s.implemented[act.issue] = this.clock.now(); await this.gh.board(act.issue, 'in_progress'); };
     }
+    Object.assign(spec, this.modelFor(act, spec.kind, report));
     const job = await this.jobs.create(spec);   // a lease conflict throws here, before any attempt is counted
-    this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, ...meta, ingested: false, at: this.clock.now() };
+    this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
     this.save();
     await bump(); this.save();
   }

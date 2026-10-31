@@ -24,7 +24,7 @@ const pr = (n, branch, head, extra = {}) => ({ number: n, title: `t${n}`, headRe
 const issue = (n, state = 'OPEN', body = '', labels = []) => ({ number: n, title: `Issue ${n} title here`, state, body, labels });
 const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n\n## D-021 — y\n- Status: agent-proposal\n';
 
-function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = config() } = {}) {
+function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = config(), teamOpts = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = { comments: [], labels: [], merges: [], board: [], created: [], issues: [] };
   const gh = {
@@ -40,7 +40,7 @@ function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = 
     listActive: async () => jobs.active, get: async id => jobs.states[id] || null,
     create: async spec => { const id = (++jobs.seq).toString(16).padStart(32, '0'); calls.created.push(spec); jobs.states[id] = { id, status: 'queued', provider: spec.provider }; return { id }; } };
   const git = { ensureWorktree: async o => o.path, worktreeFor: async () => null };
-  const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: REGISTER, clock: { now: () => 1000 } });
+  const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: REGISTER, clock: { now: () => 1000 }, ...teamOpts });
   return { dir, gh, jobs, git, team, calls };
 }
 
@@ -912,4 +912,79 @@ test('other failures from an action are still reported as skipped', async t => {
   const w = world(t, { pulls: [pr(28, 'codex/issue-3-x', H(1), { isDraft: true })], issues: [issue(3)] });
   w.git.ensureWorktree = async () => { throw new Error('boom'); };
   const r = await w.team.tick(); assert.equal(r.skipped.length, 1); assert.match(r.skipped[0].reason, /boom/);
+});
+
+// ---- model routing in the dispatcher (issue #64)
+const routed = (over = {}) => config({ models: { allowance_threshold: 0.8, agents: {
+  claude: { implement: { model: 'opus', effort: 'high' }, fix: { model: 'sonnet', effort: 'medium' }, review: { model: 'sonnet', effort: 'low' }, rebase: { model: 'sonnet', effort: 'low' }, 'ci-fix': { model: 'sonnet', effort: 'medium' }, strong: { model: 'opus', effort: 'high' } },
+  codex: { implement: { effort: 'high' }, review: { effort: 'low' }, fix: { effort: 'medium' } } } }, ...over });
+const pm = () => ({ claude: JSON.parse(fs.readFileSync(new URL('../supervisor/providers/claude.json', import.meta.url), 'utf8')).models, codex: JSON.parse(fs.readFileSync(new URL('../supervisor/providers/codex.json', import.meta.url), 'utf8')).models });
+
+test('model routing: each job type records model, effort and why on the created job; the other agent routes by its own table', async t => {
+  const w = world(t, { cfg: routed(), teamOpts: { providerModels: pm() }, pulls: [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'claude/issue-23-y', H(2))], issues: [issue(23), issue(2), issue(5)] });
+  await w.team.tick();
+  const byProvider = Object.fromEntries(w.calls.created.map(s => [s.provider, s]));
+  assert.deepEqual([byProvider.claude.kind, byProvider.claude.model, byProvider.claude.effort, byProvider.claude.modelSource], ['review', 'sonnet', 'low', 'configured']);
+  assert.deepEqual([byProvider.codex.kind, byProvider.codex.model, byProvider.codex.effort], ['review', undefined, 'low']);
+  const rec = Object.values(w.team.s.jobs).find(j => j.agent === 'claude');
+  assert.deepEqual([rec.model, rec.effort, rec.modelSource], ['sonnet', 'low', 'configured']);
+});
+
+test('model routing: no models table means no model fields (behaviour unchanged)', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23)] });
+  await w.team.tick();
+  assert.ok(w.calls.created.length && w.calls.created.every(s => !('model' in s) && !('effort' in s) && !('modelWarning' in s)));
+});
+
+test('escalation: a job that ended incomplete on the cheaper model makes the next attempt of the same work use the stronger one, with the reason', async t => {
+  const w = world(t, { cfg: routed(), teamOpts: { providerModels: pm() }, pulls: [pr(11, 'claude/issue-23-y', H(2), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' }] })], issues: [issue(23)] });
+  await w.team.tick();
+  const first = w.calls.created.find(s => s.kind === 'cifix');
+  assert.deepEqual([first.model, first.modelSource], ['sonnet', 'configured']);
+  const [id, rec] = Object.entries(w.team.s.jobs).find(([, j]) => j.kind === 'cifix');
+  w.jobs.states[id] = { id, status: 'blocked', lastEvent: 'incomplete', provider: 'claude' };
+  await w.team.ingestOne(id, rec, { ingested: [] });
+  assert.match(w.team.s.escalations[`cifix:${rec.key}`].reason, /ended incomplete on sonnet/);
+  w.jobs.active = []; w.team.s.jobs[id].ingested = true;
+  await w.team.execute({ type: 'cifix', agent: 'claude', pr: 11, head: H(2), branch: 'claude/issue-23-y', checks: [], key: rec.key });
+  const second = w.calls.created.filter(s => s.kind === 'cifix').at(-1);
+  assert.deepEqual([second.model, second.effort, second.modelSource], ['opus', 'high', 'escalated']);
+  assert.match(second.modelReason, /escalated: the previous cifix job .* ended incomplete on sonnet/);
+  // a completed job never escalates
+  const w2 = world(t, { cfg: routed(), teamOpts: { providerModels: pm() } });
+  w2.team.s.jobs.aa = { kind: 'fix', agent: 'claude', key: '11:x', pr: 11, model: 'sonnet', ingested: false }; w2.jobs.states.aa = { id: 'aa', status: 'completed', lastEvent: 'completed' };
+  await w2.team.ingestOne('aa', w2.team.s.jobs.aa, { ingested: [] });
+  assert.deepEqual(w2.team.s.escalations, {});
+});
+
+test('escalation: the same PR drawing CHANGES twice puts its next fix on the stronger model; one CHANGES does not', async t => {
+  const w = world(t, { cfg: routed(), teamOpts: { providerModels: pm() } });
+  const act = { type: 'fix', agent: 'claude', pr: 11, head: H(3), key: `11:${H(3)}` };
+  w.team.s.verdicts[`11:${H(1)}`] = { verdict: 'CHANGES' };
+  assert.equal(w.team.modelFor(act, 'fix', {}).model, 'sonnet');
+  w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES' };
+  const f = w.team.modelFor(act, 'fix', {});
+  assert.deepEqual([f.model, f.modelSource], ['opus', 'escalated']); assert.match(f.modelReason, /PR #11 has drawn CHANGES twice/);
+  assert.equal(w.team.modelFor({ ...act, pr: 12, key: `12:${H(3)}` }, 'fix', {}).model, 'sonnet', 'another PR is unaffected');
+  assert.equal(w.team.modelFor({ ...act, type: 'review' }, 'review', {}).model, 'sonnet', 'review is not a repair job');
+});
+
+test('allowance threshold in the dispatcher: above it routine work stays cheap even when escalated; implement keeps its model', async t => {
+  let used = 0.9;
+  const w = world(t, { cfg: routed(), teamOpts: { providerModels: pm(), allowanceOf: a => (a === 'claude' ? used : null) } });
+  w.team.s.verdicts[`11:${H(1)}`] = { verdict: 'CHANGES' }; w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES' };
+  const act = { type: 'fix', agent: 'claude', pr: 11, head: H(3), key: `11:${H(3)}` };
+  assert.deepEqual([w.team.modelFor(act, 'fix', {}).model, w.team.modelFor(act, 'fix', {}).modelSource], ['sonnet', 'allowance']);
+  assert.equal(w.team.modelFor({ type: 'implement', agent: 'claude', issue: 5, key: '5' }, 'implement', {}).model, 'opus');
+  used = 0.2;
+  assert.equal(w.team.modelFor(act, 'fix', {}).model, 'opus');
+});
+
+test('invalid model in the config: the job is still created on the CLI default model, with a warning on the job and in the tick report', async t => {
+  const cfg = routed(); cfg.models.agents.claude.review = { model: 'sonnet-9000', effort: 'low' };
+  const w = world(t, { cfg, teamOpts: { providerModels: pm() }, pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23)] });
+  const report = await w.team.tick();
+  const spec = w.calls.created.find(s => s.provider === 'claude');
+  assert.ok(spec, 'job not failed'); assert.equal(spec.model, undefined); assert.equal(spec.effort, 'low'); assert.match(spec.modelWarning, /not accepted/);
+  assert.equal(report.skipped.length, 0); assert.equal(report.warnings.length, 1); assert.equal(report.warnings[0].agent, 'claude');
 });
