@@ -5,6 +5,7 @@
   "repo_path": "/mnt/user/projects/DevTest-Infrastructure",
   "worktree_base": "/mnt/user/projects",
   "access": { "mode": "full", "decision": "D-020" },
+  "interim_review": { "enabled": true, "decision": "D-021", "weekly_at": 0.95 },
   "limits": { "per_agent": 1, "overall": 2, "max_review_attempts": 2, "max_fix_attempts": 2 },
   "models": {
     "allowance_threshold": 0.8,
@@ -16,6 +17,7 @@
         "review": { "model": "sonnet", "effort": "medium" },
         "rebase": { "model": "sonnet", "effort": "low" },
         "ci-fix": { "model": "sonnet", "effort": "medium" },
+        "interim-review": { "model": "sonnet", "effort": "medium" },
         "strong": { "model": "opus", "effort": "high" }
       },
       "codex": {
@@ -25,6 +27,7 @@
         "review": { "effort": "low" },
         "rebase": { "effort": "low" },
         "ci-fix": { "effort": "medium" },
+        "interim-review": { "effort": "medium" },
         "strong": { "effort": "high" }
       }
     }

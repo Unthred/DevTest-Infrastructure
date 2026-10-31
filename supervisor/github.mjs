@@ -50,6 +50,7 @@ export function githubClient(config, gh = ghRunner()) {
       gh(['issue', 'edit', String(n), '--repo', repo, '--add-label', label]);
     },
     // --match-head-commit makes GitHub refuse the merge if the head moved after the verdict.
+    removeLabel: async (n, label) => { gh(['issue', 'edit', String(n), '--repo', repo, '--remove-label', label]); },
     merge: async (n, head) => { gh(['pr', 'merge', String(n), '--repo', repo, '--merge', '--match-head-commit', head]); },
     board: async (issue, status) => {
       const b = config.board; if (!b || !b.options?.[status]) return;

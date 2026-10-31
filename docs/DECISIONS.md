@@ -102,7 +102,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Status: homeowner-approved
 - Date: 2026-10-29
 - Source: homeowner brief 2026-10-29; README (Parallel agents); issue #1, #9
-- Decision: Each agent works on its own branch in its own worktree. Never touch another agent's worktree or overwrite a shared handover. Every PR is reviewed by the opposite agent before merge.
+- Decision: Each agent works on its own branch in its own worktree. Never touch another agent's worktree or overwrite a shared handover. Every PR is reviewed by the opposite agent before merge. Narrowed by D-021: an interim same-provider review while every other agent is out of allowance.
 - Rationale: Prevents silent overwrites and self-acceptance.
 - Rejected: Shared worktrees; self-merge; Git fixtures run inside a linked worktree (their `.git` is a pointer, so fixture commits would land on the real branch; fixtures use independent clones or `git init`).
 - Superseded-by: none
@@ -186,6 +186,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: The homeowner's agents on Tower intentionally have full access, and supervised jobs must keep it. Supervised Codex currently runs `codex exec --profile ai-rules-devtest` under the profile sandbox. Bubblewrap fails on Tower (`pivot_root: Invalid argument`), so every shell command is refused. Read the homeowner's launcher (`ai` → `/root/bin/ai-agent`, plus `/usr/local/bin/ai-rules-codex` and the deployed profiles) and launch supervised Claude and Codex with the **same effective access** as the interactive sessions. For Codex `exec` that means an explicit full-access sandbox setting. This is an explicitly selected, clearly named supervisor launch mode chosen by the homeowner (the AI-Rules "elevated mode selected by a Human" clause). It must not become a silent default for other roles. Project rules still apply: D-007, D-009, D-010, no reboots, no production Home Assistant changes and no secret disclosure.
 - Rationale: The sandbox cannot start on Tower, so a sandboxed supervised job cannot run any command.
 - Rejected: A silent or default elevated mode; weakening project rules.
+- Superseded-by: none
+
+## D-021 — Interim same-provider review while the opposite agent is out of allowance
+- Status: homeowner-approved
+- Date: 2026-10-31
+- Source: homeowner decision 2026-10-31, given in a direct session; issue #81
+- Decision: When every agent other than a pull request's author is out of allowance, the team loop may have the author's own provider review that pull request as an *interim reviewer*. The interim review is a separate supervised review job: a fresh session, the reviewer's own review worktree, and the agent's `interim-review` model entry (a cheaper review model or effort where the provider offers one, never the strong implement entry). Its PASS is merge-eligible without the homeowner, under the same gates as any PASS (exact head, green checks, mergeable). Every such merge is labelled `post-merge-review`, and when the regular opposite agent has allowance again the dispatcher runs its review of the merged head; a blocking finding there opens a linked issue for the homeowner. "Out of allowance" means evidence only: a provider-reported exhausted window or status, reported weekly use at or above the configured threshold, or the provider's most recent supervised job paused or blocked on a usage limit. Provider-agnostic (D-012): it applies to whichever agent is out. The interim reviewer never merges; the dispatcher does. No paid overage or credits are used to avoid it.
+- Rationale: With one agent out of allowance for days nothing could merge (31 Oct: Codex at its weekly limit; PRs #41, #60 and #77 waiting). A fresh session on a different model is a weaker but real independent check, and the opposite agent still reviews afterwards.
+- Rejected: Self-review in the authoring session or on the authoring model; waiting for the homeowner to review every PR while an agent is out; skipping review.
 - Superseded-by: none
 
 ## Open questions (need homeowner or a later issue)
