@@ -157,15 +157,16 @@ test('back, filters and scroll: state is in the URL, Back uses the real history,
 });
 
 // ---- 4. scrollbars
-test('scrollbars: thin, themed, hidden until hover or scrolling, same standard properties for Chrome, Edge and Firefox', () => {
-  assert.match(css, /\*\{scrollbar-width:thin;scrollbar-color:transparent transparent\}/);
-  assert.match(css, /\*:hover,\*:focus-within,\.is-scrolling\{scrollbar-color:var\(--thumb\) transparent\}/);
+test('scrollbars: true overlay (no layout space), themed, shown only on hover or scrolling, native scrolling untouched', () => {
+  assert.match(css, /html\.sb-overlay,html\.sb-overlay \*\{scrollbar-width:none\}/, 'native bars hidden only once the script runs');
+  assert.match(css, /\.sb-thumb\{position:fixed;[^}]*opacity:0;[^}]*pointer-events:none/, 'the thumb is fixed over the content, invisible by default');
+  assert.match(css, /\.sb-thumb\.show\{opacity:1/);
   assert.match(css, /--thumb:color-mix\(in srgb,var\(--mut\)/, 'the thumb follows the theme token');
-  assert.match(css, /@media\(hover:none\)\{\*\{scrollbar-color:var\(--thumb\) transparent\}\}/, 'touch devices keep an indicator');
-  assert.doesNotMatch(css, /::-webkit-scrollbar|overflow:\s*overlay|scrollbar-width:\s*none/, 'no engine-specific styling, and the bar is never removed (keyboard and touch scrolling are untouched)');
-  assert.doesNotMatch(css, /overflow:hidden[^}]*;[^}]*scroll/i);
-  assert.match(appJs, /is-scrolling/); assert.match(appJs, /capture: true, passive: true/, 'scroll listeners are passive so scrolling is never blocked');
-  assert.doesNotMatch(appJs, /preventDefault\(\)[^;]*wheel|addEventListener\('(wheel|touchmove|keydown)'[^)]*scroll/);
+  assert.doesNotMatch(css, /::-webkit-scrollbar|overflow:\s*overlay/, 'no engine-specific styling');
+  assert.match(appJs, /classList\.add\('sb-overlay'\)/);
+  assert.match(appJs, /capture: true, passive: true/, 'scroll listeners are passive so scrolling is never blocked');
+  assert.match(appJs, /pointerdown/, 'the thumb can be dragged');
+  assert.doesNotMatch(appJs, /addEventListener\('(wheel|touchmove)'/, 'wheel and touch scrolling are never intercepted');
 });
 
 // ---- 5. dockable navigation
