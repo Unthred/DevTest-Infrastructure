@@ -29,3 +29,6 @@ Exposing the page through HAProxy or any remote path is a firewall/remote-access
 
 ## Evidence
 See the handover and the PR. A live screenshot needs the browser runtime of #5 (PR #27, not merged) on Tower; it has not been captured.
+
+## v2 (issue #54)
+Seven navigable pages with drill-downs, a status bar, sortable and paginated tables with footers, larger charts with range selector, legend toggles and expand, and movable cards. See [dashboard-design.md](dashboard-design.md). View model additions: `health`, `freshness`, `nextTickAt`, `version` (from `team/upgrades.jsonl`), `panels` (needs you, warnings, next), `jobs`, `verdicts`, `prs`, `issues`; attention items carry a `severity`.
