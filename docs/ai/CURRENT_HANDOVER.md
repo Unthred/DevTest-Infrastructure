@@ -20,6 +20,8 @@ Last updated: 2026-10-30 by Claude on `claude/issue-35-scheduled-ticks-fail` (is
 | #5 Playwright browser runtime | yes; branch `claude/issue-5-playwright` | no; CI and Codex review pending | no | real Docker on Tower: Chromium, Firefox and WebKit screenshots, broken-page and external-request detection, cleanup to baseline (`tests/browser-smoke.mjs`); TCP targets blocked on OQ-2 |
 
 | #32 Team dashboard | yes; Claude branch `claude/issue-32-p0-team-dashboard` (see PR); `docs/dashboard.md` | no; PR CI and Codex review pending | no (not installed, not served) | no; page checked only against a copy of the real Tower state on a temporary LAN listener (removed); screenshots at desktop and phone width NOT captured (browser runtime #5 / PR #27 unmerged) |
+
+| #6 Responsive profiles and visual evidence | yes; branch `claude/issue-6-responsive`, draft PR stacked on #27 | no; CI and Codex review pending | no | real Docker on Tower: broken fixture fails with every seeded defect, corrected fixture passes at 8 widths, in Chromium/Firefox/WebKit; no visual acceptance claimed |
 | #3–#14 other issues | not started | no | no | no |
 
 ## Ownership
@@ -197,3 +199,28 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Tests: validator OK; full suite 278/278 (new `tests/dashboard-v2.test.mjs`: sorting, pagination, footer totals, filter, range, severity mapping, health, idle-reason text on the page, routes/404, drill-downs, layout per breakpoint, contrast of tokens, static whitelist). Mutation checks on sort direction, severity map, pagination and footer fail the tests.
 - Screenshots: 40 captures (10 pages x light/dark x desktop/phone) taken with the project browser runtime (#5) from a realistic fixture, stored in `/mnt/cache/appdata/devtest-infrastructure/evidence/issue-54/` (not in Git, D-005). NOT yet attached to issue #54 (the gh CLI cannot upload images); tablet width has no runtime profile, so it is not captured. Drag, resize and the live countdown are script behaviour and were not exercised in a real browser session; their pure logic is unit-tested.
 - Not deployed, not served. Reviewer: Codex. Deploy via the supervisor self-upgrade after PASS and merge.
+
+## #6 Responsive profiles and visual evidence (Claude, branch `claude/issue-6-responsive`)
+- Started before #5 merged (homeowner exception 2026-10-30). #27 has merged; this branch is now a conflict-only rebase onto main and no longer stacked.
+- Source: viewport ladder and variants in `browser/capture.mjs`; `browser/responsive.mjs`, `browser/layout-check.mjs`, `browser/responsive-lib.mjs`; broken and corrected fixtures; runner and static server now refuse a socket path over the 107-byte Unix socket limit (found while running this gate); [docs/responsive-audit.md](../responsive-audit.md).
+- Tests: `tests/responsive.test.mjs`, `tests/browser.test.mjs`; Tower gate `tests/responsive-smoke.mjs` (output in the PR). Not claimed: visual acceptance, pixel baselines, CLI integration (#8), TCP/authenticated targets (OQ-2, #10).
+- Rebased onto main after #27 merged (conflict-only: `capture.mjs` keeps `isAllowedSocket` and the exported `bridge`). Scope gap closed: `browser/responsive.mjs` now routes WebSockets like `capture.mjs` (only `ws://` to the bridged origin connects; others are refused, recorded without query, exit 12); test with a mutation check in `tests/responsive.test.mjs`. Validator OK, 186/186; `tests/responsive-smoke.mjs` OK on Tower (cleanup 4/0/0). Exact-head CI and Codex review pending; not deployed.
+- CI report on PR #29 (head `7e8c1b8`): the reported red `project-contract` and `commit-attribution` were runs 41131346403, 41131356564 and 41131362406, all `cancelled` (superseded by newer runs of the same PR, not failed). The exact-head run 41131380143 passed both jobs, as did Supervisor and GitGuardian. Locally, `node tools/validate-project.mjs` is OK and `tools/ci/validate-commit-attribution.sh origin/main HEAD` is OK. No source defect found, so no source change. Codex review still pending.
+
+## #6 / PR #29 conflict-only rebase (Claude)
+- Rebased onto origin/main `94d4d0c`; old head `665128e`. Only conflict: this handover (status table and section list), resolved by keeping both sides. Validator OK, 219/219 tests. A recorded PASS for the old head does not carry over; the opposite agent reviews the new head.
+
+## PR #29 CHANGES fix round (Claude, branch `claude/issue-6-responsive`, from head `bc7cb37`)
+- Blocking 1 (secrets in artifacts): `layoutCheck` no longer reads `innerText`, input values or `aria-label`; findings carry only the markup label and numbers, and `responsive.mjs` also strips any `text` field it receives.
+- Blocking 2 (exit precedence): an undeclared request now yields exit 12 even after a navigation timeout, TLS or other failure, as in `capture.mjs`.
+- Regression tests added (222/222 locally, validator OK). Implemented in source; exact-head CI and opposite-agent re-review pending. Real-Docker smoke not re-run this round; not deployed.
+
+## #6 / PR #29 second conflict-only rebase (Claude)
+- Rebased onto origin/main `7eab868`; old head `7ce0a5d`. Only conflict: this handover (kept both sides). Validator OK; 257/257 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending.
+- Fix round for Codex CHANGES at `2b7feae` (one more round authorised by the homeowner, 2026-10-30): `tests/responsive-smoke.mjs` exited 2 at the restore container. Cause, reproduced: the review clone's directory was mode 0700 (what `mktemp -d` makes), and the container user (uid 99) mounts the project at `/src` and cannot read it, so `tar` fails with exit 2. Fix: `containerCanRead()` in `docker/runner.mjs` makes `createPlan` refuse such a project with the real reason; both Tower smokes (`responsive-smoke`, `browser-smoke`) stage a 0755 copy of `browser/` and the image lock under `/mnt/user/projects/.devtest-stage-*` when the project is unreadable (never chmod the original, removed afterwards). Unit tests with a mutation check in `tests/docker-runner.test.mjs`. Run from a 0700 clone: RESPONSIVE SMOKE OK. Note: the smokes compare global loop/container counts, so they fail spuriously while another job (for example `dotnet-smoke`) runs on the host.
+
+## #6 / PR #29 third conflict-only rebase (Claude)
+- Rebased onto origin/main `92431fc`; old head `8a750ca`. Only conflict: this handover (kept both sides). Validator OK; 264/264 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending.
+
+## #6 / PR #29 fourth conflict-only rebase (Claude)
+- Rebased onto origin/main `9a5bbe6`; old head `4f2a7dd`. Only conflict: this handover (kept both sides). Validator OK; 293/293 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending.

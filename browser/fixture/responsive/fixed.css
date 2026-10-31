@@ -1,0 +1,11 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: sans-serif; }
+header { padding: 1rem; background: #0b3d5c; color: #fff; }
+.table { max-width: 100%; background: #eee; padding: 1rem; }
+.card { max-width: calc(100% - 2rem); margin: 1rem; padding: .5rem; border: 1px solid #888; overflow-wrap: anywhere; }
+form { display: flex; gap: .5rem; padding: 0 1rem; }
+.search { flex: 1; min-width: 0; height: 44px; }
+.go { width: 44px; height: 44px; }
+.chips { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: .5rem; margin: 1rem; }
+.chip { flex: none; padding: .6rem 1rem; background: #cde; border-radius: 1rem; }
+.buy { width: 140px; height: 48px; margin: 1rem; }

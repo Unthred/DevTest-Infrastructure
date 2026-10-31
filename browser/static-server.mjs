@@ -31,6 +31,7 @@ export function createStaticServer(root) {
 
 // Creates the private socket directory, listens, and hands the socket to the container user. Returns { server, close }.
 export function listenOnSocket(server, socketPath, { uid, gid }) {
+  if (Buffer.byteLength(socketPath) > 107) return Promise.reject(new Error('socket path is too long for a Unix socket (limit about 107 bytes)'));
   const dir = path.dirname(socketPath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.rmSync(socketPath, { force: true });

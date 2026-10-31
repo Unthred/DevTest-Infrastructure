@@ -5,7 +5,7 @@ import os from 'node:os';
 import http from 'node:http';
 import path from 'node:path';
 import { buildPlanForVerifiedPaths, verifyTargets, targetSocketPath, validateLock, RunnerError } from '../docker/runner.mjs';
-import { parseArguments, isAllowed, redactUrl, PROFILES, EXIT } from '../browser/capture.mjs';
+import { parseArguments, isAllowed, redactUrl, PROFILES, STANDARD_PROFILES, EXIT } from '../browser/capture.mjs';
 import { createStaticServer, listenOnSocket } from '../browser/static-server.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
@@ -36,6 +36,11 @@ test('bad target declarations and any other network request are refused', () => 
   for (const targets of [['../etc'], ['A'], ['a b'], ['x'.repeat(33)], ['dup', 'dup'], ['a', 'b', 'c', 'd', 'e'], 'fixture', [''], [1]])
     assert.throws(() => plan({ targets }), RunnerError, JSON.stringify(targets));
   for (const network of ['host', 'bridge', 'internal']) assert.throws(() => plan({ network }), /later approved phase policy/);
+});
+
+test('a socket path too long for a Unix socket is refused instead of silently truncated', async t => {
+  assert.throws(() => plan({ targets: ['fixture'] }, `/mnt/cache/appdata/${'x'.repeat(90)}`), /too long/);
+  await assert.rejects(listenOnSocket(createStaticServer(os.tmpdir()), path.join(os.tmpdir(), 'x'.repeat(120), 'a.sock'), { uid: 0, gid: 0 }), /too long/);
 });
 
 test('a target must be a real socket in a private directory owned by the runner', async t => {
@@ -101,7 +106,10 @@ test('capture arguments are validated', () => {
     ['--target', 'f', '--browser', 'ie'], ['--target', 'f', '--profile', 'tv'], ['--target', 'f', '--wait', 'never'], ['--target', 'f', '--name', '../x'],
     ['--target', 'f', '--timeout-ms', '5'], ['--target', 'f', '--timeout-ms', '999999'], ['--target', 'f', '--surprise', '1'], ['--target', 'f', '--path']])
     assert.throws(() => parseArguments(bad), Error, JSON.stringify(bad));
-  assert.deepEqual(Object.keys(PROFILES), ['phone', 'desktop']);
+  assert.ok(['phone', 'desktop', ...STANDARD_PROFILES].every(p => p in PROFILES));
+  assert.deepEqual(STANDARD_PROFILES.map(p => PROFILES[p].viewport.width), [360, 390, 430, 768, 1024, 1280, 1440, 1920]);
+  assert.ok(PROFILES['phone-390-landscape'].viewport.width > PROFILES['phone-390-landscape'].viewport.height);
+  assert.ok(Object.values(PROFILES).some(p => p.deviceScaleFactor === 2 && !p.isMobile) && Object.values(PROFILES).some(p => p.hasTouch && !p.isMobile));
   assert.equal(new Set(Object.values(EXIT)).size, Object.keys(EXIT).length);
 });
 
