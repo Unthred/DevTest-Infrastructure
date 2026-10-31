@@ -1,7 +1,7 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
-import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, inRange, tableState } from './dashui/logic.mjs';
+import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, DOCKS, PAGE_SIZES, RANGES, SEVERITIES, inRange, limitsOf, tableState, trail } from './dashui/logic.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
@@ -46,7 +46,7 @@ const ICONS = {
   up: '<path d="m6 15 6-6 6 6"/>', down: '<path d="m6 9 6 6 6-6"/>', sort: '<path d="M8 9l4-4 4 4M8 15l4 4 4-4"/>', drag: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', play: '<path d="m8 5 11 7-11 7z"/>', pause: '<path d="M8 5v14M16 5v14"/>', refresh: '<path d="M20 11a8 8 0 1 0-2.300 5.700M20 4v7h-7"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.700 0l3-3a4 4 0 0 0-5.700-5.700l-1 1M14 10a4 4 0 0 0-5.700 0l-3 3a4 4 0 0 0 5.700 5.700l1-1"/>', stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
-  tag: '<path d="M3 12V3h9l9 9-9 9z"/><path d="M7.500 7.500h.01"/>', zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>', resize: '<path d="M20 12v8h-8M20 20 12 12"/>'
+  tag: '<path d="M3 12V3h9l9 9-9 9z"/><path d="M7.500 7.500h.01"/>', zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>', resize: '<path d="M20 12v8h-8M20 20 12 12"/>', rail: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>', back: '<path d="m15 6-6 6 6 6"/>'
 };
 export const icon = (name, cls = '') => `<svg class="icon ${cls}" aria-hidden="true" viewBox="0 0 24 24"><use href="#i-${esc(name)}"/></svg>`;
 const sprite = `<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>${Object.entries(ICONS).map(([n, d]) => `<symbol id="i-${n}" viewBox="0 0 24 24">${d}</symbol>`).join('')}</defs></svg>`;
@@ -172,12 +172,16 @@ function allowanceSeries(view, range) {
 const allResets = (view, range) => Object.values(view.graphs.allowance).flatMap(g => g.resets).filter(r => inRange(r.at, view.generatedAt, range));
 
 // ---- card shell
-function card({ id, title, span = 6, body, href, tools = '', cls = '', movable = true, expandable = false }) {
-  return `<section class="card ${cls}" data-card="${esc(id)}" data-span="${span}" style="--span:${span}" aria-labelledby="h-${esc(id)}"><header>${movable ? `<span class="tbtn" data-handle title="Drag to move" aria-hidden="true">${icon('drag')}</span>` : ''}<h2 id="h-${esc(id)}">${esc(title)}</h2>
-<span class="tools">${tools}${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}${movable ? `<span class="resize wide-only" tabindex="0" role="slider" aria-label="Resize ${esc(title)} (left and right arrow keys)" aria-valuemin="2" aria-valuemax="12" aria-valuenow="${span}">${icon('resize')}</span>` : ''}</section>`;
+const EDGES = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'];
+function card({ id, title, span = 6, body, href, tools = '', cls = '', movable = true, expandable = false, type = 'info' }) {
+  if (expandable) { type = 'chart'; cls = `${cls} chart-card`; }
+  const lim = limitsOf(type);
+  const handles = movable ? EDGES.filter(e => !(lim.vlock && /[ns]/.test(e) && e.length === 1)).map(e => `<span class="resize wide-only rz-${e}" data-edge="${e}" aria-hidden="true"></span>`).join('') : '';
+  return `<section class="card ${cls}" data-card="${esc(id)}" data-type="${esc(type)}" data-span="${span}" style="--span:${span}" aria-labelledby="h-${esc(id)}"><header>${movable ? `<span class="tbtn" data-handle title="Drag to move" aria-hidden="true">${icon('drag')}</span>` : ''}<h2 id="h-${esc(id)}">${esc(title)}</h2>
+<span class="tools">${tools}${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}${movable ? `${handles}<span class="resize wide-only rz-key" tabindex="0" role="slider" aria-label="Resize ${esc(title)} (arrow keys: left and right for width${lim.vlock ? '' : ', up and down for height'})" aria-valuemin="${lim.minSpan}" aria-valuemax="${lim.maxSpan}" aria-valuenow="${span}">${icon('resize')}</span>` : ''}</section>`;
 }
 const grid = (layout, cards, cls = '') => `<div class="cards ${cls}" data-layout="${esc(layout)}">${cards}</div>`;
-const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="card kpi" data-card="${esc(id)}" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div>${spark}</a>`;
+const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div><div class="spark-slot">${spark}</div></a>`;
 
 // ---- the four panels (Overview top) and the status bar
 function nowPanel(view) {
@@ -203,6 +207,7 @@ function warningsPanel(view) {
   const items = view.panels.warnings;
   return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
+const dockPicker = `<div class="dockbar wide-only" role="group" aria-label="Navigation position"><span class="k">Nav</span>${DOCKS.map(d => `<button type="button" class="tbtn dockbtn" data-dock="${d}" aria-pressed="false" aria-label="Dock navigation ${d}" title="Dock ${d}">${d[0].toUpperCase()}${d.slice(1)}</button>`).join('')}</div>`;
 function statusBar(view, route) {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
@@ -212,9 +217,9 @@ function statusBar(view, route) {
 <div class="stat"><span class="k">Next</span>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : '<span class="muted">none</span>'}</div>
 <div class="stat"><span class="k">Data</span>${badge(fr.level, fr.label)}</div>
 <div class="stat"><span class="k">Team loop</span>${view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled')}</div>
-<div class="stat"><span class="k">Version</span>${v ? (v.drift ? badge('warning', `${String(v.installed).slice(0, 7)} → ${String(v.main).slice(0, 7)} deploy needed`) : badge('ok', `${String(v.installed).slice(0, 7)} = main`)) : badge('info', 'unknown')}</div>
-<button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>
-<nav class="nav" aria-label="Pages">${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}</nav>`;
+<div class="stat"><span class="k">Version</span>${v ? (v.running && v.running !== v.installed ? badge('warning', `${String(v.installed).slice(0, 7)} installed, ${String(v.running).slice(0, 7)} running: restart needed`) : v.drift ? badge('warning', `${String(v.installed).slice(0, 7)} → ${String(v.main).slice(0, 7)} deploy needed`) : badge('ok', `${String(v.installed).slice(0, 7)} = main`)) : badge('info', 'unknown')}</div>
+${dockPicker}<button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>
+<nav class="nav" id="nav" aria-label="Pages"><span class="dock-handle wide-only" data-dock-handle title="Drag to a screen edge to dock the navigation" aria-hidden="true">${icon('drag')}</span>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
 }
 
 // ---- pages
@@ -227,10 +232,10 @@ function overview(view, query) {
   const daily = Object.values(view.graphs.jobsPerDay).map(d => Object.values(d).reduce((a, b) => a + b, 0));
   const verdicts = view.verdicts;
   const panels = [
-    card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view), href: '/agents', cls: 'panel' }),
-    card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel' }),
-    card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel' }),
-    card({ id: 'warnings', title: `Warnings${view.panels.warnings.length ? ` (${view.panels.warnings.length})` : ''}`, span: 3, body: warningsPanel(view), href: '/system', cls: 'panel' })
+    card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view), href: '/agents', cls: 'panel', type: 'panel' }),
+    card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
+    card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
+    card({ id: 'warnings', title: `Warnings${view.panels.warnings.length ? ` (${view.panels.warnings.length})` : ''}`, span: 3, body: warningsPanel(view), href: '/system', cls: 'panel', type: 'panel' })
   ].join('');
   const kpis = [
     kpi({ id: 'k-active', label: 'Agents running', value: `${active} / ${view.agents.length}`, href: '/agents' }),
@@ -241,8 +246,8 @@ function overview(view, query) {
     kpi({ id: 'k-fresh', label: 'Data age', value: view.freshness.ageMs === null ? 'none' : dur(view.freshness.ageMs), href: '/system' })
   ].join('');
   const charts = [
-    card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), now, range, title: 'allowance used over time' }), cls: 'chart-card' }),
-    card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card' })
+    card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
+    card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
   return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', panels + kpis + charts)}`, bodyClass: 'overview' };
 }
@@ -277,11 +282,11 @@ function agentDetail(view, query, path, route) {
     totals: { next: 'count' }, emptyState: empty('Queue is empty', 'No work is waiting for this agent.', 'check') }) });
   const hist = card({ id: 'hist', title: `Job history (${jobs.length})`, span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: jobs, searchKeys: ['id', 'kind', 'status', 'branch'], cols: jobCols(view, { agent: false }).map(c => ({ ...c, total: undefined })), totals: jobTotals,
     emptyState: empty('No jobs yet', 'This agent has not run a job.', 'list') }) });
-  return { title: `Agent ${a.name}`, crumbs: [['/agents', 'Agents'], [null, a.name]], body: grid('agent', cur + queue + hist) };
+  return { title: `Agent ${a.name}`, crumbs: [['/agents', 'Agents'], [null, a.name]], body: grid('agent', cur + queue + hist, 'fit') };
 }
 
 function workPage(view, query, path) {
-  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)} ${esc(i.title)}</div><div class="sub">${esc(i.reason)}</div></li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
+  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)} ${esc(i.title)}</div><div class="sub">${esc(i.reason)}</div></li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
   const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['title', 'agent', 'number', 'state', 'reason'],
     cols: [{ key: 'number', label: '#', num: true, html: r => issueLink(r.number) }, { key: 'title', label: 'Title' }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
@@ -291,7 +296,7 @@ function workPage(view, query, path) {
       { key: 'checks', label: 'CI', html: r => checksBadge(r.checks) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'reviewRounds', label: 'Review rounds', num: true, more: true },
       { key: 'fixRounds', label: 'Fix rounds', num: true, more: true }, { key: 'rebaseRounds', label: 'Rebase rounds', num: true, more: true }, { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true }],
     totals: { number: 'count', reviewRounds: 'avg', fixRounds: 'avg', tokens: 'sum' }, emptyState: empty('No pull requests yet', 'Pull requests appear once an agent opens one.', 'list') }) });
-  return { title: 'Work', body: `${grid('work', queues)}<div class="cards">${issues}${prs}</div>` };
+  return { title: 'Work', body: `${grid('work', queues, 'fit')}<div class="cards fit">${issues}${prs}</div>` };
 }
 function prDetail(view, query, path, route) {
   const p = view.prs.find(x => x.number === route.id);
@@ -301,7 +306,7 @@ function prDetail(view, query, path, route) {
   const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${esc(utc(r.at))}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
   const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)} at <span class="mono">${sha7(v.head)}</span> <span class="sub">${esc(utc(v.at))}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
   const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
-  return { title: `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs) };
+  return { title: `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs, 'fit') };
 }
 function issueDetail(view, query, path, route) {
   const i = view.issues.find(x => x.number === route.id);
@@ -311,7 +316,7 @@ function issueDetail(view, query, path, route) {
   const facts = card({ id: 'facts', title: `Issue #${i.number}: ${i.title}`, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(i.state)}</dd><dt>Assigned to</dt><dd>${agentTag(i.agent, view)}</dd><dt>Status</dt><dd>${esc(i.reason || '–')}</dd>
 <dt>Needs homeowner</dt><dd>${i.needsHomeowner ? badge('action', 'Yes') : 'No'}</dd><dt>On GitHub</dt><dd>${ext(i.url, `issue #${i.number}`)}</dd></dl>` });
   return { title: `Issue #${i.number}`, crumbs: [['/work', 'Work'], [null, `Issue #${i.number}`]], body: grid('issue', facts + card({ id: 'deps', title: 'Dependencies and blockers', span: 6, movable: false, body: deps })
-    + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? `<ul class="panel-list">${dependents.map(d => `<li class="sev-info"><div class="t">${issueLink(d.number)} ${esc(d.title)}</div></li>`).join('')}</ul>` : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') })) };
+    + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? `<ul class="panel-list">${dependents.map(d => `<li class="sev-info"><div class="t">${issueLink(d.number)} ${esc(d.title)}</div></li>`).join('')}</ul>` : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') }), 'fit') };
 }
 
 function activityPage(view, query, path) {
@@ -364,10 +369,11 @@ const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage
 export function renderRoute(view, route, { query = new URLSearchParams(), pathname = '/', refreshSeconds = 60 } = {}) {
   const fn = PAGES[route.page];
   const page = fn ? fn(view, query, pathname.replace(/\/+$/, '') || '/', route) : null;
-  const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work']] };
-  const crumbs = res.crumbs ? `<p class="crumbs">${res.crumbs.map(([h, t]) => (h ? `<a href="${h}">${esc(t)}</a>` : esc(t))).join(' / ')}</p>` : '';
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="${refreshSeconds}"><title>${esc(res.title)} · DevTest team</title><link rel="stylesheet" href="/static/style.css"></head>
-<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route)}<main id="main"><h1>${esc(res.title)}</h1>${crumbs}${res.body}</main><script type="module" src="/static/app.js"></script></body></html>`;
+  const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work'], [null, 'Not found']] };
+  const steps = trail(route.page, res.crumbs || []), parent = [...steps].reverse().find(([h]) => h)?.[0];
+  const crumbs = steps.length ? `<div class="pagehead"><a class="btn back" href="${esc(parent || '/')}" data-back>${icon('back')}Back</a><nav class="crumbs" aria-label="Breadcrumb"><ol>${steps.map(([h, t], i) => `<li>${h ? `<a href="${esc(h)}">${esc(t)}</a>` : `<span aria-current="page">${esc(t)}</span>`}${i < steps.length - 1 ? '<span class="sep" aria-hidden="true">›</span>' : ''}</li>`).join('')}</ol></nav></div>` : '';
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="${refreshSeconds}"><title>${esc(res.title)} · DevTest team</title><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
+<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route)}<main id="main">${crumbs}<h1>${esc(res.title)}</h1>${res.body}</main><script type="module" src="/static/app.js"></script></body></html>`;
   return { status: page ? 200 : 404, html };
 }
 // Kept for callers that only want the overview.

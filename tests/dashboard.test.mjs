@@ -282,7 +282,7 @@ test('server: serves a self-contained, escaped page with only same-origin script
   const s = await withServer(t, { jobs: [fx], cache: { tick: okTick(), pulls: [pr(1, 'claude/issue-5-x', H(1))].map(p => ({ ...p, title: evil })), issues: [{ ...issue(5), title: evil }] } });
   const r = await s.get('/');
   assert.equal(r.status, 200); assert.match(r.headers['content-type'], /text\/html/);
-  assert.doesNotMatch(r.body, /<script(?![^>]*src="\/static\/app\.js")/i); assert.doesNotMatch(r.body, /\son\w+=/i);
+  assert.doesNotMatch(r.body, /<script(?![^>]*src="\/static\/(?:app|early)\.js")/i); assert.doesNotMatch(r.body, /\son\w+=/i);
   assert.match((await s.get('/work')).body, /&lt;script&gt;/);
   assert.match(r.body, /http-equiv="refresh" content="60"/);
   assert.doesNotMatch(r.body, /(?:src|href)="(?:https?:)?\/\/(?!github\.com\/o\/r\/)/); assert.doesNotMatch(r.body, /@import|url\(/i);
