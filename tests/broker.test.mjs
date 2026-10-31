@@ -65,7 +65,7 @@ test('OpenBao retrieval: scoped read-only identity, token from an owner-only fil
 
 test('cleanup overwrites, deletes and revokes leases; a second cleanup is harmless; revocation failure is reported without values', async () => {
   const token = canary('token'), password = canary('password');
-  const bao = await fakeBao({ token, lease: 'kv/lease/abc', data: { 'devtest/browser/fixture-login': { username: 'u', password } } });
+  const bao = await fakeBao({ token, lease: 'kv/lease/abc', data: { 'devtest/browser/fixture-login': { username: 'fixture-user-name', password } } });
   const root = secretRoot();
   try {
     const backend = createOpenBaoBackend({ address: bao.address, tokenFile: tokenFile(token) });
@@ -87,7 +87,7 @@ test('cleanup overwrites, deletes and revokes leases; a second cleanup is harmle
 
 test('negative: a wrong token, a writable identity, a missing secret, and a world-readable token file are all refused with nothing left on disk', async () => {
   const token = canary('token'); const root = secretRoot();
-  const data = { 'devtest/browser/fixture-login': { username: 'u', password: canary('pw') } };
+  const data = { 'devtest/browser/fixture-login': { username: 'fixture-user-name', password: canary('pw') } };
   const run = async (opts, file = tokenFile(token)) => {
     const bao = await fakeBao({ token, data, ...opts });
     try { return await materialize({ policy, names: ['fixture-login'], backend: createOpenBaoBackend({ address: bao.address, tokenFile: file }), runId: RUN, root, ...me }); }
@@ -98,7 +98,7 @@ test('negative: a wrong token, a writable identity, a missing secret, and a worl
   await assert.rejects(run({ caps: ['list'] }), /cannot read/);
   await assert.rejects(run({ data: {} }), /not found/);
   await assert.rejects(run({}, tokenFile(token, 0o644)), /mode 0600/);
-  await assert.rejects(run({ data: { 'devtest/browser/fixture-login': { username: 'u' } } }), /fields are missing/);
+  await assert.rejects(run({ data: { 'devtest/browser/fixture-login': { username: 'fixture-user-name' } } }), /fields are missing/);
   assert.deepEqual(fs.readdirSync(root), [], 'a failed run leaves no secret directory');
 });
 
@@ -164,7 +164,7 @@ test('production login needs a homeowner-approved decision in the register, not 
 test('withSecrets: a leak or an incomplete cleanup is reported even when the subject also fails', async () => {
   const root = secretRoot(), out = tmp();
   const value = canary('pw2');
-  const mkBackend = (revoke) => ({ kind: 'openbao', assertReadOnly: async () => {}, read: async () => ({ values: { username: 'u', password: value }, leaseId: 'lease-1' }), revoke });
+  const mkBackend = (revoke) => ({ kind: 'openbao', assertReadOnly: async () => {}, read: async () => ({ values: { username: 'fixture-user-name', password: value }, leaseId: 'lease-1' }), revoke });
   const base = { policy, names: ['fixture-login'], root, ...me };
   await assert.rejects(withSecrets({ ...base, backend: mkBackend(async () => {}), runId: '1'.repeat(16) }, async () => { fs.writeFileSync(path.join(out, 'copied.txt'), value); throw new Error(`subject failure ${value}`); }, { outputRoots: [out] }),
     e => e.exitCode === 8 && /secret value was found/.test(e.message) && /subject also failed \(Error\)/.test(e.message) && !e.message.includes(value) && e.subjectFailed === true);
@@ -175,6 +175,24 @@ test('withSecrets: a leak or an incomplete cleanup is reported even when the sub
     e => e.exitCode === 8 && /secret value was found/.test(e.message) && /cleanup was incomplete/.test(e.message));
   const clean = tmp();
   await assert.rejects(withSecrets({ ...base, backend: mkBackend(async () => {}), runId: '4'.repeat(16) }, async () => { throw new Error('plain subject failure'); }, { outputRoots: [clean] }), /plain subject failure/);
+});
+
+test('withSecrets: a short credential is scanned too, and a contaminated output file is discarded, not kept', async () => {
+  const root = secretRoot(), out = tmp();
+  const mk = (value) => ({ kind: 'openbao', assertReadOnly: async () => {}, read: async () => ({ values: { username: 'zz', password: value }, leaseId: 'l' }), revoke: async () => {} });
+  const base = { policy, names: ['fixture-login'], root, ...me };
+  // A three-character password was previously skipped by an eight-character floor and the run "succeeded".
+  const short = 'q#7';
+  await assert.rejects(withSecrets({ ...base, backend: mk(short), runId: '5'.repeat(16) }, async () => { fs.writeFileSync(path.join(out, 'short.txt'), `token=${short}`); }, { outputRoots: [out] }),
+    e => e.exitCode === 8 && !e.message.includes(short));
+  // The leaked file is gone afterwards; the clean sibling is untouched.
+  assert.equal(fs.existsSync(path.join(out, 'short.txt')), false);
+  const longer = canary('discard');
+  await assert.rejects(withSecrets({ ...base, backend: mk(longer), runId: '6'.repeat(16) }, async () => {
+    fs.mkdirSync(path.join(out, 'sub')); fs.writeFileSync(path.join(out, 'sub', 'leak.log'), longer); fs.writeFileSync(path.join(out, 'fine.txt'), 'nothing secret here');
+  }, { outputRoots: [out] }), e => e.exitCode === 8 && /1 discarded/.test(e.message));
+  assert.equal(fs.existsSync(path.join(out, 'sub', 'leak.log')), false);
+  assert.equal(fs.readFileSync(path.join(out, 'fine.txt'), 'utf8'), 'nothing secret here');
 });
 
 test('dry-run mock backend: documented, random, labelled, valid nowhere, and it needs no OpenBao or credential', async () => {
@@ -241,7 +259,7 @@ test('a session secret is reduced before it is written, and an expired stored se
 test('withSecrets: cleans on success and on failure; the scan catches a leak in raw, base64, URL-encoded and JSON-escaped form; a clean output passes', async () => {
   const root = secretRoot(); const out = tmp();
   const secretValue = canary('pw') + '"/ ';   // forces distinct encodings
-  const backend = { kind: 'openbao', assertReadOnly: async () => {}, read: async () => ({ values: { username: 'u', password: secretValue }, leaseId: null }), revoke: async () => {} };
+  const backend = { kind: 'openbao', assertReadOnly: async () => {}, read: async () => ({ values: { username: 'fixture-user-name', password: secretValue }, leaseId: null }), revoke: async () => {} };
   const opts = { policy, names: ['fixture-login'], backend, runId: RUN, root, ...me };
   const ok = await withSecrets(opts, async () => { fs.writeFileSync(path.join(out, 'report.json'), '{"ok":true}'); return 'done'; }, { outputRoots: [out] });
   assert.equal(ok.result, 'done'); assert.equal(ok.leak.clean, true); assert.equal(fs.existsSync(path.join(root, RUN)), false);
@@ -269,14 +287,19 @@ test('session storage values from allowed origins are included in the output lea
       fs.writeFileSync(path.join(out, `leak-${i}`), value);
     }, { outputRoots: [out] }), e => e.exitCode === 8 && !e.message.includes(value));
     assert.equal(fs.existsSync(path.join(root, runId)), false);
-    fs.unlinkSync(path.join(out, `leak-${i}`));
+    assert.equal(fs.existsSync(path.join(out, `leak-${i}`)), false, 'the contaminated file is discarded');
   }
+  // A short non-secret flag in the stored state does not make every output a leak.
+  const flagState = { cookies: [], origins: [{ origin: 'https://app.fixture.test', localStorage: [{ name: 'seen', value: '1' }], sessionStorage: [] }] };
+  const flagBackend = { ...backend, read: async () => ({ values: { storage_state: flagState }, leaseId: null }) };
+  const result = await withSecrets({ ...opts, backend: flagBackend, runId: '7'.repeat(16) }, async () => { fs.writeFileSync(path.join(out, 'ok.txt'), 'page 1 of 10'); }, { outputRoots: [out] });
+  assert.equal(result.leak.clean, true);
 });
 
 test('scan failure still removes secret files and revokes the lease', async () => {
   const root = secretRoot(), revoked = [];
   const backend = { kind: 'openbao', assertReadOnly: async () => {},
-    read: async () => ({ values: { username: 'u', password: canary('scan') }, leaseId: 'test-lease' }),
+    read: async () => ({ values: { username: 'fixture-user-name', password: canary('scan') }, leaseId: 'test-lease' }),
     revoke: async id => { revoked.push(id); } };
   await assert.rejects(withSecrets({ policy, names: ['fixture-login'], backend, runId: RUN, root, ...me },
     async () => 'finished', { outputRoots: ['/proc/self/mem'] }));
