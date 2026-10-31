@@ -208,6 +208,11 @@ html.sb-overlay,html.sb-overlay *{scrollbar-width:none}
 .dock-zones i.on{opacity:1}
 .dock-zones .z-top{left:0;right:0;top:0;height:64px}.dock-zones .z-bottom{left:0;right:0;bottom:0;height:64px}
 .dock-zones .z-left{top:0;bottom:0;left:0;width:64px}.dock-zones .z-right{top:0;bottom:0;right:0;width:64px}
+/* the seven top-nav items must all fit at tablet width: tighter padding and type, shrinkable items, no clipping */
+@media(min-width:640px) and (max-width:1023px){
+  html:not([data-dock=left]):not([data-dock=right]) .nav{gap:0;padding:0 var(--sp2)}
+  html:not([data-dock=left]):not([data-dock=right]) .nav a{flex:1 1 auto;justify-content:center;gap:var(--sp1);padding:0 var(--sp2);font-size:var(--fs-sm)}
+}
 @media(min-width:640px){
   .dock-handle{display:inline-flex}
   html[data-dock=bottom] body{display:flex;flex-direction:column;min-height:100vh}
