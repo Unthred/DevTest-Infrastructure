@@ -256,3 +256,15 @@ test('version badge: matches the installed link, flags a server still running ol
   assert.match(page(null), /Version<\/span><span class="badge sev-info[^>]*>[^]*?unknown/);
   assert.doesNotMatch((await s.get('/system')).body, /undefined|NaN/);
 });
+
+// ---- review of b513b72: tablet navigation must not clip; the visual gate must fail on failed captures
+test('tablet top navigation is compact so all items fit at 768px', () => {
+  const m = /@media\(min-width:640px\) and \(max-width:1023px\)\{([\s\S]*?)\n\}/.exec(css);
+  assert.ok(m, 'tablet media block present');
+  assert.match(m[1], /\.nav a\{[^}]*flex:1 1 auto[^}]*padding:0 var\(--sp2\)/);
+});
+test('the visual-evidence script propagates capture failures', () => {
+  const src = fs.readFileSync(new URL('./dashboard-visual.mjs', import.meta.url), 'utf8');
+  assert.match(src, /subjectExit !== 0/);
+  assert.match(src, /failures\.length[\s\S]*process\.exit\(1\)/);
+});

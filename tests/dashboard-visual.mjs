@@ -33,11 +33,12 @@ for (const theme of ['light', 'dark']) {
   for (const [name, p] of pages) fs.writeFileSync(path.join(dir, `${name}.html`), renderRoute(view, matchRoute(p), { pathname: p }).html.replace('<html lang="en">', `<html lang="en" data-theme="${theme}">`).replace(/<meta http-equiv="refresh"[^>]*>/, ''));
 }
 fs.chmodSync(site, 0o755); for (const t of ['light', 'dark']) fs.chmodSync(path.join(site, t), 0o755);
+const failures = [];
 const run = async (name, spec, dir) => {
   const runId = crypto.randomBytes(8).toString('hex');
   const plan = createPlan({ project, runId, image: 'playwright', ...spec, targets: dir ? ['fixture'] : [] }, cfg);
   const server = dir ? await listenOnSocket(createStaticServer(dir), targetSocketPath(storageRoot, runId, 'fixture'), { uid, gid }) : null;
-  try { const r = await runContainer(plan, { keepVolume: true }); console.log(JSON.stringify({ run: name, exit: r.subjectExit, cleanup: r.cleanup })); if (dir) for (const f of fs.readdirSync(plan.out)) if (f.endsWith('.png')) fs.copyFileSync(path.join(plan.out, f), path.join(outDir, f)); return r; }
+  try { const r = await runContainer(plan, { keepVolume: true }); console.log(JSON.stringify({ run: name, exit: r.subjectExit, cleanup: r.cleanup })); if (r.subjectExit !== 0 || r.cleanup !== 'complete') failures.push(`${name}: exit ${r.subjectExit}, cleanup ${r.cleanup}`); if (dir) for (const f of fs.readdirSync(plan.out)) if (f.endsWith('.png')) fs.copyFileSync(path.join(plan.out, f), path.join(outDir, f)); return r; }
   finally { await server?.close(); releaseVolumes(plan); }
 };
 try {
@@ -47,3 +48,5 @@ try {
   for (const theme of ['light', 'dark']) for (const profile of ['desktop-1440', 'tablet-768', 'phone-390']) for (const [name] of pages)
     await run(`${theme}-${profile}-${name}`, { phase: 'test', command: ['node', '/src/browser/capture.mjs', '--target', 'fixture', '--path', `/${name}.html`, '--profile', profile, '--name', `${theme}-${name}`, '--wait', 'networkidle', '--full-page'] }, path.join(site, theme));
 } finally { fs.rmSync(storageRoot, { recursive: true, force: true }); fs.rmSync(site, { recursive: true, force: true }); stage.cleanup(); }
+if (failures.length) { console.error(`VISUAL CAPTURE FAILED (${failures.length}):\n${failures.join('\n')}`); process.exit(1); }
+console.log('VISUAL CAPTURE OK');
