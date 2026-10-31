@@ -262,3 +262,6 @@ Root cause (from live Tower state, read-only): a Codex job that hits its limit g
 ## #4 PR #67 CHANGES round
 - Blocking 1 (unredacted TRX output, D-008/G5/G6) fixed in `dotnet/testing.mjs` (`sanitizeTrx`, `redactSecrets`); regression test in `tests/dotnet-testing.test.mjs`.
 - Blocking 2 (real SDK 8/9/10 Docker run with TRX and coverage) is NOT fixed: xunit, Test.Sdk and coverlet are in no offline NuGet cache and containers have no network. Needs a reviewed networked restore phase (D-016) or homeowner-seeded caches. `docs/dotnet-testing.md` states the acceptance is unmet; the dispatcher/homeowner must decide whether #4 may merge without it.
+
+## #4 / PR #67 conflict-only rebase (Claude)
+- Rebased onto origin/main `c0a0449`; old head `8260073`. Only conflicts: this handover (completion-state row for #4 kept beside main's #64 row; appended #64 and #4 sections both kept). Non-handover diff identical to the old head. Validator OK; 328/328 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending. Blocking 2 (real SDK run) remains open as stated above.
