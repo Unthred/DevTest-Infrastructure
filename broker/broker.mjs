@@ -50,18 +50,21 @@ export function assertAllowed(policy, name, register = readDecisionRegister()) {
   return e;
 }
 
-const encodings = (v) => [v, Buffer.from(v).toString('base64'), encodeURIComponent(v), JSON.stringify(v).slice(1, -1)].filter(s => s.length >= 8);
+// Every non-empty value is scanned, however short: a short credential is still a credential, and a false match fails closed.
+// Session state is the exception: it holds non-secret flags ("1", "true") that would match nearly any output, so its values keep a floor.
+const SESSION_FLOOR = 8;
+const encodings = (v, floor = 1) => [v, Buffer.from(v).toString('base64'), encodeURIComponent(v), JSON.stringify(v).slice(1, -1)].filter(s => s.length >= floor);
 
 export class SecretHandle {
   #values = []; #leases = []; #backend; #dir; #files;
   constructor({ backend, dir, files }) { this.#backend = backend; this.#dir = dir; this.#files = files; this.dryRun = backend.kind === 'mock'; this.expiresAt = null; this.cleaned = false; }
   get mounts() { return this.#files.map(f => ({ name: f.name, host: f.host, container: f.container })); }
-  _add(name, values, lease) { this.#values.push(...values); if (lease) this.#leases.push(lease); }
+  _add(name, values, lease, floor = 1) { this.#values.push(...values.filter(v => typeof v === 'string').map(v => [v, floor])); if (lease) this.#leases.push(lease); }
   toJSON() { return { dryRun: this.dryRun, secrets: this.#files.map(f => f.name), expiresAt: this.expiresAt, cleaned: this.cleaned }; }
   // Looks for every held value (raw, base64, URL- and JSON-escaped) in the given files/directories. Reports file and
   // secret count only. A compressed trace cannot be scanned this way, so traces are refused for secret runs.
   scan(roots) {
-    const needles = this.#values.flatMap(v => encodings(v).map(s => Buffer.from(s)));
+    const needles = this.#values.flatMap(([v, floor]) => encodings(v, floor).map(s => Buffer.from(s)));
     const findings = []; let scanned = 0;
     const visit = (p) => {
       const st = fs.lstatSync(p, { throwIfNoEntry: false });
@@ -131,7 +134,7 @@ export async function materialize({ policy, names, backend, runId, root = DEFAUL
         const picked = Object.fromEntries(wanted.map(f => [f, values[f]]));
         payload = JSON.stringify(picked); secretStrings = Object.values(picked); until = now + e.maxTtlSeconds * 1000;
       }
-      handle._add(name, secretStrings, leaseId);
+      handle._add(name, secretStrings, leaseId, e.kind === 'session' ? SESSION_FLOOR : 1);
       expiry = Math.min(expiry, until);
       const fd = fs.openSync(files[i].host, 'wx', 0o400);
       try { fs.writeSync(fd, payload); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
@@ -146,17 +149,32 @@ export async function materialize({ policy, names, backend, runId, root = DEFAUL
   }
 }
 
+// A contaminated output file is overwritten and removed, so a failed run never leaves the secret behind. Reports counts only.
+function discardFiles(paths) {
+  const out = { removed: 0, failed: 0 };
+  for (const p of paths) {
+    try {
+      const st = fs.lstatSync(p, { throwIfNoEntry: false });
+      if (st?.isFile()) { fs.chmodSync(p, 0o600); const fd = fs.openSync(p, 'r+'); try { fs.writeSync(fd, Buffer.alloc(st.size)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
+      fs.unlinkSync(p); out.removed++;
+    } catch { out.failed++; }
+  }
+  return out;
+}
+
 // Wraps a run: secrets exist only for the duration of fn, are cleaned on every outcome, and the output is scanned afterwards.
 export async function withSecrets(options, fn, { outputRoots = [] } = {}) {
   const handle = await materialize(options);
   let result, thrown = null;
   try { result = await fn(handle); } catch (error) { thrown = error; }
-  let leak, cleanup;
-  try { leak = handle.scan(outputRoots); }   // before cleanup: cleanup forgets the values
-  finally { cleanup = await handle.cleanup(); }
+  let leak, cleanup, discarded = { removed: 0, failed: 0 };
+  try {
+    leak = handle.scan(outputRoots);   // before cleanup: cleanup forgets the values
+    discarded = discardFiles(leak.findings);
+  } finally { cleanup = await handle.cleanup(); }
   // A leaked output or an incomplete cleanup outranks a subject failure: the run is refused and the problem is reported, never masked.
   const problems = [];
-  if (!leak.clean) problems.push({ code: 8, text: `a secret value was found in ${leak.findings.length} output file(s); the output must be discarded` });
+  if (!leak.clean) problems.push({ code: 8, text: `a secret value was found in ${leak.findings.length} output file(s); ${discarded.removed} discarded${discarded.failed ? `, ${discarded.failed} could NOT be removed and must be deleted by hand` : ''}` });
   if (cleanup.errors.length) problems.push({ code: 7, text: 'secret cleanup was incomplete' });
   if (problems.length) {
     const error = new BrokerError(problems.map(p => p.text).join('; ') + (thrown ? `; the subject also failed (${String(thrown?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48)})` : ''), problems[0].code);
