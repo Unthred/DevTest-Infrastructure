@@ -56,10 +56,16 @@ test('arguments come from the manifest and are single argv entries; bad values n
   assert.deepEqual(modelArgs(claudeModels, { model: 'sonnet', effort: 'medium' }), ['--model', 'sonnet', '--effort', 'medium']);
   assert.deepEqual(modelArgs(codexModels, { effort: 'low' }), ['-c', 'model_reasoning_effort=low']);
   assert.deepEqual(modelArgs(claudeModels, { model: 'nonsense', effort: '$(id)' }), []);
+  assert.deepEqual(modelArgs(codexModels, { model: 'unknown-model-123' }), [], 'an unknown Codex model is dropped, not forwarded');
+  assert.deepEqual(modelArgs(codexModels, { model: 'gpt-5.6-terra' }), ['--model', 'gpt-5.6-terra']);
+  const unk = checkEntry({ model: 'unknown-model-123' }, codexModels);
+  assert.equal(unk.model, null); assert.equal(unk.warnings.length, 1);
+  const cu = codex.command({ command: ['codex'], manifest: manifest('codex') }, { role: 'devtest', worktree: '/w', access: 'standard', model: 'unknown-model-123' }, false);
+  assert.ok(!cu.includes('--model'), 'adapter argv has no --model for an unknown model');
   assert.deepEqual(modelArgs(null, { model: 'sonnet' }), []);
   assert.deepEqual(modelArgs(claudeModels, {}), []);
-  const cmd = codex.command({ command: ['codex'], manifest: manifest('codex') }, { role: 'devtest', worktree: '/w', access: 'standard', effort: 'high', model: 'whatever-standard' }, false);
-  assert.ok(cmd.join(' ').includes('--model whatever-standard -c model_reasoning_effort=high'));
+  const cmd = codex.command({ command: ['codex'], manifest: manifest('codex') }, { role: 'devtest', worktree: '/w', access: 'standard', effort: 'high', model: 'gpt-5.6-terra' }, false);
+  assert.ok(cmd.join(' ').includes('--model gpt-5.6-terra -c model_reasoning_effort=high'));
   assert.equal(cmd.at(-1), '-');
   const plain = codex.command({ command: ['codex'], manifest: manifest('codex') }, { role: 'devtest', worktree: '/w', access: 'standard' }, false);
   assert.ok(!plain.includes('--model') && !plain.join(' ').includes('model_reasoning_effort'), 'no model flags without a configured model');
