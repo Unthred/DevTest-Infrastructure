@@ -136,3 +136,14 @@ export function appendSnapshot(root, snap, now) {
   fs.writeFileSync(temp, keep.map(s => JSON.stringify(s)).join('\n') + '\n', { mode: 0o600 });
   fs.renameSync(temp, file);
 }
+
+// Installed-versus-main from the self-upgrade records the tick already writes (no git, no network here).
+// drift is true while the newest record names a main commit that is not the installed one.
+export function readVersion(root) {
+  let text; try { text = fs.readFileSync(path.join(root, 'team', 'upgrades.jsonl'), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  let last = null;
+  for (const line of text.split('\n')) { try { const r = JSON.parse(line); if (r && typeof r.to === 'string') last = r; } catch (error) { if (!(error instanceof SyntaxError)) throw error; } }
+  if (!last) return null;
+  const installed = ['upgraded', 'verified'].includes(last.result) ? last.to : last.from;
+  return { installed: String(installed || '').slice(0, 40), main: last.to.slice(0, 40), drift: !!installed && installed !== last.to, result: String(last.result || '').slice(0, 24), at: last.at ?? null };
+}

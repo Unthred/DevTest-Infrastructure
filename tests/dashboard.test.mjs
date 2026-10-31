@@ -156,7 +156,7 @@ test('usage: allowance windows come from provider records; absent data is "unkno
   const v = await view(t, { jobs: [codexJob], cache: { tick: okTick(), pulls: [], issues: [] } });
   assert.deepEqual(v.usage.codex.windows.map(w => [w.label, w.utilization]), [['5-hour', 0.46], ['weekly', 0.41]]);
   assert.deepEqual(v.usage.claude.windows, []);
-  const html = renderPage(v);
+  const html = renderPage(v, { route: { page: 'usage' } });
   assert.match(html, /Allowance: <b>unknown<\/b>/); assert.match(html, /not billing/); assert.match(html, /1,200/);
   assert.match(html, /unknown/);
 });
@@ -186,8 +186,8 @@ test('graphs: allowance series with reset marks, jobs per day, verdicts, issue-t
   assert.equal(v.graphs.merges[0].hours, 2); assert.equal(v.graphs.merges[1].hours, null);
   assert.deepEqual(v.graphs.tokensPerPr.map(x => x.tokens), [1000, null]);
   assert.equal(Object.values(v.graphs.jobsPerDay)[0]['implement/completed'], 1);
-  const html = renderPage(v);
-  assert.match(html, /<svg[^>]*aria-label="claude allowance used over time"/); assert.match(html, /class="reset"/);
+  const html = renderPage(v, { route: { page: 'usage' } });
+  assert.match(html, /<svg[^>]*aria-label="allowance used over time"/); assert.match(html, /class="reset"/);
   assert.match(html, /aria-label="tokens per merged PR"/); assert.match(html, /unknown/);
 });
 
@@ -277,15 +277,16 @@ async function withServer(t, { jobs = [], cache, state, snapshots, cfg = config(
   const get = (p, opts = {}) => new Promise((resolve, reject) => { const req = http.request({ host: '127.0.0.1', port, path: p, method: opts.method || 'GET', headers: { host: `127.0.0.1:${port}`, ...opts.headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }); req.on('error', reject); req.end(); });
   return { get, root };
 }
-test('server: serves a self-contained, script-free, escaped page; GET/HEAD only; wrong Host refused', async t => {
+test('server: serves a self-contained, escaped page with only same-origin script; GET/HEAD only; wrong Host refused', async t => {
   const evil = '<script>alert(1)</script>';
   const s = await withServer(t, { jobs: [fx], cache: { tick: okTick(), pulls: [pr(1, 'claude/issue-5-x', H(1))].map(p => ({ ...p, title: evil })), issues: [{ ...issue(5), title: evil }] } });
   const r = await s.get('/');
   assert.equal(r.status, 200); assert.match(r.headers['content-type'], /text\/html/);
-  assert.doesNotMatch(r.body, /<script/i); assert.match(r.body, /&lt;script&gt;/);
+  assert.doesNotMatch(r.body, /<script(?![^>]*src="\/static\/app\.js")/i); assert.doesNotMatch(r.body, /\son\w+=/i);
+  assert.match((await s.get('/work')).body, /&lt;script&gt;/);
   assert.match(r.body, /http-equiv="refresh" content="60"/);
-  assert.doesNotMatch(r.body, /(?:src|href)="https?:\/\/(?!github\.com\/o\/r\/)/); assert.doesNotMatch(r.body, /<link|@import|url\(/i);
-  assert.match(r.headers['content-security-policy'], /default-src 'none'/); assert.match(r.headers['cache-control'], /no-store/);
+  assert.doesNotMatch(r.body, /(?:src|href)="(?:https?:)?\/\/(?!github\.com\/o\/r\/)/); assert.doesNotMatch(r.body, /@import|url\(/i);
+  assert.match(r.headers['content-security-policy'], /default-src 'none'; script-src 'self'/); assert.doesNotMatch(r.headers['content-security-policy'], /unsafe-eval|script-src[^;]*unsafe-inline/); assert.match(r.headers['cache-control'], /no-store/);
   assert.doesNotMatch(r.body, /sessionId|prompt|@[a-z0-9-]+\.[a-z]{2,}/i);
   for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) assert.equal((await s.get('/', { method })).status, 405);
   assert.equal((await s.get('/', { method: 'HEAD' })).body, '');
