@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { SupervisorError, atomicJson, processStart } from './core.mjs';
+import { SupervisorError, WorktreeUnusable, atomicJson, processStart } from './core.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
@@ -162,7 +162,7 @@ export class Team {
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'released']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released']) this.s[k] ||= {};
   }
   save() { atomicJson(this.file, this.s); }
   agents() { return Object.entries(this.c.agents); }
@@ -222,7 +222,7 @@ export class Team {
 
   choose(agent, a, prs, issueByNo) {
     const L = this.c.limits;
-    const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested);
+    const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key);
     // Priority per agent: rebase > CI fix > review fix > review > implement.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
     for (const pr of prs) {
@@ -287,7 +287,7 @@ export class Team {
     const actions = await this.plan();
     report.actions = actions;
     if (dryRun) return report;
-    for (const act of actions) await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.execute(act));
+    for (const act of actions) await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
     this.save();
     return report;
   }
@@ -332,6 +332,18 @@ export class Team {
   async notifyBlocked(report, guard = (_, fn) => fn()) {
     for (const [id, j] of Object.entries(this.s.jobs)) {
       await guard(`notify ${id}`, () => this.notifyOne(id, j, report));
+    }
+  }
+  // An action whose worktree was found unusable is not retried for an hour; the entry then expires so a repaired checkout is picked up.
+  worktreeUnusable(kind, key) { const e = this.s.unusable?.[`${kind}:${key}`]; return !!e && this.clock.now() - e.at < 3600000; }
+  // A directory that is not a linked worktree of the repository is a condition for the homeowner, not a failed tick: it is
+  // recorded and announced once on the PR, reported under `blocked`, and the other actions carry on.
+  async runAction(act, report) {
+    try { await this.execute(act); } catch (error) {
+      if (!(error instanceof WorktreeUnusable)) throw error;
+      this.s.unusable[`${act.type}:${act.key}`] = { worktree: error.worktree, at: this.clock.now() }; this.save();
+      (report.blocked ||= []).push({ what: `${act.type} ${act.pr ?? act.issue} (${act.agent})`, reason: error.message.slice(0, 200) });
+      if (act.pr) await this.postNotice(act.pr, `worktree pr=${act.pr} ${act.type}`, `**Needs the homeowner.** The dispatcher cannot start a \`${act.type}\` job for this PR: \`${error.worktree}\` is not a linked worktree of \`${this.c.repo_path}\` (for example a standalone clone). Required: move the work to a linked worktree (\`git worktree add\`) or remove that checkout. It is retried hourly and nothing else is affected.`);
     }
   }
   // A notice carries a stable marker and is never retried blindly: if GitHub accepted an earlier attempt but the response

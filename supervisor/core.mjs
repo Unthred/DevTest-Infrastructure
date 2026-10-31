@@ -9,6 +9,17 @@ export const defaultRegistry = new URL('./providers.json', import.meta.url).path
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped']);
 export const allowedActions = new Set(['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue', 'update_handover']);
 export class SupervisorError extends Error {}
+// A directory the dispatcher was told to use as a worktree is not a linked worktree of the repository (for example a standalone
+// clone). A condition for the homeowner to fix, not a crash: the dispatcher records it once instead of failing every tick.
+export class WorktreeUnusable extends SupervisorError {
+  constructor(message, worktree) { super(message); this.worktree = worktree; }
+}
+// The git common directory of a checkout, as an absolute real path. `git -C <dir> rev-parse --git-common-dir` prints a path relative
+// to <dir> for a standalone clone (".git"), so it is always resolved against <dir>, never against the process working directory.
+export function gitCommonDir(dir) {
+  const raw = git(dir, 'rev-parse', '--git-common-dir');
+  return fs.realpathSync(path.resolve(dir, raw));
+}
 export const realClock = { now: () => Date.now(), sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) };
 export async function sleepUntil(clock, target) {
   while (clock.now() < target) await clock.sleep(Math.min(86400000, target - clock.now()));
@@ -81,8 +92,7 @@ export function validateSpec(spec) {
   const repository = fs.realpathSync(spec.repository), worktree = fs.realpathSync(spec.worktree);
   if (repository === worktree || git(repository, 'rev-parse', '--show-toplevel') !== repository || git(worktree, 'rev-parse', '--show-toplevel') !== worktree)
     throw new SupervisorError('repository and dedicated worktree must be distinct Git roots');
-  const common = fs.realpathSync(git(worktree, 'rev-parse', '--git-common-dir'));
-  if (common !== fs.realpathSync(path.join(repository, '.git'))) throw new SupervisorError('worktree does not belong to repository');
+  if (gitCommonDir(worktree) !== fs.realpathSync(path.join(repository, '.git'))) throw new WorktreeUnusable(`${worktree} is not a linked worktree of ${repository}`, worktree);
   const branch = git(worktree, 'symbolic-ref', '--short', 'HEAD');
   if (['main', 'master'].includes(branch)) throw new SupervisorError('job must use a feature branch');
   const handover = spec.handover ? path.resolve(worktree, spec.handover) : null;

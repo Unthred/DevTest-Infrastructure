@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Team, ciFixPrompt, rebasePrompt, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
-import { createJob, drive, readJob, stateRoot, validateSpec } from '../supervisor/core.mjs';
+import { createJob, drive, readJob, stateRoot, validateSpec, WorktreeUnusable, gitCommonDir } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
 import { ghRunner, githubClient } from '../supervisor/github.mjs';
@@ -869,4 +869,47 @@ test('fix limit (#50): the AI-channel alert is sent once with the PR link and th
   // not rejected: no alert
   const ok = world(t, { pulls: [pr(41, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   let n = 0; ok.team.alert = async () => { n++; }; ok.team.s.fixAttempts[`41:${H(0)}`] = 2; await ok.team.tick(); assert.equal(n, 0);
+});
+
+// Issue #57: a continue job for a branch checked out in a standalone clone.
+const sh = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
+function repoAndClone(t) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wt57-'))); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const repo = path.join(dir, 'repo'), linked = path.join(dir, 'linked'), clone = path.join(dir, 'clone');
+  fs.mkdirSync(repo); sh(repo, 'init', '-q', '-b', 'main'); sh(repo, 'config', 'user.email', 't@example.invalid'); sh(repo, 'config', 'user.name', 'T');
+  fs.writeFileSync(path.join(repo, 'f'), 'x'); sh(repo, 'add', 'f'); sh(repo, 'commit', '-qm', 'i');
+  sh(repo, 'worktree', 'add', '-qb', 'issue-3', linked);
+  execFileSync('git', ['clone', '-q', '--no-local', repo, clone]); sh(clone, 'checkout', '-qb', 'codex/issue-3');
+  return { dir, repo, linked, clone, spec: { role: 'devtest', provider: 'codex', repository: repo, issue: 3, scope: 's', allowed_actions: ['read'], prompt: 'p' } };
+}
+test('gitCommonDir and job validation resolve the git dir from the checkout, not the process working directory', t => {
+  const r = repoAndClone(t), cwd = process.cwd(), nogit = fs.mkdtempSync(path.join(os.tmpdir(), 'nogit-')); t.after(() => { process.chdir(cwd); fs.rmSync(nogit, { recursive: true, force: true }); });
+  for (const from of ['/', nogit]) {
+    process.chdir(from);
+    assert.equal(gitCommonDir(r.clone), fs.realpathSync(path.join(r.clone, '.git')), `standalone clone, cwd=${from}`);
+    assert.equal(gitCommonDir(r.linked), fs.realpathSync(path.join(r.repo, '.git')), `linked worktree, cwd=${from}`);
+    assert.ok(validateSpec({ ...r.spec, worktree: r.linked }), `a linked worktree is accepted from cwd=${from}`);
+    assert.throws(() => validateSpec({ ...r.spec, worktree: r.clone }), e => e instanceof WorktreeUnusable && e.worktree === r.clone && /is not a linked worktree of/.test(e.message) && !/ENOENT|emhttp/.test(e.message), `a standalone clone is refused accurately from cwd=${from}`);
+  }
+});
+test('an unusable worktree is recorded and announced once, does not fail the tick, and is not retried until it expires', async t => {
+  const draft = pr(28, 'codex/issue-3-x', H(1), { isDraft: true });
+  const w = world(t, { pulls: [draft], issues: [issue(3), issue(2, 'CLOSED')] });
+  let clockNow = 1000; w.team.clock = { now: () => clockNow };
+  w.git.ensureWorktree = async o => { throw new WorktreeUnusable(`${o.path} is not a linked worktree of /p/r`, o.path); };
+  const first = await w.team.tick();
+  assert.deepEqual(first.skipped, [], 'no skipped item, so the tick is not an error');
+  assert.equal(first.blocked.length, 1); assert.match(first.blocked[0].reason, /not a linked worktree/);
+  assert.equal(w.calls.comments.filter(([n, b]) => n === 28 && /Needs the homeowner/.test(b) && /linked worktree/.test(b)).length, 1);
+  assert.equal(w.calls.created.length, 0);
+  assert.notEqual((await w.team.plan()).find(x => x.agent === 'codex')?.type, 'continue', 'not planned again');
+  const second = await w.team.tick(); assert.deepEqual(second.skipped, []); assert.equal(second.blocked, undefined);
+  assert.equal(w.calls.comments.filter(([, b]) => /linked worktree/.test(b)).length, 1, 'the notice is not repeated');
+  clockNow += 3600001;
+  assert.equal((await w.team.plan()).find(x => x.agent === 'codex')?.type, 'continue', 'retried after the entry expires');
+});
+test('other failures from an action are still reported as skipped', async t => {
+  const w = world(t, { pulls: [pr(28, 'codex/issue-3-x', H(1), { isDraft: true })], issues: [issue(3)] });
+  w.git.ensureWorktree = async () => { throw new Error('boom'); };
+  const r = await w.team.tick(); assert.equal(r.skipped.length, 1); assert.match(r.skipped[0].reason, /boom/);
 });
