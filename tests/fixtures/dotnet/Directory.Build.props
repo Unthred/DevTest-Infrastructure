@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <FixtureTfm Condition="'$(FixtureTfm)' == ''">net8.0</FixtureTfm>
+    <TargetFramework>$(FixtureTfm)</TargetFramework>
+    <Nullable>enable</Nullable>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+</Project>
