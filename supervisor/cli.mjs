@@ -8,7 +8,7 @@ import { runProcess } from './process.mjs';
 import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { alertSender } from './alert.mjs';
-import { readCache, readJobs, readEvents, recordTick, tickOutcome, latestAllowance } from './dashdata.mjs';
+import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome, latestAllowance } from './dashdata.mjs';
 import { outOfAllowance } from './interim.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { weeklyUtilization } from './models.mjs';
@@ -104,7 +104,9 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   const limited = {};
   const limitedOf = agent => (limited[agent] ??= outOfAllowance({ provider: config.agents[agent].provider, jobs: jobsNow, allowance: allowances[config.agents[agent].provider] ?? null,
     weeklyAt: config.interim_review?.weekly_at ?? 0.95, hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') }));
-  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf });
+  // Allowance-aware scheduling (issue #56): provider-reported allowance, the jobs' token counts and the tick history.
+  const usage = { allowance: allowances, jobs: jobsNow, snapshots: readSnapshots(root) };
+  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
 }
 // Model-free allowance probes, one per provider that has one (issue #75), so a paused agent's reading still refreshes.
 // Only a local file read: never a model call. A probe failure only loses this tick's refresh.

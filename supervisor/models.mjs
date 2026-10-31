@@ -25,7 +25,7 @@ export function validateModelsConfig(m, agentNames) {
     if (!agentNames.includes(agent)) throw new SupervisorError(`invalid models config: unknown agent ${agent}`);
     if (!table || typeof table !== 'object' || Array.isArray(table)) throw new SupervisorError(`invalid models config: ${agent}`);
     for (const [type, e] of Object.entries(table)) {
-      if (![...JOB_TYPES, 'strong'].includes(type) || !entryOk(e)) throw new SupervisorError(`invalid models config: ${agent}.${type}`);
+      if (![...JOB_TYPES, 'strong', 'low'].includes(type) || !entryOk(e)) throw new SupervisorError(`invalid models config: ${agent}.${type}`);
     }
   }
 }
@@ -60,7 +60,8 @@ export function weeklyUtilization(allowance, now = Date.now()) {
   return w ? w.utilization : null;
 }
 
-// ctx: { modelsConfig, agent, kind, manifestModels, escalation: {reason}|null, utilization: number|null }
+// ctx: { modelsConfig, agent, kind, manifestModels, escalation: {reason}|null, utilization: number|null, reReview, low }
+// reReview + low (issue #56): a fix-round re-review while the reviewer's allowance is low uses the agent's `low` entry when configured.
 export function resolveModel(ctx) {
   const table = ctx.modelsConfig?.agents?.[ctx.agent];
   let type = typeOfKind(ctx.kind);
@@ -70,7 +71,9 @@ export function resolveModel(ctx) {
   const strong = table.strong || table.implement || table[type];
   let entry = table[type], source = 'configured', reason = `configured for ${type}`;
   const hot = Number.isFinite(ctx.utilization) && ctx.utilization >= threshold;
-  if (hot && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `weekly allowance ${Math.round(ctx.utilization * 100)}% >= ${Math.round(threshold * 100)}%: cheaper model kept for ${type}`; }
+  if (type === 'review' && ctx.reReview && ctx.low && table.low) { entry = table.low; source = 'allowance'; reason = 'fix-round re-review while the allowance is low: lower-cost entry'; }
+  else if (hot && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `weekly allowance ${Math.round(ctx.utilization * 100)}% >= ${Math.round(threshold * 100)}%: cheaper model kept for ${type}`; }
+  else if (ctx.low && ctx.escalation && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `allowance low: escalation suppressed for ${type}`; }
   else if (ctx.escalation && !STRONG_TYPES.has(type)) { entry = strong; source = 'escalated'; reason = `escalated: ${ctx.escalation.reason}`; }
   else if (hot) reason = `${type} keeps its model although weekly allowance is ${Math.round(ctx.utilization * 100)}%`;
   const checked = checkEntry(entry, ctx.manifestModels);

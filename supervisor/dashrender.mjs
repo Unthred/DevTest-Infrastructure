@@ -206,10 +206,18 @@ function nowPanel(view) {
     return `<li class="sev-${level}"><div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div></li>`;
   }).join('')}</ul>`;
 }
+// Allowance mode and weekly projection for one agent (issue #56).
+function budgetBlock(view, name) {
+  const b = view.budget?.[name];
+  if (!b) return '';
+  const sev = { normal: 'ok', reviews_only: 'warning', waiting: 'action' }[b.mode] || 'info', now = view.generatedAt;
+  const proj = b.known ? `Weekly ${pct(b.used)} used, projected <b>${pct(b.projected)}</b> at reset (${esc(inFuture(b.resetsAt, now))}; rate from the ${esc(b.rateSource)})${b.runsOutAt && b.runsOutAt < b.resetsAt ? `; runs out ${esc(inFuture(b.runsOutAt, now))}` : ''}` : 'Weekly use unknown';
+  return `<div class="budget" data-mode="${esc(b.mode)}"><p>${badge(sev, b.label)}${b.mode !== 'normal' && b.until ? ` <span class="sub">until ${esc(utc(b.until))}</span>` : ''}</p><p class="sub">${proj}</p>${b.reason ? `<p class="sub">Why: ${esc(b.reason)}</p>` : ''}${Object.entries(b.held || {}).map(([t, w]) => `<p class="sub">Held back (${esc(t)}): ${esc(w)}</p>`).join('')}</div>`;
+}
 function nextPanel(view) {
   const now = view.generatedAt, plan = view.panels.next;
   const when = view.nextTickAt ? `<p class="sub">${icon('clock')} Next tick <b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b></p>` : '<p class="sub">No tick is scheduled: the team loop is off or has never run.</p>';
-  return `${when}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div></li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
+  return `${when}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div>${p.reassignedFrom ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
@@ -267,7 +275,7 @@ function overview(view, query) {
 function agentsPage(view, query, path) {
   const cards = view.agents.map(a => {
     const q = view.queues[a.name] || [];
-    return card({ id: `a-${a.name}`, title: a.name, span: 6, href: `/agents/${encodeURIComponent(a.name)}`, movable: true, body: `<p>${stateBadge(a.state)} <span class="sub">${esc(a.provider)} · last activity ${esc(ago(a.lastActivityAt, view.generatedAt))}</span></p>${nowPanel({ ...view, agents: [a] })}<p class="sub">${q.length} queued · <a href="/agents/${encodeURIComponent(a.name)}">Job history and queue</a></p>` });
+    return card({ id: `a-${a.name}`, title: a.name, span: 6, href: `/agents/${encodeURIComponent(a.name)}`, movable: true, body: `<p>${stateBadge(a.state)} <span class="sub">${esc(a.provider)} · last activity ${esc(ago(a.lastActivityAt, view.generatedAt))}</span></p>${nowPanel({ ...view, agents: [a] })}${budgetBlock(view, a.name)}<p class="sub">${q.length} queued · <a href="/agents/${encodeURIComponent(a.name)}">Job history and queue</a></p>` });
   }).join('');
   return { title: 'Agents', body: grid('agents', cards) };
 }
@@ -278,6 +286,7 @@ function jobCols(view, { agent = true } = {}) {
     { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? jobRef(r, view) : '–') },
     { key: 'status', label: 'Status', html: r => badge(({ completed: 'ok', running: 'ok', queued: 'info', paused_limit: 'warning', paused_manual: 'warning', blocked: 'action', failed: 'action' })[r.status] || 'info', r.status) },
     { key: 'model', label: 'Model', html: r => esc(r.model || 'default'), more: true }, { key: 'effort', label: 'Effort', html: r => esc(r.effort || 'default'), more: true },
+    { key: 'reassignedFrom', label: 'Reassigned from', html: r => (r.reassignedFrom ? `<span title="${esc(r.reassignReason)}">${esc(r.reassignedFrom)}</span>` : '–'), more: true },
     { key: 'attempts', label: 'Attempts', num: true, more: true, totals: 'avg' }, { key: 'startedAt', label: 'Started', num: true, html: r => esc(utc(r.startedAt)), more: true },
     { key: 'elapsedMs', label: 'Elapsed', num: true, html: r => esc(dur(r.elapsedMs)), more: true },
     { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true, total: 'sum' }
@@ -352,7 +361,7 @@ function allowanceBody(u, now) {
 }
 function usagePage(view, query, path) {
   const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
-  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: allowanceBody(u, now) })).join('');
+  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now) })).join('');
   const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }) });
   const toks = view.graphs.tokensPerPr.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.tokens, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
   const tokChart = card({ id: 'u-tok', title: 'Tokens per merged PR', span: 12, expandable: true, movable: true, body: barChart({ rows: toks, title: 'tokens per merged PR', emptyTitle: 'No merged PR has recorded tokens' }) });
