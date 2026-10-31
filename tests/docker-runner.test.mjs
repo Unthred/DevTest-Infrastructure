@@ -34,16 +34,35 @@ test('locked official images have exact digests and unknown or malformed entries
 test('planner applies every hardening boundary and keeps source read-only', t => {
   const f = fixture(t), plan = f.plan(), args = plan.args.join(' ');
   for (const expected of ['--pull=never', '--log-driver=none', '--cap-drop=ALL', '--security-opt=no-new-privileges:true', '--read-only', '--network=none',
-    '--cpus 1', '--memory 512m', '--pids-limit 64', '--shm-size 64m', '--user', 'dst=/src,readonly', 'dst=/work', 'dst=/out', 'dst=/cache', '--init', '--memory-swap 512m', 'fsize=16777216:16777216']) assert.ok(args.includes(expected), expected);
+    '--cpus 1', '--memory 512m', '--pids-limit 64', '--shm-size 64m', '--user', 'dst=/src,readonly', 'dst=/work', 'dst=/out', 'dst=/cache', '--init', '--memory-swap 512m', `fsize=${3 * 1024 ** 4}:${3 * 1024 ** 4}`]) assert.ok(args.includes(expected), expected);
   assert.ok(!args.includes('--rm'), 'exit state is read before removal');
   assert.ok(!args.includes(['--', 'privileged'].join('')));
   assert.ok(!args.includes(['docker', '.sock'].join('')));
   assert.equal(plan.name, 'devtest-abcdef0123456789');
   assert.equal(plan.image, lock.images['dotnet-8'].reference);
   assert.ok(args.includes('dst=/cache,readonly'), 'build cache must be read-only');
+  assert.ok(args.includes('--entrypoint='), 'SDK command arrays must not be prefixed by the image dotnet entrypoint');
+  assert.ok(args.includes('HOME=/work/home') && args.includes('DOTNET_CLI_HOME=/work/home'), 'SDK mutable home must be on the bounded work volume');
   assert.equal(plan.workImage, path.join(plan.workspace, 'volume.img'));
   const restore = buildPlanForVerifiedPaths({ ...f.spec, phase: 'restore' }, f.config, f.project, f.storage);
   assert.ok(restore.args.join(' ').includes('dst=/cache --workdir'), 'only restore may write cache');
+});
+
+test('SDK-specific cache names resolve to isolated bounded cache images', t => {
+  const f = fixture(t);
+  const eight = buildPlanForVerifiedPaths({ ...f.spec, cacheName: 'nuget-sdk-8' }, f.config, f.project, f.storage);
+  const nine = buildPlanForVerifiedPaths({ ...f.spec, cacheName: 'nuget-sdk-9' }, f.config, f.project, f.storage);
+  assert.equal(eight.cache, path.join(f.storage, 'cache', 'nuget-sdk-8'));
+  assert.equal(eight.cacheImage, path.join(f.storage, 'cache', 'nuget-sdk-8.img'));
+  assert.notEqual(eight.cacheImage, nine.cacheImage);
+  assert.throws(() => buildPlanForVerifiedPaths({ ...f.spec, cacheName: '../escape' }, f.config, f.project, f.storage), /cache name/);
+});
+
+test('non-SDK containers retain the disk-sized file ceiling', t => {
+  const f = fixture(t);
+  const browser = buildPlanForVerifiedPaths({ ...f.spec, image: 'playwright', phase: 'test' }, f.config, f.project, f.storage);
+  assert.ok(browser.args.includes('fsize=16777216:16777216'));
+  assert.ok(!browser.args.includes(`fsize=${3 * 1024 ** 4}:${3 * 1024 ** 4}`));
 });
 
 test('planner refuses unsafe paths, IDs, limits, images, network and command shape', t => {

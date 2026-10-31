@@ -26,7 +26,6 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'schedule.json'), 'utf8')), existing);
   assert.ok(!fs.existsSync(path.dirname(key)));
 });
-
 // ---- issue #35: the generated script must work under cron's empty environment and never fail silently
 function cronWorld(t, { nodeBody } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron35-'));
@@ -113,4 +112,3 @@ test('issue #35 an unreadable CLI or non-executable node leaves a failing log li
   w.cron();
   assert.match(fs.readFileSync(w.log, 'utf8').trim().split('\n').at(-1), /rc=127 node not executable/);
 });
-
