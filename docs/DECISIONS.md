@@ -188,8 +188,17 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: A silent or default elevated mode; weakening project rules.
 - Superseded-by: none
 
+## D-021 — Secret delivery: host broker, tmpfs file bind mounts
+- Status: agent-proposal
+- Date: 2026-10-30
+- Source: issue #7 (Claude); builds on D-007, D-008, D-009, D-015; answers OQ-1
+- Decision: Only a trusted host-side broker talks to OpenBao, with a read-only identity whose token comes from an owner-only file. Secrets are delivered as read-only file bind mounts at `/secrets/<name>` from a 0700 per-run directory on tmpfs (`/dev/shm`), never argv, environment, repository or cache pool. They are overwritten, deleted and revoked after every run, and the output is scanned for the values. Traces are refused on runs with secrets. Sessions are reduced to an allow-listed domain set with a capped expiry. A production (Home Assistant) entry is refused until a recorded decision confirms a dedicated `devtest-` identity. Without OpenBao only the labelled mock backend is available. Details: docs/secrets.md.
+- Rationale: Environment and argv leak through inspection and logs; the container has no network, so a mounted file is the only channel that needs no token inside untrusted code.
+- Rejected: Environment variables; a container-side OpenBao client; secrets on persistent storage; automatic live Home Assistant login.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
-- OQ-1: Exact secret delivery into a container (issue #7).
+- OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-021, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.
 - OQ-3: Whether Docker-dependent tests run in GitHub-hosted CI or only on Tower's runner (issue #12).
 - OQ-4: Evidence retention period (issue #12/#13).

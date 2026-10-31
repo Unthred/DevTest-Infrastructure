@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with current main for PR #28. Each agent edits this file only on its own branch.
+Last updated: 2026-10-31 by Claude on `claude/issue-7-07-openbao-credentials`, rebased onto current main. Each agent edits this file only on its own branch.
 
 ## Completion states
 
@@ -21,7 +21,8 @@ Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with c
 
 | #6 Responsive profiles and visual evidence | yes; branch `claude/issue-6-responsive`, draft PR stacked on #27 | no; CI and Codex review pending | no | real Docker on Tower: broken fixture fails with every seeded defect, corrected fixture passes at 8 widths, in Chromium/Firefox/WebKit; no visual acceptance claimed |
 | #3 .NET SDK toolchain | implementation on PR #28 branch `codex/issue-3-dotnet-build`; PR ready for review | validator and 306/306 positive/negative tests passed; prior Tower SDK 8/9/10 cache-reuse smoke passed; fresh exact-head CI and opposite-agent review pending | no standalone `dev-test` installation | prior isolated restore/cache/build smoke passed; no production project changed |
-| #4, #7–#14 other issues | not started | no | no | no |
+| #7 OpenBao credentials | yes; branch `claude/issue-7-07-openbao-credentials` (broker, session reduction, mock backend, runner `secrets`, D-021 proposal, docs/secrets.md) | no; CI and Codex review pending | no | Tower: `tests/broker-smoke.mjs` real Docker with the mock backend and the live unauthenticated OpenBao health probe (2.6.1, unsealed). Authenticated retrieval from real OpenBao NOT verified: no scoped read-only identity exists |
+| #4, #8–#14 other issues | not started | no | no | no |
 | #64 Model per job type | yes; branch `claude/issue-64-choose-model-per`, see PR; `docs/model-routing.md` | no; CI and Codex review pending | no (installed supervisor not upgraded) | no; unit/fixture tests only (311/311 locally). Real `claude --model/--effort` and `codex -c model_reasoning_effort` flags checked against `--help` only; no live job run with them ; fix round 2 (Codex CHANGES at c21e147): the Codex manifest no longer accepts a `gpt-` pattern; only models listed in its `aliases` (from the local Codex models cache) are forwarded, so `gpt-not-a-real-model` is dropped with a warning. The list must be updated when Codex adds models |
 
 ## Ownership
@@ -108,6 +109,12 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - Tests: validator OK, 119/119 (new: delivered-work positive/negative, shipped config, override apply/refuse/survives-upgrade, script guards). Live read-only `team tick --dry-run` with a temp state root planned one review and no #2/#23 job.
 - Review and CI: Codex review pending. Installed: no. Deploy only after PASS and dispatcher merge, then create `/mnt/cache/ai-supervisor/team.local.json` (`{"enabled": true}`) and follow the procedure in docs/team-loop.md.
 
+## #7 OpenBao credentials (Claude, branch `claude/issue-7-07-openbao-credentials`)
+- Source: `broker/{openbao,mock,session,broker}.mjs`, `broker/policy.example.json`, runner `secrets` + `verifySecrets`, [docs/secrets.md](../secrets.md), D-021 (agent-proposal, answers OQ-1).
+- Tests: validator OK; full suite 154/154 including the 12 tests in `tests/broker.test.mjs` (positive and negative); Tower `node tests/broker-smoke.mjs`: BROKER SMOKE OK (secret readable, read-only, absent from env/argv, deliberate leak into /out caught, directories/mounts/containers at baseline).
+- Not done / homeowner actions: a read-only OpenBao policy+token file for `devtest/*`; a dedicated Home Assistant test identity (production login is refused by policy until a recorded decision). #8 must call `withSecrets` and `checkHealth`. Not deployed.
+- Review: Codex review pending; opposite agent must merge.
+
 ## #5 Playwright browser runtime (Claude, branch `claude/issue-5-playwright`)
 - Homeowner exception 2026-10-30: #5 was started before #2 was formally merged, stacked on #19 ("do not merge before #19"). #19 merged as `a8b944b` before this PR was opened, so the branch is based on main and no stacking remains.
 - Source: image `mcr.microsoft.com/playwright:v1.64.1-noble` pinned by digest with tag and resolved date in `docker/images.lock.json`; `playwright-core` 1.64.1 pinned by npm integrity (`browser/prepare-cache.mjs`); `browser/capture.mjs`; `browser/static-server.mjs`; runner `targets` (host-side Unix socket mounts, verified before start); [docs/browser-runner.md](../browser-runner.md).
@@ -139,7 +146,16 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 ## No AI attribution rule (Claude, branch `claude/no-ai-attribution`)
 - Homeowner rule: no AI attribution anywhere. Added `tools/ci/validate-commit-attribution.sh` (commit messages and the PR body), a `commit-attribution` CI job on pull requests (also on PR body edits), the AGENTS.md rule, a validator check for the rule, and tests. Existing GitHub text in DevTest-Infrastructure, SquigOS and Infrastructure was cleaned of footers (53 items; merged commit history untouched). Consequence: any open branch whose commits carry an AI trailer fails this check until those commits are reworded; that is a force-push of the unmerged branch only. Implemented only; CI and Codex review pending; not deployed.
 - Fix for the Codex CHANGES verdict on PR #42 (head `6eca932`): (1) session/share links of other AI tools (ChatGPT, OpenAI, Gemini, Copilot, Cursor, claude.ai share/chat) and OpenAI/AI bot e-mails now fail; (2) both refs are verified as commits and a failing `git rev-list` is fatal, so an unscanned range can no longer pass; (3) the diagnostic names the short SHA only, never the subject. Three regression tests added. Validator OK, 170/170. Needs a fresh Codex review of the new head; not merged, not deployed.
+- 2026-10-30 conflict-only rebase onto main `02208ec` (only conflict: `supervisor/process.mjs`, main already carried the same EPIPE fix, main's version kept). Earlier PASS for `69ed349` does not carry over; Codex reviews the new head. Validator OK, 183/183.
 
+## #7 red CI: commit-attribution (blocked on history rewrite)
+- Run 41114613212 fails: commit `06160e3` carries an AI co-author trailer in its message. The validator is correct and unchanged; nothing in the tree can fix a commit message.
+- Only fix: reword `06160e3` (drop the trailer) and push the rewritten branch, which needs a force-push (`--force-with-lease`). The task forbids force-push, so this needs a homeowner or dispatcher decision. Alternative without rewriting: open a replacement PR from a branch with the commit reworded.
+- This commit only updates the handover; CI stays red until the rewrite.
+
+## PR #41 review fixes (2026-10-30)
+- Session output scanning now tracks values from retained origins' localStorage and sessionStorage as well as cookies. Scanning runs before cleanup, and cleanup plus lease revocation run even if scanning throws.
+- Regression tests cover both storage types leaking into output and a scan read error with a leased secret. `node tools/validate-project.mjs` passed; the full test suite passed (185/185). Implemented in this branch; exact-head CI and independent review are pending. No deployment or live OpenBao credential retrieval was performed.
 ## Issue #45 review findings and follow-ups (2026-10-30)
 - The review inbox contract now classifies each finding as blocking or follow-up. CHANGES requires a blocking finding; PASS permits follow-ups and creates one linked issue per review round, with a marker for retry safety. Fix-round review prompts read previous blocking findings from a private scope file and check those fixes plus regressions.
 - `contracts/verdict.v1.schema.json`, prompt, dispatcher, GitHub client and tests are updated. `node tools/validate-project.mjs` passed; the full test suite passed (174/174). Implemented in source; exact-head CI and independent review are pending. Not deployed or verified in a live dispatcher tick.
@@ -232,3 +248,25 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## Issue #64 (Claude, `claude/issue-64-choose-model-per`)
 Implemented: `supervisor/models.mjs`, manifest `models` section (claude, codex), `models` table in `team.json` and `team.local.json`, escalation (incomplete job; CHANGES twice), allowance threshold, invalid-model fallback with warning, job fields and dashboard columns. Not done / unverified: live job with the new flags, behaviour of a real exhausted allowance, deployment (needs `tools/upgrade-supervisor.sh` after merge). Token-per-model figures only appear for jobs created after deployment. Review needed from Codex.
+
+## #7 conflict-only rebase onto main 0d32015 (Claude, 2026-10-30)
+- Rebased old head `5c2e230` (includes the merged Codex fixes from #43) onto main `0d32015`. Only conflicts were in this file (kept both sides); no code conflicts. Earlier PASS verdicts do not carry over; the opposite agent reviews the new head. Validator OK, 192/192. No commit message on the branch carries an AI trailer now, so the "red CI: commit-attribution" note above is stale; a fresh exact-head CI run decides. Not merged, not deployed.
+
+## #7 conflict-only rebase onto main 94d4d0c (Claude, 2026-10-30)
+- Rebased old head `0aadb8b` onto main `94d4d0c`. Only conflicts were table rows in this file (kept both sides: #32 and #7). Earlier PASS verdicts do not carry over; the opposite agent reviews the new head.
+
+## #7 / PR #41 conflict-only rebase onto main a947ea9 (Claude, 2026-10-30)
+- Rebased old head `fc72154` onto origin/main `a947ea9`. The only conflict was this file (kept both sides). Validator OK, 247/247 tests. The PASS for the old head does not carry over; the opposite agent reviews the new head. Not merged, not deployed.
+
+## #7 conflict-only rebase onto main 7eab868 (Claude, 2026-10-30)
+- Rebased old head `22b21a0` onto main `7eab868`. Only conflict was in this file (kept both sides: #39 section and the earlier #7 rebase notes). Validator OK, 260/260. Earlier PASS verdicts do not carry over; the opposite agent reviews the new head.
+- Fix round for Codex CHANGES at `a7d1375` (one more round authorised by the homeowner, 2026-10-30): (1) production-secret gating now requires the confirming decision to be `homeowner-approved` in `docs/DECISIONS.md` (`decisionApproved`; D-021 is still an agent proposal, D-999 does not exist, an unreadable register refuses); (2) `withSecrets` reports an output leak (exit 8) even when the subject also failed, without copying the subject's message; (3) an incomplete cleanup or revocation (exit 7) is reported even when the subject failed. A plain subject failure with clean output and complete cleanup still rethrows the subject error. Regression tests with mutation checks for each in `tests/broker.test.mjs`. Validator OK, 262/262. Exact-head CI and Codex re-review pending; not deployed.
+
+## #7 conflict-only rebase onto main 92431fc (Claude, 2026-10-30)
+- Rebased old head `6290f4f` onto main `92431fc`. Only conflicts were in this file (kept both sides). Validator OK, 266/266 tests. Earlier PASS verdicts do not carry over; the opposite agent reviews the new head. Not merged, not deployed.
+
+## #7 / PR #41 conflict-only rebase onto main 9a5bbe6 (Claude, 2026-10-31)
+- Rebased old head `f6163a9` onto origin/main `9a5bbe6`. The only conflict was this file (kept both sides: #54 section and the earlier #7 rebase notes). Validator OK, 295/295 tests. The PASS for the old head does not carry over; the opposite agent reviews the new head. Not merged, not deployed.
+
+## #7 / PR #41 conflict-only rebase onto main c0a0449 (Claude, 2026-10-31)
+- Rebased old head `2214ad8` onto origin/main `c0a0449` (merged #64 model routing and #28 .NET toolchain). Only conflicts: this handover (completion-state table kept both the #7 and #64 rows, with "#4, #8–#14" as the not-started row; appended sections kept both sides). No code conflicts and no other change. Validator OK; 339/339 tests. A PASS recorded for the old head does not carry over; Codex reviews the new head. Implemented only; CI/review pending.
