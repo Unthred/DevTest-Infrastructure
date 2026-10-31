@@ -52,14 +52,14 @@ test('exit 0 with a recovered transient rate limit completes once, with auto-res
 
 test('exit 0 does not hide a fatal event: a usage-limit line is never reported as completed', async t => {
   const f = fixture(t), job = await createJob(f.root, f.spec, f.registry);
-  const r = await drive(f.root, job, f.registry, realClock, scripted(f, "console.log('Usage limit reached');"));
+  const r = await drive(f.root, job, f.registry, realClock, scripted(f, "console.log(JSON.stringify({ type: 'error', message: 'Usage limit reached' }));"));
   assert.notEqual(r.status, 'completed'); assert.equal(r.lastEvent, 'usage_limit');
 });
 
 test('a real usage limit wins over a stray transient rate limit in either order', async t => {
   for (const lines of [['429 rate limit', 'Usage limit reached'], ['Usage limit reached', '429 rate limit']]) {
     const f = fixture(t), job = await createJob(f.root, f.spec, f.registry);
-    const source = `${lines.map(l => `console.error(${JSON.stringify(l)});`).join('')} process.exit(1);`;
+    const source = `${lines.map(l => `console.error(${JSON.stringify(/^429/.test(l) ? l : JSON.stringify({ type: 'error', message: l }))});`).join('')} process.exit(1);`;
     const r = await drive(f.root, job, f.registry, realClock, scripted(f, source));
     assert.equal(r.lastEvent, 'usage_limit', lines.join(' | '));
   }

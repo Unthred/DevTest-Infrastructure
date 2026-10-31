@@ -60,7 +60,8 @@ test('/status windows: percent left and dated resets; a past dated reset rolls t
 });
 
 test('the real limit line is a plain usage_limit: reset parsed and verified for this shape, "purchase more credits" implies no billing action', () => {
-  const r = codex.observe(LIMIT, at('2026-10-30T09:25:00Z'));
+  const r = codex.observe(err(LIMIT), at('2026-10-30T09:25:00Z'));
+  assert.equal(codex.observe(LIMIT, at('2026-10-30T09:25:00Z')).event, undefined, 'issue #68: the same plain line is not limit evidence');
   assert.equal(r.event, 'usage_limit'); assert.equal(r.resetAt, at('2026-10-30T11:44:00Z')); assert.equal(r.resetSource, 'provider_reported'); assert.equal(r.verified, true);
   assert.notEqual(r.event, 'approval_required'); assert.equal(r.billing, undefined);
   // a quoted exec --json wrapper is SIMULATED (not captured); it uses the same text
@@ -73,14 +74,15 @@ test('the real limit line is a plain usage_limit: reset parsed and verified for 
   assert.equal(codex.observe('this step requires approval', 0).event, undefined);
   assert.equal(codex.observe(JSON.stringify({ type: 'error', message: 'this step requires approval' }), 0).event, 'approval_required');
   // an unparsable reset is unreported, never invented, and not verified
-  const none = codex.observe("You've hit your usage limit. Try again sometime.", at('2026-10-30T09:25:00Z'));
+  const none = codex.observe(err("You've hit your usage limit. Try again sometime."), at('2026-10-30T09:25:00Z'));
   assert.equal(none.event, 'usage_limit'); assert.ok(!none.resetAt); assert.equal(none.verified, false);
 });
 
 test('/status lines: only an exhausted window is a limit', () => {
   const now = at('2026-10-30T09:25:00Z');
-  assert.equal(codex.observe(FIVE, now).event, 'usage_limit'); assert.equal(codex.observe(FIVE, now).resetAt, at('2026-10-30T11:44:00Z'));
-  assert.equal(codex.observe(WEEK, now).event, undefined);
+  assert.equal(codex.observe(FIVE, now).event, undefined, 'plain status line is not evidence');
+  assert.equal(codex.observe(err(FIVE), now).event, 'usage_limit'); assert.equal(codex.observe(err(FIVE), now).resetAt, at('2026-10-30T11:44:00Z'));
+  assert.equal(codex.observe(err(WEEK), now).event, undefined);
   assert.equal(codex.observe('Permissions:  Full Access', now).event, undefined);
 });
 
@@ -95,6 +97,7 @@ function world(t) {
   return { dir, registry, root: stateRoot(path.join(dir, 's')), spec: { role: 'devtest', provider: 'codex', repository: repo, worktree: wt, issue: 20, scope: 's', allowed_actions: ['read'], prompt: 'p', autoResume: true } };
 }
 const NOW = at('2026-10-30T09:25:00Z');
+const err = m => JSON.stringify({ type: 'error', message: m.replace('■ ', '') });
 function fakeClock() { let now = NOW; const sleeps = []; return { now: () => now, sleep: async ms => { sleeps.push(ms); now += ms; }, sleeps }; }
 const agent = (w, lines, code) => { const s = path.join(w.dir, 'a.mjs'); fs.writeFileSync(s, `${lines.map(l => `console.log(${JSON.stringify(l)});`).join('\n')}\nprocess.exit(${code});`); return s; };
 const runner = (w, script, clock) => async (c, ad, j, cl) => runProcess(w.root, j, { manifest: { launch: { env_allowlist: ['PATH'] } } }, { command: () => [process.execPath, script], observe: codex.observe, preflight: () => true }, cl);
@@ -103,7 +106,7 @@ test('end to end on a fake clock: restart waits for the reported reset + 2 minut
   const w = world(t), clock = fakeClock(), job = await createJob(w.root, w.spec, w.registry, clock);
   const script = path.join(w.dir, 'a.mjs'); const marker = path.join(w.dir, 'runs');
   fs.writeFileSync(script, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(marker)}, 'x');
-if (fs.readFileSync(${JSON.stringify(marker)}, 'utf8').length === 1) { console.log(${JSON.stringify(LIMIT)}); process.exit(1); } console.log('done');`);
+if (fs.readFileSync(${JSON.stringify(marker)}, 'utf8').length === 1) { console.log(${JSON.stringify(err(LIMIT))}); process.exit(1); } console.log('done');`);
   let runsAtSleep = null; const orig = clock.sleep; clock.sleep = async ms => { runsAtSleep = fs.readFileSync(marker, 'utf8').length; await orig(ms); };
   const r = await drive(w.root, job, w.registry, clock, runner(w, script, clock));
   assert.equal(r.status, 'completed'); assert.equal(r.attempts, 2); assert.equal(runsAtSleep, 1, 'no launch while waiting');
@@ -118,12 +121,12 @@ test('two exhausted windows: the later reset wins in either order; a non-exhaust
   ];
   for (const [lines, expected] of cases) {
     const w = world(t), clock = fakeClock(), job = await createJob(w.root, { ...w.spec, autoResume: false }, w.registry, clock);
-    const r = await drive(w.root, job, w.registry, clock, runner(w, agent(w, lines, 1), clock));
+    const r = await drive(w.root, job, w.registry, clock, runner(w, agent(w, lines.map(err), 1), clock));
     assert.equal(r.status, 'blocked'); assert.equal(r.lastEvent, 'usage_limit');
     assert.equal(r.resetAt, null);                                         // not restartable: nothing scheduled
     const restartable = world(t), c2 = fakeClock(), j2 = await createJob(restartable.root, restartable.spec, restartable.registry, c2);
     let n = 0, resetSeen = null;
-    await drive(restartable.root, j2, restartable.registry, c2, async (cfg, ad, j, cl) => { n++; if (n === 1) { const res = await runner(restartable, agent(restartable, lines, 1), c2)(cfg, ad, j, cl); resetSeen = res.resetAt; return res; } return { code: 0 }; });
+    await drive(restartable.root, j2, restartable.registry, c2, async (cfg, ad, j, cl) => { n++; if (n === 1) { const res = await runner(restartable, agent(restartable, lines.map(err), 1), c2)(cfg, ad, j, cl); resetSeen = res.resetAt; return res; } return { code: 0 }; });
     assert.equal(resetSeen, expected, JSON.stringify(lines));
     assert.equal(j2.nextAttemptAt, expected + 120000);
   }

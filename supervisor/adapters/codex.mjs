@@ -33,12 +33,14 @@ export function observe(line, now = Date.now()) {
   // "... or try again at 11:44 AM." The text also offers "purchase more credits"; that is an upsell, never consent to paid
   // usage: it stays a plain usage_limit and no billing action is taken.
   const tryAgain = parseTryAgain(text, now);
-  if (/usage limit|you(?:'ve| have) hit your limit/i.test(text) && !/api key|billing/i.test(text)) {
+  // Like approval, limit evidence comes only from a structured error/turn.failed object (or the rollout allowance in postRun);
+  // a plain line (stderr, tool output) can quote it (issue #68).
+  if (errorObject && /usage limit|you(?:'ve| have) hit your limit/i.test(text) && !/api key|billing/i.test(text)) {
     if (tryAgain) return { event: 'usage_limit', resetAt: tryAgain, resetSource: 'provider_reported', verified: true, sessionId };
     return { event: 'usage_limit', resetAt: base.resetTime(text), resetSource: 'provider_reported', verified: false, sessionId };
   }
   // /status window lines. Only an exhausted window (0% left) is a limit; the process keeps the later of several.
-  const window = parseStatusWindow(text, now);
+  const window = errorObject ? parseStatusWindow(text, now) : null;
   if (window && window.percentLeft === 0) return { event: 'usage_limit', resetAt: window.resetsAt, resetSource: 'provider_reported', verified: true, sessionId };
   const rest = base.observe(text);
   if (!errorObject && rest.event === 'approval_required') return { sessionId };

@@ -172,7 +172,8 @@ test('the fix is narrow: whole JSON lines, structured errors and plain stderr te
   assert.equal(claude.observe(JSON.stringify(shape)).event, undefined, 'an intact tool_result quoting the phrase was already ignored');
   assert.equal(claude.observe('Claude AI usage limit reached').event, 'usage_limit');                         // plain text line (stderr)
   assert.equal(claude.observe(JSON.stringify({ type: 'error', error: { message: 'You hit your weekly limit' } })).event, 'usage_limit');
-  assert.equal(codex.observe("You've hit your usage limit. Upgrade to Pro or try again at 11:44 AM.").event, 'usage_limit');
+  assert.equal(codex.observe(JSON.stringify({ type: 'error', message: "You've hit your usage limit. Upgrade to Pro or try again at 11:44 AM." })).event, 'usage_limit');
+  assert.equal(codex.observe("You've hit your usage limit. Upgrade to Pro or try again at 11:44 AM.").event, undefined, 'issue #68: a plain Codex line is not limit evidence');
   assert.equal(claude.observe(JSON.stringify({ type: 'result', is_error: true, api_error_status: 401, result: 'x' })).event, 'auth_error');
 });
 

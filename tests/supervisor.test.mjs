@@ -43,7 +43,7 @@ function fakeClock() {
 
 test('adapter classification distinguishes limits, context, auth, transient, approval and network', () => {
   for (const adapter of [claude, codex]) {
-    assert.equal(adapter.observe('Usage limit reached. Resets at 2026-10-30T05:00:00Z').event, 'usage_limit');
+    assert.equal(adapter.observe(JSON.stringify({ type: 'error', message: 'Usage limit reached. Resets at 2026-10-30T05:00:00Z' })).event, 'usage_limit');
     assert.equal(adapter.observe('Context window exceeded').event, 'context_limit');
     assert.equal(adapter.observe('Authentication failed').event, 'auth_error');
     assert.equal(adapter.observe('Rate limit 429').event, 'transient_rate_limit');
