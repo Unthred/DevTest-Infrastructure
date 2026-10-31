@@ -3,6 +3,7 @@
 import { Team, agentOfBranch, checksState, prerequisites } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { severityOf } from './dashui/logic.mjs';
+import { hasReading, windowExpired } from './allowance.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -15,21 +16,58 @@ export const windowLabel = (w, provider) => {
   return String(w.type || provider).replace(/_/g, ' ');
 };
 
+const DEAD = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
+const fullWindow = w => (Number.isFinite(w.utilization) && w.utilization >= EXHAUSTED) || DEAD.includes(w.status);
+export const age = ms => { const m = Math.max(0, Math.floor(ms / 60000)); return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`; };
+const PREDATES_MS = 2 * 60000;        // a reading this much older than the pause was taken before it
+// When the job went into its pause: its own allowance record is written at that moment (even an empty one), else its update.
+const pausedAt = job => Math.min(Number.isFinite(job?.allowance?.observedAt) ? job.allowance.observedAt : Infinity, Number.isFinite(job?.updatedAt) ? job.updatedAt : Infinity);
+
+// The last known reading in words, with its age and any expired window (issue #75, #76): "weekly 100%, 5-hour 26%
+// (expired: reset 4h 38m ago); reported 8h 17m ago".
+export function readingText(allowance, now) {
+  if (!hasReading(allowance)) return 'no reading has been reported';
+  const parts = allowance.windows.map(w => {
+    const used = `${windowLabel(w, allowance.provider)} ${Number.isFinite(w.utilization) ? `${Math.round(w.utilization * 100)}%` : 'unknown'}`;
+    return windowExpired(w, now) ? `${used} (expired: reset ${age(now - w.resetsAt)} ago)` : used;
+  });
+  return `${parts.join(', ')}; reported ${Number.isFinite(allowance.observedAt) && allowance.observedAt > 0 ? `${age(now - allowance.observedAt)} ago` : 'at an unknown time'}`;
+}
+
 // The rule behind "a usage pause that disagrees with the provider's own reported allowance".
-// Returns null when the pause is consistent or cannot be judged, else a finding. `allowance` is what the provider reported
-// (a job's `allowance` record, structured data from the CLI itself). A window with a known utilisation below the
-// exhausted threshold is evidence of capacity; an exhausted window, a rejected status or an unknown reading is not.
+// Returns null when the pause is consistent or cannot be judged, else a finding. `allowance` is the newest reading the
+// provider reported. Expired windows (reset time passed) are evidence of nothing (issue #75). A live full window or an
+// exhausted status confirms the pause; a live window below the threshold is evidence of capacity, but only in a reading
+// taken at or after the pause: an older reading cannot contradict a limit hit later.
 export function pauseDisagreement(job, allowance, now) {
   if (!job || job.status !== 'paused_limit' || job.lastEvent !== 'usage_limit') return null;
-  if (!allowance || !Array.isArray(allowance.windows) || !allowance.windows.length) return { kind: 'unverifiable', text: 'paused on a usage limit but the provider has reported no allowance data to confirm it' };
-  const known = allowance.windows.filter(w => Number.isFinite(w.utilization));
-  const exhausted = allowance.windows.some(w => (Number.isFinite(w.utilization) && w.utilization >= EXHAUSTED) || ['rejected', 'blocked', 'exhausted', 'limit_reached'].includes(w.status));
-  // Same exhausted-status semantics as limitFromAllowance(): a rejected/blocked/exhausted allowance confirms the pause.
-  if (exhausted || ['rejected', 'blocked', 'exhausted', 'limit_reached'].includes(allowance.status)) return null;
-  if (!known.length) return { kind: 'unverifiable', text: 'paused on a usage limit but the reported allowance has no utilisation figures to confirm it' };
+  if (!hasReading(allowance)) return { kind: 'unverifiable', text: 'paused on a usage limit but the provider has reported no allowance data to confirm it' };
+  const last = `last reading: ${readingText(allowance, now)}`;
+  const full = allowance.windows.filter(fullWindow);
+  if (full.some(w => !windowExpired(w, now))) return null;
+  if (full.length) {
+    const reset = Math.max(...full.map(w => w.resetsAt));
+    return { kind: 'expired', text: `paused on a usage limit, but the full ${full.map(w => windowLabel(w, allowance.provider)).join(' and ')} window reset ${age(now - reset)} ago, so the limit may be over (${last})` };
+  }
+  const live = allowance.windows.filter(w => !windowExpired(w, now));
+  // Same exhausted-status semantics as limitFromAllowance(): a rejected/blocked/exhausted allowance confirms the pause,
+  // unless every window of that reading has since reset.
+  if (DEAD.includes(allowance.status) && live.length) return null;
+  if (!live.length) return { kind: 'expired', text: `paused on a usage limit; every window in the last reading has reset since, so it cannot confirm the pause (${last})` };
+  const known = live.filter(w => Number.isFinite(w.utilization));
+  if (!known.length) return { kind: 'unverifiable', text: `paused on a usage limit but the reported allowance has no utilisation figures to confirm it (${last})` };
+  if ((allowance.observedAt || 0) < pausedAt(job) - PREDATES_MS) return { kind: 'unverifiable', text: `paused on a usage limit; the newest provider reading is older than the pause, so it cannot confirm it (${last})` };
   const used = known.map(w => `${windowLabel(w, allowance.provider)} ${Math.round(w.utilization * 100)}%`).join(', ');
   const at = allowance.observedAt ? ` (reported ${new Date(allowance.observedAt).toISOString().slice(11, 16)} UTC)` : '';
   return { kind: 'disagrees', text: `paused on a usage limit but the provider reports capacity left: ${used} used${at}` };
+}
+
+// What the Usage card says about a limit pause: when the limit resets and on what basis. Never an invented time.
+function limitView(job, allowance, now) {
+  if (job.resetAt) return { since: pausedAt(job), resetsAt: job.resetAt, basis: 'reported with the limit', retryAt: job.nextAttemptAt || null };
+  const full = (allowance?.windows || []).filter(w => fullWindow(w) && !windowExpired(w, now) && Number.isFinite(w.resetsAt));
+  const w = full.sort((a, b) => b.resetsAt - a.resetsAt)[0];
+  return { since: Number.isFinite(pausedAt(job)) ? pausedAt(job) : null, resetsAt: w ? w.resetsAt : null, basis: w ? `${windowLabel(w, allowance.provider)} window in the last reading` : null, retryAt: job.nextAttemptAt || null };
 }
 
 function cacheBackedTeam(config, root, cache, jobs, state) {
@@ -162,7 +200,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   for (const [agent, s] of Object.entries(states)) {
     if (s.state !== 'paused') continue;
     const a = config.agents[agent];
-    const own = s.job?.allowance?.windows ? s.job.allowance : null, fresh = allowance[a.provider] || null;   // judge by the newest thing the provider reported
+    const own = hasReading(s.job?.allowance) ? s.job.allowance : null, fresh = allowance[a.provider] || null;   // judge by the newest reading the provider reported
     const finding = pauseDisagreement(s.job, own && (!fresh || (own.observedAt || 0) >= (fresh.observedAt || 0)) ? own : fresh, now);
     if (finding) add(`pause-${agent}`, `${agent}: ${finding.text}.${finding.kind === 'disagrees' ? ' Check the provider yourself; the pause may be wrong.' : ''}`, { kind: 'issue', n: s.job.issue });
   }
@@ -174,9 +212,13 @@ function usageView(config, jobs, states, allowance, now) {
   for (const [agent, a] of Object.entries(config.agents)) {
     const al = allowance[a.provider];
     const mine = jobs.filter(j => j.provider === a.provider && j.usage);
+    const st = states[agent], limited = st?.state === 'paused' && st.job?.status === 'paused_limit' && st.job.lastEvent === 'usage_limit';
+    const windows = al ? al.windows.map(w => ({ label: windowLabel(w, a.provider), utilization: Number.isFinite(w.utilization) ? w.utilization : null, resetsAt: w.resetsAt || null, expired: windowExpired(w, now) })) : [];
     out[agent] = {
-      observedAt: al?.observedAt || null,
-      windows: al ? al.windows.map(w => ({ label: windowLabel(w, a.provider), utilization: Number.isFinite(w.utilization) ? w.utilization : null, resetsAt: w.resetsAt || null, stale: !!w.resetsAt && w.resetsAt < now })) : [],
+      observedAt: al?.observedAt || null, ageMs: al?.observedAt ? now - al.observedAt : null, source: al?.source || null,
+      allExpired: windows.length > 0 && windows.every(w => w.expired),
+      limit: limited ? limitView(st.job, al, now) : null,
+      windows,
       jobs: mine.sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0)).slice(0, 200).map(j => ({ id: j.id.slice(0, 8), kind: j.kind || 'job', ref: j.issue, status: j.status, inputTokens: j.usage.inputTokens, outputTokens: j.usage.outputTokens, costUsdEstimate: j.usage.costUsdEstimate })),
       totalTokens: mine.reduce((s, j) => s + j.usage.inputTokens + j.usage.outputTokens, 0), jobsWithUsage: mine.length
     };
@@ -200,23 +242,33 @@ export function modelUsage(rows) {
 const DAY = 86400000;
 function graphs({ config, jobs, state, snapshots, now }) {
   const agents = Object.keys(config.agents);
-  // allowance % over time per agent, resets marked where the reported reset time changes between snapshots
+  // Allowance % over time per agent. A sample is drawn only while its reading is current: once the reported reset time has
+  // passed, the line ends and an "expected reset" marker is placed at that time (issue #75), instead of holding a stale value
+  // up to now. A new reading after the reset starts a new segment (gap). "resets" are reset-time changes seen between
+  // snapshots that no expiry already explains.
   const allowance = {};
   for (const agent of agents) {
-    const series = {};
-    const resets = [];
-    let lastReset = {};
+    const samples = {};
     for (const s of snapshots.filter(x => now - x.at <= 30 * DAY).sort((a, b) => a.at - b.at)) {
       const al = s.allowance?.[agent]; if (!al) continue;
-      for (const w of al.windows || []) {
-        if (!Number.isFinite(w.utilization)) continue;
-        const k = windowLabel(w, agent);
-        (series[k] ||= []).push({ at: s.at, v: w.utilization });
-        if (w.resetsAt && lastReset[k] && w.resetsAt !== lastReset[k] && w.resetsAt > lastReset[k]) resets.push({ at: s.at, window: k });
-        if (w.resetsAt) lastReset[k] = w.resetsAt;
-      }
+      for (const w of al.windows || []) if (Number.isFinite(w.utilization)) (samples[windowLabel(w, agent)] ||= []).push({ at: s.at, v: w.utilization, resetsAt: Number.isFinite(w.resetsAt) ? w.resetsAt : null });
     }
-    allowance[agent] = { series, resets };
+    const series = {}, resets = [], expected = [];
+    const expect = (at, window) => { if (!expected.some(e => e.at === at && e.window === window)) expected.push({ at, window }); };
+    for (const [k, xs] of Object.entries(samples)) {
+      const pts = []; let open = null, gap = false, seen = null;
+      for (const x of xs) {
+        if (open && open <= x.at) { expect(open, k); open = null; gap = true; }
+        if (x.resetsAt && seen && x.resetsAt > seen && !gap) resets.push({ at: x.at, window: k });
+        if (x.resetsAt) seen = x.resetsAt;
+        if (windowExpired(x, x.at)) { if (x.resetsAt) expect(x.resetsAt, k); gap = true; continue; }
+        pts.push(gap && pts.length ? { at: x.at, v: x.v, gap: true } : { at: x.at, v: x.v });
+        gap = false; open = x.resetsAt;
+      }
+      if (open && open <= now) expect(open, k);
+      series[k] = pts;
+    }
+    allowance[agent] = { series, resets, expected: expected.sort((a, b) => a.at - b.at) };
   }
   const days = {};
   for (const j of jobs) {
@@ -261,7 +313,7 @@ function activity({ config, jobs, events, state, cache, snapshots, now }) {
 
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now }) {
   const states = agentStates(config, jobs, now);
-  const allowance = latestAllowance(jobs);
+  const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
   const team = cacheBackedTeam(config, root, c, jobs, state);
   return team.plan().then(plan => {

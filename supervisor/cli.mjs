@@ -8,8 +8,9 @@ import { runProcess } from './process.mjs';
 import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { alertSender } from './alert.mjs';
-import { readJobs, readEvents, recordTick, tickOutcome, latestAllowance } from './dashdata.mjs';
+import { readCache, readJobs, readEvents, recordTick, tickOutcome, latestAllowance } from './dashdata.mjs';
 import { outOfAllowance } from './interim.mjs';
+import { codexAllowanceProbe } from './allowance.mjs';
 import { weeklyUtilization } from './models.mjs';
 import { spawnSync } from 'node:child_process';
 import { SelfUpgrade, realDeps, runningSha } from './upgrade.mjs';
@@ -97,7 +98,7 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   // Model routing (issue #64): what each CLI accepts comes from its manifest; the weekly allowance is the freshest the provider reported.
   const providerModels = {};
   for (const a of Object.values(config.agents)) providerModels[a.provider] = (await provider(registry, a.provider)).config.manifest.models ?? null;
-  const jobsNow = readJobs(root), allowances = latestAllowance(jobsNow);
+  const jobsNow = readJobs(root), allowances = latestAllowance(jobsNow, readCache(root)?.probes);
   const allowanceOf = agent => weeklyUtilization(allowances[config.agents[agent].provider]);
   // D-021: whether an agent is out of allowance, from provider-reported records and its latest supervised job only.
   const limited = {};
@@ -105,10 +106,19 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
     weeklyAt: config.interim_review?.weekly_at ?? 0.95, hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') }));
   return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf });
 }
+// Model-free allowance probes, one per provider that has one (issue #75), so a paused agent's reading still refreshes.
+// Only a local file read: never a model call. A probe failure only loses this tick's refresh.
+function probeAllowances(config) {
+  const out = {};
+  if (Object.values(config.agents || {}).some(a => a.provider === 'codex')) {
+    try { const a = codexAllowanceProbe(); if (a) out.codex = a; } catch (error) { console.error(`ai-supervisor: codex allowance probe failed: ${error?.code || error?.name || 'Error'}`); }
+  }
+  return out;
+}
 async function teamTick(root, registry, dryRun) {
   const config = loadTeamConfig(teamConfigFile, root);
   // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
-  const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
+  const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: probeAllowances(config), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
   if (!config.enabled && !dryRun) { record({ status: 'disabled' }); return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' }; }
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };

@@ -179,15 +179,18 @@ test('graphs: allowance series with reset marks, jobs per day, verdicts, issue-t
   const state = { verdicts: { [`1:${H(1)}`]: { verdict: 'PASS', reviewer: 'codex' }, [`2:${H(2)}`]: { verdict: 'CHANGES', reviewer: 'codex' } },
     mergeLog: [{ pr: 8, issue: 5, agent: 'claude', reviewer: 'codex', startedAt: NOW - 7200000, mergedAt: NOW }, { pr: 9, issue: 6, agent: 'codex', reviewer: 'claude', startedAt: null, mergedAt: NOW }],
     jobs: { [merged.id]: { kind: 'implement', issue: 5, agent: 'claude' } } };
-  const v = await view(t, { jobs: [merged], state, cache: { tick: okTick(), pulls: [], issues: [] }, snapshots: [snap(NOW - 7200000, 0.9, 1000), snap(NOW - 3600000, 0.95, 1000), snap(NOW - 60000, 0.02, 9000)] });
+  const v = await view(t, { jobs: [merged], state, cache: { tick: okTick(), pulls: [], issues: [] }, snapshots: [snap(NOW - 7200000, 0.9, NOW - 1800000), snap(NOW - 3600000, 0.95, NOW - 1800000), snap(NOW - 60000, 0.02, NOW + 9000000)] });
   assert.equal(v.graphs.allowance.claude.series['5-hour'].length, 3);
-  assert.equal(v.graphs.allowance.claude.resets.length, 1);
+  // the reset is explained by the expiry of the first reading (issue #75): one expected-reset marker at the reported time, a new segment after it
+  assert.deepEqual(v.graphs.allowance.claude.expected, [{ at: NOW - 1800000, window: '5-hour' }]);
+  assert.equal(v.graphs.allowance.claude.series['5-hour'][2].gap, true);
+  assert.equal(v.graphs.allowance.claude.resets.length, 0);
   assert.deepEqual(v.graphs.verdicts.codex, { PASS: 1, CHANGES: 1 });
   assert.equal(v.graphs.merges[0].hours, 2); assert.equal(v.graphs.merges[1].hours, null);
   assert.deepEqual(v.graphs.tokensPerPr.map(x => x.tokens), [1000, null]);
   assert.equal(Object.values(v.graphs.jobsPerDay)[0]['implement/completed'], 1);
   const html = renderPage(v, { route: { page: 'usage' } });
-  assert.match(html, /<svg[^>]*aria-label="allowance used over time"/); assert.match(html, /class="reset"/);
+  assert.match(html, /<svg[^>]*aria-label="allowance used over time"/); assert.match(html, /class="reset expected"/);
   assert.match(html, /aria-label="tokens per merged PR"/); assert.match(html, /unknown/);
 });
 
