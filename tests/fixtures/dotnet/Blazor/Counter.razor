@@ -1,0 +1,5 @@
+<button @onclick="Increment">Clicked @Count</button>
+@code {
+    public int Count { get; private set; }
+    public void Increment() => Count++;
+}
