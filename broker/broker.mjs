@@ -51,20 +51,29 @@ export function assertAllowed(policy, name, register = readDecisionRegister()) {
 }
 
 // Every non-empty value is scanned, however short: a short credential is still a credential, and a false match fails closed.
-// Session state is the exception: it holds non-secret flags ("1", "true") that would match nearly any output, so its values keep a floor.
-const SESSION_FLOOR = 8;
-const encodings = (v, floor = 1) => [v, Buffer.from(v).toString('base64'), encodeURIComponent(v), JSON.stringify(v).slice(1, -1)].filter(s => s.length >= floor);
+// Session state holds non-secret flags ("1", "true") that would match nearly any output, so there a value under four characters
+// is skipped unless its storage key looks like a credential; credential-like keys are scanned at any length. The literals
+// true/false under a non-credential key are flags too (they would match any JSON output) and are skipped; any other value of four
+// or more characters is always scanned.
+const SHORT_SESSION_VALUE = 4;
+export const CREDENTIAL_KEY = /token|auth|session|sid|jwt|key|pass|secret|cred|bearer/i;
+export const sessionNeedle = (key, value) => {
+  if (typeof value !== 'string' || !value.length) return false;
+  if (CREDENTIAL_KEY.test(String(key ?? ''))) return true;
+  return value.length >= SHORT_SESSION_VALUE && !/^(true|false)$/i.test(value);
+};
+const encodings = (v) => [v, Buffer.from(v).toString('base64'), encodeURIComponent(v), JSON.stringify(v).slice(1, -1)];
 
 export class SecretHandle {
   #values = []; #leases = []; #backend; #dir; #files;
   constructor({ backend, dir, files }) { this.#backend = backend; this.#dir = dir; this.#files = files; this.dryRun = backend.kind === 'mock'; this.expiresAt = null; this.cleaned = false; }
   get mounts() { return this.#files.map(f => ({ name: f.name, host: f.host, container: f.container })); }
-  _add(name, values, lease, floor = 1) { this.#values.push(...values.filter(v => typeof v === 'string').map(v => [v, floor])); if (lease) this.#leases.push(lease); }
+  _add(name, values, lease) { this.#values.push(...values.filter(v => typeof v === 'string' && v.length)); if (lease) this.#leases.push(lease); }
   toJSON() { return { dryRun: this.dryRun, secrets: this.#files.map(f => f.name), expiresAt: this.expiresAt, cleaned: this.cleaned }; }
   // Looks for every held value (raw, base64, URL- and JSON-escaped) in the given files/directories. Reports file and
   // secret count only. A compressed trace cannot be scanned this way, so traces are refused for secret runs.
   scan(roots) {
-    const needles = this.#values.flatMap(([v, floor]) => encodings(v, floor).map(s => Buffer.from(s)));
+    const needles = this.#values.flatMap(v => encodings(v).map(s => Buffer.from(s)));
     const findings = []; let scanned = 0;
     const visit = (p) => {
       const st = fs.lstatSync(p, { throwIfNoEntry: false });
@@ -124,17 +133,17 @@ export async function materialize({ policy, names, backend, runId, root = DEFAUL
         const reduced = reduceSession(state, { domains: e.domains, maxTtlSeconds: e.maxTtlSeconds, now });
         payload = JSON.stringify(reduced.state); until = reduced.expiresAt * 1000;
         secretStrings = [
-          ...reduced.state.cookies.map(c => c.value),
+          ...reduced.state.cookies.map(c => [c.name, c.value]),
           ...reduced.state.origins.flatMap(o => [o.localStorage, o.sessionStorage]
-            .flatMap(entries => Array.isArray(entries) ? entries.map(e => e?.value).filter(v => typeof v === 'string') : []))
-        ];
+            .flatMap(entries => Array.isArray(entries) ? entries.map(e => [e?.name, e?.value]) : []))
+        ].filter(([key, value]) => sessionNeedle(key, value)).map(([, value]) => value);
       } else {
         const wanted = e.fields ?? Object.keys(values);
         if (!wanted.length || !wanted.every(f => typeof values[f] === 'string' && values[f].length)) throw new BrokerError(`secret ${name}: expected fields are missing`, 4);
         const picked = Object.fromEntries(wanted.map(f => [f, values[f]]));
         payload = JSON.stringify(picked); secretStrings = Object.values(picked); until = now + e.maxTtlSeconds * 1000;
       }
-      handle._add(name, secretStrings, leaseId, e.kind === 'session' ? SESSION_FLOOR : 1);
+      handle._add(name, secretStrings, leaseId);
       expiry = Math.min(expiry, until);
       const fd = fs.openSync(files[i].host, 'wx', 0o400);
       try { fs.writeSync(fd, payload); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }

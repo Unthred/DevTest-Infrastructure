@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createOpenBaoBackend, checkHealth, checkAddress, readTokenFile, safeSecretPath, BrokerError } from '../broker/openbao.mjs';
 import { createMockBackend, MOCK_PREFIX } from '../broker/mock.mjs';
 import { reduceSession, domainAllowed } from '../broker/session.mjs';
-import { materialize, withSecrets, validatePolicy, assertAllowed, decisionApproved } from '../broker/broker.mjs';
+import { materialize, withSecrets, validatePolicy, assertAllowed, decisionApproved, sessionNeedle } from '../broker/broker.mjs';
 import { buildPlanForVerifiedPaths, verifySecrets, RunnerError } from '../docker/runner.mjs';
 
 const policy = JSON.parse(fs.readFileSync(new URL('../broker/policy.example.json', import.meta.url), 'utf8'));
@@ -289,11 +289,33 @@ test('session storage values from allowed origins are included in the output lea
     assert.equal(fs.existsSync(path.join(root, runId)), false);
     assert.equal(fs.existsSync(path.join(out, `leak-${i}`)), false, 'the contaminated file is discarded');
   }
-  // A short non-secret flag in the stored state does not make every output a leak.
-  const flagState = { cookies: [], origins: [{ origin: 'https://app.fixture.test', localStorage: [{ name: 'seen', value: '1' }], sessionStorage: [] }] };
-  const flagBackend = { ...backend, read: async () => ({ values: { storage_state: flagState }, leaseId: null }) };
-  const result = await withSecrets({ ...opts, backend: flagBackend, runId: '7'.repeat(16) }, async () => { fs.writeFileSync(path.join(out, 'ok.txt'), 'page 1 of 10'); }, { outputRoots: [out] });
-  assert.equal(result.leak.clean, true);
+});
+
+test('session scan rule: credential-like keys are scanned at any length, short non-credential values and true/false flags are ignored, 4+ characters are scanned', async () => {
+  const exp = Math.floor(Date.now() / 1000) + 600;
+  const cookie = (name, value) => ({ name, value, domain: 'fixture.test', path: '/', expires: exp });
+  const store = (name, value) => ({ origin: 'https://app.fixture.test', localStorage: [{ name, value }], sessionStorage: [] });
+  const run = async (state, output, n) => {
+    const root = secretRoot(), out = tmp();
+    const backend = { kind: 'openbao', assertReadOnly: async () => {}, read: async () => ({ values: { storage_state: state }, leaseId: null }), revoke: async () => {} };
+    return withSecrets({ policy, names: ['fixture-session'], backend, root, runId: String(n).repeat(16), ...me }, async () => { fs.writeFileSync(path.join(out, 'o.txt'), output); }, { outputRoots: [out] });
+  };
+  // Credential-like key names (case-insensitive), any value length: caught.
+  for (const [n, name] of ['sessionid', 'AuthToken', 'sid', 'csrfKEY', 'jwt', 'passwd', 'client_secret', 'cred', 'Bearer'].entries()) {
+    await assert.rejects(run({ cookies: [cookie(name, 'q7')], origins: [] }, 'cookie q7 here', n + 1), e => e.exitCode === 8 && !e.message.includes('q7'), `cookie ${name}`);
+    await assert.rejects(run({ cookies: [], origins: [store(name, 'z')] }, 'value z here', n + 1), e => e.exitCode === 8, `localStorage ${name}`);
+  }
+  // Non-credential keys: "1" and true/false flags (and other values under four characters) are ignored, so ordinary output is clean.
+  for (const value of ['1', '0', 'on', 'abc', 'true', 'FALSE']) {
+    const r = await run({ cookies: [cookie('theme-seen', value)], origins: [store('banner', value)] }, `page 1 of 10 on abc true false`, 8);
+    assert.equal(r.leak.clean, true, `flag ${value}`);
+  }
+  // Four or more characters under any key are always scanned (other than the boolean literals above).
+  for (const value of ['wxyz', 'dark-mode', 'x'.repeat(4)]) {
+    await assert.rejects(run({ cookies: [cookie('theme', value)], origins: [] }, `leaked ${value}`, 9), e => e.exitCode === 8, `cookie value ${value}`);
+    await assert.rejects(run({ cookies: [], origins: [store('layout', value)] }, `leaked ${value}`, 9), e => e.exitCode === 8, `localStorage value ${value}`);
+  }
+  assert.ok(sessionNeedle('token', 'a') && sessionNeedle('x', 'abcd') && !sessionNeedle('x', 'abc') && !sessionNeedle('x', 'true') && !sessionNeedle('x', '') && sessionNeedle('auth', 'true'));
 });
 
 test('scan failure still removes secret files and revokes the lease', async () => {
