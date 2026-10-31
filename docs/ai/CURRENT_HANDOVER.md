@@ -221,3 +221,6 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## #6 / PR #29 third conflict-only rebase (Claude)
 - Rebased onto origin/main `92431fc`; old head `8a750ca`. Only conflict: this handover (kept both sides). Validator OK; 264/264 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending.
+
+## #6 / PR #29 fourth conflict-only rebase (Claude)
+- Rebased onto origin/main `9a5bbe6`; old head `4f2a7dd`. Only conflict: this handover (kept both sides). Validator OK; 293/293 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending.
