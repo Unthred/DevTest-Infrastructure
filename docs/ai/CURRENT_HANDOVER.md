@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (20 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with current main for PR #28. Each agent edits this file only on its own branch.
+Last updated: 2026-10-31 by Claude on `claude/issue-4-04-net-testing` (issue #4). Each agent edits this file only on its own branch.
 
 ## Completion states
 
@@ -21,7 +21,8 @@ Last updated: 2026-10-31 by Codex on `codex/issue-3-dotnet-build`, merged with c
 
 | #6 Responsive profiles and visual evidence | yes; branch `claude/issue-6-responsive`, draft PR stacked on #27 | no; CI and Codex review pending | no | real Docker on Tower: broken fixture fails with every seeded defect, corrected fixture passes at 8 widths, in Chromium/Firefox/WebKit; no visual acceptance claimed |
 | #3 .NET SDK toolchain | implementation on PR #28 branch `codex/issue-3-dotnet-build`; PR ready for review | validator and 306/306 positive/negative tests passed; prior Tower SDK 8/9/10 cache-reuse smoke passed; fresh exact-head CI and opposite-agent review pending | no standalone `dev-test` installation | prior isolated restore/cache/build smoke passed; no production project changed |
-| #4, #7–#14 other issues | not started | no | no | no |
+| #4 .NET testing, coverage, artifacts | implementation on branch `claude/issue-4-04-net-testing` (`dotnet/testing.mjs`, fixture, `docs/dotnet-testing.md`); PR open | validator and 329/329 tests pass locally after the third PR #67 CHANGES fix round (persisted TRX/JUnit/result.json rebuilt from allowlisted fields; failure text replaced by a closed set of constant reasons; generic-canary regression test); CI and re-review pending | no | no real Docker test run: xunit/Test.Sdk/coverlet are not in any offline NuGet cache (no network phase); verified with a fake runner over the real planner |
+| #7–#14 other issues | not started | no | no | no |
 | #64 Model per job type | yes; branch `claude/issue-64-choose-model-per`, see PR; `docs/model-routing.md` | no; CI and Codex review pending | no (installed supervisor not upgraded) | no; unit/fixture tests only (311/311 locally). Real `claude --model/--effort` and `codex -c model_reasoning_effort` flags checked against `--help` only; no live job run with them ; fix round 2 (Codex CHANGES at c21e147): the Codex manifest no longer accepts a `gpt-` pattern; only models listed in its `aliases` (from the local Codex models cache) are forwarded, so `gpt-not-a-real-model` is dropped with a warning. The list must be updated when Codex adds models |
 
 ## Ownership
@@ -232,3 +233,15 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 
 ## Issue #64 (Claude, `claude/issue-64-choose-model-per`)
 Implemented: `supervisor/models.mjs`, manifest `models` section (claude, codex), `models` table in `team.json` and `team.local.json`, escalation (incomplete job; CHANGES twice), allowance threshold, invalid-model fallback with warning, job fields and dashboard columns. Not done / unverified: live job with the new flags, behaviour of a real exhausted allowance, deployment (needs `tools/upgrade-supervisor.sh` after merge). Token-per-model figures only appear for jobs created after deployment. Review needed from Codex.
+
+## #4 PR #67 CHANGES round
+- Blocking 1 (unredacted TRX output, D-008/G5/G6) fixed in `dotnet/testing.mjs` (`sanitizeTrx`, `redactSecrets`); regression test in `tests/dotnet-testing.test.mjs`.
+- Blocking 2 (real SDK 8/9/10 Docker run with TRX and coverage) is NOT fixed: xunit, Test.Sdk and coverlet are in no offline NuGet cache and containers have no network. Needs a reviewed networked restore phase (D-016) or homeowner-seeded caches. `docs/dotnet-testing.md` states the acceptance is unmet; the dispatcher/homeowner must decide whether #4 may merge without it.
+
+## #4 / PR #67 conflict-only rebase (Claude)
+- Rebased onto origin/main `c0a0449`; old head `8260073`. Only conflicts: this handover (completion-state row for #4 kept beside main's #64 row; appended #64 and #4 sections both kept). Non-handover diff identical to the old head. Validator OK; 328/328 tests. A PASS recorded for the old head does not carry over; Codex must review the new head. Implemented only; CI/review pending. Blocking 2 (real SDK run) remains open as stated above.
+
+## #4 PR #67 CHANGES round 3 (Claude, verdict on `50a71bc`)
+- Blocking 1 (arbitrary `<Message>` text persisted; a generic canary reached TRX, JUnit and `result.json`): fixed in `dotnet/testing.mjs`. Pattern redaction (`redactSecrets`) is removed. `sanitizeTrx` now rebuilds the TRX from `parseTrx` data only: identifier-only names (theory arguments dropped, otherwise `test-<n>`), allowlisted outcomes, format-checked durations and counters, and one constant failure reason from `failureReason`'s closed vocabulary. Regression tests in `tests/dotnet-testing.test.mjs` run `runDotnetTests` end to end with a random canary in the message, the test name, stdout/stderr, the stack trace, run infos, the run user and the storage path, and check that no persisted file contains it. Mutation check: the new tests fail on the previous code (`result.json leaked the canary`). Validator OK; 329/329.
+- Blocking 2 (real SDK 8/9/10 Docker run with TRX and coverage) is still NOT fixed, and this round cannot fix it within its authority. xunit, Microsoft.NET.Test.Sdk and coverlet.collector are not in any offline cache, and every runner phase is network-disabled. Each way to get them is a decision for the homeowner or dispatcher: (a) implement the networked restore phase of D-016 (an agent proposal, and a change to a security boundary in the runner owned by #3/#8); (b) approve fetching pinned, hash-verified packages on Tower into a local feed; or (c) merge #4 without real-run evidence and move that evidence to a follow-up issue. Recorded on issue #4.
+- State: implemented only. CI and an opposite-agent (Codex) review of the new head are pending. Not deployed, not verified working.
