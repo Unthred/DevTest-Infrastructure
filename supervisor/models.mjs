@@ -4,7 +4,8 @@
 // An unknown or invalid value never fails a job: it is dropped (the CLI default applies) and a warning is returned.
 import { SupervisorError } from './core.mjs';
 
-export const JOB_TYPES = ['implement', 'fix', 'review', 'rebase', 'ci-fix', 'continue'];
+// 'interim-review' (D-021): a same-provider review while every other agent is out of allowance; falls back to the review entry.
+export const JOB_TYPES = ['implement', 'fix', 'review', 'rebase', 'ci-fix', 'continue', 'interim-review'];
 export const typeOfKind = kind => (kind === 'cifix' ? 'ci-fix' : kind);
 // Work that keeps the strong model even when the allowance is nearly used up.
 export const STRONG_TYPES = new Set(['implement', 'continue']);
@@ -60,7 +61,9 @@ export function weeklyUtilization(allowance, now = Date.now()) {
 
 // ctx: { modelsConfig, agent, kind, manifestModels, escalation: {reason}|null, utilization: number|null }
 export function resolveModel(ctx) {
-  const type = typeOfKind(ctx.kind), table = ctx.modelsConfig?.agents?.[ctx.agent];
+  const table = ctx.modelsConfig?.agents?.[ctx.agent];
+  let type = typeOfKind(ctx.kind);
+  if (type === 'interim-review' && table && !table[type]) type = 'review';
   if (!table || !table[type]) return { fields: {}, warnings: [] };
   const threshold = ctx.modelsConfig.allowance_threshold ?? DEFAULT_THRESHOLD;
   const strong = table.strong || table.implement || table[type];
