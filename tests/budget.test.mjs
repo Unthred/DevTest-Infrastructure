@@ -9,6 +9,7 @@ import { Team, applyLocalOverride, validateTeamConfig } from '../supervisor/team
 import { stateRoot } from '../supervisor/core.mjs';
 import { assessAgent, admits, jobCosts, modeLine, recentRate, weeklyHistory, validateBudgetConfig, DEFAULT_BUDGET, HOUR } from '../supervisor/budget.mjs';
 import { resolveModel } from '../supervisor/models.mjs';
+import { claudeAllowance, codexAllowance, limitFromAllowance } from '../supervisor/allowance.mjs';
 import { buildView } from '../supervisor/dashboard.mjs';
 import { buildStatus, renderStatus } from '../supervisor/teamstatus.mjs';
 
@@ -113,6 +114,39 @@ test('waiting: a used-up window or paid overage stops every job; credits alone d
   // reviews_only admits reviews and own-PR fixes only
   const ro = assessAgent({ allowance: codexAl(0.92), now: NOW });
   assert.deepEqual(['review', 'fix', 'cifix', 'rebase', 'continue', 'implement'].map(k => admits(ro, k).ok), [true, true, true, true, false, false]);
+});
+
+test('waiting on a provider-reported limit without numeric windows (review of PR #73): the dispatcher starts nothing for that agent', async t => {
+  // The shapes allowance.mjs produces for a rejected event: Claude's fallback window (rateLimitType + resetsAt, utilization
+  // null), a Codex record with limit_reached and no windows, and a window whose own status is rejected.
+  const claudeRejected = { ...claudeAllowance({ status: 'rejected', rateLimitType: 'seven_day', resetsAt: RESET / 1000 }), observedAt: NOW };
+  assert.equal(claudeRejected.windows[0].utilization, null);
+  assert.equal(limitFromAllowance(claudeRejected, NOW).event, 'usage_limit', 'allowance.mjs calls it a limit');
+  const cl = assessAgent({ allowance: claudeRejected, now: NOW });
+  assert.equal(cl.mode, 'waiting'); assert.equal(cl.until, RESET); assert.match(cl.reason, /limit reached/);
+  assert.deepEqual(['review', 'fix', 'implement'].map(k => admits(cl, k).ok), [false, false, false]);
+  assert.equal(assessAgent({ allowance: claudeRejected, now: RESET + 60000 }).mode, 'normal', 'the reported reset has passed');
+  // No reset time at all: waits one hour from the report (D-019's first wait), then the next launch reads anew.
+  const codexReached = { ...codexAllowance({ rate_limit_reached_type: 'weekly' }), observedAt: NOW };
+  assert.deepEqual(codexReached.windows, []);
+  const cx = assessAgent({ allowance: codexReached, now: NOW + 30 * 60000 });
+  assert.equal(cx.mode, 'waiting'); assert.equal(cx.until, NOW + HOUR); assert.match(cx.reason, /without a reset time/);
+  assert.equal(assessAgent({ allowance: codexReached, now: NOW + HOUR }).mode, 'normal');
+  assert.equal(assessAgent({ allowance: { status: 'rejected', observedAt: NOW }, now: NOW }).mode, 'waiting', 'a record without a windows list');
+  // A window that reports its own rejected status with no numeric reading, under an "allowed" record status.
+  const win = { provider: 'claude', status: 'allowed', observedAt: NOW, windows: [{ type: 'five_hour', utilization: null, resetsAt: NOW + 2 * HOUR, status: 'rejected' }, { type: 'seven_day', utilization: null, resetsAt: RESET, status: 'allowed' }], billing: { usingOverage: false } };
+  const ww = assessAgent({ allowance: win, now: NOW });
+  assert.equal(ww.mode, 'waiting'); assert.equal(ww.until, NOW + 2 * HOUR, 'waits for the rejected window, not the latest of all');
+  // Unflagged records without numeric windows stay normal.
+  assert.equal(assessAgent({ allowance: { ...codexAllowance({}), observedAt: NOW }, now: NOW }).mode, 'normal');
+  // Through the dispatcher: claude reviews nothing and implements nothing; codex (normal) still works its own issues.
+  const w = world(t, { issues: [issue(2), issue(3), issue(23), issue(5)], pulls: [pr(40, 'codex/issue-2-x', H(1))], allowance: { codex: codexAl(0.3), claude: claudeRejected } });
+  const plan = await w.team.plan();
+  assert.ok(!plan.some(a => a.agent === 'claude'), JSON.stringify(plan));
+  assert.ok(plan.some(a => a.agent === 'codex'));
+  await w.team.tick();
+  assert.ok(!w.calls.created.some(s => s.provider === 'claude'), 'no claude job created');
+  assert.equal(w.team.s.budget.claude.mode, 'waiting');
 });
 
 test('dispatcher on the 31 Oct numbers: codex takes only reviews; its implementation goes to claude, which keeps the owner and D-011', async t => {

@@ -81,6 +81,23 @@ export function jobCosts(jobs, weekly, now) {
   return { perToken, typical, cost: kind => (perToken === null ? null : perToken * (typical[kind] ?? any ?? NaN)) || null };
 }
 
+// A limit the provider itself reports (an exhausted status on the record or on a window), whether or not any window carries
+// a numeric reading: the exhausted-state shapes are not captured live, and a rejected Claude event may hold only
+// `rateLimitType` and `resetsAt` (allowance.mjs keeps such a window with utilization null). Current while a reported reset
+// time is still ahead (waits until the latest one). When every reported reset time has passed, the limit has reset. With no
+// reset time at all it holds for one hour from the reading, D-019's first conservative wait; the next launch reads anew.
+export function reportedLimit(allowance, now) {
+  const all = Array.isArray(allowance?.windows) ? allowance.windows : [];
+  const flagged = all.filter(w => EXHAUSTED_STATUS.includes(w?.status));
+  if (!EXHAUSTED_STATUS.includes(allowance?.status) && !flagged.length) return null;
+  const times = (flagged.length ? flagged : all).map(w => w?.resetsAt).filter(Number.isFinite);
+  const ahead = times.filter(t => t > now);
+  if (ahead.length) return { until: Math.max(...ahead), reason: 'the provider reports the limit reached; waits for the reset' };
+  if (times.length) return null;
+  const until = Number.isFinite(allowance?.observedAt) && allowance.observedAt > 0 ? allowance.observedAt + HOUR : null;
+  return until !== null && now < until ? { until, reason: 'the provider reports the limit reached without a reset time; waits one hour from the report (D-019)' } : null;
+}
+
 const pct = v => `${Math.round(v * 100)}%`;
 const hrs = h => (h >= 48 ? `${Math.round(h / 24 * 10) / 10} days` : `${Math.round(h)}h`);
 
@@ -89,7 +106,11 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   const out = { mode: 'normal', reason: null, until: null, known: false, used: null, resetsAt: null, hoursLeft: null, ratePerHour: null, rateSource: null, projected: null, runsOutAt: null,
     shortWindow: null, observedAt: allowance?.observedAt ?? null, overage: allowance?.billing?.usingOverage === true, creditsAvailable: allowance?.billing?.creditsAvailable === true, costs: { perToken: null, typical: {}, cost: () => null } };
   if (settings.enabled === false) { out.reason = 'allowance-aware scheduling is switched off'; return out; }
-  if (!allowance || !Array.isArray(allowance.windows)) { out.reason = 'no allowance reported yet'; return out; }
+  if (!allowance || !Array.isArray(allowance.windows)) {
+    const reported = reportedLimit(allowance, now);
+    if (reported) return { ...out, mode: 'waiting', until: reported.until, reason: reported.reason };
+    out.reason = 'no allowance reported yet'; return out;
+  }
   const windows = live(allowance, now), weekly = top(windows.filter(isWeekly)), short = top(windows.filter(w => !isWeekly(w)));
   if (short) out.shortWindow = { used: short.utilization, resetsAt: short.resetsAt };
   if (weekly) {
@@ -106,7 +127,8 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (out.overage && fresh) return { ...out, mode: 'waiting', until: latest, reason: 'the provider reports paid overage in use; nothing starts (overage and credits are never used)' };
   if (weekly && weekly.utilization >= settings.exhausted_at) return { ...out, mode: 'waiting', until: weekly.resetsAt, reason: `weekly ${pct(weekly.utilization)}: used up; waits for the reset` };
   if (short && short.utilization >= settings.exhausted_at) return { ...out, mode: 'waiting', until: short.resetsAt, reason: `short window ${pct(short.utilization)}: used up; waits for its reset` };
-  if (EXHAUSTED_STATUS.includes(allowance.status) && windows.length) return { ...out, mode: 'waiting', until: latest, reason: 'the provider reports the limit reached; waits for the reset' };
+  const reported = reportedLimit(allowance, now);
+  if (reported) return { ...out, mode: 'waiting', until: reported.until, reason: reported.reason };
   if (!weekly) return out;
   // reviews_only: projected to run out before the reset, or at or above the high-water mark with more than a day to go
   const fig = `weekly ${pct(out.used)}, projected ${pct(out.projected)} at reset (${hrs(out.hoursLeft)} left, ${out.rateSource})`;
