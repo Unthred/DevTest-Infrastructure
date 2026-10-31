@@ -2,15 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (21 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-021 homeowner-approved 2026-10-31 (issue #81); D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-<<<<<<< HEAD
-Last updated: 2026-11-01 by Claude on `claude/issue-56-allowance-aware-scheduling` (issue #56). Previous update: Claude on `claude/issue-72-dashboard-supervisor-health` (issue #72). Each agent edits this file only on its own branch.
-=======
-<<<<<<< HEAD
-Last updated: 2026-10-31 by Claude on `claude/issue-72-dashboard-supervisor-health` (issue #72). Each agent edits this file only on its own branch.
-=======
-Last updated: 2026-10-31 by Claude on `claude/issue-4-04-net-testing` (issue #4). Each agent edits this file only on its own branch.
->>>>>>> 0bf5ec3 (Add .NET test runner with TRX, JUnit and coverage artifacts (issue #4))
->>>>>>> 8f6c9cc (Add .NET test runner with TRX, JUnit and coverage artifacts (issue #4))
+Last updated: 2026-11-01 by Claude on `claude/issue-4-04-net-testing` (issue #4). Previous update: Claude on `claude/issue-56-allowance-aware-scheduling` (issue #56). Each agent edits this file only on its own branch.
 
 ## Completion states
 
@@ -33,13 +25,9 @@ Last updated: 2026-10-31 by Claude on `claude/issue-4-04-net-testing` (issue #4)
 | #81 Interim same-provider reviewer (D-021) | yes; branch `claude/issue-81-interim-reviewer` | pending | pending | fixture tests (self-upgrade accepts an interim PASS while enabled); out-of-allowance check run read-only against the real Tower state (claude not out, codex out) |
 | #83 Upgrade accepts current launcher form | yes; branch `claude/issue-83-launcher-check` | pending | pending | check run against the real `/root/bin/ai-agent` (accepted) |
 | #75 Stale or missing allowance readings | yes; branch `claude/issue-75-usage-cards-and`, see PR. Codex's limit-hit record (`primary/secondary: null`, captured) is now status `unknown` and never hides an older reading; one expiry rule (`windowExpired`) on cards, chart, Warnings and model routing; chart lines end at the reported reset with an *Expected reset* marker; model-free Codex probe (local rollout `rate_limits` only) stored in `dashboard/cache.json` `probes`. Also covers #76 requirement 6 (Warnings card shows the last reading and its age) | no; CI and Codex review pending | no (installed supervisor not upgraded) | no; unit/fixture tests (337/337) plus a read-only render of the live Tower state (in memory, nothing written): Codex card showed "Limit reached, resets 2026-11-04 07:18 UTC" with an 8h 25m old reading, Claude 5-hour 100% marked expired. No browser screenshot taken. Claude has no model-free probe |
-<<<<<<< HEAD
 | #72 Dashboard Supervisor area and copy buttons | yes; branch `claude/issue-72-dashboard-supervisor-health`, see PR; `supervisor/suphealth.mjs`, `docs/dashboard.md` | no; CI and Codex review pending | no (installed supervisor not upgraded; dashboard not served) | partly: validator OK, 342/342 tests; Tower `tests/supervisor-page-smoke.mjs` OK (layout audit passes at 8 widths on 4 pages in real Chromium; copy buttons revealed, no page errors); read-only render against the real Tower state OK. Not verified: a real copy to a phone's clipboard, Firefox/WebKit |
-| #4, #7–#14 other issues | not started | no | no | no |
-=======
-| #4 .NET testing, coverage, artifacts | implementation on branch `claude/issue-4-04-net-testing` (`dotnet/testing.mjs`, fixture, `docs/dotnet-testing.md`); PR open | validator and all node tests pass locally; CI and opposite-agent review pending | no | no real Docker test run: xunit/Test.Sdk/coverlet are not in any offline NuGet cache (no network phase); verified with a fake runner over the real planner |
+| #4 .NET testing, coverage, artifacts | implementation on branch `claude/issue-4-04-net-testing` (`dotnet/testing.mjs`, fixture, `docs/dotnet-testing.md`); PR open | validator and 314/314 tests pass locally after the PR #67 CHANGES fix round (persisted TRX/JUnit/summary now sanitized: raw output and stack traces dropped, failure message redacted and capped, regression test added); CI and re-review pending | no | no real Docker test run: xunit/Test.Sdk/coverlet are not in any offline NuGet cache (no network phase); verified with a fake runner over the real planner |
 | #7–#14 other issues | not started | no | no | no |
->>>>>>> 0bf5ec3 (Add .NET test runner with TRX, JUnit and coverage artifacts (issue #4))
 | #64 Model per job type | yes; branch `claude/issue-64-choose-model-per`, see PR; `docs/model-routing.md` | no; CI and Codex review pending | no (installed supervisor not upgraded) | no; unit/fixture tests only (311/311 locally). Real `claude --model/--effort` and `codex -c model_reasoning_effort` flags checked against `--help` only; no live job run with them ; fix round 2 (Codex CHANGES at c21e147): the Codex manifest no longer accepts a `gpt-` pattern; only models listed in its `aliases` (from the local Codex models cache) are forwarded, so `gpt-not-a-real-model` is dropped with a warning. The list must be updated when Codex adds models |
 | #56 Allowance-aware scheduling | yes; PR #73 from `claude/issue-56-allowance-aware-scheduling`; `supervisor/budget.mjs`, `docs/allowance-scheduling.md` | CI pending, review no: Codex CHANGES on `49d4d47` and `56a7b6a` (one blocking finding: a provider-reported limit without numeric windows left the agent `normal`). Fixed on 2026-10-31 in `assessAgent()`/`reportedLimit()` with a regression test (fails on the old code); validator OK and 339/339 tests locally; exact-head CI and Codex re-review of the new head pending. 2026-10-31: conflict-only rebase onto main `1cf4667` (old head `e1229ee`; only the handover "Last updated" line conflicted, both sides kept); validator OK and 341/341 tests after rebase; the earlier review does not carry over to the new head | no (installed supervisor not upgraded) | no; fixture tests only (including the 31 Oct numbers). A read-only assessment against the real Tower state root gave Claude weekly 60% / 4.6 days left and Codex 96% / 3.8 days left, both projected above 100% at reset: with the shipped settings both would be reviews-only (no new implementation) until a reset. No live tick has run with it |
 
@@ -271,3 +259,6 @@ Root cause (from live Tower state, read-only): a Codex job that hits its limit g
 ## Issue #56 / PR #73 red CI fix (Claude)
 - CI at `f75705d` failed on one test: `handover: completion states ...` in `tests/validate-project.test.mjs`. It removed only the first "Verified working", but the handover now repeats the phrase in prose, so the validator (substring, any case) still passed. Fixed in the test (removes every occurrence, any case); no validator or product change, no check weakened.
 - Validator OK and 365/365 tests locally. The new head needs exact-head CI and opposite-agent review. Not deployed, not verified working.
+## #4 PR #67 CHANGES round
+- Blocking 1 (unredacted TRX output, D-008/G5/G6) fixed in `dotnet/testing.mjs` (`sanitizeTrx`, `redactSecrets`); regression test in `tests/dotnet-testing.test.mjs`.
+- Blocking 2 (real SDK 8/9/10 Docker run with TRX and coverage) is NOT fixed: xunit, Test.Sdk and coverlet are in no offline NuGet cache and containers have no network. Needs a reviewed networked restore phase (D-016) or homeowner-seeded caches. `docs/dotnet-testing.md` states the acceptance is unmet; the dispatcher/homeowner must decide whether #4 may merge without it.

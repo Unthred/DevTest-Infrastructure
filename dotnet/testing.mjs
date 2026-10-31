@@ -14,6 +14,30 @@ const attr = (tag, name) => new RegExp(`\\b${name}="([^"]*)"`).exec(tag)?.[1];
 const unescapeXml = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 const escapeXml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// Test output can contain credentials (D-008). Persisted artifacts never carry raw TRX output: stdout/stderr/stack
+// traces are dropped, and the one failure message kept per test is pattern-redacted and capped. Pattern redaction is
+// best effort, not a guarantee, so the message stays short and the rest of the output is removed entirely.
+const SECRET_PATTERNS = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[REDACTED]'],
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@'"<>]*@/gi, '$1[REDACTED]@'],
+  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]{8,}/gi, '$1 [REDACTED]'],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?/g, '[REDACTED]'],
+  [/\b([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|auth|cookie|connectionstring)[A-Za-z0-9_.-]*)(\s*[:=]\s*|\s+is\s+)("[^"]*"|'[^']*'|[^\s;,&]+)/gi, '$1$2[REDACTED]'],
+  [/\b(?:AKIA|ASIA|ghp_|gho_|ghs_|github_pat_|glpat-|xox[abprs]-|sk-|hvs\.)[A-Za-z0-9_-]{8,}/g, '[REDACTED]'],
+  [/\b[A-Fa-f0-9]{32,}\b/g, '[REDACTED]'],
+  [/\b[A-Za-z0-9+\/_-]{40,}={0,2}/g, '[REDACTED]']
+];
+export const redactSecrets = text => SECRET_PATTERNS.reduce((t, [re, to]) => t.replace(re, to), String(text));
+const safeMessage = raw => redactSecrets(raw.replace(/\s+/g, ' ')).slice(0, 500);
+
+// Returns TRX text safe to persist: every <Output> block is replaced by a single redacted, capped message.
+export function sanitizeTrx(xml) {
+  return xml.replace(/<Output\b[^>]*?(?:\/>|>[\s\S]*?<\/Output>)/g, block => {
+    const message = /<Message>([\s\S]*?)<\/Message>/.exec(block)?.[1];
+    return message === undefined ? '' : '<Output><ErrorInfo><Message>' + escapeXml(safeMessage(unescapeXml(message))) + '</Message></ErrorInfo></Output>';
+  }).replace(/<(StdOut|StdErr|DebugTrace|TextMessages)\b[^>]*>[\s\S]*?<\/\1>/g, '');
+}
+
 export function parseTrx(xml) {
   const counters = /<Counters\b[^>]*>/.exec(xml)?.[0];
   if (!counters) return null;
@@ -22,7 +46,7 @@ export function parseTrx(xml) {
   for (const m of xml.matchAll(/<UnitTestResult\b([^>]*?)(?:\/>|>([\s\S]*?)<\/UnitTestResult>)/g)) {
     const message = /<Message>([\s\S]*?)<\/Message>/.exec(m[2] ?? '')?.[1];
     results.push({ name: unescapeXml(attr(m[1], 'testName') ?? ''), outcome: attr(m[1], 'outcome') ?? 'Unknown', duration: attr(m[1], 'duration') ?? '',
-      message: message === undefined ? undefined : unescapeXml(message).slice(0, 500) });
+      message: message === undefined ? undefined : safeMessage(unescapeXml(message)) });
   }
   return { total: n('total'), executed: n('executed'), passed: n('passed'), failed: n('failed'), results };
 }
@@ -68,7 +92,8 @@ export function collectArtifacts(outDir, runDir, suite) {
   let summary = null;
   const resultsDir = path.join(outDir, 'results');
   const trx = findFiles(resultsDir, '.trx')[0];
-  if (trx && copyBounded(trx, path.join(dest, 'results.trx'))) {
+  if (trx && fs.statSync(trx).size <= MAX_ARTIFACT_BYTES) {
+    fs.writeFileSync(path.join(dest, 'results.trx'), sanitizeTrx(fs.readFileSync(trx, 'utf8')), { flag: 'wx' });   // the raw TRX is never copied
     artifacts.push(record('trx', path.join(dest, 'results.trx'), runDir));
     summary = parseTrx(fs.readFileSync(path.join(dest, 'results.trx'), 'utf8'));
     if (summary) {
