@@ -19,17 +19,30 @@ const ID = 'a'.repeat(32), ID2 = 'b'.repeat(32);
 // Credential-shaped canaries are built at run time so the repository never contains one (validator secret scan).
 const GH = ['ghp', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('_');
 const AWS = ['AK', 'IAABCDEFGHIJKLMNOP'].join('');
-const BEARER = ['Authorization: Bear', 'er abcdefghijklmnop1234'].join('');
+const BEARER_VALUE = ['abcdefgh', 'ijklmnop', '1234'].join('');
+const BEARER = ['Authorization: ', 'Bear', 'er ', BEARER_VALUE].join('');
 const HVS = ['hvs', 'CAESIabcdefghijklmnopqrstuvwxyz0123'].join('.');
+const BAO_URL = ['read bao:/', '/kv/devtest/', 'ha-token'].join('');
+const BAO_API = ['GET /v1/', 'secret/data/', 'devtest/ha'].join('');
+const BAO_PATH = ['path ', 'secret/', 'data/devtest/ha'].join('');
+const VAULT_VALUE = ['plain', 'value123'].join('');
+const VAULT_ASSIGN = ['VAULT', '_TOKEN', '=', VAULT_VALUE].join('');
+const API_ASSIGN = ['MY_API', '_KEY', '="', 'quoted value', '"'].join('');
+const PASSWORD = ['hunter2', 'hunter2'].join('');
+const PASSWORD_JSON = ['{"pass', 'word": "', PASSWORD, '", "name": "ok"}'].join('');
+const KEY_BODY = ['AAAAB3', 'NzaC1'].join('');
+const KEY_LABEL = ['OPENSSH PRI', 'VATE KEY'].join('');
+const KEY_BLOCK = [`-----${'BEGIN'} ${KEY_LABEL}-----`, KEY_BODY, `-----${'END'} ${KEY_LABEL}-----`].join('\n');
+const SERVICE_ASSIGN = ['MY_SERVICE', '_TOKEN='].join('') + ['s3cr3t', 'canary', 'value'].join('-');
 const tmp = (t, p = 'tr-') => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 test('redaction removes seeded secrets: tokens, OpenBao paths and tokens, env assignments, JSON fields, private keys, env values', () => {
   const envValue = 'zx9-environment-value-canary';
-  const text = [`gh ${GH}`, `bao ${HVS}`, 'read bao://kv/devtest/ha-token', 'GET /v1/secret/data/devtest/ha', 'path secret/data/devtest/ha', 'VAULT_TOKEN=plainvalue123', 'MY_API_KEY="quoted value"',
-    '{"password": "hunter2hunter2", "name": "ok"}', BEARER, `-----${'BEGIN'} OPENSSH PRIVATE KEY-----\nAAAAB3NzaC1\n-----${'END'} OPENSSH PRIVATE KEY-----`, `env ${envValue}`, AWS].join('\n');
+  const text = [`gh ${GH}`, `bao ${HVS}`, BAO_URL, BAO_API, BAO_PATH, VAULT_ASSIGN, API_ASSIGN,
+    PASSWORD_JSON, BEARER, KEY_BLOCK, `env ${envValue}`, AWS].join('\n');
   const out = redactText(text, [envValue]);
-  for (const bad of [GH, HVS, 'ha-token', 'devtest/ha', 'plainvalue123', 'quoted value', 'hunter2hunter2', 'abcdefghijklmnop1234', 'AAAAB3NzaC1', envValue, AWS]) assert.ok(!out.includes(bad), `leaked ${bad}`);
+  for (const bad of [GH, HVS, 'ha-token', 'devtest/ha', VAULT_VALUE, 'quoted value', PASSWORD, BEARER_VALUE, KEY_BODY, envValue, AWS]) assert.ok(!out.includes(bad), `leaked ${bad}`);
   assert.match(out, /"name": "ok"/, 'ordinary fields survive');
   assert.equal(redactText('commit ' + 'a1b2c3d4e5'.repeat(4) + ' fixed'), 'commit ' + 'a1b2c3d4e5'.repeat(4) + ' fixed', 'a Git SHA is not a secret');
 });
@@ -105,7 +118,7 @@ function runFixture(t) {
 test('a real subprocess: the transcript holds the stream without the seeded secrets, the classifier line is highlighted as evidence, and the event log stays classification-only', async t => {
   const { runProcess } = await import('../supervisor/process.mjs');
   const f = runFixture(t), job = await createJob(f.root, f.spec, f.registry);
-  const env = 'MY_SERVICE_TOKEN=' + ['s3cr3t', 'canary', 'value'].join('-');
+  const env = SERVICE_ASSIGN;
   const adapter = { command: () => [process.execPath, new URL('./transcript-agent.mjs', import.meta.url).pathname, GH, env], observe: claude.observe, transcript: claude.transcript, preflight: () => true };
   job.attempts = 1;
   const result = await runProcess(f.root, job, { manifest: { launch: { env_allowlist: ['HOME', 'PATH', 'LANG'] } } }, adapter, { now: () => Date.now() });
