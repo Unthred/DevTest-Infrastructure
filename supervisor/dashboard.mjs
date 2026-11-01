@@ -2,6 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import path from 'node:path';
+import { transcriptExists } from './transcript.mjs';
 import { Team, ROLES, agentOfBranch, checksState, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
@@ -314,7 +315,7 @@ function graphs({ config, jobs, state, snapshots, now }) {
   return { allowance, jobsPerDay: days, verdicts, merges, tokensPerPr };
 }
 
-function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [] }) {
+function activity({ config, jobs, events, state, cache, snapshots, now, root, incidents = [] }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: `${kind === 'pull' ? 'PR' : 'issue'} #${n}` } : null);
@@ -324,7 +325,7 @@ function activity({ config, jobs, events, state, cache, snapshots, now, incident
   for (const e of events) {
     if (!names[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover'].includes(e.kind)) continue;
     const j = jobById.get(e.job); if (!j) continue;
-    rows.push({ at: e.at, text: `${agentName(j)}: ${names[e.kind] || redact(e.kind, 40)} (${j.kind || 'job'})`, link: jobLink(j) });
+    rows.push({ at: e.at, text: `${agentName(j)}: ${names[e.kind] || redact(e.kind, 40)} (${j.kind || 'job'})`, link: jobLink(j), ...(root && transcriptExists(root, j.id) ? { transcript: j.id } : {}) });
   }
   for (const [id, tj] of Object.entries(state.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at))
     rows.push({ at: tj.at, text: `rebase of PR #${tj.pr}: ${sha7(tj.rebase.oldHead)} -> ${sha7(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
@@ -381,7 +382,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       const s = states[name], j = s.job;
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
       base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state });
-      if (j) base.job = { id: j.id.slice(0, 8), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
+      if (j) base.job = { id: j.id.slice(0, 8), fullId: j.id, kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state }).map(a => ({ ...a, severity: severityOf(a.id) }));
@@ -393,7 +394,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and ticks are stopped: ${f.error}. team.local.json was not changed.`, 300), ref: null, severity: 'action' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
-    const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });
+    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });
     return {
       ...extra,
       generatedAt: now, repository: config.repository, teamEnabled: config.enabled !== false,
@@ -403,7 +404,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       attention,
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots, now }),
-      activity: activity({ config, jobs, events, state, cache, snapshots, now, incidents: readIncidents(root) })
+      activity: activity({ config, jobs, events, state, cache, snapshots, now, root, incidents: readIncidents(root) })
     };
   });
 }
@@ -433,13 +434,13 @@ export function freshness(tickAt, now) {
 const findingText = f => redact(typeof f === 'string' ? f : (f?.summary || f?.title || f?.message || JSON.stringify(f ?? '')), 240);
 const sumKeys = (obj, pr) => Object.entries(obj || {}).filter(([k]) => k.split(':')[0] === String(pr)).reduce((s, [, c]) => s + (Number(c) || 0), 0);
 
-function dashExtras({ config, cache, jobs, state, states, plan, queues, attention, now, ver, sup }) {
+function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
   const tokensOf = j => (j.usage ? j.usage.inputTokens + j.usage.outputTokens : null);
   const jobRows = jobs.filter(j => j.createdAt).sort((a, b) => b.createdAt - a.createdAt).slice(0, 300).map(j => ({
-    id: j.id.slice(0, 8), fullId: j.id, agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
+    id: j.id.slice(0, 8), fullId: j.id, hasTranscript: transcriptExists(root, j.id), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100) }));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, verdict: v.verdict || null, at: v.at ?? null,
@@ -472,7 +473,8 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
   const needsYou = attention.filter(a => a.severity === 'action').map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
-    return { ...a, why: a.text, decision: NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
+    const watch = a.id.startsWith('job-') && transcriptExists(root, a.id.slice(4)) ? a.id.slice(4) : null;
+    return { ...a, watch, why: a.text, decision: NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
   });
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {

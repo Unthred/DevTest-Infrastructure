@@ -234,3 +234,20 @@ html.sb-overlay,html.sb-overlay *{scrollbar-width:none}
   html[data-rail=collapsed][data-dock=left] .nav a,html[data-rail=collapsed][data-dock=right] .nav a{justify-content:center;padding:0}
 }
 @media(max-width:639px){.dockbar,.dock-handle,.nav-collapse{display:none!important}}
+/* watch a job (issue #123) */
+.watch-stats{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:center}
+.tr-log{display:flex;flex-direction:column;gap:var(--sp2);margin:var(--sp3) 0}
+.tr{padding:var(--sp2) var(--sp3);border-left:3px solid var(--line);border-radius:var(--r-sm);background:var(--panel,transparent);overflow-wrap:anywhere;min-width:0}
+.tr time{font-variant-numeric:tabular-nums;color:var(--muted,#667);margin-right:var(--sp2);font-size:var(--fs-sm)}
+.tr .who{font-weight:600;margin-right:var(--sp2)}
+.tr .txt{white-space:pre-wrap;margin-top:var(--sp1)}
+.tr-assistant{border-left-color:var(--link)}
+.tr-tool_call summary,.tr-tool_result summary{cursor:pointer}
+.tr-tool_call,.tr-tool_result{border-left-color:var(--line);font-size:var(--fs-sm)}
+.tr pre{white-space:pre-wrap;overflow-x:auto;max-width:100%;margin:var(--sp2) 0 0;font-size:var(--fs-sm)}
+.tr-usage{opacity:.7;font-size:var(--fs-sm)}
+.tr-error{border-left-color:var(--bad,#c33)}
+.tr-evidence{outline:2px solid var(--warn,#d90);outline-offset:1px}
+.tr .ev{margin:var(--sp2) 0 0}.tr mark{background:color-mix(in srgb,var(--warn,#d90) 35%,transparent);color:inherit;padding:0 2px;white-space:pre-wrap}
+.watch-link{margin-left:var(--sp2)}
+@media(max-width:639px){.tr{padding:var(--sp2)}}
