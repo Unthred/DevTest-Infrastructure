@@ -71,6 +71,13 @@ test('handover: completion states, decision link, blockers and next actions are 
   expectFinding((a) => a.edit('docs/ai/CURRENT_HANDOVER.md', '## Next actions', '## Later'), 'handover', 'Next actions');
 });
 
+test('handover: a pasted raw HTML document is rejected, inline mentions are not', () => {
+  for (const page of ['<!DOCTYPE html>\n<html>\n<head><title>x</title></head>\n</html>', '  <html lang="en">', '</HTML>', '<body>']) {
+    expectFinding((a) => a.write('docs/ai/CURRENT_HANDOVER.md', `${a.read('docs/ai/CURRENT_HANDOVER.md')}\n${page}\n`), 'handover', 'raw HTML');
+  }
+  expectClean((a) => a.write('docs/ai/CURRENT_HANDOVER.md', `${a.read('docs/ai/CURRENT_HANDOVER.md')}\n- The page shell renders \`<html>\` and \`<!DOCTYPE html>\`; <head> tags are checked.\n<header> and <bodyless> at line start are not documents.\n`));
+});
+
 test('entry points: CLAUDE.md pointer and AGENTS.md rules are required', () => {
   expectFinding((a) => a.write('CLAUDE.md', 'Read AGENTS.md\n'), 'entrypoints', '@AGENTS.md');
   expectFinding((a) => a.edit('AGENTS.md', 'One writer per worktree', 'Share worktrees'), 'entrypoints', 'worktree rule');
