@@ -11,6 +11,12 @@ export function rangeEqual({ repoPath, base, oldHead, newHead }) {
   };
   const side = head => run(['rev-list', '--reverse', `${base}..${head}`]).split('\n').filter(Boolean)
     .map(c => `${run(['patch-id', '--stable'], run(['show', '--format=', c])).split(' ')[0]}\n${run(['log', '-1', '--format=%B', c])}`);
+  // A merge commit's `show` is a combined diff that hides evil-merge hunks, so carry nothing across one.
+  const hasMerge = head => run(['rev-list', '--min-parents=2', '-n', '1', `${base}..${head}`]).trim() !== '';
+  if (hasMerge(oldHead) || hasMerge(newHead)) return false;
+  // The net change against the base must match too.
+  const net = head => run(['patch-id', '--stable'], run(['diff', `${base}...${head}`])).split(' ')[0];
+  if (net(oldHead) !== net(newHead)) return false;
   const a = side(oldHead), b = side(newHead);
   return a.length > 0 && a.length === b.length && a.every((x, i) => x === b[i]);
 }

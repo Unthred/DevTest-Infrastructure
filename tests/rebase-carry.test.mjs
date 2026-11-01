@@ -140,3 +140,17 @@ test('real git: rangeEqual is true for a clean rebase and false once a patch cha
   assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: old }), true);
   assert.throws(() => rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: 'f'.repeat(40) }));
 });
+
+test('real git: rangeEqual refuses a range holding a merge commit, even an evil merge that reverts a main fix', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } }).trim();
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'vulnerable\n'); g('add', '.'); g('commit', '-qm', 'base');
+  g('checkout', '-qb', 'feat'); fs.writeFileSync(path.join(dir, 'f'), 'f\n'); g('add', '.'); g('commit', '-qm', 'feature');
+  g('checkout', '-q', 'main'); fs.writeFileSync(path.join(dir, 'a.txt'), 'fixed\n'); g('commit', '-qam', 'security fix');
+  g('checkout', '-q', 'feat'); g('merge', '-q', '--no-ff', '-m', 'Merge main', 'main'); const clean = g('rev-parse', 'HEAD');
+  g('reset', '-q', '--hard', 'HEAD~1'); g('merge', '-q', '--no-ff', '--no-commit', 'main');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'vulnerable\n'); g('add', '.'); g('commit', '-qm', 'Merge main'); const evil = g('rev-parse', 'HEAD');
+  assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: clean, newHead: evil }), false);
+  assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: clean, newHead: clean }), false);
+});
