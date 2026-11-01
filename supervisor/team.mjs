@@ -411,9 +411,10 @@ export class Team {
       if (!allow('implement')) return null;
       return { type: 'implement', issue: n, title: issue.title, key: String(n) };
     }
-    // Issue #104: an issue with no owner at all goes to any agent with implement allowance, blockers first (the issues that
+    // Issue #104: opt-in only (unowned_allow_labels, default off; a label can only be applied by someone with triage rights, so
+    // issues from strangers on a public repo are never picked up). An issue with no owner that carries an allow label goes to any agent with implement allowance, blockers first (the issues that
     // unblock the most others come ahead). It has no owner to return to; the other agent reviews the PR as usual.
-    if (!B || B.mode === 'normal') {
+    if (B && B.mode === 'normal' && B.known && mayTakeOver(this.c, agent)) {
       for (const issue of this.unownedReady(prs, issueByNo, busy)) {
         if (!allow('implement')) return null;
         return { type: 'implement', issue: issue.number, title: issue.title, key: String(issue.number), unowned: true, reassignReason: 'unowned: no agent owns this issue; offered to an agent with implement allowance' };
@@ -446,14 +447,17 @@ export class Team {
     return l?.out ? { why: `is out of allowance (${String(l.reason || 'usage limit').slice(0, 160)})`, until: l.until ?? null } : null;
   }
 
-  // Open, ready issues no configured agent owns, blockers first (most open dependants), then by number.
+  // Open, ready issues no configured agent owns that carry an explicit opt-in label (unowned_allow_labels; empty = off),
+  // blockers first (most open dependants), then by number.
   unownedReady(prs, issueByNo, busy) {
+    const allowed = new Set(this.c.unowned_allow_labels || []);
+    if (!allowed.size) return [];
     const owned = new Set(this.agents().flatMap(([, a]) => a.issues));
     const skip = new Set(['needs-homeowner', 'epic', 'tracking', 'question', 'wontfix', ...(this.c.unowned_exclude_labels || [])]);
     const depsOf = i => this.c.depends_on_overrides?.[i.number] ?? i.prerequisites ?? prerequisites(i.body);
     const open = [...issueByNo.values()].filter(i => i.state === 'OPEN');
     const dependants = n => open.filter(i => depsOf(i).includes(n)).length;
-    return open.filter(i => !owned.has(i.number) && !i.labels.some(l => skip.has(l)) && this.implementable(i.number, prs, issueByNo, busy))
+    return open.filter(i => !owned.has(i.number) && i.labels.some(l => allowed.has(l)) && !i.labels.some(l => skip.has(l)) && this.implementable(i.number, prs, issueByNo, busy))
       .map(i => ({ i, d: dependants(i.number) })).sort((x, y) => (y.d - x.d) || (x.i.number - y.i.number)).map(x => x.i);
   }
 

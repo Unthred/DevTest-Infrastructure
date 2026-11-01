@@ -394,26 +394,38 @@ test('#104 in-flight, started and draft issues are never taken', async t => {
   assert.deepEqual(p.filter(a => a.agent === 'claude').map(a => a.issue), [3], 'the prerequisite (also codex-owned) is taken, not its dependant');
 });
 
-test('#104 an unowned ready issue is picked up, the one that unblocks others first; labels and open prerequisites exclude', async t => {
-  const w = world(t, { issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), issue(40), issue(41), issue(42, 'OPEN', 'Prerequisites: #41'), issue(43, 'OPEN', '', ['needs-homeowner']), issue(44, 'OPEN', 'Prerequisites: #99')],
+const OPT = ['agent-ok'];
+const L = (n, body = '', labels = []) => issue(n, 'OPEN', body, [...OPT, ...labels]);
+test('#104 unowned pickup is off by default and needs an allow label: unlabelled issues are never taken', async t => {
+  const issues = [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), issue(40), issue(41)];
+  const allowance = { codex: codexAl(0.3), claude: claudeAl(0.3) };
+  assert.deepEqual(await world(t, { issues, allowance }).team.plan(), [], 'no unowned_allow_labels: off');
+  const w = world(t, { issues, allowance, cfg: config({ unowned_allow_labels: OPT }) });
+  assert.deepEqual(await w.team.plan(), [], 'configured, but no issue carries the label');
+});
+
+test('#104 an opted-in unowned issue is picked up, the one that unblocks others first; labels and open prerequisites exclude', async t => {
+  const w = world(t, { cfg: config({ unowned_allow_labels: OPT }), issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), L(40), L(41), L(42, 'Prerequisites: #41'), L(43, '', ['needs-homeowner']), L(44, 'Prerequisites: #99'), issue(45)],
     allowance: { codex: codexAl(0.3), claude: claudeAl(0.3) } });
   const plan = await w.team.plan();
-  assert.ok(plan.length >= 1);
   for (const a of plan) { assert.equal(a.type, 'implement'); assert.equal(a.unowned, true); }
   assert.equal(plan.length, 2, 'one per agent');
-  assert.deepEqual(plan.map(a => a.issue).sort(), [40, 41].sort());
-  assert.equal(plan.find(a => a.issue === 41).unowned, true);
-  // 41 blocks 42, so it is chosen first; it is the first agent in config order
+  assert.deepEqual(plan.map(a => a.issue).sort(), [40, 41]);
   assert.equal(plan[0].issue, 41);
   await w.team.tick();
   const spec = w.calls.created.find(s => s.postcondition.branch.includes('issue-41'));
   assert.match(spec.prompt, /has no owner/);
-  assert.ok(!w.calls.created.some(s => /issue-4[234]-/.test(s.postcondition.branch)));
+  assert.ok(!w.calls.created.some(s => /issue-4[2345]-/.test(s.postcondition.branch)));
+});
+
+test('#104 an agent that may not take work over does not pick up unowned issues', async t => {
+  const w = world(t, { cfg: config({ unowned_allow_labels: OPT, budget: { can_take_over: ['codex'] } }), issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), L(40)], allowance: { codex: codexAl(0.3), claude: claudeAl(0.3) } });
+  assert.deepEqual((await w.team.plan()).map(a => [a.agent, a.issue]), [['codex', 40]]);
 });
 
 test('#104 an unowned issue with a PR is not offered again, and its draft is continued by the agent that took it', async t => {
-  const w = world(t, { issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), issue(40)], pulls: [pr(60, 'claude/issue-40-x', H(2), { isDraft: true })], allowance: { codex: codexAl(0.3), claude: claudeAl(0.3) } });
+  const w = world(t, { cfg: config({ unowned_allow_labels: OPT }), issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), L(40)], pulls: [pr(60, 'claude/issue-40-x', H(2), { isDraft: true })], allowance: { codex: codexAl(0.3), claude: claudeAl(0.3) } });
   w.team.s.jobs.x = { kind: 'implement', agent: 'claude', issue: 40, unowned: true, ingested: true };
   const plan = await w.team.plan();
-  assert.deepEqual(plan.map(a => [a.agent, a.type, a.issue]), [['claude', 'continue', 40]]);
+  assert.deepEqual(plan.map(x => [x.agent, x.type, x.issue]), [['claude', 'continue', 40]]);
 });

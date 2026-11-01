@@ -358,7 +358,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
-    for (const i of team.unownedReady(c.pulls || [], new Map((c.issues || []).map(x => [x.number, x])), () => false)) attention.push({ id: 'unowned', text: `Issue #${i.number} has no owner${plan.some(a => a.issue === i.number && a.unowned) ? ' (next: offered to an agent with allowance)' : ''}.`, ref: i.number, severity: 'warning' });
+    const unowned = team.unownedReady(c.pulls || [], new Map((c.issues || []).map(x => [x.number, x])), () => false);
+    if (unowned.length) attention.push({ id: 'unowned', text: `${unowned.length} opted-in issue${unowned.length === 1 ? ' has' : 's have'} no owner (${unowned.slice(0, 5).map(i => '#' + i.number).join(', ')}${unowned.length > 5 ? ', …' : ''}).`, ref: unowned[0].number, severity: 'warning' });
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
     const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });
