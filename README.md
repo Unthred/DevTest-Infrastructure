@@ -44,7 +44,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 ## Validation
 `node tools/validate-project.mjs` checks required files, the decision register, the handover, entry points, contracts, secrets, Docker-socket/privileged use and image pinning. `node --test "tests/**/*.test.mjs"` runs it against good and deliberately broken fixtures. CI runs both.
 
-Before each substantive report, preserve progress in the canonical handover once it exists. Record source, CI, deployed and verified states separately.
+Before each substantive report, record progress in the PR description and issue comments (feature branches never edit the handover, D-023; it is updated on main after merge). Record source, CI, deployed and verified states separately.
 
 ## First useful outcome
 Build and test a real Blazor fixture, render browser screenshots at phone and desktop widths, detect a deliberately broken responsive page, securely capture an authenticated HA view when access is approved, and cleanly stop containers with reproducible evidence saved on Tower.

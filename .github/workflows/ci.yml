@@ -39,3 +39,16 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: bash tools/ci/validate-commit-attribution.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+
+  no-handover-edit:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Feature branches do not edit the handover (D-023)
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: bash tools/ci/validate-no-handover-edit.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"

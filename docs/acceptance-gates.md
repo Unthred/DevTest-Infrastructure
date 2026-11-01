@@ -19,7 +19,7 @@ A merged PR or green CI alone is state 1–2, not 4.
 | G4 Review | Reviewed by the opposite agent, independently (it re-runs the tests, does not trust the author's report). Findings fixed or answered. | review link |
 | G5 Security | No secret in Git, logs or artifacts; no Docker socket or privileged mode; no production mutation; no reboot; images pinned by digest. | validator output |
 | G6 Evidence | Reproducible commands and outputs linked on the issue; sensitive values redacted. | issue comment |
-| G7 Handover | `docs/ai/CURRENT_HANDOVER.md` updated with the four states, SHA and blockers before the report. | handover commit |
+| G7 Handover | The four states, SHA and blockers are in the PR description and issue comment. The handover file is not edited on the feature branch (D-023); it is updated on main after merge. | PR description; main handover commit |
 | G8 Live (only if the issue deploys) | Deployed to Tower with a rollback, then observed working. | observation record |
 
 Dependencies come first: do not start an issue whose prerequisites are not at least state 2.

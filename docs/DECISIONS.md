@@ -123,7 +123,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: `docs/ai/CURRENT_HANDOVER.md` is canonical. It is updated before each substantive report. It records `implemented in source`, `CI/review passed`, `deployed`, and `verified working` separately for each item. Green CI or a merged PR is never reported as working.
 - Rationale: Resume from repository state, not chat memory.
 - Rejected: Chronological-only logs; status held only in chat or on the project board.
-- Superseded-by: none
+- Superseded-by: D-023 (partly: who may edit the handover and when; the file stays canonical and the four states stay separate)
 
 ## D-014 — Register path is `docs/DECISIONS.md`
 - Status: homeowner-approved
@@ -204,6 +204,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: Only a trusted host-side broker talks to OpenBao, with a read-only identity whose token comes from an owner-only file. Secrets are delivered as read-only file bind mounts at `/secrets/<name>` from a 0700 per-run directory on tmpfs (`/dev/shm`), never argv, environment, repository or cache pool. They are overwritten, deleted and revoked after every run, and the output is scanned for the values. Traces are refused on runs with secrets. Sessions are reduced to an allow-listed domain set with a capped expiry. A production (Home Assistant) entry is refused until a recorded decision confirms a dedicated `devtest-` identity. Without OpenBao only the labelled mock backend is available. Details: docs/secrets.md.
 - Rationale: Environment and argv leak through inspection and logs; the container has no network, so a mounted file is the only channel that needs no token inside untrusted code.
 - Rejected: Environment variables; a container-side OpenBao client; secrets on persistent storage; automatic live Home Assistant login.
+- Superseded-by: none
+
+## D-023 — The handover changes on main only, never on a feature branch
+- Status: homeowner-approved
+- Date: 2026-10-30
+- Source: homeowner decision 2026-10-30; issue #52; amends D-013
+- Decision: Feature branches (implement, continue, fix, ci-fix and rebase jobs) do not edit `docs/ai/CURRENT_HANDOVER.md`. The dispatcher's state and the dashboard are the live per-job record. The handover is updated only on main, by one post-merge step (a dispatcher-generated summary or a periodic docs pull request from a `docs/handover-*` branch). D-013 otherwise stands: the handover stays canonical and reports `implemented in source`, `CI/review passed`, `deployed` and `verified working` separately. CI fails a pull request whose branch changes the handover unless its head branch is `docs/handover-*`.
+- Rationale: 30 Oct: nearly every rebase job, and the full opposite-agent re-review it forced (500k-1.2M tokens each), came from conflicts in the handover that every feature branch edited. Codex reached 75% of its weekly allowance.
+- Rejected: Keeping per-branch handover edits and merging them by hand; a merge driver that hides the conflict but still produces a new head and a re-review.
 - Superseded-by: none
 
 ## Open questions (need homeowner or a later issue)

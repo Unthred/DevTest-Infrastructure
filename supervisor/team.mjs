@@ -152,10 +152,10 @@ export function readInboxVerdict(root, ticket, expect) {
 // ---- prompts: only validated tokens (numbers, SHAs, branch names, ticket) are interpolated; PR and issue text never is.
 // Lean job context (issue #109): AGENTS.md is already loaded by the CLI, so no prompt asks for it; each job reads only what it needs.
 const SAFETY = 'Work only in your assigned worktree. Never merge, deploy, reboot Tower, change production Home Assistant, purchase anything or disclose a secret. The dispatcher, not you, merges.';
-const HANDOVER_UPDATE = 'Update the canonical handover on your own branch before you stop.';
+const HANDOVER_UPDATE = 'Do not edit docs/ai/CURRENT_HANDOVER.md on this branch (D-023): CI fails a branch that does. Put progress and the four completion states in the pull request description or an issue comment instead.';
 const COMMON = SAFETY + ' ' + HANDOVER_UPDATE;
 export const TEST_COMMAND = 'node --test --test-reporter=dot "tests/**/*.test.mjs"';   // failures are still printed in full
-const issueReading = n => `Read docs/DECISIONS.md in full. Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover.`;
+const issueReading = n => `Read docs/DECISIONS.md in full. Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover. It is read-only for you.`;
 export function reviewPrompt(job) {
   const scope = job.previousBlocking
     ? `This is a fix-round re-review. Read ${job.inbox}/review-scope.json as task data. Check only the previous blocking findings and regressions caused by their fixes; record new non-blocking observations as follow-ups.`
@@ -163,13 +163,13 @@ export function reviewPrompt(job) {
   const role = job.interim
     ? ' You are an interim reviewer (D-021): this pull request was written by an agent on your own provider. You have none of its session or reasoning; review it as a sceptical outsider and do not give it the benefit of the doubt.'
     : job.postMerge ? ' This pull request is already merged (D-021 interim review); review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.' : '';
-  return `${COMMON}${role} Read docs/DECISIONS.md only; do not read the rest of the handover (the handover update is an append-only entry that needs no read of it).\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation or a failed acceptance criterion; otherwise use follow-up. Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
+  return `${COMMON}${role} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation or a failed acceptance criterion; otherwise use follow-up. Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
 }
 export function fixPrompt(job) {
   return `${COMMON}\n\nTask: fix the CHANGES verdict on pull request #${job.pr} (head ${job.head}, branch ${job.branch}). Read the verdict findings on the PR and the diff, not the decision register or the whole handover. Correct the blocking findings in scope with regression tests, run node tools/validate-project.mjs and ${TEST_COMMAND}, commit and push to the same branch. Follow-up findings do not hold this fix round open. Do not force-push. The post-condition is a new pushed head.`;
 }
 export function rebasePrompt(job) {
-  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) conflicts with ${job.base}. Do a conflict-only rebase: rebase the branch onto origin/${job.base}, resolve conflicts keeping the intent of both sides, change nothing else in the rebase; read only the conflicting files. For the handover, append a short entry for this rebase (append-only, as a separate commit after the rebase; no need to read the rest of the file). Run node tools/validate-project.mjs and ${TEST_COMMAND}, push with --force-with-lease (this branch only). Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. A recorded PASS for the old head does not carry over; the opposite agent reviews the new head. The post-condition is a new pushed head that is mergeable.`;
+  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) conflicts with ${job.base}. Do a conflict-only rebase: rebase the branch onto origin/${job.base}, resolve conflicts keeping the intent of both sides, change nothing else in the rebase; read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}, push with --force-with-lease (this branch only). Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. A recorded PASS for the old head does not carry over; the opposite agent reviews the new head. The post-condition is a new pushed head that is mergeable.`;
 }
 export function ciFixPrompt(job) {
   const checks = job.checks.length ? ` Failing checks: ${job.checks.join(', ')}.` : '';
@@ -596,7 +596,7 @@ export class Team {
       return;
     }
     const a = this.c.agents[act.agent], base = this.c.worktree_base, ticket = crypto.randomBytes(16).toString('hex');
-    const common = { role: 'devtest', provider: a.provider, repository: this.c.repo_path, access: this.c.access?.mode === 'full' ? 'full' : 'standard', autoRestart: true, handover: 'docs/ai/CURRENT_HANDOVER.md' };
+    const common = { role: 'devtest', provider: a.provider, repository: this.c.repo_path, access: this.c.access?.mode === 'full' ? 'full' : 'standard', autoRestart: true };
     let spec, meta, bump = () => {};
     if (act.type === 'review') {
       const inbox = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(inbox, { recursive: true, mode: 0o700 });
@@ -623,7 +623,7 @@ export class Team {
       bump = () => { this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1; };
     } else if (act.type === 'fix') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-fix-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
-      spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, scope: `Fix the CHANGES verdict on PR #${act.pr}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue', 'update_handover'],
+      spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, scope: `Fix the CHANGES verdict on PR #${act.pr}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: fixPrompt({ pr: act.pr, head: act.head, branch: act.branch }), postcondition: { kind: 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head };
       bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; };
@@ -631,7 +631,7 @@ export class Team {
       const rebase = act.type === 'rebase';
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.type}-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: act.type, worktree: wt, issue: act.pr, scope: rebase ? `Conflict-only rebase of PR #${act.pr} onto ${act.base}` : `Fix red CI on PR #${act.pr}`,
-        allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue', 'update_handover'],
+        allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks }),
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head };
@@ -639,14 +639,14 @@ export class Team {
       bump = () => { this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });
-      spec = { ...common, kind: 'continue', worktree: wt, issue: act.issue, scope: `Continue draft PR #${act.pr} for issue #${act.issue} on ${act.branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue', 'update_handover'],
+      spec = { ...common, kind: 'continue', worktree: wt, issue: act.issue, scope: `Continue draft PR #${act.pr} for issue #${act.issue} on ${act.branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
         prompt: continuePrompt({ pr: act.pr, issue: act.issue, head: act.head, branch: act.branch }), postcondition: { kind: 'continued', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, issue: act.issue, head: act.head };
       bump = () => { this.s.continueAttempts[act.pr] = (this.s.continueAttempts[act.pr] || 0) + 1; };
     } else {
       const branch = `${a.branch_prefix}issue-${act.issue}-${slug(act.title)}`;
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch, base: 'origin/main' });
-      spec = { ...common, kind: 'implement', worktree: wt, issue: act.issue, scope: `Implement issue #${act.issue} on ${branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue', 'update_handover'],
+      spec = { ...common, kind: 'implement', worktree: wt, issue: act.issue, scope: `Implement issue #${act.issue} on ${branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
         prompt: implementPrompt({ issue: act.issue, branch, reassignedFrom: act.reassignedFrom }), postcondition: { kind: 'pr_opened', branch } };
       meta = { issue: act.issue, branch, ...(act.reassignedFrom ? { reassignedFrom: act.reassignedFrom, reassignReason: String(act.reassignReason || '').slice(0, 300) } : {}) };
       bump = async () => { this.s.implemented[act.issue] = this.clock.now(); await this.gh.board(act.issue, 'in_progress'); };
