@@ -2,6 +2,7 @@
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
 import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, inRange, tableState } from './dashui/logic.mjs';
+import { resultSeverity } from './suphealth.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
@@ -19,7 +20,7 @@ const colourOf = (name, i = 0) => AGENT_COLOUR[name] || EXTRA_COLOURS[i % EXTRA_
 // ---- routes
 export const NAV = [
   ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
-  ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['system', '/system', 'System', 'gear']
+  ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['system', '/system', 'System', 'gear']
 ];
 export function matchRoute(pathname) {
   const p = pathname.replace(/\/+$/, '') || '/';
@@ -29,9 +30,11 @@ export function matchRoute(pathname) {
   if ((m = /^\/agents\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'agent', id: m[1] };
   if ((m = /^\/work\/pr\/(\d{1,9})$/.exec(p))) return { page: 'pr', id: Number(m[1]) };
   if ((m = /^\/work\/issue\/(\d{1,9})$/.exec(p))) return { page: 'issue', id: Number(m[1]) };
+  if (p === '/supervisor/ticks') return { page: 'ticks' };
+  if (p === '/supervisor/upgrades') return { page: 'upgrades' };
   return null;
 }
-const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work' })[page] || page;
+const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', ticks: 'supervisor', upgrades: 'supervisor' })[page] || page;
 
 // ---- icons: authored for this project (24x24, 2px stroke); no third-party icon set is bundled
 const ICONS = {
@@ -46,7 +49,8 @@ const ICONS = {
   up: '<path d="m6 15 6-6 6 6"/>', down: '<path d="m6 9 6 6 6-6"/>', sort: '<path d="M8 9l4-4 4 4M8 15l4 4 4-4"/>', drag: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', play: '<path d="m8 5 11 7-11 7z"/>', pause: '<path d="M8 5v14M16 5v14"/>', refresh: '<path d="M20 11a8 8 0 1 0-2.300 5.700M20 4v7h-7"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.700 0l3-3a4 4 0 0 0-5.700-5.700l-1 1M14 10a4 4 0 0 0-5.700 0l-3 3a4 4 0 0 0 5.700 5.700l1-1"/>', stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
-  tag: '<path d="M3 12V3h9l9 9-9 9z"/><path d="M7.500 7.500h.01"/>', zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>', resize: '<path d="M20 12v8h-8M20 20 12 12"/>'
+  tag: '<path d="M3 12V3h9l9 9-9 9z"/><path d="M7.500 7.500h.01"/>', copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h4"/>',
+  shield: '<path d="M12 3 4 6v6c0 4.500 3.400 7.700 8 9 4.600-1.300 8-4.500 8-9V6z"/><path d="m9 12 2 2 4-4"/>', zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>', resize: '<path d="M20 12v8h-8M20 20 12 12"/>'
 };
 export const icon = (name, cls = '') => `<svg class="icon ${cls}" aria-hidden="true" viewBox="0 0 24 24"><use href="#i-${esc(name)}"/></svg>`;
 const sprite = `<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>${Object.entries(ICONS).map(([n, d]) => `<symbol id="i-${n}" viewBox="0 0 24 24">${d}</symbol>`).join('')}</defs></svg>`;
@@ -62,6 +66,14 @@ const prLink = n => `<a href="/work/pr/${Number(n)}">PR #${Number(n)}</a>`;
 const issueLink = n => `<a href="/work/issue/${Number(n)}">issue #${Number(n)}</a>`;
 const refOf = r => (r ? (r.kind === 'pull' ? prLink(r.n) : issueLink(r.n)) : '');
 const ext = (url, text) => `<a href="${esc(url)}">${esc(text)}</a>`;
+// ---- copy buttons (issue #72): the text to copy is in data-copy; dashui/app.js does the copying and shows "Copied".
+// Hidden until the script runs, because without script a button that does nothing is worse than none.
+export const copyBtn = (text, what, { label = '', cls = '' } = {}) => `<button type="button" class="copy ${label ? 'btn' : 'tbtn'} ${cls}" data-copy="${esc(text)}" aria-label="Copy ${esc(what)}" title="Copy ${esc(what)}" hidden>${icon('copy')}${label ? `<span data-copy-label>${esc(label)}</span>` : ''}</button>`;
+const overseerBtn = text => copyBtn(text, 'a plain-text summary for the overseer', { label: 'Copy for overseer', cls: 'overseer' });
+const cmdBlock = command => `<div class="cmdrow"><code class="cmd mono">${esc(command)}</code>${copyBtn(command, 'command')}</div>`;
+const idCopy = (shown, full, what) => `<span class="mono">${esc(shown)}</span>${full ? copyBtn(full, what) : ''}`;
+const shaCopy = (sha, what = 'commit ID') => (sha ? idCopy(String(sha).slice(0, 7), sha, what) : '<span class="muted">–</span>');
+const errCopy = text => (text ? `<span class="err">${esc(text)}</span>${copyBtn(text, 'error message')}` : '');
 const jobRef = (j, view) => (['implement', 'continue'].includes(j.kind) ? issueLink(j.ref) : prLink(j.ref));
 
 // ---- empty / error states
@@ -201,7 +213,7 @@ function nextPanel(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-action"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div><div class="sub">Decision: ${esc(a.decision)}</div>${a.command ? `<code class="cmd mono">${esc(a.command)}</code>` : ''}</li>`).join('')}</ul>`
+  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-action"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div><div class="sub">Decision: ${esc(a.decision)}</div>${a.command ? cmdBlock(a.command) : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 function warningsPanel(view) {
@@ -261,7 +273,7 @@ function agentsPage(view, query, path) {
 }
 function jobCols(view, { agent = true } = {}) {
   return [
-    { key: 'id', label: 'Job', html: r => `<span class="mono">${esc(r.id)}</span>` },
+    { key: 'id', label: 'Job', html: r => idCopy(r.id, r.fullId, 'job ID') },
     ...(agent ? [{ key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }] : []),
     { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? jobRef(r, view) : '–') },
     { key: 'status', label: 'Status', html: r => badge(({ completed: 'ok', running: 'ok', queued: 'info', paused_limit: 'warning', paused_manual: 'warning', blocked: 'action', failed: 'action' })[r.status] || 'info', r.status) },
@@ -305,7 +317,7 @@ function prDetail(view, query, path, route) {
   const facts = card({ id: 'facts', title: `PR #${p.number}: ${p.title}`, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(p.status)}</dd><dt>Author</dt><dd>${agentTag(p.agent, view)}</dd><dt>CI</dt><dd>${checksBadge(p.checks)}</dd><dt>Latest verdict</dt><dd>${verdictBadge(p.verdict)}</dd>
 <dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, `PR #${p.number}`)}</dd></dl>` });
   const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${esc(utc(r.at))}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
-  const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)} at <span class="mono">${sha7(v.head)}</span> <span class="sub">${esc(utc(v.at))}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
+  const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${esc(utc(v.at))}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
   const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
   return { title: `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs) };
 }
@@ -365,7 +377,7 @@ function reviewsPage(view, query, path) {
   const m = card({ id: 'r-m', title: 'Issue start to merge (hours)', span: 6, expandable: true, body: barChart({ rows: merges, title: 'time from issue start to merge', emptyTitle: 'No merges recorded' }) });
   const rows = view.verdicts.map(r => ({ ...r, findingCount: r.findings.length }));
   const t = card({ id: 'r-t', title: 'Verdict history', span: 12, movable: false, body: table({ id: 'rev', path, query, noun: 'verdicts', rows, searchKeys: ['pr', 'reviewer', 'verdict', 'head'], totals: { pr: 'count', findingCount: 'avg' },
-    cols: [{ key: 'pr', label: 'PR', num: true, html: r => prLink(r.pr) }, { key: 'reviewer', label: 'Reviewer', html: r => agentTag(r.reviewer, view) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'head', label: 'Head', html: r => `<span class="mono">${sha7(r.head)}</span>`, more: true },
+    cols: [{ key: 'pr', label: 'PR', num: true, html: r => prLink(r.pr) }, { key: 'reviewer', label: 'Reviewer', html: r => agentTag(r.reviewer, view) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'head', label: 'Head', html: r => (r.fullHead ? shaCopy(r.fullHead) : `<span class="mono">${sha7(r.head)}</span>`), more: true },
       { key: 'findingCount', label: 'Findings', num: true }, { key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)), more: true }], emptyState: empty('No reviews yet', 'Verdicts appear after the first review.', 'review') }) });
   return { title: 'Reviews', body: grid('reviews', v + m + t) };
 }
@@ -373,14 +385,88 @@ function systemPage(view) {
   const t = view.tick, v = view.version, now = view.generatedAt;
   const facts = card({ id: 'sys', title: 'Dispatcher', span: 6, movable: false, body: `<dl class="kv"><dt>Repository</dt><dd>${esc(view.repository)}</dd><dt>Team loop</dt><dd>${view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled')}</dd>
 <dt>Health</dt><dd>${badge(view.health.severity, view.health.label)}</dd><dt>Last tick</dt><dd>${t ? `${badge(t.status === 'ok' ? 'ok' : 'action', t.status)} ${esc(utc(t.at))} (${esc(ago(t.at, now))})` : badge('action', 'none recorded')}</dd>
-<dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${esc(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : 'none'}</dd>
+<dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : 'none'}</dd>
 <dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${esc(utc(now))}</dd></dl>` });
-  const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd class="mono">${esc(String(v.installed).slice(0, 12))}</dd><dt>Main</dt><dd class="mono">${esc(String(v.main).slice(0, 12))}</dd><dt>State</dt><dd>${v.drift ? badge('warning', 'Deploy needed') : badge('ok', 'Up to date')}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
+  const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${v.drift ? badge('warning', 'Deploy needed') : badge('ok', 'Up to date')}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
   const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
   return { title: 'System', body: grid('system', facts + ver + all) };
 }
 
-const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, activity: activityPage, usage: usagePage, reviews: reviewsPage, system: systemPage };
+// ---- Supervisor area (issue #72): health cards with drill-downs, tick history, upgrade history
+const list = (items, cls = '') => (items.length ? `<ul class="mini ${cls}">${items.join('')}</ul>` : '<span class="muted">none</span>');
+const tickRef = a => (a.type === 'implement' || a.type === 'continue' ? (a.issue ? issueLink(a.issue) : `#${Number(a.ref)}`) : a.pr ? prLink(a.pr) : `#${Number(a.ref)}`);
+function tickDetail(t) {
+  return `<dl class="kv"><dt>Verdicts ingested</dt><dd>${list(t.ingested.map(i => `<li>${verdictBadge(i.verdict)} ${i.pr ? prLink(i.pr) : ''} ${i.job ? `job ${idCopy(i.job.slice(0, 8), i.job, 'job ID')}` : ''}</li>`))}</dd>
+<dt>Actions</dt><dd>${list(t.actions.map(a => `<li>${esc(a.agent)} ${esc(a.type === 'cifix' ? 'fix CI' : a.type)} ${tickRef(a)}</li>`))}</dd>
+<dt>Skipped</dt><dd>${t.note ? `<span class="muted">${esc(t.note)}</span>` : list(t.skipped.map(s => `<li><b>${esc(s.what)}</b>: ${errCopy(s.reason)}</li>`))}</dd>
+<dt>Self-upgrade</dt><dd>${esc(t.selfUpgrade || '–')}</dd><dt>Leases released</dt><dd>${t.released}</dd>${t.rc !== null ? `<dt>Exit code</dt><dd>rc=${Number(t.rc)}</dd>` : ''}
+<dt>Errors</dt><dd>${list(t.errors.map(e => `<li>${errCopy(e)}</li>`), 'errs')}</dd></dl>`;
+}
+const tickStatusBadge = s => badge(({ ok: 'ok', partial: 'warning', skipped: 'info', empty: 'warning', error: 'action' })[s] || 'info', ({ ok: 'OK', partial: 'Partial', skipped: 'Skipped', empty: 'No result', error: 'Error' })[s] || s);
+function healthBody(c, view) {
+  const now = view.generatedAt;
+  const notes = c.notes.length ? `<ul class="mini notes">${c.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '';
+  let dl = '';
+  if (c.id === 'version') {
+    const u = c.lastUpgrade;
+    dl = `<dt>Installed</dt><dd>${shaCopy(c.installed)}${c.installedAt ? ` <span class="sub">since ${esc(utc(c.installedAt))}</span>` : ''}</dd><dt>origin/main</dt><dd>${shaCopy(c.origin)}</dd>
+<dt>Upgrade step</dt><dd>${esc(c.step || 'not reported')}</dd>
+<dt>Last upgrade</dt><dd>${u ? `${badge(resultSeverity(u.result), u.result)} ${shaCopy(u.from)} → ${shaCopy(u.to)} <span class="sub">${esc(ago(u.at, now))}</span>${u.reason ? `<br>${errCopy(u.reason)}` : ''}` : '<span class="muted">no record</span>'}</dd>
+<dt>Pre-check latched</dt><dd>${list(c.prechecked.map(p => `<li>${shaCopy(p.sha)} since ${esc(utc(p.at))}${p.isMain ? ` ${badge('warning', 'is origin/main')}` : ''}</li>`))}</dd>
+${c.latch ? `<dt>Rollback latch</dt><dd>${badge('action', 'Set')} ${errCopy(c.latch.reason)}</dd>` : ''}${c.pending ? `<dt>Pending</dt><dd>${shaCopy(c.pending.to)} awaiting a live tick</dd>` : ''}`;
+  } else if (c.id === 'tick') {
+    const t = c.tick;
+    dl = t ? `<dt>When</dt><dd>${esc(utc(t.at))} <span class="sub">(${esc(ago(t.at, now))}${c.stale ? ', more than two intervals' : ''})</span></dd><dt>Status</dt><dd>${tickStatusBadge(t.status)}</dd>
+<dt>Verdicts ingested</dt><dd>${t.ingested.length}</dd><dt>Actions</dt><dd>${list(t.actions.map(a => `<li>${esc(a.agent)} ${esc(a.type === 'cifix' ? 'fix CI' : a.type)} ${tickRef(a)}</li>`))}</dd>
+<dt>Skipped</dt><dd>${t.note ? esc(t.note) : list(t.skipped.map(s => `<li><b>${esc(s.what)}</b>: ${errCopy(s.reason)}</li>`))}</dd>` : '';
+  } else if (c.id === 'leases') {
+    const odd = c.leases.filter(l => l.state !== 'active');
+    dl = `<dt>Held</dt><dd>${c.leases.length} job(s)</dd><dt>Needs recovery</dt><dd>${odd.length ? list(odd.map(l => `<li>${badge(l.state === 'stale' ? 'action' : 'warning', l.state === 'stale' ? 'Stale' : 'Held')} job ${idCopy(l.job.slice(0, 8), l.job, 'job ID')} ${esc(l.reason)}${l.command ? cmdBlock(l.command) : ''}</li>`)) : '<span class="muted">none</span>'}</dd>`;
+  } else if (c.id === 'errors') {
+    dl = `<dt>Count</dt><dd>${c.count}</dd><dt>Since</dt><dd>${c.since ? esc(utc(c.since)) : 'the start of the log'}</dd>
+<dt>Latest</dt><dd>${c.latest ? `<span class="sub">${esc(utc(c.latest.at))}</span><br>${errCopy(c.latest.text)}` : '<span class="muted">none</span>'}</dd>`;
+  } else if (c.id === 'drift') {
+    dl = `<dt>Local main</dt><dd>${shaCopy(c.local)}</dd><dt>origin/main</dt><dd>${shaCopy(c.origin)}${c.fetchedAt ? ` <span class="sub">fetched ${esc(ago(c.fetchedAt, now))}</span>` : ''}</dd><dt>Checked out</dt><dd>${esc(c.head || 'unknown')}</dd>`;
+  }
+  return `<p class="hc-sum">${badge(c.severity)} <b>${esc(c.summary)}</b></p>${notes}${dl ? `<dl class="kv">${dl}</dl>` : ''}<div class="acts">${overseerBtn(c.overseer)}</div>`;
+}
+const DRILL = { version: '/supervisor/upgrades', tick: '/supervisor/ticks', leases: '/supervisor#h-leases-table', errors: '/supervisor/ticks?ticks.q=error' };
+function supervisorPage(view, query, path) {
+  const s = view.supervisor;
+  const cards = s.cards.map(c => card({ id: `h-${c.id}`, title: c.title, span: c.id === 'version' || c.id === 'tick' ? 6 : 4, href: DRILL[c.id], cls: `health hc-${c.severity}`, body: healthBody(c, view) })).join('');
+  const lc = s.cards.find(c => c.id === 'leases');
+  const leases = card({ id: 'h-leases-table', title: `Leases (${lc.leases.length})`, span: 12, movable: false, body: table({ id: 'leases', path, query, noun: 'leases', rows: lc.leases, searchKeys: ['job', 'agent', 'kind', 'status', 'state', 'reason'],
+    cols: [{ key: 'job', label: 'Job', html: r => idCopy(r.job.slice(0, 8), r.job, 'job ID') }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }, { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? `#${Number(r.ref)}` : '–') },
+      { key: 'ageMs', label: 'Age', num: true, html: r => esc(dur(r.ageMs)) }, { key: 'state', label: 'State', html: r => badge(r.state === 'stale' ? 'action' : r.state === 'held' ? 'warning' : 'ok', r.state) }, { key: 'status', label: 'Job status', more: true },
+      { key: 'reason', label: 'Why', more: true, html: r => `${esc(r.reason)}${r.command ? cmdBlock(r.command) : ''}` }],
+    totals: { job: 'count' }, emptyState: empty('No lease held', 'Leases appear while a supervised job owns an issue or worktree.', 'check') }) });
+  const recent = s.ticks.slice(-5).reverse();
+  const ticks = card({ id: 'h-recent', title: 'Recent ticks', span: 12, movable: false, href: '/supervisor/ticks', body: recent.length ? `<ul class="panel-list">${recent.map(t => `<li class="sev-${({ ok: 'ok', partial: 'warning', error: 'action' })[t.status] || 'info'}"><div class="t">${tickStatusBadge(t.status)} ${esc(utc(t.at))} <span class="sub">${esc(ago(t.at, view.generatedAt))}</span></div><div class="sub">${t.ingested.length} verdict(s), ${t.actions.length} action(s), ${t.skipped.length} skipped${t.errors.length ? `, ${t.errors.length} error(s)` : ''}${t.selfUpgrade ? `, self-upgrade ${esc(t.selfUpgrade)}` : ''}</div></li>`).join('')}</ul><p class="sub"><a href="/supervisor/ticks">Full tick history</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>`
+    : empty('No tick in the reconcile log', 'The reconcile cron writes one entry every five minutes.', 'clock') });
+  return { title: 'Supervisor', body: `${grid('supervisor', cards)}<div class="cards">${ticks}${leases}</div>` };
+}
+function ticksPage(view, query, path) {
+  // A row expands through the URL (ticks.open=<time>), like the rest of the table state: bookmarkable, works without script,
+  // and nothing hidden is laid out (a closed <details> is still measured by the layout audit).
+  const open = Number(query.get('ticks.open'));
+  const rows = view.supervisor.ticks.slice().reverse().map((t, i) => ({ ...t, n: i, nIngested: t.ingested.length, nActions: t.actions.length, nSkipped: t.skipped.length, nErrors: t.errors.length, flags: t.errors.length ? 'error' : '',
+    text: [...t.actions.map(a => `${a.agent} ${a.type} ${a.ref}`), ...t.skipped.map(s => `${s.what} ${s.reason}`), ...t.errors, t.note || ''].join(' ') }));
+  return { title: 'Tick history', crumbs: [['/supervisor', 'Supervisor'], [null, 'Tick history']], body: grid('ticks', card({ id: 't-all', title: `Ticks in the reconcile log (${rows.length})`, span: 12, movable: false, body: table({ id: 'ticks', path, query, noun: 'ticks', rows, searchKeys: ['status', 'selfUpgrade', 'flags', 'text'],
+    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'status', label: 'Status', html: r => tickStatusBadge(r.status) }, { key: 'nIngested', label: 'Verdicts', num: true }, { key: 'nActions', label: 'Actions', num: true },
+      { key: 'nSkipped', label: 'Skipped', num: true }, { key: 'nErrors', label: 'Errors', num: true }, { key: 'selfUpgrade', label: 'Self-upgrade', more: true },
+      { key: 'detail', label: 'Detail', sortable: false, html: r => (r.at === open && Number.isFinite(r.at)
+        ? `<a class="btn" href="${esc(withQuery(path, query, { 'ticks.open': null }))}" aria-expanded="true">Hide</a><div class="tick-detail" id="tick-${r.at}">${tickDetail(r)}</div>`
+        : Number.isFinite(r.at) ? `<a class="btn" href="${esc(withQuery(path, query, { 'ticks.open': r.at }))}#tick-${r.at}" aria-expanded="false">Show</a>` : '–') }],
+    totals: { at: 'count', nActions: 'sum', nSkipped: 'sum', nErrors: 'sum' }, emptyState: empty('No tick in the reconcile log', 'The reconcile cron writes one entry every five minutes.', 'clock') }) })) };
+}
+function upgradesPage(view, query, path) {
+  const rows = view.supervisor.upgrades.slice().reverse().map(u => ({ ...u, prText: u.prs.join(' '), checkText: Object.entries(u.checks).map(([k, v]) => `${k} ${v}`).join(', ') }));
+  return { title: 'Upgrade history', crumbs: [['/supervisor', 'Supervisor'], [null, 'Upgrade history']], body: grid('upgrades', card({ id: 'u-all', title: `Self-upgrade records (${rows.length})`, span: 12, movable: false, body: table({ id: 'upg', path, query, noun: 'records', rows, searchKeys: ['result', 'reason', 'from', 'to', 'prText'],
+    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'result', label: 'Result', html: r => badge(resultSeverity(r.result), r.result) }, { key: 'from', label: 'From', html: r => shaCopy(r.from) }, { key: 'to', label: 'To', html: r => shaCopy(r.to) },
+      { key: 'prText', label: 'PRs', html: r => (r.prs.length ? r.prs.map(prLink).join(', ') : '–') }, { key: 'reason', label: 'Reason', html: r => (r.reason ? errCopy(r.reason) : '–') }, { key: 'checkText', label: 'Checks', more: true }],
+    totals: { at: 'count' }, emptyState: empty('No self-upgrade record', 'Records appear in team/upgrades.jsonl when the supervisor upgrades itself.', 'info') }) })) };
+}
+const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, activity: activityPage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
 export function renderRoute(view, route, { query = new URLSearchParams(), pathname = '/', refreshSeconds = 60 } = {}) {
@@ -388,8 +474,8 @@ export function renderRoute(view, route, { query = new URLSearchParams(), pathna
   const page = fn ? fn(view, query, pathname.replace(/\/+$/, '') || '/', route) : null;
   const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work']] };
   const crumbs = res.crumbs ? `<p class="crumbs">${res.crumbs.map(([h, t]) => (h ? `<a href="${h}">${esc(t)}</a>` : esc(t))).join(' / ')}</p>` : '';
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="${refreshSeconds}"><title>${esc(res.title)} · DevTest team</title><link rel="stylesheet" href="/static/style.css"></head>
-<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route)}<main id="main"><h1>${esc(res.title)}</h1>${crumbs}${res.body}</main><script type="module" src="/static/app.js"></script></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="${refreshSeconds}"><title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"></head>
+<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route)}<main id="main"><h1>${esc(res.title)}</h1>${crumbs}${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><script type="module" src="/static/app.js"></script></body></html>`;
   return { status: page ? 200 : 404, html };
 }
 // Kept for callers that only want the overview.

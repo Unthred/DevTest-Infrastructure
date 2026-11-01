@@ -83,3 +83,11 @@ export function moveItem(order, id, delta) {
   if (i < 0 || j < 0 || j >= order.length) return order.slice();
   const out = order.slice(); [out[i], out[j]] = [out[j], out[i]]; return out;
 }
+
+// ---- copy buttons (issue #72). The page is served over plain HTTP on the LAN, which is not a secure context, so the
+// asynchronous Clipboard API is usually missing; the order of fallbacks is chosen here so it can be tested.
+export function copyMethods({ secure = false, clipboard = false, execCommand = false } = {}) {
+  return [...(secure && clipboard ? ['clipboard'] : []), ...(execCommand ? ['exec'] : []), 'manual'];
+}
+export const COPY_FEEDBACK_MS = 1600;
+export const copyFeedback = ok => (ok ? { state: 'copied', label: 'Copied', announce: 'Copied to the clipboard' } : { state: 'failed', label: 'Select and copy', announce: 'Could not copy automatically; the text is selected for you to copy' });

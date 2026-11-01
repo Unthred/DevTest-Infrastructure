@@ -41,6 +41,14 @@ export function readEvents(root, jobIds) {
   }
   return out;
 }
+// Lease files (one per issue/worktree key) name the job that holds them. Shared by `team status` and the Supervisor page (#72).
+export function readLeases(root) {
+  const dir = path.join(root, 'leases'); const out = [];
+  for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+    try { const l = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); if (typeof l.job === 'string') out.push({ job: l.job, at: l.at }); } catch (error) { if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error; }
+  }
+  return out;
+}
 export function readTeamState(root) {
   try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')); } catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return {}; throw error; }
 }
