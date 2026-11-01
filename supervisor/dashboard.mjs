@@ -339,7 +339,8 @@ export function budgetView(team) {
   return out;
 }
 
-export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '' }) {
+export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: interim reviews (D-021) are not planned here, but the real tick would refuse to run.';
+export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
@@ -356,6 +357,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
+    if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
     const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });
     return {
