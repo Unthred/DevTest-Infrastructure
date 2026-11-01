@@ -595,7 +595,7 @@ export class Team {
     }
   }
   // The dispatcher's own finished jobs free their issue/worktree leases, including jobs the homeowner resumed by hand.
-  // Blocked and failed jobs keep theirs: they are resumable and the lease stops a duplicate job on the same issue.
+  // Terminal transitions release leases themselves (issue #80); this sweep is a backstop for older jobs. Recovery re-acquires.
   async releaseFinished(report, guard = (_, fn) => fn()) {
     for (const id of Object.keys(this.s.jobs)) {
       await guard(`release ${id}`, async () => {
