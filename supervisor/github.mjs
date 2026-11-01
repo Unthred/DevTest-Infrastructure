@@ -26,7 +26,7 @@ export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding
 export function githubClient(config, gh = ghRunner()) {
   const repo = config.repository;
   const json = args => JSON.parse(gh(args) || 'null');
-  const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,statusCheckRollup,url';
+  const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url';
   return {
     listPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS]),
     listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,closingIssuesReferences']),
