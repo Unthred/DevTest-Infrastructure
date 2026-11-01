@@ -69,12 +69,12 @@ test('not reviewed: no PASS, PASS from the author, PASS at another head, unknown
     'self review': { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude' } } },
     'PASS at an older head': { verdicts: { [`7:${H('e')}`]: { verdict: 'PASS', reviewer: 'codex' } } },
     'unknown reviewer': { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'mallory' } } },
-    'interim PASS while interim review is not enabled': { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude', interim: true } } }
+    'same-provider PASS not recorded as independent': { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude', job: 'j' } } }
   };
   for (const [name, over] of Object.entries(cases)) {
     const w = world(t, over);
     assert.equal(await w.up.step(), 'not-eligible', name);
-    assert.match(w.alerts()[0], /PR #7 has no recorded PASS from the opposite agent/, name);
+    assert.match(w.alerts()[0], /PR #7 has no recorded PASS from an independent reviewer/, name);
     assert.equal(await w.up.step(), 'not-eligible'); assert.equal(w.alerts().length, 1, `${name}: alert repeated`);
     assert.equal(w.log.some(x => ['pre', 'upgrade'].includes(x[0])), false, name);
     assert.equal(w.records()[0].result, 'refused');
@@ -322,11 +322,12 @@ test('rollback script keeps the original single-argument launcher behaviour', t 
   assert.notEqual(spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname, 'nothex'], { encoding: 'utf8' }).status, 0);
 });
 
-test('an interim (D-021) PASS from the author counts while interim review is enabled', async t => {
-  const w = world(t, { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude', interim: true } } });
-  w.up.d.config = { ...config, interim_review: { enabled: true, decision: 'D-021' } };
-  assert.notEqual(await w.up.step(), 'not-eligible');
-  assert.ok(w.log.some(x => x[0] === 'pre'));
+test('a PASS from the author\'s provider counts when it was recorded as independent (a different model, issue #152), and so does an earlier interim PASS', async t => {
+  for (const flag of [{ independent: true }, { interim: true }]) {
+    const w = world(t, { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude', ...flag } } });
+    assert.notEqual(await w.up.step(), 'not-eligible', JSON.stringify(flag));
+    assert.ok(w.log.some(x => x[0] === 'pre'));
+  }
 });
 
 test('issue #69: an environmental pre-check failure is retried after an hour with one alert; a failed check stays latched', async t => {

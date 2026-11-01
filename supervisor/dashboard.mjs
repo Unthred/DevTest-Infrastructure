@@ -103,7 +103,6 @@ function reasons(team, cache, jobs, plan, states) {
     const v = S.verdicts?.[key];
     const checks = checksState(pr.statusCheckRollup);
     if (!author) continue;
-    const other = Object.keys(c.agents).filter(n => n !== author);
     let reason;
     if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
     else if (checks === 'pending') reason = 'waiting on CI';
@@ -111,9 +110,9 @@ function reasons(team, cache, jobs, plan, states) {
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? `PASS from ${v.reviewer}; merges on the next tick` : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
-    else reason = `awaiting ${other.join('/')} review of ${sha7(pr.headRefOid)}`;
+    else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}`;
     queues[author].push({ type: 'pr', ref: pr.number, title: pr.title, reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
-    if (!pr.isDraft && checks === 'green' && !v) for (const reviewer of other) {
+    if (!pr.isDraft && checks === 'green' && !v) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
       queues[reviewer].push({ type: 'review', ref: pr.number, title: pr.title, reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : team.held?.[reviewer]?.review ? ` (held: ${team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
@@ -352,7 +351,7 @@ export function budgetView(team) {
 }
 
 const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.DateTimeFormat('en-GB', { timeZone: team.timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(until)).replace(',', '')}` : '');
-export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: interim reviews (D-021) are not planned here, but the real tick would refuse to run.';
+export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: the real tick would refuse to launch jobs.';
 // Role slots (issue #148): who holds the implementer and reviewer slot right now, with the model and the work. A job the dispatcher has
 // no record of (started by hand) counts against the implementer slot, as the planner counts it.
 const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer' };

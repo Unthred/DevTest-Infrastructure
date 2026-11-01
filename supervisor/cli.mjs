@@ -95,7 +95,7 @@ function realGit(repoPath) {
 }
 async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true) {
   // The decision register that counts is the one merged into main, not a working copy.
-  // A dry run reads it too when it can, so `team status` plans interim reviews (D-021) the way a real tick would.
+  // A dry run reads it too when it can, so `team status` plans the way a real tick would.
   const register = readRegister(config);
   if (!register && needRegister) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main');
   // Model routing (issue #64): what each CLI accepts comes from its manifest; the weekly allowance is the freshest the provider reported.

@@ -63,7 +63,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   const slots = view.slots;   // role slots (issue #148), from the shared view
 
   // 2. what happens next
-  const plan = view.plan.map(p => { const n = p.issue ?? p.pr, what = `${p.interim ? 'interim ' : p.postMerge ? 'post-merge ' : ''}${p.type === 'cifix' ? 'fix CI on' : p.type} ${ref(p.type, n)}${p.interim ? ' (its own PR: every other agent is out of allowance, D-021)' : ''}`; return { agent: p.agent || null, type: p.type, ref: n, text: p.agent ? `${p.agent} → ${what}` : `dispatcher → ${what}` }; });
+  const plan = view.plan.map(p => { const n = p.issue ?? p.pr, what = `${p.secondOpinion || p.postMerge ? 'second-opinion ' : ''}${p.type === 'cifix' ? 'fix CI on' : p.type} ${ref(p.type, n)}`; return { agent: p.agent || null, type: p.type, ref: n, text: p.agent ? `${p.agent} → ${what}` : `dispatcher → ${what}` }; });
   const waiting = [];
   if (!view.teamEnabled) waiting.push({ agent: null, text: 'The team loop is switched off, so nothing will start by itself.' });
   for (const a of view.agents) {

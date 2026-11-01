@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { latestAllowance } from './dashdata.mjs';
 import { outOfAllowance } from './interim.mjs';
 import { weeklyUtilization } from './models.mjs';
+import { weeklyAtOf } from './team.mjs';
 
 // jobs: job records. probes: the tick cache's model-free allowance probes. events: [{ job, kind }] (the usage_limit evidence).
 // hadLimit(id) may replace the events lookup (the tick reads a job's events only when asked).
@@ -14,10 +15,10 @@ export function planningInputs({ config, jobs, probes = {}, snapshots = [], even
   const providerOf = agent => config.agents[agent].provider;
   const allowanceOf = agent => weeklyUtilization(allowances[providerOf(agent)]);
   const limitedJobs = new Set(events.filter(e => e.kind === 'usage_limit').map(e => e.job));
-  // D-021: whether an agent is out of allowance, from provider-reported records and its latest supervised job only.
+  // Whether an agent is out of allowance, from provider-reported records and its latest supervised job only.
   const limited = {};
   const limitedOf = agent => (limited[agent] ??= outOfAllowance({ provider: providerOf(agent), jobs, allowance: allowances[providerOf(agent)] ?? null,
-    weeklyAt: config.interim_review?.weekly_at ?? 0.95, now, hadLimit: hadLimit || (id => limitedJobs.has(id)) }));
+    weeklyAt: weeklyAtOf(config), now, hadLimit: hadLimit || (id => limitedJobs.has(id)) }));
   return { allowances, allowanceOf, limitedOf, usage: { allowance: allowances, jobs, snapshots } };
 }
 

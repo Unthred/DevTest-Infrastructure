@@ -130,7 +130,7 @@ test('queue reasons: waiting on CI, blocked by #n, awaiting review of sha, draft
   const q = (agent, ref) => v.queues[agent].find(i => i.ref === ref)?.reason;
   assert.equal(q('claude', 11), 'waiting on CI');
   assert.equal(q('claude', 12), 'draft');
-  assert.match(q('claude', 13), /awaiting codex review of 3333333/);
+  assert.match(q('claude', 13), /waiting for a reviewer on a different model: review of 3333333/);
   assert.match(q('claude', 14), /CHANGES from codex on 4444444; fix waits for a free slot/);
   assert.match(q('codex', 15), /PASS from claude; merges on the next tick/);
   assert.match(q('claude', 16), /PASS from codex but not mergeable \(conflicting\)/);

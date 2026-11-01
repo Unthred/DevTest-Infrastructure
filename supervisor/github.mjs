@@ -31,6 +31,7 @@ export function githubClient(config, gh = ghRunner()) {
     listPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS]),
     listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,closingIssuesReferences']),
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
+    listPullFiles: async n => (json(['pr', 'view', String(n), '--repo', repo, '--json', 'files'])?.files || []).map(f => String(f.path)),
     getPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', PR_FIELDS]),
     listIssues: async () => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '200', '--json', 'number,title,state,body,labels'])
       .map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) })),

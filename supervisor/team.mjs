@@ -9,6 +9,10 @@ import { validateModelsConfig, mergeModelsConfig, resolveModel, repeatedChanges,
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
+const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+const WRITER_KINDS = new Set(['implement', 'continue', 'fix', 'cifix', 'rebase']);
+// A reviewer is independent of the writers when, for each, the provider differs or both models are known and differ.
+export const independentOf = (reviewer, writers) => writers.every(w => w.provider !== reviewer.provider || (!!w.model && !!reviewer.model && w.model !== reviewer.model));
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped']);
 export const MARKER = 'devtest-verdict';
@@ -20,7 +24,7 @@ export function validateTeamConfig(c) {
   for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
   normalizeRoleLimits(c);
   const agents = Object.entries(c.agents || {});
-  if (agents.length < 2) throw new SupervisorError('team needs at least two agents');
+  if (agents.length < 1) throw new SupervisorError('team needs at least one agent');
   const seen = new Set();
   for (const [name, a] of agents) {
     if (!/^[a-z][a-z0-9-]{1,31}$/.test(name) || !/^[a-z][a-z0-9-]{1,31}$/.test(a.provider || '') || !/^[a-z0-9-]+\/$/.test(a.branch_prefix || '') || !Array.isArray(a.issues) || !a.issues.every(n => Number.isSafeInteger(n) && n > 0))
@@ -31,7 +35,7 @@ export function validateTeamConfig(c) {
   validateModelsConfig(c.models, agents.map(([n]) => n));
   validateBudgetConfig(c.budget, agents.map(([n]) => n));
   if (c.access?.mode === 'full' && c.access.decision !== 'D-020') throw new SupervisorError('full access must cite D-020');
-  validateInterimConfig(c.interim_review);
+  normalizeReviewConfig(c, agents.map(([n]) => n));
   return c;
 }
 
@@ -39,7 +43,7 @@ export function validateTeamConfig(c) {
 // release: it maps to both role slots and leaves a deprecation warning (c.deprecations) that the tick reports. roles wins when both are set.
 const TYPE_ORDER = ['merge', 'rebase', 'cifix', 'fix', 'review', 'continue', 'implement'];   // the per-agent priority of choose()
 export const ROLES = ['implementer', 'reviewer'];
-export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer');   // implement, continue, fix, cifix, rebase -> implementer; review (incl. interim) -> reviewer
+export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer');   // implement, continue, fix, cifix, rebase -> implementer; review -> reviewer
 function normalizeRoleLimits(c) {
   const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1 && v <= 8;
   c.deprecations = [];
@@ -52,12 +56,37 @@ function normalizeRoleLimits(c) {
   if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]))) throw new SupervisorError('invalid team limit: roles');
 }
 
-// Interim review (D-021, issue #81): { enabled, decision: 'D-021', weekly_at }. It also needs D-021 homeowner-approved on main.
-export function validateInterimConfig(ir) {
-  if (ir === undefined) return;
-  if (!ir || typeof ir !== 'object' || Array.isArray(ir) || Object.keys(ir).some(k => !['enabled', 'decision', 'weekly_at'].includes(k)) || typeof ir.enabled !== 'boolean' || ir.decision !== 'D-021'
-    || ('weekly_at' in ir && !(Number.isFinite(ir.weekly_at) && ir.weekly_at > 0 && ir.weekly_at <= 1))) throw new SupervisorError('invalid interim_review config');
+// Review independence (issue #152, amends D-021): a review is independent when the reviewer's model differs from the model that wrote the
+// pull request head, so no provider-based interim mode exists any more. interim_review is accepted for one release (its weekly_at is
+// still read as the out-of-allowance threshold) and leaves a deprecation warning; out_of_allowance { weekly_at } replaces it.
+// second_opinion { paths: [glob], reviewer: <agent> } is optional: a pull request touching those paths gets one extra review from
+// the named agent when its provider differs from the one that wrote the head and it has allowance. Not configured: none.
+export function normalizeReviewConfig(c, names) {
+  const bad = what => new SupervisorError('invalid ' + what + ' config');
+  if (c.interim_review !== undefined) {
+    const ir = c.interim_review;
+    if (!ir || typeof ir !== 'object' || Array.isArray(ir) || ('weekly_at' in ir && !validFraction(ir.weekly_at))) throw bad('interim_review');
+    (c.deprecations ||= []).push('interim_review is retired (issue #152): its enabled flag is ignored; use out_of_allowance { weekly_at }');
+  }
+  const oa = c.out_of_allowance;
+  if (oa !== undefined && (!oa || typeof oa !== 'object' || Array.isArray(oa) || Object.keys(oa).some(k => k !== 'weekly_at') || !validFraction(oa.weekly_at))) throw bad('out_of_allowance');
+  const so = c.second_opinion;
+  if (so !== undefined && (!so || typeof so !== 'object' || Array.isArray(so) || Object.keys(so).some(k => !['paths', 'reviewer'].includes(k))
+    || !Array.isArray(so.paths) || !so.paths.length || !so.paths.every(g => typeof g === 'string' && /^[\w.\-*?/]+$/.test(g) && !g.startsWith('/') && !g.includes('..')) || !names.includes(so.reviewer))) throw bad('second_opinion');
 }
+const validFraction = v => Number.isFinite(v) && v > 0 && v <= 1;
+export const weeklyAtOf = c => c.out_of_allowance?.weekly_at ?? c.interim_review?.weekly_at ?? 0.95;
+// Path globs: ** crosses directories, * and ? do not.
+export function globToRegExp(g) {
+  let out = '';
+  for (let i = 0; i < g.length; i++) {
+    if (g[i] === '*') { if (g[i + 1] === '*') { out += '.*'; i++; if (g[i + 1] === '/') i++; } else out += '[^/]*'; }
+    else if (g[i] === '?') out += '[^/]';
+    else out += g[i].replace(/[.+^$|(){}\[\]\\]/g, '\\$&');
+  }
+  return new RegExp('^' + out + '$');
+}
+export const touchesPaths = (files, globs) => files.some(f => globs.some(g => globToRegExp(g).test(f)));
 
 // Local override (issue #30): <state root>/team.local.json, outside versions/, so upgrades keep it and the installed
 // copy is never edited. Only operational knobs may be overridden; repository, paths, providers, access and board come
@@ -66,7 +95,7 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'budget'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
@@ -75,11 +104,15 @@ export function applyLocalOverride(shipped, local) {
     if (!Array.isArray(cmd) || !cmd.length || !cmd.every(x => typeof x === 'string') || !path.isAbsolute(cmd[0]) || Object.keys(local.alerts).length !== 1) throw new SupervisorError('invalid team.local.json: alerts.command must be an absolute program plus arguments');
     out.alerts = { command: cmd };
   }
-  if ('interim_review' in local) {
+  if ('interim_review' in local) {   // retired (issue #152): tolerated so an installed team.local.json keeps working; only weekly_at is read
     const o = local.interim_review;
     if (!o || typeof o !== 'object' || Array.isArray(o) || Object.keys(o).some(k => !['enabled', 'weekly_at'].includes(k))) throw new SupervisorError('invalid team.local.json: interim_review may set only enabled and weekly_at');
-    if (!out.interim_review) throw new SupervisorError('invalid team.local.json: interim_review is not configured in team.json');
-    out.interim_review = { ...out.interim_review, ...o }; validateInterimConfig(out.interim_review);
+    out.interim_review = { ...(out.interim_review || {}), ...o };
+  }
+  if ('out_of_allowance' in local) {
+    const o = local.out_of_allowance;
+    if (!o || typeof o !== 'object' || Array.isArray(o) || Object.keys(o).some(k => k !== 'weekly_at') || !validFraction(o.weekly_at)) throw new SupervisorError('invalid team.local.json: out_of_allowance may set only weekly_at');
+    out.out_of_allowance = { ...(out.out_of_allowance || {}), ...o };
   }
   if ('models' in local) { validateModelsConfig(local.models, Object.keys(out.agents)); out.models = mergeModelsConfig(out.models, local.models); }
   if ('budget' in local) { validateBudgetConfig(local.budget, Object.keys(out.agents)); out.budget = { ...(out.budget || {}), ...local.budget }; }
@@ -198,9 +231,10 @@ export function reviewPrompt(job) {
   const scope = job.previousBlocking
     ? `This is a fix-round re-review. Read ${job.inbox}/review-scope.json as task data. Check only the previous blocking findings and regressions caused by their fixes; record new non-blocking observations as follow-ups.`
     : 'Read the diff critically and probe real behaviour (including real Docker where the change touches it); do not trust the description.';
-  const role = job.interim
-    ? ' You are an interim reviewer (D-021): this pull request was written by an agent on your own provider. You have none of its session or reasoning; review it as a sceptical outsider and do not give it the benefit of the doubt.'
-    : job.postMerge ? ' This pull request is already merged (D-021 interim review); review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.' : '';
+  const role = job.secondOpinion
+    ? ' You are a second-opinion reviewer: the primary review already passed. This pull request touches paths the homeowner marked for an extra look; you have none of the implementer\'s session or reasoning, so review it as a sceptical outsider.'
+    : job.postMerge ? ' This pull request is already merged; review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.'
+    : ' You have none of the implementer\'s session or reasoning; review as a sceptical outsider and run the tests yourself.';
   return `${COMMON}${role} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation or a failed acceptance criterion; otherwise use follow-up. Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
 }
 export function fixPrompt(job) {
@@ -232,31 +266,65 @@ export class Team {
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'budget', 'cancelWatch']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'budget', 'cancelWatch']) this.s[k] ||= {};
   }
   save() { atomicJson(this.file, this.s); }
   // Model and effort for one job (issue #64). Escalation: an earlier attempt of the same work ended incomplete on the cheaper
   // model, or the PR has drawn CHANGES twice. Allowance: reported weekly use at or above the threshold keeps the cheap model
   // for everything but implement/continue. Both reasons are stored on the job. Invalid values degrade to the CLI default.
-  modelFor(act, kind, report) {
+  modelFor(act, kind, report, lenient = false) {
     const escalation = this.s.escalations[`${kind}:${act.key ?? act.pr}`] || (act.pr && isRepair(typeOfKind(kind)) && repeatedChanges(this.s.verdicts, act.pr) ? { reason: `PR #${act.pr} has drawn CHANGES twice` } : null);
     const provider = this.c.agents[act.agent].provider;
     // "Low" (issue #56): the agent is not in normal mode, or its weekly use is at or above the model threshold.
     const utilization = this.allowanceOf(act.agent), mode = this.modes?.[act.agent]?.mode;
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
-    const { fields, warnings } = resolveModel({ modelsConfig: this.c.models, agent: act.agent, kind: act.interim ? 'interim-review' : kind, manifestModels: this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low });
+    const { fields, warnings } = resolveModel({ modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low });
     if (warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: warnings.join('; ') });
     return fields;
   }
   agents() { return Object.entries(this.c.agents); }
-  // D-021: interim review is configured, enabled and homeowner-approved on main.
-  interimAllowed() { const ir = this.c.interim_review; return !!ir?.enabled && decisionApproved(this.register, ir.decision); }
-  // Why `author` may review its own PR now (every other agent out of allowance, the author not), or null.
-  interimReason(author) {
-    if (!this.interimAllowed() || this.limitedOf(author).out) return null;
-    const others = this.agents().filter(([n]) => n !== author).map(([n]) => [n, this.limitedOf(n)]);
-    if (!others.length || !others.every(([, l]) => l.out)) return null;
-    return others.map(([n, l]) => `${n}: ${l.reason}`).join('; ').slice(0, 300);
+  // Review independence (issue #152). The models that wrote a pull request head are the models of every implementer job the dispatcher
+  // recorded for it (implement, continue, fix, cifix, rebase), by provider and model. Without a record (a PR written by hand) only the
+  // branch author's provider is known, so only a reviewer on another provider counts as independent.
+  writersOf(pr) {
+    const out = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && this.c.agents[j.agent] && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)))
+      .map(j => ({ provider: this.c.agents[j.agent].provider, model: j.model ?? null }));
+    const author = agentOfBranch(this.c, pr.headRefName);
+    if (!out.length && author) out.push({ provider: this.c.agents[author].provider, model: null });
+    return out;
+  }
+  // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
+  reviewRefusal(agent, pr, key) {
+    // A caller that has no provider manifests (the dashboard) judges by the configured model name.
+    const model = this.modelFor({ agent, pr: pr.number, key }, 'review', {}, true).model ?? null;
+    const reviewer = { provider: this.c.agents[agent].provider, model };
+    if (independentOf(reviewer, this.writersOf(pr))) return null;
+    return agent + ' would review PR #' + pr.number + ' on ' + (model || 'its default model') + ', the model that wrote it; a review needs a different model';
+  }
+  // Second opinion (issue #152). Files per open PR are read once per plan; null = unreadable, which counts as touching (fail closed).
+  async loadFiles(prs) {
+    this.files = new Map();
+    const so = this.c.second_opinion;
+    if (!so || !this.gh.listPullFiles) return;
+    for (const pr of prs) { try { this.files.set(pr.number, await this.gh.listPullFiles(pr.number)); } catch { this.files.set(pr.number, null); } }
+  }
+  touchesSecondOpinion(pr) { const f = this.files?.get(pr.number); return f === undefined ? false : f === null || touchesPaths(f, this.c.second_opinion.paths); }
+  // The extra review that is owed for this open PR head, as { key } for the configured reviewer, or null.
+  secondOpinionDue(agent, pr) {
+    const so = this.c.second_opinion;
+    if (!so || so.reviewer !== agent || pr.isDraft || !SHA.test(pr.headRefOid) || !agentOfBranch(this.c, pr.headRefName) || pr.mergeable === 'CONFLICTING' || checksState(pr.statusCheckRollup) !== 'green' || !this.touchesSecondOpinion(pr)) return null;
+    const vk = verdictKey(pr.number, pr.headRefOid), key = vk + ':' + agent + ':second';
+    if (this.s.verdicts[vk]?.verdict !== 'PASS' || this.s.secondOpinions[vk]) return null;
+    const provider = this.c.agents[agent].provider;
+    if (this.writersOf(pr).some(w => w.provider === provider) || this.limitedOf(agent).out) return null;
+    if ((this.s.reviewAttempts[key] || 0) >= this.c.limits.max_review_attempts) return null;
+    return { key };
+  }
+  // Merge is held while an extra review is still owed and could run (its reviewer has allowance and attempts left). A reviewer that
+  // is out of allowance or has used its attempts does not hold the merge: the extra review is optional.
+  secondOpinionPending(pr) {
+    const so = this.c.second_opinion;
+    return !!so && !!this.c.agents[so.reviewer] && !!this.secondOpinionDue(so.reviewer, pr);
   }
   // Weekly burn and scheduling mode per agent (issue #56), from provider-reported data only; null when no usage data is wired.
   budgets() {
@@ -268,11 +336,11 @@ export class Team {
     }
     return out;
   }
-  // Opposite-agent reviews still owed by `agent` (open, non-draft, no verdict from it on the current head, attempts left).
+  // Reviews `agent` could do (open, non-draft, no verdict from it on the current head, attempts left).
   pendingReviews(agent, prs) {
     return prs.filter(pr => {
       const author = agentOfBranch(this.c, pr.headRefName), key = verdictKey(pr.number, pr.headRefOid);
-      return author && author !== agent && !pr.isDraft && SHA.test(pr.headRefOid) && this.s.verdicts[key]?.reviewer !== agent && (this.s.reviewAttempts[`${key}:${agent}`] || 0) < this.c.limits.max_review_attempts;
+      return author && !pr.isDraft && !this.reviewRefusal(agent, pr, `${verdictKey(pr.number, pr.headRefOid)}:${agent}`) && SHA.test(pr.headRefOid) && this.s.verdicts[key]?.reviewer !== agent && (this.s.reviewAttempts[`${key}:${agent}`] || 0) < this.c.limits.max_review_attempts;
     }).length;
   }
   // A mode change is recorded once and alerted once (retried until the channel accepts it). Only a real tick calls this.
@@ -312,6 +380,7 @@ export class Team {
       if (b && agentOfBranch(this.c, m.headRefName)) this.delivered.add(Number(b[1]));
     }
     this.modes = this.budgets(); this.held = {};
+    await this.loadFiles(prs);
     const active = await this.jobs.listActive();
     // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
     // record of (started by hand) is counted against the implementer slot, the conservative reading.
@@ -325,13 +394,13 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
-      if (v?.verdict === 'PASS' && (v.reviewer !== author || (v.interim === true && this.interimAllowed())) && agentOfBranch(this.c, pr.headRefName) && this.c.agents[v.reviewer] && checksState(pr.statusCheckRollup) === 'green' && pr.mergeable === 'MERGEABLE') {
-        actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job, ...(v.interim === true ? { interim: true, branch: pr.headRefName, author } : {}) });
+      if (v?.verdict === 'PASS' && (v.reviewer !== author || v.independent === true || v.interim === true) && this.c.agents[v.reviewer] && checksState(pr.statusCheckRollup) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
+        actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job });
         break;
       }
     }
     // 2. dispatch per role slot: any agent may fill a free slot, and one agent may fill both. Where several agents could, a review goes
-    // to the opposite agent of the PR author before an interim or post-merge one, and an implement job to the issue's owner before
+    // to an agent on another provider than the PR author before one on the author's provider, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
       while (used[role] < L.roles[role] && total < L.overall) {
@@ -354,7 +423,7 @@ export class Team {
   }
   // Lower is preferred when several agents could fill the same slot.
   slotRank(agent, act, prs) {
-    if (act.type === 'review') return act.interim ? 2 : act.postMerge ? 1 : agentOfBranch(this.c, prs.find(p => p.number === act.pr)?.headRefName) === agent ? 2 : 0;
+    if (act.type === 'review') return act.secondOpinion || act.postMerge ? 2 : this.c.agents[agentOfBranch(this.c, prs.find(p => p.number === act.pr)?.headRefName)]?.provider === this.c.agents[agent].provider ? 1 : 0;   // another provider first
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
     // An owner at a usage limit ranks last, so another agent can take its ready issue (#104).
@@ -435,23 +504,33 @@ export class Team {
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key };
     }
-    // review: the other agent's PR, green CI, mergeable, no verdict from me on this exact head
+    // review: any agent's PR whose head was written by another model, green CI, mergeable, no verdict yet on this exact head
     for (const pr of rev ? prs : []) {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || checksState(pr.statusCheckRollup) !== 'green' || !SHA.test(pr.headRefOid)) continue;
-      // D-021: its own PR only as an interim reviewer, while every other agent is out of allowance.
-      const interim = author === agent ? this.interimReason(author) : null;
-      if (author === agent && !interim) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
-      if (this.s.verdicts[key]?.reviewer === agent || busy('review', `${key}:${agent}`) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
+      if (this.s.verdicts[key] || busy('review', `${key}:${agent}`) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
+      // Independence (issue #152): a review on the model that wrote the head is refused.
+      const refusal = this.reviewRefusal(agent, pr, `${key}:${agent}`);
+      if (refusal) { (this.held[agent] ||= {}).review ||= 'review refused: ' + refusal; continue; }
       if (this.reviewerHold(agent)) break;
       if (!allow('review')) break;
-      return { type: 'review', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key: `${key}:${agent}`, ...(interim ? { interim } : {}) };
+      return { type: 'review', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key: `${key}:${agent}` };
     }
-    // post-merge review (D-021): a PR merged on an interim PASS, once this agent (not its author) has allowance again.
+    // second opinion (optional second_opinion config): one extra review of a PR that touches the configured paths, by the configured
+    // reviewer, on another provider than the one that wrote the head, once the primary review has passed and while it has allowance.
+    for (const pr of rev ? prs : []) {
+      const so = this.secondOpinionDue(agent, pr);
+      if (!so) continue;
+      if (busy('review', so.key) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
+      if (this.reviewerHold(agent)) break;
+      if (!allow('review')) break;
+      return { type: 'review', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key: so.key, secondOpinion: true };
+    }
+    // second opinion on a merged PR whose earlier queue entry touches the configured paths (entries that do not were dropped).
     for (const [n, pm] of Object.entries(rev ? this.s.postMerge : {})) {
-      if (pm.done || pm.author === agent || !SHA.test(pm.head || '') || this.limitedOf(agent).out) continue;
+      if (pm.done || !pm.secondOpinion || pm.author === agent || this.c.second_opinion?.reviewer !== agent || !SHA.test(pm.head || '') || this.limitedOf(agent).out) continue;
       const key = `${n}:${pm.head}:${agent}:post`;
       if (busy('review', key) || (this.s.reviewAttempts[key] || 0) >= L.max_review_attempts) continue;
       if (this.reviewerHold(agent)) break;
@@ -515,6 +594,7 @@ export class Team {
       await this.ingest(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.watchCancelled(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
+    if (!dryRun) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     let actions = await this.plan();
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
     if (hold) {
@@ -529,6 +609,22 @@ export class Team {
     return report;
   }
 
+  // Issue #152: post-merge reviews are no longer queued. Entries queued earlier are dropped unless the merged PR touched the
+  // second-opinion paths and a second_opinion reviewer is configured; those run as a second opinion. An unreadable file list keeps the entry.
+  async pruneLegacyPostMerge(report) {
+    const so = this.c.second_opinion;
+    for (const [n, pm] of Object.entries(this.s.postMerge)) {
+      if (pm.done || pm.secondOpinion) continue;
+      let keep = false;
+      if (so && this.gh.listPullFiles) {
+        let files; try { files = await this.gh.listPullFiles(Number(n)); } catch { (report.skipped ||= []).push({ what: 'post-merge entry ' + n, reason: 'file list unreadable; kept for the next tick' }); continue; }
+        keep = touchesPaths(files, so.paths);
+      }
+      if (keep) pm.secondOpinion = true;
+      else { (this.s.postMergeDropped ||= {})[n] = { head: pm.head, at: this.clock.now() }; delete this.s.postMerge[n]; (report.droppedPostMerge ||= []).push(Number(n)); }
+      this.save();
+    }
+  }
   async ingest(report, guard = (_, fn) => fn()) {
     for (const [id, j] of Object.entries(this.s.jobs)) {
       if (j.ingested) continue;
@@ -548,6 +644,14 @@ export class Team {
       if (j.kind === 'review' && job.status === 'completed') {
         const r = readInboxVerdict(this.root, j.ticket, { pr: j.pr, head: j.head });
         if (r.verdict && j.postMerge) { await this.ingestPostMerge(id, j, r.verdict, report); return; }
+        // A review on the model that wrote the head is refused (issue #152): no verdict is recorded from it.
+        const branch = r.verdict ? (j.branch || (await this.gh.getPull(j.pr))?.headRefName || '') : '';
+        const reviewer = { provider: this.c.agents[j.agent].provider, model: j.model ?? null };
+        if (r.verdict && !independentOf(reviewer, this.writersOf({ number: j.pr, headRefName: branch }))) {
+          j.ingested = true; this.save();
+          report.ingested.push({ job: id, pr: j.pr, error: 'review refused: reviewer model ' + (j.model || 'default') + ' is a model that wrote this pull request' });
+          return;
+        }
         if (r.verdict) {
           r.verdict = { ...r.verdict, findings: this.flagLostInRebase(j, r.verdict.findings) };
           const followUps = r.verdict.findings.filter(f => f.kind === 'follow-up');
@@ -558,14 +662,17 @@ export class Team {
             if (!followUpIssue) followUpIssue = await this.gh.createIssue(`Review follow-ups for PR #${j.pr} at ${j.head.slice(0, 7)}`,
               `${marker}\nFollow-up from PR #${j.pr} at head \`${j.head}\`.\n\n${followUps.map(f => `- ${f.text}`).join('\n')}`);
           }
-          const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — ${j.interim ? `interim review (D-021) by \`${j.agent}\` on \`${j.model || 'its review model'}\` in a fresh session, while every other agent is out of allowance (${j.interimReason || 'reason not recorded'}); the regular reviewer reviews it after merge. Review` : 'independent review'} by \`${j.agent}\` of exact head \`${j.head}\` (recorded by the dispatcher from job \`${id}\`; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}${followUpIssue ? `\n\nFollow-ups: issue #${followUpIssue}.` : ''}\n\nCommands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
+          const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — ${j.secondOpinion ? 'second-opinion review' : 'independent review'} on \`${j.model || 'the default model'}\` in a fresh session, by \`${j.agent}\` of exact head \`${j.head}\` (recorded by the dispatcher from job \`${id}\`; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}${followUpIssue ? `\n\nFollow-ups: issue #${followUpIssue}.` : ''}\n\nCommands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
           // The verdict becomes merge-eligible only after its public record is posted; a failed comment records nothing,
           // so the next tick retries the whole step and nothing can merge on an unposted PASS.
           // Not retried blindly: if an earlier attempt was accepted but its response was lost, this job/head marker is already
           // on GitHub, so it is not posted twice.
           const marker = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} `;
           if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, body);
-          this.s.verdicts[verdictKey(j.pr, j.head)] = { verdict: r.verdict.verdict, reviewer: j.agent, job: id, ...(j.interim ? { interim: true } : {}), findings: r.verdict.findings, followUpIssue, commandsRun: r.verdict.commandsRun, at: this.clock.now() };
+          const entry = { verdict: r.verdict.verdict, reviewer: j.agent, job: id, independent: true, ...(j.secondOpinion ? { secondOpinion: true } : {}), findings: r.verdict.findings, followUpIssue, commandsRun: r.verdict.commandsRun, at: this.clock.now() };
+          // A second opinion never replaces the primary PASS; its CHANGES does (the fix loop then runs as for any rejected head).
+          if (j.secondOpinion) { this.s.secondOpinions[verdictKey(j.pr, j.head)] = entry; if (r.verdict.verdict === 'CHANGES') this.s.verdicts[verdictKey(j.pr, j.head)] = entry; }
+          else this.s.verdicts[verdictKey(j.pr, j.head)] = entry;
           j.ingested = true; this.save();
           report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });
           return;
@@ -626,7 +733,7 @@ export class Team {
     this.s.verdicts[key] = { ...prior, carriedFrom: j.head, at: this.clock.now() };
     this.save(); (report.carried ||= []).push({ pr: j.pr, head: pr.headRefOid, carried: true });
   }
-  // D-021 post-merge review: PASS clears the label; CHANGES opens one linked issue for the homeowner. Never touches merge state.
+  // Second-opinion review of a merged PR (issue #152, formerly the D-021 post-merge review): PASS clears the label; CHANGES opens one linked issue for the homeowner. Never touches merge state.
   async ingestPostMerge(id, j, v, report) {
     const pm = this.s.postMerge[j.pr];
     const blocking = v.findings.filter(f => f.kind === 'blocking');
@@ -634,12 +741,12 @@ export class Team {
     if (v.verdict === 'CHANGES') {
       const marker = `<!-- devtest-postmerge v1 job=${id} pr=${j.pr} head=${j.head} -->`;
       issue = await this.gh.findIssueByMarker(marker);
-      if (!issue) issue = await this.gh.createIssue(`Post-merge review of PR #${j.pr} found blocking issues`,
-        `${marker}\nPR #${j.pr} was merged at \`${j.head}\` on an interim review (D-021). The post-merge review by \`${j.agent}\` (job \`${id}\`) found:\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n')}`);
+      if (!issue) issue = await this.gh.createIssue(`Second-opinion review of merged PR #${j.pr} found blocking issues`,
+        `${marker}\nPR #${j.pr} was merged at \`${j.head}\`. The second-opinion review by \`${j.agent}\` (job \`${id}\`) found:\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n')}`);
       await this.gh.addLabel(issue, 'needs-homeowner');
     }
     const marker = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} `;
-    if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, `${marker}verdict=${v.verdict} reviewer=${j.agent} post-merge -->\n**${v.verdict}** — post-merge review (D-021) by \`${j.agent}\` of merged head \`${j.head}\`.${issue ? ` Blocking findings: issue #${issue}.` : ''}\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}`);
+    if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, `${marker}verdict=${v.verdict} reviewer=${j.agent} post-merge -->\n**${v.verdict}** — second-opinion review by \`${j.agent}\` of merged head \`${j.head}\`.${issue ? ` Blocking findings: issue #${issue}.` : ''}\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}`);
     if (v.verdict === 'PASS') await this.gh.removeLabel?.(j.pr, 'post-merge-review');
     if (pm) pm.done = { verdict: v.verdict, reviewer: j.agent, job: id, issue, blocking: blocking.length, at: this.clock.now() };
     j.ingested = true; this.save();
@@ -765,11 +872,7 @@ export class Team {
 
   async execute(act, report = {}) {
     if (act.type === 'merge') {
-      // D-021: an interim merge owes the regular reviewer a post-merge review. Recorded before the merge, so a crash after it
-      // cannot lose the debt; a refused merge removes it again.
-      if (act.interim) { this.s.postMerge[act.pr] = { head: act.head, branch: act.branch, author: act.author, interimReviewer: act.reviewer, interimJob: act.job, at: this.clock.now() }; this.save(); }
-      try { await this.gh.merge(act.pr, act.head); }      // GitHub refuses unless the head still equals act.head
-      catch (error) { if (act.interim) { delete this.s.postMerge[act.pr]; this.save(); } throw error; }
+      await this.gh.merge(act.pr, act.head);      // GitHub refuses unless the head still equals act.head
       this.s.merged[act.pr] = act.head;
       const branch = (await this.gh.getPull(act.pr))?.headRefName || '';
       const m = /issue-(\d+)/.exec(branch);
@@ -778,10 +881,9 @@ export class Team {
       this.s.mergeLog.push({ pr: act.pr, issue, agent: agentOfBranch(this.c, branch), reviewer: act.reviewer, startedAt: issue ? (this.s.implemented[issue] ?? null) : null, mergedAt: this.clock.now() });
       this.s.mergeLog = this.s.mergeLog.slice(-500);
       if (issue) {
-        await this.gh.comment(issue, `PR #${act.pr} merged at \`${act.head}\` by the dispatcher. Gates: ${act.interim ? 'interim (D-021) ' : ''}PASS from \`${act.reviewer}\` (job \`${act.job}\`) recorded for this exact head, all checks green, mergeable.${act.interim ? ' A post-merge review by the regular reviewer follows.' : ''} Merged is not deployed or verified working.`);
+        await this.gh.comment(issue, `PR #${act.pr} merged at \`${act.head}\` by the dispatcher. Gates: PASS from \`${act.reviewer}\` (job \`${act.job}\`) recorded for this exact head, all checks green, mergeable. Merged is not deployed or verified working.`);
         await this.gh.board(issue, act.base === 'main' ? 'done' : 'in_review');
       }
-      if (act.interim) await this.gh.addLabel(act.pr, 'post-merge-review');
       return;
     }
     const a = this.c.agents[act.agent], base = this.c.worktree_base, ticket = crypto.randomBytes(16).toString('hex');
@@ -802,13 +904,13 @@ export class Team {
         && fix.head === latestVerdict[0].slice(`${act.pr}:`.length) && fix.head !== act.head
         && (fix.at || 0) >= (latestVerdict[1].at || 0)
         && (await this.jobs.get(latestChange[0]))?.status === 'completed';
-      const previous = fixedRejectedHead && !act.postMerge ? latestVerdict[1] : null;
+      const previous = fixedRejectedHead && !act.postMerge && !act.secondOpinion ? latestVerdict[1] : null;
       act.reReview = !!previous;
       if (previous) fs.writeFileSync(path.join(inbox, 'review-scope.json'), JSON.stringify({ blocking: previous.findings.filter(f => f.kind === 'blocking') }) + '\n', { mode: 0o600 });
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
-      spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.interim ? 'Interim (D-021) review' : act.postMerge ? 'Post-merge review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
-        prompt: reviewPrompt({ pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, interim: !!act.interim, postMerge: !!act.postMerge }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head } };
-      meta = { pr: act.pr, head: act.head, ...(act.interim ? { interim: true, interimReason: act.interim } : {}), ...(act.postMerge ? { postMerge: true } : {}) };
+      spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
+        prompt: reviewPrompt({ pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head } };
+      meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.secondOpinion ? { secondOpinion: true } : {}), ...(act.postMerge ? { postMerge: true } : {}) };
       bump = () => { this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1; };
     } else if (act.type === 'fix') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-fix-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
