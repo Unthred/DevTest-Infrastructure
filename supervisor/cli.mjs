@@ -115,7 +115,7 @@ function probeAllowances(config) {
   }
   return out;
 }
-async function teamTick(root, registry, dryRun) {
+async function teamTick(root, registry, dryRun, hold = null) {
   const config = loadTeamConfig(teamConfigFile, root);
   // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
   const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: probeAllowances(config), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
@@ -124,7 +124,7 @@ async function teamTick(root, registry, dryRun) {
   if (!unlock) return { skipped: 'another tick is running' };
   try {
     const team = await teamFor(root, registry, config, !dryRun);
-    const report = await team.tick({ dryRun });
+    const report = await team.tick({ dryRun, hold });
     if (!dryRun) record({ ...tickOutcome(report), team, actions: report.actions });
     return report;
   } catch (error) {
@@ -138,9 +138,19 @@ function selfUpgradeFor(root, registry) {
   const jobs = realJobs(root, registry);
   return { config, upgrade: new SelfUpgrade({ root, deps: realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, sendAlert: alertSender(root, config) }) }) };
 }
-async function selfUpgradeStep(root, registry, tick) {
+// Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so running jobs
+// can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.
+async function selfUpgradeBefore(root, registry) {
   const { config, upgrade } = selfUpgradeFor(root, registry);
-  if (!config.enabled) return 'team-loop-disabled';
+  if (!config.enabled) return { result: 'team-loop-disabled', hold: null };
+  const result = await upgrade.step();
+  // 'upgraded': this process still runs the old code, so it must not dispatch either; the next tick runs the new version.
+  return { result, hold: result === 'busy' || result === 'upgraded' ? { to: upgrade.s.holding?.to || upgrade.s.pending?.to || null } : null };
+}
+// After the team step: an upgrade installed by an earlier tick is verified by this live tick.
+async function selfUpgradeAfter(root, registry, before, tick) {
+  if (before.result !== 'awaiting-verification') return before.result;
+  const { upgrade } = selfUpgradeFor(root, registry);
   // A tick skipped because another one holds the lock is not a live tick and verifies nothing.
   const live = !tick?.skipped || Array.isArray(tick.skipped);
   const failed = tick?.error || (Array.isArray(tick?.skipped) && tick.skipped.length);
@@ -148,7 +158,7 @@ async function selfUpgradeStep(root, registry, tick) {
     const verdict = await upgrade.verifyPending({ running: runningSha(self), ok: !failed, reason: tick?.error || tick?.skipped?.[0]?.reason });
     if (verdict === 'rolled-back' || verdict === 'rollback-failed' || verdict === 'verified') return verdict;
   }
-  return upgrade.step();
+  return before.result;
 }
 async function main() {
   const command = process.argv[2] || 'help';
@@ -239,14 +249,17 @@ async function main() {
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
       const result = reconcileOnce(root, registry);
+      // The upgrade check comes first (issue #134). A failure here never fails the tick.
+      let before;
+      try { before = await selfUpgradeBefore(root, registry); } catch (error) { before = { error: String(error.message).slice(0, 200), hold: null }; }
       // The five-minute reconcile cron also runs the token-free team tick, when the team loop is enabled.
       try {
-        result.team = await teamTick(root, registry, false);
+        result.team = await teamTick(root, registry, false, before.hold);
         // A skipped item (lease conflict, gh error) keeps the other items running but still makes the scheduled run fail visibly.
         if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
       } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
       // After the lock is released, so the new version's dry-run health check can take it. A failure here never fails the tick.
-      try { result.selfUpgrade = await selfUpgradeStep(root, registry, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
+      try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
       console.log(JSON.stringify(result)); return;
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.

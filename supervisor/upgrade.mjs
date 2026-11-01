@@ -54,8 +54,14 @@ export class SelfUpgrade {
     try { await this.d.alert(text); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
   }
 
-  // Returns a short result string for the tick report.
+  // Returns a short result string for the tick report. `holding` (read by `team status` and the dashboard) is set only while the
+  // result is 'busy': an upgrade is pending and eligible, and new jobs are held back (issue #134).
   async step() {
+    const result = await this.stepInner();
+    if (result !== 'busy' && this.s.holding) { delete this.s.holding; this.save(); }
+    return result;
+  }
+  async stepInner() {
     if (this.latch()) return 'latched';
     if (this.s.pending) return 'awaiting-verification';
     const from = this.d.installed();
@@ -82,15 +88,16 @@ export class SelfUpgrade {
       return 'not-eligible';
     }
     const now = this.clock.now();
-    this.s.waitingSince ??= now;
-    if ((await this.d.activeJobs()) > 0 && now - this.s.waitingSince < QUIET_MAX_WAIT_MS) { this.save(); return 'busy'; }
     // A failed check latches this commit until a newer main; an environmental failure is retried after ENV_RETRY_MS (#69).
+    // Checked before the quiet wait so a latched target never holds dispatch for a commit that will not be installed (#134).
     const latched = this.s.prechecked[target];
     if (latched && !(latched.environmental && now - latched.at >= ENV_RETRY_MS)) return 'precheck-failed';
+    this.s.waitingSince ??= now;
+    if ((await this.d.activeJobs()) > 0 && now - this.s.waitingSince < QUIET_MAX_WAIT_MS) { this.s.holding = { to: target, since: this.s.holding?.to === target ? this.s.holding.since : now }; this.save(); return 'busy'; }
     const checks = { eligibility: 'ok', quiet: (await this.d.activeJobs()) > 0 ? 'forced-after-wait' : 'idle' };
     const pre = await this.d.preChecks(target);
     if (!pre.ok) {
-      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true } : now; this.save();
+      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true } : now; delete this.s.waitingSince; this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).`);
       this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.reason });
       return 'precheck-failed';

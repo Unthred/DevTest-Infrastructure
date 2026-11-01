@@ -1,5 +1,7 @@
 // View model of the team dashboard (issue #32). Pure functions over data the tick already stored: supervisor job records,
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
+import fs from 'node:fs';
+import path from 'node:path';
 import { Team, ROLES, agentOfBranch, checksState, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
@@ -382,6 +384,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
+    // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
+    try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Holding new jobs: upgrade to ${sha7(h.to)} pending.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
     const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });

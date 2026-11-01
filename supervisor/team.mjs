@@ -489,7 +489,7 @@ export class Team {
   }
 
   // ---- execution
-  async tick({ dryRun = false } = {}) {
+  async tick({ dryRun = false, hold = null } = {}) {
     if (!dryRun && this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
       throw new SupervisorError(`${this.c.access.decision} is not homeowner-approved in the decision register; refusing to launch jobs`);
     const report = { ingested: [], notified: [], actions: [], skipped: [] };
@@ -500,7 +500,12 @@ export class Team {
       await this.ingest(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
-    const actions = await this.plan();
+    let actions = await this.plan();
+    // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
+    if (hold) {
+      report.held = { reason: `upgrade to ${String(hold.to || '').slice(0, 7) || 'a newer supervisor'} pending`, actions: actions.filter(a => a.type !== 'merge').length };
+      actions = actions.filter(a => a.type === 'merge');
+    }
     report.actions = actions;
     if (this.modes) report.allowance = Object.fromEntries(Object.entries(this.modes).map(([n, m]) => [n, { mode: m.mode, reason: m.reason, until: m.until, ...(this.held[n] ? { held: this.held[n] } : {}) }]));
     if (dryRun) return report;
