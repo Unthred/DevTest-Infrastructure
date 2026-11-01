@@ -68,6 +68,13 @@ function realJobs(root, registry) {
     },
     get: async id => { try { return readJob(root, id); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } },
     release: async id => releaseLeases(root, readJob(root, id)),
+    // Issue #163: one automatic resume of a job that stopped on a transient cause. Same recovery as `resume`, with the attempt
+    // counters reset so the worker gets one more bounded round instead of stopping at once on retry_exhausted.
+    resume: async id => {
+      const job = recover(root, id, false);
+      job.attempts = 0; job.incompleteRetries = 0; job.nextAttemptAt = Date.now(); saveJob(root, job, realClock, true);
+      startWorker(root, id, registry);
+    },
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
 }

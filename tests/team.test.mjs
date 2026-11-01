@@ -193,7 +193,7 @@ test('rule 2 fix: own PR with CHANGES on its current head only; capped', async t
   w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
   const a = (await w.team.plan()).find(x => x.agent === 'claude');
   assert.deepEqual([a.type, a.pr, a.head], ['fix', 11, H(2)]);
-  w.team.s.fixAttempts[`11:${H(2)}`] = 2;
+  w.team.s.fixAttempts[`11:${H(2)}`] = 2; w.team.s.unblock.escalated[11] = { head: H(2) };   // the one escalated round (#163) is used up too
   assert.equal((await w.team.plan()).find(x => x.agent === 'claude'), undefined);
   const stale = world(t, { pulls: [pr(11, 'claude/issue-23-y', H(9))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   stale.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
@@ -220,7 +220,7 @@ test('priority is fix, then review, then implement (no rebase or red CI here)', 
   const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'claude/issue-23-y', H(2))], issues: [issue(23), issue(5)] });
   w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
   assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'fix');
-  w.team.s.fixAttempts[`11:${H(2)}`] = 2;
+  w.team.s.fixAttempts[`11:${H(2)}`] = 2; w.team.s.unblock.escalated[11] = { head: H(2) };
   assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'review');
   w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };
   assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'implement');
@@ -238,7 +238,7 @@ test('rule 12 red CI on my own PR: CI-fix job naming only the safe failing check
   assert.deepEqual([spec.kind, spec.postcondition.kind, spec.postcondition.baseHead, spec.issue], ['cifix', 'new_head', H(3), 38]);
   assert.equal(w.team.s.fixAttempts[`38:${H(3)}`], 1);
   assert.equal((await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix'), undefined);   // job in flight (busy)
-  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.fixAttempts[`38:${H(3)}`] = 2;
+  w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true; w.team.s.fixAttempts[`38:${H(3)}`] = 2; w.team.s.unblock.escalated[38] = { head: H(3) };
   assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'cifix');   // max_fix_attempts reached
   const none = [['a draft', pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: red, isDraft: true })],
     ['the other agent\'s PR', pr(38, 'codex/issue-4-x', H(3), { statusCheckRollup: red })],
@@ -776,7 +776,7 @@ test('max_fix_attempts counts fixes per PR across heads; at the limit one needs-
   w.team.s.jobs[Object.keys(w.team.s.jobs)[0]].ingested = true;
   reject(H(2)); a = (await w.team.plan()).find(x => x.agent === 'claude'); assert.equal(a.type, 'fix'); await w.team.execute({ agent: 'claude', ...a });
   w.team.s.jobs[Object.keys(w.team.s.jobs)[1]].ingested = true;
-  assert.equal(w.team.fixCount(38), 2);
+  assert.equal(w.team.fixCount(38), 2); w.team.s.unblock.escalated[38] = { head: H(2) };   // escalation already used (#163)
   reject(H(3)); assert.notEqual((await w.team.plan()).find(x => x.agent === 'claude')?.type, 'fix');
   const r1 = await w.team.tick(); const r2 = await w.team.tick();
   const notices = w.calls.comments.filter(c => c[0] === 38 && /fix rounds/.test(c[1]));
@@ -784,7 +784,7 @@ test('max_fix_attempts counts fixes per PR across heads; at the limit one needs-
   assert.deepEqual(r1.notified.map(n => n.pr), [38]); assert.equal(r2.notified.length, 0);
   // red CI draws on the same per-PR budget
   const c = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'test' }] })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
-  c.team.s.fixAttempts[`38:${H(1)}`] = 1; c.team.s.fixAttempts[`38:${H(2)}`] = 1;
+  c.team.s.fixAttempts[`38:${H(1)}`] = 1; c.team.s.fixAttempts[`38:${H(2)}`] = 1; c.team.s.unblock.escalated[38] = { head: H(2) };
   assert.notEqual((await c.team.plan()).find(x => x.agent === 'claude')?.type, 'cifix');
   // not rejected any more (green, no CHANGES): no notice even though the budget is spent
   const ok = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(5))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
@@ -857,12 +857,12 @@ test('fix limit (#50): the AI-channel alert is sent once with the PR link and th
   const sent = [];
   const w = world(t, { pulls: [pr(41, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   w.team.alert = async text => { sent.push(text); };
-  w.team.s.verdicts[`41:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' }; w.team.s.fixAttempts[`41:${H(0)}`] = 2;
+  w.team.s.verdicts[`41:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' }; w.team.s.fixAttempts[`41:${H(0)}`] = 2; w.team.s.unblock.escalated[41] = { head: H(0) };
   await w.team.tick(); await w.team.tick();
   assert.equal(sent.length, 1); assert.match(sent[0], /PR #41/); assert.match(sent[0], /github\.com\/o\/r\/pull\/41/); assert.match(sent[0], /Decision needed/);
   const f = world(t, { pulls: [pr(41, 'claude/issue-35-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   let tries = 0; f.team.alert = async () => { tries++; throw new Error('channel down'); };
-  f.team.s.verdicts[`41:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' }; f.team.s.fixAttempts[`41:${H(0)}`] = 2;
+  f.team.s.verdicts[`41:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' }; f.team.s.fixAttempts[`41:${H(0)}`] = 2;  f.team.s.unblock.escalated[41] = { head: H(0) };
   const r = await f.team.tick(); await f.team.tick();
   assert.equal(tries, 2); assert.equal(f.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 1); assert.ok(r.skipped.some(x => /alert fix-limit/.test(x.what)));
   // an undelivered alert is retried until the channel accepts it, then not repeated
