@@ -688,10 +688,19 @@ export class Team {
   // before each effect, so a failed call is not repeated blindly and a rerun is never issued twice for the same head.
   async watchCancelled(report, guard = (_, fn) => fn()) {
     const wait = this.c.limits.cancelled_wait_ms ?? CANCELLED_WAIT_MS, now = this.clock.now();
-    for (const pr of await this.gh.listPulls()) {
+    const pulls = await this.gh.listPulls(), open = new Set(pulls.map(pr => `${pr.number}:${pr.headRefOid}`));
+    for (const key of Object.keys(this.s.cancelWatch)) if (!open.has(key)) delete this.s.cancelWatch[key];   // head moved or PR closed
+    for (const pr of pulls) {
       if (pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const lone = loneCancelled(pr.statusCheckRollup), key = `${pr.number}:${pr.headRefOid}`;
-      if (!lone.length) { if (this.s.cancelWatch[key] && !this.s.cancelWatch[key].noticed) delete this.s.cancelWatch[key]; continue; }
+      if (!lone.length) {
+        // Before the rerun, no lone cancel means it was superseded: forget it. After the rerun the check is queued or in progress
+        // (no lone cancel either), so the entry is kept until the head goes green; a rerun that ends cancelled again leads to the
+        // notice, never to a second rerun.
+        const w = this.s.cancelWatch[key];
+        if (w && !w.noticed && (!w.rerunAt || checksState(pr.statusCheckRollup) === 'green')) delete this.s.cancelWatch[key];
+        continue;
+      }
       const w = this.s.cancelWatch[key] ||= { since: now };
       if (!w.rerunAt && now - w.since >= wait) {
         const runs = [...new Set(lone.map(c => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl || '')?.[1]).filter(Boolean))];

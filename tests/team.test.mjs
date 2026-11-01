@@ -1081,6 +1081,35 @@ test('issue #149 tick(): a lone cancelled run is rerun once, then labelled needs
   assert.equal(w.calls.comments.filter(([, b]) => /cancelled/.test(b)).length, 1);
 });
 
+test('issue #149 tick(): a rerun that goes in progress and then ends cancelled again is not rerun a second time; it becomes Needs you', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const url = { detailsUrl: 'https://github.com/o/r/actions/runs/777/job/1' };
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('CANCELLED', 'test', T0, url)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  const tickFor = async minutes => { for (let i = 0; i < minutes; i++) { clock.t += 60000; await w.team.tick(); } };
+  await w.team.tick(); await tickFor(5); assert.deepEqual(w.calls.reruns, ['777']);
+  w.gh.pulls[0].statusCheckRollup = [{ status: 'IN_PROGRESS', name: 'test', workflowName: 'CI', startedAt: T1, ...url }];
+  await tickFor(3); assert.ok(w.team.s.cancelWatch[`10:${H(1)}`]?.rerunAt, 'the watch survives the rerun being in progress');
+  w.gh.pulls[0].statusCheckRollup = [done('CANCELLED', 'test', T1, url)];
+  await tickFor(60);
+  assert.deepEqual(w.calls.reruns, ['777']); assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']]);
+  assert.equal(w.calls.comments.filter(([, b]) => /cancelled/.test(b)).length, 1);
+});
+
+test('issue #149 watchCancelled: a rerun that goes green clears the watch, and a moved head or closed PR prunes it', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const url = { detailsUrl: 'https://github.com/o/r/actions/runs/9/job/1' };
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('CANCELLED', 'test', T0, url)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.watchCancelled({}); clock.t += 5 * 60000; await w.team.watchCancelled({});
+  assert.deepEqual(w.calls.reruns, ['9']);
+  w.gh.pulls[0].statusCheckRollup = [{ status: 'QUEUED', name: 'test', workflowName: 'CI', ...url }];
+  await w.team.watchCancelled({}); assert.ok(w.team.s.cancelWatch[`10:${H(1)}`]);
+  w.gh.pulls[0].statusCheckRollup = [done('SUCCESS', 'test', T1, url)];
+  await w.team.watchCancelled({}); assert.equal(w.team.s.cancelWatch[`10:${H(1)}`], undefined);
+  w.team.s.cancelWatch[`10:${H(1)}`] = { since: 0, rerunAt: 1, noticed: 2 }; w.team.s.cancelWatch[`99:${H(3)}`] = { since: 0, noticed: 1 };
+  w.gh.pulls[0].headRefOid = H(2);
+  await w.team.watchCancelled({}); assert.deepEqual(w.team.s.cancelWatch, {});
+});
+
 test('issue #149 watchCancelled: a cancelled run that gets superseded before the wait ends is forgotten, and a throwing rerun is not retried', async t => {
   const clock = { t: 1000, now: () => clock.t };
   const lone = [done('CANCELLED', 'test', T0, { detailsUrl: 'https://github.com/o/r/actions/runs/5/job/1' })];
