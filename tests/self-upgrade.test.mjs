@@ -20,7 +20,7 @@ function world(t, over = {}) {
     commits: [{ sha: H('c'), pr: 7, head: H('d') }], pulls: { 7: { state: 'MERGED', headRefName: 'claude/issue-9-x', headRefOid: H('d'), statusCheckRollup: green } },
     verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'codex' } }, pre: { ok: true }, up: { ok: true }, dry: { ok: true }, rb: { ok: true }, ancestor: true, ...over };
   const deps = {
-    config,
+    config, independenceApproved: () => state.d024 !== false,
     installed: () => state.installed, fetchMain: () => state.target, isAncestor: () => state.ancestor, changedFiles: () => state.files,
     mainCommits: () => state.commits, mergedPull: async n => state.pulls[n] || null, verdict: (pr, head) => state.verdicts[`${pr}:${head}`] || null,
     activeJobs: async () => state.active,
@@ -328,6 +328,12 @@ test('a PASS from the author\'s provider counts when it was recorded as independ
     assert.notEqual(await w.up.step(), 'not-eligible', JSON.stringify(flag));
     assert.ok(w.log.some(x => x[0] === 'pre'));
   }
+});
+
+test('review fix (PR #168): an independent same-provider PASS counts only once D-024 is approved; an earlier interim PASS always counts', async t => {
+  const v = { verdict: 'PASS', reviewer: 'claude' };
+  assert.equal(await world(t, { d024: false, verdicts: { [`7:${H('d')}`]: { ...v, independent: true } } }).up.step(), 'not-eligible');
+  assert.notEqual(await world(t, { d024: false, verdicts: { [`7:${H('d')}`]: { ...v, interim: true } } }).up.step(), 'not-eligible');
 });
 
 test('issue #69: an environmental pre-check failure is retried after an hour with one alert; a failed check stays latched', async t => {

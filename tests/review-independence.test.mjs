@@ -12,7 +12,7 @@ import { outOfAllowance } from '../supervisor/interim.mjs';
 const H = n => String(n).repeat(40).slice(0, 40);
 const NOW = 1_800_000_000_000;
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
-const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n\n## D-021 — y\n- Status: homeowner-approved\n- Date: 2026-10-31\n';
+const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n\n## D-021 — y\n- Status: homeowner-approved\n- Date: 2026-10-31\n\n## D-024 — z\n- Status: homeowner-approved\n- Date: 2026-11-01\n';
 const config = (over = {}) => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p',
   access: { mode: 'full', decision: 'D-020' }, out_of_allowance: { weekly_at: 0.95 },
@@ -152,9 +152,9 @@ test('one-agent roster: validates, plans implement and review, and zero agents i
 });
 
 const SO = { paths: ['supervisor/upgrade.mjs', 'network/**'], reviewer: 'codex' };
-function soWorld(t, { files = ['supervisor/upgrade.mjs'], so = SO, out = {}, passed = true } = {}) {
+function soWorld(t, { files = ['supervisor/upgrade.mjs'], so = SO, out = {}, passed = true, register = REGISTER } = {}) {
   const cfg = config({ second_opinion: so }); if (!so) delete cfg.second_opinion;
-  const w = world(t, { cfg, out }); writer(w);
+  const w = world(t, { cfg, out, register }); writer(w);
   w.gh.listPullFiles = async () => files;
   if (passed) w.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j', independent: true, at: NOW - 1000 };
   return w;
@@ -244,4 +244,28 @@ test('globs: ** crosses directories, * does not, regex characters are literal', 
   assert.equal(touchesPaths(['supervisor/upgrade.mjs'], ['supervisor/upgrade.mjs']), true);
   assert.equal(touchesPaths(['supervisorXupgrade.mjs'], ['supervisor.upgrade.mjs']), false);
   assert.equal(touchesPaths(['secrets/a.json'], ['**/*.json']), true);
+});
+
+// Review fix (PR #168): D-024 is an agent-proposal until the homeowner approves it; D-021 keeps binding meanwhile.
+const UNAPPROVED = REGISTER.replace(/## D-024[\s\S]*/, '') + '\n## D-024 — z\n- Status: agent-proposal\n- Date: 2026-11-01\n';
+
+test('until D-024 is homeowner-approved a same-provider independent PASS does not merge, and an opposite-provider PASS still does', async t => {
+  const w = world(t, { register: UNAPPROVED, out: CODEX_OUT }); writer(w);
+  w.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j', independent: true, at: NOW - 1000 };
+  assert.equal((await w.team.plan()).find(a => a.type === 'merge'), undefined);
+  w.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'codex', job: 'j', at: NOW - 1000 };
+  assert.ok((await w.team.plan()).find(a => a.type === 'merge'));
+  const ok = world(t, { out: CODEX_OUT }); writer(ok);
+  ok.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j', independent: true, at: NOW - 1000 };
+  assert.ok((await ok.team.plan()).find(a => a.type === 'merge'), 'approved D-024: merges');
+});
+
+test('until D-024 is homeowner-approved the tick keeps queued post-merge reviews', async t => {
+  for (const [register, kept] of [[UNAPPROVED, ['10']], [REGISTER, []]]) {
+    const w = soWorld(t, { passed: false, out: {}, register }); w.gh.pulls = [];
+    w.team.s.postMerge[10] = { head: H(1), branch: 'claude/issue-1-x', author: 'claude', at: NOW };
+    w.gh.listPullFiles = async () => ['docs/a.md'];
+    await w.team.tick({});
+    assert.deepEqual(Object.keys(w.team.s.postMerge), kept);
+  }
 });

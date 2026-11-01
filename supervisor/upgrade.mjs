@@ -159,7 +159,7 @@ export class SelfUpgrade {
       if (!pull || pull.state !== 'MERGED' || pull.headRefOid !== c.head || !author) return { ok: false, prs, reason: `PR #${c.pr} could not be matched to its merged head` };
       prs.push(c.pr);
       const v = this.d.verdict(c.pr, c.head);
-      const independent = v?.independent === true || v?.interim === true;
+      const independent = v?.interim === true || (v?.independent === true && this.d.independenceApproved?.() === true);
       if (v?.verdict !== 'PASS' || (v.reviewer === author && !independent) || !this.d.config.agents[v.reviewer])
         return { ok: false, prs, reason: `PR #${c.pr} has no recorded PASS from an independent reviewer at merged head ${short(c.head)}` };
       if (checksState(pull.statusCheckRollup) !== 'green') return { ok: false, prs, reason: `CI was not green on PR #${c.pr} at merged head ${short(c.head)}` };
@@ -175,7 +175,7 @@ const defaultRun = (cmd, args, { cwd, timeoutMs = 120000, input } = {}) => {
 };
 const tail = r => String(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' | ').slice(0, 200);
 
-export function realDeps({ root, config, gh, listActive, verdictFor, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert }) {
+export function realDeps({ root, config, gh, listActive, verdictFor, independenceApproved = () => false, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert }) {
   const repo = config.repo_path;
   const git = (...a) => { const r = run('git', ['-C', repo, ...a]); if (r.status !== 0) throw new Error(`git ${a[0]} failed`); return r.stdout.trim(); };
   const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'self-upgrade-'));
@@ -207,6 +207,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, wrapper = '
     }),
     mergedPull: n => gh.getMergedPull(n),
     verdict: verdictFor,
+    independenceApproved,
     activeJobs: async () => (await listActive()).length,
     preChecks: async sha => withCheckout(sha, checkout => {
       const v = run('node', ['tools/validate-project.mjs'], { cwd: checkout, timeoutMs: 300000 });

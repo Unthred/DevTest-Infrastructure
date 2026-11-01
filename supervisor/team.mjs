@@ -145,6 +145,10 @@ export function decisionApproved(registerText, id) {
   return !!m && /^- Status: homeowner-approved\s*$/m.test(m[1]);
 }
 
+// Issue #152: D-024 (review independence by model, no mandatory post-merge review) binds only once the homeowner approves it.
+// Until then D-021/D-011 stand: a merge needs a reviewer other than the author, and queued post-merge reviews are kept.
+export const INDEPENDENCE_DECISION = 'D-024';
+
 // Issue #149: judge each check by its latest run on the head. A push followed by a PR description edit starts two runs of the same
 // check about 20 s apart; the concurrency group cancels the first. That superseded cancelled run is not a failure.
 const CHECK_OK = ['SUCCESS', 'NEUTRAL', 'SKIPPED'];
@@ -294,6 +298,7 @@ export class Team {
     return out;
   }
   // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
+  independenceApproved() { return decisionApproved(this.register, INDEPENDENCE_DECISION); }
   reviewRefusal(agent, pr, key) {
     // A caller that has no provider manifests (the dashboard) judges by the configured model name.
     const model = this.modelFor({ agent, pr: pr.number, key }, 'review', {}, true).model ?? null;
@@ -394,7 +399,7 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
-      if (v?.verdict === 'PASS' && (v.reviewer !== author || v.independent === true || v.interim === true) && this.c.agents[v.reviewer] && checksState(pr.statusCheckRollup) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
+      if (v?.verdict === 'PASS' && (v.reviewer !== author || v.interim === true || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && checksState(pr.statusCheckRollup) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
         actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job });
         break;
       }
@@ -594,7 +599,7 @@ export class Team {
       await this.ingest(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.watchCancelled(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
-    if (!dryRun) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
+    if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     let actions = await this.plan();
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
     if (hold) {
