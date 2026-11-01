@@ -135,7 +135,7 @@ function reasons(team, cache, jobs, plan, states) {
     else if (hasPr) reason = 'PR open';
     else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; PR #${prOf.number} open` : ''}`;
     else if (S.implemented?.[n]) reason = 'started earlier; no PR yet';
-    else if (taker) reason = `next: reassigned for allowance to ${taker.agent} (${agent} is ${MODE_LABEL[mode?.mode] || 'low'})`;
+    else if (taker) reason = `next: taken from ${agent} by ${taker.agent}: ${agent} has no allowance${untilText(team.ownerOut(agent)?.until, team)} (${taker.agent} takes it; ${agent} keeps ownership)`;
     else if (planned.has(`${agent}:implement:${n}`)) reason = 'next: implement';
     else if (mode && mode.mode !== 'normal') reason = `waits: ${agent} is ${MODE_LABEL[mode.mode]} (${mode.reason}); no agent with headroom can take it`;
     else if (team.held?.[agent]?.implement) reason = `waits: ${team.held[agent].implement}`;
@@ -339,6 +339,7 @@ export function budgetView(team) {
   return out;
 }
 
+const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.DateTimeFormat('en-GB', { timeZone: team.timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(until)).replace(',', '')}` : '');
 export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: interim reviews (D-021) are not planned here, but the real tick would refuse to run.';
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false }) {
   const states = agentStates(config, jobs, now);

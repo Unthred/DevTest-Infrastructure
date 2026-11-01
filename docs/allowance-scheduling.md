@@ -32,6 +32,7 @@ Only what the dispatcher already has, with no model call and no extra provider c
 - The issue **keeps its owner** in `team.json` and on GitHub; the dispatcher changes no labels. The work runs on the taker's branch (`<taker>/issue-<n>-…`), so the owner (the opposite agent) reviews it and D-011 holds. The job prompt says so. The taker may continue its own draft of such an issue; the owner never continues another agent's branch.
 - **Drafts are not reassigned**: a draft stays with its branch's author (another agent continuing it would later review its own work).
 - When the owner's window resets, it is `normal` again and implements its own remaining issues; work already started by the taker stays with the taker's PR.
+- **Ownership is a preference, not a lock (issue #104).** "Out" also covers an owner whose latest supervised job paused on a usage limit or whose provider reports a used-up window, even when its mode is still `normal`. Prerequisites owned by the out agent move the same way, so the queue behind them unblocks. A `reviews_only` or `waiting` taker takes nothing. Ready means open, prerequisites closed, not `needs-homeowner`, no PR (draft or not), no started or running job. One taker per issue per plan. The queue says "taken from X by Y: X has no allowance until …". Only issues an agent owns in the team config move this way; an issue no agent owns is never dispatched.
 - Reviews stay opposite-agent. A reviewer that is `waiting` reviews nothing; the implementer keeps working on its other unblocked items.
 
 ## Cheaper re-reviews
