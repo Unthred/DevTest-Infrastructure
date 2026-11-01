@@ -159,3 +159,7 @@ test('fixtures leave the real repository untouched', () => {
   assert.ok(fs.existsSync(path.join(repo, 'README.md')));
   assert.deepEqual(checks({ dir: repo }), before);
 });
+
+test('entrypoints: AGENTS.md must state the main-only handover rule (D-023)', () => {
+  expectFinding((a) => a.write('AGENTS.md', a.read('AGENTS.md').replaceAll('D-023', 'D-0xx')), 'entrypoints', 'D-023');
+});

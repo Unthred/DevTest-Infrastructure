@@ -415,6 +415,7 @@ test('dispatch creates correctly shaped specs: full access, restart, D-018 names
   assert.match(c.postcondition.branch, /^claude\/issue-23-[a-z0-9-]+$/);
   assert.ok(!c.prompt.includes('rm -rf'), 'issue text is data and never reaches a prompt'); assert.ok(!c.scope.includes('rm -rf'));
   assert.ok(c.allowed_actions.every(a => ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue', 'update_handover'].includes(a)));
+  for (const s of [c, x]) { assert.ok(!s.allowed_actions.includes('update_handover'), 'D-023: no handover edits'); assert.equal(s.handover, undefined, 'D-023: no handover checkpoint (it would block restarts as stale)'); }
   assert.deepEqual(w.calls.board, [[23, 'in_progress'], [2, 'in_progress']]);
   const again = await w.team.plan();      // jobs are active now; nothing new
   assert.deepEqual(w.calls.created.length, 2);
@@ -1000,17 +1001,17 @@ test('lean prompts: AGENTS.md is never requested; reading is per job; every test
     const n = (p.match(/node --test/g) || []).length;
     assert.ok(n >= 1, `${k} names the tests`);
     assert.equal((p.match(/node --test --test-reporter=dot "tests\/\*\*\/\*\.test\.mjs"/g) || []).length, n, `${k}: every test command uses the dot reporter`);
-    assert.match(p, /Update the canonical handover on your own branch before you stop/, `${k} keeps the handover write-through`);
+    assert.match(p, /Do not edit docs\/ai\/CURRENT_HANDOVER\.md on this branch \(D-023\)/, `${k} forbids handover edits`);
     assert.doesNotMatch(p, /run the validator and tests/, k);
   }
   // rebase does not read the decision register or the whole handover, but still appends to the handover
   assert.doesNotMatch(all.rebase, /DECISIONS|decision register/);
-  assert.match(all.rebase, /append-only/);
+  assert.match(all.rebase, /take main's version/); assert.doesNotMatch(all.rebase, /append-only|append a short entry/);
   assert.match(all.rebase, /only the conflicting files/);
   // implement and continue: summary sections plus the issue's own section, never the whole handover
   for (const k of ['cont', 'impl']) { assert.match(all[k], /docs\/DECISIONS\.md/); assert.match(all[k], /summary sections/); assert.match(all[k], /section for issue #109/); assert.match(all[k], /never the whole handover/); }
   // review reads the decision register only; fix and ci-fix read findings/logs and the diff
-  assert.match(all.review, /Read docs\/DECISIONS\.md only; do not read the rest of the handover/);
+  assert.match(all.review, /Read docs\/DECISIONS\.md only; do not read the handover/);
   assert.doesNotMatch(all.fix, /Read docs\/ai\/CURRENT_HANDOVER\.md/); assert.match(all.fix, /findings on the PR and the diff/);
   assert.match(all.cifix, /failing logs and the diff/);
   assert.doesNotMatch(all.review + all.fix + all.cifix, /Read AGENTS|summary sections/);
