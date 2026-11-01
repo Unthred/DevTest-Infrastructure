@@ -46,8 +46,8 @@ function verdictOf(state, p) {
   return v ? { verdict: v.verdict, reviewer: redact(v.reviewer, 20), current: !!hit, head: key.split(':')[1]?.slice(0, 7) || null } : null;
 }
 
-export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [] }) {
-  const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now });
+export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [], register = '' }) {
+  const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now, register });
   const live = id => jobs.some(j => j.id === id && ACTIVE.includes(j.status));
   const problems = view.attention.map(a => ({ id: a.id, text: a.text }));
   const add = (id, text) => { if (!problems.some(p => p.id === id)) problems.push({ id, text: redact(text, 300) }); };
@@ -109,10 +109,10 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   return { generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
 }
 
-export async function currentStatus({ root, config, gh = null, now = Date.now(), tz }) {
+export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '' }) {
   const jobs = readJobs(root);
   const { cache, notes } = await refreshIfStale({ cache: readCache(root), gh, now });
-  return buildStatus({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache, snapshots: readSnapshots(root), leases: readLeases(root), now, tz, notes });
+  return buildStatus({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache, snapshots: readSnapshots(root), leases: readLeases(root), now, tz, notes, register });
 }
 
 export function renderStatus(s) {
