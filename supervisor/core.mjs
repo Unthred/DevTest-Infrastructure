@@ -281,6 +281,12 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       if ((job.incompleteRetries || 0) < 1) { job.incompleteRetries = (job.incompleteRetries || 0) + 1; job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
       transition(root, job, 'blocked', 'incomplete', clock); return job;
     }
+    // Issue #120: a verdict or post-condition already in place when a limit is reported means the work is done.
+    if (['usage_limit', 'transient_rate_limit'].includes(result.event) && job.postcondition && typeof checkPostcondition === 'function') {
+      let done = false;
+      try { done = (await checkPostcondition(job)) === true; } catch { done = false; }
+      if (done) { transition(root, job, 'completed', 'completed_before_limit', clock); return job; }
+    }
     if (result.event === 'usage_limit' && restartable() && (job.autoRestart || config.manifest.capabilities.usage_limit_detection === 'supported')) {
       if (job.attempts >= maxAttempts) { transition(root, job, 'blocked', 'retry_exhausted', clock); return job; }
       const now = clock.now();
