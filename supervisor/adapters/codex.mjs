@@ -1,6 +1,7 @@
 import * as base from './base.mjs';
 import { spawnSync } from 'node:child_process';
 import { codexAllowanceFromRollout, codexRolloutFile } from '../allowance.mjs';
+import { oneLine } from '../transcript.mjs';
 import { parseStatusWindow, parseTryAgain } from '../clocktext.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight(job) {
@@ -48,3 +49,21 @@ export function observe(line, now = Date.now()) {
 }
 // Codex's exec stream carries no limit data; the thread's rollout file does. Read after the process exits.
 export function postRun(job) { return codexAllowanceFromRollout(codexRolloutFile(job.sessionId)); }
+// Transcript schema (issue #123): Codex `exec --json` items mapped to common entries. Reasoning items are not recorded.
+export function transcript(line) {
+  let o; try { o = JSON.parse(line); } catch { return null; }
+  if (!o || typeof o !== 'object') return [];
+  const it = o.item, n = v => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
+  if (o.type === 'turn.completed' && o.usage) return [{ kind: 'usage', text: '', tokens: { in: n(o.usage.input_tokens), out: n(o.usage.output_tokens) } }];
+  if (o.type === 'turn.failed' || o.type === 'error') return [{ kind: 'system', error: true, text: oneLine(o.error?.message || o.message || o.error || 'error', 1000) }];
+  if (!it || typeof it !== 'object') return [];
+  if (o.type === 'item.completed' && it.type === 'agent_message' && String(it.text || '').trim()) return [{ kind: 'assistant', text: it.text }];
+  if (it.type === 'command_execution') {
+    if (o.type === 'item.started') return [{ kind: 'tool_call', tool: 'shell', text: oneLine(it.command), detail: String(it.command || '') }];
+    if (o.type === 'item.completed') return [{ kind: 'tool_result', error: Number.isFinite(it.exit_code) && it.exit_code !== 0, text: `exit ${it.exit_code ?? '?'}\n${it.aggregated_output || ''}` }];
+  }
+  if (o.type === 'item.completed' && it.type === 'mcp_tool_call') return [{ kind: 'tool_call', tool: `${it.server || 'mcp'}.${it.tool || 'tool'}`, text: oneLine(JSON.stringify(it.arguments ?? {})), detail: JSON.stringify(it.arguments ?? {}, null, 1) }];
+  if (o.type === 'item.completed' && it.type === 'file_change') return [{ kind: 'tool_call', tool: 'file_change', text: oneLine((it.changes || []).map(c => `${c.kind || 'change'} ${c.path || ''}`).join(', ')) }];
+  if (o.type === 'item.completed' && it.type === 'web_search') return [{ kind: 'tool_call', tool: 'web_search', text: oneLine(it.query) }];
+  return [];
+}

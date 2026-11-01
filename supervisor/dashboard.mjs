@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Team, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { transcriptExists } from './transcript.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs, readHeadRegister } from './planning.mjs';
 import { proposalsAdded } from './decisions.mjs';
@@ -474,7 +475,7 @@ export function describeFor(j, { names, state }) {
 
 // Which model made a decision (issue #140): provider, model and effort of the job that produced it, as recorded on the job.
 const modelOf = j => (j ? [j.provider, j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
-function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names }) {
+function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names, root }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: (kind === 'pull' ? names.pr(n) : names.issue(n)).text } : null);
@@ -485,7 +486,7 @@ function activity({ config, jobs, events, state, cache, snapshots, now, incident
     if (!eventNames[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover'].includes(e.kind)) continue;
     const j = jobById.get(e.job); if (!j) continue;
     const what = e.kind === 'completed' ? describeFor(j, { names, state }) : `${names.job(j).text}: ${eventNames[e.kind] || redact(e.kind, 40)}`;
-    rows.push({ at: e.at, text: `${agentName(j)}: ${what}`, link: { url: names.job(j).url, text: names.job(j).text } });
+    rows.push({ at: e.at, text: `${agentName(j)}: ${what}`, link: { url: names.job(j).url, text: names.job(j).text }, ...(root && transcriptExists(root, j.id) ? { transcript: j.id } : {}) });
   }
   for (const [id, tj] of Object.entries(state.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at))
     rows.push({ at: tj.at, text: `${names.job({ id, kind: 'rebase', pr: tj.pr }).text}: ${shortCommit(tj.rebase.oldHead)} -> ${shortCommit(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
@@ -558,8 +559,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
       base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state, names });
       // Issue #213: one entry per running or paused job, with its role, model and item, so concurrent jobs on one agent each get a card.
-      base.jobs = (s.jobs || []).map(x => { const r = state.jobs?.[x.id] || {}; return { id: shortJob(x.id), name: redact(names.job(x).text, 300), kind: x.kind || r.kind || 'job', role: roleOfType(r.kind || x.kind), model: redact(r.model || x.model || '', 40) || null, status: x.status, lastEvent: redact(x.lastEvent || '', 48), nextAttemptAt: x.nextAttemptAt || null, startedAt: x.createdAt, elapsedMs: now - x.createdAt, attempts: x.attempts || 0, paused: ['paused_limit', 'paused_manual'].includes(x.status) }; });
-      if (j) base.job = { id: shortJob(j.id), name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
+      base.jobs = (s.jobs || []).map(x => { const r = state.jobs?.[x.id] || {}; return { id: shortJob(x.id), fullId: x.id, name: redact(names.job(x).text, 300), kind: x.kind || r.kind || 'job', role: roleOfType(r.kind || x.kind), model: redact(r.model || x.model || '', 40) || null, status: x.status, lastEvent: redact(x.lastEvent || '', 48), nextAttemptAt: x.nextAttemptAt || null, startedAt: x.createdAt, elapsedMs: now - x.createdAt, attempts: x.attempts || 0, paused: ['paused_limit', 'paused_manual'].includes(x.status) }; });
+      if (j) base.job = { id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
@@ -588,7 +589,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const w = sup.ticks.filter(t => Number.isFinite(t.at)).at(-1)?.warnings || [];
       if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told the team needs you.', ref: null, severity: 'action' });
       else if (w.length) attention.push({ id: 'alert-warning', text: redact(w[0].replace(/^team-alert: warning: /, 'Alerting: '), 200), ref: null, severity: 'warning' }); }
-    const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names });
+    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
     if (latch) upgrade = { ...(upgrade || {}), latch: true };
@@ -606,7 +607,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       attention,
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots, now }),
-      activity: activity({ config, jobs, events, state, cache, snapshots, now, incidents: readIncidents(root), names })
+      activity: activity({ config, jobs, events, state, cache, snapshots, now, root, incidents: readIncidents(root), names })
     };
   });
 }
@@ -653,14 +654,14 @@ export function issueTimelinesOf({ jobs, state, names, jobRows, cache }) {
     .filter(t => t.events.length).sort((a, b) => b.last - a.last).slice(0, 60);
 }
 
-function dashExtras({ config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names }) {
+function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
   const tokensOf = j => (j.usage ? j.usage.inputTokens + j.usage.outputTokens : null);
   const sortedJobs = jobs.filter(j => j.createdAt).sort((a, b) => b.createdAt - a.createdAt);
   const rowOf = j => ({
-    id: shortJob(j.id), fullId: j.id, desc: describeFor(j, { names, state }), name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
+    id: shortJob(j.id), fullId: j.id, hasTranscript: transcriptExists(root, j.id), desc: describeFor(j, { names, state }), name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100), overseer: jobOverseer(j, { ticks: sup.ticks, state, cache, now }) });
   const jobRows = sortedJobs.slice(0, 300).map(rowOf);
@@ -697,7 +698,8 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
   const needsYou = attention.filter(a => a.severity === 'action').map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
-    return { ...a, why: a.text, decision: a.action || NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
+    const watch = a.id.startsWith('job-') && transcriptExists(root, a.id.slice(4)) ? a.id.slice(4) : null;
+    return { ...a, watch, why: a.text, decision: a.action || NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
   });
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {

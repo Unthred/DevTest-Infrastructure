@@ -4,6 +4,7 @@
 import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, countText, inRange, limitsOf, pillLinks, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
+import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
@@ -32,11 +33,12 @@ export function matchRoute(pathname) {
   if ((m = /^\/work\/pr\/(\d{1,9})$/.exec(p))) return { page: 'pr', id: Number(m[1]) };
   if ((m = /^\/work\/issue\/(\d{1,9})$/.exec(p))) return { page: 'issue', id: Number(m[1]) };
   if ((m = /^\/work\/job\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'job', id: m[1] };
+  if ((m = /^\/jobs\/([a-f0-9]{32})$/.exec(p))) return { page: 'watch', id: m[1] };
   if (p === '/supervisor/ticks') return { page: 'ticks' };
   if (p === '/supervisor/upgrades') return { page: 'upgrades' };
   return null;
 }
-const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', job: 'work', ticks: 'supervisor', upgrades: 'supervisor' })[page] || page;
+const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor' })[page] || page;
 
 // ---- icons: authored for this project (24x24, 2px stroke); no third-party icon set is bundled
 const ICONS = {
@@ -87,6 +89,7 @@ const shaCopy = (sha, what = 'commit ID') => (sha ? idCopy(String(sha).slice(0, 
 const errCopy = text => (text ? `<span class="err">${esc(text)}</span>${copyBtn(text, 'error message')}` : '');
 // A long text is cut with an ellipsis by CSS and shown in full on hover or tap (issue #204).
 const trunc = text => `<span class="trunc" tabindex="0" title="${esc(text)}">${esc(text)}</span>`;
+const watchLink = (id, text) => `<a class="btn watch-link" href="/jobs/${esc(id)}">${icon('play')}${esc(text)}</a>`;
 const jobRef = (j, view) => (['implement', 'continue'].includes(j.kind) ? issueLink(j.ref) : prLink(j.ref));
 
 // ---- empty / error states
@@ -222,12 +225,12 @@ function nowPanel(view) {
   const jobItem = (a, j) => {
     const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : 'Implementer';
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`;
-    return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${j.name ? `${esc(j.name)} · ` : ''}${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${when}</div></li>`;
+    return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${j.name ? `${esc(j.name)} · ` : ''}${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
   };
   return `${slots}<ul class="panel-list">${view.agents.map(a => {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j)).join('');
     const j = a.job, level = stateSev[a.state] || 'info';
-    const what = j ? `${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}`
+    const what = j ? `${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
       : `<span>Idle: ${a.idleReason ? esc(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
     return `<li class="sev-${level}"><div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div></li>`;
   }).join('')}</ul>`;
@@ -255,7 +258,7 @@ function nextPanel(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
+  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 function warningsPanel(view) {
@@ -334,7 +337,7 @@ function agentsPage(view, query, path) {
 }
 function jobCols(view, { agent = true } = {}) {
   return [
-    { key: 'id', label: 'Job', html: r => jobIdCell(r.fullId) },
+    { key: 'id', label: 'Job', html: r => jobIdCell(r.fullId) + (r.hasTranscript ? ` <a href="/jobs/${esc(r.fullId)}">${r.status === 'running' ? 'watch' : 'transcript'}</a>` : '') },
     ...(agent ? [{ key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }] : []),
     { key: 'desc', label: 'What happened', html: r => trunc(r.desc) },
     { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? jobRef(r, view) : '–') },
@@ -421,9 +424,9 @@ function activityPage(view, query, path) {
     const body = tls.length ? tls.map(t => `<section class="issue-story"><h3>${named(`/work/issue/${t.number}`, { text: t.name, full: t.full }, `#${t.number}`)}</h3><ol class="tl">${t.events.map(e => `<li><b>${esc(utc(e.at))}</b><br>${trunc(e.text)}${e.link ? ` <a href="${esc(e.link.url)}">job page</a>` : ''}</li>`).join('')}</ol></section>`).join('') : empty('No activity yet', 'Issue timelines appear after the first job.', 'pulse');
     return { title: 'Activity by issue', crumbs: [['/activity', 'Activity'], [null, 'By issue']], body: grid('activity', card({ id: 'act', title: `Issues (${tls.length})`, span: 12, movable: false, body: toggle + body })) };
   }
-  const rows = view.activity.map(r => ({ at: r.at, text: r.text, link: r.link }));
+  const rows = view.activity.map(r => ({ at: r.at, text: r.text, link: r.link, transcript: r.transcript }));
   return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (last ${rows.length})`, span: 12, movable: false, body: toggle + table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text'],
-    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'text', label: 'What', html: r => trunc(r.text) }, { key: 'link', label: 'Job page', sortable: false, html: r => (r.link ? ext(r.link.url, 'open') : '') }], totals: { text: 'count' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') }) })) };
+    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'text', label: 'What', html: r => trunc(r.text) }, { key: 'link', label: 'Job page', sortable: false, html: r => (r.link ? ext(r.link.url, 'open') : '') + (r.transcript ? ` <a href="/jobs/${esc(r.transcript)}">transcript</a>` : '') }], totals: { text: 'count' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') }) })) };
 }
 // One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
 // marked and never shown as current; a limit pause says when it resets and on what basis.
@@ -561,7 +564,22 @@ function upgradesPage(view, query, path) {
       { key: 'prText', label: 'PRs', html: r => (r.prs.length ? r.prs.map(prLink).join(', ') : '–') }, { key: 'reason', label: 'Reason', html: r => (r.reason ? errCopy(r.reason) : '–') }, { key: 'checkText', label: 'Checks', more: true }],
     totals: { at: 'count' }, emptyState: empty('No self-upgrade record', 'Records appear in team/upgrades.jsonl when the supervisor upgrades itself.', 'info') }) })) };
 }
-const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, activity: activityPage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+// Watch a job (issue #123): the transcript so far is rendered here; for a running job watch.js streams the rest.
+function watchPage(view, query, path, route) {
+  const t = route.transcript, job = route.job;
+  if (!job && !t?.entries?.length) return null;
+  const row = view.jobs.find(j => j.fullId === route.id);
+  const live = !!job && ['queued', 'running'].includes(job.status);
+  const entries = t?.entries || [], last = entries.at(-1)?.seq || 0, started = job?.createdAt ?? row?.startedAt;
+  const elapsed = Number.isFinite(started) ? (live ? route.runningNow : (job?.updatedAt || started)) - started : null;
+  const meta = row ? `${esc(row.agent)} · ${esc(row.kind)} ${row.ref ? jobRef(row, view) : ''} · ${esc(row.status)}` : esc(job?.status || 'unknown');
+  const head = `<p class="sub">${meta}</p><p class="watch-stats"><span class="badge sev-${live ? 'ok' : 'info'}" data-state>${live ? 'Live' : `Finished (${esc(job?.status || 'ended')})`}</span> Elapsed <b data-elapsed>${Number.isFinite(elapsed) ? esc(fmtElapsed(elapsed)) : 'unknown'}</b> · <span data-totals>${esc(renderTotals(totals(entries)))}</span></p>`;
+  const none = entries.length ? '' : `<p class="sub">${live ? 'Waiting for the first output…' : 'No transcript is stored for this job (it ran before transcripts existed, or it is older than 7 days).'}</p>`;
+  const seed = entries.map(e => ({ kind: e.kind, tokens: e.tokens, evidence: e.evidence ? 1 : 0 }));
+  const panel = `<section class="card watch" data-watch data-job="${esc(route.id)}" data-live="${live}" data-last="${last}" data-started="${Number.isFinite(started) ? started : ''}" data-seed="${esc(JSON.stringify(seed))}"><div class="card-body">${head}${none}<div class="tr-log" role="log" aria-live="polite">${renderEntries(entries)}</div><p class="sub">Read-only. Secrets, OpenBao paths and environment values are redacted before storage; transcripts are kept 7 days.</p></div></section>`;
+  return { title: `Job ${route.id.slice(0, 8)}`, crumbs: [['/work', 'Work'], [null, `Job ${route.id.slice(0, 8)}`]], body: `<div class="cards">${panel}</div><script type="module" src="/static/watch.js"></script>` };
+}
+const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
 // REFS is a module-level lookup that the link helpers read; it is set for one synchronous render and cleared after (issue #182).
@@ -575,7 +593,7 @@ function renderRouteWith(view, route, { query = new URLSearchParams(), pathname 
   const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work'], [null, 'Not found']] };
   const steps = trail(route.page, res.crumbs || []), parent = [...steps].reverse().find(([h]) => h)?.[0];
   const crumbs = steps.length ? `<a class="btn back" href="${esc(parent || '/')}" data-back>${icon('back')}Back</a><nav class="crumbs" aria-label="Breadcrumb"><ol>${steps.map(([h, t], i) => `<li>${h ? `<a href="${esc(h)}">${esc(t)}</a>` : `<span aria-current="page">${esc(t)}</span>`}${i < steps.length - 1 ? '<span class="sep" aria-hidden="true">›</span>' : ''}</li>`).join('')}</ol></nav>` : '';
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><noscript><meta http-equiv="refresh" content="${refreshSeconds}"></noscript><meta name="refresh-seconds" content="${refreshSeconds}"><title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${refreshSeconds > 0 ? `<noscript><meta http-equiv="refresh" content="${refreshSeconds}"></noscript><meta name="refresh-seconds" content="${refreshSeconds}">` : ''}<title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
 <body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route, (crumbs ? `<div class="pagehead">${crumbs}<h1>${esc(res.title)}</h1></div>` : `<h1>${esc(res.title)}</h1>`))}<main id="main">${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><button type="button" id="to-top" class="to-top" aria-label="Back to top" title="Back to top" hidden>${icon('up')}</button><script type="module" src="/static/app.js"></script></body></html>`;
   return { status: page ? 200 : 404, html };
 }

@@ -93,3 +93,14 @@ A panel at the top of Overview summarises PRs merged, PRs opened, reviews (PASS 
 - **Range:** `?since=visit` (default), `24h` or `today` (UTC day). With no marker yet, "since last visit" shows the last 24 h and says so.
 - **Marker:** `dashboard/last-seen.json` on the server. It moves only when Mark as read is pressed (a same-origin form POST to `/mark-read`, no script needed), never on page load. It is set to the time the page was built, never moves backwards, and rejects a missing or foreign `Origin`, a bad host, and a future time. It is the dashboard's only write; every other request stays GET/HEAD.
 - **Copy summary** puts the plain-text summary on the clipboard (same copy mechanism as issue #72). The layout is responsive and works on a phone.
+
+## Watching a job (issue #123)
+
+Jobs run headless, so the supervisor keeps a per-job **transcript** at `<state>/transcripts/<job id>.jsonl` (directory 0700, file 0600). It is separate from the classification-only event log, which is unchanged.
+
+- **Schema.** Each adapter maps its stream to one entry shape (`kind`: assistant, tool_call, tool_result, usage, system, log, truncated; plus `tool`, `text`, `detail`, `tokens`, `evidence`). Claude and Codex are mapped in `supervisor/adapters/*.mjs` (`transcript()`); a new provider adds one function. Reasoning/thinking is not recorded.
+- **Redaction before writing.** Secret shapes (GitHub/API/JWT tokens, bearer headers, private keys), OpenBao paths (`bao://`, `/v1/secret/...`, `secret/data/...`) and tokens, credential-named assignments and JSON fields, and the values of secret-named environment variables are replaced before anything reaches disk (`supervisor/transcript.mjs`).
+- **Cap and retention.** 4 MiB per job. At the cap whole entries stop, one `truncated` notice is written, and only the lines that triggered a classified event may still use a 64 KiB reserve. Files older than 7 days are deleted when the next job starts.
+- **Watch view.** `/jobs/<job id>` shows assistant messages, tool calls as one expandable line each, running token count and elapsed time. For a running job `watch.js` follows `/api/jobs/<id>/events` (server-sent events, `Last-Event-ID` resume, polled every 250 ms, so new lines arrive well inside 2 seconds). Both are GET-only and read-only. The page is complete without script; the server and the browser render with the same functions (`dashui/watch.mjs`), so a replay equals the live view.
+- **Entry points.** A running agent card ("Watch live"), the Job history and Activity tables, and each Needs you item that comes from a failed job ("Replay transcript").
+- **Classifier evidence.** The exact line behind a classified event (usage_limit, crash and so on) is stored with the entry and highlighted.
