@@ -11,7 +11,7 @@ export const SEVERITIES = {
 // Attention item id -> severity. Anything that waits on the homeowner, or that has stopped work, is Action needed.
 export function severityOf(id) {
   const s = String(id || '');
-  if (/^(homeowner|tick-failed|job)(-|$)/.test(s)) return 'action';
+  if (/^(homeowner|tick-failed|job|rebase-lost)(-|$)/.test(s)) return 'action';
   if (/^(ci|tick-stale|no-tick|idle|pause|drift|lease|register)(-|$)/.test(s)) return 'warning';
   return 'info';
 }
