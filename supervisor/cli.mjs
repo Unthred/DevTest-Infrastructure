@@ -9,10 +9,9 @@ import { runProcess } from './process.mjs';
 import { Team, loadTeamConfig, tickLock } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { alertSender } from './alert.mjs';
-import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome, latestAllowance } from './dashdata.mjs';
-import { outOfAllowance } from './interim.mjs';
+import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome } from './dashdata.mjs';
+import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
-import { weeklyUtilization } from './models.mjs';
 import { spawnSync } from 'node:child_process';
 import { SelfUpgrade, realDeps, runningSha } from './upgrade.mjs';
 
@@ -94,21 +93,14 @@ function realGit(repoPath) {
 async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true) {
   // The decision register that counts is the one merged into main, not a working copy.
   // A dry run reads it too when it can, so `team status` plans interim reviews (D-021) the way a real tick would.
-  let register = '';
-  const shown = spawnSync('git', ['-C', config.repo_path, 'show', 'origin/main:docs/DECISIONS.md'], { encoding: 'utf8', timeout: 30000 });
-  if (shown.status === 0) register = shown.stdout;
-  else if (needRegister) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main');
+  const register = readRegister(config);
+  if (!register && needRegister) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main');
   // Model routing (issue #64): what each CLI accepts comes from its manifest; the weekly allowance is the freshest the provider reported.
   const providerModels = {};
   for (const a of Object.values(config.agents)) providerModels[a.provider] = (await provider(registry, a.provider)).config.manifest.models ?? null;
-  const jobsNow = readJobs(root), allowances = latestAllowance(jobsNow, readCache(root)?.probes);
-  const allowanceOf = agent => weeklyUtilization(allowances[config.agents[agent].provider]);
-  // D-021: whether an agent is out of allowance, from provider-reported records and its latest supervised job only.
-  const limited = {};
-  const limitedOf = agent => (limited[agent] ??= outOfAllowance({ provider: config.agents[agent].provider, jobs: jobsNow, allowance: allowances[config.agents[agent].provider] ?? null,
-    weeklyAt: config.interim_review?.weekly_at ?? 0.95, hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') }));
-  // Allowance-aware scheduling (issue #56): provider-reported allowance, the jobs' token counts and the tick history.
-  const usage = { allowance: allowances, jobs: jobsNow, snapshots: readSnapshots(root) };
+  // The allowance inputs are shared with `team status` and the dashboard (issue #121), so all of them plan alike.
+  const jobsNow = readJobs(root);
+  const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs: jobsNow, probes: readCache(root)?.probes, snapshots: readSnapshots(root), hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') });
   return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
 }
 // Model-free allowance probes, one per provider that has one (issue #75), so a paused agent's reading still refreshes.
@@ -219,7 +211,7 @@ async function main() {
     if (a._[0] === 'status') {
       const { currentStatus, renderStatus } = await import('./teamstatus.mjs');
       const config = loadTeamConfig(teamConfigFile, root);
-      const status = await currentStatus({ root, config, gh: a['no-github'] ? null : githubClient(config) });
+      const status = await currentStatus({ root, config, register: readRegister(config), gh: a['no-github'] ? null : githubClient(config) });
       console.log(a.json === true ? JSON.stringify(status, null, 2) : renderStatus(status).trimEnd()); return;
     }
     if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json]');

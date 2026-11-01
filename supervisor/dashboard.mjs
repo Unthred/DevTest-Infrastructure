@@ -2,6 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import { Team, agentOfBranch, checksState, prerequisites } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
+import { planningInputs } from './planning.mjs';
 import { severityOf } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, supervisorHealth } from './suphealth.mjs';
@@ -72,13 +73,15 @@ function limitView(job, allowance, now) {
   return { since: Number.isFinite(pausedAt(job)) ? pausedAt(job) : null, resetsAt: w ? w.resetsAt : null, basis: w ? `${windowLabel(w, allowance.provider)} window in the last reading` : null, retryAt: job.nextAttemptAt || null };
 }
 
-function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now()) {
+function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '') {
   const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })),
     // delivered-work issue numbers the tick cached, in the shape Team.plan() reads, so the page matches `team tick --dry-run`
     listMergedPulls: async () => [{ headRefName: '', closingIssuesReferences: (cache.delivered || []).map(number => ({ number })) }] };
   const jobsApi = { listActive: async () => jobs.filter(j => ACTIVE.includes(j.status)).map(j => ({ id: j.id, provider: j.provider, status: j.status })) };
-  // Same usage data as the tick (issue #56), so the page shows the same allowance modes and reassignments as `team tick --dry-run`.
-  const team = new Team({ config, root, gh, jobs: jobsApi, git: null, usage: { allowance: latestAllowance(jobs), jobs, snapshots }, clock: { now: () => now } });
+  // The same planning inputs as the tick (issues #56, #121): probes included, so the page shows the allowance modes, holds and
+  // reassignments `team tick --dry-run` would.
+  const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs, probes: cache.probes, snapshots, events, now });
+  const team = new Team({ config, root, gh, jobs: jobsApi, git: null, register, allowanceOf, limitedOf, usage, clock: { now: () => now } });
   team.s = { ...team.s, ...state };      // the state the caller read, so the plan and the page agree
   for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable']) team.s[k] ||= {};
   return team;
@@ -336,11 +339,11 @@ export function budgetView(team) {
   return out;
 }
 
-export function buildView({ config, root, jobs, events, state, cache, snapshots, now }) {
+export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '' }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
-  const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now);
+  const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now, events || [], register);
   return team.plan().then(plan => {
     const queues = reasons(team, c, jobs, plan, states);
     const agents = Object.entries(config.agents).map(([name, a]) => {

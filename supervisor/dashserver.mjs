@@ -4,6 +4,7 @@ import http from 'node:http';
 import { SupervisorError } from './core.mjs';
 import { readCache, readEvents, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { buildView } from './dashboard.mjs';
+import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
 import { matchRoute, renderRoute } from './dashrender.mjs';
 import { validateTeamConfig } from './team.mjs';
@@ -22,9 +23,17 @@ export function validateBind(host, port) {
   return { host, port };
 }
 
+// The register on main changes rarely and reading it spawns git, so the server keeps it for a minute.
+let registerMemo = { at: 0, text: '' };
+function registerCached(config) {
+  const now = Date.now();
+  if (now - registerMemo.at > 60000) registerMemo = { at: now, text: readRegister(config) };
+  return registerMemo.text;
+}
+
 export async function currentView({ root, config, now = Date.now() }) {
   const jobs = readJobs(root);
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now });
+  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, register: registerCached(config) });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request.
