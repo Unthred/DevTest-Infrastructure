@@ -53,3 +53,21 @@ test('real git: a whitespace-only difference alone makes rangeEqual false', t =>
   assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: trail }), false);
   assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: old }), true);
 });
+
+test('real git: a non-ASCII filename is placement-checked, and a git-quoted filename fails closed', t => {
+  for (const name of ['ü.txt', 'tab\tname']) {
+    if (name.includes('\t') && process.platform === 'win32') continue;
+    const { dir, g, w } = repo(t);
+    w(name, [block, block, block].join('-\n')); g('add', '.'); g('commit', '-qm', 'base');
+    g('checkout', '-qb', 'feat'); w(name, withX(0)); g('commit', '-qam', 'feature'); const a = g('rev-parse', 'HEAD');
+    g('checkout', '-q', '--detach', 'main'); w(name, withX(2)); g('commit', '-qam', 'feature'); const b = g('rev-parse', 'HEAD');
+    assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: a, newHead: b }), false, name);
+  }
+});
+
+test('parseHunks fails closed on a quoted header or a hunk without a file', async () => {
+  const { parseHunks } = await import('../supervisor/rangediff.mjs');
+  assert.equal(parseHunks('diff --git "a/\\303\\274" "b/\\303\\274"\n@@ -1,2 +1,3 @@\n'), null);
+  assert.equal(parseHunks('@@ -1,2 +1,3 @@\n'), null);
+  assert.deepEqual(parseHunks('diff --git a/x b/x\n@@ -1,2 +1,3 @@\n'), [{ file: 'x', start: 1, count: 2 }]);
+});

@@ -14,14 +14,17 @@ export function normalisePatch(text) {
     .map(l => l.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/, '@@')).join('\n');
 }
 
-// Hunks of a raw diff as [{ file, start, count }] on the old (base) side, in order.
+// Hunks of a raw diff as [{ file, start, count }] on the old (base) side, in order. Null (fail closed) when a
+// header does not parse (git quotes names with a tab, quote or backslash) or a hunk has no known file.
 export function parseHunks(text) {
   const out = []; let file = null;
   for (const l of text.split('\n')) {
     const f = /^diff --git a\/(.*) b\/(.*)$/.exec(l);
     if (f) { file = f[2]; continue; }
+    if (l.startsWith('diff --git ')) return null;
     const h = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(l);
-    if (h && file !== null) out.push({ file, start: Number(h[1]), count: h[2] === undefined ? 1 : Number(h[2]) });
+    if (h && file === null) return null;
+    if (h) out.push({ file, start: Number(h[1]), count: h[2] === undefined ? 1 : Number(h[2]) });
   }
   return out;
 }
@@ -45,8 +48,9 @@ function upstreamShift(upstream, { start, count }) {
 function samePlacement(run, base, oldHead, newHead) {
   const mb = head => run(['merge-base', base, head]).trim();
   const oldMb = mb(oldHead), newMb = mb(newHead);
-  const hunks = head => parseHunks(run(['diff', ...DIFF_FLAGS, `${base}...${head}`]));
+  const hunks = head => parseHunks(run(['-c', 'core.quotePath=false', 'diff', ...DIFF_FLAGS, `${base}...${head}`]));
   const oh = hunks(oldHead), nh = hunks(newHead);
+  if (oh === null || nh === null) return false; // unparseable header: fail closed
   if (oh.length !== nh.length) return false;
   const cache = new Map();
   const upstream = file => {
