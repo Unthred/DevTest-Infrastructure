@@ -231,3 +231,46 @@ test('issue #68: a FAILED run with the same stderr text and an allowed allowance
   const ro = await drive(o.root, oj, o.registry, clk, o.run(o.root, oj));
   assert.equal(ro.status, 'blocked'); assert.equal(ro.lastEvent, 'approval_required');
 });
+
+// Issue #120: a 74,404-byte stream-json line exceeded the 64 KiB buffer; its opening brace was dropped and the tail was
+// classified as plain text that quoted a diff mentioning "usage limit".
+const logOf = (s, job) => fs.readFileSync(path.join(s.root, 'events', `${job.id}.jsonl`), 'utf8');
+const huge = () => longToolResult('The diff adds: usage limit and weekly limit handling', 74404 - 600);
+
+test('issue #120: replay of a 74 KiB stream-json line quoting "usage limit" pauses nothing and is logged as oversize_line', async t => {
+  const line = huge(); assert.ok(line.length > 70000);
+  for (const code of [0, 1]) {
+    const s = sandbox(t, `process.stdout.write(${JSON.stringify(line)} + '\\n'); ${emit(claudeLive)} process.exit(${code});`, { observe: claude.observe }), job = await createJob(s.root, s.spec, s.registry);
+    const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+    assert.notEqual(r.lastEvent, 'usage_limit'); assert.notEqual(r.status, 'paused_limit');
+    assert.match(logOf(s, job), /oversize_line:stdout/); assert.doesNotMatch(logOf(s, job), /classified:usage_limit/);
+    if (code === 0) assert.equal(r.status, 'completed');
+  }
+});
+
+test('issue #120: an oversize line arriving in many chunks is dropped whole and the next line is still read', async t => {
+  const line = huge();
+  const s = sandbox(t, `const l = ${JSON.stringify(line)}; for (let i = 0; i < l.length; i += 9000) process.stdout.write(l.slice(i, i + 9000)); process.stdout.write('\\n'); ${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.lastEvent, 'usage_limit'); assert.equal(r.allowance.windows[0].status, 'rejected');
+  assert.match(logOf(s, job), /oversize_line:stdout/);
+});
+
+test('issue #120: a text-matched usage limit on a clean exit with an allowed reading is ignored; a failed run or overage still counts', async t => {
+  const s = sandbox(t, `${emit(claudeLive)} console.error('You have reached your usage limit'); console.log('done');`, { observe: claude.observe }), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'completed'); assert.equal(r.attempts, 1);
+  assert.match(logOf(s, job), /transition_ignored:usage_limit_text/);
+  const f = sandbox(t, `${emit(claudeLive)} console.error('You have reached your usage limit'); process.exit(1);`, { observe: claude.observe }), fj = await createJob(f.root, f.spec, f.registry);
+  const rf = await drive(f.root, fj, f.registry, clk, f.run(f.root, fj));
+  assert.equal(rf.lastEvent, 'usage_limit');
+});
+
+test('issue #120: a verdict or post-condition already in place when the job pauses completes it instead of retrying', async t => {
+  const s = sandbox(t, `${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, { ...s.spec, postcondition: { kind: 'verdict', ticket: 'a'.repeat(32), pr: 41, head: 'b'.repeat(40) } }, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job), 4, async () => true);
+  assert.equal(r.status, 'completed'); assert.equal(r.attempts, 1);
+  const n = sandbox(t, `${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), nj = await createJob(n.root, { ...n.spec, postcondition: { kind: 'verdict', ticket: 'a'.repeat(32), pr: 41, head: 'b'.repeat(40) } }, n.registry);
+  const rn = await drive(n.root, nj, n.registry, clk, n.run(n.root, nj), 1, async () => false);
+  assert.notEqual(rn.status, 'completed');
+});

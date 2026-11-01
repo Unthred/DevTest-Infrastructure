@@ -48,17 +48,35 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   // A child that exits before reading its prompt closes the pipe; that is an exit status, not a supervisor crash.
   child.stdin.on('error', () => {});
   child.stdin.end(prompt(job, job.attempts > 1, job.attempts > 1 && !session.resume ? sessionSeed(job) : null));
+  const CAP = 65536;
+  // Issue #120: a line longer than the buffer cap is discarded whole, up to its newline, and never classified from a
+  // fragment (a dropped opening brace turned a JSON tail into "plain text" that quoted a diff mentioning a usage limit).
+  const discarding = { stdout: false, stderr: false };
+  const handleLine = (stream, raw) => {
+    const line = raw.slice(0, 16384);
+    usage = addUsage(usage, usageFromLine(line));
+    touch(job, clock);
+    const sessionUsage = sessionFromLine(line); if (sessionUsage) recordUsage(job, sessionUsage);
+    const result = adapter.observe(line, clock.now());
+    if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
+    observeEvent(result, stream, line);
+  };
   const onData = stream => chunk => {
-    buffers[stream] = (buffers[stream] + chunk.toString('utf8')).slice(-65536);
-    let index;
-    while ((index = buffers[stream].indexOf('\n')) !== -1) {
-      const line = buffers[stream].slice(0, index).slice(0, 16384); buffers[stream] = buffers[stream].slice(index + 1);
-      usage = addUsage(usage, usageFromLine(line));
-      touch(job, clock);
-      const sessionUsage = sessionFromLine(line); if (sessionUsage) recordUsage(job, sessionUsage);
-      const result = adapter.observe(line, clock.now());
-      if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
-      observeEvent(result, stream, line);
+    let text = chunk.toString('utf8');
+    while (text.length) {
+      const nl = text.indexOf('\n');
+      if (discarding[stream]) {
+        if (nl === -1) return;
+        discarding[stream] = false; text = text.slice(nl + 1); continue;
+      }
+      if (nl === -1) {
+        buffers[stream] += text;
+        if (buffers[stream].length > CAP) { buffers[stream] = ''; discarding[stream] = true; event(root, job, `oversize_line:${stream}`, clock); }
+        return;
+      }
+      const raw = buffers[stream] + text.slice(0, nl); buffers[stream] = ''; text = text.slice(nl + 1);
+      if (raw.length > CAP) { event(root, job, `oversize_line:${stream}`, clock); continue; }
+      handleLine(stream, raw);
     }
   };
   child.stdout.on('data', onData('stdout')); child.stderr.on('data', onData('stderr'));
@@ -72,7 +90,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
       child.on('error', () => resolve({ code: 1, event: 'crash' }));
       child.on('close', code => resolve({ code: code ?? 1 }));
     });
-    for (const stream of ['stdout', 'stderr']) if (buffers[stream]) { const rest = buffers[stream].slice(0, 16384); observeEvent(adapter.observe(rest, clock.now()), stream, rest); }
+    for (const stream of ['stdout', 'stderr']) if (buffers[stream] && !discarding[stream]) { const rest = buffers[stream].slice(0, 16384); observeEvent(adapter.observe(rest, clock.now()), stream, rest); }
     if (typeof adapter.postRun === 'function') { const late = adapter.postRun(job); if (late) allowance = late; }
     touch(job, clock);
     if (usage) job.usage = addUsage(job.usage, usage);
@@ -84,6 +102,11 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     // overage, is a false positive (issue #68): the post-condition, not a log line, decides completion.
     else if (result.code === 0 && observed === 'approval_required' && allowance?.status === 'allowed' && allowance.billing?.usingOverage === false) {
       event(root, job, `approval_ignored:clean_exit_allowance_allowed:${cause}`, clock);
+      observed = null; resetAt = null; resetSource = 'none'; verified = false;
+    }
+    // Issue #120: a text-matched usage limit on a clean exit with an allowed, non-overage reading is a false positive.
+    else if (result.code === 0 && observed === 'usage_limit' && /:non-json$/.test(cause || '') && allowance?.status === 'allowed' && allowance.billing?.usingOverage === false) {
+      event(root, job, 'transition_ignored:usage_limit_text', clock);
       observed = null; resetAt = null; resetSource = 'none'; verified = false;
     }
     // Limit evidence only refines a failed run; it never turns a success into a limit.
