@@ -53,3 +53,9 @@ Copy buttons (all pages): next to every command shown, job and commit IDs (the f
 The page is served over plain HTTP on the LAN, which is not a secure context, so the Clipboard API is usually unavailable. The script copies through a selected textarea and `execCommand('copy')`; if that fails it opens a dialog with the text selected. The button shows "Copied" (or "Select and copy") for 1.6 s and announces it through a live region. The buttons are hidden until the script runs. Phone: 44 px copy targets, full-width overseer buttons, stacked facts.
 
 Gate: `tests/dashboard-supervisor.test.mjs` (unit, handler and fake-DOM tests); on Tower, `ionice -c 3 nice -n 19 node tests/supervisor-page-smoke.mjs` renders the pages from a fixture and runs the #6 layout audit at all eight standard widths in the pinned Playwright container (evidence under `/mnt/cache/appdata/devtest-infrastructure/evidence/issue-72/`).
+
+## Stale server after a self-upgrade (issue #155)
+
+A verified supervisor self-upgrade also restarts the dashboard server: the upgrade step finds the `cli.mjs dashboard serve` process (never a worker, tick or job), stops it, starts the same `--host` and `--port` from the new version, and records `dashboard_restarted` (or `dashboard_restart_failed`, with an alert) in `team/upgrades.jsonl`. If no dashboard server is running it does nothing. This code lives in `supervisor/upgrade.mjs`, an upgrader path, so the first deployment is by hand.
+
+Until the server is on the installed version, the Warnings panel shows "Dashboard is running <old>, Foreman is on <new>; what you see may be out of date." The server re-reads `team.local.json` on every request (a bad edit keeps the last good configuration). A job record whose status this version does not know, or that cannot be parsed, shows the agent as **Unknown**, never Idle.

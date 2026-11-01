@@ -29,10 +29,15 @@ export function readJobs(root) {
   const dir = path.join(root, 'jobs'); const out = [];
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     if (!name.endsWith('.json')) continue;
-    try { out.push(JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'))); } catch (error) { if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error; }
+    // A record that cannot be parsed is kept as an `unreadable` marker, never dropped: dropping it would make a running job look idle.
+    try { const j = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); out.push(j && typeof j === 'object' && !Array.isArray(j) ? j : { unreadable: true, status: 'unreadable' }); }
+    catch (error) { if (error instanceof SyntaxError) out.push({ unreadable: true, status: 'unreadable' }); else if (error.code !== 'ENOENT') throw error; }
   }
   return out;
 }
+// The job statuses this version understands. A record with any other status was probably written by a newer version.
+export const KNOWN_STATUSES = ['queued', 'running', 'paused_limit', 'paused_manual', 'blocked', 'failed', 'completed', 'stopped'];
+export const isUnknownJob = j => j?.unreadable === true || !KNOWN_STATUSES.includes(j?.status);
 export function readEvents(root, jobIds) {
   const out = [];
   for (const id of jobIds) {
@@ -80,7 +85,9 @@ export const compactIssues = issues => (issues || []).map(i => ({ number: i.numb
 export function agentStates(config, jobs, now) {
   const out = {};
   for (const [name, a] of Object.entries(config.agents)) {
-    const mine = jobs.filter(j => j.provider === a.provider).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0));
+    // Records this version cannot read (or whose provider it cannot tell) might be that agent's work: say "unknown", never "idle".
+    const unknown = jobs.some(j => isUnknownJob(j) && (j.unreadable || j.provider === a.provider || typeof j.provider !== 'string'));
+    const mine = jobs.filter(j => j.provider === a.provider && !isUnknownJob(j)).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0));
     const active = mine.filter(j => ['queued', 'running', 'paused_limit', 'paused_manual'].includes(j.status));
     const live = active.find(j => ['running', 'queued'].includes(j.status));
     const paused = active.find(j => ['paused_limit', 'paused_manual'].includes(j.status));
@@ -88,6 +95,7 @@ export function agentStates(config, jobs, now) {
     let state = 'idle', job = null;
     if (live) { state = 'running'; job = live; }
     else if (paused) { state = 'paused'; job = paused; }
+    else if (unknown) { state = 'unknown'; job = null; }
     else if (latest && ['blocked', 'failed'].includes(latest.status) && now - (latest.updatedAt || 0) < 48 * 3600000) { state = 'blocked'; job = latest; }
     out[name] = { state, job, last: latest || null };
   }
@@ -176,7 +184,7 @@ export function readVersion(root, { running = codeVersion() } = {}) {
   let linked = null, linkedAt = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); if (m) { linked = m[1]; linkedAt = fs.lstatSync(path.join(root, 'current')).mtimeMs; } } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'EINVAL') throw error; }
   if (!last && !linked) return null;
-  const fromRecords = last ? (['upgraded', 'verified'].includes(last.result) ? last.to : last.from) : null;
+  const fromRecords = last ? (['upgraded', 'verified', 'dashboard_restarted', 'dashboard_restart_failed'].includes(last.result) ? last.to : last.from) : null;
   const installed = linked || fromRecords || '';
   // The records name main only as far as they went. If the link was moved after the newest record (a manual upgrade), they say
   // nothing about main beyond what is installed, so no drift is claimed.

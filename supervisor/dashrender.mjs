@@ -57,8 +57,8 @@ const sprite = `<svg width="0" height="0" style="position:absolute" aria-hidden=
 
 const sev = level => SEVERITIES[level] || SEVERITIES.info;
 export const badge = (level, text, extra = '') => `<span class="badge sev-${esc(level)} ${extra}">${icon(sev(level).icon)}${esc(text ?? sev(level).label)}</span>`;
-const stateSev = { running: 'ok', idle: 'info', paused: 'warning', blocked: 'action' };
-const stateBadge = s => badge(stateSev[s] || 'info', ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked' })[s] || s);
+const stateSev = { running: 'ok', idle: 'info', paused: 'warning', blocked: 'action', unknown: 'warning' };
+const stateBadge = s => badge(stateSev[s] || 'info', ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[s] || s);
 const checksBadge = c => (c === 'green' ? badge('ok', 'CI green') : c === 'red' ? badge('action', 'CI failing') : c === 'pending' ? badge('info', 'CI running') : c ? badge('info', 'No CI') : '<span class="muted">–</span>');
 const verdictBadge = v => (v === 'PASS' ? badge('ok', 'PASS') : v === 'CHANGES' ? badge('warning', 'CHANGES') : '<span class="muted">none</span>');
 const agentTag = (name, view) => (name ? `<a href="/agents/${esc(encodeURIComponent(name))}"><span class="agent-dot" style="background:${colourOf(name, Object.keys(view.usage || {}).indexOf(name))}"></span>${esc(name)}</a>` : '<span class="muted">–</span>');
@@ -230,7 +230,8 @@ function needsPanel(view) {
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 function warningsPanel(view) {
-  const items = view.panels.warnings;
+  const unknown = view.agents.filter(a => a.state === 'unknown');
+  const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
   return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
 const dockPicker = `<div class="dockbar wide-only" role="group" aria-label="Navigation position"><span class="k">Nav</span>${DOCKS.map(d => `<button type="button" class="tbtn dockbtn" data-dock="${d}" aria-pressed="false" aria-label="Dock navigation ${d}" title="Dock ${d}">${d[0].toUpperCase()}${d.slice(1)}</button>`).join('')}</div>`;
@@ -257,14 +258,15 @@ function overview(view, query) {
   const tokens = Object.values(view.usage).reduce((s, u) => s + u.totalTokens, 0);
   const daily = Object.values(view.graphs.jobsPerDay).map(d => Object.values(d).reduce((a, b) => a + b, 0));
   const verdicts = view.verdicts;
+  const warnCount = view.panels.warnings.length + (view.agents.some(a => a.state === 'unknown') ? 1 : 0);
   const panels = [
     card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
-    card({ id: 'warnings', title: `Warnings${view.panels.warnings.length ? ` (${view.panels.warnings.length})` : ''}`, span: 3, body: warningsPanel(view), href: '/system', cls: 'panel', type: 'panel' })
+    card({ id: 'warnings', title: `Warnings${warnCount ? ` (${warnCount})` : ''}`, span: 3, body: warningsPanel(view), href: '/system', cls: 'panel', type: 'panel' })
   ].join('');
   const kpis = [
-    kpi({ id: 'k-active', label: 'Agents running', value: `${active} / ${view.agents.length}`, href: '/agents' }),
+    kpi({ id: 'k-active', label: 'Agents running', value: view.agents.some(a => a.state === 'unknown') ? `? / ${view.agents.length}` : `${active} / ${view.agents.length}`, href: '/agents' }),
     kpi({ id: 'k-prs', label: 'Open pull requests', value: String(open.length), href: '/work', spark: sparkline(daily) }),
     kpi({ id: 'k-queue', label: 'Queued items', value: String(Object.values(view.queues).reduce((s, q) => s + q.length, 0)), href: '/work' }),
     kpi({ id: 'k-reviews', label: 'Reviews recorded', value: String(verdicts.length), href: '/reviews' }),

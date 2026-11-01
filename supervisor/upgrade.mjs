@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { checksState, agentOfBranch } from './team.mjs';
 
@@ -29,6 +29,44 @@ export function runningSha(file) {
   const m = /\/versions\/([0-9a-f]{40})\/supervisor\/[^/]+$/.exec(file);
   return m ? m[1] : null;
 }
+
+// ---- dashboard server restart (issue #155). The read-only dashboard server is a long-lived process started by hand or by the
+// AI Dashboard user script; a self-upgrade moves the `current` link but not that process, so it would keep serving old code.
+// This finds only `cli.mjs dashboard serve` processes (never a worker or a job), stops them, and starts the same host and port
+// from the new version. Every effect is injectable so the rule is tested without a real process.
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+export function findDashboards(procRoot = '/proc', self = process.pid) {
+  const out = [];
+  let names = []; try { names = fs.readdirSync(procRoot); } catch { return out; }
+  for (const name of names) {
+    if (!/^\d+$/.test(name) || Number(name) === self) continue;
+    let argv; try { argv = fs.readFileSync(path.join(procRoot, name, 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { continue; }
+    const cli = /(^|\/)(node|nodejs)$/.test(argv[0] || '') ? argv.findIndex((a, i) => i === 1 && /(^|\/)supervisor\/cli\.mjs$/.test(a)) : -1;
+    if (cli < 0 || argv[cli + 1] !== 'dashboard' || argv[cli + 2] !== 'serve') continue;
+    const opt = key => { const i = argv.indexOf(key); return i > cli && i + 1 < argv.length ? argv[i + 1] : null; };
+    out.push({ pid: Number(name), host: opt('--host'), port: opt('--port'), version: runningSha(argv[cli]) });
+  }
+  return out;
+}
+export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50 } = {}) {
+  const found = findDashboards(procRoot);
+  if (!found.length) return { ok: true, restarted: false, reason: 'no dashboard server was running' };
+  if (found.every(d => d.version === sha)) return { ok: true, restarted: false, reason: 'already on the new version' };
+  const old = found.find(d => IPV4.test(d.host || '') && /^\d+$/.test(d.port || '')) || found[0];
+  if (!IPV4.test(old.host || '')) return { ok: false, reason: 'the running dashboard server has no readable --host, so it cannot be restarted the same way' };
+  for (const d of found) { try { kill(d.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') return { ok: false, reason: `could not stop dashboard pid ${d.pid}: ${error.code || 'error'}` }; } }
+  const gone = () => { try { return found.every(d => { try { kill(d.pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } }); } catch { return false; } };
+  for (let i = 0; i < tries && !gone(); i++) await sleep(200);
+  if (!gone()) return { ok: false, reason: 'the old dashboard server did not stop' };
+  const args = ['dashboard', 'serve', '--host', old.host, ...(old.port ? ['--port', old.port] : [])];
+  try { (start || defaultStart)(wrapper, args); } catch (error) { return { ok: false, reason: `could not start the dashboard server: ${String(error?.message || error).slice(0, 120)}` }; }
+  for (let i = 0; i < tries; i++) {
+    if (findDashboards(procRoot).some(d => d.version === sha)) return { ok: true, restarted: true, host: old.host, port: old.port };
+    await sleep(200);
+  }
+  return { ok: false, reason: `the dashboard server did not come back on ${short(sha)}` };
+}
+const defaultStart = (wrapper, args) => { spawn(wrapper, args, { detached: true, stdio: 'ignore', env: process.env }).unref(); };
 
 export class SelfUpgrade {
   constructor({ root, deps, clock = { now: () => Date.now() } }) {
@@ -131,7 +169,18 @@ export class SelfUpgrade {
     if (!ok) return this.rollback(p.from, p.to, `live tick failed: ${String(reason || 'error').slice(0, 160)}`, p.prs, { ...p.checks, liveTick: 'failed' });
     delete this.s.pending; this.save();
     this.record({ from: p.from, to: p.to, prs: p.prs, checks: { ...p.checks, liveTick: 'ok' }, result: 'verified' });
+    await this.restartDashboard(p);
     return 'verified';
+  }
+
+  // After a verified upgrade the dashboard server is restarted so it does not keep serving old code. It never touches jobs or
+  // the dispatcher; a failure is recorded and alerted once and the page's own mismatch warning stays up until it is fixed.
+  async restartDashboard(p) {
+    if (typeof this.d.restartDashboard !== 'function') return;
+    let r;
+    try { r = await this.d.restartDashboard(p.to); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
+    this.record({ from: p.from, to: p.to, result: r.ok ? 'dashboard_restarted' : 'dashboard_restart_failed', reason: r.ok ? (r.restarted ? null : r.reason) : r.reason, ...(r.ok && r.restarted ? { restarted: true } : {}) });
+    if (!r.ok) await this.alert(`${p.to}:dashboard`, `Dashboard server was not restarted after the upgrade to ${short(p.to)}: ${r.reason}. Restart it by hand; the page warns that it may be out of date.`);
   }
 
   async rollback(from, to, reason, prs, checks) {
@@ -237,6 +286,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, wrapper = '
         return r.status === 0 ? { ok: true } : { ok: false, reason: tail(r) };
       } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     },
+    restartDashboard: async sha => restartDashboardServer(sha, { wrapper }),
     alert: sendAlert
   };
 }

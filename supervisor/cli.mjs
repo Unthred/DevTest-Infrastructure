@@ -226,7 +226,7 @@ async function main() {
   if (command === 'dashboard') {
     if (a._[0] !== 'serve') throw new SupervisorError('usage: dashboard serve --host LAN_IPV4 [--port N]');
     const { serve, DEFAULT_PORT } = await import('./dashserver.mjs');
-    const server = await serve({ root, config: loadTeamConfig(teamConfigFile, root), host: a.host || process.env.DASHBOARD_HOST, port: Number(a.port || process.env.DASHBOARD_PORT || DEFAULT_PORT) });
+    const server = await serve({ root, config: () => loadTeamConfig(teamConfigFile, root), host: a.host || process.env.DASHBOARD_HOST, port: Number(a.port || process.env.DASHBOARD_PORT || DEFAULT_PORT) });
     console.log(`dashboard listening on http://${server.address().address}:${server.address().port}/ (read-only)`);
     return;   // the server keeps the process alive
   }
