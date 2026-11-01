@@ -8,7 +8,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Team, rebasePrompt } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
-import { rangeEqual } from '../supervisor/rangediff.mjs';
+import { rangeEqual, normalisePatch } from '../supervisor/rangediff.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
@@ -153,4 +153,50 @@ test('real git: rangeEqual refuses a range holding a merge commit, even an evil 
   fs.writeFileSync(path.join(dir, 'a.txt'), 'vulnerable\n'); g('add', '.'); g('commit', '-qm', 'Merge main'); const evil = g('rev-parse', 'HEAD');
   assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: clean, newHead: evil }), false);
   assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: clean, newHead: clean }), false);
+});
+
+test('real git: rangeEqual refuses a rebase that changes only whitespace (indentation is behaviour in Python), but carries one that only shifts lines', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } }).trim();
+  const w = (f, s) => fs.writeFileSync(path.join(dir, f), s);
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  const pad = Array.from({ length: 8 }, (_, i) => `x${i} = ${i}\n`).join('');
+  w('p.py', `${pad}def get(u):\n    pass\n`); g('add', '.'); g('commit', '-qm', 'base');
+  const guarded = 'def get(u):\n    if not u.admin:\n        raise PermissionError()\n    return secret()\n';
+  g('checkout', '-qb', 'feat'); w('p.py', pad + guarded); g('commit', '-qam', 'feature'); const old = g('rev-parse', 'HEAD');
+  // main moves in the same file, well above the change, so only the hunk line numbers shift in a clean rebase
+  g('checkout', '-q', 'main'); w('p.py', `# header\n\n${pad}def get(u):\n    pass\n`); g('commit', '-qam', 'main moves');
+  g('checkout', '-q', 'feat'); g('rebase', '-q', 'main'); const clean = g('rev-parse', 'HEAD');
+  assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: clean }), true);
+  const variant = body => { g('checkout', '-q', '--detach', 'main'); w('p.py', `# header\n\n${pad}${body}`); g('commit', '-qam', 'feature'); return g('rev-parse', 'HEAD'); };
+  // same message, but `return secret()` is now inside the raise branch: patch-id treats it as identical
+  assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: variant(guarded.replace('    return', '        return')) }), false);
+  // a trailing-space-only change does not carry either
+  assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: variant(guarded.replace('secret()', 'secret() ')) }), false);
+});
+
+test('real git: rangeEqual carries nothing when the net change is empty', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } }).trim();
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  fs.writeFileSync(path.join(dir, 'a'), '1\n'); g('add', '.'); g('commit', '-qm', 'base');
+  g('checkout', '-qb', 'feat'); g('commit', '-q', '--allow-empty', '-m', 'empty'); const old = g('rev-parse', 'HEAD');
+  assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: old }), false);
+});
+
+test('real git: rangeEqual carries nothing when main changed the context lines around a patch (git range-diff shows !)', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } }).trim();
+  const w = (f, s) => fs.writeFileSync(path.join(dir, f), s);
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  w('p.py', 'def get(u):\n    pass\n'); g('add', '.'); g('commit', '-qm', 'base');
+  g('checkout', '-qb', 'feat'); w('p.py', 'def get(u):\n    return 1\n'); g('commit', '-qam', 'feature'); const old = g('rev-parse', 'HEAD');
+  g('checkout', '-q', 'main'); w('p.py', '# header\ndef get(u):\n    pass\n'); g('commit', '-qam', 'main moves');
+  g('checkout', '-q', 'feat'); g('rebase', '-q', 'main');
+  assert.equal(rangeEqual({ repoPath: dir, base: 'main', oldHead: old, newHead: g('rev-parse', 'HEAD') }), false);
+});
+
+test('normalisePatch drops only blob hashes and hunk line numbers, keeping whitespace and function context', () => {
+  const p = 'diff --git a/x b/x\nindex 142a295..af6a0ba 100644\n--- a/x\n+++ b/x\n@@ -10,2 +12,3 @@ def f():\n     a\n+    b \n';
+  assert.equal(normalisePatch(p), 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ def f():\n     a\n+    b \n');
 });
