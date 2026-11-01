@@ -301,7 +301,8 @@ test('server: serves a self-contained, escaped page with only same-origin script
 test('server: loading the page makes no GitHub or model call (gh and provider CLIs are never started)', async t => {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nogh-')); t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
   const marker = path.join(bin, 'called');
-  for (const name of ['gh', 'claude', 'codex', 'git', 'curl']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho ${name} >> ${marker}\nexit 1\n`, { mode: 0o755 });
+  // git is not faked: the page reads the decision register from the local origin/main ref (D-021).
+  for (const name of ['gh', 'claude', 'codex', 'curl']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho ${name} >> ${marker}\nexit 1\n`, { mode: 0o755 });
   const oldPath = process.env.PATH; process.env.PATH = `${bin}:${oldPath}`; t.after(() => { process.env.PATH = oldPath; });
   const s = await withServer(t, { jobs: [fx], cache: { tick: okTick(), pulls: [], issues: [issue(30)] } });
   assert.equal((await s.get('/')).status, 200); assert.equal((await s.get('/api/view.json')).status, 200);

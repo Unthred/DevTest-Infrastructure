@@ -75,3 +75,51 @@ test('limitedOf takes usage_limit events from the view the same way the tick doe
   assert.equal(without.limitedOf('codex').out, false);
   assert.equal(withEvent.limitedOf('claude').out, false);
 });
+
+// ---- D-021 interim review needs the register (issue #130)
+const REGISTER = fs.readFileSync(new URL('../docs/DECISIONS.md', import.meta.url), 'utf8');
+const interimConfig = () => ({ ...config(), interim_review: { enabled: true, decision: 'D-021', weekly_at: 0.95 } });
+const key = a => `${a.agent}:${a.type}:${a.issue ?? a.pr}`;
+
+async function tickPlanWith(t, register) {
+  const root = tmp(t);
+  const gh = { listPulls: async () => pulls, listIssues: async () => [], listMergedPulls: async () => [], getPull: async n => pulls.find(p => p.number === n) || null, hasComment: async () => false };
+  const inputs = planningInputs({ config: interimConfig(), jobs, probes, snapshots: [], now: NOW });
+  const team = new Team({ config: interimConfig(), root: stateRoot(path.join(root, 'state')), gh, jobs: { listActive: async () => [] }, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null },
+    clock: { now: () => NOW }, register, allowanceOf: inputs.allowanceOf, limitedOf: inputs.limitedOf, usage: inputs.usage });
+  return (await team.tick({ dryRun: true })).actions || [];
+}
+
+test('with the real register the tick, the dashboard view and `team status` all plan the interim review', async t => {
+  const actions = await tickPlanWith(t, REGISTER);
+  assert.ok(actions.some(a => a.type === 'review' && a.agent === 'claude' && a.interim), 'the tick plans claude interim review');
+  const view = await buildView({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], now: NOW, register: REGISTER });
+  assert.deepEqual(view.plan.map(key), actions.map(key));
+  const status = await buildStatus({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], leases: [], now: NOW, tz: 'UTC', register: REGISTER });
+  assert.deepEqual(status.next.plan.map(p => `${p.agent}:${p.type}:${p.ref}`), actions.map(key));
+  assert.ok(!status.notes.some(n => /DECISIONS/.test(n)));
+});
+
+test('negative control: without the register nothing is planned, and the view and status say so', async t => {
+  const view = await buildView({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], now: NOW, register: '', registerUnreadable: true });
+  assert.ok(!view.plan.some(a => a.interim));
+  const item = view.attention.find(a => a.id === 'register-unreadable');
+  assert.ok(item && item.severity === 'warning');
+  const status = await buildStatus({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], leases: [], now: NOW, tz: 'UTC', registerUnreadable: true });
+  assert.ok(status.notes.some(n => /DECISIONS\.md/.test(n)));
+  const ok = await buildView({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], now: NOW, register: REGISTER });
+  assert.ok(!ok.attention.some(a => a.id === 'register-unreadable'));
+});
+
+test('registerCached keys by repository path and never keeps an empty read', async () => {
+  const { registerCached, clearRegisterMemo } = await import('../supervisor/dashserver.mjs');
+  clearRegisterMemo();
+  const calls = [];
+  const read = text => c => { calls.push(c.repo_path); return text; };
+  assert.equal(registerCached({ repo_path: '/a' }, read(''), 1000), '');
+  assert.equal(registerCached({ repo_path: '/a' }, read('A'), 1001), 'A', 'an empty read is retried at once');
+  assert.equal(registerCached({ repo_path: '/a' }, read('A2'), 2000), 'A', 'a good read is kept for 60 s');
+  assert.equal(registerCached({ repo_path: '/b' }, read('B'), 2001), 'B', 'another repository does not share the entry');
+  assert.equal(registerCached({ repo_path: '/a' }, read('A3'), 62000), 'A3', 'expires after 60 s');
+  assert.equal(calls.length, 4);
+});

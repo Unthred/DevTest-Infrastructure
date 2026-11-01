@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { STALE_TICK_MS, compactIssues, compactMerged, compactPulls, readCache, readEvents, readJobs, readLeases, readSnapshots, readTeamState, redact } from './dashdata.mjs';
-import { buildView } from './dashboard.mjs';
+import { buildView, REGISTER_NOTE } from './dashboard.mjs';
 import { checksState } from './team.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { validateTeamConfig } from './team.mjs';
@@ -46,8 +46,9 @@ function verdictOf(state, p) {
   return v ? { verdict: v.verdict, reviewer: redact(v.reviewer, 20), current: !!hit, head: key.split(':')[1]?.slice(0, 7) || null } : null;
 }
 
-export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [], register = '' }) {
-  const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now, register });
+export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [], register = '', registerUnreadable = false }) {
+  if (registerUnreadable) notes = [...notes, REGISTER_NOTE];
+  const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now, register, registerUnreadable });
   const live = id => jobs.some(j => j.id === id && ACTIVE.includes(j.status));
   const problems = view.attention.map(a => ({ id: a.id, text: a.text }));
   const add = (id, text) => { if (!problems.some(p => p.id === id)) problems.push({ id, text: redact(text, 300) }); };
@@ -109,10 +110,10 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   return { generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
 }
 
-export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '' }) {
+export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {
   const jobs = readJobs(root);
   const { cache, notes } = await refreshIfStale({ cache: readCache(root), gh, now });
-  return buildStatus({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache, snapshots: readSnapshots(root), leases: readLeases(root), now, tz, notes, register });
+  return buildStatus({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache, snapshots: readSnapshots(root), leases: readLeases(root), now, tz, notes, register, registerUnreadable });
 }
 
 export function renderStatus(s) {

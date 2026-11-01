@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { SEVERITIES, applyLayout, breakpointOf, compareValues, filterRows, footer, inRange, moveItem, paginate, severityOf, sortRows, tableState, worst } from '../supervisor/dashui/logic.mjs';
 import { healthOf, freshness } from '../supervisor/dashboard.mjs';
 import { matchRoute, table } from '../supervisor/dashrender.mjs';
@@ -138,8 +139,16 @@ const config = {
   limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [30, 5] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [2, 3] } }
 };
+// A clone-like fixture with docs/DECISIONS.md on origin/main, so the dashboard can read the register (issue #130). Never a linked worktree.
+function registerRepo(t) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'dash2-repo-')); t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  const git = (...a) => execFileSync('git', ['-C', d, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...a], { stdio: 'pipe' });
+  git('init', '-q', '-b', 'main'); fs.mkdirSync(path.join(d, 'docs')); fs.writeFileSync(path.join(d, 'docs', 'DECISIONS.md'), '# Decision register\n');
+  git('add', '.'); git('commit', '-q', '-m', 'register'); git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  return d;
+}
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
-async function serve(t, { jobs = [], cache, state, snapshots, upgrades } = {}) {
+async function serve(t, { jobs = [], cache, state, snapshots, upgrades, repo } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash2-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'jobs'), { recursive: true }); fs.mkdirSync(path.join(root, 'dashboard'), { recursive: true }); fs.mkdirSync(path.join(root, 'team'), { recursive: true });
   for (const j of jobs) fs.writeFileSync(path.join(root, 'jobs', `${j.id}.json`), JSON.stringify(j));
@@ -148,7 +157,7 @@ async function serve(t, { jobs = [], cache, state, snapshots, upgrades } = {}) {
   if (snapshots) fs.writeFileSync(path.join(root, 'dashboard', 'snapshots.jsonl'), snapshots.map(s => JSON.stringify(s)).join('\n') + '\n');
   if (upgrades) fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), upgrades.map(s => JSON.stringify(s)).join('\n') + '\n');
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
-  const port = server.address().port; server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => NOW }));
+  const port = server.address().port; server.on('request', handler({ root, config: repo ? { ...config, repo_path: repo } : config, host: '127.0.0.1', port, now: () => NOW }));
   return { get: p => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p, headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject)) };
 }
 const jb = (over = {}) => ({ id: 'a'.repeat(32), provider: 'claude', kind: 'implement', issue: 30, branch: 'claude/issue-30-x', status: 'running', createdAt: NOW - 600000, updatedAt: NOW - 1000, lastProgress: NOW - 1000, attempts: 2, usage: { inputTokens: 900, outputTokens: 100, costUsdEstimate: 0.5 }, ...over });
@@ -207,8 +216,11 @@ test('Needs you lists every needs-homeowner item with what, why, the decision ne
   const warn = body.slice(body.indexOf('data-card="warnings"'));
   assert.match(warn, /No tick for 20 minutes/); assert.match(warn, /sev-warning/); assert.doesNotMatch(needs, /No tick for/);
   const calm = cache(); calm.issues = calm.issues.filter(i => i.number !== 3);
-  const quiet = (await (await serve(t, { cache: calm })).get('/')).body;
+  const quiet = (await (await serve(t, { cache: calm, repo: registerRepo(t) })).get('/')).body;
   assert.match(quiet, /Nothing needs you/); assert.match(quiet, /No warnings/);
+  // Same quiet state but the register cannot be read: a warning says so.
+  const blind = (await (await serve(t, { cache: calm })).get('/')).body;
+  assert.match(blind, /Cannot read docs\/DECISIONS\.md from origin\/main/); assert.doesNotMatch(blind, /No warnings/);
 });
 test('Now panel: a running agent shows its job, issue link, elapsed time and attempt; an idle agent shows why in plain words', async t => {
   const s = await serve(t, { jobs: [jb()], cache: cache() });

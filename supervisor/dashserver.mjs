@@ -24,16 +24,21 @@ export function validateBind(host, port) {
 }
 
 // The register on main changes rarely and reading it spawns git, so the server keeps it for a minute.
-let registerMemo = { at: 0, text: '' };
-function registerCached(config) {
-  const now = Date.now();
-  if (now - registerMemo.at > 60000) registerMemo = { at: now, text: readRegister(config) };
-  return registerMemo.text;
+// Keyed by repository path; an empty (failed) read is never kept, so the next request retries.
+const registerMemo = new Map();
+export function registerCached(config, read = readRegister, now = Date.now()) {
+  const hit = registerMemo.get(config.repo_path);
+  if (hit && now - hit.at <= 60000) return hit.text;
+  const text = read(config);
+  if (text) registerMemo.set(config.repo_path, { at: now, text }); else registerMemo.delete(config.repo_path);
+  return text;
 }
+export const clearRegisterMemo = () => registerMemo.clear();
 
 export async function currentView({ root, config, now = Date.now() }) {
   const jobs = readJobs(root);
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, register: registerCached(config) });
+  const register = registerCached(config);
+  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, register, registerUnreadable: !register });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request.
