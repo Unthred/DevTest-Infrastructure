@@ -193,7 +193,7 @@ export function fixPrompt(job) {
 }
 export function rebasePrompt(job) {
   const why = job.behind ? `is mergeable but behind ${job.base}, and has a recorded PASS, so it is rebased right before merge` : `conflicts with ${job.base}`;
-  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) ${why}. Do a conflict-only rebase: rebase the branch onto origin/${job.base}, resolve conflicts keeping the intent of both sides, change nothing else in the rebase (do not amend, squash, reword or reorder commits, so an unchanged patch stays recognisable); read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}, push with --force-with-lease (this branch only). Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. The dispatcher itself compares the two heads: a recorded PASS for the old head carries over to the new head only when every commit is unchanged (equal patches and messages); otherwise the opposite agent reviews the new head. The post-condition is a new pushed head that is mergeable.`;
+  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) ${why}. Do a conflict-only rebase, and only through the two guarded steps below (issue #158). Step 1, right before you rebase: run \`ai-supervisor rebase-prepare --worktree <this worktree> --branch ${job.branch}\`; it fetches and puts the branch on the REMOTE head, which it prints as oldHead (never rebase a cached local copy). Then rebase onto origin/${job.base} and resolve conflicts keeping the intent of both sides; change nothing else in the rebase (do not amend, squash, reword or reorder commits, so an unchanged patch stays recognisable); read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}. Step 2, instead of a plain push: run \`ai-supervisor rebase-push --worktree <this worktree> --branch ${job.branch} --base ${job.base} --old <oldHead from step 1>\`; it checks by patch-id that every commit of the old remote head that is not on ${job.base} is in your result, and only then pushes with --force-with-lease against the head step 1 fetched. If it reports pushed:false (a dropped commit, or the branch moved during the job) do NOT push by any other means: stop and say which. Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. The dispatcher itself compares the two heads: a recorded PASS for the old head carries over to the new head only when every commit is unchanged (equal patches and messages); otherwise the opposite agent reviews the new head. The post-condition is a new pushed head that is mergeable.`;
 }
 export function ciFixPrompt(job) {
   const checks = job.checks.length ? ` Failing checks: ${job.checks.join(', ')}.` : '';
@@ -529,6 +529,7 @@ export class Team {
         const r = readInboxVerdict(this.root, j.ticket, { pr: j.pr, head: j.head });
         if (r.verdict && j.postMerge) { await this.ingestPostMerge(id, j, r.verdict, report); return; }
         if (r.verdict) {
+          r.verdict = { ...r.verdict, findings: this.flagLostInRebase(j, r.verdict.findings) };
           const followUps = r.verdict.findings.filter(f => f.kind === 'follow-up');
           let followUpIssue = null;
           if (r.verdict.verdict === 'PASS' && followUps.length) {
@@ -550,8 +551,43 @@ export class Team {
           return;
         } else report.ingested.push({ job: id, pr: j.pr, error: r.error });
       }
-      if (j.kind === 'rebase' && job.status === 'completed') await this.carryVerdict(id, j, report);
+      if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
       j.ingested = true; this.save();
+  }
+  // Issue #158: what the rebase did, recorded on the job (old head, new head, commit list) and checked by patch-id against the old
+  // head. A commit that was on the old head and is not in the result is announced once on the PR with its id and subject, the
+  // PR is labelled for the homeowner (the dashboard shows it under Needs you) and no verdict carries across. Returns true when
+  // commits were lost. An unreadable comparison records the error and claims nothing.
+  async recordRebase(id, j, report) {
+    const pr = await this.gh.getPull(j.pr);
+    if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === j.head) return false;
+    let check;
+    try { check = await this.git?.checkRebase?.({ base: `origin/${j.base || 'main'}`, oldHead: j.head, newHead: pr.headRefOid }); } catch { check = null; }
+    if (!check) { j.rebase = { oldHead: j.head, newHead: pr.headRefOid, commits: [], unchecked: true }; this.save(); return false; }
+    const slim = list => list.slice(0, 50).map(c => ({ sha: c.sha, subject: String(c.subject || '').slice(0, 100) }));
+    j.rebase = { oldHead: j.head, newHead: pr.headRefOid, commits: slim(check.commits) };
+    if (check.missing.length) j.rebase.lost = slim(check.missing);
+    this.save();
+    if (!check.missing.length) return false;
+    (report.lostCommits ||= []).push({ pr: j.pr, job: id, lost: j.rebase.lost.map(c => c.sha) });
+    await this.postNotice(j.pr, `rebase-lost job=${id}`, `**Needs the homeowner.** Rebase job \`${id}\` moved this PR from \`${j.head}\` to \`${pr.headRefOid}\`, and ${check.missing.length} commit(s) of the old head that are not on \`${j.base || 'main'}\` are not in the result (compared by patch-id):\n\n${j.rebase.lost.map(c => `- \`${c.sha}\` ${c.subject}`).join('\n')}\n\nNo verdict carries to the new head. Required: restore the missing commits on the branch (the old head is still reachable by its id) before anything is reviewed or merged.`);
+    await this.gh.addLabel(j.pr, 'needs-homeowner');
+    return true;
+  }
+  // Issue #158: a finding of an earlier CHANGES verdict on this PR that was fixed (a fix job ran after it) and then rebased, and that
+  // a later review reports again with the same text, is flagged: the fix may have been lost in the rebase.
+  flagLostInRebase(j, findings) {
+    const jobs = Object.values(this.s.jobs).filter(x => x.pr === j.pr);
+    const earlier = Object.entries(this.s.verdicts).filter(([key, v]) => key.startsWith(`${j.pr}:`) && key !== verdictKey(j.pr, j.head) && v.verdict === 'CHANGES');
+    const norm = t => String(t).toLowerCase().replace(/\s+/g, ' ').trim();
+    return findings.map(f => {
+      const hit = earlier.some(([, v]) => {
+        if (!v.findings?.some(o => norm(o.text) === norm(f.text))) return false;
+        const fix = jobs.filter(x => x.kind === 'fix' && (x.at || 0) >= (v.at || 0)).at(0);
+        return !!fix && jobs.some(x => x.kind === 'rebase' && (x.at || 0) >= (fix.at || 0));
+      });
+      return hit && !f.possiblyLostInRebase ? { ...f, text: `${f.text} (possibly lost in rebase: this finding was fixed on an earlier head and reappears after a rebase)`, possiblyLostInRebase: true } : f;
+    });
   }
   // Issue #79: a PASS recorded for the head a rebase started from carries to the rebased head when `git range-diff` shows every
   // commit equal (same patch, same message). The carry is public first (a marker comment), then recorded, like any verdict.

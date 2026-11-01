@@ -191,7 +191,7 @@ export function idleReason({ agent, config, team, cache, plan, state }) {
   return { text: parts.slice(0, 3).map(x => x.text).join('; '), links: links.slice(0, 6) };
 }
 
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {} }) {
   const items = [], add = (id, text, ref) => items.push({ id, text: redact(text, 300), ref: ref || null });
   const t = cache?.tick;
   if (!t) add('no-tick', 'No tick has ever been recorded: the dispatcher has not run since the dashboard was installed.');
@@ -202,6 +202,12 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner')) add(`homeowner-${i.number}`, `Issue #${i.number} needs the homeowner: ${i.title}`, { kind: 'issue', n: i.number });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0)))
     add(`job-${j.id}`, `Job ${j.id.slice(0, 8)} (${j.provider} ${j.kind || 'job'} #${j.issue}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind: ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull', n: j.issue });
+  // issue #158: a rebase that dropped commits, while the PR still sits on that rebased head
+  for (const [id, tj] of Object.entries(state.jobs || {})) {
+    const pr = (cache?.pulls || []).find(x => x.number === tj.pr);
+    if (tj.kind === 'rebase' && tj.rebase?.lost?.length && pr && pr.headRefOid === tj.rebase.newHead)
+      add(`rebase-lost-${id.slice(0, 8)}`, `Rebase job ${id.slice(0, 8)} dropped ${tj.rebase.lost.length} commit(s) from PR #${tj.pr}: ${tj.rebase.lost.map(c => `${sha7(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
+  }
   for (const pr of cache?.pulls || []) if (!pr.isDraft && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on PR #${pr.number}: ${pr.title}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
   const recent = snapshots.filter(s => now - s.at <= 30 * 60000).sort((a, b) => a.at - b.at);
@@ -316,6 +322,8 @@ function activity({ config, jobs, events, state, cache, snapshots, now }) {
     const j = jobById.get(e.job); if (!j) continue;
     rows.push({ at: e.at, text: `${agentName(j)}: ${names[e.kind] || redact(e.kind, 40)} (${j.kind || 'job'})`, link: jobLink(j) });
   }
+  for (const [id, tj] of Object.entries(state.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at))
+    rows.push({ at: tj.at, text: `rebase of PR #${tj.pr}: ${sha7(tj.rebase.oldHead)} -> ${sha7(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
   for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on PR #${pr} at ${sha7(head)}`, link: link('pull', Number(pr)) }); }
   for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged PR #${m.pr}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
   // ticks take part in the same newest-first ordering and 50-event bound as every other event (issue #32)
@@ -371,7 +379,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: j.id.slice(0, 8), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
@@ -396,7 +404,8 @@ export const TICK_INTERVAL_MS = 5 * 60000;
 const NEXT_STEP = {
   homeowner: 'Open the issue and either answer it or remove the needs-homeowner label so the team can continue.',
   'tick-failed': 'Read the tick error; nothing is dispatched until a tick succeeds.',
-  job: 'Read the job record, then retry it or close the issue.'
+  job: 'Read the job record, then retry it or close the issue.',
+  rebase: 'Restore the dropped commits on the PR branch (the old head is still reachable by its id) before it is reviewed or merged.'
 };
 const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run' };
 export function healthOf({ attention, states, teamEnabled }) {
