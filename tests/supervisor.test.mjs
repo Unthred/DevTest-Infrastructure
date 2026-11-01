@@ -312,3 +312,103 @@ test('uncommitted tracked changes also mark an unchanged handover stale', async 
   checkpoint(f.root, job);
   assert.equal(readJob(f.root, job.id).checkpoint.handoverStale, true);
 });
+
+// Issue #80
+const leaseFiles = root => fs.existsSync(path.join(root, 'leases')) ? fs.readdirSync(path.join(root, 'leases')) : [];
+
+test('#80 blocked retry_exhausted releases both leases so the next job on the worktree can start', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, autoRestart: true }, f.registry, clock);
+  assert.equal(leaseFiles(f.root).length, 2);
+  const result = await drive(f.root, job, f.registry, clock, async () => ({ code: 1, event: 'usage_limit' }), 2);
+  assert.equal(result.status, 'blocked'); assert.equal(result.lastEvent, 'retry_exhausted');
+  assert.deepEqual(leaseFiles(f.root), []);
+  const next = await createJob(f.root, { ...f.spec, issue: 77 }, f.registry, clock); // same worktree, different issue
+  assert.equal(next.status, 'queued');
+});
+
+test('#80 failed and stopped jobs release leases; a live lease still refuses a second job', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+  await assert.rejects(() => createJob(f.root, f.spec, f.registry, clock), /already leased/);
+  const failed = await drive(f.root, job, f.registry, clock, async () => ({ code: 1, event: 'crash' }));
+  assert.equal(failed.status, 'failed'); assert.deepEqual(leaseFiles(f.root), []);
+  const g = fixture(t), j2 = await createJob(g.root, g.spec, g.registry, clock);
+  const { transition } = await import('../supervisor/core.mjs');
+  transition(g.root, j2, 'stopped', 'manual_stop', clock);
+  assert.deepEqual(leaseFiles(g.root), []);
+});
+
+test('#80 recovering a released job re-acquires its leases, or refuses when another job took them', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+  await drive(f.root, job, f.registry, clock, async () => ({ code: 1, event: 'auth_error' }));
+  assert.equal(readJob(f.root, job.id).status, 'blocked'); assert.deepEqual(leaseFiles(f.root), []);
+  recover(f.root, job.id, true);
+  assert.equal(leaseFiles(f.root).length, 2);
+  const g = fixture(t), j2 = await createJob(g.root, g.spec, g.registry, clock);
+  await drive(g.root, j2, g.registry, clock, async () => ({ code: 1, event: 'auth_error' }));
+  const other = await createJob(g.root, g.spec, g.registry, clock);
+  assert.throws(() => recover(g.root, j2.id, true), /already leased/);
+  assert.equal(readJob(g.root, j2.id).status, 'blocked'); assert.equal(other.status, 'queued');
+});
+
+test('#80 usage_limit with no reset in the result uses the allowance window resetsAt (+2 min), not the 1h backoff', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, autoRestart: true }, f.registry, clock);
+  const resetsAt = clock.now() + 3 * 3600000; // five_hour window, as for Claude job ab36f931
+  let calls = 0;
+  const result = await drive(f.root, job, f.registry, clock, async (c, a, j) => {
+    if (++calls > 1) return { code: 0 };
+    j.allowance = { status: 'rejected', windows: [{ type: 'five_hour', utilization: 1, resetsAt, status: 'rejected' }], observedAt: clock.now() };
+    return { code: 1, event: 'usage_limit', resetAt: null, resetSource: 'none', verified: false };
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(clock.sleeps.reduce((a, b) => a + b, 0) >= 3 * 3600000 + 120000, true);
+  assert.equal(clock.sleeps.reduce((a, b) => a + b, 0) < 3 * 3600000 + 180000, true);
+  assert.equal(result.resetAt, resetsAt);
+});
+
+test('#80 usage_limit with an allowance whose window already reset, or none, keeps the backoff', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, autoRestart: true }, f.registry, clock);
+  let calls = 0;
+  await drive(f.root, job, f.registry, clock, async (c, a, j) => {
+    if (++calls > 1) return { code: 0 };
+    j.allowance = { status: 'rejected', windows: [{ type: 'five_hour', utilization: 1, resetsAt: clock.now() - 600000, status: 'rejected' }], observedAt: clock.now() };
+    return { code: 1, event: 'usage_limit', resetAt: null, resetSource: 'none', verified: false };
+  });
+  assert.deepEqual(clock.sleeps, [3600000]);
+  const g = fixture(t), c2 = fakeClock(), j2 = await createJob(g.root, { ...g.spec, autoRestart: true }, g.registry, c2);
+  let n = 0;
+  await drive(g.root, j2, g.registry, c2, async () => ++n === 1 ? { code: 1, event: 'usage_limit' } : { code: 0 });
+  assert.deepEqual(c2.sleeps, [3600000]);
+});
+
+test('#80 a paused job whose postcondition is met completes instead of resuming the session', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, autoRestart: true, postcondition: { kind: 'pr_opened' } }, f.registry, clock);
+  let calls = 0, checks = 0;
+  const result = await drive(f.root, job, f.registry, clock, async () => { calls++; return { code: 1, event: 'usage_limit' }; }, 4,
+    async () => ++checks >= 2); // not met when the limit hit (e.g. PR opened while paused), met by the time of resume
+  assert.equal(result.status, 'completed'); assert.equal(result.lastEvent, 'completed_before_resume');
+  assert.equal(calls, 1); assert.deepEqual(leaseFiles(f.root), []);
+});
+
+test('#80 a paused job whose postcondition is not met still resumes', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, autoRestart: true, postcondition: { kind: 'pr_opened' } }, f.registry, clock);
+  let calls = 0, done = false;
+  const result = await drive(f.root, job, f.registry, clock, async () => { calls++; if (calls === 1) return { code: 1, event: 'usage_limit' }; done = true; return { code: 0 }; }, 4, async () => done);
+  assert.equal(calls, 2); assert.equal(result.status, 'completed'); assert.equal(result.lastEvent, 'completed');
+});
+
+test('#80 a terminal transition keeps the leases while a detached child is alive, and releases once it is gone', async t => {
+  const { spawn } = await import('node:child_process');
+  const { transition, saveJob } = await import('../supervisor/core.mjs');
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { detached: true, stdio: 'ignore' }); child.unref();
+  t.after(() => { try { process.kill(child.pid, 'SIGKILL'); } catch {} });
+  job.status = 'running'; job.workerPid = 2147483000; job.workerStart = 'dead'; job.childPid = child.pid; saveJob(f.root, job, clock);
+  transition(f.root, job, 'blocked', 'orphaned_worker', clock);
+  assert.equal(leaseFiles(f.root).length, 2);
+  await assert.rejects(() => createJob(f.root, { ...f.spec, issue: 77 }, f.registry, clock), /already leased/);
+  assert.throws(() => releaseLeases(f.root, job), /still running/);
+  process.kill(child.pid, 'SIGKILL');
+  for (let i = 0; i < 50 && fs.existsSync(`/proc/${child.pid}/stat`) && !/\) Z/.test(fs.readFileSync(`/proc/${child.pid}/stat`, 'utf8')); i++) await new Promise(r => setTimeout(r, 20));
+  job.childPid = null; releaseLeases(f.root, job);
+  assert.deepEqual(leaseFiles(f.root), []);
+});

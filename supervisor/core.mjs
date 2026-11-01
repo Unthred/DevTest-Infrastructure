@@ -4,6 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { limitFromAllowance } from './allowance.mjs';
 
 export const defaultRegistry = new URL('./providers.json', import.meta.url).pathname;
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped']);
@@ -174,29 +175,45 @@ export async function createJob(root, spec, registry = defaultRegistry, clock = 
     createdAt: clock.now(), updatedAt: clock.now(), attempts: 0, resetAt: null, nextAttemptAt: null, sessionId: null, sessions: null,
     workerPid: null, workerStart: null, childPid: null, lastEvent: null, lastProgress: null, checkpoint: null, capabilities,
     currentAttemptId: null };
+  acquireLeases(root, job, clock);
+  saveJob(root, job, clock); event(root, job, 'created', clock);
+  return job;
+}
+// Takes every lease the job needs or none; a lease held by another job is a refusal, never a takeover.
+export function acquireLeases(root, job, clock = realClock) {
   fs.mkdirSync(path.join(root, 'leases'), { recursive: true, mode: 0o700 });
   const acquired = [];
   try {
     for (const key of leaseKeys(job)) {
       const file = path.join(root, 'leases', key);
-      fs.writeFileSync(file, JSON.stringify({ job: job.id, at: clock.now() }), { flag: 'wx', mode: 0o600 });
+      try { fs.writeFileSync(file, JSON.stringify({ job: job.id, at: clock.now() }), { flag: 'wx', mode: 0o600 }); }
+      catch (error) {
+        if (error.code === 'EEXIST' && JSON.parse(fs.readFileSync(file, 'utf8')).job === job.id) continue;
+        throw error;
+      }
       acquired.push(file);
     }
-    saveJob(root, job, clock); event(root, job, 'created', clock);
-    return job;
   } catch (error) {
     for (const file of acquired) fs.unlinkSync(file);
     if (error.code === 'EEXIST') throw new SupervisorError('issue or worktree already leased; stale lease requires explicit recovery');
     throw error;
   }
 }
+// One writer per worktree: a lease is kept while the job's worker (other than this process) or provider child still exists.
+export function jobProcessesAlive(job) {
+  const worker = job.workerPid && job.workerPid !== process.pid && processStart(job.workerPid) === job.workerStart;
+  const child = job.childPid && job.childPid !== process.pid && processStart(job.childPid);
+  return Boolean(worker || child);
+}
 export function releaseLeases(root, job) {
   if (!terminal.has(job.status)) throw new SupervisorError('cannot release active lease');
+  if (jobProcessesAlive(job)) throw new SupervisorError('worker or child process still running; lease kept');
+  let released = 0;
   for (const key of leaseKeys(job)) {
     const file = path.join(root, 'leases', key);
-    if (fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).job === job.id) fs.unlinkSync(file);
+    if (fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).job === job.id) { fs.unlinkSync(file); released++; }
   }
-  event(root, job, 'leases_released');
+  if (released) event(root, job, 'leases_released');
 }
 export function checkpoint(root, job, clock = realClock) {
   const head = git(job.worktree, 'rev-parse', 'HEAD');
@@ -248,6 +265,11 @@ export function safeEnvironment(source = process.env, allowlist = null) {
 export function transition(root, job, status, kind, clock = realClock) {
   job.status = status; job.lastEvent = kind; saveJob(root, job, clock);
   event(root, job, job.status === status ? kind : 'transition_ignored', clock);
+  // Issue #80: a terminal job holds no lease; a stale one would stall every later job on the same worktree.
+  if (terminal.has(job.status)) {
+    if (jobProcessesAlive(job)) event(root, job, 'lease_kept_processes_alive', clock);
+    else releaseLeases(root, job);
+  }
 }
 export async function drive(root, job, registry = defaultRegistry, clock = realClock, runOnce, maxAttempts = 4, checkPostcondition = null) {
   const restartable = () => job.autoResume || job.autoRestart;
@@ -255,6 +277,12 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
   while (true) {
     checkpoint(root, job, clock);
     if (job.checkpoint.issueState === 'CLOSED') { transition(root, job, 'blocked', 'issue_closed', clock); return job; }
+    if (job.status === 'paused_limit' && job.postcondition && typeof checkPostcondition === 'function') {
+      // Issue #80: never resume a session for work that is already done.
+      let done = false;
+      try { done = (await checkPostcondition(job)) === true; } catch { done = false; }
+      if (done) { transition(root, job, 'completed', 'completed_before_resume', clock); return job; }
+    }
     if (job.attempts > 0 && job.checkpoint.handoverStale) { transition(root, job, 'blocked', 'stale_handover', clock); return job; }
     transition(root, job, 'running', 'started', clock);
     job.attempts++; job.currentAttemptId = crypto.randomUUID(); saveJob(root, job, clock);
@@ -291,8 +319,11 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       if (job.attempts >= maxAttempts) { transition(root, job, 'blocked', 'retry_exhausted', clock); return job; }
       const now = clock.now();
       const verifiedReset = result.verified === true && result.resetSource === 'provider_reported' && result.resetAt > now;
-      const delay = verifiedReset ? Math.max(0, result.resetAt + 120000 - now) : Math.min(86400000, 3600000 * 2 ** (job.attempts - 1));
-      job.resetAt = verifiedReset ? result.resetAt : null; job.nextAttemptAt = now + delay;
+      // Issue #80: without a verified reset in the result, the provider's allowance window still names one.
+      const windowReset = verifiedReset ? null : limitFromAllowance(job.allowance, now)?.resetAt || null;
+      const resetAt = verifiedReset ? result.resetAt : windowReset;
+      const delay = resetAt ? Math.max(0, resetAt + 120000 - now) : Math.min(86400000, 3600000 * 2 ** (job.attempts - 1));
+      job.resetAt = resetAt; job.nextAttemptAt = now + delay;
       transition(root, job, 'paused_limit', 'usage_limit', clock);
       await sleepUntil(clock, now + delay); // no CLI process or model invocation in the wait
       continue;
@@ -348,6 +379,7 @@ export function recover(root, id, force = false) {
     fs.unlinkSync(claim);
   }
   if (job.status === 'running' && !force) { transition(root, job, 'blocked', 'orphaned_worker'); throw new SupervisorError('orphaned worker requires explicit recovery'); }
+  acquireLeases(root, job); // terminal states released them (issue #80); refuse if another job took the issue meanwhile
   job.workerPid = null; job.workerStart = null; job.childPid = null; job.status = 'queued'; saveJob(root, job, realClock, true);
   event(root, job, 'recovered'); return job;
 }
