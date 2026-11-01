@@ -967,6 +967,8 @@ test('escalation: the same PR drawing CHANGES twice puts its next fix on the str
   assert.deepEqual([f.model, f.modelSource], ['opus', 'escalated']); assert.match(f.modelReason, /PR #11 has drawn CHANGES twice/);
   assert.equal(w.team.modelFor({ ...act, pr: 12, key: `12:${H(3)}` }, 'fix', {}).model, 'sonnet', 'another PR is unaffected');
   assert.equal(w.team.modelFor({ ...act, type: 'review' }, 'review', {}).model, 'sonnet', 'review is not a repair job');
+  const rb = w.team.modelFor({ ...act, type: 'rebase' }, 'rebase', {});
+  assert.deepEqual([rb.model, rb.effort, rb.modelSource], ['sonnet', 'low', 'configured'], 'an escalated PR\'s rebase stays on the rebase entry');
 });
 
 test('allowance threshold in the dispatcher: above it routine work stays cheap even when escalated; implement keeps its model', async t => {

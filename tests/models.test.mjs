@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Team, applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 import { validateManifest, stateRoot, provider, defaultRegistry } from '../supervisor/core.mjs';
-import { resolveModel, weeklyUtilization, modelArgs, validateModelsConfig, checkEntry } from '../supervisor/models.mjs';
+import { resolveModel, weeklyUtilization, modelArgs, validateModelsConfig, checkEntry, repeatedChanges, isRepair } from '../supervisor/models.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import { modelUsage } from '../supervisor/dashboard.mjs';
 import { claudeAllowance, codexAllowance } from '../supervisor/allowance.mjs';
@@ -16,11 +16,13 @@ const manifest = n => JSON.parse(fs.readFileSync(new URL(`../supervisor/provider
 const claudeModels = manifest('claude').models, codexModels = manifest('codex').models;
 const H = n => String(n).repeat(40).slice(0, 40);
 
-test('shipped defaults: Claude sonnet for routine work, opus for implement; Codex low effort for review and rebase, high for implement', () => {
+test('shipped defaults (homeowner table 2026-11-01): Claude sonnet/medium for implement, continue, fix, ci-fix, sonnet/low rebase, opus/medium review, opus/high escalation; Codex low effort for review and rebase, high for implement', () => {
   validateTeamConfig(shipped);
   const r = (agent, kind, m, extra = {}) => resolveModel({ modelsConfig: shipped.models, agent, kind, manifestModels: m, escalation: null, utilization: null, ...extra }).fields;
-  for (const k of ['fix', 'review', 'rebase', 'cifix']) assert.equal(r('claude', k, claudeModels).model, 'sonnet', k);
-  assert.equal(r('claude', 'implement', claudeModels).model, 'opus');
+  for (const k of ['implement', 'continue', 'fix', 'cifix']) assert.deepEqual([r('claude', k, claudeModels).model, r('claude', k, claudeModels).effort], ['sonnet', 'medium'], k);
+  assert.deepEqual([r('claude', 'rebase', claudeModels).model, r('claude', 'rebase', claudeModels).effort], ['sonnet', 'low']);
+  for (const k of ['review']) assert.deepEqual([r('claude', k, claudeModels).model, r('claude', k, claudeModels).effort], ['opus', 'medium']);
+  assert.deepEqual([shipped.models.agents.claude.strong.model, shipped.models.agents.claude.strong.effort], ['opus', 'high']);
   assert.equal(r('codex', 'review', codexModels).effort, 'low');
   assert.equal(r('codex', 'rebase', codexModels).effort, 'low');
   assert.equal(r('codex', 'implement', codexModels).effort, 'high');
@@ -101,7 +103,7 @@ test('allowance at the threshold keeps the cheap model for everything but implem
   const base = { modelsConfig: shipped.models, agent: 'claude', manifestModels: claudeModels };
   const hot = kind => resolveModel({ ...base, kind, utilization: 0.8, escalation: { reason: 'x' } }).fields;
   assert.equal(hot('fix').model, 'sonnet'); assert.equal(hot('fix').modelSource, 'allowance'); assert.match(hot('fix').modelReason, /80%/);
-  assert.equal(hot('implement').model, 'opus');
+  assert.equal(hot('implement').model, 'sonnet');
   assert.equal(resolveModel({ ...base, kind: 'fix', utilization: 0.79, escalation: { reason: 'x' } }).fields.model, 'opus', 'below the threshold escalation applies');
   const custom = { ...shipped.models, allowance_threshold: 0.5 };
   assert.equal(resolveModel({ ...base, modelsConfig: custom, kind: 'fix', utilization: 0.6, escalation: { reason: 'x' } }).fields.modelSource, 'allowance');
@@ -114,4 +116,15 @@ test('modelUsage groups tokens per job type and model', () => {
   const g = modelUsage(rows);
   assert.deepEqual(g[0], { kind: 'fix', model: 'sonnet', effort: 'medium', jobs: 2, inTokens: 11, outTokens: 6, cost: 0.5 });
   assert.deepEqual([g[1].model, g[1].effort], ['CLI default', 'default']);
+});
+
+test('issue #78: a rebase never escalates; fix and ci-fix still do; continue is not a repair job', () => {
+  const base = { modelsConfig: shipped.models, agent: 'claude', manifestModels: claudeModels, utilization: null };
+  const esc = { reason: 'PR #1 has drawn CHANGES twice' };
+  const rb = resolveModel({ ...base, kind: 'rebase', escalation: esc }).fields;
+  assert.deepEqual([rb.model, rb.effort, rb.modelSource], ['sonnet', 'low', 'configured']);
+  for (const kind of ['fix', 'cifix']) assert.deepEqual([resolveModel({ ...base, kind, escalation: esc }).fields.model, resolveModel({ ...base, kind, escalation: esc }).fields.modelSource], ['opus', 'escalated']);
+  const v = { '5:a': { verdict: 'CHANGES' }, '5:b': { verdict: 'CHANGES' } };
+  assert.equal(repeatedChanges(v, 5), true);
+  assert.deepEqual(['fix', 'ci-fix', 'rebase', 'continue', 'implement', 'review'].map(isRepair), [true, true, false, false, false, false]);
 });
