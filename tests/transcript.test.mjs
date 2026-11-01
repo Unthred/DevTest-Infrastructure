@@ -19,6 +19,7 @@ const ID = 'a'.repeat(32), ID2 = 'b'.repeat(32);
 // Credential-shaped canaries are built at run time so the repository never contains one (validator secret scan).
 const GH = ['ghp', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('_');
 const AWS = ['AK', 'IAABCDEFGHIJKLMNOP'].join('');
+const BEARER = ['Authorization: Bear', 'er abcdefghijklmnop1234'].join('');
 const HVS = ['hvs', 'CAESIabcdefghijklmnopqrstuvwxyz0123'].join('.');
 const tmp = (t, p = 'tr-') => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -26,7 +27,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 test('redaction removes seeded secrets: tokens, OpenBao paths and tokens, env assignments, JSON fields, private keys, env values', () => {
   const envValue = 'zx9-environment-value-canary';
   const text = [`gh ${GH}`, `bao ${HVS}`, 'read bao://kv/devtest/ha-token', 'GET /v1/secret/data/devtest/ha', 'path secret/data/devtest/ha', 'VAULT_TOKEN=plainvalue123', 'MY_API_KEY="quoted value"',
-    '{"password": "hunter2hunter2", "name": "ok"}', 'Authorization: Bearer abcdefghijklmnop1234', `-----${'BEGIN'} OPENSSH PRIVATE KEY-----\nAAAAB3NzaC1\n-----${'END'} OPENSSH PRIVATE KEY-----`, `env ${envValue}`, AWS].join('\n');
+    '{"password": "hunter2hunter2", "name": "ok"}', BEARER, `-----${'BEGIN'} OPENSSH PRIVATE KEY-----\nAAAAB3NzaC1\n-----${'END'} OPENSSH PRIVATE KEY-----`, `env ${envValue}`, AWS].join('\n');
   const out = redactText(text, [envValue]);
   for (const bad of [GH, HVS, 'ha-token', 'devtest/ha', 'plainvalue123', 'quoted value', 'hunter2hunter2', 'abcdefghijklmnop1234', 'AAAAB3NzaC1', envValue, AWS]) assert.ok(!out.includes(bad), `leaked ${bad}`);
   assert.match(out, /"name": "ok"/, 'ordinary fields survive');
