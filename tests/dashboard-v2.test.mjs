@@ -93,14 +93,14 @@ test('layout: saved per breakpoint, phone is reorder-only, stale ids dropped and
   assert.equal(breakpointOf(390), 'phone'); assert.equal(breakpointOf(768), 'tablet'); assert.equal(breakpointOf(1280), 'desktop');
   const ids = ['now', 'next', 'needs'];
   const saved = { order: ['needs', 'gone', 'now'], span: { now: 8, next: 99, gone: 3, needs: 1.5 } };
-  assert.deepEqual(applyLayout(ids, saved, 'desktop'), { order: ['needs', 'now', 'next'], span: { now: 8 } });
-  assert.deepEqual(applyLayout(ids, saved, 'phone'), { order: ['needs', 'now', 'next'], span: {} });
-  assert.deepEqual(applyLayout(ids, null, 'desktop'), { order: ids, span: {} }); assert.deepEqual(applyLayout(ids, { order: 'x', span: 3 }, 'desktop'), { order: ids, span: {} });
+  assert.deepEqual(applyLayout(ids, saved, 'desktop'), { order: ['needs', 'now', 'next'], span: { now: 8 }, h: {} });
+  assert.deepEqual(applyLayout(ids, saved, 'phone'), { order: ['needs', 'now', 'next'], span: {}, h: {} });
+  assert.deepEqual(applyLayout(ids, null, 'desktop'), { order: ids, span: {}, h: {} }); assert.deepEqual(applyLayout(ids, { order: 'x', span: 3 }, 'desktop'), { order: ids, span: {}, h: {} });
   assert.deepEqual(moveItem(ids, 'next', -1), ['next', 'now', 'needs']); assert.deepEqual(moveItem(ids, 'now', -1), ids); assert.deepEqual(moveItem(ids, 'needs', 1), ids); assert.deepEqual(moveItem(ids, 'nope', 1), ids);
 });
 test('the browser script keys the saved layout by breakpoint and never reads or sends anything over the network', () => {
   const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
-  assert.match(js, /dash\.layout\.\$\{page\}\.\$\{bp\(\)\}/);
+  assert.match(js, /dash\.layout\.\$\{page\}\.\$\{bpNow\(\)\}/);
   assert.doesNotMatch(js, /fetch\(|XMLHttpRequest|WebSocket|sendBeacon|eval\(|new Function|innerHTML|document\.write|import\(/);
 });
 
@@ -162,10 +162,10 @@ test('every page has its own URL, answers 200 with the navigation bar, and marks
   const urls = ['/', '/agents', '/agents/claude', '/work', '/work/pr/41', '/work/issue/30', '/activity', '/usage', '/reviews', '/system'];
   for (const u of urls) {
     const r = await s.get(u); assert.equal(r.status, 200, u); assert.match(r.headers['content-type'], /text\/html/);
-    assert.match(r.body, /<nav class="nav" aria-label="Pages">/); assert.match(r.body, /aria-current="page"/); assert.match(r.body, /<main id="main">/); assert.match(r.body, /class="skip"/);
+    assert.match(r.body, /<nav class="nav" id="nav" aria-label="Pages">/); assert.match(r.body, /aria-current="page"/); assert.match(r.body, /<main id="main">/); assert.match(r.body, /class="skip"/);
     for (const label of ['Overview', 'Agents', 'Work', 'Activity', 'Usage &amp; cost', 'Reviews', 'System']) assert.match(r.body, new RegExp(`<span>${label}</span>`), `${u} ${label}`);
   }
-  assert.match((await s.get('/work/pr/41')).body, /<a href="\/work"[^>]*>Work<\/a> \/ PR #41/);
+  assert.match((await s.get('/work/pr/41')).body, /<a href="\/work"[^>]*>Work<\/a><span class="sep" aria-hidden="true">›<\/span><\/li><li><span aria-current="page">PR #41<\/span>/);
   assert.match((await s.get('/agents/claude')).body, /aria-current="page"><svg[^>]*><use href="#i-users"/, 'an agent page highlights Agents');
   assert.match((await s.get('/work/issue/30')).body, /aria-current="page"><svg[^>]*><use href="#i-list"/);
   assert.doesNotMatch((await s.get('/work')).body, /<b>x<\/b>/); assert.doesNotMatch((await s.get('/work/pr/41')).body, /<b>bad<\/b>/);
@@ -195,7 +195,7 @@ test('Overview: four labelled panels, KPI tiles and charts all link to detail pa
   for (const h of ['>Now<', '>Next<', '>Needs you', '>Warnings']) assert.ok(body.includes(h), h);
   assert.match(body, /<body class="overview">/);
   for (const href of ['/agents', '/work', '/reviews', '/usage', '/system', '/activity']) assert.ok(body.includes(`href="${href}"`), href);
-  assert.match(body, /data-reset-layout/); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 1);
+  assert.match(body, /data-reset-layout/); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 2, 'the early dock script and the module');
   assert.match(body, /data-countdown="\d+"/);
 });
 test('Needs you lists every needs-homeowner item with what, why, the decision needed, a link and the exact command; Warnings holds the rest', async t => {

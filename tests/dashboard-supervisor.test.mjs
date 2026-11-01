@@ -198,7 +198,7 @@ test('routes: /supervisor, its tick and upgrade drill-downs; the nav shows Super
     const r = await s.get(u); assert.equal(r.status, 200, u); assert.match(r.body, /<a href="\/supervisor"[^>]*><svg[^>]*><use href="#i-shield"\/><\/svg><span>Supervisor<\/span>/, u);
   }
   assert.match((await s.get('/supervisor/ticks')).body, /<a href="\/supervisor" aria-current="page">/);
-  assert.match((await s.get('/supervisor/upgrades')).body, /<a href="\/supervisor">Supervisor<\/a> \/ Upgrade history/);
+  assert.match((await s.get('/supervisor/upgrades')).body, /<a href="\/supervisor">Supervisor<\/a>.*<span aria-current="page">Upgrade history<\/span>/s);
   assert.equal((await s.get('/supervisor/nope')).status, 404);
 });
 test('Supervisor page: five summary cards that turn amber or red, each with a drill-down and a copy-for-overseer button; works without data', async t => {
@@ -305,7 +305,7 @@ test('hostile log text is escaped on every Supervisor page', async t => {
   const s = await serve(t, { root: stateRoot(t, { log }), cache });
   for (const u of ['/supervisor', '/supervisor/ticks', '/supervisor/upgrades']) {
     const b = (await s.get(u)).body;
-    assert.doesNotMatch(b, /<img src=x/); assert.doesNotMatch(b, /<script>x/); assert.doesNotMatch(b, /<b>w<\/b>/); assert.doesNotMatch(b, /<i>a<\/i>/); assert.equal((b.match(/<script/g) || []).length, 1, u);
+    assert.doesNotMatch(b, /<img src=x/); assert.doesNotMatch(b, /<script>x/); assert.doesNotMatch(b, /<b>w<\/b>/); assert.doesNotMatch(b, /<i>a<\/i>/); assert.equal((b.match(/<script/g) || []).length, 2, u); assert.equal((b.match(/<script(?![^>]*\bsrc=)/g) || []).length, 0, u + ': no inline script');
   }
 });
 
@@ -323,7 +323,7 @@ test('copy fallbacks: plain-HTTP LAN pages skip the Clipboard API; feedback is s
 test('phone layout: copy targets are 44px, overseer buttons span the card, health facts stack, [hidden] wins over component display', async t => {
   const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
   assert.match(css, /\[hidden\]\{display:none!important\}/);
-  const phone = css.slice(css.lastIndexOf('@media(max-width:639px)'));
+  const phone = css.slice(css.indexOf('@media(max-width:639px)', css.indexOf('.copy.tbtn{min-width:28px')));
   assert.match(phone, /\.copy\.tbtn\{min-width:44px;min-height:44px\}/); assert.match(phone, /\.btn\.overseer\{width:100%/); assert.match(phone, /\.card\.health dl\.kv\{grid-template-columns:1fr\}/);
   for (const sev of ['action', 'warning', 'info', 'ok']) assert.match(css, new RegExp(`\\.card\\.hc-${sev}\\{border-top-color:var\\(--${sev}\\)\\}`));
 });
@@ -349,7 +349,7 @@ async function runApp({ execResult }) {
   const live = new FakeEl('p'), body = new FakeEl('body'), timers = [];
   const fake = { copied: [], focused: null };
   const doc = {
-    documentElement: { dataset: {} }, body,
+    documentElement: { dataset: {}, classList: { add() {}, remove() {} } }, body,
     querySelector: sel => (sel === '#copy-status' ? live : sel === '.copy-manual' ? body.children.find(c => c.className === 'copy-manual' && !c.removed) || null : null),
     querySelectorAll: sel => (sel === 'button[data-copy]' ? [button] : []),
     createElement: tag => new FakeEl(tag),
@@ -357,7 +357,7 @@ async function runApp({ execResult }) {
   };
   const saved = {}; const set = (k, v) => { saved[k] = Object.getOwnPropertyDescriptor(globalThis, k); Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true }); };
   set('document', doc); set('window', globalThis); set('isSecureContext', false); set('navigator', {}); set('localStorage', { getItem: () => null, setItem() {}, removeItem() {} });
-  set('setInterval', () => 0); set('setTimeout', fn => { timers.push(fn); return timers.length; }); set('clearTimeout', () => {}); set('addEventListener', () => {}); set('innerWidth', 390); set('__fake', fake);
+  set('setInterval', () => 0); set('setTimeout', fn => { timers.push(fn); return timers.length; }); set('clearTimeout', () => {}); set('addEventListener', () => {}); set('innerWidth', 390); set('innerHeight', 800); set('location', { pathname: '/supervisor', search: '', origin: 'http://x' }); set('sessionStorage', { getItem: () => null, setItem() {} }); set('history', { length: 1 }); set('scrollTo', () => {}); set('scrollY', 0); set('requestAnimationFrame', fn => { fn(); return 1; }); set('__fake', fake);
   try {
     await import(`../supervisor/dashui/app.js?run=${Math.random()}`);
     assert.equal(button.hidden, false, 'the script reveals copy buttons');
