@@ -128,3 +128,10 @@ test('issue #78: a rebase never escalates; fix and ci-fix still do; continue is 
   assert.equal(repeatedChanges(v, 5), true);
   assert.deepEqual(['fix', 'ci-fix', 'rebase', 'continue', 'implement', 'review'].map(isRepair), [true, true, false, false, false, false]);
 });
+
+test('issue #78 (PR #113 verdict): an incomplete-attempt escalation reaches only fix and ci-fix, never review, interim-review, rebase, implement or continue', () => {
+  const base = { modelsConfig: shipped.models, agent: 'claude', manifestModels: claudeModels, utilization: null, escalation: { reason: 'the previous job ended incomplete' } };
+  for (const kind of ['review', 'interim-review', 'rebase', 'implement', 'continue']) assert.equal(resolveModel({ ...base, kind }).fields.modelSource, 'configured', kind);
+  for (const kind of ['review', 'interim-review']) assert.deepEqual([resolveModel({ ...base, kind }).fields.model, resolveModel({ ...base, kind }).fields.effort], ['opus', 'medium'], kind);
+  for (const kind of ['fix', 'cifix']) assert.equal(resolveModel({ ...base, kind }).fields.modelSource, 'escalated', kind);
+});

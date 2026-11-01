@@ -8,7 +8,7 @@ import { windowExpired } from './allowance.mjs';
 // 'interim-review' (D-021): a same-provider review while every other agent is out of allowance; falls back to the review entry.
 export const JOB_TYPES = ['implement', 'fix', 'review', 'rebase', 'ci-fix', 'continue', 'interim-review'];
 export const typeOfKind = kind => (kind === 'cifix' ? 'ci-fix' : kind);
-// Work that keeps the strong model even when the allowance is nearly used up.
+// Work that is not downgraded by the weekly-allowance threshold (it has no strong entry above its own; implement/continue never escalate, issue #78).
 export const STRONG_TYPES = new Set(['implement', 'continue']);
 // Escalation (issue #78) applies to fix and ci-fix only. A rebase is mechanical and never escalates; `continue` already runs the implement entry.
 const REPAIR_TYPES = new Set(['fix', 'ci-fix']);
@@ -74,8 +74,8 @@ export function resolveModel(ctx) {
   const hot = Number.isFinite(ctx.utilization) && ctx.utilization >= threshold;
   if (type === 'review' && ctx.reReview && ctx.low && table.low) { entry = table.low; source = 'allowance'; reason = 'fix-round re-review while the allowance is low: lower-cost entry'; }
   else if (hot && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `weekly allowance ${Math.round(ctx.utilization * 100)}% >= ${Math.round(threshold * 100)}%: cheaper model kept for ${type}`; }
-  else if (ctx.low && ctx.escalation && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `allowance low: escalation suppressed for ${type}`; }
-  else if (ctx.escalation && !STRONG_TYPES.has(type)) { entry = strong; source = 'escalated'; reason = `escalated: ${ctx.escalation.reason}`; }
+  else if (ctx.low && ctx.escalation && REPAIR_TYPES.has(type)) { source = 'allowance'; reason = `allowance low: escalation suppressed for ${type}`; }
+  else if (ctx.escalation && REPAIR_TYPES.has(type)) { entry = strong; source = 'escalated'; reason = `escalated: ${ctx.escalation.reason}`; }
   else if (hot) reason = `${type} keeps its model although weekly allowance is ${Math.round(ctx.utilization * 100)}%`;
   const checked = checkEntry(entry, ctx.manifestModels);
   const fields = { modelSource: source, modelReason: reason.slice(0, 200) };
