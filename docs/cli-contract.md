@@ -9,7 +9,7 @@ Status: `agent-proposal` (D-017), to be implemented in issue #8. The machine-rea
 | `dev-test help [command]` | Usage. |
 | `dev-test doctor` | Read-only check of Docker, pinned images, cache and run directories, OpenBao reachability and policy state. |
 | `dev-test dotnet build --sdk <8\|9\|10> --project <path>` | Build in a pinned SDK container. |
-| `dev-test dotnet test --sdk <8\|9\|10> --project <path> [--coverage]` | Test; produce TRX and coverage artifacts. |
+| `dev-test dotnet test --sdk <8\|9\|10> --project <path> [--coverage]` | Test; produce TRX and coverage artifacts (see [dotnet-testing.md](dotnet-testing.md)). |
 | `dev-test web screenshot --url <url> --profile <name>` | Capture one screenshot. |
 | `dev-test web responsive --url <url> --profiles <list> [--assert <rule>...]` | Capture across profiles and apply responsive assertions. |
 | `dev-test report <run-id>` | Show a stored result. |

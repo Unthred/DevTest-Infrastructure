@@ -51,7 +51,7 @@ test('commands pin SDK selector and pass project paths as argv elements', t => {
     sdk: '9', phase: 'build', command: ['dotnet', 'build', '/src/App.csproj', '--verbosity', 'minimal', '-p:RestorePackagesPath=/cache/9', '--source', '/work/empty-feed', '--artifacts-path', '/work/artifacts', '--configuration', 'Release', '--framework', 'net9.0'], workingDirectory: '/src'
   });
   assert.deepEqual(buildCommand({ sdk: 8, operation: 'test', project: '/src/A.csproj' }).command,
-    ['dotnet', 'test', '/src/A.csproj', '--verbosity', 'minimal', '-p:RestorePackagesPath=/cache/8', '--source', '/work/empty-feed', '--artifacts-path', '/work/artifacts']);
+    ['dotnet', 'test', '/src/A.csproj', '--verbosity', 'minimal', '-p:RestorePackagesPath=/cache/8', '--source', '/work/empty-feed', '--artifacts-path', '/work/artifacts', '--results-directory', '/out/results', '--logger', 'trx;LogFileName=results.trx']);
   assert.deepEqual(buildCommand({ sdk: 10, operation: 'restore', project: '/src/A.csproj' }).command,
     ['dotnet', 'restore', '/src/A.csproj', '--verbosity', 'minimal', '--packages', '/cache/10', '--artifacts-path', '/work/artifacts']);
 });
