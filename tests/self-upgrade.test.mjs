@@ -385,3 +385,14 @@ test('hold (issue #134): a failed pre-check, an ineligible range, an upgrader ch
   assert.equal(await w.up.step(), 'busy'); w.state.target = FROM;     // main moved back / upgraded by hand: the hold ends
   assert.equal(await w.up.step(), 'current'); assert.equal(w.up.s.holding, undefined);
 });
+
+test('a latched failed pre-check never holds dispatch, even with active jobs, and a newer main waits afresh (#134)', async t => {
+  const w = world(t, { pre: { ok: false, reason: 'tests: 3 failed' } });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  w.state.active = 1; w.state.now += 5 * 60 * 1000;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
+  w.state.now += 31 * 60 * 1000;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
+  w.state.target = H('9'); w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
+});
