@@ -132,3 +132,16 @@ test('a finding fixed on an earlier head that reappears after a rebase is flagge
   assert.equal(out[0].possiblyLostInRebase, true); assert.match(out[0].text, /possibly lost in rebase/);
   assert.equal(out[1].possiblyLostInRebase, undefined); assert.equal(out[1].text, 'something new');
 });
+
+test('a rebase that resolves a conflict is not reported lost and is pushed', t => {
+  const r = repo(t);
+  git(r.seed, 'checkout', '-q', 'feat'); commit(r.seed, 'base.txt', 'FEAT\n', 'feat edits base'); git(r.seed, 'push', '-q', 'origin', 'feat');
+  git(r.seed, 'checkout', '-q', 'main'); commit(r.seed, 'base.txt', 'MAIN\n', 'main edits base'); git(r.seed, 'push', '-q', 'origin', 'main');
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  assert.throws(() => git(r.agent, 'rebase', 'origin/main'));                  // conflicts on base.txt
+  fs.writeFileSync(path.join(r.agent, 'base.txt'), 'MAIN+FEAT\n'); git(r.agent, 'add', '-A');
+  execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+  const res = pushRebase({ worktree: r.agent, branch: 'feat', base: 'main', oldHead });
+  assert.equal(res.pushed, true); assert.deepEqual(res.missing, []);
+  assert.equal(git(r.dir, '--git-dir', r.remote, 'rev-parse', 'feat'), res.newHead);
+});

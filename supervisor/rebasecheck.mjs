@@ -24,7 +24,8 @@ function listCommits(run, range, { cherry = false } = {}) {
   for (const sha of revs) {
     const patch = run(['show', '--format=', '--no-ext-diff', '--no-textconv', '--binary', '--no-renames', sha]);
     const id = patch.trim() === '' ? null : run(['patch-id', '--stable'], patch).trim().split(/\s+/)[0] || null;
-    out.push({ sha, subject: run(['log', '-1', '--format=%s', sha]).trim(), patchId: id });
+    const [subject, ident] = run(['log', '-1', '--format=%s%x00%an <%ae> %aI', sha]).replace(/\n$/, '').split('\0');
+    out.push({ sha, subject, ident, patchId: id });
   }
   return out;
 }
@@ -35,13 +36,19 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
   const run = runner(repoPath);
   const old = listCommits(run, `${base}...${oldHead}`, { cherry: true });
   const now = listCommits(run, `${base}..${newHead}`);
-  const have = new Map();
-  for (const c of now) have.set(c.patchId, (have.get(c.patchId) || 0) + 1);
-  const missing = [];
+  // Pass 1: patch-id. Pass 2: a conflict resolution changes the patch (and so its patch-id) but a rebase keeps the author, author
+  // date and subject, so a commit with no patch-id match is paired with an unused new commit of the same identity.
+  const used = new Set();
+  const unmatched = [];
   for (const c of old) {
     if (c.patchId === null) continue;              // an empty commit has no patch to lose
-    const n = have.get(c.patchId) || 0;
-    if (n > 0) have.set(c.patchId, n - 1); else missing.push({ sha: c.sha, subject: c.subject });
+    const m = now.find(n => !used.has(n.sha) && n.patchId === c.patchId);
+    if (m) used.add(m.sha); else unmatched.push(c);
+  }
+  const missing = [];
+  for (const c of unmatched) {
+    const m = now.find(n => !used.has(n.sha) && n.ident === c.ident && n.subject === c.subject);
+    if (m) used.add(m.sha); else missing.push({ sha: c.sha, subject: c.subject });
   }
   return { oldHead, newHead, commits: now.map(c => ({ sha: c.sha, subject: c.subject })), missing };
 }
