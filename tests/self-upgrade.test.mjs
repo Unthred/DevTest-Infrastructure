@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { SelfUpgrade, realDeps, runningSha, installedSha, UPGRADER_PATHS, QUIET_MAX_WAIT_MS, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS } from '../supervisor/upgrade.mjs';
+import { SelfUpgrade, realDeps, runningSha, installedSha, UPGRADER_PATHS, QUIET_MAX_WAIT_MS, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
 import { applyLocalOverride } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -327,4 +327,36 @@ test('an interim (D-021) PASS from the author counts while interim review is ena
   w.up.d.config = { ...config, interim_review: { enabled: true, decision: 'D-021' } };
   assert.notEqual(await w.up.step(), 'not-eligible');
   assert.ok(w.log.some(x => x[0] === 'pre'));
+});
+
+test('issue #69: an environmental pre-check failure is retried after an hour with one alert; a failed check stays latched', async t => {
+  const w = world(t, { pre: { ok: false, environmental: true, reason: 'checkout failed: unable to read tree' } });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  w.state.now += ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
+  w.state.now += 1; w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.alerts().filter(a => /pre-check failed/.test(a)).length, 1);
+  const g = world(t, { pre: { ok: false, reason: 'tests: 1 failed' } });
+  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += 10 * ENV_RETRY_MS; g.state.pre = { ok: true };
+  assert.equal(await g.up.step(), 'precheck-failed'); assert.equal(g.log.filter(x => x[0] === 'pre').length, 1);
+});
+
+test('issue #69: the real pre-check checks out an origin/main commit that the local main is behind', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-git-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const g = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' }).trim();
+  const origin = path.join(dir, 'origin.git'), repo = path.join(dir, 'repo'), other = path.join(dir, 'other');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+  execFileSync('git', ['clone', '-q', origin, other]); g(other, 'commit', '-q', '--allow-empty', '-m', 'one'); g(other, 'push', '-q', 'origin', 'HEAD:main');
+  execFileSync('git', ['clone', '-q', origin, repo]);
+  g(other, 'commit', '-q', '--allow-empty', '-m', 'two'); g(other, 'push', '-q', 'origin', 'HEAD:main');
+  // the self-upgrade fetch: origin/main moves, local main stays behind
+  g(repo, 'fetch', '-q', 'origin', 'main'); const target = g(repo, 'rev-parse', 'origin/main');
+  assert.notEqual(g(repo, 'rev-parse', 'main'), target);
+  const run = (cmd, args, opts = {}) => {
+    if (cmd === 'node') return { status: 0, stdout: '', stderr: '' };   // validator and tests are not part of this fixture
+    const r = spawnSync(cmd, args, { cwd: opts.cwd, encoding: 'utf8' }); return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+  };
+  const deps = realDeps({ root: dir, config: { repo_path: repo, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, run, sendAlert: async () => {} });
+  assert.deepEqual(await deps.preChecks(target), { ok: true });
+  const missing = await deps.preChecks('f'.repeat(40));
+  assert.equal(missing.ok, false); assert.equal(missing.environmental, true); assert.match(missing.reason, /^checkout failed/);
 });
