@@ -199,8 +199,15 @@ export function acquireLeases(root, job, clock = realClock) {
     throw error;
   }
 }
+// One writer per worktree: a lease is kept while the job's worker (other than this process) or provider child still exists.
+export function jobProcessesAlive(job) {
+  const worker = job.workerPid && job.workerPid !== process.pid && processStart(job.workerPid) === job.workerStart;
+  const child = job.childPid && job.childPid !== process.pid && processStart(job.childPid);
+  return Boolean(worker || child);
+}
 export function releaseLeases(root, job) {
   if (!terminal.has(job.status)) throw new SupervisorError('cannot release active lease');
+  if (jobProcessesAlive(job)) throw new SupervisorError('worker or child process still running; lease kept');
   let released = 0;
   for (const key of leaseKeys(job)) {
     const file = path.join(root, 'leases', key);
@@ -259,7 +266,10 @@ export function transition(root, job, status, kind, clock = realClock) {
   job.status = status; job.lastEvent = kind; saveJob(root, job, clock);
   event(root, job, job.status === status ? kind : 'transition_ignored', clock);
   // Issue #80: a terminal job holds no lease; a stale one would stall every later job on the same worktree.
-  if (terminal.has(job.status)) releaseLeases(root, job);
+  if (terminal.has(job.status)) {
+    if (jobProcessesAlive(job)) event(root, job, 'lease_kept_processes_alive', clock);
+    else releaseLeases(root, job);
+  }
 }
 export async function drive(root, job, registry = defaultRegistry, clock = realClock, runOnce, maxAttempts = 4, checkPostcondition = null) {
   const restartable = () => job.autoResume || job.autoRestart;

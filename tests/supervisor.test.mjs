@@ -395,3 +395,20 @@ test('#80 a paused job whose postcondition is not met still resumes', async t =>
   const result = await drive(f.root, job, f.registry, clock, async () => { calls++; if (calls === 1) return { code: 1, event: 'usage_limit' }; done = true; return { code: 0 }; }, 4, async () => done);
   assert.equal(calls, 2); assert.equal(result.status, 'completed'); assert.equal(result.lastEvent, 'completed');
 });
+
+test('#80 a terminal transition keeps the leases while a detached child is alive, and releases once it is gone', async t => {
+  const { spawn } = await import('node:child_process');
+  const { transition, saveJob } = await import('../supervisor/core.mjs');
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { detached: true, stdio: 'ignore' }); child.unref();
+  t.after(() => { try { process.kill(child.pid, 'SIGKILL'); } catch {} });
+  job.status = 'running'; job.workerPid = 2147483000; job.workerStart = 'dead'; job.childPid = child.pid; saveJob(f.root, job, clock);
+  transition(f.root, job, 'blocked', 'orphaned_worker', clock);
+  assert.equal(leaseFiles(f.root).length, 2);
+  await assert.rejects(() => createJob(f.root, { ...f.spec, issue: 77 }, f.registry, clock), /already leased/);
+  assert.throws(() => releaseLeases(f.root, job), /still running/);
+  process.kill(child.pid, 'SIGKILL');
+  for (let i = 0; i < 50 && fs.existsSync(`/proc/${child.pid}/stat`) && !/\) Z/.test(fs.readFileSync(`/proc/${child.pid}/stat`, 'utf8')); i++) await new Promise(r => setTimeout(r, 20));
+  job.childPid = null; releaseLeases(f.root, job);
+  assert.deepEqual(leaseFiles(f.root), []);
+});
