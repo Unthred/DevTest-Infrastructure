@@ -207,3 +207,56 @@ test('the watch page: unknown job is a 404, a job with no transcript says so, an
   const home = (await s.req('/')).body; assert.match(home, new RegExp(`Replay transcript`)); assert.ok(home.includes(`href="/jobs/${ID2}"`));
   assert.ok((await s.req('/activity')).body.includes(`href="/jobs/${ID2}"`));
 });
+
+// Issue #123 review fix: more secret shapes. Every fixture is assembled at run time (no literal credential in the repository).
+const V = (...p) => p.join('');
+const gone = (out, ...bad) => { for (const b of bad) assert.ok(!out.includes(b), `leaked ${b}`); };
+
+test('redaction: URL userinfo (user:password and token-only) is removed, host and path stay', () => {
+  const pw = V('pa', 'ss', 'word-canary-1'), tok = V('tok', 'en-canary-2');
+  const out = redactText([`git clone https://alice:${pw}@example.org/repo.git`, `curl https://${tok}@example.org/x`, 'see https://example.org/plain'].join('\n'));
+  gone(out, pw, tok, 'alice:');
+  assert.match(out, /example\.org\/repo\.git/);
+  assert.match(out, /https:\/\/example\.org\/plain/);
+});
+
+test('redaction: Basic, Digest and Token Authorization headers', () => {
+  const basic = V('dXNl', 'cjpwYXNz', 'd29yZA=='), tok = V('abc', 'DEF', '123canary'), dig = V('resp', 'onse-canary-3');
+  const out = redactText([`Authorization: Basic ${basic}`, `curl -H 'Authorization: Token ${tok}' https://example.org`,
+    `Authorization: Digest username="u", realm="r", response="${dig}"`, `Proxy-Authorization: Basic ${basic}`].join('\n'));
+  gone(out, basic, tok, dig);
+  assert.match(out, /https:\/\/example\.org/, 'the rest of the command survives');
+});
+
+test('redaction: `key: value` and `--flag value` for secret-named keys, ordinary keys survive', () => {
+  const a = V('s3', 'cret-yaml-canary'), b = V('flag-', 'value-canary'), c = V('eq-', 'value-canary'), d = V('sp ', 'ace-canary');
+  const out = redactText([`password: ${a}`, `api_key: "${d}"`, `client-secret: ${a}2`, `curl --token ${b} --user bob`, `tool --password=${c} --verbose`,
+    `mytool --api-key ${b}2 run`, 'name: build', 'status: ok'].join('\n'));
+  gone(out, a, b, c, d);
+  assert.match(out, /name: build/); assert.match(out, /status: ok/); assert.match(out, /--user bob/); assert.match(out, /--verbose/);
+});
+
+test('redaction: *_PASS and *_PWD variable names (either case), PWD alone is left', () => {
+  const v1 = V('db-', 'pass-canary'), v2 = V('pw', 'd-canary'), v3 = V('lower-', 'canary');
+  const out = redactText([`DB_${'PASS'}=${v1}`, `export SERVICE_${'PWD'}="${v2}"`, `db_${'pass'}=${v3}`, 'PWD=/home/work'].join('\n'));
+  gone(out, v1, v2, v3);
+  assert.match(out, /PWD=\/home\/work/);
+});
+
+test('redaction: bao/vault kv get table output (any key name) and -field output', t => {
+  const v1 = V('tbl-', 'value-canary-1'), v2 = V('tbl-', 'value-canary-2');
+  const table = ['====== Data ======', 'Key         Value', '---         -----', `username    ${v1}`, `custom_name ${v2}`, '', 'after the table'].join('\n');
+  const out = redactText(table);
+  gone(out, v1, v2);
+  assert.match(out, /username\s+\[redacted\]/); assert.match(out, /after the table/);
+  // -field prints a bare value with no shape: the result of a secret read is dropped whole by the writer.
+  const bare = V('bare-', 'field-canary-9');
+  const root = tmp(t), w = new TranscriptWriter(root, ID, { secrets: [] });
+  w.append({ kind: 'tool_call', tool: 'Bash', text: `bao kv get -field=password secret/devtest/x` });
+  w.append({ kind: 'tool_result', text: bare });
+  w.append({ kind: 'tool_call', tool: 'Bash', text: 'ls' });
+  w.append({ kind: 'tool_result', text: 'plain listing' });
+  const disk = fs.readFileSync(transcriptFile(root, ID), 'utf8');
+  gone(disk, bare);
+  assert.match(disk, /redacted: output of a secret read/); assert.match(disk, /plain listing/);
+});

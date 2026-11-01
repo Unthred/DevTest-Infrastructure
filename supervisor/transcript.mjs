@@ -24,6 +24,13 @@ export function secretValues(env = process.env, extra = []) {
   for (const v of extra) if (typeof v === 'string' && v.length >= 4) out.add(v);
   return [...out].sort((a, b) => b.length - a.length);
 }
+// Names whose value is a secret in `key: value`, `--flag value` and `NAME=value` forms (case-insensitive).
+const KEYWORD = '(?:passw(?:or)?d|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|access[_-]?key|credential|authorization|[a-z0-9]+_pass)';
+const VALUE = '(?:"[^"\\n]*"|\'[^\'\\n]*\'|[^\\s,;"\'][^\\s,;]*)';
+// `bao|vault kv get` / `read` print a Key/Value table: every value row after the header is a secret, whatever its key is called.
+const KV_TABLE = /(^[ \t]*Key[ \t]+Value[ \t]*\r?\n[ \t]*-{2,}[ \t]+-{2,}[ \t]*\r?\n)((?:[ \t]*\S+[ \t]+[^\r\n]*(?:\r?\n|$))+)/gm;
+// A command that reads a secret from OpenBao/Vault. Its output is a bare value (`-field=...`) or a table; a bare value has no shape to match.
+export const isSecretRead = text => /\b(?:bao|vault|openbao)\b[^\n]*?(?:\bkv\s+get\b|\bread\b|\btoken\s+lookup\b|\s-field\b)/i.test(String(text ?? ''));
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Redaction: exact secret values first, then secret shapes, OpenBao paths and tokens, and credential-looking assignments.
@@ -40,6 +47,12 @@ export function redactText(value, secrets = []) {
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g, '[redacted jwt]')
     .replace(/\b(?:gh[pousr]_|github_pat_|sk-ant-|sk-|xox[abprs]-|glpat-|npm_)[\w-]{8,}/g, '[redacted token]')
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[redacted token]')
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, '$1[redacted]@')
+    .replace(/\b((?:proxy-)?authorization["']?\s*[:=]\s*)(?:Digest\s+[^\r\n]*|[^\s"'\r\n]+(?:[ \t]+[^\s"'\r\n]+)?)/gi, '$1[redacted]')
+    .replace(KV_TABLE, (_m, head, rows) => head + rows.replace(/^([ \t]*\S+[ \t]+)[^\r\n]*/gm, '$1[redacted]'))
+    .replace(new RegExp(`(--?[a-z0-9-]*${KEYWORD}[a-z0-9-]*)(\\s+|=)(?!-)(${VALUE})`, 'gi'), '$1$2[redacted]')
+    .replace(new RegExp(`(\\b[a-z0-9_.-]*${KEYWORD}[a-z0-9_.-]*)(\\s*:\\s+)(?!\\[redacted)(${VALUE})`, 'gi'), '$1$2[redacted]')
+    .replace(/\b([A-Za-z][A-Za-z0-9]*_(?:PASS|PWD)[A-Za-z0-9_]*)\s*=\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/gi, '$1=[redacted]')
     .replace(/\b[Bb]earer\s+[\w.~+/=-]{8,}/g, 'Bearer [redacted]')
     .replace(/("[\w-]*(?:token|secret|passw(?:or)?d|passwd|api[_-]?key|private[_-]?key|credential|authorization|cookie)[\w-]*"\s*:\s*)"(?:[^"\\]|\\.)*"/gi, '$1"[redacted]"')
     .replace(/\b([A-Za-z][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH|COOKIE)[A-Za-z0-9_]*)\s*=\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/g, '$1=[redacted]')
@@ -67,7 +80,7 @@ export function sanitizeEntry(entry, secrets = []) {
 export class TranscriptWriter {
   constructor(root, jobId, { capBytes = TRANSCRIPT_CAP_BYTES, reserveBytes = EVIDENCE_RESERVE_BYTES, secrets = secretValues(), clock = { now: () => Date.now() } } = {}) {
     if (!validJobId(jobId)) throw new Error('invalid job id for transcript');
-    Object.assign(this, { root, jobId, capBytes, reserveBytes, secrets, clock, file: transcriptFile(root, jobId), seq: 0, size: 0, full: false, closed: false });
+    Object.assign(this, { root, jobId, capBytes, reserveBytes, secrets, clock, file: transcriptFile(root, jobId), seq: 0, size: 0, full: false, closed: false, pendingSecretReads: 0 });
     fs.mkdirSync(transcriptDir(root), { recursive: true, mode: 0o700 });
     // Later attempts of the same job append: continue the sequence and the size budget.
     try {
@@ -78,6 +91,10 @@ export class TranscriptWriter {
   }
   append(entry) {
     if (this.closed) return null;
+    // The output of a secret read has no shape to match, so drop it whole. Results are not tied to calls by id: while a read is
+    // pending every result is dropped (this can hide an unrelated result, never leak one).
+    if (entry?.kind === 'tool_call' && isSecretRead(`${entry.text ?? ''}\n${entry.detail ?? ''}`)) this.pendingSecretReads++;
+    else if (entry?.kind === 'tool_result' && this.pendingSecretReads > 0) { this.pendingSecretReads--; entry = { ...entry, text: '[redacted: output of a secret read]' }; }
     const clean = sanitizeEntry(entry, this.secrets);
     const make = e => JSON.stringify({ v: 1, seq: this.seq + 1, at: this.clock.now(), ...e }) + '\n';
     let line = make(clean);
