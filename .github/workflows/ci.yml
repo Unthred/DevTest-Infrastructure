@@ -10,7 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: devtest-${{ github.workflow }}-${{ github.ref }}
+  # Issue #149: a description edit runs in its own group, so it can never cancel the run for a push (and a push never cancels it).
+  group: devtest-${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'edited' && 'edit' || 'code' }}
   cancel-in-progress: true
 
 jobs:

@@ -112,24 +112,39 @@ export function decisionApproved(registerText, id) {
   return !!m && /^- Status: homeowner-approved\s*$/m.test(m[1]);
 }
 
+// Issue #149: judge each check by its latest run on the head. A push followed by a PR description edit starts two runs of the same
+// check about 20 s apart; the concurrency group cancels the first. That superseded cancelled run is not a failure.
+const CHECK_OK = ['SUCCESS', 'NEUTRAL', 'SKIPPED'];
+const checkDone = c => (c.status ? c.status === 'COMPLETED' : !!c.state && c.state !== 'PENDING' && c.state !== 'EXPECTED');
+const isCancelled = c => c.conclusion === 'CANCELLED';
+const checkTime = c => { const t = Date.parse(c.startedAt || c.completedAt || ''); return Number.isFinite(t) ? t : null; };
+const CANCELLED_WAIT_MS = 5 * 60000;
+export function latestChecks(rollup) {
+  if (!Array.isArray(rollup)) return [];
+  const latest = new Map();
+  rollup.forEach((c, i) => {
+    const key = `${c.workflowName || ''}\u0000${c.name || c.context || `#${i}`}`;
+    const prev = latest.get(key), t = checkTime(c), pt = prev && checkTime(prev);
+    if (!prev || (t !== null && pt !== null ? t >= pt : true)) latest.set(key, c);   // no timestamps: the later list entry wins
+  });
+  return [...latest.values()];
+}
+// A cancelled check that nothing superseded: pending (not red) until the dispatcher reruns it once.
+export function loneCancelled(rollup) { return latestChecks(rollup).filter(c => checkDone(c) && isCancelled(c)); }
 export function checksState(rollup) {
   if (!Array.isArray(rollup) || !rollup.length) return 'none';
   let pending = false;
-  for (const c of rollup) {
-    const done = c.status ? c.status === 'COMPLETED' : c.state && c.state !== 'PENDING' && c.state !== 'EXPECTED';
-    const result = c.conclusion || c.state;
-    if (!done) { pending = true; continue; }
-    if (!['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(result)) return 'red';
+  for (const c of latestChecks(rollup)) {
+    if (!checkDone(c) || isCancelled(c)) { pending = true; continue; }
+    if (!CHECK_OK.includes(c.conclusion || c.state)) return 'red';
   }
   return pending ? 'pending' : 'green';
 }
 // Names of completed, non-successful checks, safe to quote in a prompt (GitHub-supplied text is never interpolated unvalidated).
 export function failingChecks(rollup) {
-  if (!Array.isArray(rollup)) return [];
   const names = [];
-  for (const c of rollup) {
-    const done = c.status ? c.status === 'COMPLETED' : c.state && c.state !== 'PENDING' && c.state !== 'EXPECTED';
-    if (!done || ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(c.conclusion || c.state)) continue;
+  for (const c of latestChecks(rollup)) {
+    if (!checkDone(c) || isCancelled(c) || CHECK_OK.includes(c.conclusion || c.state)) continue;
     const name = c.name || c.context;
     if (typeof name === 'string' && /^[A-Za-z0-9 ._:()\/-]{1,80}$/.test(name) && !names.includes(name)) names.push(name);
   }
@@ -217,7 +232,7 @@ export class Team {
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'budget']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'budget', 'cancelWatch']) this.s[k] ||= {};
   }
   save() { atomicJson(this.file, this.s); }
   // Model and effort for one job (issue #64). Escalation: an earlier attempt of the same work ended incomplete on the cheaper
@@ -497,7 +512,7 @@ export class Team {
     // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).
     const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
     if (!dryRun) {
-      await this.ingest(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.releaseFinished(report, guard);
+      await this.ingest(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.watchCancelled(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     let actions = await this.plan();
@@ -667,6 +682,33 @@ export class Team {
       await this.postNotice(target, `job=${id} status=${job.status}`, `**Needs the homeowner.** Supervised ${j.kind} job \`${id}\` (${j.agent}) stopped as \`${job.status}\` (last event: \`${job.lastEvent}\`). Required: inspect \`ai-agent --supervisor status ${id}\` and \`logs ${id}\`, then decide whether to \`resume\`, reassign or close. Other agents keep working.`);
       } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
       report.notified.push({ job: id, target });
+  }
+  // Issue #149: a cancelled check with no later run of its name is pending, not red. After a bounded wait the dispatcher reruns it
+  // once (gh run rerun); if it is still cancelled a further wait later, the PR is labelled needs-homeowner (Needs you). Recorded
+  // before each effect, so a failed call is not repeated blindly and a rerun is never issued twice for the same head.
+  async watchCancelled(report, guard = (_, fn) => fn()) {
+    const wait = this.c.limits.cancelled_wait_ms ?? CANCELLED_WAIT_MS, now = this.clock.now();
+    for (const pr of await this.gh.listPulls()) {
+      if (pr.isDraft || !SHA.test(pr.headRefOid)) continue;
+      const lone = loneCancelled(pr.statusCheckRollup), key = `${pr.number}:${pr.headRefOid}`;
+      if (!lone.length) { if (this.s.cancelWatch[key] && !this.s.cancelWatch[key].noticed) delete this.s.cancelWatch[key]; continue; }
+      const w = this.s.cancelWatch[key] ||= { since: now };
+      if (!w.rerunAt && now - w.since >= wait) {
+        const runs = [...new Set(lone.map(c => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl || '')?.[1]).filter(Boolean))];
+        w.rerunAt = now; w.runs = runs; this.save();
+        await guard(`rerun cancelled ${pr.number}`, async () => { for (const r of runs) await this.gh.rerunRun(r); });
+        (report.notified ||= []).push({ pr: pr.number, rerun: runs });
+      } else if (w.rerunAt && !w.noticed && now - w.rerunAt >= wait) {
+        await guard(`cancelled-ci ${pr.number}`, async () => {
+          w.noticed = now; this.save();
+          try {
+            await this.gh.addLabel(pr.number, 'needs-homeowner');
+            await this.postNotice(pr.number, `cancelled-ci pr=${pr.number}`, `**Needs the homeowner.** CI check(s) ${lone.map(c => c.name).join(', ')} were cancelled on head \`${pr.headRefOid}\` with no later run, were rerun once, and are still not green. Required: rerun CI by hand or push a new commit.`);
+          } catch (error) { delete w.noticed; this.save(); throw error; }
+        });
+      }
+    }
+    this.save();
   }
   // A PR that is still rejected (CHANGES verdict or red CI on its current head) after max_fix_attempts fix rounds gets exactly one
   // needs-homeowner notice and no further fix jobs. Recorded before posting, like the other notices.

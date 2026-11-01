@@ -51,6 +51,7 @@ export function githubClient(config, gh = ghRunner()) {
     },
     // --match-head-commit makes GitHub refuse the merge if the head moved after the verdict.
     removeLabel: async (n, label) => { gh(['issue', 'edit', String(n), '--repo', repo, '--remove-label', label]); },
+    rerunRun: async runId => { if (!/^\d+$/.test(String(runId))) throw new SupervisorError('invalid run id'); gh(['run', 'rerun', String(runId), '--repo', repo], undefined, { retry: false }); },
     merge: async (n, head) => { gh(['pr', 'merge', String(n), '--repo', repo, '--merge', '--match-head-commit', head]); },
     board: async (issue, status) => {
       const b = config.board; if (!b || !b.options?.[status]) return;

@@ -30,7 +30,7 @@ function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = 
   const gh = {
     pulls, issues,
     listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues,
-    comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]),
+    rerunRun: async r => { (calls.reruns ||= []).push(r); }, comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]),
     findIssueByMarker: async marker => gh.issues.find(i => i.body?.includes(marker))?.number || null,
     createIssue: async (title, body) => { const number = 100 + gh.issues.length; gh.issues.push(issue(number, 'OPEN', body)); calls.issues.push([number, title, body]); return number; },
     merge: async (n, head) => { const p = gh.pulls.find(x => x.number === n); if (!p || p.headRefOid !== head) throw new Error('head moved'); calls.merges.push([n, head]); },
@@ -1033,4 +1033,9 @@ test('hold (issue #134): a pending upgrade starts no job, reports the hold, and 
   assert.match(r.held.reason, /upgrade to 7777777 pending/); assert.ok(r.held.actions > 0);
   const free = mk(); const r2 = await free.team.tick();
   assert.equal(r2.held, undefined); assert.ok(free.calls.created.length > 0);
+});
+
+test('issue #149 CI workflow: a description edit cannot share a concurrency group with push runs', () => {
+  const y = fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  assert.match(y, /group:.*github\.event\.action == 'edited' && 'edit' \|\| 'code'/);
 });
