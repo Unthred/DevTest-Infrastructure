@@ -134,3 +134,21 @@ test('team.local.json: roles override merges per role; a local per_agent still w
   assert.deepEqual(legacy.limits.roles, { implementer: 2, reviewer: 2 }); assert.equal(legacy.deprecations.length, 1);
   assert.throws(() => validateTeamConfig(applyLocalOverride(base, { limits: { roles: { reviewer: 0 } } })), /roles/);
 });
+
+test('repair work outranks a new implement across agents: a rejected or red PR of the second-listed agent is not starved', async t => {
+  // codex PR #10 has a CHANGES verdict on its head; claude (listed first) has implementable issues
+  const rejected = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))] });
+  rejected.team.s.verdicts[`10:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'claude', findings: [{ kind: 'blocking', text: 'x' }], at: 1_800_000_000_000 - 1000 };
+  const a = await rejected.team.plan();
+  assert.deepEqual(a.filter(x => x.type !== 'review').map(x => [x.agent, x.type, x.pr]), [['codex', 'fix', 10]]);
+  // the same for a red CI check
+  const red = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'ci' }] })] });
+  const b = (await red.team.plan()).filter(x => x.type !== 'review');
+  assert.deepEqual(b.map(x => [x.agent, x.type]), [['codex', 'cifix']]);
+  // and a conflicting PR
+  const conflict = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { mergeable: 'CONFLICTING' })] });
+  assert.deepEqual((await conflict.team.plan()).filter(x => x.type !== 'review').map(x => [x.agent, x.type]), [['codex', 'rebase']]);
+  // with no repair pending, the first agent's implement still wins the tie (owner order)
+  const none = world(t);
+  assert.deepEqual((await none.team.plan()).map(x => [x.agent, x.type]), [['claude', 'implement']]);
+});
