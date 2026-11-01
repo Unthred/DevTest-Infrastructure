@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
+import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, failingChecks, loneCancelled, latestChecks, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
 import { createJob, drive, readJob, stateRoot, validateSpec, WorktreeUnusable, gitCommonDir } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
@@ -1038,4 +1038,59 @@ test('hold (issue #134): a pending upgrade starts no job, reports the hold, and 
 test('issue #149 CI workflow: a description edit cannot share a concurrency group with push runs', () => {
   const y = fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
   assert.match(y, /group:.*github\.event\.action == 'edited' && 'edit' \|\| 'code'/);
+});
+
+const done = (conclusion, name, startedAt, extra = {}) => ({ status: 'COMPLETED', conclusion, name, workflowName: 'CI', startedAt, ...extra });
+const T0 = '2026-11-01T10:00:00Z', T1 = '2026-11-01T10:00:20Z';
+
+test('issue #149 checks are judged by their latest run: superseded cancel is green, lone cancel is pending, failure is red', () => {
+  const cancelled = done('CANCELLED', 'test', T0), ok = done('SUCCESS', 'test', T1);
+  assert.equal(checksState([cancelled, ok]), 'green'); assert.equal(checksState([ok, cancelled]), 'green');   // either list order
+  assert.deepEqual(loneCancelled([cancelled, ok]), []);
+  assert.equal(checksState([cancelled]), 'pending'); assert.equal(loneCancelled([cancelled]).length, 1);
+  assert.deepEqual(failingChecks([cancelled]), []);
+  assert.equal(checksState([done('FAILURE', 'test', T1)]), 'red'); assert.deepEqual(failingChecks([done('FAILURE', 'test', T1)]), ['test']);
+  assert.equal(checksState([cancelled, { status: 'IN_PROGRESS', name: 'test', workflowName: 'CI', startedAt: T1 }]), 'pending');
+  assert.equal(checksState([cancelled, done('FAILURE', 'test', T1)]), 'red');
+  // a later success replaces an earlier failure of the same check (a manual rerun); another check's failure still counts
+  assert.equal(checksState([done('FAILURE', 'test', T0), done('SUCCESS', 'test', T1)]), 'green');
+  assert.equal(checksState([cancelled, ok, done('FAILURE', 'other', T1)]), 'red');
+  assert.equal(latestChecks([cancelled, ok]).length, 1);
+});
+
+test('issue #149 plan(): a superseded cancelled run does not block the review, a lone cancelled run does', async t => {
+  const rollup = [done('CANCELLED', 'test', T0), done('SUCCESS', 'test', T1)];
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: rollup })], issues: [issue(23), issue(5)] });
+  assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'review');
+  const l = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('CANCELLED', 'test', T0)] })], issues: [issue(23), issue(5)] });
+  assert.ok(!(await l.team.plan()).some(a => a.type === 'review' || a.type === 'cifix'));
+});
+
+test('issue #149 tick(): a lone cancelled run is rerun once, then labelled needs-homeowner with one notice', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const lone = [done('CANCELLED', 'test', T0, { detailsUrl: 'https://github.com/o/r/actions/runs/777/job/1' })];
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: lone })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.tick(); assert.equal(w.calls.reruns, undefined);   // inside the wait
+  clock.t += 5 * 60000; await w.team.tick(); assert.deepEqual(w.calls.reruns, ['777']);
+  clock.t += 60000; await w.team.tick(); assert.deepEqual(w.calls.reruns, ['777']); assert.equal(w.calls.labels.length, 0);
+  clock.t += 5 * 60000; await w.team.tick();
+  assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']]);
+  assert.equal(w.calls.comments.filter(([, b]) => /cancelled/.test(b)).length, 1);
+  clock.t += 20 * 60000; await w.team.tick();
+  assert.deepEqual(w.calls.reruns, ['777']); assert.equal(w.calls.labels.length, 1);   // no repeats
+  assert.equal(w.calls.comments.filter(([, b]) => /cancelled/.test(b)).length, 1);
+});
+
+test('issue #149 watchCancelled: a cancelled run that gets superseded before the wait ends is forgotten, and a throwing rerun is not retried', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const lone = [done('CANCELLED', 'test', T0, { detailsUrl: 'https://github.com/o/r/actions/runs/5/job/1' })];
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: lone })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.tick(); assert.ok(w.team.s.cancelWatch[`10:${H(1)}`]);
+  w.gh.pulls[0].statusCheckRollup = [...lone, done('SUCCESS', 'test', T1)];
+  clock.t += 6 * 60000; await w.team.tick();
+  assert.equal(w.team.s.cancelWatch[`10:${H(1)}`], undefined); assert.equal(w.calls.reruns, undefined);
+  const f = world(t, { pulls: [pr(11, 'codex/issue-3-x', H(2), { statusCheckRollup: lone })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  let n = 0; f.gh.rerunRun = async () => { n++; throw new Error('403'); };
+  await f.team.tick(); clock.t += 6 * 60000; await f.team.tick(); await f.team.tick();
+  assert.equal(n, 1);
 });
