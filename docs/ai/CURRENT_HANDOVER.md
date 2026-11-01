@@ -278,3 +278,6 @@ Root cause (from live Tower state, read-only): a Codex job that hits its limit g
 
 ## #4 / PR #67 third conflict-only rebase (Claude)
 - Rebased onto origin/main `4182342` (old head `a0fef36`). Only conflicts: this handover (Last-updated line, completion-state rows). Validator OK; 375/375 tests. A PASS for an old head does not carry over; Codex must review the new head. Implemented only; CI/review pending; not deployed.
+
+## Issue #4 / PR #67 fourth conflict-only rebase (Claude)
+- Rebased onto origin/main `3c62261` (old head `736c041`, rebased head `e37066c`). Only conflicts were in this file (header line and tail sections; both sides kept). Earlier PASS for the old head does not carry over; the opposite agent must review the new head. Validator OK, 394/394 tests. Not deployed, not verified working.
