@@ -250,3 +250,7 @@ Root cause (from live Tower state, read-only): a Codex job that hits its limit g
 - Live read-only check: in-process render against `/mnt/cache/ai-supervisor` (no listener, nothing written): Version, Last tick, Leases and Errors green; Local repo drift amber (local main `c0a0449` vs origin/main `1cf4667`, the #69 condition); no IP, token or e-mail on any page.
 - Not done or not verified: a real clipboard write on a phone (headless audit cannot click); Firefox/WebKit runs of the new pages; deployment (after merge, via the self-upgrade). Reviewer: Codex.
 
+
+## Issue #56 / PR #73 conflict-only rebase (Claude)
+- Rebased onto origin/main (old head `f64147f`). Conflicts: `supervisor/cli.mjs` (imports: both `readCache` and `readSnapshots`), `supervisor/dashboard.mjs` (imports of `allowance.mjs` and `budget.mjs` both kept; `limitView` kept with the new `cacheBackedTeam(..., snapshots, now)` signature), `supervisor/dashrender.mjs` (#75 `allowanceBody` and expected-reset chart kept, #56 `budgetBlock` prefixed on the card) and this file (header). Nothing else changed.
+- After the rebase: validator OK, 365/365 tests. Any earlier PASS for the old head does not carry over; the opposite agent must review the new head. Not deployed, not verified working.
