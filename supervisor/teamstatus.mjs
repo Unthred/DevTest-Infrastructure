@@ -9,6 +9,7 @@ import { buildView } from './dashboard.mjs';
 import { checksState } from './team.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { validateTeamConfig } from './team.mjs';
+import { modeLine } from './budget.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;     // the reconcile cron runs `*/5 * * * *` (tools/install-reconcile-user-script.sh)
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -100,7 +101,12 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   const last = lastTick?.at ?? null, next = last == null ? null : last + TICK_INTERVAL_MS;
   const schedule = { intervalMinutes: TICK_INTERVAL_MS / 60000, lastTickAt: last, lastTickStatus: lastTick?.status ?? null, nextTickAt: next, minutesUntilNext: next == null ? null : mins(next - now) };
 
-  return { generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, next: { plan, waiting }, problems, pulls, mergedToday, schedule };
+  // 7. allowance (issue #56): mode, reason and weekly projection per agent, as the planner sees it
+  const allowance = Object.entries(view.budget || {}).map(([agent, b]) => ({ agent, mode: b.mode, used: b.used, projected: b.projected, resetsAt: b.resetsAt, until: b.until,
+    text: redact(`${modeLine(agent, b, tz)}${b.mode === 'normal' && b.resetsAt ? `; weekly resets ${new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(b.resetsAt)).replace(',', '')}` : ''}`, 400) }));
+  for (const p of view.plan) if (p.reassignedFrom) { const e = plan.find(x => x.agent === p.agent && x.ref === (p.issue ?? p.pr)); if (e) e.text += ` (reassigned from ${p.reassignedFrom} for allowance)`; }
+
+  return { generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz }) {
@@ -128,6 +134,9 @@ export function renderStatus(s) {
   head('Merged today');
   if (!s.mergedToday.length) out.push('  nothing yet');
   for (const m of s.mergedToday) out.push(`  #${m.number} at ${t(m.at)}${m.title ? `: ${m.title}` : ''}`);
+  head('Allowance');
+  if (!s.allowance?.length) out.push('  no allowance data');
+  for (const a of s.allowance || []) out.push(`  ${a.text}`);
   head('Schedule');
   const sc = s.schedule;
   out.push(`  ticks run every ${sc.intervalMinutes} minutes`);

@@ -2,7 +2,7 @@
 
 Binding decisions: [docs/DECISIONS.md](../DECISIONS.md) (21 entries; D-019 and D-020 are homeowner-approved, recorded by PR #25; D-021 homeowner-approved 2026-10-31 (issue #81); D-006 and D-015–D-018 remain agent proposals). Entry point: [AGENTS.md](../../AGENTS.md). Gates: [acceptance-gates.md](../acceptance-gates.md).
 
-Last updated: 2026-10-31 by Claude on `claude/issue-72-dashboard-supervisor-health` (issue #72). Each agent edits this file only on its own branch.
+Last updated: 2026-11-01 by Claude on `claude/issue-56-allowance-aware-scheduling` (issue #56). Previous update: Claude on `claude/issue-72-dashboard-supervisor-health` (issue #72). Each agent edits this file only on its own branch.
 
 ## Completion states
 
@@ -28,6 +28,7 @@ Last updated: 2026-10-31 by Claude on `claude/issue-72-dashboard-supervisor-heal
 | #72 Dashboard Supervisor area and copy buttons | yes; branch `claude/issue-72-dashboard-supervisor-health`, see PR; `supervisor/suphealth.mjs`, `docs/dashboard.md` | no; CI and Codex review pending | no (installed supervisor not upgraded; dashboard not served) | partly: validator OK, 342/342 tests; Tower `tests/supervisor-page-smoke.mjs` OK (layout audit passes at 8 widths on 4 pages in real Chromium; copy buttons revealed, no page errors); read-only render against the real Tower state OK. Not verified: a real copy to a phone's clipboard, Firefox/WebKit |
 | #4, #7–#14 other issues | not started | no | no | no |
 | #64 Model per job type | yes; branch `claude/issue-64-choose-model-per`, see PR; `docs/model-routing.md` | no; CI and Codex review pending | no (installed supervisor not upgraded) | no; unit/fixture tests only (311/311 locally). Real `claude --model/--effort` and `codex -c model_reasoning_effort` flags checked against `--help` only; no live job run with them ; fix round 2 (Codex CHANGES at c21e147): the Codex manifest no longer accepts a `gpt-` pattern; only models listed in its `aliases` (from the local Codex models cache) are forwarded, so `gpt-not-a-real-model` is dropped with a warning. The list must be updated when Codex adds models |
+| #56 Allowance-aware scheduling | yes; PR #73 from `claude/issue-56-allowance-aware-scheduling`; `supervisor/budget.mjs`, `docs/allowance-scheduling.md` | CI pending, review no: Codex CHANGES on `49d4d47` and `56a7b6a` (one blocking finding: a provider-reported limit without numeric windows left the agent `normal`). Fixed on 2026-10-31 in `assessAgent()`/`reportedLimit()` with a regression test (fails on the old code); validator OK and 339/339 tests locally; exact-head CI and Codex re-review of the new head pending. 2026-10-31: conflict-only rebase onto main `1cf4667` (old head `e1229ee`; only the handover "Last updated" line conflicted, both sides kept); validator OK and 341/341 tests after rebase; the earlier review does not carry over to the new head | no (installed supervisor not upgraded) | no; fixture tests only (including the 31 Oct numbers). A read-only assessment against the real Tower state root gave Claude weekly 60% / 4.6 days left and Codex 96% / 3.8 days left, both projected above 100% at reset: with the shipped settings both would be reviews-only (no new implementation) until a reset. No live tick has run with it |
 
 ## Ownership
 
@@ -78,6 +79,7 @@ OQ-1 secret delivery (#7), OQ-2 browser egress enforcement (#5/#10, firewall cha
 - 2026-10-30: Codex independently reviewed PR #34 at `fb3634849bc41082fe5c7e2c0959f47caa7b356f`: validator OK, 122/122 tests, exact-head CI green; [PASS](https://github.com/Unthred/DevTest-Infrastructure/pull/34#issuecomment-6525563953), merged as `d668e4336617a6f98ab9387ab49fc6ec36b1d627`. PR #31 passed review at `1cb2c7e7599936f709455a690946606df4ed6cd2` (validator OK, 119/119, exact-head CI green); after #34 the handover conflicts with main. [PASS and conflict-only rebase requested from Claude](https://github.com/Unthred/DevTest-Infrastructure/pull/31#issuecomment-6525593912); not merged pending rebase and exact-head recheck.
 
 ## Next actions
+- #56: Codex review of the rebased PR #73 head (range-diff in the PR comment) after the CHANGES fix (a reported `rejected`/`limit_reached` record or window now makes the agent `waiting` even with no numeric window: until the latest reported reset ahead, or one hour from the reading when none is reported). Before deploying, the homeowner should confirm `budget.projected_limit` (shipped 1.0, the literal "runs out before reset" rule): on 2026-10-31 real figures both agents would be reviews-only. A decision-register entry (agent-proposal: reassigned work runs on the taker's branch so D-011 holds; drafts are not reassigned; overage/credits never used) is not added yet because D-021 is already used on the #7 branches; add it with the next free number after #7 merges.
 1. PR #28 is ready for independent Claude review; exact-head CI is pending after `6e4ab8b` and this handover update.
 2. Keep live provider-limit recovery unverified; do not reboot Tower.
 
@@ -248,3 +250,11 @@ Root cause (from live Tower state, read-only): a Codex job that hits its limit g
 - Live read-only check: in-process render against `/mnt/cache/ai-supervisor` (no listener, nothing written): Version, Last tick, Leases and Errors green; Local repo drift amber (local main `c0a0449` vs origin/main `1cf4667`, the #69 condition); no IP, token or e-mail on any page.
 - Not done or not verified: a real clipboard write on a phone (headless audit cannot click); Firefox/WebKit runs of the new pages; deployment (after merge, via the self-upgrade). Reviewer: Codex.
 
+
+## Issue #56 / PR #73 conflict-only rebase (Claude)
+- Rebased onto origin/main (old head `f64147f`). Conflicts: `supervisor/cli.mjs` (imports: both `readCache` and `readSnapshots`), `supervisor/dashboard.mjs` (imports of `allowance.mjs` and `budget.mjs` both kept; `limitView` kept with the new `cacheBackedTeam(..., snapshots, now)` signature), `supervisor/dashrender.mjs` (#75 `allowanceBody` and expected-reset chart kept, #56 `budgetBlock` prefixed on the card) and this file (header). Nothing else changed.
+- After the rebase: validator OK, 365/365 tests. Any earlier PASS for the old head does not carry over; the opposite agent must review the new head. Not deployed, not verified working.
+
+## Issue #56 / PR #73 red CI fix (Claude)
+- CI at `f75705d` failed on one test: `handover: completion states ...` in `tests/validate-project.test.mjs`. It removed only the first "Verified working", but the handover now repeats the phrase in prose, so the validator (substring, any case) still passed. Fixed in the test (removes every occurrence, any case); no validator or product change, no check weakened.
+- Validator OK and 365/365 tests locally. The new head needs exact-head CI and opposite-agent review. Not deployed, not verified working.

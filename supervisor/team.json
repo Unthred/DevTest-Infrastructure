@@ -18,7 +18,8 @@
         "rebase": { "model": "sonnet", "effort": "low" },
         "ci-fix": { "model": "sonnet", "effort": "medium" },
         "interim-review": { "model": "sonnet", "effort": "medium" },
-        "strong": { "model": "opus", "effort": "high" }
+        "strong": { "model": "opus", "effort": "high" },
+        "low": { "model": "sonnet", "effort": "low" }
       },
       "codex": {
         "implement": { "effort": "high" },
@@ -28,10 +29,12 @@
         "rebase": { "effort": "low" },
         "ci-fix": { "effort": "medium" },
         "interim-review": { "effort": "medium" },
-        "strong": { "effort": "high" }
+        "strong": { "effort": "high" },
+        "low": { "effort": "low" }
       }
     }
   },
+  "budget": { "enabled": true, "projected_limit": 1, "high_water": 0.85, "high_water_min_hours": 24, "recent_hours": 24, "exhausted_at": 0.995, "can_take_over": ["claude", "codex"] },
   "agents": {
     "claude": { "provider": "claude", "branch_prefix": "claude/", "issues": [5, 6, 7, 10, 13, 14] },
     "codex": { "provider": "codex", "branch_prefix": "codex/", "issues": [3, 4, 8, 9, 11, 12] }
