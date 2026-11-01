@@ -1023,3 +1023,14 @@ test('lean launch: the Claude manifest drops MCP servers (manifest only, D-012);
   assert.deepEqual(m('codex').launch.args, []);
   assert.ok(!JSON.stringify(m('codex')).includes('mcp'));
 });
+
+test('hold (issue #134): a pending upgrade starts no job, reports the hold, and still merges; without a hold dispatch is unchanged', async t => {
+  const mk = () => world(t, { issues: [issue(23), issue(2)], pulls: [pr(10, 'codex/issue-2-x', H(1))] });
+  const held = mk(); held.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };
+  const r = await held.team.tick({ hold: { to: H(7) } });
+  assert.deepEqual(r.actions.map(a => a.type), ['merge']); assert.equal(held.calls.merges.length, 1);
+  assert.deepEqual(held.calls.created.map(s => s.kind), []); assert.equal(held.calls.board.some(b => b[1] === 'in_progress'), false);
+  assert.match(r.held.reason, /upgrade to 7777777 pending/); assert.ok(r.held.actions > 0);
+  const free = mk(); const r2 = await free.team.tick();
+  assert.equal(r2.held, undefined); assert.ok(free.calls.created.length > 0);
+});

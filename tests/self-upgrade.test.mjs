@@ -360,3 +360,28 @@ test('issue #69: the real pre-check checks out an origin/main commit that the lo
   const missing = await deps.preChecks('f'.repeat(40));
   assert.equal(missing.ok, false); assert.equal(missing.environmental, true); assert.match(missing.reason, /^checkout failed/);
 });
+
+test('hold (issue #134): busy marks the hold, idle installs with quiet idle and clears it, a forced install records forced-after-wait', async t => {
+  const w = world(t, { active: 1 });
+  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, TO); const since = w.up.s.holding.since;
+  w.state.now += 1000; assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.since, since);
+  w.state.active = 0;
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.holding, undefined);
+  assert.equal(w.records()[0].checks.quiet, 'idle');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'root/team/self-upgrade.json'), 'utf8')).holding, undefined);
+  const forced = world(t, { active: 1 });
+  assert.equal(await forced.up.step(), 'busy'); forced.state.now += QUIET_MAX_WAIT_MS;
+  assert.equal(await forced.up.step(), 'upgraded'); assert.equal(forced.records()[0].checks.quiet, 'forced-after-wait'); assert.equal(forced.up.s.holding, undefined);
+});
+
+test('hold (issue #134): a failed pre-check, an ineligible range, an upgrader change and nothing pending never hold', async t => {
+  for (const [name, over, want] of [
+    ['precheck', { pre: { ok: false, reason: 'x' } }, 'precheck-failed'], ['ineligible', { verdicts: {} }, 'not-eligible'],
+    ['upgrader', { files: ['supervisor/upgrade.mjs'] }, 'upgrader-changed'], ['current', { target: FROM }, 'current']]) {
+    const w = world(t, over);
+    assert.equal(await w.up.step(), want, name); assert.equal(w.up.s.holding, undefined, name);
+  }
+  const w = world(t, { active: 1 });
+  assert.equal(await w.up.step(), 'busy'); w.state.target = FROM;     // main moved back / upgraded by hand: the hold ends
+  assert.equal(await w.up.step(), 'current'); assert.equal(w.up.s.holding, undefined);
+});

@@ -54,8 +54,14 @@ export class SelfUpgrade {
     try { await this.d.alert(text); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
   }
 
-  // Returns a short result string for the tick report.
+  // Returns a short result string for the tick report. `holding` (read by `team status` and the dashboard) is set only while the
+  // result is 'busy': an upgrade is pending and eligible, and new jobs are held back (issue #134).
   async step() {
+    const result = await this.stepInner();
+    if (result !== 'busy' && this.s.holding) { delete this.s.holding; this.save(); }
+    return result;
+  }
+  async stepInner() {
     if (this.latch()) return 'latched';
     if (this.s.pending) return 'awaiting-verification';
     const from = this.d.installed();
@@ -83,7 +89,7 @@ export class SelfUpgrade {
     }
     const now = this.clock.now();
     this.s.waitingSince ??= now;
-    if ((await this.d.activeJobs()) > 0 && now - this.s.waitingSince < QUIET_MAX_WAIT_MS) { this.save(); return 'busy'; }
+    if ((await this.d.activeJobs()) > 0 && now - this.s.waitingSince < QUIET_MAX_WAIT_MS) { this.s.holding = { to: target, since: this.s.holding?.to === target ? this.s.holding.since : now }; this.save(); return 'busy'; }
     // A failed check latches this commit until a newer main; an environmental failure is retried after ENV_RETRY_MS (#69).
     const latched = this.s.prechecked[target];
     if (latched && !(latched.environmental && now - latched.at >= ENV_RETRY_MS)) return 'precheck-failed';
