@@ -109,6 +109,9 @@ export function validate(root) {
       if (!text.toLowerCase().includes(state.toLowerCase())) add('handover', `completion state "${state}" not reported`);
     }
     for (const h of ['Blockers', 'Next actions']) if (!new RegExp(`^## ${h}`, 'm').test(text)) add('handover', `missing "## ${h}" section`);
+    // A raw HTML document (for example a service error page pasted from command output) does not belong in the handover.
+    const html = text.split('\n').findIndex((l) => /^\s*<(?:!doctype\s+html|html|\/html|head|body)\b/i.test(l));
+    if (html !== -1) add('handover', `contains a raw HTML document at line ${html + 1}; remove pasted command output`);
   }
 
   // Entry points

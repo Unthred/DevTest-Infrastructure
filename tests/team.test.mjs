@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team, ciFixPrompt, rebasePrompt, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
+import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
 import { createJob, drive, readJob, stateRoot, validateSpec, WorktreeUnusable, gitCommonDir } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
@@ -987,4 +987,36 @@ test('invalid model in the config: the job is still created on the CLI default m
   const spec = w.calls.created.find(s => s.provider === 'claude');
   assert.ok(spec, 'job not failed'); assert.equal(spec.model, undefined); assert.equal(spec.effort, 'low'); assert.match(spec.modelWarning, /not accepted/);
   assert.equal(report.skipped.length, 0); assert.equal(report.warnings.length, 1); assert.equal(report.warnings[0].agent, 'claude');
+});
+
+// ---- issue #109: lean job context
+test('lean prompts: AGENTS.md is never requested; reading is per job; every test command uses the dot reporter', () => {
+  const j = { pr: 7, issue: 109, head: H(1), branch: 'claude/issue-109-x', base: 'main', repository: 'o/r', inbox: '/i', checks: [] };
+  const all = { review: reviewPrompt(j), fix: fixPrompt(j), rebase: rebasePrompt(j), cifix: ciFixPrompt(j), cont: continuePrompt(j), impl: implementPrompt(j) };
+  for (const [k, p] of Object.entries(all)) {
+    assert.doesNotMatch(p, /AGENTS\.md/, `${k} must not ask for AGENTS.md`);
+    const n = (p.match(/node --test/g) || []).length;
+    assert.ok(n >= 1, `${k} names the tests`);
+    assert.equal((p.match(/node --test --test-reporter=dot "tests\/\*\*\/\*\.test\.mjs"/g) || []).length, n, `${k}: every test command uses the dot reporter`);
+    assert.match(p, /Update the canonical handover on your own branch before you stop/, `${k} keeps the handover write-through`);
+    assert.doesNotMatch(p, /run the validator and tests/, k);
+  }
+  // rebase does not read the decision register or the whole handover, but still appends to the handover
+  assert.doesNotMatch(all.rebase, /DECISIONS|decision register/);
+  assert.match(all.rebase, /append-only/);
+  assert.match(all.rebase, /only the conflicting files/);
+  // implement and continue: summary sections plus the issue's own section, never the whole handover
+  for (const k of ['cont', 'impl']) { assert.match(all[k], /docs\/DECISIONS\.md/); assert.match(all[k], /summary sections/); assert.match(all[k], /section for issue #109/); assert.match(all[k], /never the whole handover/); }
+  // review reads the decision register only; fix and ci-fix read findings/logs and the diff
+  assert.match(all.review, /Read docs\/DECISIONS\.md only; do not read the rest of the handover/);
+  assert.doesNotMatch(all.fix, /Read docs\/ai\/CURRENT_HANDOVER\.md/); assert.match(all.fix, /findings on the PR and the diff/);
+  assert.match(all.cifix, /failing logs and the diff/);
+  assert.doesNotMatch(all.review + all.fix + all.cifix, /Read AGENTS|summary sections/);
+});
+
+test('lean launch: the Claude manifest drops MCP servers (manifest only, D-012); the Codex manifest is unchanged', () => {
+  const m = id => JSON.parse(fs.readFileSync(new URL(`../supervisor/providers/${id}.json`, import.meta.url), 'utf8'));
+  assert.ok(m('claude').launch.args.includes('--strict-mcp-config'));
+  assert.deepEqual(m('codex').launch.args, []);
+  assert.ok(!JSON.stringify(m('codex')).includes('mcp'));
 });
