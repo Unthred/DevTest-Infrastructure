@@ -5,7 +5,9 @@
   "adapter_version": "0.1.0",
   "launch": {
     "command": "claude",
-    "args": [],
+    "args": [
+      "--strict-mcp-config"
+    ],
     "env_allowlist": [
       "HOME",
       "PATH",
