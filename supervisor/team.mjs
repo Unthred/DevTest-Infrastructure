@@ -342,7 +342,8 @@ export class Team {
     if (act.type === 'review') return act.interim ? 2 : act.postMerge ? 1 : agentOfBranch(this.c, prs.find(p => p.number === act.pr)?.headRefName) === agent ? 2 : 0;
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
-    return (act.type === 'implement' ? 10 : 0) + (act.reassignedFrom ? 1 : 0);
+    // An owner at a usage limit ranks last, so another agent can take its ready issue (#104).
+    return (act.type === 'implement' ? 10 : 0) + (act.reassignedFrom ? 1 : 0) + (act.type === 'implement' && !act.reassignedFrom && this.ownerOut(agent) ? 20 : 0);
   }
 
   // The issue a draft PR continues for `agent`, or null when the draft is not continuable (not mine, not an owned issue, issue closed,
