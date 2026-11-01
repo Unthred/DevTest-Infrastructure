@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
+import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, failingChecks, loneCancelled, latestChecks, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
 import { createJob, drive, readJob, stateRoot, validateSpec, WorktreeUnusable, gitCommonDir } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
@@ -30,7 +30,7 @@ function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = 
   const gh = {
     pulls, issues,
     listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues,
-    comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]),
+    rerunRun: async r => { (calls.reruns ||= []).push(r); }, comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]),
     findIssueByMarker: async marker => gh.issues.find(i => i.body?.includes(marker))?.number || null,
     createIssue: async (title, body) => { const number = 100 + gh.issues.length; gh.issues.push(issue(number, 'OPEN', body)); calls.issues.push([number, title, body]); return number; },
     merge: async (n, head) => { const p = gh.pulls.find(x => x.number === n); if (!p || p.headRefOid !== head) throw new Error('head moved'); calls.merges.push([n, head]); },
@@ -1033,4 +1033,93 @@ test('hold (issue #134): a pending upgrade starts no job, reports the hold, and 
   assert.match(r.held.reason, /upgrade to 7777777 pending/); assert.ok(r.held.actions > 0);
   const free = mk(); const r2 = await free.team.tick();
   assert.equal(r2.held, undefined); assert.ok(free.calls.created.length > 0);
+});
+
+test('issue #149 CI workflow: a description edit cannot share a concurrency group with push runs', () => {
+  const y = fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  assert.match(y, /group:.*github\.event\.action == 'edited' && 'edit' \|\| 'code'/);
+});
+
+const done = (conclusion, name, startedAt, extra = {}) => ({ status: 'COMPLETED', conclusion, name, workflowName: 'CI', startedAt, ...extra });
+const T0 = '2026-11-01T10:00:00Z', T1 = '2026-11-01T10:00:20Z';
+
+test('issue #149 checks are judged by their latest run: superseded cancel is green, lone cancel is pending, failure is red', () => {
+  const cancelled = done('CANCELLED', 'test', T0), ok = done('SUCCESS', 'test', T1);
+  assert.equal(checksState([cancelled, ok]), 'green'); assert.equal(checksState([ok, cancelled]), 'green');   // either list order
+  assert.deepEqual(loneCancelled([cancelled, ok]), []);
+  assert.equal(checksState([cancelled]), 'pending'); assert.equal(loneCancelled([cancelled]).length, 1);
+  assert.deepEqual(failingChecks([cancelled]), []);
+  assert.equal(checksState([done('FAILURE', 'test', T1)]), 'red'); assert.deepEqual(failingChecks([done('FAILURE', 'test', T1)]), ['test']);
+  assert.equal(checksState([cancelled, { status: 'IN_PROGRESS', name: 'test', workflowName: 'CI', startedAt: T1 }]), 'pending');
+  assert.equal(checksState([cancelled, done('FAILURE', 'test', T1)]), 'red');
+  // a later success replaces an earlier failure of the same check (a manual rerun); another check's failure still counts
+  assert.equal(checksState([done('FAILURE', 'test', T0), done('SUCCESS', 'test', T1)]), 'green');
+  assert.equal(checksState([cancelled, ok, done('FAILURE', 'other', T1)]), 'red');
+  assert.equal(latestChecks([cancelled, ok]).length, 1);
+});
+
+test('issue #149 plan(): a superseded cancelled run does not block the review, a lone cancelled run does', async t => {
+  const rollup = [done('CANCELLED', 'test', T0), done('SUCCESS', 'test', T1)];
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: rollup })], issues: [issue(23), issue(5)] });
+  assert.equal((await w.team.plan()).find(a => a.agent === 'claude').type, 'review');
+  const l = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('CANCELLED', 'test', T0)] })], issues: [issue(23), issue(5)] });
+  assert.ok(!(await l.team.plan()).some(a => a.type === 'review' || a.type === 'cifix'));
+});
+
+test('issue #149 tick(): a lone cancelled run is rerun once, then labelled needs-homeowner with one notice', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const lone = [done('CANCELLED', 'test', T0, { detailsUrl: 'https://github.com/o/r/actions/runs/777/job/1' })];
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: lone })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.tick(); assert.equal(w.calls.reruns, undefined);   // inside the wait
+  clock.t += 5 * 60000; await w.team.tick(); assert.deepEqual(w.calls.reruns, ['777']);
+  clock.t += 60000; await w.team.tick(); assert.deepEqual(w.calls.reruns, ['777']); assert.equal(w.calls.labels.length, 0);
+  clock.t += 5 * 60000; await w.team.tick();
+  assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']]);
+  assert.equal(w.calls.comments.filter(([, b]) => /cancelled/.test(b)).length, 1);
+  clock.t += 20 * 60000; await w.team.tick();
+  assert.deepEqual(w.calls.reruns, ['777']); assert.equal(w.calls.labels.length, 1);   // no repeats
+  assert.equal(w.calls.comments.filter(([, b]) => /cancelled/.test(b)).length, 1);
+});
+
+test('issue #149 tick(): a rerun that goes in progress and then ends cancelled again is not rerun a second time; it becomes Needs you', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const url = { detailsUrl: 'https://github.com/o/r/actions/runs/777/job/1' };
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('CANCELLED', 'test', T0, url)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  const tickFor = async minutes => { for (let i = 0; i < minutes; i++) { clock.t += 60000; await w.team.tick(); } };
+  await w.team.tick(); await tickFor(5); assert.deepEqual(w.calls.reruns, ['777']);
+  w.gh.pulls[0].statusCheckRollup = [{ status: 'IN_PROGRESS', name: 'test', workflowName: 'CI', startedAt: T1, ...url }];
+  await tickFor(3); assert.ok(w.team.s.cancelWatch[`10:${H(1)}`]?.rerunAt, 'the watch survives the rerun being in progress');
+  w.gh.pulls[0].statusCheckRollup = [done('CANCELLED', 'test', T1, url)];
+  await tickFor(60);
+  assert.deepEqual(w.calls.reruns, ['777']); assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']]);
+  assert.equal(w.calls.comments.filter(([, b]) => /cancelled/.test(b)).length, 1);
+});
+
+test('issue #149 watchCancelled: a rerun that goes green clears the watch, and a moved head or closed PR prunes it', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const url = { detailsUrl: 'https://github.com/o/r/actions/runs/9/job/1' };
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('CANCELLED', 'test', T0, url)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.watchCancelled({}); clock.t += 5 * 60000; await w.team.watchCancelled({});
+  assert.deepEqual(w.calls.reruns, ['9']);
+  w.gh.pulls[0].statusCheckRollup = [{ status: 'QUEUED', name: 'test', workflowName: 'CI', ...url }];
+  await w.team.watchCancelled({}); assert.ok(w.team.s.cancelWatch[`10:${H(1)}`]);
+  w.gh.pulls[0].statusCheckRollup = [done('SUCCESS', 'test', T1, url)];
+  await w.team.watchCancelled({}); assert.equal(w.team.s.cancelWatch[`10:${H(1)}`], undefined);
+  w.team.s.cancelWatch[`10:${H(1)}`] = { since: 0, rerunAt: 1, noticed: 2 }; w.team.s.cancelWatch[`99:${H(3)}`] = { since: 0, noticed: 1 };
+  w.gh.pulls[0].headRefOid = H(2);
+  await w.team.watchCancelled({}); assert.deepEqual(w.team.s.cancelWatch, {});
+});
+
+test('issue #149 watchCancelled: a cancelled run that gets superseded before the wait ends is forgotten, and a throwing rerun is not retried', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const lone = [done('CANCELLED', 'test', T0, { detailsUrl: 'https://github.com/o/r/actions/runs/5/job/1' })];
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: lone })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.tick(); assert.ok(w.team.s.cancelWatch[`10:${H(1)}`]);
+  w.gh.pulls[0].statusCheckRollup = [...lone, done('SUCCESS', 'test', T1)];
+  clock.t += 6 * 60000; await w.team.tick();
+  assert.equal(w.team.s.cancelWatch[`10:${H(1)}`], undefined); assert.equal(w.calls.reruns, undefined);
+  const f = world(t, { pulls: [pr(11, 'codex/issue-3-x', H(2), { statusCheckRollup: lone })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  let n = 0; f.gh.rerunRun = async () => { n++; throw new Error('403'); };
+  await f.team.tick(); clock.t += 6 * 60000; await f.team.tick(); await f.team.tick();
+  assert.equal(n, 1);
 });

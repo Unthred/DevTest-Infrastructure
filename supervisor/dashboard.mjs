@@ -2,7 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import path from 'node:path';
-import { Team, ROLES, agentOfBranch, checksState, prerequisites, roleOfType } from './team.mjs';
+import { Team, ROLES, agentOfBranch, checksState, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { severityOf } from './dashui/logic.mjs';
@@ -211,6 +211,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       add(`rebase-lost-${id.slice(0, 8)}`, `Rebase job ${id.slice(0, 8)} dropped ${tj.rebase.lost.length} commit(s) from PR #${tj.pr}: ${tj.rebase.lost.map(c => `${sha7(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
   }
   for (const pr of cache?.pulls || []) if (!pr.isDraft && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on PR #${pr.number}: ${pr.title}`, { kind: 'pull', n: pr.number });
+  // issue #149: a cancelled check that was rerun once and is still cancelled
+  for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on PR #${pr.number}: ${pr.title}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
   const recent = snapshots.filter(s => now - s.at <= 30 * 60000).sort((a, b) => a.at - b.at);
   for (const [agent, s] of Object.entries(states)) {
