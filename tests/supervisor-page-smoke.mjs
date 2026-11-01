@@ -51,7 +51,7 @@ async function fixtureSite(dir) {
     const repo = path.join(root, 'repo');
     fs.mkdirSync(path.join(repo, '.git', 'refs', 'heads'), { recursive: true }); fs.mkdirSync(path.join(repo, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
     fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n'); fs.writeFileSync(path.join(repo, '.git', 'refs', 'heads', 'main'), `${H(1)}\n`); fs.writeFileSync(path.join(repo, '.git', 'refs', 'remotes', 'origin', 'main'), `${H(2)}\n`);
-    const cfg = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: repo, worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+    const cfg = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: repo, worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
       agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [72] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [3] } } };
     const cache = { tick: { at: NOW - 2 * MIN, status: 'ok', error: null, lastOkAt: NOW - 2 * MIN }, fetchedAt: NOW - 2 * MIN, delivered: [], issues: [{ number: 72, title: 'Dashboard: Supervisor health area and copy buttons', state: 'OPEN', labels: [], prerequisites: [] }],
       pulls: [{ number: 41, title: 'OpenBao credentials', headRefName: 'claude/issue-7-07-openbao-credentials', headRefOid: H(4), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }] };

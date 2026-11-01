@@ -84,7 +84,7 @@ test('git refs: loose and packed refs, symbolic HEAD, linked worktree; hostile r
 // ---- the five cards
 const config = (repo = '/nonexistent/repo') => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: repo, worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
-  limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [30] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [3] } }
 });
 function stateRoot(t, { log, upgrades, selfUpgrade, latch, installed, installedAt, leases = [] } = {}) {

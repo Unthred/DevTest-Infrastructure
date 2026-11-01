@@ -16,7 +16,7 @@ const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
 const red = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
 const config = () => validateTeamConfig({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
-  limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [30, 5] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [2, 3] } } });
 const pr = (n, branch, head, extra = {}) => ({ number: n, title: `pr ${n}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green, ...extra });
 const issue = (n, state = 'OPEN', body = '', labels = []) => ({ number: n, title: `issue ${n}`, state, body, labels });
@@ -199,4 +199,17 @@ test('issue #83 upgrade accepts both launcher forms that exec /root/bin/ai-super
   assert.equal(probe('    --supervisor) shift; exec /root/bin/ai-supervisor "$@" ;;').status, 0);
   assert.equal(probe('    --supervisor) shift; exec "${AI_AGENT_SUPERVISOR:-/root/bin/ai-supervisor}" "$@" ;;').status, 0);
   const bad = probe('    --supervisor) shift; exec /tmp/evil "$@" ;;'); assert.equal(bad.status, 2); assert.match(bad.stderr, /launcher integration missing/);
+});
+
+test('issue #148 role slots: the implementer and reviewer slots are shown with agent, model and work; an empty slot is idle', async () => {
+  const idle = await status();
+  assert.deepEqual(idle.slots.map(x => x.text), ['Implementer: idle', 'Reviewer: idle']);
+  assert.match(text(idle), /=== Role slots\n  Implementer: idle\n  Reviewer: idle/);
+  const a = 'a'.repeat(32), b = 'b'.repeat(32);
+  const s = await status({ jobs: [job({ id: a }), job({ id: b, kind: 'review', issue: undefined, pr: 146 })],
+    state: { jobs: { [a]: { kind: 'implement', agent: 'claude', model: 'sonnet', issue: 104 }, [b]: { kind: 'review', agent: 'claude', model: 'opus', pr: 146 } } } });
+  assert.deepEqual(s.slots.map(x => x.text), ['Implementer: claude · sonnet · #104 · implementing', 'Reviewer: claude · opus · PR #146 · reviewing']);
+  // negative: a finished job holds no slot
+  const done = await status({ jobs: [job({ id: a, status: 'completed' })], state: { jobs: { [a]: { kind: 'implement', agent: 'claude', model: 'sonnet', issue: 104 } } } });
+  assert.equal(done.slots[0].text, 'Implementer: idle');
 });

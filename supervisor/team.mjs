@@ -17,7 +17,8 @@ export function validateTeamConfig(c) {
   if (c?.schema_version !== 1 || !/^[\w.-]+\/[\w.-]+$/.test(c.repository || '') || !path.isAbsolute(c.repo_path || '') || !path.isAbsolute(c.worktree_base || ''))
     throw new SupervisorError('invalid team config: schema, repository or paths');
   const L = c.limits || {};
-  for (const k of ['per_agent', 'overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
+  for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
+  normalizeRoleLimits(c);
   const agents = Object.entries(c.agents || {});
   if (agents.length < 2) throw new SupervisorError('team needs at least two agents');
   const seen = new Set();
@@ -32,6 +33,23 @@ export function validateTeamConfig(c) {
   if (c.access?.mode === 'full' && c.access.decision !== 'D-020') throw new SupervisorError('full access must cite D-020');
   validateInterimConfig(c.interim_review);
   return c;
+}
+
+// Concurrency is counted per role (issue #148): limits.roles = { implementer, reviewer }. The old limits.per_agent is accepted for one
+// release: it maps to both role slots and leaves a deprecation warning (c.deprecations) that the tick reports. roles wins when both are set.
+const TYPE_ORDER = ['merge', 'rebase', 'cifix', 'fix', 'review', 'continue', 'implement'];   // the per-agent priority of choose()
+export const ROLES = ['implementer', 'reviewer'];
+export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer');   // implement, continue, fix, cifix, rebase -> implementer; review (incl. interim) -> reviewer
+function normalizeRoleLimits(c) {
+  const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1 && v <= 8;
+  c.deprecations = [];
+  if ('per_agent' in L) {
+    if (!ok(L.per_agent)) throw new SupervisorError('invalid team limit: per_agent');
+    c.deprecations.push(L.roles ? 'limits.per_agent is deprecated and ignored because limits.roles is set; remove it' : 'limits.per_agent is deprecated: it is mapped to limits.roles { implementer, reviewer }; replace it with limits.roles');
+  }
+  if (L.roles === undefined && 'per_agent' in L) L.roles = { implementer: L.per_agent, reviewer: L.per_agent };
+  const R = L.roles;
+  if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]))) throw new SupervisorError('invalid team limit: roles');
 }
 
 // Interim review (D-021, issue #81): { enabled, decision: 'D-021', weekly_at }. It also needs D-021 homeowner-approved on main.
@@ -65,7 +83,12 @@ export function applyLocalOverride(shipped, local) {
   }
   if ('models' in local) { validateModelsConfig(local.models, Object.keys(out.agents)); out.models = mergeModelsConfig(out.models, local.models); }
   if ('budget' in local) { validateBudgetConfig(local.budget, Object.keys(out.agents)); out.budget = { ...(out.budget || {}), ...local.budget }; }
-  if (local.limits) { if (typeof local.limits !== 'object') throw new SupervisorError('invalid team.local.json: limits'); out.limits = { ...out.limits, ...local.limits }; }
+  if (local.limits) {
+    if (typeof local.limits !== 'object' || Array.isArray(local.limits)) throw new SupervisorError('invalid team.local.json: limits');
+    out.limits = { ...out.limits, ...local.limits };
+    if ('per_agent' in local.limits && !('roles' in local.limits)) delete out.limits.roles;   // a deprecated local per_agent still takes effect over the shipped roles
+    else if ('roles' in local.limits) { delete out.limits.per_agent; out.limits.roles = { ...shipped.limits?.roles, ...local.limits.roles }; }
+  }
   if (local.depends_on_overrides) out.depends_on_overrides = { ...out.depends_on_overrides, ...local.depends_on_overrides };
   for (const [name, o] of Object.entries(local.agents || {})) {
     if (!out.agents[name]) throw new SupervisorError(`invalid team.local.json: unknown agent ${name}`);
@@ -275,10 +298,13 @@ export class Team {
     }
     this.modes = this.budgets(); this.held = {};
     const active = await this.jobs.listActive();
-    const perAgent = Object.fromEntries(this.agents().map(([n]) => [n, 0]));
-    for (const j of active) { const a = this.agentOfProvider(j.provider); if (a) perAgent[a]++; }
+    // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
+    // record of (started by hand) is counted against the implementer slot, the conservative reading.
+    const used = Object.fromEntries(ROLES.map(r => [r, 0]));
+    for (const j of active) used[roleOfType(this.s.jobs[j.id]?.kind)]++;
     let total = active.length;
     const L = this.c.limits;
+    this.taken = new Set();
     // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
@@ -289,13 +315,32 @@ export class Team {
         break;
       }
     }
-    // 2. dispatch per agent
-    for (const [agent, a] of this.agents()) {
-      if (perAgent[agent] >= L.per_agent || total >= L.overall) continue;
-      const act = this.choose(agent, a, prs, issueByNo);
-      if (act) { actions.push({ agent, ...act }); perAgent[agent]++; total++; if (act.type === 'implement') this.picked.add(String(act.issue)); }
+    // 2. dispatch per role slot: any agent may fill a free slot, and one agent may fill both. Where several agents could, a review goes
+    // to the opposite agent of the PR author before an interim or post-merge one, and an implement job to the issue's owner before
+    // an agent taking it over (#104).
+    for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
+      while (used[role] < L.roles[role] && total < L.overall) {
+        const cands = [];
+        for (const [agent, a] of this.agents()) {
+          const act = this.choose(agent, a, prs, issueByNo, role);
+          if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) });
+        }
+        if (!cands.length) break;
+        const best = cands.sort((x, y) => x.rank - y.rank)[0];   // stable: ties keep the team.json agent order
+        actions.push({ agent: best.agent, ...best.act }); used[role]++; total++;
+        this.taken.add(`${best.act.type}:${best.act.key}`);
+        if (best.act.type === 'review') this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`);
+        if (best.act.issue) this.taken.add(`issue:${best.act.issue}`);
+      }
     }
-    return actions;
+    // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
+    const order = n => this.agents().findIndex(([x]) => x === n);
+    return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -1 : order(x.agent)) - (y.type === 'merge' ? -1 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
+  }
+  // Lower is preferred when several agents could fill the same slot.
+  slotRank(agent, act, prs) {
+    if (act.type === 'review') return act.interim ? 2 : act.postMerge ? 1 : agentOfBranch(this.c, prs.find(p => p.number === act.pr)?.headRefName) === agent ? 2 : 0;
+    return act.reassignedFrom ? 1 : 0;
   }
 
   // The issue a draft PR continues for `agent`, or null when the draft is not continuable (not mine, not an owned issue, issue closed,
@@ -333,9 +378,10 @@ export class Team {
     return why;
   }
 
-  choose(agent, a, prs, issueByNo) {
+  choose(agent, a, prs, issueByNo, role = null) {
     const L = this.c.limits;
-    const busy = (kind, key) => (kind === 'implement' && this.picked.has(key)) || Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key);
+    const impl = role !== 'reviewer', rev = role !== 'implementer';   // role null (a caller outside plan()) considers both
+    const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key) || !!this.taken?.has(`${kind}:${key}`);
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
     // chosen instead. The reason is kept for the dashboard and `team status`.
@@ -343,7 +389,7 @@ export class Team {
     const allow = type => { const r = admits(B, type, owed); if (!r.ok) (this.held[agent] ||= {})[type] ||= r.why; return r.ok; };
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
-    for (const pr of prs) {
+    for (const pr of impl ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       // Issue #79: rebase only on a conflict, or right before merge (a PR that already has its PASS and green CI, and that GitHub
@@ -355,7 +401,7 @@ export class Team {
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
-    for (const pr of prs) {
+    for (const pr of impl ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || checksState(pr.statusCheckRollup) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       if (busy('cifix', key) || this.fixCount(pr.number) >= L.max_fix_attempts) continue;
@@ -363,7 +409,7 @@ export class Team {
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks: failingChecks(pr.statusCheckRollup), key };
     }
     // fix: my PR with a CHANGES verdict on its current head
-    for (const pr of prs) {
+    for (const pr of impl ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key)) continue;
@@ -372,21 +418,21 @@ export class Team {
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key };
     }
     // review: the other agent's PR, green CI, mergeable, no verdict from me on this exact head
-    for (const pr of prs) {
+    for (const pr of rev ? prs : []) {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || checksState(pr.statusCheckRollup) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       // D-021: its own PR only as an interim reviewer, while every other agent is out of allowance.
       const interim = author === agent ? this.interimReason(author) : null;
       if (author === agent && !interim) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
-      if (this.s.verdicts[key]?.reviewer === agent || busy('review', `${key}:${agent}`)) continue;
+      if (this.s.verdicts[key]?.reviewer === agent || busy('review', `${key}:${agent}`) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
       if (this.reviewerHold(agent)) break;
       if (!allow('review')) break;
       return { type: 'review', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key: `${key}:${agent}`, ...(interim ? { interim } : {}) };
     }
     // post-merge review (D-021): a PR merged on an interim PASS, once this agent (not its author) has allowance again.
-    for (const [n, pm] of Object.entries(this.s.postMerge)) {
+    for (const [n, pm] of Object.entries(rev ? this.s.postMerge : {})) {
       if (pm.done || pm.author === agent || !SHA.test(pm.head || '') || this.limitedOf(agent).out) continue;
       const key = `${n}:${pm.head}:${agent}:post`;
       if (busy('review', key) || (this.s.reviewAttempts[key] || 0) >= L.max_review_attempts) continue;
@@ -397,17 +443,18 @@ export class Team {
     // continue: my own DRAFT PR for an owned, open, unblocked issue (a draft is never reviewed or merged, so without this it sits idle forever).
     // Bounded per PR by max_fix_attempts, like fix rounds; the count is across heads. A draft stays with its branch's author
     // (never reassigned): another agent continuing it would later review its own work.
-    for (const pr of prs) {
+    for (const pr of impl ? prs : []) {
       const n = this.draftIssue(agent, a, pr, issueByNo);
-      if (n == null || !SHA.test(pr.headRefOid) || busy('continue', String(pr.number)) || busy('implement', String(n))) continue;
+      if (n == null || !SHA.test(pr.headRefOid) || busy('continue', String(pr.number)) || busy('implement', String(n)) || this.taken?.has(`issue:${n}`)) continue;
       if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts) continue;
       if (!allow('continue')) break;
       return { type: 'continue', pr: pr.number, issue: n, head: pr.headRefOid, branch: pr.headRefName, key: String(pr.number) };
     }
     // implement: next owned open issue whose prerequisites are closed and that has no work in flight
+    if (!impl) return null;
     for (const n of a.issues) {
       const issue = this.implementable(n, prs, issueByNo, busy);
-      if (!issue) continue;
+      if (!issue || this.taken?.has(`issue:${n}`)) continue;
       if (!allow('implement')) return null;
       return { type: 'implement', issue: n, title: issue.title, key: String(n) };
     }
@@ -422,7 +469,7 @@ export class Team {
       if (other === agent || !ob) continue;
       for (const n of o.issues) {
         const issue = this.implementable(n, prs, issueByNo, busy);
-        if (!issue) continue;
+        if (!issue || this.taken?.has(`issue:${n}`)) continue;
         if (!allow('implement')) return null;
         return { type: 'implement', issue: n, title: issue.title, key: String(n), reassignedFrom: other, reassignReason: `reassigned for allowance: ${other} ${ob.why}` };
       }
@@ -443,6 +490,7 @@ export class Team {
     if (!dryRun && this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
       throw new SupervisorError(`${this.c.access.decision} is not homeowner-approved in the decision register; refusing to launch jobs`);
     const report = { ingested: [], notified: [], actions: [], skipped: [] };
+    for (const w of this.c.deprecations || []) (report.warnings ||= []).push({ warning: w });
     // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).
     const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
     if (!dryRun) {

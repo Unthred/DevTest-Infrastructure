@@ -136,7 +136,7 @@ test('table: empty data renders a designed empty state, values are escaped, phon
 // ---- pages through the real handler
 const config = {
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
-  limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [30, 5] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [2, 3] } }
 };
 // A clone-like fixture with docs/DECISIONS.md on origin/main, so the dashboard can read the register (issue #130). Never a linked worktree.

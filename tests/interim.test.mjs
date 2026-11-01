@@ -17,7 +17,7 @@ const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-
 const config = (over = {}) => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p',
   access: { mode: 'full', decision: 'D-020' }, interim_review: { enabled: true, decision: 'D-021', weekly_at: 0.95 },
-  limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   models: { agents: { claude: { implement: { model: 'opus', effort: 'high' }, review: { model: 'sonnet', effort: 'medium' }, 'interim-review': { model: 'haiku', effort: 'medium' } } } },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } },
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } }, ...over });

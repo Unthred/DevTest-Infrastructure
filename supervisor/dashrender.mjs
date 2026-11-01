@@ -203,7 +203,8 @@ const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="car
 // ---- the four panels (Overview top) and the status bar
 function nowPanel(view) {
   const now = view.generatedAt;
-  return `<ul class="panel-list">${view.agents.map(a => {
+  const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${esc(x.text)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}</div>`;
+  return `${slots}<ul class="panel-list">${view.agents.map(a => {
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${esc(j.kind)} ${jobRef({ kind: j.kind, ref: j.ref })} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}`
       : `<span>Idle: ${a.idleReason ? esc(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
