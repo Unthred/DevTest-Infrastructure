@@ -54,6 +54,11 @@ test('a job record this version cannot understand shows unknown, never idle; an 
   assert.deepEqual(v.agents.map(a => a.state), ['unknown', 'unknown']);
   assert.match(renderPage(v), /Unknown/); assert.doesNotMatch(renderPage(v), /badge[^>]*>Idle/);
   assert.equal(v.health?.state ?? 'unknown', 'unknown');
+  const html = renderPage(v);
+  assert.match(html, /\? \/ 2/, 'headline count is unknown, not 0 / 2');
+  assert.doesNotMatch(html, /0 \/ 2/);
+  assert.match(html, /running count is unknown/, 'warnings panel flags it');
+  assert.doesNotMatch(html, /No stalls, stale data or version drift/);
 });
 
 test('positive control: a known running job still shows running, and known records show idle when there are none', () => {
