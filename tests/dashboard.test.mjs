@@ -109,7 +109,7 @@ test('idle agent with work: flagged only when the same plan has stood, idle, for
   const cache = { tick: okTick(), pulls: [], issues: [issue(30), issue(5, 'OPEN', 'Prerequisites: #77'), issue(77)] };
   const snap = at => ({ at, status: 'ok', plan: [{ agent: 'claude', type: 'implement', ref: 30 }], agents: { claude: 'idle', codex: 'idle' } });
   let v = await view(t, { cache, snapshots: [snap(NOW - 600000), snap(NOW - 300000), snap(NOW - 10000)] });
-  assert.deepEqual(v.plan.map(a => [a.agent, a.type, a.issue]), [['claude', 'implement', 30], ['codex', 'implement', 2]].filter(x => cache.issues.some(i => i.number === x[2])).map(x => x));
+  assert.deepEqual(v.plan.map(a => [a.agent, a.type, a.issue]), [['claude', 'implement', 30], ['codex', 'implement', 77]]);   // 77 has no owner (issue #104): offered to codex, ahead of the issue it unblocks
   assert.ok(ids(v).includes('idle-claude'));
   v = await view(t, { cache, snapshots: [snap(NOW - 60000)] });                 // just planned: the next tick will start it
   assert.ok(!ids(v).includes('idle-claude'));
@@ -390,4 +390,9 @@ test('dashboard serve applies team.local.json: the page reports the effective en
     let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve(JSON.parse(b)));
   }).on('error', reject));
   assert.equal(view.teamEnabled, true);
+});
+test('#104 the dashboard flags an unowned ready issue', async t => {
+  const v = await view(t, { cache: { tick: okTick(), pulls: [], issues: [issue(77)] } });
+  assert.ok(ids(v).includes('unowned'));
+  assert.match(v.attention.find(a => a.id === 'unowned').text, /Issue #77 has no owner/);
 });

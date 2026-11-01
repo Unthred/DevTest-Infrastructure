@@ -343,7 +343,7 @@ test('dashboard and team status show the mode, the weekly projection and why wor
   assert.equal(view.budget.claude.mode, 'normal');
   const p = view.plan.find(a => a.agent === 'claude');
   assert.deepEqual([p.type, p.issue, p.reassignedFrom], ['implement', 2, 'codex']);
-  assert.match(view.queues.codex.find(q => q.type === 'issue' && q.ref === 2).reason, /reassigned for allowance to claude/);
+  assert.match(view.queues.codex.find(q => q.type === 'issue' && q.ref === 2).reason, /taken from codex by claude: codex has no allowance until/);
   assert.match(view.queues.codex.find(q => q.type === 'issue' && q.ref === 3).reason, /waits: codex is reviews only/);
   assert.match(view.agents.find(a => a.name === 'codex').idleReason.text, /^reviews only: weekly 92%/);
   assert.ok(view.panels.next.find(n => n.agent === 'claude').why.startsWith('reassigned for allowance'));
@@ -357,4 +357,63 @@ test('dashboard and team status show the mode, the weekly projection and why wor
   const out = renderStatus(s);
   assert.match(out, /=== Allowance\n {2}claude: normal — weekly 40%, projected 80% at reset[^\n]*; weekly resets Wed 07:18\n {2}codex: reviews only until Wed 07:18 — weekly 92%/);
   assert.match(out, /claude → implement issue #2 \(reassigned from codex for allowance\)/);
+});
+
+// ---- Issue #104: ownership is a preference, not a lock
+
+test('#104 an owner at a usage limit (mode normal, no numeric window) loses its ready issue to the other agent; ownership stays', async t => {
+  const w = world(t, { issues: [issue(2), issue(3), issue(23, 'CLOSED'), issue(5, 'CLOSED')], allowance: { claude: claudeAl(0.4) } });
+  w.team.limitedOf = agent => (agent === 'codex' ? { out: true, reason: 'codex weekly use 97%', until: RESET } : { out: false });
+  const plan = await w.team.plan();
+  const cl = plan.find(a => a.agent === 'claude');
+  assert.deepEqual([cl.type, cl.issue, cl.reassignedFrom], ['implement', 2, 'codex']);
+  assert.match(cl.reassignReason, /codex is out of allowance/);
+  assert.deepEqual(w.team.c.agents.codex.issues, [2, 3]);
+  // owner has allowance again and nothing started: nobody takes it from it
+  w.team.limitedOf = () => ({ out: false });
+  assert.ok(!(await w.team.plan()).some(a => a.agent === 'claude' && a.reassignedFrom));
+});
+
+test('#104 a taker in reviews-only mode takes nothing, owned elsewhere or unowned', async t => {
+  const w = world(t, { issues: [issue(2), issue(3), issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(50)], allowance: { codex: codexAl(0.92), claude: claudeAl(0.9) } });
+  assert.deepEqual(await w.team.plan(), []);
+});
+
+test('#104 in-flight, started and draft issues are never taken', async t => {
+  const base = { allowance: { codex: codexAl(0.92), claude: claudeAl(0.4) } };
+  const draft = world(t, { ...base, issues: [issue(2), issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(3, 'CLOSED')], pulls: [pr(30, 'codex/issue-2-x', H(1), { isDraft: true })] });
+  assert.ok(!(await draft.team.plan()).some(a => a.agent === 'claude'), 'draft stays with its author');
+  const started = world(t, { ...base, issues: [issue(2), issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(3, 'CLOSED')] });
+  started.team.s.implemented[2] = true;
+  assert.ok(!(await started.team.plan()).some(a => a.agent === 'claude'), 'started work is not taken');
+  const flight = world(t, { ...base, issues: [issue(2), issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(3, 'CLOSED')] });
+  flight.team.s.jobs.j = { kind: 'implement', key: '2', agent: 'codex', issue: 2, ingested: false };
+  assert.ok(!(await flight.team.plan()).some(a => a.agent === 'claude'), 'an in-flight job blocks it');
+  const prereq = world(t, { ...base, issues: [issue(2, 'OPEN', 'Prerequisites: #3'), issue(3), issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  const p = await prereq.team.plan();
+  assert.deepEqual(p.filter(a => a.agent === 'claude').map(a => a.issue), [3], 'the prerequisite (also codex-owned) is taken, not its dependant');
+});
+
+test('#104 an unowned ready issue is picked up, the one that unblocks others first; labels and open prerequisites exclude', async t => {
+  const w = world(t, { issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), issue(40), issue(41), issue(42, 'OPEN', 'Prerequisites: #41'), issue(43, 'OPEN', '', ['needs-homeowner']), issue(44, 'OPEN', 'Prerequisites: #99')],
+    allowance: { codex: codexAl(0.3), claude: claudeAl(0.3) } });
+  const plan = await w.team.plan();
+  assert.ok(plan.length >= 1);
+  for (const a of plan) { assert.equal(a.type, 'implement'); assert.equal(a.unowned, true); }
+  assert.equal(plan.length, 2, 'one per agent');
+  assert.deepEqual(plan.map(a => a.issue).sort(), [40, 41].sort());
+  assert.equal(plan.find(a => a.issue === 41).unowned, true);
+  // 41 blocks 42, so it is chosen first; it is the first agent in config order
+  assert.equal(plan[0].issue, 41);
+  await w.team.tick();
+  const spec = w.calls.created.find(s => s.postcondition.branch.includes('issue-41'));
+  assert.match(spec.prompt, /has no owner/);
+  assert.ok(!w.calls.created.some(s => /issue-4[234]-/.test(s.postcondition.branch)));
+});
+
+test('#104 an unowned issue with a PR is not offered again, and its draft is continued by the agent that took it', async t => {
+  const w = world(t, { issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), issue(40)], pulls: [pr(60, 'claude/issue-40-x', H(2), { isDraft: true })], allowance: { codex: codexAl(0.3), claude: claudeAl(0.3) } });
+  w.team.s.jobs.x = { kind: 'implement', agent: 'claude', issue: 40, unowned: true, ingested: true };
+  const plan = await w.team.plan();
+  assert.deepEqual(plan.map(a => [a.agent, a.type, a.issue]), [['claude', 'continue', 40]]);
 });

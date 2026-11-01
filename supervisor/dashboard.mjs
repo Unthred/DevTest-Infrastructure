@@ -135,7 +135,7 @@ function reasons(team, cache, jobs, plan, states) {
     else if (hasPr) reason = 'PR open';
     else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; PR #${prOf.number} open` : ''}`;
     else if (S.implemented?.[n]) reason = 'started earlier; no PR yet';
-    else if (taker) reason = `next: reassigned for allowance to ${taker.agent} (${agent} is ${MODE_LABEL[mode?.mode] || 'low'})`;
+    else if (taker) reason = `next: taken from ${agent} by ${taker.agent}: ${agent} has no allowance${untilText(team.ownerOut(agent)?.until, team)} (${taker.agent} takes it; ${agent} keeps ownership)`;
     else if (planned.has(`${agent}:implement:${n}`)) reason = 'next: implement';
     else if (mode && mode.mode !== 'normal') reason = `waits: ${agent} is ${MODE_LABEL[mode.mode]} (${mode.reason}); no agent with headroom can take it`;
     else if (team.held?.[agent]?.implement) reason = `waits: ${team.held[agent].implement}`;
@@ -339,6 +339,7 @@ export function budgetView(team) {
   return out;
 }
 
+const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.DateTimeFormat('en-GB', { timeZone: team.timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(until)).replace(',', '')}` : '');
 export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: interim reviews (D-021) are not planned here, but the real tick would refuse to run.';
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false }) {
   const states = agentStates(config, jobs, now);
@@ -357,6 +358,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
+    for (const i of team.unownedReady(c.pulls || [], new Map((c.issues || []).map(x => [x.number, x])), () => false)) attention.push({ id: 'unowned', text: `Issue #${i.number} has no owner${plan.some(a => a.issue === i.number && a.unowned) ? ' (next: offered to an agent with allowance)' : ''}.`, ref: i.number, severity: 'warning' });
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
     const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });
