@@ -15,6 +15,8 @@ const SHA = /^[0-9a-f]{40}$/;
 export const QUIET_MAX_WAIT_MS = 30 * 60 * 1000;
 export const MIN_UPGRADE_INTERVAL_MS = 60 * 60 * 1000;
 export const VERIFY_MAX_WAIT_MS = 60 * 60 * 1000;
+// An environmental pre-check failure (clone, fetch or checkout) is retried after this; only a failed check latches a commit (#69).
+export const ENV_RETRY_MS = 60 * 60 * 1000;
 // A change to any of these cannot be deployed by the upgrader it modifies: the homeowner deploys it by hand.
 export const UPGRADER_PATHS = ['tools/upgrade-supervisor.sh', 'tools/rollback-supervisor.sh', 'supervisor/upgrade.mjs'];
 const short = sha => String(sha).slice(0, 7);
@@ -82,11 +84,13 @@ export class SelfUpgrade {
     const now = this.clock.now();
     this.s.waitingSince ??= now;
     if ((await this.d.activeJobs()) > 0 && now - this.s.waitingSince < QUIET_MAX_WAIT_MS) { this.save(); return 'busy'; }
-    if (this.s.prechecked[target]) return 'precheck-failed';       // already failed and alerted for this commit; wait for a newer main
+    // A failed check latches this commit until a newer main; an environmental failure is retried after ENV_RETRY_MS (#69).
+    const latched = this.s.prechecked[target];
+    if (latched && !(latched.environmental && now - latched.at >= ENV_RETRY_MS)) return 'precheck-failed';
     const checks = { eligibility: 'ok', quiet: (await this.d.activeJobs()) > 0 ? 'forced-after-wait' : 'idle' };
     const pre = await this.d.preChecks(target);
     if (!pre.ok) {
-      this.s.prechecked[target] = now; this.save();
+      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true } : now; this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).`);
       this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.reason });
       return 'precheck-failed';
@@ -173,9 +177,13 @@ export function realDeps({ root, config, gh, listActive, verdictFor, wrapper = '
     try {
       const checkout = path.join(dir, 'src');
       const c = run('git', ['clone', '--quiet', '--no-local', repo, checkout], { timeoutMs: 300000 });
-      if (c.status !== 0) return { ok: false, reason: `clone failed: ${tail(c)}` };
+      if (c.status !== 0) return { ok: false, environmental: true, reason: `clone failed: ${tail(c)}` };
+      // A clone of the local repository carries only its branches. The target comes from fetchMain (origin/main), which the
+      // local main may be behind, so the clone also takes the repository's remote-tracking refs (#69).
+      const f = run('git', ['-C', checkout, 'fetch', '--quiet', 'origin', '+refs/remotes/origin/*:refs/remotes/origin/*'], { timeoutMs: 300000 });
+      if (f.status !== 0) return { ok: false, environmental: true, reason: `fetch failed: ${tail(f)}` };
       const d = run('git', ['-C', checkout, 'checkout', '--quiet', '--detach', sha]);
-      if (d.status !== 0) return { ok: false, reason: `checkout failed: ${tail(d)}` };
+      if (d.status !== 0) return { ok: false, environmental: true, reason: `checkout failed: ${tail(d)}` };
       return fn(checkout);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   };
