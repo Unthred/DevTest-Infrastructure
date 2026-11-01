@@ -17,7 +17,7 @@ const NOW = T('2026-10-31T22:57:00Z');
 const limitHit = JSON.parse(fs.readFileSync(new URL('./fixtures/allowance/codex-0.166.0-exec-limit-hit.token_count.json', import.meta.url), 'utf8'));
 const notReached = JSON.parse(fs.readFileSync(new URL('./fixtures/allowance/codex-0.166-token_count.not-reached.json', import.meta.url), 'utf8'));
 const config = () => ({ schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
-  limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [72] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } } });
 const id = c => c.repeat(32);
 // Codex: last job reading 14:36 (weekly 99%), probe reading 14:41 (weekly 100%), limit hit 22:55 with an empty record.

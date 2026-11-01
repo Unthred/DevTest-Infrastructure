@@ -18,7 +18,7 @@ const RESET = T('2026-11-04T07:18:00Z');
 const codexAl = (weekly, at) => ({ provider: 'codex', status: 'allowed', observedAt: at,
   windows: [{ type: 'primary', windowMinutes: 300, utilization: 0.1, resetsAt: at + 3600000, status: 'unknown' }, { type: 'secondary', windowMinutes: 10080, utilization: weekly, resetsAt: RESET, status: 'unknown' }] });
 const config = () => ({ schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
-  limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } } });
 const pulls = [{ number: 119, title: 't', headRefName: 'claude/issue-79-x', headRefOid: H(1), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }];
 // The job record says weekly 99% (older); the model-free probe says 100% (newer): the tick uses the probe.

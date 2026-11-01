@@ -1,6 +1,6 @@
 // View model of the team dashboard (issue #32). Pure functions over data the tick already stored: supervisor job records,
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
-import { Team, agentOfBranch, checksState, prerequisites } from './team.mjs';
+import { Team, ROLES, agentOfBranch, checksState, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { severityOf } from './dashui/logic.mjs';
@@ -341,6 +341,22 @@ export function budgetView(team) {
 
 const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.DateTimeFormat('en-GB', { timeZone: team.timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(until)).replace(',', '')}` : '');
 export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: interim reviews (D-021) are not planned here, but the real tick would refuse to run.';
+// Role slots (issue #148): who holds the implementer and reviewer slot right now, with the model and the work. A job the dispatcher has
+// no record of (started by hand) counts against the implementer slot, as the planner counts it.
+const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer' };
+const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
+export function roleSlots(config, jobs, state) {
+  return ROLES.map(role => {
+    const held = jobs.filter(j => ACTIVE.includes(j.status) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {
+      const r = state.jobs?.[j.id] || {}, agent = r.agent || Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
+      return { agent: redact(agent, 20), model: r.model ? redact(r.model, 40) : null, kind: r.kind || null, ref: r.pr ?? r.issue ?? j.issue ?? null, refType: r.pr != null ? 'PR' : 'issue' };
+    });
+    const label = SLOT_LABEL[role];
+    const text = held.length ? `${label}: ${held.map(h => [h.agent, h.model, h.ref != null ? `${h.refType === 'PR' ? 'PR #' : '#'}${h.ref}` : null, h.kind ? SLOT_WHAT[h.kind] || h.kind : null].filter(Boolean).join(' · ')).join('; ')}` : `${label}: idle`;
+    return { role, label, capacity: config.limits?.roles?.[role] ?? 1, held, text };
+  });
+}
+
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
@@ -444,6 +460,6 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver,
     panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
-    jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
+    slots: roleSlots(config, jobs, state), jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
   };
 }

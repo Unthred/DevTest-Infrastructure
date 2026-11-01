@@ -60,6 +60,8 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
     return { name: a.name, state: a.state, idleReason: a.idleReason || null, job: j ? { kind: j.kind, ref: j.ref } : null, text };
   });
 
+  const slots = view.slots;   // role slots (issue #148), from the shared view
+
   // 2. what happens next
   const plan = view.plan.map(p => { const n = p.issue ?? p.pr, what = `${p.interim ? 'interim ' : p.postMerge ? 'post-merge ' : ''}${p.type === 'cifix' ? 'fix CI on' : p.type} ${ref(p.type, n)}${p.interim ? ' (its own PR: every other agent is out of allowance, D-021)' : ''}`; return { agent: p.agent || null, type: p.type, ref: n, text: p.agent ? `${p.agent} → ${what}` : `dispatcher → ${what}` }; });
   const waiting = [];
@@ -107,7 +109,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
     text: redact(`${modeLine(agent, b, tz)}${b.mode === 'normal' && b.resetsAt ? `; weekly resets ${new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(b.resetsAt)).replace(',', '')}` : ''}`, 400) }));
   for (const p of view.plan) if (p.reassignedFrom) { const e = plan.find(x => x.agent === p.agent && x.ref === (p.issue ?? p.pr)); if (e) e.text += ` (reassigned from ${p.reassignedFrom} for allowance)`; }
 
-  return { generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
+  return { generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {
@@ -123,6 +125,8 @@ export function renderStatus(s) {
   for (const n of s.notes) out.push(`  note: ${n}`);
   head('What each agent is doing');
   for (const a of s.agents) out.push(`  ${a.name}: ${a.text}`);
+  head('Role slots');
+  for (const x of s.slots) out.push(`  ${x.text}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity} slots)` : ''}`);
   head('What happens next');
   if (s.next.plan.length) for (const p of s.next.plan) out.push(`  ${p.text}`);
   for (const w of s.next.waiting) out.push(`  ${w.text}`);

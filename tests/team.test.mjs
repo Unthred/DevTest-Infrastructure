@@ -17,7 +17,7 @@ const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
 const config = (over = {}) => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p',
   access: { mode: 'full', decision: 'D-020' },
-  limits: { per_agent: 1, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+  limits: { roles: { implementer: 2, reviewer: 2 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [23, 5] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [2, 3] } },
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } }, ...over });
 const pr = (n, branch, head, extra = {}) => ({ number: n, title: `t${n}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green, ...extra });
@@ -164,7 +164,7 @@ test('team config: the shipped file is valid, disabled by default and cites D-02
   assert.throws(() => validateTeamConfig(config({ access: { mode: 'full', decision: 'D-001' } })), /D-020/);
   assert.throws(() => validateTeamConfig(config({ agents: { aa: { provider: 'pp', branch_prefix: 'aa/', issues: [1] }, bb: { provider: 'pp', branch_prefix: 'bb/', issues: [2] } } })), /share a provider/);
   assert.throws(() => validateTeamConfig(config({ agents: { aa: { provider: 'pp', branch_prefix: 'aa/', issues: [1] }, bb: { provider: 'qq', branch_prefix: 'bb/', issues: [1] } } })), /two owners/);
-  assert.throws(() => validateTeamConfig(config({ limits: { per_agent: 0, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } })), /per_agent/);
+  assert.throws(() => validateTeamConfig(config({ limits: { roles: { implementer: 0, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } })), /roles/);
 });
 
 test('rule 1 review: the other agent\'s PR with green CI and no verdict from me', async t => {
@@ -287,7 +287,7 @@ test('a conflicting PR is not reviewed, merged or counted green; after the rebas
   w.gh.pulls = [pr(36, 'claude/issue-32-x', H(6))];
   const after = await w.team.plan();
   assert.equal(after.find(a => a.type === 'merge'), undefined);           // the PASS was for the old head
-  assert.deepEqual(after.filter(a => a.agent === 'codex').map(a => [a.type, a.head]), [['review', H(6)]]);
+  assert.deepEqual(after.filter(a => a.agent === 'codex' && a.type === 'review').map(a => [a.type, a.head]), [['review', H(6)]]);
 });
 
 test('priority per agent: rebase > CI fix > review fix > review > implement', async t => {
@@ -305,13 +305,13 @@ test('priority per agent: rebase > CI fix > review fix > review > implement', as
   assert.deepEqual(order, ['rebase', 'cifix', 'fix', 'review', 'implement']);
 });
 
-test('concurrency: one active or paused job per agent, two overall', async t => {
+test('concurrency: slots per role, two overall; an unrecorded job holds the implementer slot', async t => {
   const issues = [issue(23), issue(2)];
   const one = world(t, { issues, active: [{ id: 'a', provider: 'claude', status: 'paused_limit' }] });
-  assert.deepEqual((await one.team.plan()).map(a => a.agent), ['codex']);
+  assert.deepEqual((await one.team.plan()).map(a => a.agent), ['claude']);   // issue #148: a job the dispatcher has no record of holds the implementer slot, the other slot is free
   const both = world(t, { issues, active: [{ id: 'a', provider: 'claude', status: 'running' }, { id: 'b', provider: 'codex', status: 'queued' }] });
   assert.deepEqual(await both.team.plan(), []);
-  const cap = world(t, { issues, cfg: config({ limits: { per_agent: 1, overall: 1, max_review_attempts: 2, max_fix_attempts: 2 } }) });
+  const cap = world(t, { issues, cfg: config({ limits: { roles: { implementer: 2, reviewer: 2 }, overall: 1, max_review_attempts: 2, max_fix_attempts: 2 } }) });
   assert.equal((await cap.team.plan()).length, 1);
   const manual = world(t, { issues, active: [{ id: 'm', provider: 'codex', status: 'running' }, { id: 'n', provider: 'other', status: 'running' }] });
   assert.deepEqual(await manual.team.plan(), []);   // a manual job counts toward the overall cap
@@ -629,7 +629,7 @@ test('issue #30 local override: allowed knobs apply, everything else is refused,
   assert.equal(loadTeamConfig(shippedFile, root).enabled, false);                         // no override file: shipped values
   fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true, limits: { overall: 3 }, agents: { claude: { issues: [5] } } }));
   const c = loadTeamConfig(shippedFile, root);
-  assert.equal(c.enabled, true); assert.equal(c.limits.overall, 3); assert.equal(c.limits.per_agent, 1); assert.deepEqual(c.agents.claude.issues, [5]);
+  assert.equal(c.enabled, true); assert.equal(c.limits.overall, 3); assert.equal(c.limits.roles.implementer, 1); assert.deepEqual(c.agents.claude.issues, [5]);
   assert.deepEqual(c.agents.codex.issues, [3, 4, 8, 9, 11, 12]);
   // simulated upgrade: a different code directory holding another shipped version, same state root
   const v2 = fs.mkdtempSync(path.join(os.tmpdir(), 'team-v2-')); t.after(() => fs.rmSync(v2, { recursive: true, force: true }));
