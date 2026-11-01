@@ -80,7 +80,7 @@ export function sanitizeEntry(entry, secrets = []) {
 export class TranscriptWriter {
   constructor(root, jobId, { capBytes = TRANSCRIPT_CAP_BYTES, reserveBytes = EVIDENCE_RESERVE_BYTES, secrets = secretValues(), clock = { now: () => Date.now() } } = {}) {
     if (!validJobId(jobId)) throw new Error('invalid job id for transcript');
-    Object.assign(this, { root, jobId, capBytes, reserveBytes, secrets, clock, file: transcriptFile(root, jobId), seq: 0, size: 0, full: false, closed: false, pendingSecretReads: 0 });
+    Object.assign(this, { root, jobId, capBytes, reserveBytes, secrets, clock, file: transcriptFile(root, jobId), seq: 0, size: 0, full: false, closed: false, calls: new Map() });
     fs.mkdirSync(transcriptDir(root), { recursive: true, mode: 0o700 });
     // Later attempts of the same job append: continue the sequence and the size budget.
     try {
@@ -89,12 +89,28 @@ export class TranscriptWriter {
       for (const line of text.split('\n')) { try { const e = JSON.parse(line); if (Number.isSafeInteger(e?.seq)) this.seq = Math.max(this.seq, e.seq); if (e?.kind === 'truncated') this.full = true; } catch { /* partial line */ } }
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
+  // The output of a secret read has no shape to match, so a result is dropped whole when its call was a secret read. Calls and
+  // results are paired by id (Claude tool_use_id, Codex item id), so parallel and out-of-order results stay correct. Fail closed: a
+  // result whose id was never seen as a call, or that has no id, is redacted too (this includes the result of an id-less call).
+  // The id is used here only and is not stored.
+  guardSecretRead(entry) {
+    const redacted = e => ({ ...e, text: '[redacted: output of a secret read]', detail: undefined });
+    if (entry?.kind === 'tool_call') {
+      const reads = isSecretRead(`${entry.text ?? ''}\n${entry.detail ?? ''}`);
+      if (typeof entry.callId === 'string' && entry.callId) {
+        this.calls.set(entry.callId, reads);
+        if (this.calls.size > 20000) this.calls.delete(this.calls.keys().next().value);
+      }
+    } else if (entry?.kind === 'tool_result') {
+      const known = typeof entry.callId === 'string' && this.calls.has(entry.callId);
+      if (!known) return redacted(entry);
+      if (this.calls.get(entry.callId) === true) return redacted(entry);
+    }
+    return entry;
+  }
   append(entry) {
     if (this.closed) return null;
-    // The output of a secret read has no shape to match, so drop it whole. Results are not tied to calls by id: while a read is
-    // pending every result is dropped (this can hide an unrelated result, never leak one).
-    if (entry?.kind === 'tool_call' && isSecretRead(`${entry.text ?? ''}\n${entry.detail ?? ''}`)) this.pendingSecretReads++;
-    else if (entry?.kind === 'tool_result' && this.pendingSecretReads > 0) { this.pendingSecretReads--; entry = { ...entry, text: '[redacted: output of a secret read]' }; }
+    entry = this.guardSecretRead(entry);
     const clean = sanitizeEntry(entry, this.secrets);
     const make = e => JSON.stringify({ v: 1, seq: this.seq + 1, at: this.clock.now(), ...e }) + '\n';
     let line = make(clean);

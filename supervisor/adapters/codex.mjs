@@ -59,8 +59,8 @@ export function transcript(line) {
   if (!it || typeof it !== 'object') return [];
   if (o.type === 'item.completed' && it.type === 'agent_message' && String(it.text || '').trim()) return [{ kind: 'assistant', text: it.text }];
   if (it.type === 'command_execution') {
-    if (o.type === 'item.started') return [{ kind: 'tool_call', tool: 'shell', text: oneLine(it.command), detail: String(it.command || '') }];
-    if (o.type === 'item.completed') return [{ kind: 'tool_result', error: Number.isFinite(it.exit_code) && it.exit_code !== 0, text: `exit ${it.exit_code ?? '?'}\n${it.aggregated_output || ''}` }];
+    if (o.type === 'item.started') return [{ kind: 'tool_call', callId: it.id, tool: 'shell', text: oneLine(it.command), detail: String(it.command || '') }];
+    if (o.type === 'item.completed') return [{ kind: 'tool_result', callId: it.id, error: Number.isFinite(it.exit_code) && it.exit_code !== 0, text: `exit ${it.exit_code ?? '?'}\n${it.aggregated_output || ''}` }];
   }
   if (o.type === 'item.completed' && it.type === 'mcp_tool_call') return [{ kind: 'tool_call', tool: `${it.server || 'mcp'}.${it.tool || 'tool'}`, text: oneLine(JSON.stringify(it.arguments ?? {})), detail: JSON.stringify(it.arguments ?? {}, null, 1) }];
   if (o.type === 'item.completed' && it.type === 'file_change') return [{ kind: 'tool_call', tool: 'file_change', text: oneLine((it.changes || []).map(c => `${c.kind || 'change'} ${c.path || ''}`).join(', ')) }];

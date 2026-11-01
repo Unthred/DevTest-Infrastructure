@@ -252,11 +252,64 @@ test('redaction: bao/vault kv get table output (any key name) and -field output'
   // -field prints a bare value with no shape: the result of a secret read is dropped whole by the writer.
   const bare = V('bare-', 'field-canary-9');
   const root = tmp(t), w = new TranscriptWriter(root, ID, { secrets: [] });
-  w.append({ kind: 'tool_call', tool: 'Bash', text: `bao kv get -field=password secret/devtest/x` });
-  w.append({ kind: 'tool_result', text: bare });
-  w.append({ kind: 'tool_call', tool: 'Bash', text: 'ls' });
-  w.append({ kind: 'tool_result', text: 'plain listing' });
+  w.append({ kind: 'tool_call', callId: 'c1', tool: 'Bash', text: `bao kv get -field=password secret/devtest/x` });
+  w.append({ kind: 'tool_result', callId: 'c1', text: bare });
+  w.append({ kind: 'tool_call', callId: 'c2', tool: 'Bash', text: 'ls' });
+  w.append({ kind: 'tool_result', callId: 'c2', text: 'plain listing' });
   const disk = fs.readFileSync(transcriptFile(root, ID), 'utf8');
   gone(disk, bare);
   assert.match(disk, /redacted: output of a secret read/); assert.match(disk, /plain listing/);
+});
+
+// Review fix (job 3a3474bc): pending secret reads are keyed by tool-use id (Claude) and item id (Codex), not counted.
+const PAR_SECRET = V('par-', 'allel-canary-7');
+const claudeLine = o => JSON.stringify(o);
+const callsMessage = claudeLine({ type: 'assistant', message: { id: 'm1', content: [
+  { type: 'tool_use', id: 'toolu_ls', name: 'Bash', input: { command: 'ls' } },
+  { type: 'tool_use', id: 'toolu_bao', name: 'Bash', input: { command: 'bao kv get -field=password secret/x' } }] } });
+const claudeResult = (id, text) => ({ type: 'tool_result', tool_use_id: id, content: text });
+function feed(t, lines, adapter = claude) {
+  const root = tmp(t), w = new TranscriptWriter(root, ID, { secrets: [] }), state = {};
+  for (const line of lines) for (const e of adapter.transcript(line, state) || []) w.append(e);
+  return fs.readFileSync(transcriptFile(root, ID), 'utf8');
+}
+
+test('parallel tool calls: the secret read output is dropped, the ls output is kept (separate lines)', t => {
+  const disk = feed(t, [callsMessage,
+    claudeLine({ type: 'user', message: { content: [claudeResult('toolu_ls', 'file-a file-b')] } }),
+    claudeLine({ type: 'user', message: { content: [claudeResult('toolu_bao', PAR_SECRET)] } })]);
+  gone(disk, PAR_SECRET); assert.match(disk, /file-a file-b/); assert.match(disk, /redacted: output of a secret read/);
+});
+
+test('parallel tool calls: results in one user message, and out of order', t => {
+  const inOne = feed(t, [callsMessage, claudeLine({ type: 'user', message: { content: [claudeResult('toolu_ls', 'file-a file-b'), claudeResult('toolu_bao', PAR_SECRET)] } })]);
+  gone(inOne, PAR_SECRET); assert.match(inOne, /file-a file-b/);
+  const reversed = feed(t, [callsMessage, claudeLine({ type: 'user', message: { content: [claudeResult('toolu_bao', PAR_SECRET), claudeResult('toolu_ls', 'file-a file-b')] } })]);
+  gone(reversed, PAR_SECRET); assert.match(reversed, /file-a file-b/);
+  const later = feed(t, [callsMessage, claudeLine({ type: 'user', message: { content: [claudeResult('toolu_ls', 'file-a file-b')] } }),
+    claudeLine({ type: 'user', message: { content: [claudeResult('toolu_bao', PAR_SECRET)] } })]);
+  gone(later, PAR_SECRET);
+});
+
+test('an unmatched result (unknown or missing id) is redacted', t => {
+  const unknown = feed(t, [callsMessage, claudeLine({ type: 'user', message: { content: [claudeResult('toolu_other', PAR_SECRET)] } })]);
+  gone(unknown, PAR_SECRET); assert.match(unknown, /redacted: output of a secret read/);
+  const root = tmp(t), w = new TranscriptWriter(root, ID, { secrets: [] });
+  w.append({ kind: 'tool_call', tool: 'Bash', text: 'bao kv get -field=password secret/x' });
+  w.append({ kind: 'tool_result', text: PAR_SECRET });
+  gone(fs.readFileSync(transcriptFile(root, ID), 'utf8'), PAR_SECRET);
+});
+
+test('positive control: an ordinary call and result are stored in full', t => {
+  const disk = feed(t, [claudeLine({ type: 'assistant', message: { id: 'm2', content: [{ type: 'tool_use', id: 'toolu_x', name: 'Bash', input: { command: 'ls' } }] } }),
+    claudeLine({ type: 'user', message: { content: [claudeResult('toolu_x', 'file-a file-b')] } })]);
+  assert.match(disk, /file-a file-b/); assert.ok(!/redacted: output of a secret read/.test(disk));
+});
+
+test('Codex: secret read and ordinary command paired by item id, in either order', t => {
+  const item = (type, id, command, extra = {}) => JSON.stringify({ type, item: { id, type: 'command_execution', command, ...extra } });
+  const disk = feed(t, [item('item.started', 'item_1', 'ls'), item('item.started', 'item_2', 'bao kv get -field=password secret/x'),
+    item('item.completed', 'item_2', 'bao kv get -field=password secret/x', { exit_code: 0, aggregated_output: PAR_SECRET }),
+    item('item.completed', 'item_1', 'ls', { exit_code: 0, aggregated_output: 'file-a file-b' })], codex);
+  gone(disk, PAR_SECRET); assert.match(disk, /file-a file-b/);
 });

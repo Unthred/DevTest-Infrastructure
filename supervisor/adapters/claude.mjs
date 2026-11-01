@@ -46,7 +46,7 @@ export function transcript(line, state = {}) {
   if (o.type === 'assistant' && Array.isArray(o.message?.content)) {
     for (const b of o.message.content) {
       if (b?.type === 'text' && String(b.text || '').trim()) out.push({ kind: 'assistant', text: b.text });
-      else if (b?.type === 'tool_use') out.push({ kind: 'tool_call', tool: b.name, text: summarizeInput(b.input), detail: typeof b.input === 'string' ? b.input : JSON.stringify(b.input, null, 1) });
+      else if (b?.type === 'tool_use') out.push({ kind: 'tool_call', callId: b.id, tool: b.name, text: summarizeInput(b.input), detail: typeof b.input === 'string' ? b.input : JSON.stringify(b.input, null, 1) });
     }
     const u = o.message.usage, id = o.message.id;
     if (u && id && !(state.seen ||= new Set()).has(id)) {
@@ -55,7 +55,7 @@ export function transcript(line, state = {}) {
       out.push({ kind: 'usage', text: '', tokens: { in: n(u.input_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens), out: n(u.output_tokens) } });
     }
   } else if (o.type === 'user' && Array.isArray(o.message?.content)) {
-    for (const b of o.message.content) if (b?.type === 'tool_result') out.push({ kind: 'tool_result', text: blockText(b.content), error: b.is_error === true });
+    for (const b of o.message.content) if (b?.type === 'tool_result') out.push({ kind: 'tool_result', callId: b.tool_use_id, text: blockText(b.content), error: b.is_error === true });
   } else if (o.type === 'result' && o.is_error === true) out.push({ kind: 'system', error: true, text: oneLine(o.result || o.error?.message || o.subtype || 'error', 1000) });
   else if (o.type === 'error') out.push({ kind: 'system', error: true, text: oneLine(o.error?.message || o.error || o.message || 'error', 1000) });
   return out;
