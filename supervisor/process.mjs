@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { billingRisk, limitFromAllowance } from './allowance.mjs';
-import { addUsage, usageFromLine } from './usage.mjs';
+import { addUsage, sessionFromLine, usageFromLine } from './usage.mjs';
+import { begin as beginSession, recordUsage, seed as sessionSeed, touch } from './session.mjs';
 import { checkpoint, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
 export async function runProcess(root, job, config, adapter, clock, options = {}) {
@@ -10,7 +11,9 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     if (ok === 'not_found') return { code: 1, event: 'preflight_failed' };
     if (!ok) return { code: 1, event: 'auth_error' };
   }
-  const argv = adapter.command(config, job, job.attempts > 1);
+  // Issue #74: a new job always starts a fresh session; a later attempt resumes only a recent, small session.
+  const session = beginSession(root, job, clock);
+  const argv = adapter.command(config, job, session.resume);
   const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   let observed = null, resetAt = null, resetSource = 'none', verified = false;
   const buffers = { stdout: '', stderr: '' };
@@ -44,13 +47,15 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   job.childPid = child.pid; saveJob(root, job, clock);
   // A child that exits before reading its prompt closes the pipe; that is an exit status, not a supervisor crash.
   child.stdin.on('error', () => {});
-  child.stdin.end(prompt(job, job.attempts > 1));
+  child.stdin.end(prompt(job, job.attempts > 1, job.attempts > 1 && !session.resume ? sessionSeed(job) : null));
   const onData = stream => chunk => {
     buffers[stream] = (buffers[stream] + chunk.toString('utf8')).slice(-65536);
     let index;
     while ((index = buffers[stream].indexOf('\n')) !== -1) {
       const line = buffers[stream].slice(0, index).slice(0, 16384); buffers[stream] = buffers[stream].slice(index + 1);
       usage = addUsage(usage, usageFromLine(line));
+      touch(job, clock);
+      const sessionUsage = sessionFromLine(line); if (sessionUsage) recordUsage(job, sessionUsage);
       const result = adapter.observe(line, clock.now());
       if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
       observeEvent(result, stream, line);
@@ -69,6 +74,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     });
     for (const stream of ['stdout', 'stderr']) if (buffers[stream]) { const rest = buffers[stream].slice(0, 16384); observeEvent(adapter.observe(rest, clock.now()), stream, rest); }
     if (typeof adapter.postRun === 'function') { const late = adapter.postRun(job); if (late) allowance = late; }
+    touch(job, clock);
     if (usage) job.usage = addUsage(job.usage, usage);
     if (allowance) job.allowance = { ...allowance, observedAt: clock.now() };
     // Billing guard: spending beyond the subscription blocks for a human on ANY exit, and outranks every other event

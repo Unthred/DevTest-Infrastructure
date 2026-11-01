@@ -171,7 +171,7 @@ export async function createJob(root, spec, registry = defaultRegistry, clock = 
   if (spec.autoResume === true && ['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].some(key => capabilities[key] !== 'supported'))
     throw new SupervisorError('auto-resume requires verified supported provider capabilities');
   const job = { ...checked, id: crypto.randomBytes(16).toString('hex'), schemaVersion: 1, status: 'queued', autoResume: spec.autoResume === true, autoRestart: spec.autoRestart === true, incompleteRetries: 0,
-    createdAt: clock.now(), updatedAt: clock.now(), attempts: 0, resetAt: null, nextAttemptAt: null, sessionId: null,
+    createdAt: clock.now(), updatedAt: clock.now(), attempts: 0, resetAt: null, nextAttemptAt: null, sessionId: null, sessions: null,
     workerPid: null, workerStart: null, childPid: null, lastEvent: null, lastProgress: null, checkpoint: null, capabilities,
     currentAttemptId: null };
   fs.mkdirSync(path.join(root, 'leases'), { recursive: true, mode: 0o700 });
@@ -229,7 +229,7 @@ export function checkpoint(root, job, clock = realClock) {
   job.checkpoint = { at: clock.now(), head, status, issueState, issueCheckedAt, handoverSha256, handoverExcerpt, handoverStale };
   job.lastProgress = clock.now(); saveJob(root, job, clock); event(root, job, 'checkpoint', clock);
 }
-export function prompt(job, resume = false) {
+export function prompt(job, resume = false, seed = null) {
   let head = `Selected launcher role: ${job.role}. Supervised issue #${job.issue} in ${job.worktree}. Approved scope: ${job.scope}. Allowed actions: ${job.allowedActions.join(', ')}. Preserve project and role governance. Do not purchase credits, switch to paid API billing, deploy, merge, reboot or change credentials without separate authorization.`;
   // Observed 2026-10-30: a supervised Claude Bash tool starts in /root (the shell profile changes directory), so a bare
   // `node --test` found no tests. Say so explicitly instead of assuming the process cwd carries over.
@@ -237,6 +237,7 @@ export function prompt(job, resume = false) {
   if (job.access === 'full') head += ' Launch mode: full access (decision D-020, selected by the homeowner), the same as the interactive agents. Project rules still apply: no reboot of Tower, no production Home Assistant change, no secret disclosure, no purchases, no merge of your own work.';
   if (job.handover) head += ` Read the handover at ${job.handover} and update it only when the approved actions permit edits.`;
   if (resume) head += ` Resume the SAME issue and worktree. Read issue, Git state and handover before changing anything. Last checkpoint HEAD: ${job.checkpoint?.head || 'unknown'}. Avoid duplicate actions.`;
+  if (seed) head += `\n\n${seed}`;
   return head + '\n\n' + job.prompt;
 }
 export function safeEnvironment(source = process.env, allowlist = null) {

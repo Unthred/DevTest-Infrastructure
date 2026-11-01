@@ -19,3 +19,14 @@ export function addUsage(a, b) {
   return { inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens,
     costUsdEstimate: a.costUsdEstimate === null && b.costUsdEstimate === null ? null : (a.costUsdEstimate || 0) + (b.costUsdEstimate || 0) };
 }
+// Session accounting for issue #74: tokens the provider had to (re)cache, and the size of the last context sent.
+// Claude reports cache_creation_input_tokens directly; Codex reports input_tokens with cached_input_tokens as a subset,
+// so its uncached input is the closest equivalent.
+export function sessionFromLine(line) {
+  if (typeof line !== 'string' || !line.startsWith('{')) return null;
+  let o; try { o = JSON.parse(line); } catch { return null; }
+  if (!o || !['result', 'turn.completed'].includes(o.type) || !o.usage || typeof o.usage !== 'object') return null;
+  const u = o.usage;
+  if (o.type === 'result') return { recached: count(u.cache_creation_input_tokens), context: count(u.input_tokens) + count(u.cache_creation_input_tokens) + count(u.cache_read_input_tokens) };
+  return { recached: Math.max(0, count(u.input_tokens) - count(u.cached_input_tokens)), context: count(u.input_tokens) };
+}
