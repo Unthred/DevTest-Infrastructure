@@ -310,3 +310,65 @@ Root cause (from live Tower state, read-only): a Codex job that hits its limit g
 - `supervisor/providers/claude.json` launch args gain `--strict-mcp-config` (accepted by Tower's installed `claude`; checked in `claude --help`). Codex manifest unchanged. No provider branch in core (D-012).
 - Tests: `lean prompts` and `lean launch` in `tests/team.test.mjs`. Validator and full suite pass locally.
 - Open: after deploy, compare input tokens per job type on the Usage page (one week each side or five jobs per type). Handover writes unchanged until #52.
+<!DOCTYPE html>
+
+
+<html>
+<head>
+    <title>NZBHydra 2</title>
+    <meta name="robots" content="noindex"/>
+    <meta name="referrer" content="no-referrer"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="shortcut icon" type="image/x-icon" href="static/img/favicon.ico"/>
+    <meta charset="utf-8"/>
+</head>
+<body>
+An error occurred. Check the logs.
+
+<br>Some details:
+<table>
+    <tr>
+        <td>Path</td>
+      <td>/internalapi/tasks</td>
+    </tr>
+    <tr>
+        <td>Query parameters</td>
+      <td></td>
+    </tr>
+    <tr>
+        <td>Status</td>
+      <td>403</td>
+    </tr>
+    <tr>
+        <td>Timestamp</td>
+      <td>2026-09-22T07:10:18.981292994Z</td>
+    </tr>
+    <tr>
+        <td>Error</td>
+      <td></td>
+    </tr>
+    <tr>
+        <td>Exception</td>
+      <td>java.lang.Exception
+at org.graalvm.nativeimage.builder/com.oracle.svm.core.reflect.SubstrateConstructorAccessor.newInstance(SubstrateConstructorAccessor.java:68)
+at java.base@25.0.4.1/java.lang.reflect.Constructor.newInstanceWithCaller(Constructor.java:499)
+at java.base@25.0.4.1/java.lang.reflect.Constructor.newInstance(Constructor.java:483)
+at org.springframework.beans.BeanUtils.instantiateClass(BeanUtils.java:194)
+at org.springframework.validation.DataBinder.createObject(DataBinder.java:911)
+at org.springframework.validation.DataBinder.construct(DataBinder.java:887)
+at org.springframework.web.bind.ServletRequestDataBinder.construct(ServletRequestDataBinder.java:116)
+at org.springframework.security.web.access.ExceptionTranslationFilter.doFilter(ExceptionTranslationFilter.java:126)
+at org.springframework.security.web.access.ExceptionTranslationFilter.doFilter(ExceptionTranslationFilter.java:120)
+at org.springframework.security.web.authentication.AnonymousAuthenticationFilter.doFilter(AnonymousAuthenticationFilter.java:100)
+at org.springframework.security.web.savedrequest.RequestCacheAwareFilter.doFilter(RequestCacheAwareFilter.java:63)
+at org.springframework.security.web.context.SecurityContextHolderFilter.doFilter(SecurityContextHolderFilter.java:82)
+at org.springframework.security.web.context.SecurityContextHolderFilter.doFilter(SecurityContextHolderFilter.java:69)
+at org.springframework.security.config.annotation.web.configuration.WebSecurityConfiguration$CompositeFilterChainProxy.doFilter(WebSecurityConfiguration.java:317)
+at org.springframework.security.config.annotation.web.configuration.WebSecurityConfiguration$CompositeFilterChainProxy.doFilter(WebSecurityConfiguration.java:317)
+at java.base@25.0.4.1/java.lang.Thread.run(Thread.java:1474)</td>
+    </tr>
+</table>
+
+</body>
+</html>
+- Fix round for the CHANGES verdict on PR #111: rebase prompt keeps the handover write-through (append-only entry, no read of the rest); lean-prompt test now counts every `node --test` against dot-reporter commands for all six prompts and asserts the handover update in each; review/continue wording clarified (DECISIONS.md read in full, every section for the issue). Remaining follow-ups: verify `--strict-mcp-config` against claude.ai connectors after deploy; the dot reporter prints no pass count (exit code is the signal); the Usage-page token comparison keeps #109 open after merge.

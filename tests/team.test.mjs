@@ -995,17 +995,20 @@ test('lean prompts: AGENTS.md is never requested; reading is per job; every test
   const all = { review: reviewPrompt(j), fix: fixPrompt(j), rebase: rebasePrompt(j), cifix: ciFixPrompt(j), cont: continuePrompt(j), impl: implementPrompt(j) };
   for (const [k, p] of Object.entries(all)) {
     assert.doesNotMatch(p, /AGENTS\.md/, `${k} must not ask for AGENTS.md`);
-    for (const m of p.match(/node --test[^.]*?\.mjs"/g) || []) assert.match(m, /--test-reporter=dot/, `${k} test command`);
+    const n = (p.match(/node --test/g) || []).length;
+    assert.ok(n >= 1, `${k} names the tests`);
+    assert.equal((p.match(/node --test --test-reporter=dot "tests\/\*\*\/\*\.test\.mjs"/g) || []).length, n, `${k}: every test command uses the dot reporter`);
+    assert.match(p, /Update the canonical handover on your own branch before you stop/, `${k} keeps the handover write-through`);
     assert.doesNotMatch(p, /run the validator and tests/, k);
   }
-  for (const k of ['review', 'fix', 'cifix', 'cont', 'impl']) assert.match(all[k], /--test-reporter=dot "tests\/\*\*\/\*\.test\.mjs"/, k);
-  // rebase names neither the decision register nor the handover
-  assert.doesNotMatch(all.rebase, /DECISIONS|HANDOVER|handover|decision register/);
+  // rebase does not read the decision register or the whole handover, but still appends to the handover
+  assert.doesNotMatch(all.rebase, /DECISIONS|decision register/);
+  assert.match(all.rebase, /append-only/);
   assert.match(all.rebase, /only the conflicting files/);
   // implement and continue: summary sections plus the issue's own section, never the whole handover
   for (const k of ['cont', 'impl']) { assert.match(all[k], /docs\/DECISIONS\.md/); assert.match(all[k], /summary sections/); assert.match(all[k], /section for issue #109/); assert.match(all[k], /never the whole handover/); }
   // review reads the decision register only; fix and ci-fix read findings/logs and the diff
-  assert.match(all.review, /Read docs\/DECISIONS\.md only; do not read the handover/);
+  assert.match(all.review, /Read docs\/DECISIONS\.md only; do not read the rest of the handover/);
   assert.doesNotMatch(all.fix, /Read docs\/ai\/CURRENT_HANDOVER\.md/); assert.match(all.fix, /findings on the PR and the diff/);
   assert.match(all.cifix, /failing logs and the diff/);
   assert.doesNotMatch(all.review + all.fix + all.cifix, /Read AGENTS|summary sections/);
