@@ -169,7 +169,8 @@ export function fixPrompt(job) {
   return `${COMMON}\n\nTask: fix the CHANGES verdict on pull request #${job.pr} (head ${job.head}, branch ${job.branch}). Read the verdict findings on the PR and the diff, not the decision register or the whole handover. Correct the blocking findings in scope with regression tests, run node tools/validate-project.mjs and ${TEST_COMMAND}, commit and push to the same branch. Follow-up findings do not hold this fix round open. Do not force-push. The post-condition is a new pushed head.`;
 }
 export function rebasePrompt(job) {
-  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) conflicts with ${job.base}. Do a conflict-only rebase: rebase the branch onto origin/${job.base}, resolve conflicts keeping the intent of both sides, change nothing else in the rebase; read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}, push with --force-with-lease (this branch only). Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. A recorded PASS for the old head does not carry over; the opposite agent reviews the new head. The post-condition is a new pushed head that is mergeable.`;
+  const why = job.behind ? `is mergeable but behind ${job.base}, and has a recorded PASS, so it is rebased right before merge` : `conflicts with ${job.base}`;
+  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) ${why}. Do a conflict-only rebase: rebase the branch onto origin/${job.base}, resolve conflicts keeping the intent of both sides, change nothing else in the rebase (do not amend, squash, reword or reorder commits, so an unchanged patch stays recognisable); read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}, push with --force-with-lease (this branch only). Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. The dispatcher itself compares the two heads: a recorded PASS for the old head carries over to the new head only when every commit is unchanged (equal patches and messages); otherwise the opposite agent reviews the new head. The post-condition is a new pushed head that is mergeable.`;
 }
 export function ciFixPrompt(job) {
   const checks = job.checks.length ? ` Failing checks: ${job.checks.join(', ')}.` : '';
@@ -321,6 +322,16 @@ export class Team {
     return busy('implement', String(n)) ? null : issue;
   }
 
+  // Issue #79: no review is scheduled for a reviewer at its usage limit (a used-up window, or its latest job paused on one); the
+  // reason is kept for the dashboard and `team status`. A reviewer in `waiting` mode is held by allow() with the mode's own reason.
+  reviewerHold(agent) {
+    const l = this.limitedOf(agent);
+    if (!l.out) return null;
+    const why = `review held: ${agent} is out of allowance (${String(l.reason || 'usage limit').slice(0, 200)})`;
+    (this.held[agent] ||= {}).review ||= why;
+    return why;
+  }
+
   choose(agent, a, prs, issueByNo) {
     const L = this.c.limits;
     const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key);
@@ -332,11 +343,15 @@ export class Team {
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
     for (const pr of prs) {
-      if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable !== 'CONFLICTING' || !SHA.test(pr.headRefOid)) continue;
+      if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
+      // Issue #79: rebase only on a conflict, or right before merge (a PR that already has its PASS and green CI, and that GitHub
+      // says is BEHIND its base, which a branch rule requiring an up-to-date branch would refuse). Main moving is not a reason.
+      const behind = pr.mergeable !== 'CONFLICTING' && pr.mergeStateStatus === 'BEHIND' && this.s.verdicts[key]?.verdict === 'PASS' && checksState(pr.statusCheckRollup) === 'green';
+      if (pr.mergeable !== 'CONFLICTING' && !behind) continue;
       if (busy('rebase', key) || (this.s.rebaseAttempts[key] || 0) >= L.max_fix_attempts) continue;
       if (!allow('rebase')) break;
-      return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key };
+      return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
     for (const pr of prs) {
@@ -365,6 +380,7 @@ export class Team {
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.reviewer === agent || busy('review', `${key}:${agent}`)) continue;
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
+      if (this.reviewerHold(agent)) break;
       if (!allow('review')) break;
       return { type: 'review', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key: `${key}:${agent}`, ...(interim ? { interim } : {}) };
     }
@@ -373,6 +389,7 @@ export class Team {
       if (pm.done || pm.author === agent || !SHA.test(pm.head || '') || this.limitedOf(agent).out) continue;
       const key = `${n}:${pm.head}:${agent}:post`;
       if (busy('review', key) || (this.s.reviewAttempts[key] || 0) >= L.max_review_attempts) continue;
+      if (this.reviewerHold(agent)) break;
       if (!allow('review')) break;
       return { type: 'review', pr: Number(n), head: pm.head, branch: pm.branch, key, postMerge: true };
     }
@@ -471,7 +488,25 @@ export class Team {
           return;
         } else report.ingested.push({ job: id, pr: j.pr, error: r.error });
       }
+      if (j.kind === 'rebase' && job.status === 'completed') await this.carryVerdict(id, j, report);
       j.ingested = true; this.save();
+  }
+  // Issue #79: a PASS recorded for the head a rebase started from carries to the rebased head when `git range-diff` shows every
+  // commit equal (same patch, same message). The carry is public first (a marker comment), then recorded, like any verdict.
+  // A changed patch, an unknown comparison or a head that moved again carries nothing: the opposite agent reviews it.
+  async carryVerdict(id, j, report) {
+    const prior = this.s.verdicts[verdictKey(j.pr, j.head)];
+    if (prior?.verdict !== 'PASS') return;
+    const pr = await this.gh.getPull(j.pr);
+    if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === j.head) return;
+    const key = verdictKey(j.pr, pr.headRefOid);
+    if (this.s.verdicts[key]) return;
+    let equal = false;
+    try { equal = (await this.git?.rangeEqual?.({ base: `origin/${j.base || 'main'}`, oldHead: j.head, newHead: pr.headRefOid })) === true; } catch { equal = false; }
+    if (!equal) { (report.carried ||= []).push({ pr: j.pr, head: pr.headRefOid, carried: false }); return; }
+    await this.postNotice(j.pr, `carry pr=${j.pr} head=${pr.headRefOid}`, `**Verdict carried.** The rebase from \`${j.head}\` to \`${pr.headRefOid}\` (job \`${id}\`) is a clean rebase: \`git range-diff\` shows every commit equal (patch and message). The **PASS** from \`${prior.reviewer}\` (job \`${prior.job}\`) for the old head carries to the new head without a new review. Checks and mergeability on the new head are still required.`);
+    this.s.verdicts[key] = { ...prior, carriedFrom: j.head, at: this.clock.now() };
+    this.save(); (report.carried ||= []).push({ pr: j.pr, head: pr.headRefOid, carried: true });
   }
   // D-021 post-merge review: PASS clears the label; CHANGES opens one linked issue for the homeowner. Never touches merge state.
   async ingestPostMerge(id, j, v, report) {
@@ -632,9 +667,9 @@ export class Team {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.type}-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: act.type, worktree: wt, issue: act.pr, scope: rebase ? `Conflict-only rebase of PR #${act.pr} onto ${act.base}` : `Fix red CI on PR #${act.pr}`,
         allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
-        prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks }),
+        prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch, behind: !!act.behind }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks }),
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
-      meta = { pr: act.pr, head: act.head };
+      meta = { pr: act.pr, head: act.head, ...(rebase ? { base: act.base } : {}) };
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
       bump = () => { this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; };
     } else if (act.type === 'continue') {

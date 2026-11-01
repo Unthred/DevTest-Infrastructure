@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { rangeEqual } from './rangediff.mjs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +73,8 @@ function realJobs(root, registry) {
 function realGit(repoPath) {
   const git = (...args) => { const r = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', timeout: 60000 }); if (r.status !== 0) throw new SupervisorError(`git ${args[0]} failed`); return r.stdout.trim(); };
   return {
+    // range-diff equality (issue #79); refs are fetched first so both heads and the base are present
+    rangeEqual: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return rangeEqual({ repoPath, base, oldHead, newHead }); },
     worktreeFor: async branch => { const out = git('worktree', 'list', '--porcelain').split('\n\n'); const hit = out.find(b => b.includes(`branch refs/heads/${branch}`)); return hit ? hit.split('\n')[0].replace('worktree ', '') : null; },
     ensureWorktree: async ({ path: wt, branch, base }) => {
       if (fs.existsSync(wt)) {

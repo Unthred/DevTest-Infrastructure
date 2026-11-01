@@ -64,7 +64,7 @@ export function readSnapshots(root) {
 }
 
 // What the cache keeps of GitHub data: just enough for the planner and the page, nothing else (no bodies, no comments).
-export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable,
+export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
   statusCheckRollup: (p.statusCheckRollup || []).slice(0, 40).map(c => ({ name: redact(c.name || c.context || '', 80), status: c.status, conclusion: c.conclusion, state: c.state })) }));
 // Recently merged PRs (number, title, time) for the "merged today" section of `team status`.

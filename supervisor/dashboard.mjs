@@ -111,7 +111,7 @@ function reasons(team, cache, jobs, plan, states) {
     if (!pr.isDraft && checks === 'green' && !v) for (const reviewer of other) {
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
-      queues[reviewer].push({ type: 'review', ref: pr.number, title: pr.title, reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
+      queues[reviewer].push({ type: 'review', ref: pr.number, title: pr.title, reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : team.held?.[reviewer]?.review ? ` (held: ${team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
     }
   }
   for (const [agent, a] of Object.entries(c.agents)) for (const n of a.issues) {
