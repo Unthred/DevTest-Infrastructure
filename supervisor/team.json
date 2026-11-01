@@ -11,13 +11,13 @@
     "allowance_threshold": 0.8,
     "agents": {
       "claude": {
-        "implement": { "model": "opus", "effort": "high" },
-        "continue": { "model": "opus", "effort": "high" },
+        "implement": { "model": "sonnet", "effort": "medium" },
+        "continue": { "model": "sonnet", "effort": "medium" },
         "fix": { "model": "sonnet", "effort": "medium" },
-        "review": { "model": "sonnet", "effort": "medium" },
+        "review": { "model": "opus", "effort": "medium" },
         "rebase": { "model": "sonnet", "effort": "low" },
         "ci-fix": { "model": "sonnet", "effort": "medium" },
-        "interim-review": { "model": "sonnet", "effort": "medium" },
+        "interim-review": { "model": "opus", "effort": "medium" },
         "strong": { "model": "opus", "effort": "high" },
         "low": { "model": "sonnet", "effort": "low" }
       },

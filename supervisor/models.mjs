@@ -8,10 +8,10 @@ import { windowExpired } from './allowance.mjs';
 // 'interim-review' (D-021): a same-provider review while every other agent is out of allowance; falls back to the review entry.
 export const JOB_TYPES = ['implement', 'fix', 'review', 'rebase', 'ci-fix', 'continue', 'interim-review'];
 export const typeOfKind = kind => (kind === 'cifix' ? 'ci-fix' : kind);
-// Work that keeps the strong model even when the allowance is nearly used up.
+// Work that is not downgraded by the weekly-allowance threshold (it has no strong entry above its own; implement/continue never escalate, issue #78).
 export const STRONG_TYPES = new Set(['implement', 'continue']);
-// Escalation on repeated CHANGES applies to the jobs that repair a PR.
-const REPAIR_TYPES = new Set(['fix', 'ci-fix', 'rebase', 'continue']);
+// Escalation (issue #78) applies to fix and ci-fix only. A rebase is mechanical and never escalates; `continue` already runs the implement entry.
+const REPAIR_TYPES = new Set(['fix', 'ci-fix']);
 export const DEFAULT_THRESHOLD = 0.8;
 const SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const entryOk = e => e && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).every(k => ['model', 'effort'].includes(k)) && Object.values(e).every(v => typeof v === 'string');
@@ -68,13 +68,14 @@ export function resolveModel(ctx) {
   if (type === 'interim-review' && table && !table[type]) type = 'review';
   if (!table || !table[type]) return { fields: {}, warnings: [] };
   const threshold = ctx.modelsConfig.allowance_threshold ?? DEFAULT_THRESHOLD;
+  if (type === 'rebase') ctx = { ...ctx, escalation: null };
   const strong = table.strong || table.implement || table[type];
   let entry = table[type], source = 'configured', reason = `configured for ${type}`;
   const hot = Number.isFinite(ctx.utilization) && ctx.utilization >= threshold;
   if (type === 'review' && ctx.reReview && ctx.low && table.low) { entry = table.low; source = 'allowance'; reason = 'fix-round re-review while the allowance is low: lower-cost entry'; }
   else if (hot && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `weekly allowance ${Math.round(ctx.utilization * 100)}% >= ${Math.round(threshold * 100)}%: cheaper model kept for ${type}`; }
-  else if (ctx.low && ctx.escalation && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `allowance low: escalation suppressed for ${type}`; }
-  else if (ctx.escalation && !STRONG_TYPES.has(type)) { entry = strong; source = 'escalated'; reason = `escalated: ${ctx.escalation.reason}`; }
+  else if (ctx.low && ctx.escalation && REPAIR_TYPES.has(type)) { source = 'allowance'; reason = `allowance low: escalation suppressed for ${type}`; }
+  else if (ctx.escalation && REPAIR_TYPES.has(type)) { entry = strong; source = 'escalated'; reason = `escalated: ${ctx.escalation.reason}`; }
   else if (hot) reason = `${type} keeps its model although weekly allowance is ${Math.round(ctx.utilization * 100)}%`;
   const checked = checkEntry(entry, ctx.manifestModels);
   const fields = { modelSource: source, modelReason: reason.slice(0, 200) };
