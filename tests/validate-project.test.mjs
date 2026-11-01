@@ -64,7 +64,8 @@ test('a superseding entry that exists is accepted', () => {
 });
 
 test('handover: completion states, decision link, blockers and next actions are required', () => {
-  expectFinding((a) => a.edit('docs/ai/CURRENT_HANDOVER.md', 'Verified working', 'Seems fine'), 'handover', 'verified working');
+  // Remove every occurrence (any case): the validator accepts the phrase anywhere in the file, and handover prose may repeat it.
+  expectFinding((a) => a.write('docs/ai/CURRENT_HANDOVER.md', a.read('docs/ai/CURRENT_HANDOVER.md').replace(/verified working/gi, 'seems fine')), 'handover', 'verified working');
   expectFinding((a) => a.edit('docs/ai/CURRENT_HANDOVER.md', '[docs/DECISIONS.md](../DECISIONS.md)', 'the register'), 'handover', 'decision register');
   expectFinding((a) => a.edit('docs/ai/CURRENT_HANDOVER.md', '## Blockers', '## Problems'), 'handover', 'Blockers');
   expectFinding((a) => a.edit('docs/ai/CURRENT_HANDOVER.md', '## Next actions', '## Later'), 'handover', 'Next actions');

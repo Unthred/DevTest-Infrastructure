@@ -254,3 +254,7 @@ Root cause (from live Tower state, read-only): a Codex job that hits its limit g
 ## Issue #56 / PR #73 conflict-only rebase (Claude)
 - Rebased onto origin/main (old head `f64147f`). Conflicts: `supervisor/cli.mjs` (imports: both `readCache` and `readSnapshots`), `supervisor/dashboard.mjs` (imports of `allowance.mjs` and `budget.mjs` both kept; `limitView` kept with the new `cacheBackedTeam(..., snapshots, now)` signature), `supervisor/dashrender.mjs` (#75 `allowanceBody` and expected-reset chart kept, #56 `budgetBlock` prefixed on the card) and this file (header). Nothing else changed.
 - After the rebase: validator OK, 365/365 tests. Any earlier PASS for the old head does not carry over; the opposite agent must review the new head. Not deployed, not verified working.
+
+## Issue #56 / PR #73 red CI fix (Claude)
+- CI at `f75705d` failed on one test: `handover: completion states ...` in `tests/validate-project.test.mjs`. It removed only the first "Verified working", but the handover now repeats the phrase in prose, so the validator (substring, any case) still passed. Fixed in the test (removes every occurrence, any case); no validator or product change, no check weakened.
+- Validator OK and 365/365 tests locally. The new head needs exact-head CI and opposite-agent review. Not deployed, not verified working.
