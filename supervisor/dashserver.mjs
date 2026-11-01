@@ -35,7 +35,16 @@ export function registerCached(config, read = readRegister, now = Date.now()) {
 }
 export const clearRegisterMemo = () => registerMemo.clear();
 
+// `config` may be a loader function: it is called on every request, so an edit of team.local.json shows without a restart. A
+// loader that throws (a half-written or invalid file) keeps the last good configuration rather than breaking the page.
+export function configSource(config) {
+  if (typeof config !== 'function') return () => config;
+  let good = null;
+  return () => { try { good = config(); } catch (error) { if (!good) throw error; } return good; };
+}
+
 export async function currentView({ root, config, now = Date.now() }) {
+  if (typeof config === 'function') config = config();
   const jobs = readJobs(root);
   const register = registerCached(config);
   return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, register, registerUnreadable: !register });
@@ -49,6 +58,7 @@ const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosnif
   'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 
 export function handler({ root, config, host, port, now = () => Date.now() }) {
+  const source = configSource(config);
   const allowedHost = `${host}:${port}`;
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
@@ -60,7 +70,7 @@ export function handler({ root, config, host, port, now = () => Date.now() }) {
       if (STATIC[path]) return send(200, STATIC[path][1], staticFile(STATIC[path][0]));
       const route = path === '/api/view.json' ? null : matchRoute(path);
       if (path !== '/api/view.json' && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
-      const view = await currentView({ root, config, now: now() });
+      const view = await currentView({ root, config: source(), now: now() });
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(view));
       const out = renderRoute(view, route, { query: new URLSearchParams(search), pathname: path });
       return send(out.status, 'text/html; charset=utf-8', out.html);

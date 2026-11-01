@@ -57,8 +57,8 @@ const sprite = `<svg width="0" height="0" style="position:absolute" aria-hidden=
 
 const sev = level => SEVERITIES[level] || SEVERITIES.info;
 export const badge = (level, text, extra = '') => `<span class="badge sev-${esc(level)} ${extra}">${icon(sev(level).icon)}${esc(text ?? sev(level).label)}</span>`;
-const stateSev = { running: 'ok', idle: 'info', paused: 'warning', blocked: 'action' };
-const stateBadge = s => badge(stateSev[s] || 'info', ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked' })[s] || s);
+const stateSev = { running: 'ok', idle: 'info', paused: 'warning', blocked: 'action', unknown: 'warning' };
+const stateBadge = s => badge(stateSev[s] || 'info', ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[s] || s);
 const checksBadge = c => (c === 'green' ? badge('ok', 'CI green') : c === 'red' ? badge('action', 'CI failing') : c === 'pending' ? badge('info', 'CI running') : c ? badge('info', 'No CI') : '<span class="muted">–</span>');
 const verdictBadge = v => (v === 'PASS' ? badge('ok', 'PASS') : v === 'CHANGES' ? badge('warning', 'CHANGES') : '<span class="muted">none</span>');
 const agentTag = (name, view) => (name ? `<a href="/agents/${esc(encodeURIComponent(name))}"><span class="agent-dot" style="background:${colourOf(name, Object.keys(view.usage || {}).indexOf(name))}"></span>${esc(name)}</a>` : '<span class="muted">–</span>');

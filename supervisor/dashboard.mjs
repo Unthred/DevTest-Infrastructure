@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Team, ROLES, agentOfBranch, checksState, loneCancelled, prerequisites, roleOfType } from './team.mjs';
-import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
+import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { severityOf } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
@@ -359,7 +359,7 @@ const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer' };
 const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
 export function roleSlots(config, jobs, state) {
   return ROLES.map(role => {
-    const held = jobs.filter(j => ACTIVE.includes(j.status) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {
+    const held = jobs.filter(j => (ACTIVE.includes(j.status) || isUnknownJob(j)) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {
       const r = state.jobs?.[j.id] || {}, agent = r.agent || Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
       return { agent: redact(agent, 20), model: r.model ? redact(r.model, 40) : null, kind: r.kind || null, ref: r.pr ?? r.issue ?? j.issue ?? null, refType: r.pr != null ? 'PR' : 'issue' };
     });
@@ -369,7 +369,7 @@ export function roleSlots(config, jobs, state) {
   });
 }
 
-export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false }) {
+export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, running }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
@@ -384,7 +384,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       return base;
     });
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state }).map(a => ({ ...a, severity: severityOf(a.id) }));
-    const ver = readVersion(root);
+    const ver = readVersion(root, running === undefined ? {} : { running });
+    if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Holding new jobs: upgrade to ${sha7(h.to)} pending.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
@@ -417,6 +418,7 @@ const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run' };
 export function healthOf({ attention, states, teamEnabled }) {
   if (attention.some(a => a.severity === 'action')) return { state: 'needs_you', label: 'Needs you', severity: 'action' };
   if (attention.some(a => /^(tick-stale|idle)/.test(a.id))) return { state: 'stuck', label: 'Stuck', severity: 'warning' };
+  if (Object.values(states).some(s => s.state === 'unknown')) return { state: 'unknown', label: 'Unknown', severity: 'warning' };
   if (Object.values(states).some(s => s.state === 'paused')) return { state: 'paused', label: 'Paused', severity: 'warning' };
   if (Object.values(states).some(s => s.state === 'running')) return { state: 'running', label: 'Running', severity: 'ok' };
   return { state: 'idle', label: 'Idle', severity: teamEnabled === false ? 'info' : 'ok' };
