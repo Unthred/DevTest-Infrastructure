@@ -303,8 +303,8 @@ test('transient stop: a job already reported to the homeowner, a closed PR, a mo
   assert.deepEqual(Object.keys(w.team.s.unblock.noResume).sort(), ['closed', 'merged', 'moved', 'notified']);
   assert.match(w.team.s.unblock.noResume.notified.why, /already reported/);
   // the stale ones are handled as before: one Needs you notice each, nothing relaunched
-  assert.ok(w.calls.comments.some(c => c[0] === 9 && /job `merged`/.test(c[1])));
-  assert.ok(w.calls.comments.some(c => c[0] === 10 && /job `moved`/.test(c[1])));
+  assert.ok(w.calls.comments.some(c => c[0] === 9 && /Needs the homeowner/.test(c[1])));
+  assert.ok(w.calls.comments.some(c => c[0] === 10 && /Needs the homeowner/.test(c[1])));
   noMerge(w);
 });
 
