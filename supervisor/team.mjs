@@ -457,7 +457,7 @@ export class Team {
     const so = this.c.second_opinion;
     if (!so || so.reviewer !== agent || pr.isDraft || !SHA.test(pr.headRefOid) || !agentOfBranch(this.c, pr.headRefName) || pr.mergeable === 'CONFLICTING' || checksState(pr.statusCheckRollup) !== 'green' || !this.touchesSecondOpinion(pr)) return null;
     const vk = verdictKey(pr.number, pr.headRefOid), key = vk + ':' + agent + ':second';
-    if (this.s.verdicts[vk]?.verdict !== 'PASS' || this.s.secondOpinions[vk]) return null;
+    if (this.s.verdicts[vk]?.verdict !== 'PASS' || (this.s.secondOpinions[vk] && this.carryOk(this.s.secondOpinions[vk], pr))) return null;
     const provider = this.c.agents[agent].provider;
     if (this.writersOf(pr).some(w => w.provider === provider)) return null;
     if ((this.s.reviewAttempts[key] || 0) >= this.c.limits.max_review_attempts) return null;
@@ -551,7 +551,7 @@ export class Team {
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
       const interim = v?.interim === true && v.reviewer === author;
-      if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
+      if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.carryOk(v, pr) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
         // Until D-024 is approved, an interim merge owes the opposite agent a post-merge review (D-021).
         actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job, ...(interim && !this.independenceApproved() ? { interim: true, branch: pr.headRefName, author } : {}) });
         break;
@@ -846,7 +846,7 @@ export class Team {
     const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
     if (!dryRun) {
       await guard('load names', () => this.loadNames());
-      await this.ingest(report, guard); await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
+      await this.ingest(report, guard); await this.retryCarries(report, guard); await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
@@ -1025,22 +1025,47 @@ export class Team {
       return hit && !f.possiblyLostInRebase ? { ...f, text: `${f.text} (possibly lost in rebase: this finding was fixed on an earlier head and reappears after a rebase)`, possiblyLostInRebase: true } : f;
     });
   }
-  // Issue #79: a PASS recorded for the head a rebase started from carries to the rebased head when `git range-diff` shows every
-  // commit equal (same patch, same message). The carry is public first (a marker comment), then recorded, like any verdict.
-  // A changed patch, an unknown comparison or a head that moved again carries nothing: the opposite agent reviews it.
+  // Issue #290 (homeowner decision 2 Nov 2026, D-025): a review PASS (and a configured second-opinion PASS) recorded for the head a
+  // rebase started from carries to the rebased head only when ALL hold: the rebase resolved no conflict (#258, judged mechanically),
+  // the net patch and every commit are unchanged (exact text comparison, rangeEqual), and all CI on the new head is green. Anything
+  // false or undeterminable carries nothing and a full review runs. Pending CI waits (the carry is retried each tick, and no review
+  // is planned while CI is pending); red CI or a head that moved again ends the attempt. The carry is public first (a marker comment),
+  // then recorded with the evidence on the verdict itself, so the merge gate and the dashboard can show and re-verify it.
   async carryVerdict(id, j, report) {
     const prior = this.s.verdicts[verdictKey(j.pr, j.head)];
     if (prior?.verdict !== 'PASS') return;
     const pr = await this.gh.getPull(j.pr);
-    if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === j.head) return;
+    const done = () => { if (j.carry?.state === 'pending') { j.carry = { state: 'refused', reason: 'superseded', at: this.clock.now() }; this.save(); } };
+    if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === j.head) return done();
     const key = verdictKey(j.pr, pr.headRefOid);
-    if (this.s.verdicts[key]) return;
+    if (this.s.verdicts[key]) return done();
+    const refuse = reason => { j.carry = { state: 'refused', reason, at: this.clock.now() }; this.save(); (report.carried ||= []).push({ pr: j.pr, head: pr.headRefOid, carried: false, reason }); };
+    const prev = this.s.secondOpinions[verdictKey(j.pr, j.head)];
+    if (j.carry?.state === 'pending' && j.carry.newHead !== pr.headRefOid) return refuse('the head moved again before CI finished');
+    if (j.rebase?.newHead !== pr.headRefOid) return refuse('no recorded comparison for this head');
+    if (j.rebase.resolvedConflicts !== false) return refuse(j.rebase.resolvedConflicts === true ? 'the rebase resolved a conflict' : 'could not tell whether the rebase resolved a conflict');
+    const ci = this.ciState(pr);
+    if (ci === 'pending') { if (j.carry?.state !== 'pending') { j.carry = { state: 'pending', newHead: pr.headRefOid, at: this.clock.now() }; this.save(); } return; }
+    if (ci !== 'green') return refuse(`CI on the new head is ${ci}`);
     let equal = false;
     try { equal = (await this.git?.rangeEqual?.({ base: `origin/${j.base || 'main'}`, oldHead: j.head, newHead: pr.headRefOid })) === true; } catch { equal = false; }
-    if (!equal) { (report.carried ||= []).push({ pr: j.pr, head: pr.headRefOid, carried: false }); return; }
-    await this.postNotice(j.pr, `carry pr=${j.pr} head=${pr.headRefOid}`, `**Verdict carried.** The rebase from \`${shortCommit(j.head)}\` to \`${shortCommit(pr.headRefOid)}\` (${this.names().job({ id, kind: 'rebase', pr: j.pr }).text}) is a clean rebase: \`git range-diff\` shows every commit equal (patch and message). The **PASS** from \`${prior.reviewer}\` (job ${String(prior.job).slice(0, 8)}) for the old head carries to the new head without a new review. Checks and mergeability on the new head are still required.`);
-    this.s.verdicts[key] = { ...prior, carriedFrom: j.head, at: this.clock.now() };
+    if (!equal) return refuse('the patch changed or could not be compared');
+    const carry = { oldHead: j.head, newHead: pr.headRefOid, job: id, base: j.base || 'main', evidence: { resolvedConflicts: false, patchUnchanged: true, ci: 'green' }, at: this.clock.now() };
+    await this.postNotice(j.pr, `carry pr=${j.pr} head=${pr.headRefOid}`, `**Verdict carried.** The rebase from \`${shortCommit(j.head)}\` to \`${shortCommit(pr.headRefOid)}\` (${this.names().job({ id, kind: 'rebase', pr: j.pr }).text}) carries the **PASS** from \`${prior.reviewer}\` (job ${String(prior.job).slice(0, 8)})${prev ? ` and the second-opinion PASS from \`${prev.reviewer}\`` : ''} for the old head to the new head without a new review. Evidence: no conflict was resolved, the patch is unchanged (exact text and placement comparison), CI on the new head is green. Merge still re-verifies this record against the current head.`);
+    this.s.verdicts[key] = { ...prior, carriedFrom: j.head, carry, at: this.clock.now() };
+    if (prev?.verdict === 'PASS') this.s.secondOpinions[key] = { ...prev, carriedFrom: j.head, carry, at: this.clock.now() };
+    j.carry = { state: 'carried', newHead: pr.headRefOid, at: this.clock.now() };
     this.save(); (report.carried ||= []).push({ pr: j.pr, head: pr.headRefOid, carried: true });
+  }
+  // Retry carries that waited for CI (called every tick after ingest).
+  async retryCarries(report, guard = (_, fn) => fn()) {
+    for (const [id, j] of Object.entries(this.s.jobs)) if (j.kind === 'rebase' && j.carry?.state === 'pending') await guard(`carry ${id}`, () => this.carryVerdict(id, j, report));
+  }
+  // A carried verdict is valid only against the head it was recorded for, with every condition recorded as met.
+  carryOk(entry, pr) {
+    if (!entry?.carriedFrom) return true;
+    const c = entry.carry, e = c?.evidence;
+    return !!c && c.newHead === pr.headRefOid && c.oldHead === entry.carriedFrom && SHA.test(c.oldHead) && e?.resolvedConflicts === false && e.patchUnchanged === true && e.ci === 'green';
   }
   // Second-opinion review of a merged PR (issue #152, formerly the D-021 post-merge review): PASS clears the label; CHANGES opens one linked issue for the homeowner. Never touches merge state.
   async ingestPostMerge(id, j, v, report) {

@@ -19,13 +19,13 @@ const config = () => ({
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } });
 const pr = (n, branch, head, extra = {}) => ({ number: n, title: `t${n}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', statusCheckRollup: green, ...extra });
 
-function world(t, { pulls, out = {}, equal = true, modes = null }) {
+function world(t, { pulls, out = {}, equal = true, modes = null, resolved = false }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carry-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = { comments: [], created: [], range: [] };
   const gh = { pulls, listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => [], listMergedPulls: async () => [],
     comment: async (n, b) => calls.comments.push([n, b]), hasComment: async (n, m) => calls.comments.some(([x, b]) => x === n && b.includes(m)) };
   const jobs = { states: {}, listActive: async () => [], get: async id => jobs.states[id] || null, create: async spec => { calls.created.push(spec); return { id: 'a'.repeat(32) }; } };
-  const git = { ensureWorktree: async o => o.path, worktreeFor: async () => null, rangeEqual: async a => { calls.range.push(a); if (equal instanceof Error) throw equal; return equal; } };
+  const git = { checkRebase: async a => ({ commits: [], missing: [], ...(resolved === 'unknown' ? {} : { resolvedConflicts: resolved }) }), ensureWorktree: async o => o.path, worktreeFor: async () => null, rangeEqual: async a => { calls.range.push(a); if (equal instanceof Error) throw equal; return equal; } };
   const team = new Team({ config: config(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: '', clock: { now: () => 1000 }, limitedOf: a => (out[a] ? { out: true, reason: out[a] } : { out: false }) });
   if (modes) team.budgets = () => modes;
   return { team, gh, jobs, calls };
@@ -56,8 +56,8 @@ test('a conflicting PR is still rebased; a BEHIND PR is rebased only with PASS a
   assert.equal((await plan(red, 'claude'))?.type, 'cifix');   // red CI on the merged result is the CI-fix path
 });
 
-async function rebased(t, equal) {
-  const w = world(t, { pulls: [pr(10, 'claude/issue-5-x', H(2))], equal });
+async function rebased(t, equal, o = {}) {
+  const w = world(t, { pulls: [pr(10, 'claude/issue-5-x', H(2), o.pr)], equal, resolved: o.resolved ?? false });
   w.team.s.verdicts[`10:${H(1)}`] = { ...PASS };
   w.team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 10, head: H(1), base: 'main', ingested: false, at: 1 };
   w.jobs.states.r1 = { status: 'completed' };
@@ -72,6 +72,7 @@ test('a rebase with every commit equal carries the PASS to the new head, publicl
   const v = w.team.s.verdicts[`10:${H(2)}`];
   assert.equal(v.verdict, 'PASS'); assert.equal(v.carriedFrom, H(1)); assert.equal(v.reviewer, 'codex');
   assert.equal(w.calls.comments.length, 1); assert.match(w.calls.comments[0][1], /Verdict carried/); assert.deepEqual(report.carried, [{ pr: 10, head: H(2), carried: true }]);
+  assert.equal(v.carry.oldHead, H(1)); assert.equal(v.carry.newHead, H(2)); assert.deepEqual(v.carry.evidence, { resolvedConflicts: false, patchUnchanged: true, ci: 'green' });
   assert.equal((await w.team.plan()).find(a => a.type === 'merge')?.head, H(2));
   await w.team.ingest({ ingested: [], skipped: [] });   // a second pass posts and records nothing more
   assert.equal(w.calls.comments.length, 1);
@@ -81,7 +82,7 @@ test('a rebase whose patch changed, whose comparison failed or errored carries n
   for (const equal of [false, new Error("boom"), null]) {
     const { w, report } = await rebased(t, equal);
     assert.equal(w.team.s.verdicts[`10:${H(2)}`], undefined); assert.equal(w.calls.comments.length, 0);
-    assert.deepEqual(report.carried, [{ pr: 10, head: H(2), carried: false }]);
+    assert.deepEqual(report.carried, [{ pr: 10, head: H(2), carried: false, reason: 'the patch changed or could not be compared' }]);
     assert.equal((await w.team.plan()).find(a => a.agent === 'codex')?.type, 'review');
   }
 });
@@ -199,4 +200,54 @@ test('real git: rangeEqual carries nothing when main changed the context lines a
 test('normalisePatch drops only blob hashes and hunk line numbers, keeping whitespace and function context', () => {
   const p = 'diff --git a/x b/x\nindex 142a295..af6a0ba 100644\n--- a/x\n+++ b/x\n@@ -10,2 +12,3 @@ def f():\n     a\n+    b \n';
   assert.equal(normalisePatch(p), 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ def f():\n     a\n+    b \n');
+});
+
+test('issue #290: a resolved conflict, unknown conflict status, red CI or a changed patch never carries; each is re-reviewed', async t => {
+  const red = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
+  for (const [name, o, eq] of [['resolved conflict', { resolved: true }, true], ['unknown conflict status', { resolved: 'unknown' }, true], ['red CI', { pr: { statusCheckRollup: red } }, true], ['changed patch', {}, false], ['undeterminable comparison', {}, null]]) {
+    const { w } = await rebased(t, eq, o);
+    assert.equal(w.team.s.verdicts[`10:${H(2)}`], undefined, name); assert.equal(w.calls.comments.length, 0, name);
+  }
+});
+
+test('issue #290: pending CI waits, then carries once CI is green; red CI or a moved head ends the wait', async t => {
+  const pending = [{ status: 'IN_PROGRESS', conclusion: null }];
+  const { w, report } = await rebased(t, true, { pr: { statusCheckRollup: pending } });
+  assert.equal(w.team.s.verdicts[`10:${H(2)}`], undefined); assert.equal(w.team.s.jobs.r1.carry.state, 'pending'); assert.equal(report.carried, undefined);
+  assert.equal((await w.team.plan()).find(a => a.agent === 'codex' && a.type === 'review'), undefined);   // no review while CI runs
+  await w.team.retryCarries({ ingested: [] });
+  assert.equal(w.team.s.verdicts[`10:${H(2)}`], undefined);
+  w.gh.pulls[0].statusCheckRollup = green;
+  await w.team.retryCarries({ ingested: [] });
+  assert.equal(w.team.s.verdicts[`10:${H(2)}`].verdict, 'PASS'); assert.equal(w.team.s.jobs.r1.carry.state, 'carried');
+  const red = await rebased(t, true, { pr: { statusCheckRollup: pending } });
+  red.w.gh.pulls[0].statusCheckRollup = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
+  await red.w.team.retryCarries({ ingested: [] });
+  assert.equal(red.w.team.s.verdicts[`10:${H(2)}`], undefined); assert.equal(red.w.team.s.jobs.r1.carry.state, 'refused');
+  const moved = await rebased(t, true, { pr: { statusCheckRollup: pending } });
+  moved.w.gh.pulls[0].headRefOid = H(3); moved.w.gh.pulls[0].statusCheckRollup = green;
+  await moved.w.team.retryCarries({ ingested: [] });
+  assert.equal(moved.w.team.s.verdicts[`10:${H(3)}`], undefined); assert.equal(moved.w.team.s.jobs.r1.carry.state, 'refused');
+});
+
+test('issue #290: merge re-verifies the carry record against the current head; a forged or stale record does not merge', async t => {
+  const { w } = await rebased(t, true);
+  const v = w.team.s.verdicts[`10:${H(2)}`];
+  assert.equal((await w.team.plan()).find(a => a.type === 'merge')?.head, H(2));
+  for (const bad of [{ ...v, carry: { ...v.carry, newHead: H(3) } }, { ...v, carry: undefined }, { ...v, carry: { ...v.carry, evidence: { ...v.carry.evidence, ci: 'pending' } } }, { ...v, carriedFrom: H(4) }]) {
+    w.team.s.verdicts[`10:${H(2)}`] = bad;
+    assert.equal((await w.team.plan()).find(a => a.type === 'merge'), undefined);
+  }
+});
+
+test('issue #290: a second-opinion PASS carries with the primary PASS; one with an invalid record is owed again', async t => {
+  const w = world(t, { pulls: [pr(10, 'claude/issue-5-x', H(2))], equal: true });
+  w.team.s.verdicts[`10:${H(1)}`] = { ...PASS };
+  w.team.s.secondOpinions[`10:${H(1)}`] = { ...PASS, reviewer: 'codex', secondOpinion: true };
+  w.team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 10, head: H(1), base: 'main', ingested: false, at: 1 };
+  w.jobs.states.r1 = { status: 'completed' };
+  await w.team.ingest({ ingested: [], skipped: [] });
+  const so = w.team.s.secondOpinions[`10:${H(2)}`];
+  assert.equal(so.verdict, 'PASS'); assert.equal(so.carry.newHead, H(2)); assert.equal(so.carriedFrom, H(1));
+  assert.equal(w.team.carryOk(so, { headRefOid: H(2) }), true); assert.equal(w.team.carryOk(so, { headRefOid: H(3) }), false);
 });
