@@ -151,3 +151,32 @@ test('dashboard: a failed migration is a Needs you item naming it, and applied/f
   assert.equal(v.health.state, 'needs_you');
   assert.ok(v.activity.some(r => /002-broken failed: boom/.test(r.text)));
 });
+
+test('stale failure: removing the failed migration (hotfix or rollback) clears state.failed; a still-present failure is kept', async t => {
+  const root = tmp(t), dir = path.join(root, 'm');
+  mkMig(dir, '001-a.mjs', tag(1));
+  mkMig(dir, '002-bad.mjs', "export const description = 'bad'; export function migrate() { throw new Error('boom'); }");
+  put(root, { enabled: true });
+  await runMigrations({ root, dir, validate });
+  assert.equal(readMigrationState(root).failed.number, 2);
+  await runMigrations({ root, dir, validate });
+  assert.equal(readMigrationState(root).failed.number, 2);   // negative: still shipped, still failing
+  fs.rmSync(path.join(dir, '002-bad.mjs'));
+  const r = await runMigrations({ root, dir, validate });
+  assert.equal(r.failed, null);
+  const st = readMigrationState(root); assert.equal(st.failed, null); assert.equal(st.applied, 1);
+});
+
+test('activity: a failed migration error with a secret-shaped value is redacted', async t => {
+  const { buildView } = await import('../supervisor/dashboard.mjs');
+  const root = tmp(t), NOW = Date.now();
+  const secret = ['gh', 'p_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('');
+  fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'team', 'incidents.jsonl'), JSON.stringify({ at: NOW - 1000, kind: 'migration', result: 'failed', number: 2, name: 'x', error: `token ${secret} rejected` }) + '\n');
+  const cfg = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
+    limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [1] } } };
+  const cache = { pulls: [], issues: [], tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 } };
+  const v = await buildView({ config: cfg, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW });
+  const row = v.activity.find(r => /002-x failed/.test(r.text));
+  assert.ok(row); assert.ok(!row.text.includes(secret));
+});
