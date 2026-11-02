@@ -200,10 +200,24 @@ export function acquireLeases(root, job, clock = realClock) {
   }
 }
 // One writer per worktree: a lease is kept while the job's worker (other than this process) or provider child still exists.
+// Issue #132: the child counts as alive only when its start time matches the one recorded at spawn (PID reuse) and it is
+// not a zombie. A job without a recorded childStart (written by an older worker) falls back to existence, minus zombies.
+export function processInfo(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ');   // after "pid (comm) ": state is field 0, starttime field 19
+    return { state: rest[0], start: rest[19] };
+  } catch { return null; }
+}
+export function childAlive(job) {
+  if (!job.childPid || job.childPid === process.pid) return false;
+  const info = processInfo(job.childPid);
+  if (!info || info.state === 'Z' || info.state === 'X') return false;
+  return job.childStart ? info.start === job.childStart : true;
+}
 export function jobProcessesAlive(job) {
   const worker = job.workerPid && job.workerPid !== process.pid && processStart(job.workerPid) === job.workerStart;
-  const child = job.childPid && job.childPid !== process.pid && processStart(job.childPid);
-  return Boolean(worker || child);
+  return Boolean(worker || childAlive(job));
 }
 export function releaseLeases(root, job) {
   if (!terminal.has(job.status)) throw new SupervisorError('cannot release active lease');
@@ -363,7 +377,7 @@ export function claimWorker(root, id) {
 export function recover(root, id, force = false) {
   const job = readJob(root, id);
   if (job.workerPid && processStart(job.workerPid) === job.workerStart) throw new SupervisorError('worker is still running; refusing takeover');
-  if (job.childPid && processStart(job.childPid)) throw new SupervisorError('child PID still exists; refusing takeover');
+  if (childAlive(job)) throw new SupervisorError('child PID still exists; refusing takeover');
   const stateLock = path.join(root, 'job-locks', id);
   if (fs.existsSync(stateLock)) {
     const ownerFile = path.join(stateLock, 'owner.json');
