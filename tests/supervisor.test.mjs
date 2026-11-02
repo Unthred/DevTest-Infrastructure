@@ -466,3 +466,14 @@ test('#132 reconcile releases leases kept on a stopped job once its processes ar
   assert.deepEqual(leaseFiles(f.root), []);
   assert.equal(reconcile().released, 0, 'idempotent');
 });
+
+test('issue #302: a lease conflict is a typed LeaseHeld error naming the holder, with the message unchanged', async t => {
+  const { createJob, LeaseHeld } = await import('../supervisor/core.mjs');
+  const { acquireLeases } = await import('../supervisor/core.mjs');
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const job = id => ({ id, kind: 'review', repository: 'o/r', issue: 5, worktree: '/w/review' });
+  acquireLeases(root, job('a'.repeat(32)));
+  assert.throws(() => acquireLeases(root, job('b'.repeat(32))), e => e instanceof LeaseHeld && e.holder === 'a'.repeat(32) && /already leased; stale lease requires explicit recovery/.test(e.message));
+  assert.equal(fs.readdirSync(path.join(root, 'leases')).length, 2, 'the conflicting job took nothing');
+});

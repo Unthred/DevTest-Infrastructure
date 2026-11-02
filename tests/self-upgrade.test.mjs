@@ -588,3 +588,27 @@ test('issue #101: realDeps maps install exit codes 11 and 12 to blocked (no roll
   const swap = await mk(13).upgrade('b'.repeat(40)); assert.equal(swap.ok, false); assert.equal(swap.blocked, undefined); assert.equal(swap.environmental, undefined);
   assert.equal((await mk(10).upgrade('b'.repeat(40))).environmental, true);
 });
+
+import { liveTickOutcome } from '../supervisor/upgrade.mjs';
+test('issue #302: a verifying tick with only a live job\'s lease wait verifies; real faults still fail it', async t => {
+  assert.deepEqual(liveTickOutcome({ actions: [], skipped: [], waiting: [{ what: 'review 5 (claude)', reason: 'waiting for job abababab (running)' }] }), { ok: true, reason: null });
+  assert.equal(liveTickOutcome({ skipped: [{ what: 'x', reason: 'r', expected: true }] }).ok, true);
+  assert.deepEqual(liveTickOutcome({ skipped: [{ what: 'x', reason: 'gh failed' }] }), { ok: false, reason: 'gh failed' });
+  assert.deepEqual(liveTickOutcome({ error: 'boom' }), { ok: false, reason: 'boom' });
+  const w = world(t);
+  await w.up.step();
+  assert.equal(await w.up.verifyPending({ running: TO, ...liveTickOutcome({ skipped: [], waiting: [{ what: 'review', reason: 'waiting' }] }) }), 'verified');
+  assert.equal(w.up.latch(), null);
+});
+
+test('issue #302: an upgrade during a running job holds, installs once the job ends, and a repeated rollback is never attempted while latched', async t => {
+  const w = world(t, { active: 1 });
+  assert.notEqual(await w.up.step(), 'upgraded'); assert.ok(!w.log.some(x => x[0] === 'upgrade'), 'nothing installs while a job runs');
+  w.state.active = 0;
+  assert.equal(await w.up.step(), 'upgraded');
+  assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: 'boom' }), 'rolled-back');
+  assert.ok(w.up.latch());
+  const before = w.log.length; w.state.now += 3 * MIN_UPGRADE_INTERVAL_MS;
+  assert.equal(await w.up.step(), 'latched');
+  assert.equal(w.log.length, before, 'no upgrade, no second rollback and no new alert while latched');
+});

@@ -539,6 +539,9 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: deploy needed.`, ref: null, severity: 'warning' });
     // Issue #265: one Needs you item while main needs a hand-deployed bootstrap installer change; it ends when the installed commit moves.
     try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).handDeploy; if (h && /^[0-9a-f]{40}$/.test(h.to || '') && h.from === ver?.installed) attention.push({ id: 'hand-deploy', text: redact(`Main ${sha7(h.to)} changes ${(h.files || []).map(String).join(', ')}, which Foreman cannot install itself. Run: ${h.command}`, 300), ref: null, severity: 'action' }); } catch { /* none */ }
+    // Issue #302: a rolled-back upgrade pauses all later upgrades (the latch); one Needs you item says why and how to clear it.
+    const latch = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.latch'), 'utf8')); } catch (error) { return error.code === 'ENOENT' ? null : { reason: 'unreadable latch file' }; } })();
+    if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${new Date(h.since).toISOString().slice(11, 16)} UTC` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
     // Issue #153: a failed config migration stops the ticks until the homeowner fixes team.local.json
@@ -554,6 +557,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
+    if (latch) upgrade = { ...(upgrade || {}), latch: true };
     const budget = budgetView(team);
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {
@@ -582,7 +586,7 @@ const NEXT_STEP = {
   migration: 'Fix team.local.json by hand (or remove the offending key), then the next tick retries the migration. The failed attempt left the file unchanged; backups are next to it.',
   rebase: 'Restore the dropped commits on the PR branch (the old head is still reachable by its id) before it is reviewed or merged.'
 };
-const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run' };
+const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run', 'upgrade-latched': 'ai-supervisor self-upgrade clear-latch' };
 export function healthOf({ attention, states, teamEnabled }) {
   const open = attention.filter(a => a.severity === 'action').length;   // issue #141: the header shows how many
   if (open) return { state: 'needs_you', label: `Needs you (${open})`, count: open, severity: 'action' };

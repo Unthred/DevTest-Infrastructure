@@ -15,7 +15,7 @@ import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome
 import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
-import { SelfUpgrade, realDeps, runningSha } from './upgrade.mjs';
+import { SelfUpgrade, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 import { DRAIN_DEFAULT_MINUTES } from './team.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -75,6 +75,7 @@ function realJobs(root, registry) {
     },
     get: async id => { try { return readJob(root, id); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } },
     release: async id => releaseLeases(root, readJob(root, id)),
+    alive: async job => jobProcessesAlive(job),
     // Issue #163: one automatic resume of a job that stopped on a transient cause. Same recovery as `resume`, with the attempt
     // counters reset so the worker gets one more bounded round instead of stopping at once on retry_exhausted.
     resume: async id => {
@@ -92,6 +93,8 @@ function realGit(repoPath) {
     rangeEqual: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return rangeEqual({ repoPath, base, oldHead, newHead }); },
     // issue #158: the commits a rebase carried and the ones it dropped (by patch-id), checked again by the dispatcher after the job
     checkRebase: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return checkRebase({ repoPath, base, oldHead, newHead }); },
+    // issue #302: true only when git can prove the worktree has no uncommitted work (tracked or untracked); anything else is false/null
+    isClean: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 ? r.stdout.trim() === '' : null; },
     worktreeFor: async branch => { const out = git('worktree', 'list', '--porcelain').split('\n\n'); const hit = out.find(b => b.includes(`branch refs/heads/${branch}`)); return hit ? hit.split('\n')[0].replace('worktree ', '') : null; },
     ensureWorktree: async ({ path: wt, branch, base }) => {
       if (fs.existsSync(wt)) {
@@ -198,9 +201,9 @@ async function selfUpgradeAfter(root, registry, before, tick) {
   const { upgrade } = selfUpgradeFor(root, registry);
   // A tick skipped because another one holds the lock is not a live tick and verifies nothing.
   const live = !tick?.skipped || Array.isArray(tick.skipped);
-  const failed = tick?.error || (Array.isArray(tick?.skipped) && tick.skipped.length);
+  const outcome = liveTickOutcome(tick);
   if (live) {
-    const verdict = await upgrade.verifyPending({ running: runningSha(self), ok: !failed, reason: tick?.error || tick?.skipped?.[0]?.reason });
+    const verdict = await upgrade.verifyPending({ running: runningSha(self), ok: outcome.ok, reason: outcome.reason });
     if (verdict === 'rolled-back' || verdict === 'rollback-failed' || verdict === 'verified') return verdict;
   }
   return before.result;

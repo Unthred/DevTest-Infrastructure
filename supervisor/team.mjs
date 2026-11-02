@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { SupervisorError, WorktreeUnusable, atomicJson, processStart } from './core.mjs';
+import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
@@ -538,6 +538,7 @@ export class Team {
     this.modes = this.budgets(); this.held = {}; this.heldPr = {};
     await this.loadFiles(prs);
     const active = await this.jobs.listActive();
+    this.activeIds = new Set(active.map(j => j.id));
     // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
     // record of (started by hand) is counted against the implementer slot, the conservative reading.
     const used = Object.fromEntries(ROLES.map(r => [r, 0]));
@@ -573,13 +574,18 @@ export class Team {
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
         this.taken.add(`${best.act.type}:${best.act.key}`);
-        if (best.act.type === 'review') this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`);
+        if (best.act.type === 'review') { this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`); this.taken.add(`review-wt:${best.agent}`); }
         if (best.act.issue) this.taken.add(`issue:${best.act.issue}`);
       }
     }
     // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
     const order = n => this.agents().findIndex(([x]) => x === n);
     return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -1 : order(x.agent)) - (y.type === 'merge' ? -1 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
+  }
+  // True while this agent's shared review worktree is taken: a review or split job of its own is active, or a review was planned this tick.
+  reviewWorktreeBusy(agent) {
+    if (this.taken?.has(`review-wt:${agent}`)) return true;
+    return [...(this.activeIds || [])].some(id => { const j = this.s.jobs[id]; return j && j.agent === agent && ['review', 'split'].includes(j.kind); });
   }
   // Lower is preferred when several agents could fill the same slot.
   slotRank(agent, act, prs) {
@@ -715,8 +721,11 @@ export class Team {
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
     }
+    // Issue #302: an agent's review jobs all share one review worktree, so it runs one review (or split draft) at a time. While that
+    // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
+    const wtBusy = rev && this.reviewWorktreeBusy(agent);
     // review: any agent's PR whose head was written by another model, green CI, mergeable, no verdict yet on this exact head
-    for (const pr of rev ? prs : []) {
+    for (const pr of rev && !wtBusy ? prs : []) {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
@@ -731,7 +740,7 @@ export class Team {
     }
     // second opinion (optional second_opinion config): one extra review of a PR that touches the configured paths, by the configured
     // reviewer, on another provider than the one that wrote the head, once the primary review has passed and while it has allowance.
-    for (const pr of rev ? prs : []) {
+    for (const pr of rev && !wtBusy ? prs : []) {
       const so = this.secondOpinionDue(agent, pr);
       if (!so) continue;
       if (busy('review', so.key) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
@@ -743,7 +752,7 @@ export class Team {
     // its author once that agent has allowance again. Once approved, only entries kept as a second opinion (they touch the configured
     // paths) remain, for the configured reviewer; the others were dropped.
     const legacyPostMerge = !this.independenceApproved();
-    for (const [n, pm] of Object.entries(rev ? this.s.postMerge : {})) {
+    for (const [n, pm] of Object.entries(rev && !wtBusy ? this.s.postMerge : {})) {
       if (pm.done || pm.author === agent || !SHA.test(pm.head || '') || this.limitedOf(agent).out) continue;
       if (!legacyPostMerge && (!pm.secondOpinion || this.c.second_opinion?.reviewer !== agent)) continue;
       const key = `${n}:${pm.head}:${agent}:post`;
@@ -1120,11 +1129,59 @@ export class Team {
   // recorded and announced once on the PR, reported under `blocked`, and the other actions carry on.
   async runAction(act, report) {
     try { await this.execute(act, report); } catch (error) {
+      if (error instanceof LeaseHeld) { await this.leaseHeld(error, act, report); return; }
       if (!(error instanceof WorktreeUnusable)) throw error;
       this.s.unusable[`${act.type}:${act.key}`] = { worktree: error.worktree, at: this.clock.now() }; this.save();
       (report.blocked ||= []).push({ what: `${act.type} ${act.pr ?? act.issue} (${act.agent})`, reason: error.message.slice(0, 200) });
       if (act.pr) await this.postNotice(act.pr, `worktree pr=${act.pr} ${act.type}`, `**Needs the homeowner.** The dispatcher cannot start a \`${act.type}\` job for this PR: \`${error.worktree}\` is not a linked worktree of \`${this.c.repo_path}\` (for example a standalone clone). Required: move the work to a linked worktree (\`git worktree add\`) or remove that checkout. It is retried hourly and nothing else is affected.`);
     }
+  }
+  // Issue #302: a lease held by another job is not a fault. Three outcomes, decided from the holder's job record and processes:
+  //  - the holder is a live job: an expected wait (report.waiting), never a skipped item;
+  //  - the holder finished (completed or stopped), nothing of it runs and its worktree has no uncommitted work: the lease is
+  //    released (the job record is kept) and the action is retried once;
+  //  - anything else (no record, blocked or failed, a dead "running" job, a dirty or unreadable worktree, no way to check): one
+  //    Needs you item naming the holder and the exact next step. Nothing is released.
+  async leaseHeld(error, act, report) {
+    const what = `${act.type} ${act.pr ?? act.issue} (${act.agent})`;
+    const id = typeof error.holder === 'string' ? error.holder : null;
+    let job = null; try { job = id ? await this.jobs.get(id) : null; } catch { /* unreadable record: uncertain */ }
+    const short = id ? id.slice(0, 8) : 'unknown holder';
+    const alive = job ? (typeof this.jobs.alive === 'function' ? !!(await this.jobs.alive(job)) : true) : false;   // without a liveness check a job is presumed live
+    if (job && ['queued', 'running', 'paused_limit', 'paused_manual'].includes(job.status) && (alive || job.status !== 'running')) {
+      (report.waiting ||= []).push({ what, reason: `waiting for job ${short} (${job.status})` });
+      return;
+    }
+    let why;
+    if (!id) why = 'the lease file names no readable holder';
+    else if (!job) why = `job ${short} has no job record`;
+    else if (alive) why = `job ${short} is ${job.status} but still has a live process`;
+    else if (!['completed', 'stopped'].includes(job.status)) why = `job ${short} is ${job.status}; its lease is kept until you decide`;
+    else {
+      const clean = typeof this.git.isClean === 'function' && job.worktree ? await this.git.isClean(job.worktree).catch(() => null) : null;
+      if (clean !== true) why = `job ${short} finished but its worktree ${clean === false ? 'has uncommitted work' : 'could not be checked'}`;
+      else {
+        try {
+          await this.jobs.release(id);
+          (report.recovered ||= []).push({ what, reason: `released the stale lease of finished job ${short}; its record is kept` });
+          await this.execute(act, report);
+          return;
+        } catch (again) {
+          if (!(again instanceof LeaseHeld)) throw again;
+          why = `released job ${short}'s lease but another job holds it now`;
+        }
+      }
+    }
+    const next = id ? `inspect ${job?.worktree ? `\`${job.worktree}\` and ` : ''}the job (\`ai-supervisor status ${id}\`); if nothing there is needed, run \`ai-supervisor release ${id}\`, then remove the needs-homeowner label so the team continues` : 'remove the unreadable file in <state root>/leases after checking no job needs it, then remove the needs-homeowner label';
+    const text = `**Needs the homeowner.** The dispatcher could not start the \`${act.type}\` job for ${act.pr != null ? `PR #${act.pr}` : `issue #${act.issue}`}: ${why}. Next step: ${next}.`;
+    (report.blocked ||= []).push({ what, reason: why.slice(0, 200) });
+    const key = `lease:${id || 'unknown'}`;
+    if (this.s.notified[key]) return;
+    const target = act.pr ?? act.issue;
+    await this.postNotice(target, `lease holder=${id || 'unknown'}`, text);
+    await this.gh.addLabel(target, 'needs-homeowner');
+    this.s.notified[key] = this.clock.now(); this.save();
+    if (this.alert) { try { await this.alert(`Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600)); } catch { (report.skipped ||= []).push({ what: 'alert lease holder', reason: 'alert delivery failed' }); } }
   }
   // A notice carries a stable marker and is never retried blindly: if GitHub accepted an earlier attempt but the response
   // was lost, the marker is already there and nothing is posted twice (same approach as verdict ingestion).
