@@ -45,7 +45,7 @@ h1{font-size:var(--fs-xl);margin:0 0 var(--sp3);line-height:1.2}h2{font-size:var
 .nav{display:flex;gap:var(--sp1);padding:0 var(--sp3);background:var(--surface);border-bottom:1px solid var(--line);overflow-x:auto}
 .nav a{display:flex;align-items:center;gap:var(--sp2);padding:0 var(--sp4);min-height:var(--nav-h);color:var(--mut);text-decoration:none;font-weight:600;border-bottom:3px solid transparent;white-space:nowrap}
 .nav a:hover{color:var(--fg)}.nav a[aria-current=page]{color:var(--fg);border-bottom-color:var(--link)}
-main{max-width:1500px;margin:0 auto;padding:var(--sp4)}
+main{width:100%;max-width:1500px;margin:0 auto;padding:var(--sp4)}   /* width:100%: in the flex-column docks, auto margins would shrink main to its content (issue #140) */
 .pagehead{display:flex;align-items:center;gap:var(--sp3);margin-bottom:var(--sp2);flex-wrap:wrap}
 .crumbs ol{display:flex;flex-wrap:wrap;gap:var(--sp1);list-style:none;margin:0;padding:0;font-size:var(--fs-sm)}
 .crumbs li{display:inline-flex;gap:var(--sp1);align-items:center}.crumbs .sep{color:var(--mut)}.crumbs [aria-current=page]{font-weight:650}
@@ -241,3 +241,7 @@ html.sb-overlay,html.sb-overlay *{scrollbar-width:none}
 a[title]{cursor:help}
 .issue-story{margin-bottom:var(--sp3)}.issue-story h3{margin:0 0 var(--sp1)}
 @media (max-width:640px){.trunc{max-width:34ch}.issue-story .trunc{max-width:100%}}
+
+/* issue #140: app bar carries the back button and page title; a gap before stacked card groups */
+.statusbar .pagehead{margin:0;flex:1 1 auto;min-width:0}.statusbar h1{font-size:var(--fs-lg);margin:0}
+.cards.stacked{margin-top:var(--sp3)}

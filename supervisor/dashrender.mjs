@@ -1,7 +1,7 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
-import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, DOCKS, PAGE_SIZES, RANGES, SEVERITIES, inRange, limitsOf, tableState, trail } from './dashui/logic.mjs';
+import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, inRange, limitsOf, tableState, trail } from './dashui/logic.mjs';
 import { resultSeverity } from './suphealth.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -251,18 +251,17 @@ function warningsPanel(view) {
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
   return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
-const dockPicker = `<div class="dockbar wide-only" role="group" aria-label="Navigation position"><span class="k">Nav</span>${DOCKS.map(d => `<button type="button" class="tbtn dockbtn" data-dock="${d}" aria-pressed="false" aria-label="Dock navigation ${d}" title="Dock ${d}">${d[0].toUpperCase()}${d.slice(1)}</button>`).join('')}</div>`;
-function statusBar(view, route) {
+function statusBar(view, route, head = '') {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
-  return `<header class="statusbar" role="banner"><div class="brand">${icon('pulse')} DevTest team</div>
+  return `<header class="statusbar" role="banner"><div class="brand">${icon('pulse')} DevTest team</div>${head}
 <div class="stat" title="Overall health">${badge(view.health.severity, view.health.label, 'big')}</div>
 <div class="stat"><span class="k">Last tick</span>${tickBadge}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat"><span class="k">Next</span>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : '<span class="muted">none</span>'}</div>
 <div class="stat"><span class="k">Data</span>${badge(fr.level, fr.label)}</div>
 <div class="stat"><span class="k">Team loop</span>${view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled')}</div>
 <div class="stat"><span class="k">Version</span>${v ? (v.running && v.running !== v.installed ? badge('warning', `running ${String(v.running).slice(0, 7)}, installed ${String(v.installed).slice(0, 7)}, restart pending`) : v.drift ? badge('warning', `${String(v.installed).slice(0, 7)} → ${String(v.main).slice(0, 7)} deploy needed`) : badge('ok', `${String(v.installed).slice(0, 7)} = main`)) : badge('info', 'unknown')}</div>
-${dockPicker}<button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>
+<button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>
 <nav class="nav" id="nav" aria-label="Pages"><span class="dock-handle wide-only" data-dock-handle title="Drag to a screen edge to dock the navigation" aria-hidden="true">${icon('drag')}</span>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
 }
 
@@ -362,7 +361,7 @@ function prDetail(view, query, path, route) {
   const facts = card({ id: 'facts', title: p.full || p.name, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(p.status)}</dd><dt>Author</dt><dd>${agentTag(p.agent, view)}</dd><dt>CI</dt><dd>${checksBadge(p.checks)}</dd><dt>Latest verdict</dt><dd>${verdictBadge(p.verdict)}</dd>
 <dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd></dl>` });
   const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${esc(utc(r.at))}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
-  const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${esc(utc(v.at))}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
+  const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)}${v.model ? ` <span class="sub">(${esc(v.model)})</span>` : ''} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${esc(utc(v.at))}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
   const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
   return { title: p.name || `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, p.name || `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs, 'fit') };
 }
@@ -429,7 +428,7 @@ function reviewsPage(view, query, path) {
   const m = card({ id: 'r-m', title: 'Issue start to merge (hours)', span: 6, expandable: true, body: barChart({ rows: merges, title: 'time from issue start to merge', emptyTitle: 'No merges recorded' }) });
   const rows = view.verdicts.map(r => ({ ...r, findingCount: r.findings.length }));
   const t = card({ id: 'r-t', title: 'Verdict history', span: 12, movable: false, body: table({ id: 'rev', path, query, noun: 'verdicts', rows, searchKeys: ['pr', 'reviewer', 'verdict', 'head'], totals: { pr: 'count', findingCount: 'avg' },
-    cols: [{ key: 'pr', label: 'PR', num: true, html: r => prLink(r.pr) }, { key: 'reviewer', label: 'Reviewer', html: r => agentTag(r.reviewer, view) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'head', label: 'Head', html: r => (r.fullHead ? shaCopy(r.fullHead) : `<span class="mono">${sha7(r.head)}</span>`), more: true },
+    cols: [{ key: 'pr', label: 'PR', num: true, html: r => prLink(r.pr) }, { key: 'reviewer', label: 'Reviewer', html: r => agentTag(r.reviewer, view) }, { key: 'model', label: 'Model', html: r => (r.model ? esc(r.model) : '<span class="muted">unknown</span>') }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'head', label: 'Head', html: r => (r.fullHead ? shaCopy(r.fullHead) : `<span class="mono">${sha7(r.head)}</span>`), more: true },
       { key: 'findingCount', label: 'Findings', num: true }, { key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)), more: true }], emptyState: empty('No reviews yet', 'Verdicts appear after the first review.', 'review') }) });
   return { title: 'Reviews', body: grid('reviews', v + m + t) };
 }
@@ -497,7 +496,7 @@ function supervisorPage(view, query, path) {
   const recent = s.ticks.slice(-5).reverse();
   const ticks = card({ id: 'h-recent', title: 'Recent ticks', span: 12, movable: false, href: '/supervisor/ticks', body: recent.length ? `<ul class="panel-list">${recent.map(t => `<li class="sev-${({ ok: 'ok', partial: 'warning', error: 'action' })[t.status] || 'info'}"><div class="t">${tickStatusBadge(t.status)} ${esc(utc(t.at))} <span class="sub">${esc(ago(t.at, view.generatedAt))}</span></div><div class="sub">${t.ingested.length} verdict(s), ${t.actions.length} action(s), ${t.skipped.length} skipped${t.errors.length ? `, ${t.errors.length} error(s)` : ''}${t.selfUpgrade ? `, self-upgrade ${esc(t.selfUpgrade)}` : ''}</div></li>`).join('')}</ul><p class="sub"><a href="/supervisor/ticks">Full tick history</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>`
     : empty('No tick in the reconcile log', 'The reconcile cron writes one entry every five minutes.', 'clock') });
-  return { title: 'Supervisor', body: `${grid('supervisor', cards)}<div class="cards">${ticks}${leases}</div>` };
+  return { title: 'Supervisor', body: `${grid('supervisor', cards)}<div class="cards stacked">${ticks}${leases}</div>` };
 }
 function ticksPage(view, query, path) {
   // A row expands through the URL (ticks.open=<time>), like the rest of the table state: bookmarkable, works without script,
@@ -529,9 +528,9 @@ export function renderRoute(view, route, { query = new URLSearchParams(), pathna
   const page = fn ? fn(view, query, pathname.replace(/\/+$/, '') || '/', route) : null;
   const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work'], [null, 'Not found']] };
   const steps = trail(route.page, res.crumbs || []), parent = [...steps].reverse().find(([h]) => h)?.[0];
-  const crumbs = steps.length ? `<div class="pagehead"><a class="btn back" href="${esc(parent || '/')}" data-back>${icon('back')}Back</a><nav class="crumbs" aria-label="Breadcrumb"><ol>${steps.map(([h, t], i) => `<li>${h ? `<a href="${esc(h)}">${esc(t)}</a>` : `<span aria-current="page">${esc(t)}</span>`}${i < steps.length - 1 ? '<span class="sep" aria-hidden="true">›</span>' : ''}</li>`).join('')}</ol></nav></div>` : '';
+  const crumbs = steps.length ? `<a class="btn back" href="${esc(parent || '/')}" data-back>${icon('back')}Back</a><nav class="crumbs" aria-label="Breadcrumb"><ol>${steps.map(([h, t], i) => `<li>${h ? `<a href="${esc(h)}">${esc(t)}</a>` : `<span aria-current="page">${esc(t)}</span>`}${i < steps.length - 1 ? '<span class="sep" aria-hidden="true">›</span>' : ''}</li>`).join('')}</ol></nav>` : '';
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="${refreshSeconds}"><title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
-<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route)}<main id="main">${crumbs}<h1>${esc(res.title)}</h1>${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><script type="module" src="/static/app.js"></script></body></html>`;
+<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route, (crumbs ? `<div class="pagehead">${crumbs}<h1>${esc(res.title)}</h1></div>` : `<h1>${esc(res.title)}</h1>`))}<main id="main">${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><script type="module" src="/static/app.js"></script></body></html>`;
   return { status: page ? 200 : 404, html };
 }
 // Kept for callers that only want the overview.

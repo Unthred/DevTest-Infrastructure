@@ -374,6 +374,8 @@ export function describeFor(j, { names, state }) {
   return redact(describeJob({ ...j, kind }, { names, rec, verdict, opened }), 400);
 }
 
+// Which model made a decision (issue #140): provider, model and effort of the job that produced it, as recorded on the job.
+const modelOf = j => (j ? [j.provider, j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
 function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
@@ -390,7 +392,7 @@ function activity({ config, jobs, events, state, cache, snapshots, now, incident
   for (const [id, tj] of Object.entries(state.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at))
     rows.push({ at: tj.at, text: `${names.job({ id, kind: 'rebase', pr: tj.pr }).text}: ${shortCommit(tj.rebase.oldHead)} -> ${shortCommit(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
   for (const u of state.unblock?.log || []) if (Number.isFinite(u.at)) rows.push({ at: u.at, text: `Foreman unblocked: ${u.what}, ${u.why}, ${u.result}`, link: link(u.tk === 'issue' ? 'issue' : 'pull', u.target) });
-  for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on ${names.pr(Number(pr)).text} at ${shortCommit(head)}`, link: link('pull', Number(pr)) }); }
+  for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); const mdl = modelOf(jobById.get(v.job)); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on ${names.pr(Number(pr)).text} at ${shortCommit(head)}${mdl ? ` (${mdl})` : ''}`, link: link('pull', Number(pr)) }); }
   for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged ${names.pr(m.pr).text}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
   for (const i of incidents) if (i.kind === 'migration') rows.push({ at: i.at, text: `config migration ${String(i.number).padStart(3, '0')}-${i.name} ${i.result}${i.result === 'failed' ? `: ${i.error}` : `: ${i.description || ''}`}`, link: null });
   // ticks take part in the same newest-first ordering and 50-event bound as every other event (issue #32)
@@ -541,7 +543,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     id: shortJob(j.id), fullId: j.id, desc: describeFor(j, { names, state }), name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100) }));
-  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, verdict: v.verdict || null, at: v.at ?? null,
+  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobs.find(j => j.id === v.job)), verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
@@ -556,7 +558,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,
-      timeline: [...vs.map(v => ({ at: v.at, text: `${v.reviewer}: ${v.verdict} at ${v.head}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length === 1 ? '' : 's'})` : ''}` })),
+      timeline: [...vs.map(v => ({ at: v.at, text: `${v.reviewer}${v.model ? ` (${v.model})` : ''}: ${v.verdict} at ${v.head}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length === 1 ? '' : 's'})` : ''}` })),
         ...(m ? [{ at: m.mergedAt, text: 'merged' }] : []), ...prJobs.map(j => ({ at: j.startedAt, text: `${j.agent}: ${j.kind} job ${j.status}` }))].filter(r => Number.isFinite(r.at)).sort((a, b) => a.at - b.at) };
   });
   const byNo = new Map((cache.issues || []).map(i => [i.number, i]));

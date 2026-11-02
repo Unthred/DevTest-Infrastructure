@@ -64,6 +64,8 @@ export function tableState(rows, { sort, dir = 'asc', q = '', page = 1, pageSize
 // ---- time range for charts
 export const RANGES = { '24h': 24 * 3600000, '7d': 7 * 86400000, '30d': 30 * 86400000 };
 export const DEFAULT_RANGE = '7d';
+// The range to show (issue #140): an explicit address wins; otherwise the viewer's saved choice if it is a known range.
+export const chooseRange = (saved, inUrl) => (inUrl in RANGES ? inUrl : saved in RANGES ? saved : DEFAULT_RANGE);
 export const rangeMs = r => RANGES[r] ?? RANGES[DEFAULT_RANGE];
 export const inRange = (at, now, range) => Number.isFinite(at) && now - at <= rangeMs(range) && at <= now + 60000;
 
@@ -85,6 +87,7 @@ export function applyLayout(ids, saved, bp) {
 
 // ---- card resizing (issue #58): snap to the grid, limits per card type, never smaller than the content
 export const ROW_STEP = 40;   // px: card heights snap to this step
+export const MIN_CARD_H = 120;   // px: a resized card never gets shorter than this, even when its content is shorter
 // Width is in grid columns (12 on desktop, 6 on tablet). A saved height is a min-height, so content can never be clipped.
 // vlock: the card's height is its content (charts scale with their width, KPI tiles are one fixed shape).
 export const CARD_LIMITS = {
@@ -114,7 +117,7 @@ export function resizeBox({ edge, dx, dy, span, h, natH = 0, colW, type, bp = 'd
   nSpan = clamp(nSpan, sl.min, sl.max);
   let nH = h;
   if (!l.vlock && (e.includes('s') || e.includes('n'))) {
-    const floor = Math.max(ROW_STEP, Math.ceil(natH / ROW_STEP) * ROW_STEP);
+    const floor = Math.max(MIN_CARD_H, Math.ceil(natH / ROW_STEP) * ROW_STEP);
     nH = clamp(Math.round((h + (e.includes('s') ? ddy : -ddy)) / ROW_STEP) * ROW_STEP, floor, Math.max(floor, l.maxH));
   }
   return { span: nSpan, h: l.vlock ? null : nH };
