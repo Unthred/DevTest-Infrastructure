@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
-import { validateModelsConfig, mergeModelsConfig, resolveModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
+import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { redact } from './redact.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
@@ -415,14 +415,11 @@ export class Team {
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
     const base = { modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low };
     let { fields, warnings } = resolveModel(base);
-    // Issue #316: an escalation that would leave the PR with no available independent reviewer is not chosen automatically; the
-    // job keeps the model it would have had without the escalation (a fresh session with the review findings).
-    if (fields.modelSource === 'escalated' && act.pr != null && act.agent && !act.noStrandCheck) {
-      const strand = this.strandsReviewer({ number: act.pr, headRefName: act.branch }, act.agent, fields.model ?? null);
-      if (strand) {
-        ({ fields, warnings } = resolveModel({ ...base, escalation: null }));
-        fields = { ...fields, modelReason: `escalation withheld: ${strand}`.slice(0, 200), escalationWithheld: true };
-      }
+    // Issue #316 (homeowner decision 2 Nov 2026): a writing job never runs on a model its agent is configured to review with, and never
+    // on a model that would leave the PR with no available independent reviewer. It is refused, not given a different model.
+    if (WRITER_KINDS.has(kind) && !act.noWriteGuard) {
+      const refusal = this.writeRefusal(act, kind, fields.model ?? null);
+      if (refusal) fields = { ...fields, writeRefusal: refusal.slice(0, 300) };
     }
     // Issue #258: a review uses the first candidate of the agent's ordered list that is independent of every writer of the PR; the
     // low-allowance fix-round re-review entry keeps its rule and is checked as it stands. With none independent the first candidate
@@ -509,12 +506,17 @@ export class Team {
     const out = this.agents().filter(([a]) => a !== agent && unavailable(a)).map(([a]) => a);
     return `running ${agent} on ${model || 'its default model'} would make every configured review model a writer of PR #${pr.number}${out.length ? `, and ${out.join(' and ')} cannot review now (out of allowance or waiting)` : ', and no other agent is configured to review'}`;
   }
-  // Issue #316: why the one escalated fix round must not run on this PR, or null. Evaluated with the escalated model.
-  escalationBlock(pr) {
+  // Issue #316: why a writing job (the fix/ci-fix of this PR's author) must not run now, or null. Used by the planner and the dashboard.
+  writeBlock(pr, kind = 'fix') {
     const agent = agentOfBranch(this.c, pr.headRefName);
-    if (!agent || !this.c.models?.agents?.[agent]) return null;
-    const f = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, escalated: true, noStrandCheck: true, key: `esc:${pr.number}` }, 'fix', {}, true);
-    return f.modelSource === 'escalated' ? this.strandsReviewer(pr, agent, f.model ?? null) : null;
+    if (!agent || !this.c.agents[agent]) return null;
+    return this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key: `wb:${pr.number}` }, kind, {}, true).writeRefusal || null;
+  }
+  writeRefusal(act, kind, model) {
+    const table = this.c.models?.agents?.[act.agent];
+    if (model && reviewModelsOf(table).has(model)) return `${act.agent}'s ${model} model is one of its configured review models, so it is not given ${kind} work`;
+    if (act.pr != null) return this.strandsReviewer({ number: act.pr, headRefName: act.branch }, act.agent, model);
+    return null;
   }
   // Review models whose approval would unblock: models of this agent's provider known to its manifest that no writer used. Empty when
   // none is known (the dashboard has no manifests) or an unrecorded writer makes no model provably different.
@@ -787,6 +789,7 @@ export class Team {
       // Issue #266: with a merge backlog, rebase only the PR that is next to merge (merges go in PR-number order), and let a
       // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
       if (this.rebaseDeferred(pr, prs, issueByNo, busy)) break;
+      if (this.writeBlock(pr, 'rebase')) continue;
       if (!allow('rebase')) break;
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
@@ -795,7 +798,7 @@ export class Team {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
-      if (busy('cifix', key) || (escalated && !this.canEscalate(pr.number, pr))) continue;
+      if (busy('cifix', key) || (escalated && !this.canEscalate(pr.number, pr)) || this.writeBlock(pr, 'cifix')) continue;
       if (!allow('cifix')) break;
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks: failingChecks(pr.statusCheckRollup, this.retried(pr)), key, ...(escalated ? { escalated: true } : {}) };
     }
@@ -805,7 +808,7 @@ export class Team {
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key)) continue;
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
-      if (escalated && !this.canEscalate(pr.number, pr)) continue;
+      if ((escalated && !this.canEscalate(pr.number, pr)) || this.writeBlock(pr)) continue;
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
     }
@@ -855,7 +858,7 @@ export class Team {
     for (const pr of repair ? prs : []) {
       const n = this.draftIssue(agent, a, pr, issueByNo);
       if (n == null || !SHA.test(pr.headRefOid) || busy('continue', String(pr.number)) || busy('implement', String(n)) || this.taken?.has(`issue:${n}`)) continue;
-      if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts) continue;
+      if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts || this.writeBlock(pr, 'continue')) continue;
       if (!allow('continue')) break;
       return { type: 'continue', pr: pr.number, issue: n, head: pr.headRefOid, branch: pr.headRefName, key: String(pr.number) };
     }
@@ -1430,10 +1433,10 @@ export class Team {
       if (this.escalationPending(pr.number, pr)) continue;   // issue #163: one escalated round runs (or is still allowed) before the homeowner is asked
       // The escalated round was never run because the unblock budget is spent: that limit is its own Needs you item, and the
       // fix-limit notice says that no escalated round ran rather than claiming one did.
-      const escalated = !!this.s.unblock.escalated[pr.number], room = escalated ? null : this.unblockRoom(pr.number), block = escalated || room ? null : this.escalationBlock(pr);
+      const escalated = !!this.s.unblock.escalated[pr.number], room = escalated ? null : this.unblockRoom(pr.number), block = escalated || room ? null : this.writeBlock(pr);
       if (room) await guard(`unblock limit ${pr.number}`, () => this.raiseUnblockLimit(report, pr.number, room, 'pull'));
-      const round = escalated ? ' (including one escalated round on the reviewer-tier model with the full review history)'
-        : room ? ` (no escalated round ran: Foreman reached ${room.text})` : block ? ` (no escalated round ran: ${block}; the earlier rounds each used a fresh session with the review findings)` : ' (no escalated round ran)';
+      const round = escalated ? ' (including one final round, a fresh session on the same model with the full review history and the option to split out-of-scope findings)'
+        : room ? ` (no escalated round ran: Foreman reached ${room.text})` : block ? ` (no further round ran: ${block}; the earlier rounds each used a fresh session with the review findings)` : ' (no escalated round ran)';
       if (!this.s.notified[nkey]) {
         await guard(`fix-limit ${pr.number}`, async () => {
           this.s.notified[nkey] = this.clock.now(); this.save();
@@ -1549,7 +1552,7 @@ export class Team {
     }
   }
   // Fix limit (issue #163 part 3): one escalated round per PR on the reviewer-tier model with the full review history.
-  canEscalate(pr, prObj = null) { return !this.s.unblock.escalated[pr] && !this.unblockRoom(pr) && !(prObj && this.escalationBlock(prObj)); }
+  canEscalate(pr, prObj = null) { return !this.s.unblock.escalated[pr] && !this.unblockRoom(pr) && !(prObj && this.writeBlock(prObj)); }
   escalationPending(pr, prObj = null) {
     return this.canEscalate(pr, prObj) || Object.values(this.s.jobs).some(j => j.pr === pr && j.escalated && !j.ingested);
   }
@@ -1800,6 +1803,7 @@ export class Team {
       bump = async () => { this.s.implemented[act.issue] = this.clock.now(); await this.gh.board(act.issue, 'in_progress'); };
     }
     Object.assign(spec, this.modelFor(act, spec.kind, report));
+    if (spec.writeRefusal) { (report.warnings ||= []).push({ agent: act.agent, kind: spec.kind, warning: `job not started: ${spec.writeRefusal}` }); return; }
     const create = async () => {
       const job = await this.jobs.create(spec);   // a lease conflict throws here, before any attempt is counted
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
@@ -1813,7 +1817,7 @@ export class Team {
     const room = this.unblockRoom(act.pr);
     if (room) { await this.raiseUnblockLimit(report, act.pr, room, 'pull'); return; }
     this.s.unblock.escalated[act.pr] = { head: act.head, at: this.clock.now() }; this.save();
-    try { await this.unblock(report, { target: act.pr, tk: 'pull', what: `escalated the ${act.type === 'cifix' ? 'CI fix' : 'fix'} of PR #${act.pr}`, why: `${this.fixCount(act.pr)} fix rounds did not clear ${this.rejectionCause(this.view?.prs?.find?.(p => p.number === act.pr) || { number: act.pr, headRefOid: act.head })} (limit ${L_MAX(this)}); one round runs on the reviewer-tier model with the full review history` }, create); }
+    try { await this.unblock(report, { target: act.pr, tk: 'pull', what: `escalated the ${act.type === 'cifix' ? 'CI fix' : 'fix'} of PR #${act.pr}`, why: `${this.fixCount(act.pr)} fix rounds did not clear ${this.rejectionCause(this.view?.prs?.find?.(p => p.number === act.pr) || { number: act.pr, headRefOid: act.head })} (limit ${L_MAX(this)}); one final round runs as a fresh session on the same model with the full review history` }, create); }
     catch (error) { delete this.s.unblock.escalated[act.pr]; this.save(); throw error; }
   }
 

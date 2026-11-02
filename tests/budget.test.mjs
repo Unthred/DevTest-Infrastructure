@@ -294,7 +294,7 @@ test('re-reviews use the configured lower-cost entry while the reviewer is low; 
   assert.equal(r({ reReview: false, low: true }).model, 'sonnet');
   assert.equal(r({ reReview: true, low: false }).model, 'sonnet');
   const fix = resolveModel({ modelsConfig: { agents: { claude: { fix: { model: 'sonnet' }, strong: { model: 'opus' } } } }, agent: 'claude', kind: 'fix', manifestModels, escalation: { reason: 'x' }, utilization: null, low: true }).fields;
-  assert.deepEqual([fix.model, fix.modelSource], ['sonnet', 'allowance'], 'escalation is suppressed while low');
+  assert.deepEqual([fix.model, fix.modelSource], ['sonnet', 'configured'], 'escalation never changes the model (issue #316)');
 });
 
 test('dispatcher: a fix-round re-review by a reviews-only agent gets its low entry', async t => {

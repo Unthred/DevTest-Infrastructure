@@ -132,9 +132,9 @@ test('review_candidates is validated', () => {
   }
 });
 
-test('the shipped config lists Opus then Sonnet for Claude, and no Haiku or Fable', () => {
+test('the shipped config lists only Opus for Claude (Sonnet writes, issue #316), and no Haiku or Fable', () => {
   const shipped = JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
-  assert.deepEqual(shipped.models.agents.claude.review_candidates.map(c => c.model), ['opus', 'sonnet']);
+  assert.deepEqual(shipped.models.agents.claude.review_candidates.map(c => c.model), ['opus']);
   assert.equal(shipped.models.agents.codex.review_candidates, undefined);
 });
 

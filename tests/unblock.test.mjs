@@ -118,7 +118,7 @@ test('fix limit: no notice while the escalation is pending; one escalated fix ru
   const r = await w.team.tick();
   assert.equal(w.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 0, 'the homeowner is not asked before the escalated round');
   const spec = w.calls.created[0];
-  assert.equal(spec.kind, 'fix'); assert.equal(spec.modelSource, 'escalated'); assert.match(spec.prompt, /escalated round/); assert.match(spec.prompt, /review-history\.json/);
+  assert.equal(spec.kind, 'fix'); assert.equal(spec.modelSource, 'configured'); assert.match(spec.prompt, /escalated round/); assert.match(spec.prompt, /review-history\.json/);
   const [jobId, rec] = Object.entries(w.team.s.jobs)[0];
   const history = JSON.parse(fs.readFileSync(path.join(w.team.dir, 'inbox', rec.ticket, 'review-history.json'), 'utf8'));
   assert.deepEqual(history.verdicts.map(v => v.head), [H(0), H(1)]); assert.equal(history.verdicts[0].findings[0].text, 'first head problem');
@@ -140,7 +140,7 @@ test('fix limit: red CI escalates once too', async t => {
   const w = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1), { statusCheckRollup: failed })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   w.team.s.fixAttempts[`38:${H(0)}`] = 2;
   await w.team.tick();
-  assert.equal(w.calls.created[0].kind, 'cifix'); assert.equal(w.calls.created[0].modelSource, 'escalated'); assert.match(w.calls.created[0].prompt, /review-history\.json/);
+  assert.equal(w.calls.created[0].kind, 'cifix'); assert.equal(w.calls.created[0].modelSource, 'configured'); assert.match(w.calls.created[0].prompt, /review-history\.json/);
   assert.equal((await w.team.plan()).some(a => a.type === 'cifix'), false);
 });
 
