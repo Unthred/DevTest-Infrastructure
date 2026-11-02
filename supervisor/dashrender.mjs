@@ -311,13 +311,13 @@ function sincePanel(view, query) {
   const sv = view.since, now = view.generatedAt;
   const range = Object.hasOwn(SINCE_RANGES, query.get('since')) ? query.get('since') : DEFAULT_SINCE, r = sv.ranges[range];
   const picker = `<div class="ranges" role="group" aria-label="Summary range">${Object.entries(SINCE_RANGES).map(([k, label]) => `<a href="${esc(withQuery('/', query, { since: k === DEFAULT_SINCE ? null : k }))}"${k === range ? ' aria-current="true"' : ''}>${esc(label)}</a>`).join('')}</div>`;
-  const when = sv.lastSeen === null ? 'never marked as read' : utc(sv.lastSeen);
+  const when = sv.lastSeen === null ? 'never marked as read' : lt(sv.lastSeen);
   const total = SECTIONS.slice(0, 5).reduce((n, [k]) => n + r[k].length, 0);
   const item = i => `<li>${i.url ? `<a href="${esc(i.url)}">${esc(i.text)}</a>` : esc(i.text)}${Number.isFinite(i.at) ? ` <span class="muted">${esc(ago(i.at, now))}</span>` : ''}</li>`;
   const sections = SECTIONS.map(([k, label]) => `<div class="since-sec"><h3>${esc(label)} <span class="muted">(${r[k].length})</span></h3>${r[k].length ? `<ul class="since-list">${r[k].slice(0, 30).map(item).join('')}${r[k].length > 30 ? `<li class="muted">and ${r[k].length - 30} more</li>` : ''}</ul>` : '<p class="muted">None</p>'}</div>`).join('');
-  const body = `<div class="since-head"><span>Showing ${esc(r.label.toLowerCase())}, from ${esc(utc(r.from))}${r.fallback ? ' (you have not marked anything as read yet, so this is the last 24 h)' : ''}.</span>${copyBtn(r.text, 'the summary', { label: 'Copy summary' })}<form method="post" action="/mark-read" class="since-mark"><input type="hidden" name="at" value="${esc(now)}"><button class="btn" type="submit">Mark as read</button></form></div>
+  const body = `<div class="since-head"><span>Last marked as read: ${when}. Showing ${esc(r.label.toLowerCase())}, from ${lt(r.from)}${r.fallback ? ' (you have not marked anything as read yet, so this is the last 24 h)' : ''}.</span>${copyBtn(r.text, 'the summary', { label: 'Copy summary' })}<form method="post" action="/mark-read" class="since-mark"><input type="hidden" name="at" value="${esc(now)}"><button class="btn" type="submit">Mark as read</button></form></div>
 <p class="since-tokens">Tokens used: <b>${r.tokens === null ? 'unknown' : esc(num(r.tokens))}</b> <span class="muted">across ${r.tokenJobs} job${r.tokenJobs === 1 ? '' : 's'}</span></p>${total || r.needsYou.length ? '' : '<p class="muted">Nothing has happened in this range.</p>'}<div class="since-grid">${sections}</div>`;
-  return card({ id: 'since', title: `Since you were last here (${when})`, span: 12, tools: picker, body, cls: 'panel since', type: 'panel' });
+  return card({ id: 'since', title: 'Since you were last here', span: 12, tools: picker, body, cls: 'panel since', type: 'panel' });
 }
 
 // ---- pages
@@ -587,7 +587,7 @@ function healthBody(c, view) {
     dl = `<dt>Installed</dt><dd>${shaCopy(c.installed)}${c.installedAt ? ` <span class="sub">since ${lt(c.installedAt)}</span>` : ''}</dd><dt>origin/main</dt><dd>${shaCopy(c.origin)}</dd>
 <dt>Upgrade step</dt><dd>${esc(c.step || 'not reported')}</dd>
 <dt>Last install</dt><dd>${c.install ? `${badge(c.install.severity, c.install.result)}${c.install.sha ? ` ${shaCopy(c.install.sha)}` : ''}${c.install.at ? ` <span class="sub">${esc(ago(c.install.at, now))}</span>` : ''}${c.install.reason ? `<br>${errCopy(c.install.reason)}` : ''}` : '<span class="muted">no record</span>'}</dd>
-<dt>Next attempt</dt><dd>${c.install?.nextAttemptAt ? esc(utc(c.install.nextAttemptAt)) : '<span class="muted">none scheduled</span>'}</dd>
+<dt>Next attempt</dt><dd>${c.install?.nextAttemptAt ? lt(c.install.nextAttemptAt) : '<span class="muted">none scheduled</span>'}</dd>
 <dt>Last upgrade</dt><dd>${u ? `${badge(resultSeverity(u.result), u.result)} ${shaCopy(u.from)} → ${shaCopy(u.to)} <span class="sub">${esc(ago(u.at, now))}</span>${u.reason ? `<br>${errCopy(u.reason)}` : ''}` : '<span class="muted">no record</span>'}</dd>
 <dt>Pre-check latched</dt><dd>${list(c.prechecked.map(p => `<li>${shaCopy(p.sha)} since ${lt(p.at)}${p.isMain ? ` ${badge('warning', 'is origin/main')}` : ''}</li>`))}</dd>
 ${c.latch ? `<dt>Rollback latch</dt><dd>${badge('action', 'Set')} ${errCopy(c.latch.reason)}</dd>` : ''}${c.pending ? `<dt>Pending</dt><dd>${shaCopy(c.pending.to)} awaiting a live tick</dd>` : ''}`;

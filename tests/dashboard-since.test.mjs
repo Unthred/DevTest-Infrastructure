@@ -86,7 +86,7 @@ async function serve(t) {
 
 test('page shows the panel with a copy button, a picker and Mark as read; page load does not move the marker', async t => {
   const s = await serve(t), body = (await s.get('/')).body;
-  assert.match(body, /Since you were last here \(never marked as read\)/);
+  assert.match(body, /Last marked as read: never marked as read/);
   assert.match(body, /data-copy="[^"]*PRs merged: 1/);
   assert.match(body, /<form method="post" action="\/mark-read"/);
   assert.match(body, /Last 24 h/); assert.match(body, /href="\/\?since=today"/);
@@ -96,7 +96,7 @@ test('page shows the panel with a copy button, a picker and Mark as read; page l
 
 test('range picker through the URL changes the window; an unknown value falls back to the default', async t => {
   const s = await serve(t);
-  assert.match((await s.get('/?since=today')).body, /Showing today, from 2026-11-02 00:00 UTC/);
+  assert.match((await s.get('/?since=today')).body, /Showing today, from <time[^>]*data-local>2026-11-02 00:00 UTC<\/time>/);
   assert.match((await s.get('/?since=nonsense')).body, /Showing since last visit/);
 });
 
@@ -106,7 +106,7 @@ test('Mark as read moves the marker to the page time and the next view uses it',
   assert.equal(r.status, 303); assert.equal(r.headers.location, '/');
   assert.equal(readLastSeen(s.root), H(2));
   const body = (await s.get('/')).body;
-  assert.match(body, /Since you were last here \(2026-11-02 13:00 UTC\)/);
+  assert.match(body, /Last marked as read: <time[^>]*data-local>2026-11-02 13:00 UTC<\/time>/);
   assert.match(body, /PRs merged <span class="muted">\(0\)/);          // the merge 4 h ago is now before the marker
   assert.equal((await s.post(H(9))).status, 303); assert.equal(readLastSeen(s.root), H(2), 'never moves backwards');
 });

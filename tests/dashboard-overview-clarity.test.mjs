@@ -236,3 +236,12 @@ test('time: estimates name the zone they are computed in', async t => {
   const html = page(v, { page: 'work' });
   if (/class="sub est"/.test(html)) assert.match(html, /class="sub est"[^>]*>[\s\S]*?<span class="tzl">\(UTC\)<\/span>/);
 });
+
+// Review of PR #217 (head 2d7d76a): the Since card and the Version health card's Next attempt must be <time data-local>,
+// never plain server-rendered UTC text. Guard: no remaining esc(utc(...)) in a visible text outside a chart <title> that carries data-lms.
+test('time: no visible timestamp is rendered as plain utc() text', () => {
+  const src = fs.readFileSync(new URL('../supervisor/dashrender.mjs', import.meta.url), 'utf8');
+  const bad = src.split('\n').filter(l => /esc\(utc\(/.test(l) && !/data-lms|lms\(|data-local/.test(l));
+  assert.deepEqual(bad, []);
+  assert.doesNotMatch(src, /\$\{when\}\)`/);
+});
