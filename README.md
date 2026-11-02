@@ -32,6 +32,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 | [docs/architecture.md](docs/architecture.md) | Components, tracks, storage, security model |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Binding decisions, status, rejected alternatives, open questions |
 | [docs/cli-contract.md](docs/cli-contract.md) | `dev-test` commands, exit codes, result schema, setup and policy (issue #8: `bin/dev-test`, `cli/`) |
+| [docs/blazor-demo.md](docs/blazor-demo.md) | Blazor end-to-end demonstration (`tools/blazor-demo.mjs`) and applying the runner to other projects (issue #11) |
 | [docs/agent-provider-contract.md](docs/agent-provider-contract.md) | Provider adapter contract shared with the supervisor (#15) |
 | [docs/docker-runner.md](docs/docker-runner.md) | Host-side pinned-image Docker foundation and Tower smoke (issue #2) |
 | [docs/ci-and-images.md](docs/ci-and-images.md) | CI split, image pin/update/cache policy, `tools/ci/check-ci.mjs` (issue #12) |
