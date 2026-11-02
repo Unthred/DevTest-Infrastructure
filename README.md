@@ -14,6 +14,7 @@ On-demand, pinned official Docker-based .NET SDK 8/9/10 builds/tests and Playwri
 - Both agents work on separate branches and isolated worktrees; never touch another agent's worktree or overwrite shared handovers. Cross-review before merge.
 - These are issue role hints, not GitHub user assignees. The single shared CLI contract is designed in #1 and integrated in #8.
 - Project board is coordination only; issue dependencies and handover remain authoritative.
+- The cooperative-work protocol (ownership, exclusive files, merges, exit duties) is [docs/cooperative-work.md](docs/cooperative-work.md); `node tools/cooperation.mjs` checks it.
 
 ## Security
 - Use **OpenBao** for credentials wherever possible, with least privilege and no secrets in Git, artifacts, issue logs or CLI arguments.
