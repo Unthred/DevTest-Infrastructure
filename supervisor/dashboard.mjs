@@ -12,6 +12,7 @@ import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth } from './suphealth.mjs';
 import { MODE_LABEL } from './budget.mjs';
 import { estimateQueue } from './estimate.mjs';
+import { sinceView } from './since.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -528,7 +529,7 @@ export function refsOf({ names, cache, jobs, state }) {
   return out;
 }
 
-export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running }) {
+export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
@@ -579,6 +580,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {
       ...extra,
+      since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),
       estimates,
       generatedAt: now, repository: config.repository, teamEnabled: config.enabled !== false,

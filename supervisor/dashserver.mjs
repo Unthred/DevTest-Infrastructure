@@ -2,7 +2,7 @@
 // tick wrote; it makes no GitHub call and no model call, and exposes no endpoint that changes anything (GET/HEAD only).
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
-import { readCache, readEvents, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
+import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { buildView } from './dashboard.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
@@ -47,7 +47,7 @@ export async function currentView({ root, config, now = Date.now() }) {
   if (typeof config === 'function') config = config();
   const jobs = readJobs(root);
   const register = registerCached(config);
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, register, registerUnreadable: !register });
+  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, lastSeen: readLastSeen(root), register, registerUnreadable: !register });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request.
@@ -55,16 +55,31 @@ const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], 
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
-  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
+  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" };
 
 export function handler({ root, config, host, port, now = () => Date.now() }) {
   const source = configSource(config);
   const allowedHost = `${host}:${port}`;
+  // Mark as read (issue #253): the only write. Same-origin form POST; moves the marker to the time the page was built, so work that
+  // finished between page load and click is still shown next time. It can never move the marker backwards or into the future.
+  const markRead = async (req, res, send) => {
+    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+    if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    const at = Number(form.get('at')), t = now(), prev = readLastSeen(root);
+    if (!/^\d{10,15}$/.test(form.get('at') || '') || at > t) return send(400, 'text/plain; charset=utf-8', 'bad time');
+    writeLastSeen(root, Math.max(at, prev ?? 0));
+    return send(303, 'text/plain; charset=utf-8', 'marked', { location: '/' });
+  };
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
+    const [reqPath] = (req.url || '/').split('?');
+    if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain; charset=utf-8', 'read-only dashboard', { allow: 'GET, HEAD' });
     if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');   // blocks DNS-rebinding
-    const [path, search = ''] = (req.url || '/').split('?');
+    const [, search = ''] = (req.url || '/').split('?'), path = reqPath;
     try {
       if (path === '/healthz') return send(200, 'text/plain; charset=utf-8', 'ok\n');
       if (STATIC[path]) return send(200, STATIC[path][1], staticFile(STATIC[path][0]));

@@ -3,6 +3,7 @@
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
 import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, countText, inRange, limitsOf, pillLinks, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
+import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
@@ -278,6 +279,20 @@ function statusBar(view, route, head = '') {
 <nav class="nav" id="nav" aria-label="Pages"><span class="dock-handle wide-only" data-dock-handle title="Drag to a screen edge to dock the navigation" aria-hidden="true">${icon('drag')}</span>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
 }
 
+// ---- "Since you were last here" (issue #253): the range lives in the URL (?since=), Mark as read is a same-origin form POST.
+function sincePanel(view, query) {
+  const sv = view.since, now = view.generatedAt;
+  const range = query.get('since') in SINCE_RANGES ? query.get('since') : DEFAULT_SINCE, r = sv.ranges[range];
+  const picker = `<div class="ranges" role="group" aria-label="Summary range">${Object.entries(SINCE_RANGES).map(([k, label]) => `<a href="${esc(withQuery('/', query, { since: k === DEFAULT_SINCE ? null : k }))}"${k === range ? ' aria-current="true"' : ''}>${esc(label)}</a>`).join('')}</div>`;
+  const when = sv.lastSeen === null ? 'never marked as read' : utc(sv.lastSeen);
+  const total = SECTIONS.slice(0, 5).reduce((n, [k]) => n + r[k].length, 0);
+  const item = i => `<li>${i.url ? `<a href="${esc(i.url)}">${esc(i.text)}</a>` : esc(i.text)}${Number.isFinite(i.at) ? ` <span class="muted">${esc(ago(i.at, now))}</span>` : ''}</li>`;
+  const sections = SECTIONS.map(([k, label]) => `<div class="since-sec"><h3>${esc(label)} <span class="muted">(${r[k].length})</span></h3>${r[k].length ? `<ul class="since-list">${r[k].slice(0, 30).map(item).join('')}${r[k].length > 30 ? `<li class="muted">and ${r[k].length - 30} more</li>` : ''}</ul>` : '<p class="muted">None</p>'}</div>`).join('');
+  const body = `<div class="since-head"><span>Showing ${esc(r.label.toLowerCase())}, from ${esc(utc(r.from))}${r.fallback ? ' (you have not marked anything as read yet, so this is the last 24 h)' : ''}.</span>${copyBtn(r.text, 'the summary', { label: 'Copy summary' })}<form method="post" action="/mark-read" class="since-mark"><input type="hidden" name="at" value="${esc(now)}"><button class="btn" type="submit">Mark as read</button></form></div>
+<p class="since-tokens">Tokens used: <b>${r.tokens === null ? 'unknown' : esc(num(r.tokens))}</b> <span class="muted">across ${r.tokenJobs} job${r.tokenJobs === 1 ? '' : 's'}</span></p>${total || r.needsYou.length ? '' : '<p class="muted">Nothing has happened in this range.</p>'}<div class="since-grid">${sections}</div>`;
+  return card({ id: 'since', title: `Since you were last here (${when})`, span: 12, tools: picker, body, cls: 'panel since', type: 'panel' });
+}
+
 // ---- pages
 const agentCols = view => ({ agent: { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) } });
 function overview(view, query) {
@@ -307,7 +322,7 @@ function overview(view, query) {
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
-  return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', panels + kpis + charts)}`, bodyClass: 'overview' };
+  return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
 }
 
 function agentsPage(view, query, path) {

@@ -265,3 +265,9 @@ li:target{outline:3px solid var(--focus);outline-offset:2px;border-radius:var(--
 html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-area-inset-bottom))}
 @media(max-width:639px){.to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-area-inset-bottom));width:44px;height:44px;opacity:.92}}
 @media print{.to-top{display:none!important}}
+
+/* Since you were last here (issue #253) */
+.since-head{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:center}.since-head>span{flex:1 1 20ch}.since-mark{margin:0}
+.since-tokens{margin:var(--sp2) 0}
+.since-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:var(--sp3)}
+.since-sec h3{font-size:1rem;margin:0 0 var(--sp1)}.since-list{margin:0;padding-left:1.1em;overflow-wrap:anywhere}.since-sec p{margin:0}

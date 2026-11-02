@@ -86,3 +86,10 @@ Until the server is on the installed version, the Warnings panel shows "Dashboar
 - **Status colours:** the version pill reads *Up to date* (green), *Deploy needed* or *Restart needed* (amber, with the versions), *Upgrade failed* (rolled back) or *Upgrade latched* (red). The same rule feeds the System page.
 - **Clickable header pills:** health, last tick, data, team loop and version each link to what explains them (`/system#att-<id>` for a Needs-you item, `/supervisor#c-h-tick`, `/supervisor#c-h-version`, `/system#c-sys`). The target card or item is outlined with `:target`.
 - The script now makes one same-origin GET (the table update above); it still sends nothing.
+
+## Since you were last here (issue #253)
+A panel at the top of Overview summarises PRs merged, PRs opened, reviews (PASS / changes), issues completed, jobs failed or blocked, what needs you now, and tokens used. Every item is number + title (naming.mjs). It is built from the job records, merge log and verdicts the supervisor already keeps (`supervisor/since.mjs`): no model call, no GitHub call. Opened PRs are counted from finished implement/continue jobs; completed issues from the merge log.
+
+- **Range:** `?since=visit` (default), `24h` or `today` (UTC day). With no marker yet, "since last visit" shows the last 24 h and says so.
+- **Marker:** `dashboard/last-seen.json` on the server. It moves only when Mark as read is pressed (a same-origin form POST to `/mark-read`, no script needed), never on page load. It is set to the time the page was built, never moves backwards, and rejects a missing or foreign `Origin`, a bad host, and a future time. It is the dashboard's only write; every other request stays GET/HEAD.
+- **Copy summary** puts the plain-text summary on the clipboard (same copy mechanism as issue #72). The layout is responsive and works on a phone.
