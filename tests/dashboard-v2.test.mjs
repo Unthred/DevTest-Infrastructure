@@ -174,7 +174,7 @@ test('every page has its own URL, answers 200 with the navigation bar, and marks
     assert.match(r.body, /<nav class="nav" id="nav" aria-label="Pages">/); assert.match(r.body, /aria-current="page"/); assert.match(r.body, /<main id="main">/); assert.match(r.body, /class="skip"/);
     for (const label of ['Overview', 'Agents', 'Work', 'Activity', 'Usage &amp; cost', 'Reviews', 'System']) assert.match(r.body, new RegExp(`<span>${label}</span>`), `${u} ${label}`);
   }
-  assert.match((await s.get('/work/pr/41')).body, /<a href="\/work"[^>]*>Work<\/a><span class="sep" aria-hidden="true">›<\/span><\/li><li><span aria-current="page">PR #41 · #30 Thirty<\/span>/);
+  assert.match((await s.get('/work/pr/41')).body, /<a href="\/work"[^>]*>Work<\/a><span class="sep" aria-hidden="true">›<\/span><\/li><li><span aria-current="page">PR #41 PR forty-one \(for #30 Thirty\)<\/span>/);
   assert.match((await s.get('/agents/claude')).body, /aria-current="page"><svg[^>]*><use href="#i-users"/, 'an agent page highlights Agents');
   assert.match((await s.get('/work/issue/30')).body, /aria-current="page"><svg[^>]*><use href="#i-list"/);
   assert.doesNotMatch((await s.get('/work')).body, /<b>x<\/b>/); assert.doesNotMatch((await s.get('/work/pr/41')).body, /<b>bad<\/b>/);
@@ -225,7 +225,7 @@ test('Needs you lists every needs-homeowner item with what, why, the decision ne
 test('Now panel: a running agent shows its job, issue link, elapsed time and attempt; an idle agent shows why in plain words', async t => {
   const s = await serve(t, { jobs: [jb()], cache: cache() });
   const body = (await s.get('/')).body, now = body.slice(body.indexOf('data-card="now"'), body.indexOf('data-card="next"'));
-  assert.match(now, /<a href="\/job\/[^"]*"|<a href="\/work\/job\/[^"]*"[^>]*>implement · #30[^<]* · job [0-9a-f]{8}<\/a>/); assert.match(now, /attempt 2/); assert.match(now, /elapsed 10m/); assert.match(now, /Running/);
+  assert.match(now, /<a href="\/job\/[^"]*"|<a href="\/work\/job\/[^"]*"[^>]*>Implementer · implement · #30[^<]*<\/a>/); assert.match(now, /attempt 2/); assert.match(now, /elapsed 10m/); assert.match(now, /Running/);
   assert.match(now, /Idle: /, 'codex has no job'); assert.doesNotMatch(now, /No current job/);
 });
 test('idle-reason text is plain English and names the blocker (issue #50 wording reaches the page)', async t => {
@@ -328,7 +328,7 @@ test('#141 a blocked job gives exactly one card with what, tried, action and lin
   const blocked = jb({ status: 'blocked', kind: 'cifix', issue: 41, provider: 'claude', lastEvent: 'blocked_needs_input', updatedAt: NOW - 1000 });
   const v = await needsOf(await serve(t, { jobs: [blocked], cache: calmCache() }));
   assert.equal(v.panels.needsYou.length, 1); const c = v.panels.needsYou[0];
-  assert.match(c.text, /is blocked/); assert.ok(c.tried && c.decision); assert.ok(c.links.some(l => l.url === 'https://github.com/o/r/pull/41')); assert.ok(c.links.some(l => /^job /.test(l.text)));
+  assert.match(c.text, /is blocked/); assert.ok(c.tried && c.decision); assert.ok(c.links.some(l => l.url === 'https://github.com/o/r/pull/41')); assert.ok(c.links.some(l => /^(Implementer|Reviewer) · /.test(l.text) && /^\/work\/job\//.test(l.url)));
   assert.equal(v.health.label, 'Needs you (1)'); assert.equal(v.health.count, 1);
   const gone = calmCache(); gone.pulls = [{ ...gone.pulls[0], number: 99 }];
   assert.equal((await needsOf(await serve(t, { jobs: [blocked], cache: gone }))).panels.needsYou.length, 0, 'the PR is no longer open');

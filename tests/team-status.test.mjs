@@ -28,20 +28,20 @@ const text = s => renderStatus(s);
 
 test('1. agents: running, paused with restart time, idle, with job kind and reference', async () => {
   const s = await status({ jobs: [job(), job({ id: 'b'.repeat(32), provider: 'codex', kind: 'review', issue: 36, status: 'paused_limit', lastEvent: 'usage_limit', nextAttemptAt: NOW + 90 * MIN })] });
-  assert.equal(s.agents.find(a => a.name === 'claude').text, 'running: implement · #30 issue 30 · job aaaaaaaa');
-  assert.equal(s.agents.find(a => a.name === 'codex').text, 'paused: review · PR #36 · job bbbbbbbb, restarts about 13:30');
+  assert.equal(s.agents.find(a => a.name === 'claude').text, 'running: Implementer · implement · #30 issue 30');
+  assert.equal(s.agents.find(a => a.name === 'codex').text, 'paused: Reviewer · review · PR #36, restarts about 13:30');
   assert.match((await status()).agents[0].text, /^idle: about to start implement #30 issue 30/);
 });
 
 test('2. next: the dispatcher plan is shown as agent → action', async () => {
   const s = await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, pulls: [pr(36, 'claude/issue-32-x', H(1))], issues: [issue(2)] } });
-  assert.ok(s.next.plan.some(p => p.text === 'codex → review PR #36 · #32'), JSON.stringify(s.next));
-  assert.match(text(s), /codex → review PR #36 · #32/);
+  assert.ok(s.next.plan.some(p => p.text === 'codex → review PR #36 pr 36 (for #32)'), JSON.stringify(s.next));
+  assert.match(text(s), /codex → review PR #36 pr 36 \(for #32\)/);
 });
 test('2. next: plain reasons why nothing will start', async () => {
   // waiting on review: PR open, CI pending
   let s = await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, pulls: [pr(36, 'claude/issue-30-x', H(1), { statusCheckRollup: [{ status: 'IN_PROGRESS' }] })], issues: [issue(30)] } });
-  assert.ok(s.next.waiting.some(w => w.agent === 'claude' && /PR #36 · #30 issue 30: waiting on CI/.test(w.text)), JSON.stringify(s.next));
+  assert.ok(s.next.waiting.some(w => w.agent === 'claude' && /PR #36 pr 36 \(for #30 issue 30\): waiting on CI/.test(w.text)), JSON.stringify(s.next));
   // blocked by a prerequisite
   s = await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, pulls: [], issues: [issue(2, 'OPEN', 'Prerequisites: #9'), issue(9)] } });
   assert.ok(s.next.waiting.some(w => w.agent === 'codex' && /#2 issue 2: blocked by #9 issue 9/.test(w.text)), JSON.stringify(s.next));
@@ -65,8 +65,8 @@ test('3. problems: failed tick, consecutive failures, red CI, conflicts, blocked
   const t = s.problems.map(p => p.text).join('\n');
   assert.match(t, /Last tick failed.*gh pr list failed: boom/);
   assert.match(t, /3 ticks in a row have failed/);
-  assert.match(t, /CI is red on PR #7 · #30 issue 30/);
-  assert.match(t, /PR #8 · #2 has merge conflicts/);
+  assert.match(t, /CI is red on PR #7 pr 7 \(for #30 issue 30\)/);
+  assert.match(t, /PR #8 pr 8 \(for #2\) has merge conflicts/);
   assert.match(t, /is blocked: retry_exhausted/);
   assert.match(t, /1 lease\(s\) held with nothing running/);
 });
@@ -92,7 +92,7 @@ test('4. pull requests: ready / draft / conflicting, CI state, latest verdict (c
   assert.deepEqual([by(11).ci, by(11).verdict.current, by(11).verdict.head], ['red', false, '2222222']);
   assert.deepEqual([by(12).status, by(12).ci, by(12).verdict], ['draft', 'not run', null]);
   assert.equal(by(13).status, 'conflicting');
-  assert.match(text(s), /PR #11 · #2 ready, CI red, claude said CHANGES on an older commit \(2222222\)/);
+  assert.match(text(s), /PR #11 pr 11 \(for #2\) ready, CI red, claude said CHANGES on an older commit \(2222222\)/);
 });
 
 test('5. merged today uses the local day and includes the dispatcher log', async () => {
@@ -100,7 +100,7 @@ test('5. merged today uses the local day and includes the dispatcher log', async
     cache: { tick: tick(), fetchedAt: NOW - MIN, pulls: [], issues: [], merged: [
       { number: 1, title: 'today', mergedAt: '2026-10-30T09:30:00Z' }, { number: 2, title: 'yesterday', mergedAt: '2026-10-29T23:59:00Z' }, { number: 99, title: 'dup', mergedAt: new Date(NOW - 5 * MIN).toISOString() }] } });
   assert.deepEqual(s.mergedToday.map(m => m.number), [1, 99]);
-  assert.match(text(s), /PR #1 at 09:30/);
+  assert.match(text(s), /PR #1 today at 09:30/);
   assert.match(text(await status()), /Merged today\n {2}nothing yet/);
 });
 
@@ -163,13 +163,13 @@ test('idle reasons (#50): each idle agent states why in plain words', async () =
   const idle = async (cache, state = {}, agent = 'codex') => (await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, merged: [], ...cache }, state })).agents.find(a => a.name === agent);
   // fix limit reached -> waiting for homeowner, with a link
   let a = await idle({ pulls: [pr(41, 'codex/issue-2-x', H(1))], issues: [issue(2), issue(3, 'CLOSED')] }, { verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'claude' } }, fixAttempts: { [`41:${H(0)}`]: 2 }, unblock: { escalated: { 41: {} } } });
-  assert.match(a.text, /waiting for homeowner: fix limit reached on PR #41 · #2 issue 2/); assert.equal(a.idleReason.links[0].url, 'https://github.com/o/r/pull/41');
+  assert.match(a.text, /waiting for homeowner: fix limit reached on PR #41 pr 41 \(for #2 issue 2\)/); assert.equal(a.idleReason.links[0].url, 'https://github.com/o/r/pull/41');
   // only work is a draft whose issue is closed -> not continuable
   a = await idle({ pulls: [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] });
-  assert.match(a.text, /only work is draft PR #28 · #3 issue 3/);
+  assert.match(a.text, /only work is draft PR #28 pr 28 \(for #3 issue 3\)/);
   // continue limit reached
   a = await idle({ pulls: [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })], issues: [issue(2, 'CLOSED'), issue(3)] }, { continueAttempts: { 28: 2 } });
-  assert.match(a.text, /waiting for homeowner: continue limit reached on draft PR #28 · #3 issue 3/);
+  assert.match(a.text, /waiting for homeowner: continue limit reached on draft PR #28 pr 28 \(for #3 issue 3\)/);
   // a continuable draft is planned, not reported as stuck
   a = await idle({ pulls: [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })], issues: [issue(2, 'CLOSED'), issue(3)] });
   assert.match(a.text, /about to start continue #3/);
@@ -178,7 +178,7 @@ test('idle reasons (#50): each idle agent states why in plain words', async () =
   assert.match(a.text, /all issues blocked by #3 issue 3, #77 issue 77/);
   // waiting for review of #29
   a = await idle({ pulls: [pr(29, 'codex/issue-2-x', H(3))], issues: [issue(2), issue(3, 'CLOSED')] });
-  assert.match(a.text, /waiting for review of PR #29 · #2 issue 2/);
+  assert.match(a.text, /waiting for review of PR #29 pr 29 \(for #2 issue 2\)/);
   // needs-homeowner label; nothing assigned
   a = await idle({ pulls: [], issues: [issue(2, 'OPEN', '', ['needs-homeowner']), issue(3, 'CLOSED')] });
   assert.match(a.text, /waiting for homeowner: #2 issue 2 needs the homeowner/);

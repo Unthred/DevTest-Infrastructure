@@ -81,6 +81,8 @@ const cmdBlock = command => `<div class="cmdrow"><code class="cmd mono">${esc(co
 const idCopy = (shown, full, what) => `<span class="mono">${esc(shown)}</span>${full ? copyBtn(full, what) : ''}`;
 const shaCopy = (sha, what = 'commit ID') => (sha ? idCopy(String(sha).slice(0, 7), sha, what) : '<span class="muted">–</span>');
 const errCopy = text => (text ? `<span class="err">${esc(text)}</span>${copyBtn(text, 'error message')}` : '');
+// A long text is cut with an ellipsis by CSS and shown in full on hover or tap (issue #204).
+const trunc = text => `<span class="trunc" tabindex="0" title="${esc(text)}">${esc(text)}</span>`;
 const jobRef = (j, view) => (['implement', 'continue'].includes(j.kind) ? issueLink(j.ref) : prLink(j.ref));
 
 // ---- empty / error states
@@ -306,6 +308,7 @@ function jobCols(view, { agent = true } = {}) {
   return [
     { key: 'id', label: 'Job', html: r => jobIdCell(r.fullId) },
     ...(agent ? [{ key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }] : []),
+    { key: 'desc', label: 'What happened', html: r => trunc(r.desc) },
     { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? jobRef(r, view) : '–') },
     { key: 'status', label: 'Status', html: r => badge(({ completed: 'ok', running: 'ok', queued: 'info', paused_limit: 'warning', paused_manual: 'warning', blocked: 'action', failed: 'action' })[r.status] || 'info', r.status) },
     { key: 'model', label: 'Model', html: r => esc(r.model || 'default'), more: true }, { key: 'effort', label: 'Effort', html: r => esc(r.effort || 'default'), more: true },
@@ -325,7 +328,7 @@ function agentDetail(view, query, path, route) {
   const queue = card({ id: 'queue', title: `Queue (${q.length})`, span: 12, movable: false, body: table({ id: 'q', path, query, noun: 'queue items', rows: queueRows, searchKeys: ['title', 'reason', 'type'],
     cols: [{ key: 'next', label: 'Next', html: r => (r.next ? badge('info', 'Next') : '') }, { key: 'type', label: 'Type' }, { key: 'ref', label: 'Item', num: true, html: r => (r.type === 'issue' ? issueLink(r.ref) : prLink(r.ref)) }, { key: 'est', label: 'Est. finish', html: r => { const e = r.type === 'review' ? null : estFor(view, r.type === 'issue' ? 'issue' : 'pr', r.ref); return e ? `<span title="${esc((e.basis || []).join('\n'))}" data-est="${esc(e.status)}">${esc(e.text)}</span>` : ''; } }, { key: 'reason', label: 'Reason', more: true }],
     totals: { next: 'count' }, emptyState: empty('Queue is empty', 'No work is waiting for this agent.', 'check') }) });
-  const hist = card({ id: 'hist', title: `Job history (${jobs.length})`, span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: jobs, searchKeys: ['id', 'kind', 'status', 'branch'], cols: jobCols(view, { agent: false }).map(c => ({ ...c, total: undefined })), totals: jobTotals,
+  const hist = card({ id: 'hist', title: `Job history (${jobs.length})`, span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: jobs, searchKeys: ['id', 'kind', 'status', 'branch', 'desc'], cols: jobCols(view, { agent: false }).map(c => ({ ...c, total: undefined })), totals: jobTotals,
     emptyState: empty('No jobs yet', 'This agent has not run a job.', 'list') }) });
   return { title: `Agent ${a.name}`, crumbs: [['/agents', 'Agents'], [null, a.name]], body: grid('agent', cur + queue + hist, 'fit') };
 }
@@ -375,9 +378,16 @@ function issueDetail(view, query, path, route) {
 }
 
 function activityPage(view, query, path) {
+  const grouped = query.get('group') === 'issue';
+  const toggle = `<p class="sub">View: ${grouped ? `<a href="${esc(withQuery(path, query, { group: null }))}">Timeline</a> · <b>Group by issue</b>` : `<b>Timeline</b> · <a href="${esc(withQuery(path, query, { group: 'issue' }))}">Group by issue</a>`}</p>`;
+  if (grouped) {
+    const tls = view.issueTimelines || [];
+    const body = tls.length ? tls.map(t => `<section class="issue-story"><h3>${named(`/work/issue/${t.number}`, { text: t.name, full: t.full }, `#${t.number}`)}</h3><ol class="tl">${t.events.map(e => `<li><b>${esc(utc(e.at))}</b><br>${trunc(e.text)}${e.link ? ` <a href="${esc(e.link.url)}">job page</a>` : ''}</li>`).join('')}</ol></section>`).join('') : empty('No activity yet', 'Issue timelines appear after the first job.', 'pulse');
+    return { title: 'Activity by issue', crumbs: [['/activity', 'Activity'], [null, 'By issue']], body: grid('activity', card({ id: 'act', title: `Issues (${tls.length})`, span: 12, movable: false, body: toggle + body })) };
+  }
   const rows = view.activity.map(r => ({ at: r.at, text: r.text, link: r.link }));
-  return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (last ${rows.length})`, span: 12, movable: false, body: table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text'],
-    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'text', label: 'What' }, { key: 'link', label: 'Link', sortable: false, html: r => (r.link ? ext(r.link.url, r.link.text) : '') }], totals: { text: 'count' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') }) })) };
+  return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (last ${rows.length})`, span: 12, movable: false, body: toggle + table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text'],
+    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'text', label: 'What', html: r => trunc(r.text) }, { key: 'link', label: 'Job page', sortable: false, html: r => (r.link ? ext(r.link.url, 'open') : '') }], totals: { text: 'count' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') }) })) };
 }
 // One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
 // marked and never shown as current; a limit pause says when it resets and on what basis.

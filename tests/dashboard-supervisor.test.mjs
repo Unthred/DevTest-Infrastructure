@@ -272,7 +272,7 @@ test('copy for overseer on an Action needed job item: what is wrong, job record 
   const needs = over.slice(over.indexOf('data-card="needs"'), over.indexOf('data-card="warnings"'));
   const block = copies(needs).find(c => c.startsWith('DevTest overseer note'));
   assert.ok(block, 'a copy-for-overseer button on the item'); assert.match(needs, /<span data-copy-label>Copy for overseer<\/span>/);
-  assert.match(block, /^What is wrong: review · PR #41 · #30 [^\n]*· job b485512f \(codex\) is blocked: retry_exhausted\.$/m);
+  assert.match(block, /^What is wrong: Reviewer · review · PR #41 PR forty-one \(codex\) is blocked: retry_exhausted\.$/m);
   assert.match(block, /^Job b485512f78df4a50af28f7b192a30710: status blocked, kind review, provider codex, ref #41, attempts 1, last event retry_exhausted, postcondition verdict PR #41 head 4444444, updated /m);
   assert.match(block, /^PR #41 latest review: CHANGES by codex at 4444444 \(current head\), .*1 blocking finding\(s\)$/m);
   assert.match(block, /^Command: ai-supervisor status b485512f78df4a50af28f7b192a30710$/m);
