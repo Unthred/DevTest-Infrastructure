@@ -88,7 +88,9 @@ function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now =
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs, probes: cache.probes, snapshots, events, now });
   const team = new Team({ config, root, gh, jobs: jobsApi, git: null, register, allowanceOf, limitedOf, usage, clock: { now: () => now }, timeZone: tz });
   team.s = { ...team.s, ...state };      // the state the caller read, so the plan and the page agree
-  for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable']) team.s[k] ||= {};
+  for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable', 'unblock']) team.s[k] ||= {};
+  for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'escalated', 'queued']) team.s.unblock[k] ||= {};
+  team.s.unblock.log ||= [];
   return team;
 }
 
@@ -172,7 +174,10 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
     if (p.isDraft) {
       if ((S.continueAttempts?.[p.number] || 0) >= L.max_fix_attempts) part(0, `waiting for homeowner: continue limit reached on draft ${names.pr(p.number).text}`, 'pull', p.number);
       else part(2, `only work is draft ${names.pr(p.number).text}`, 'pull', p.number);
-    } else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) part(0, `waiting for homeowner: fix limit reached on ${names.pr(p.number).text}`, 'pull', p.number);
+    } else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) {
+      if (team.escalationPending(p.number)) part(1, `fix limit reached on ${names.pr(p.number).text}: one escalated round pending`, 'pull', p.number);
+      else part(0, `waiting for homeowner: fix limit reached on ${names.pr(p.number).text}`, 'pull', p.number);
+    }
     else if (p.mergeable === 'CONFLICTING') part(1, `waiting to rebase ${names.pr(p.number).text}`, 'pull', p.number);
     else if (checks === 'pending') part(1, `waiting on CI for ${names.pr(p.number).text}`, 'pull', p.number);
     else if (v?.verdict === 'PASS') part(1, `${names.pr(p.number).text} has a PASS and merges on the next tick`, 'pull', p.number);
@@ -371,6 +376,7 @@ function activity({ config, jobs, events, state, cache, snapshots, now, incident
   }
   for (const [id, tj] of Object.entries(state.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at))
     rows.push({ at: tj.at, text: `${names.job({ id, kind: 'rebase', pr: tj.pr }).text}: ${shortCommit(tj.rebase.oldHead)} -> ${shortCommit(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
+  for (const u of state.unblock?.log || []) if (Number.isFinite(u.at)) rows.push({ at: u.at, text: `Foreman unblocked: ${u.what}, ${u.why}, ${u.result}`, link: link(u.tk === 'issue' ? 'issue' : 'pull', u.target) });
   for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on ${names.pr(Number(pr)).text} at ${shortCommit(head)}`, link: link('pull', Number(pr)) }); }
   for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged ${names.pr(m.pr).text}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
   for (const i of incidents) if (i.kind === 'migration') rows.push({ at: i.at, text: `config migration ${String(i.number).padStart(3, '0')}-${i.name} ${i.result}${i.result === 'failed' ? `: ${i.error}` : `: ${i.description || ''}`}`, link: null });
