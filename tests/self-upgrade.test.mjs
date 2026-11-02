@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { SelfUpgrade, realDeps, runningSha, installedSha, UPGRADER_PATHS, QUIET_MAX_WAIT_MS, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
+import { SelfUpgrade, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
 import { applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -135,21 +135,74 @@ test('pre-check failure: no upgrade, one alert, no repeat of the heavy checks fo
   assert.equal(await w.up.step(), 'upgraded');
 });
 
-test('upgrader-touching change is refused with the deploy-needed alert, whatever else it contains', async t => {
-  for (const file of UPGRADER_PATHS) {
-    const w = world(t, { files: ['supervisor/team.mjs', file] });
-    assert.equal(await w.up.step(), 'upgrader-changed');
-    assert.match(w.alerts()[0], /deploy needed: changes the upgrader/);
-    assert.equal(w.log.some(x => ['pre', 'upgrade', 'rollback'].includes(x[0])), false);
-    assert.equal(await w.up.step(), 'upgrader-changed'); assert.equal(w.alerts().length, 1);
-    assert.equal(w.records()[0].result, 'refused');
-    assert.equal(w.up.latch(), null, 'a refusal is not a rollback and must not latch');
-  }
-  // the self-upgrade code is on the list, and so is the module this test imports
-  assert.ok(UPGRADER_PATHS.includes('supervisor/upgrade.mjs'));
-  assert.ok(fs.existsSync(new URL('../supervisor/upgrade.mjs', import.meta.url)));
+test('issue #101: a change to the bootstrap installer is refused as needs-homeowner, whatever else the range contains', async t => {
+  assert.deepEqual(BOOTSTRAP_PATHS, ['tools/bootstrap-install.sh']);
+  const w = world(t, { files: ['supervisor/team.mjs', 'tools/bootstrap-install.sh'] });
+  assert.equal(await w.up.step(), 'upgrader-changed');
+  assert.match(w.alerts()[0], /needs the homeowner: changes the bootstrap installer/);
+  assert.equal(w.log.some(x => ['pre', 'upgrade', 'rollback'].includes(x[0])), false);
+  assert.equal(await w.up.step(), 'upgrader-changed'); assert.equal(w.alerts().length, 1);
+  assert.equal(w.records()[0].result, 'refused');
+  assert.equal(w.up.s.install.result, 'needs-homeowner');
+  assert.equal(w.up.latch(), null, 'a refusal is not a rollback and must not latch');
 });
 
+test('issue #101: a change to the upgrader itself self-installs like any other reviewed change', async t => {
+  const w = world(t, { files: ['supervisor/upgrade.mjs', 'tools/upgrade-supervisor.sh', 'tools/rollback-supervisor.sh'] });
+  assert.equal(await w.up.step(), 'upgraded');
+  assert.deepEqual(w.log.map(x => x[0]), ['pre', 'upgrade', 'dry', 'alert']);
+  assert.equal(await w.up.verifyPending({ running: TO, ok: true }), 'verified');
+  assert.equal(w.up.s.install.result, 'verified'); assert.equal(w.up.s.install.sha, TO);
+  // negative: the same range without a reviewed PASS is still refused (the review gate applies to upgrader changes too)
+  const bad = world(t, { files: ['supervisor/upgrade.mjs'], verdicts: {} });
+  assert.equal(await bad.up.step(), 'not-eligible'); assert.equal(bad.log.some(x => x[0] === 'upgrade'), false);
+});
+
+test('issue #101: a failed post-swap health check of an upgrader change rolls back automatically and records the result', async t => {
+  const w = world(t, { files: ['supervisor/upgrade.mjs'], dry: { ok: false, reason: 'dry-run did not run a plan' } });
+  assert.equal(await w.up.step(), 'rolled-back');
+  assert.deepEqual(w.log.filter(x => x[0] === 'rollback'), [['rollback', FROM, TO]]);
+  assert.equal(w.up.s.install.result, 'rolled_back'); assert.ok(w.up.latch());
+  // and a live tick that fails after a good dry run also rolls back
+  const v = world(t, { files: ['supervisor/upgrade.mjs'] });
+  assert.equal(await v.up.step(), 'upgraded');
+  assert.equal(await v.up.verifyPending({ running: TO, ok: false, reason: 'boom' }), 'rolled-back');
+  assert.equal(v.up.s.install.result, 'rolled_back');
+});
+
+test('issue #101: GitHub unreachable is transient: backoff, no latch, one install record, recovers by itself', async t => {
+  const w = world(t);
+  let down = true; w.deps.fetchMain = () => { if (down) throw new Error('git fetch failed'); return w.state.target; };
+  assert.equal(await w.up.step(), 'github-unreachable');
+  assert.equal(w.up.s.install.result, 'transient'); assert.equal(w.up.s.install.nextAttemptAt, w.state.now + ENV_RETRY_MS);
+  assert.equal(w.up.latch(), null); assert.deepEqual(w.up.s.prechecked, {});
+  w.state.now += ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'github-unreachable'); assert.equal(w.up.s.fetchFailures, 1, 'no new attempt before the backoff ends');
+  w.state.now += 1; assert.equal(await w.up.step(), 'github-unreachable'); assert.equal(w.up.s.fetchFailures, 2);
+  assert.equal(w.up.s.install.nextAttemptAt, w.state.now + 2 * ENV_RETRY_MS, 'the backoff doubles');
+  down = false; w.state.now += 2 * ENV_RETRY_MS;
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.fetchFailures, undefined);
+  assert.equal(w.alerts().filter(a => /unreachable/i.test(a)).length, 0, 'a transient outage raises no alert');
+  assert.equal(envBackoffMs(1), ENV_RETRY_MS); assert.equal(envBackoffMs(99), ENV_RETRY_MAX_MS);
+});
+
+test('issue #101: a clone failure at install time is retried with backoff, not rolled back and not latched', async t => {
+  const w = world(t, { up: { ok: false, environmental: true, reason: 'clone failed' } });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  assert.equal(w.log.some(x => x[0] === 'rollback'), false); assert.equal(w.up.latch(), null);
+  assert.equal(w.up.s.install.result, 'transient'); assert.equal(w.up.s.install.attempts, 1);
+  w.state.now += ENV_RETRY_MS; w.state.up = { ok: true };
+  w.deps.upgrade = async sha => { w.log.push(['upgrade', sha]); return w.state.up; };
+  assert.equal(await w.up.step(), 'upgraded');
+});
+
+test('issue #101: a failed validator or test run blocks only that commit, with one alert, until a newer main', async t => {
+  const w = world(t, { pre: { ok: false, reason: 'validator: bad' } });
+  assert.equal(await w.up.step(), 'precheck-failed'); w.state.now += 100 * ENV_RETRY_MAX_MS;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.alerts().length, 1);
+  assert.equal(w.up.s.install.result, 'blocked');
+  w.state.target = H('9'); w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'upgraded');
+});
 test('health check failure at the dry run rolls back, alerts, records and latches', async t => {
   const w = world(t, { dry: { ok: false, reason: 'exit 2' } });
   assert.equal(await w.up.step(), 'rolled-back');
@@ -260,22 +313,74 @@ test('real git: PR merges, direct commits, changed files and ancestry are read c
   assert.equal(deps.mainCommits(tip, fake)[0].pr, null);
 });
 
-test('real checkout: pre-checks run in a detached clean checkout of the target and fail on a failing validator or test', async t => {
-  for (const [validator, test_, ok] of [['process.exit(0)', 'import t from "node:test"; t("a",()=>{});', true], ['process.exit(3)', 'import t from "node:test"; t("a",()=>{});', false], ['process.exit(0)', 'import t from "node:test"; import a from "node:assert"; t("a",()=>a.fail("boom"));', false]]) {
-    const r = repo(t);
-    r.write('tools/validate-project.mjs', validator); r.write('tests/x.test.mjs', test_); r.git('add', '-A'); r.git('commit', '-qm', 'c');
-    const sha = r.git('rev-parse', 'HEAD');
-    r.write('tests/untracked-local-change.txt', 'dirty'); // the working copy is dirty; the pre-check must not see it
-    const deps = realDeps({ root: '/nonexistent', config: { repo_path: r.dir }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
-    const res = await deps.preChecks(sha);
-    assert.equal(res.ok, ok, JSON.stringify(res));
-    if (!ok) assert.match(res.reason, /^(validator|tests):/);
-  }
-  const r = repo(t); r.write('f', '1'); r.git('add', '-A'); r.git('commit', '-qm', 'c');
-  const deps = realDeps({ root: '/nonexistent', config: { repo_path: r.dir }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
-  assert.match((await deps.preChecks(H('7'))).reason, /checkout failed/);
+// A real bootstrap installer run against a bare "GitHub" repository (a file URL), with fixture validator, tests and swap script.
+const BOOT = new URL('../tools/bootstrap-install.sh', import.meta.url).pathname;
+function remote(t, { validator = 'process.exit(0)', test_ = 'import t from "node:test"; t("a",()=>{});', swap = 'echo swapped > "$SWAP_MARK"' } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boot-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' };
+  const g = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', env }).trim();
+  const origin = path.join(dir, 'origin.git'), work = path.join(dir, 'work');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]); execFileSync('git', ['clone', '-q', origin, work], { stdio: 'ignore' });
+  const write = (f, c) => { fs.mkdirSync(path.dirname(path.join(work, f)), { recursive: true }); fs.writeFileSync(path.join(work, f), c); };
+  write('tools/validate-project.mjs', validator); write('tests/x.test.mjs', test_); write('tools/upgrade-supervisor.sh', swap + '\n'); write('tools/bootstrap-install.sh', fs.readFileSync(BOOT));
+  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'c'); g(work, 'push', '-q', 'origin', 'HEAD:main');
+  return { dir, origin, work, g, write, sha: g(work, 'rev-parse', 'HEAD'), mark: path.join(dir, 'swap.mark') };
+}
+const boot = (r, mode, url, sha) => spawnSync('bash', [BOOT, mode, url, sha], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME, SWAP_MARK: r.mark } });
+
+test('issue #101: bootstrap check/install from a clean remote copy: passes, swaps only on install, ignores local edits', t => {
+  const r = remote(t);
+  r.write('tests/untracked-local-change.txt', 'dirty'); fs.writeFileSync(path.join(r.work, 'tools/validate-project.mjs'), 'process.exit(9)');   // a dirty local checkout must not matter
+  const c = boot(r, 'check', r.origin, r.sha); assert.equal(c.status, 0, c.stderr);
+  assert.equal(fs.existsSync(r.mark), false, 'check never swaps');
+  const i = boot(r, 'install', r.origin, r.sha); assert.equal(i.status, 0, i.stderr);
+  assert.equal(fs.readFileSync(r.mark, 'utf8').trim(), 'swapped');
 });
 
+test('issue #101: bootstrap exit codes: failing validator or test = 11, bad usage = 2, swap failure = 13, no swap on failure', t => {
+  for (const over of [{ validator: 'process.exit(3)' }, { test_: 'import t from "node:test"; import a from "node:assert"; t("a",()=>a.fail("boom"));' }]) {
+    const r = remote(t, over);
+    for (const mode of ['check', 'install']) { const x = boot(r, mode, r.origin, r.sha); assert.equal(x.status, 11, x.stderr); }
+    assert.equal(fs.existsSync(r.mark), false);
+  }
+  const r = remote(t);
+  assert.equal(boot(r, 'check', r.origin, 'abc').status, 2); assert.equal(boot(r, 'bogus', r.origin, r.sha).status, 2); assert.equal(boot(r, 'check', '', r.sha).status, 2);
+  const f = remote(t, { swap: 'exit 5' }); assert.equal(boot(f, 'install', f.origin, f.sha).status, 13);
+});
+
+test('issue #101: bootstrap treats an unreachable remote or a missing commit as transient (10)', t => {
+  const r = remote(t);
+  assert.equal(boot(r, 'check', path.join(r.dir, 'nonexistent.git'), r.sha).status, 10);
+  assert.equal(boot(r, 'install', r.origin, 'f'.repeat(40)).status, 10);
+  assert.equal(fs.existsSync(r.mark), false);
+});
+
+test('issue #101: bootstrap refuses a payload that differs from the reviewed commit (a check that alters the copy)', t => {
+  const r = remote(t, { validator: 'import fs from "node:fs"; fs.appendFileSync("tools/upgrade-supervisor.sh", ' + JSON.stringify('echo evil > "$SWAP_MARK"\n') + ');' });
+  const x = boot(r, 'install', r.origin, r.sha);
+  assert.equal(x.status, 12, x.stderr); assert.match(x.stderr, /differs from the reviewed commit/);
+  assert.equal(fs.existsSync(r.mark), false, 'nothing is swapped');
+  // positive control for the same shape of repo: an untouched copy installs
+  const ok = remote(t); assert.equal(boot(ok, 'install', ok.origin, ok.sha).status, 0);
+});
+
+test('issue #101: realDeps runs the bootstrap installer taken from the installed commit against the origin URL and maps its exit codes', async t => {
+  const r = remote(t);
+  const clone = path.join(r.dir, 'repo'); execFileSync('git', ['clone', '-q', r.origin, clone], { stdio: 'ignore' });
+  const root = path.join(r.dir, 'state'); fs.mkdirSync(path.join(root, 'versions'), { recursive: true }); fs.symlinkSync(`versions/${r.sha}`, path.join(root, 'current'));
+  const deps = realDeps({ root, config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, run: (cmd, args, o = {}) => {
+    const x = spawnSync(cmd, args, { cwd: o.cwd, encoding: 'utf8', env: { ...process.env, SWAP_MARK: r.mark } }); return { status: x.status ?? 1, stdout: x.stdout || '', stderr: x.stderr || '' }; } });
+  assert.deepEqual(await deps.preChecks(r.sha), { ok: true });
+  const missing = await deps.preChecks('f'.repeat(40)); assert.equal(missing.ok, false); assert.equal(missing.environmental, true);
+  assert.deepEqual(await deps.upgrade(r.sha), { ok: true }); assert.equal(fs.existsSync(r.mark), true);
+  const bad = remote(t, { validator: 'process.exit(3)' }); const badClone = path.join(bad.dir, 'repo'); execFileSync('git', ['clone', '-q', bad.origin, badClone], { stdio: 'ignore' });
+  fs.mkdirSync(path.join(bad.dir, 'state/versions'), { recursive: true }); fs.symlinkSync(`versions/${bad.sha}`, path.join(bad.dir, 'state/current'));
+  const d2 = realDeps({ root: path.join(bad.dir, 'state'), config: { repo_path: badClone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
+  const res = await d2.preChecks(bad.sha); assert.equal(res.ok, false); assert.equal(res.environmental, undefined); assert.match(res.reason, /^validator:/);
+  // no installed version: nothing to take the bootstrap from, so it refuses rather than guess
+  const none = realDeps({ root: '/nonexistent', config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
+  assert.equal((await none.preChecks(r.sha)).ok, false);
+});
 test('dry-run health check: only a real plan counts, not a lock skip, bad JSON or a non-zero exit', async t => {
   const mk = out => realDeps({ root: '/x', config: { repo_path: '/x' }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, wrapper: '/w', run: () => out });
   assert.equal((await mk({ status: 0, stdout: JSON.stringify({ actions: [], skipped: [] }), stderr: '' }).dryRunTick()).ok, true);
@@ -336,38 +441,19 @@ test('review fix (PR #168): an independent same-provider PASS counts only once D
   assert.notEqual(await world(t, { d024: false, verdicts: { [`7:${H('d')}`]: { ...v, interim: true } } }).up.step(), 'not-eligible');
 });
 
-test('issue #69: an environmental pre-check failure is retried after an hour with one alert; a failed check stays latched', async t => {
+test('issue #69/#101: an environmental pre-check failure is retried with backoff and one alert; a failed check stays latched', async t => {
   const w = world(t, { pre: { ok: false, environmental: true, reason: 'checkout failed: unable to read tree' } });
   assert.equal(await w.up.step(), 'precheck-failed');
   w.state.now += ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
+  w.state.now += 1;   // second failure doubles the wait
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
+  w.state.now += 2 * ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
   w.state.now += 1; w.state.pre = { ok: true };
   assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.alerts().filter(a => /pre-check failed/.test(a)).length, 1);
   const g = world(t, { pre: { ok: false, reason: 'tests: 1 failed' } });
-  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += 10 * ENV_RETRY_MS; g.state.pre = { ok: true };
+  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += 10 * ENV_RETRY_MAX_MS; g.state.pre = { ok: true };
   assert.equal(await g.up.step(), 'precheck-failed'); assert.equal(g.log.filter(x => x[0] === 'pre').length, 1);
 });
-
-test('issue #69: the real pre-check checks out an origin/main commit that the local main is behind', async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-git-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const g = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' }).trim();
-  const origin = path.join(dir, 'origin.git'), repo = path.join(dir, 'repo'), other = path.join(dir, 'other');
-  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
-  execFileSync('git', ['clone', '-q', origin, other]); g(other, 'commit', '-q', '--allow-empty', '-m', 'one'); g(other, 'push', '-q', 'origin', 'HEAD:main');
-  execFileSync('git', ['clone', '-q', origin, repo]);
-  g(other, 'commit', '-q', '--allow-empty', '-m', 'two'); g(other, 'push', '-q', 'origin', 'HEAD:main');
-  // the self-upgrade fetch: origin/main moves, local main stays behind
-  g(repo, 'fetch', '-q', 'origin', 'main'); const target = g(repo, 'rev-parse', 'origin/main');
-  assert.notEqual(g(repo, 'rev-parse', 'main'), target);
-  const run = (cmd, args, opts = {}) => {
-    if (cmd === 'node') return { status: 0, stdout: '', stderr: '' };   // validator and tests are not part of this fixture
-    const r = spawnSync(cmd, args, { cwd: opts.cwd, encoding: 'utf8' }); return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
-  };
-  const deps = realDeps({ root: dir, config: { repo_path: repo, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, run, sendAlert: async () => {} });
-  assert.deepEqual(await deps.preChecks(target), { ok: true });
-  const missing = await deps.preChecks('f'.repeat(40));
-  assert.equal(missing.ok, false); assert.equal(missing.environmental, true); assert.match(missing.reason, /^checkout failed/);
-});
-
 test('hold (issue #134): busy marks the hold, idle installs with quiet idle and clears it, a forced install records forced-after-wait', async t => {
   const w = world(t, { active: 1 });
   assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, TO); const since = w.up.s.holding.since;
@@ -384,7 +470,7 @@ test('hold (issue #134): busy marks the hold, idle installs with quiet idle and 
 test('hold (issue #134): a failed pre-check, an ineligible range, an upgrader change and nothing pending never hold', async t => {
   for (const [name, over, want] of [
     ['precheck', { pre: { ok: false, reason: 'x' } }, 'precheck-failed'], ['ineligible', { verdicts: {} }, 'not-eligible'],
-    ['upgrader', { files: ['supervisor/upgrade.mjs'] }, 'upgrader-changed'], ['current', { target: FROM }, 'current']]) {
+    ['bootstrap', { files: ['supervisor/team.mjs', 'tools/bootstrap-install.sh'] }, 'upgrader-changed'], ['current', { target: FROM }, 'current']]) {
     const w = world(t, over);
     assert.equal(await w.up.step(), want, name); assert.equal(w.up.s.holding, undefined, name);
   }

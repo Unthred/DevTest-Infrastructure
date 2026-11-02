@@ -139,8 +139,10 @@ export function readSelfUpgrade(root) {
   const latchFile = readJsonFile(path.join(root, 'team', 'self-upgrade.latch'));
   const prechecked = Object.entries(st.prechecked && typeof st.prechecked === 'object' ? st.prechecked : {}).filter(([sha, at]) => SHA.test(sha) && Number.isFinite(at)).map(([sha, at]) => ({ sha, at })).sort((a, b) => b.at - a.at);
   const latch = latchFile ? { at: Number.isFinite(latchFile.value?.at) ? latchFile.value.at : null, from: SHA.test(latchFile.value?.from || '') ? latchFile.value.from : null, to: SHA.test(latchFile.value?.to || '') ? latchFile.value.to : null, reason: scrub(latchFile.value?.reason || (latchFile.unreadable ? 'unreadable latch file' : 'no reason recorded'), 300) } : null;
-  const p = st.pending;
-  return { prechecked, latch, lastUpgradeAt: Number.isFinite(st.lastUpgradeAt) ? st.lastUpgradeAt : null, waitingSince: Number.isFinite(st.waitingSince) ? st.waitingSince : null,
+  const p = st.pending, i = st.install;
+  const install = i && typeof i.result === 'string' ? { result: scrub(i.result, 30), sha: SHA.test(i.sha || '') ? i.sha : null, at: Number.isFinite(i.at) ? i.at : null,
+    nextAttemptAt: Number.isFinite(i.nextAttemptAt) ? i.nextAttemptAt : null, reason: i.reason ? scrub(i.reason, 200) : null } : null;
+  return { install, prechecked, latch, lastUpgradeAt: Number.isFinite(st.lastUpgradeAt) ? st.lastUpgradeAt : null, waitingSince: Number.isFinite(st.waitingSince) ? st.waitingSince : null,
     pending: p && SHA.test(p.to || '') ? { from: SHA.test(p.from || '') ? p.from : null, to: p.to, at: Number.isFinite(p.at) ? p.at : null } : null };
 }
 export function readInstalled(root) {
@@ -192,10 +194,11 @@ const UPGRADE_STEP = {
   upgraded: ['ok', 'upgraded; waiting for a live tick to verify it'], 'awaiting-verification': ['info', 'upgraded; waiting for a live tick to verify it'],
   busy: ['info', 'upgrade waits for running jobs (at most 30 minutes)'], 'rate-limited': ['info', 'at most one upgrade per hour; waiting'],
   'precheck-failed': ['warning', 'pre-checks failed for this main; waits for a newer main'], 'not-eligible': ['warning', 'main has a change without a recorded PASS and green CI'],
-  'upgrader-changed': ['warning', 'main changes the upgrader itself: deploy by hand'], diverged: ['warning', 'installed version is not an ancestor of main'],
+  'upgrader-changed': ['warning', 'main changes the bootstrap installer: needs the homeowner'], 'github-unreachable': ['info', 'GitHub is unreachable; the install is retried with backoff'], diverged: ['warning', 'installed version is not an ancestor of main'],
   'not-versioned': ['warning', 'the installed supervisor is not a versioned install'], latched: ['action', 'automatic upgrades are paused by the rollback latch'],
   'rolled-back': ['action', 'the last upgrade was rolled back'], 'rollback-failed': ['action', 'a rollback failed: manual repair needed'], error: ['warning', 'the self-upgrade step raised an error']
 };
+const INSTALL_SEV = { installed: 'ok', verified: 'ok', transient: 'info', blocked: 'warning', 'needs-homeowner': 'action', rolled_back: 'action', rollback_failed: 'action' };
 const RESULT_SEV = { upgraded: 'ok', verified: 'ok', refused: 'warning', precheck_failed: 'warning', rolled_back: 'action', rollback_failed: 'action' };
 export const resultSeverity = r => RESULT_SEV[r] || 'info';
 
@@ -215,7 +218,7 @@ function versionCard({ installed, origin, upgrades, su, lastTick, now }) {
   return { id: 'version', title: 'Version', severity: worst(levels.length ? levels : ['info']),
     summary: !installed.sha ? 'Installed version unknown' : !origin ? `Installed ${short(installed.sha)}; origin/main unknown` : behind ? `Installed ${short(installed.sha)}, origin/main ${short(origin)}` : `Installed ${short(installed.sha)} = origin/main`,
     installed: installed.sha, installedAt: installed.at, origin, behind: !!behind, step, notes,
-    lastUpgrade: last, latch: su.latch, prechecked: su.prechecked.slice(0, 5).map(p => ({ ...p, isMain: p.sha === origin })), pending: su.pending, lastUpgradeAt: su.lastUpgradeAt };
+    lastUpgrade: last, latch: su.latch, prechecked: su.prechecked.slice(0, 5).map(p => ({ ...p, isMain: p.sha === origin })), pending: su.pending, install: su.install ? { ...su.install, severity: INSTALL_SEV[su.install.result] || "info" } : null, lastUpgradeAt: su.lastUpgradeAt };
 }
 
 function lastTickCard({ ticks, now }) {

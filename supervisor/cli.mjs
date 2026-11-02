@@ -295,7 +295,7 @@ async function main() {
     const { upgrade } = selfUpgradeFor(root, registry);
     if (a._[0] === 'clear-latch') { upgrade.clearLatch(); console.log('latch cleared'); return; }
     if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|clear-latch');
-    console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, installed: upgrade.d.installed() }, null, 2)); return;
+    console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, install: upgrade.s.install || null, installed: upgrade.d.installed() }, null, 2)); return;
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {

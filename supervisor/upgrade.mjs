@@ -16,10 +16,16 @@ const SHA = /^[0-9a-f]{40}$/;
 export const QUIET_MAX_WAIT_MS = 30 * 60 * 1000;
 export const MIN_UPGRADE_INTERVAL_MS = 60 * 60 * 1000;
 export const VERIFY_MAX_WAIT_MS = 60 * 60 * 1000;
-// An environmental pre-check failure (clone, fetch or checkout) is retried after this; only a failed check latches a commit (#69).
-export const ENV_RETRY_MS = 60 * 60 * 1000;
-// A change to any of these cannot be deployed by the upgrader it modifies: the homeowner deploys it by hand.
-export const UPGRADER_PATHS = ['tools/upgrade-supervisor.sh', 'tools/rollback-supervisor.sh', 'supervisor/upgrade.mjs'];
+// An environmental failure (clone, fetch, checkout or GitHub unreachable) is retried with backoff and never latches a commit (#69, #101):
+// the first retry after ENV_RETRY_MS, doubling each time up to ENV_RETRY_MAX_MS. Only a failed validator or test run latches.
+export const ENV_RETRY_MS = 10 * 60 * 1000;
+export const ENV_RETRY_MAX_MS = 4 * 60 * 60 * 1000;
+export const envBackoffMs = attempts => Math.min(ENV_RETRY_MS * 2 ** Math.max(0, (attempts || 1) - 1), ENV_RETRY_MAX_MS);
+// Only the bootstrap installer cannot install itself: a change to it is a needs-homeowner card (issue #101). The main upgrader
+// (supervisor/upgrade.mjs, tools/upgrade-supervisor.sh, tools/rollback-supervisor.sh) installs like any other reviewed change.
+export const BOOTSTRAP_PATHS = ['tools/bootstrap-install.sh'];
+// Exit codes of tools/bootstrap-install.sh.
+export const BOOTSTRAP_EXIT = { transient: 10, checks: 11, payload: 12, swap: 13 };
 const short = shortCommit;
 
 export function installedSha(root) {
@@ -84,6 +90,10 @@ export class SelfUpgrade {
     let names = null; try { names = await this.d.names?.(); } catch { names = null; }
     return (prs || []).map(n => (names ? names.pr(n).text : `PR #${n}`)).join(', ') || 'no pull requests';
   }
+  // The last install outcome, shown by `team status` and the dashboard (and read by #105's Install stage). result is one of: installed
+  // (awaiting the live tick), verified, transient (retried at nextAttemptAt), blocked (failed validator or tests; waits for a newer
+  // main), needs-homeowner, rolled_back, rollback_failed.
+  noteInstall(i) { this.s.install = { at: this.clock.now(), ...i }; }
   save() { fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 }); atomicJson(this.stateFile, this.s); }
   latch() { try { return JSON.parse(fs.readFileSync(this.latchFile, 'utf8')); } catch { return fs.existsSync(this.latchFile) ? { reason: 'unreadable latch' } : null; } }
   clearLatch() { fs.rmSync(this.latchFile, { force: true }); }
@@ -111,7 +121,18 @@ export class SelfUpgrade {
     const from = this.d.installed();
     if (!from) return 'not-versioned';
     if (this.s.lastUpgradeAt && this.clock.now() - this.s.lastUpgradeAt < MIN_UPGRADE_INTERVAL_MS) return 'rate-limited';
-    const target = this.d.fetchMain();
+    let target;
+    const t0 = this.clock.now();
+    if (this.s.fetchRetryAt && t0 < this.s.fetchRetryAt) return 'github-unreachable';
+    try { target = this.d.fetchMain(); } catch (error) {
+      // GitHub unreachable (or fetch failed): transient. Nothing is latched; the next attempt is after the backoff.
+      const n = (this.s.fetchFailures || 0) + 1, retryAt = t0 + envBackoffMs(n);
+      this.s.fetchFailures = n; this.s.fetchRetryAt = retryAt;
+      this.noteInstall({ result: 'transient', sha: null, attempts: n, reason: `GitHub unreachable: ${String(error?.message || error).slice(0, 120)}`, nextAttemptAt: retryAt });
+      this.save();
+      return 'github-unreachable';
+    }
+    if (this.s.fetchFailures) { delete this.s.fetchFailures; delete this.s.fetchRetryAt; if (this.s.install?.result === 'transient' && !this.s.install.sha) delete this.s.install; this.save(); }
     if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; this.save(); return 'current'; }
     if (!this.d.isAncestor(from, target)) {
       await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`);
@@ -119,10 +140,11 @@ export class SelfUpgrade {
     }
     const files = this.d.changedFiles(from, target);
     if (!files.some(f => f.startsWith('supervisor/'))) return 'no-supervisor-change';
-    const touched = files.filter(f => UPGRADER_PATHS.includes(f));
+    const touched = files.filter(f => BOOTSTRAP_PATHS.includes(f));
     if (touched.length) {
-      await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${short(target)}: deploy needed: changes the upgrader (${touched.join(', ')}). Not upgraded automatically.`);
-      this.record({ from, to: target, result: 'refused', reason: 'changes the upgrader', files: touched });
+      await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${short(target)}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically.`);
+      this.record({ from, to: target, result: 'refused', reason: 'changes the bootstrap installer', files: touched });
+      this.noteInstall({ result: 'needs-homeowner', sha: target, reason: 'changes the bootstrap installer' }); this.save();
       return 'upgrader-changed';
     }
     const eligibility = await this.eligibility(from, target);
@@ -135,7 +157,7 @@ export class SelfUpgrade {
     // A failed check latches this commit until a newer main; an environmental failure is retried after ENV_RETRY_MS (#69).
     // Checked before the quiet wait so a latched target never holds dispatch for a commit that will not be installed (#134).
     const latched = this.s.prechecked[target];
-    if (latched && !(latched.environmental && now - latched.at >= ENV_RETRY_MS)) return 'precheck-failed';
+    if (latched && !(latched.environmental && now - latched.at >= envBackoffMs(latched.attempts))) return 'precheck-failed';
     this.s.waitingSince ??= now;
     // Drain (issue #136): while jobs run and the bound is not reached, no new job starts; the install happens at the first job
     // boundary. At the bound the install goes ahead without waiting further; it replaces files only and never kills a running job.
@@ -144,7 +166,12 @@ export class SelfUpgrade {
     const checks = { eligibility: 'ok', quiet: running > 0 ? 'forced-after-wait' : 'idle' };
     const pre = await this.d.preChecks(target);
     if (!pre.ok) {
-      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true } : now; delete this.s.waitingSince; this.save();
+      const attempts = pre.environmental ? (latched?.environmental ? (latched.attempts || 1) + 1 : 1) : 0;
+      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now; delete this.s.waitingSince;
+      this.noteInstall(pre.environmental
+        ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
+        : { result: 'blocked', sha: target, reason: pre.reason });
+      this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).`);
       this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.reason });
       return 'precheck-failed';
@@ -153,6 +180,14 @@ export class SelfUpgrade {
     // The rate-limit stamp is written before the upgrade, so a crash mid-upgrade cannot cause an immediate second attempt.
     this.s.lastUpgradeAt = now; delete this.s.waitingSince; this.save();
     const up = await this.d.upgrade(target);
+    if (!up.ok && up.environmental) {
+      // The clean copy could not be taken at install time (GitHub unreachable): nothing was swapped, so retry, do not roll back.
+      const attempts = (latched?.environmental ? (latched.attempts || 1) : 0) + 1;
+      this.s.prechecked[target] = { at: now, environmental: true, attempts }; delete this.s.lastUpgradeAt;
+      this.noteInstall({ result: 'transient', sha: target, reason: up.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }); this.save();
+      this.record({ from, to: target, prs: eligibility.prs, checks, result: 'precheck_failed', reason: up.reason });
+      return 'precheck-failed';
+    }
     if (!up.ok) {
       const rb = await this.rollback(from, target, `upgrade script failed: ${up.reason}`, eligibility.prs, checks);
       return rb;
@@ -160,7 +195,8 @@ export class SelfUpgrade {
     const dry = await this.d.dryRunTick();
     if (!dry.ok) return this.rollback(from, target, `team tick --dry-run failed: ${dry.reason}`, eligibility.prs, { ...checks, dryRun: 'failed' });
     checks.dryRun = 'ok';
-    this.s.pending = { from, to: target, prs: eligibility.prs, checks, at: now }; this.save();
+    this.s.pending = { from, to: target, prs: eligibility.prs, checks, at: now };
+    this.noteInstall({ result: 'installed', sha: target, reason: null }); this.save();
     this.record({ from, to: target, prs: eligibility.prs, checks, result: 'upgraded' });
     await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (${await this.prNames(eligibility.prs)}).`);
     return 'upgraded';
@@ -176,7 +212,7 @@ export class SelfUpgrade {
       return this.rollback(p.from, p.to, 'no live tick ran under the new version within an hour', p.prs, { ...p.checks, liveTick: 'missing' });
     }
     if (!ok) return this.rollback(p.from, p.to, `live tick failed: ${String(reason || 'error').slice(0, 160)}`, p.prs, { ...p.checks, liveTick: 'failed' });
-    delete this.s.pending; this.save();
+    delete this.s.pending; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();
     this.record({ from: p.from, to: p.to, prs: p.prs, checks: { ...p.checks, liveTick: 'ok' }, result: 'verified' });
     await this.restartDashboard(p);
     return 'verified';
@@ -195,8 +231,9 @@ export class SelfUpgrade {
   async rollback(from, to, reason, prs, checks) {
     let result = { ok: false, reason: 'rollback not attempted' };
     try { result = await this.d.rollback(from, to); } catch (error) { result = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
-    delete this.s.pending; this.save();
+    delete this.s.pending;
     const note = result.ok ? reason : `${reason}; ROLLBACK FAILED (${result.reason}), manual repair needed`;
+    this.noteInstall({ result: result.ok ? 'rolled_back' : 'rollback_failed', sha: to, reason: note.slice(0, 200) }); this.save();
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(this.latchFile, JSON.stringify({ at: this.clock.now(), from, to, reason: note }), { mode: 0o600 });
     this.record({ from, to, prs, checks, result: result.ok ? 'rolled_back' : 'rollback_failed', reason: note });
@@ -236,22 +273,24 @@ const tail = r => String(r.stderr || r.stdout || '').trim().split('\n').slice(-3
 export function realDeps({ root, config, gh, listActive, verdictFor, independenceApproved = () => false, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert }) {
   const repo = config.repo_path;
   const git = (...a) => { const r = run('git', ['-C', repo, ...a]); if (r.status !== 0) throw new Error(`git ${a[0]} failed`); return r.stdout.trim(); };
-  const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'self-upgrade-'));
-  const withCheckout = (sha, fn) => {
+  const remoteUrl = () => git('remote', 'get-url', 'origin');
+  // The bootstrap installer is taken from the installed commit, not the target: it is the one file a range may not change.
+  const bootstrap = (mode, sha, timeoutMs) => {
     const dir = scratch();
     try {
-      const checkout = path.join(dir, 'src');
-      const c = run('git', ['clone', '--quiet', '--no-local', repo, checkout], { timeoutMs: 300000 });
-      if (c.status !== 0) return { ok: false, environmental: true, reason: `clone failed: ${tail(c)}` };
-      // A clone of the local repository carries only its branches. The target comes from fetchMain (origin/main), which the
-      // local main may be behind, so the clone also takes the repository's remote-tracking refs (#69).
-      const f = run('git', ['-C', checkout, 'fetch', '--quiet', 'origin', '+refs/remotes/origin/*:refs/remotes/origin/*'], { timeoutMs: 300000 });
-      if (f.status !== 0) return { ok: false, environmental: true, reason: `fetch failed: ${tail(f)}` };
-      const d = run('git', ['-C', checkout, 'checkout', '--quiet', '--detach', sha]);
-      if (d.status !== 0) return { ok: false, environmental: true, reason: `checkout failed: ${tail(d)}` };
-      return fn(checkout);
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+      const from = installedSha(root);
+      if (!from) return { ok: false, reason: 'no installed version to take the bootstrap installer from' };
+      const script = path.join(dir, 'bootstrap-install.sh');
+      fs.writeFileSync(script, git('show', `${from}:tools/bootstrap-install.sh`), { mode: 0o700 });
+      const r = run('bash', [script, mode, remoteUrl(), sha], { timeoutMs });
+      if (r.status === 0) return { ok: true };
+      const reason = tail(r);
+      if (r.status === BOOTSTRAP_EXIT.transient) return { ok: false, environmental: true, reason };
+      return { ok: false, reason: r.status === BOOTSTRAP_EXIT.payload ? `refused: ${reason}` : reason };
+    } catch (error) { return { ok: false, environmental: true, reason: String(error?.message || error).slice(0, 160) }; }
+    finally { fs.rmSync(dir, { recursive: true, force: true }); }
   };
+  const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'self-upgrade-'));
   return {
     config,
     installed: () => installedSha(root),
@@ -268,16 +307,8 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     verdict: verdictFor,
     independenceApproved,
     activeJobs: async () => (await listActive()).length,
-    preChecks: async sha => withCheckout(sha, checkout => {
-      const v = run('node', ['tools/validate-project.mjs'], { cwd: checkout, timeoutMs: 300000 });
-      if (v.status !== 0) return { ok: false, reason: `validator: ${tail(v)}` };
-      const t = run('node', ['--test', 'tests/**/*.test.mjs'], { cwd: checkout, timeoutMs: 1800000 });
-      return t.status === 0 ? { ok: true } : { ok: false, reason: `tests: ${tail(t)}` };
-    }),
-    upgrade: async sha => withCheckout(sha, checkout => {
-      const u = run('bash', ['tools/upgrade-supervisor.sh'], { cwd: checkout, timeoutMs: 600000 });
-      return u.status === 0 ? { ok: true } : { ok: false, reason: tail(u) };
-    }),
+    preChecks: async sha => bootstrap('check', sha, 2400000),
+    upgrade: async sha => bootstrap('install', sha, 3000000),
     dryRunTick: async () => {
       const r = run(wrapper, ['team', 'tick', '--dry-run'], { timeoutMs: 180000 });
       if (r.status !== 0) return { ok: false, reason: tail(r) };
