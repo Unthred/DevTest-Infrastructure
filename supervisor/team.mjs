@@ -25,6 +25,7 @@ export function validateTeamConfig(c) {
   for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
   normalizeRoleLimits(c);
   validateUnblockLimits(L.unblock);
+  validateSelfUpgrade(c.self_upgrade);
   const agents = Object.entries(c.agents || {});
   if (agents.length < 1) throw new SupervisorError('team needs at least one agent');
   const seen = new Set();
@@ -39,6 +40,14 @@ export function validateTeamConfig(c) {
   if (c.access?.mode === 'full' && c.access.decision !== 'D-020') throw new SupervisorError('full access must cite D-020');
   normalizeReviewConfig(c, agents.map(([n]) => n));
   return c;
+}
+
+// Issue #136: how long a pending supervisor install drains running jobs (no new job starts) before it goes ahead.
+export const DRAIN_DEFAULT_MINUTES = 30;
+function validateSelfUpgrade(u) {
+  if (u === undefined) return;
+  if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => k !== 'drain_max_minutes')) throw new SupervisorError('invalid team config: self_upgrade');
+  if ('drain_max_minutes' in u && !(Number.isSafeInteger(u.drain_max_minutes) && u.drain_max_minutes >= 1 && u.drain_max_minutes <= 720)) throw new SupervisorError('invalid team config: self_upgrade.drain_max_minutes');
 }
 
 // Automatic unblocks (issue #163) are budgeted: per PR (or issue) and per UTC day. A limit is only ever changed by the homeowner.
@@ -110,10 +119,11 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
+  if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
   if ('alerts' in local) {
     const cmd = local.alerts?.command;
     if (!Array.isArray(cmd) || !cmd.length || !cmd.every(x => typeof x === 'string') || !path.isAbsolute(cmd[0]) || Object.keys(local.alerts).length !== 1) throw new SupervisorError('invalid team.local.json: alerts.command must be an absolute program plus arguments');

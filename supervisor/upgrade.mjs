@@ -32,8 +32,8 @@ export function runningSha(file) {
 }
 
 export class SelfUpgrade {
-  constructor({ root, deps, clock = { now: () => Date.now() } }) {
-    this.root = root; this.d = deps; this.clock = clock;
+  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS }) {
+    this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs;   // issue #136: the configurable drain bound
     this.dir = path.join(root, 'team');
     this.stateFile = path.join(this.dir, 'self-upgrade.json');
     this.latchFile = path.join(this.dir, 'self-upgrade.latch');       // the homeowner clears the latch by removing this file
@@ -99,8 +99,11 @@ export class SelfUpgrade {
     const latched = this.s.prechecked[target];
     if (latched && !(latched.environmental && now - latched.at >= ENV_RETRY_MS)) return 'precheck-failed';
     this.s.waitingSince ??= now;
-    if ((await this.d.activeJobs()) > 0 && now - this.s.waitingSince < QUIET_MAX_WAIT_MS) { this.s.holding = { to: target, since: this.s.holding?.to === target ? this.s.holding.since : now }; this.save(); return 'busy'; }
-    const checks = { eligibility: 'ok', quiet: (await this.d.activeJobs()) > 0 ? 'forced-after-wait' : 'idle' };
+    // Drain (issue #136): while jobs run and the bound is not reached, no new job starts; the install happens at the first job
+    // boundary. At the bound the install goes ahead without waiting further; it replaces files only and never kills a running job.
+    const running = await this.d.activeJobs();
+    if (running > 0 && now - this.s.waitingSince < this.drainMaxMs) { this.s.holding = { to: target, since: this.s.holding?.to === target ? this.s.holding.since : now, jobs: running }; this.save(); return 'busy'; }
+    const checks = { eligibility: 'ok', quiet: running > 0 ? 'forced-after-wait' : 'idle' };
     const pre = await this.d.preChecks(target);
     if (!pre.ok) {
       this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true } : now; delete this.s.waitingSince; this.save();

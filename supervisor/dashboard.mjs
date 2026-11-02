@@ -451,7 +451,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
-    try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Holding new jobs: upgrade to ${sha7(h.to)} pending.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
+    try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${new Date(h.since).toISOString().slice(11, 16)} UTC` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
     // Issue #153: a failed config migration stops the ticks until the homeowner fixes team.local.json
     { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and ticks are stopped: ${f.error}. team.local.json was not changed.`, 300), ref: null, severity: 'action' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });

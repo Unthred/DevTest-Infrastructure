@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { SelfUpgrade, realDeps, runningSha, installedSha, UPGRADER_PATHS, QUIET_MAX_WAIT_MS, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
-import { applyLocalOverride } from '../supervisor/team.mjs';
+import { applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
@@ -402,4 +402,33 @@ test('a latched failed pre-check never holds dispatch, even with active jobs, an
   assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
   w.state.target = H('9'); w.state.pre = { ok: true };
   assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
+});
+
+test('drain (issue #136): the bound is configurable and honoured, the hold records the running count, an install never touches running jobs', async t => {
+  const w = world(t, { active: 3 });
+  w.up.drainMaxMs = 5 * 60000;
+  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.jobs, 3);
+  w.state.active = 2; w.state.now += 5 * 60000 - 1;
+  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.jobs, 2); assert.equal(w.log.length, 0);
+  w.state.now += 1;
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records()[0].checks.quiet, 'forced-after-wait');
+  assert.equal(w.up.s.holding, undefined); assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 1);
+  assert.equal(w.log.some(x => x[0] === 'kill' || x[0] === 'stop'), false);   // the dependency set offers no way to stop a job
+  // the default bound is the shipped 30 minutes
+  assert.equal(world(t).up.drainMaxMs, QUIET_MAX_WAIT_MS);
+});
+
+test('drain (issue #136): dispatch resumes after an install failure or rollback (no hold is reported)', async t => {
+  for (const over of [{ up: { ok: false, reason: 'x' } }, { dry: { ok: false, reason: 'y' } }]) {
+    const w = world(t, { active: 1, ...over });
+    assert.equal(await w.up.step(), 'busy'); w.state.active = 0;
+    const r = await w.up.step(); assert.equal(r, 'rolled-back'); assert.equal(w.up.s.holding, undefined);
+  }
+});
+
+test('drain (issue #136): the drain bound is a validated, overridable team setting', () => {
+  const shipped = JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
+  assert.equal(validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: { drain_max_minutes: 10 } })).self_upgrade.drain_max_minutes, 10);
+  for (const bad of [{ drain_max_minutes: 0 }, { drain_max_minutes: 721 }, { drain_max_minutes: 1.5 }, { drain_max_minutes: '5' }, { other: 1 }, [], null])
+    assert.throws(() => validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: bad })), /self_upgrade/);
 });

@@ -115,7 +115,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
 
   // A pending supervisor upgrade holds back new jobs (issue #134); self-upgrade.json is written by the upgrade step.
   let hold = null;
-  try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') hold = { to: redact(h.to.slice(0, 7), 12), since: Number.isFinite(h.since) ? h.since : null, text: `holding new jobs: upgrade to ${redact(h.to.slice(0, 7), 12)} pending` }; } catch { /* no state file: nothing is held */ }
+  try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') hold = { to: redact(h.to.slice(0, 7), 12), since: Number.isFinite(h.since) ? h.since : null, jobs: Number.isSafeInteger(h.jobs) ? h.jobs : null, text: `install pending (upgrade to ${redact(h.to.slice(0, 7), 12)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}; no new jobs start` }; } catch { /* no state file: nothing is held */ }
   const estimates = { waits: view.estimates.waits.map(w => ({ kind: w.kind, at: w.at, text: redact(w.text, 200) })), items: Object.values(view.estimates.items).map(e => ({ kind: e.kind, ref: e.ref, name: redact(ref(e.kind, e.ref), 300), agent: e.agent, status: e.status, text: redact(e.text, 200), finishP50: e.finish?.p50 ?? null, finishP90: e.finish?.p90 ?? null, waits: e.waits.map(w => redact(w.text, 200)), basis: e.basis.map(b => redact(b, 300)) })) };
   return { hold, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
 }
@@ -136,7 +136,7 @@ export function renderStatus(s) {
   head('Role slots');
   for (const x of s.slots) out.push(`  ${x.text}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity} slots)` : ''}`);
   head('What happens next');
-  if (s.hold) out.push(`  ${s.hold.text}${s.hold.since ? ` (since ${t(s.hold.since)})` : ''}`);
+  if (s.hold) out.push(`  ${s.hold.text.replace(/^install pending/, s.hold.since ? `install pending since ${t(s.hold.since)}` : 'install pending')}`);
   if (s.next.plan.length) for (const p of s.next.plan) out.push(`  ${p.text}${p.estimate ? ` (${p.estimate})` : ''}`);
   for (const w of s.next.waiting) out.push(`  ${w.text}`);
   head('Estimated finish');
