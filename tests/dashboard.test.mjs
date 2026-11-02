@@ -398,8 +398,8 @@ test('dashboard serve applies team.local.json: the page reports the effective en
   }).on('error', reject));
   assert.equal(view.teamEnabled, true);
 });
-test('#104 an issue no agent owns is not planned and raises no attention item', async t => {
+test('#212 an issue no agent lists raises no attention item (it is eligible, not orphaned)', async t => {
   const v = await view(t, { cache: { tick: okTick(), pulls: [], issues: [issue(77)] } });
   assert.ok(!ids(v).includes('unowned'));
-  assert.ok(!v.plan.some(a => a.issue === 77));
+  assert.ok(!ids(v).includes('unqueued'));
 });

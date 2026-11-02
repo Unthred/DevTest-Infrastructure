@@ -86,7 +86,8 @@ function limitView(job, allowance, now) {
 function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '', tz = undefined) {
   const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })),
     // delivered-work issue numbers the tick cached, in the shape Team.plan() reads, so the page matches `team tick --dry-run`
-    listMergedPulls: async () => [{ headRefName: '', closingIssuesReferences: (cache.delivered || []).map(number => ({ number })) }] };
+    // plus every merged PR number the tick saw, so a follow-up waiting on a merged PR is not mistaken for one closed unmerged (issue #212)
+    listMergedPulls: async () => [{ headRefName: '', closingIssuesReferences: (cache.delivered || []).map(number => ({ number })) }, ...[...new Set([...(cache.mergedNumbers || []), ...(cache.merged || []).map(m => m.number)])].filter(Number.isSafeInteger).map(number => ({ number, headRefName: '', closingIssuesReferences: [] }))] };
   gh.listPullFiles = async n => { const f = cache.pullFiles?.[n]; if (f === null) throw new Error('file list unreadable'); return f || []; };   // the tick's file lists
   const jobsApi = { listActive: async () => jobs.filter(j => ACTIVE.includes(j.status)).map(j => ({ id: j.id, provider: j.provider, status: j.status })) };
   // The same planning inputs as the tick (issues #56, #121): probes included, so the page shows the allowance modes, holds and
@@ -225,7 +226,7 @@ export function pendingProposals(config, pulls, mainRegister, read = readHeadReg
   }
   return out;
 }
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [], fixCount }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [], fixCount, excluded = [] }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
@@ -296,11 +297,10 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     else add(`noreviewer-${u.pr}`, `${what} at ${sha7(u.head)} has no reviewer that is independent and available: ${u.reasons.join('; ')}`, { kind: 'pull', n: u.pr },
       { tried, action: `${unblock}, or review the PR by hand.`, links: [{ text: what, url: web('pull', u.pr) }] });
   }
-  // Open issues no agent will ever be given (since #146 an issue in no agent's list is not dispatched).
-  { const listed = new Set(Object.values(config.agents || {}).flatMap(a => a.issues || []));
-    const orphans = (cache?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number) && !i.labels?.includes('needs-homeowner') && !i.labels?.includes('epic') && !(cache?.pulls || []).some(p => new RegExp(`/issue-${i.number}(\\D|$)`).test(p.headRefName || ''))).map(i => i.number).sort((a, b) => a - b);
-    if (orphans.length) add('unqueued', `${orphans.length} open issue${orphans.length === 1 ? ' is' : 's are'} in no agent's queue, so Foreman will not start ${orphans.length === 1 ? 'it' : 'them'} by itself: ${orphans.map(n => `#${n}`).join(', ')}`, null,
-      { tried: 'Foreman only dispatches issues listed under an agent in team.local.json. These are in no list, so nothing has been started for them. Issues labelled epic or needs-homeowner, and issues that already have an open pull request, are not counted here.', action: 'Add each issue to an agent\'s issues list in team.local.json if it should be built, or close it if it should not.', links: orphans.slice(0, 6).map(n => ({ text: `issue #${n}`, url: web('issue', n) })) }); }
+  // Issue #212: every open issue is eligible by default, so none is orphaned. Deliberate exclusions (labels, prerequisites, a PR still to
+  // merge) are listed on the Work page, not here; only a follow-up whose PR was closed without merging needs the homeowner.
+  for (const e of excluded) if (e.kind === 'pr-closed') add(`prclosed-${e.number}`, `${names.issue(e.number).text}: ${e.reason}`, { kind: 'issue', n: e.number },
+    { tried: 'Foreman held this follow-up until its pull request merged; the PR was closed without merging, so it will not become eligible by itself.', action: 'Close the issue, remove the reference to the PR, or reopen the PR.', links: [{ text: names.issue(e.number).text, url: web('issue', e.number) }] });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
     // Issue #297: an issue that is closed, labelled epic or has an accepted split has nothing left to decide.
@@ -556,9 +556,17 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
   const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now, events || [], register, tz);
-  return team.plan().then(plan => {
+  return team.plan().then(async plan => {
     const names = makeNamer({ repo: config.repository, issues: c.issues, pulls: c.pulls, merged: c.merged, mergeLog: state.mergeLog, stateJobs: state.jobs, titles: state.titles });
     const queues = reasons(team, c, jobs, plan, states, names);
+    const byNoAll = new Map((c.issues || []).map(i => [i.number, i]));
+    team.view = { prs: c.pulls || [], issues: c.issues || [] }; team.merged = await team.gh.listMergedPulls();
+    const excluded = (c.issues || []).filter(i => i.state === 'OPEN' && !team.delivered?.has(i.number)).sort((x, y) => x.number - y.number).flatMap(i => {
+      const ex = team.exclusion(i.number, byNoAll, c.pulls || []);
+      if (ex) return [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: ex.kind, reason: redact(ex.kind === 'prerequisite' ? `blocked by ${ex.refs.map(d => names.issue(d).text).join(', ')}` : ex.text, 300) }];
+      const held = (c.pulls || []).find(p => agentOfBranch(config, p.headRefName) && new RegExp(`/issue-${i.number}(\\D|$)`).test(p.headRefName));
+      return held ? [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: 'pr-open', reason: `held by open ${names.pr(held.number).text}` }] : [];
+    });
     const agents = Object.entries(config.agents).map(([name, a]) => {
       const s = states[name], j = s.job;
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
@@ -568,7 +576,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? {} : { running });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: deploy needed.`, ref: null, severity: 'warning' });
@@ -596,7 +604,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       else if (w.length) attention.push({ id: 'alert-warning', text: redact(w[0].replace(/^team-alert: warning: /, 'Alerting: '), 200), ref: null, severity: 'warning' }); }
     // Issue #358: the pinned status issue could not be updated; the tick itself is unaffected.
     { const e = readStatusIssueState(root).error; if (e) attention.push({ id: 'status-issue-failed', text: redact(e, 300), ref: null, severity: 'warning' }); }
-    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names });
+    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
     if (latch) upgrade = { ...(upgrade || {}), latch: true };
@@ -661,7 +669,7 @@ export function issueTimelinesOf({ jobs, state, names, jobRows, cache }) {
     .filter(t => t.events.length).sort((a, b) => b.last - a.last).slice(0, 60);
 }
 
-function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names }) {
+function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
@@ -694,10 +702,11 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   });
   const byNo = new Map((cache.issues || []).map(i => [i.number, i]));
   const queueReason = new Map(Object.values(queues).flat().filter(q => q.type === 'issue').map(q => [q.ref, q.reason]));
+  const excludedBy = new Map(excluded.map(e => [e.number, e.reason]));
   const issues = (cache.issues || []).slice().sort((a, b) => a.number - b.number).map(i => {
     const deps = i.prerequisites || [];
     return { number: i.number, name: redact(names.issue(i.number).text, 300), title: i.title, state: i.state, agent: agentNames.find(n => config.agents[n].issues.includes(i.number)) || null, needsHomeowner: (i.labels || []).includes('needs-homeowner'),
-      dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [] };
+      dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || excludedBy.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [] };
   });
   const issueTimelines = issueTimelinesOf({ jobs, state, names, jobRows, cache });
   const tickAt = cache.tick?.at ?? null;
@@ -714,6 +723,6 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
     panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
-    slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
+    slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };
 }

@@ -420,22 +420,20 @@ test('#104 ownership returns when the owner mode resets from reviews only or wai
   assert.deepEqual(seen, ['reviews_only', 'waiting']);
 });
 
-// Review of PR #146: issues no agent owns are out of scope for #104 and must never be dispatched, whatever the config or labels say.
-test('#104 an issue no agent owns is never implemented, even with an opt-in style label and key and both agents idle', async t => {
+// Issue #212 reverses PR #146: an open issue in no agent's list is eligible by default; only the excluding labels keep it out.
+test('#212 an issue no agent lists is implemented unless it carries an excluding label', async t => {
   const issues = [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), issue(40), issue(41, 'OPEN', '', ['agent-ok']), issue(42, 'OPEN', '', ['enhancement'])];
   const allowance = { codex: codexAl(0.3), claude: claudeAl(0.3) };
-  assert.deepEqual(await world(t, { issues, allowance }).team.plan(), []);
-  const w = world(t, { issues, allowance, cfg: config({ unowned_allow_labels: ['agent-ok'] }) });
-  assert.deepEqual(await w.team.plan(), [], 'an unowned_allow_labels key has no effect');
-  await w.team.tick();
-  assert.deepEqual(w.calls.created, [], 'no job is created');
-  assert.equal(typeof w.team.unownedReady, 'undefined');
+  const plan = await world(t, { issues, allowance }).team.plan();
+  assert.ok(plan.some(a => a.type === 'implement' && a.issue === 40), 'an unlabelled unlisted issue is planned without a config edit');
+  const excluded = [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), ...['epic', 'tracking', 'parked', 'needs-homeowner'].map((l, i) => issue(50 + i, 'OPEN', '', [l]))];
+  assert.deepEqual(await world(t, { issues: excluded, allowance }).team.plan(), [], 'each excluding label keeps an issue out');
 });
 
-test('#104 a draft for an unowned issue is not continued, even with an implement job recorded for it', async t => {
+test('#212 a draft for an unlisted eligible issue is continued by its author', async t => {
   const w = world(t, { issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED'), issue(40)], pulls: [pr(60, 'claude/issue-40-x', H(2), { isDraft: true })], allowance: { codex: codexAl(0.3), claude: claudeAl(0.3) } });
   w.team.s.jobs.x = { kind: 'implement', agent: 'claude', issue: 40, unowned: true, ingested: true };
-  assert.ok(!(await w.team.plan()).some(a => a.issue === 40));
+  assert.ok((await w.team.plan()).some(a => a.type === 'continue' && a.issue === 40));
 });
 
 test('issue #187: the cost of jobs already planned this tick is charged to the next candidate, and the held reason says so', async t => {
