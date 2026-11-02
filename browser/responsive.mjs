@@ -38,7 +38,9 @@ export async function audit(o) {
   const { port, server } = await bridge(socketPath);
   let browser;
   try {
-    const pw = await import(pathToFileURL(o.playwright).href);
+    let pw;
+    try { pw = await import(pathToFileURL(o.playwright).href); }
+    catch (error) { return { summary: null, exit: EXIT.launch, problem: `playwright module could not be loaded (cache not restored?): ${clip(error.message)}` }; }
     const engine = (pw.default ?? pw)[o.browser];
     try { browser = await engine.launch({ headless: true, args: o.browser === 'chromium' ? ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--disable-dev-shm-usage'] : [] }); }
     catch (error) { return { summary: null, exit: EXIT.launch, problem: `browser launch failed: ${clip(error.message)}` }; }

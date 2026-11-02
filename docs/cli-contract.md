@@ -47,7 +47,7 @@ Issue #8. `bin/dev-test` runs `cli/main.mjs`, which only plans and starts runs t
 
 ### Setup
 - `DEV_TEST_CONFIG` names the runner configuration (default `/mnt/cache/appdata/devtest-infrastructure/state/runner.json`; start from `docker/runner.example.json`). It holds policy only: `allowedProjects` (exact directories under `/mnt/user/projects`), `storageRoot`, `uid`/`gid`, `limits`, and optionally `lockFile`, `evidenceRoot`, `keepRuns` (newest run directories kept per evidence root, default 200) and `openbao: { address, policyFile }`. The dev-test repository itself must be in `allowedProjects` for `web` commands, because the browser scripts run from its read-only mount.
-- `web` commands need the Playwright cache once: `node browser/prepare-cache.mjs` (deliberate, uses the network) and a restore-phase run ([browser-runner.md](browser-runner.md)). `dev-test doctor` shows whether it is ready.
+- `web` commands need the Playwright cache once: `node browser/prepare-cache.mjs` (deliberate, uses the network) and `node browser/restore-cache.mjs` (restore phase, writes the marker) ([browser-runner.md](browser-runner.md)). `dev-test doctor` shows whether it is ready.
 - Images are never pulled by a run. A missing pinned image is exit 3 with the image name.
 
 ### Targets and policy

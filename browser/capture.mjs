@@ -90,7 +90,9 @@ export async function capture(o) {
   const { port, server } = await bridge(socketPath);
   let browser, context;
   try {
-    const pw = await import(pathToFileURL(o.playwright).href);
+    let pw;
+    try { pw = await import(pathToFileURL(o.playwright).href); }
+    catch (error) { report.problems.push(`playwright module could not be loaded (cache not restored?): ${clip(error.message)}`); return { report, exit: EXIT.launch }; }
     const engine = (pw.default ?? pw)[o.browser];
     const args = o.browser === 'chromium' ? ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--disable-dev-shm-usage'] : [];
     try { browser = await engine.launch({ headless: true, args }); report.browserVersion = browser.version(); }

@@ -44,6 +44,7 @@ try {
   const restored = await runContainer(plan);
   fs.rmSync(plan.workspace, { recursive: true, force: true });
   check('restore playwright cache', restored.exitCode === 0);
+  if (restored.exitCode === 0) fs.writeFileSync(path.join(storageRoot, 'cache', 'playwright.restored.json'), JSON.stringify({ package: 'playwright-core', version: pkg.version }));
 
   const doctor = cli(['doctor']);
   check('doctor: ready', doctor.code === 0 && doctor.result.data.checks.some((c) => c.name === 'image playwright' && c.status === 'ok'));

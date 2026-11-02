@@ -24,3 +24,16 @@ export function loadConfig(env = process.env) {
   catch { throw new EnvironmentError(`image lock file ${lockFile} is missing or not valid JSON`); }
   return { config, file };
 }
+
+// The cache image is an opaque loop image, so the host cannot look inside it. browser/restore-cache.mjs writes this marker only
+// after the restore run proved /cache/package/index.mjs exists; an image left by a failed restore has no marker.
+export const PLAYWRIGHT_MARKER = 'playwright.restored.json';
+export function playwrightCacheState(config) {
+  const dir = path.join(config.storageRoot, 'cache');
+  if (!fs.existsSync(path.join(dir, 'playwright.img'))) return { ok: false, reason: 'not prepared' };
+  let marker;
+  try { marker = JSON.parse(fs.readFileSync(path.join(dir, PLAYWRIGHT_MARKER), 'utf8')); } catch { return { ok: false, reason: 'cache image present but its restore was never confirmed' }; }
+  const want = config.lock?.packages?.['playwright-core']?.version;
+  if (marker?.package !== 'playwright-core' || (want && marker.version !== want)) return { ok: false, reason: `cache was restored for another playwright-core version (want ${want})` };
+  return { ok: true, reason: `restored playwright-core ${marker.version}` };
+}

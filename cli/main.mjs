@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, UsageError, COMMANDS, VERSION, CONTRACT_VERSION } from './args.mjs';
-import { loadConfig, EnvironmentError, REPO_ROOT } from './config.mjs';
+import { loadConfig, EnvironmentError, REPO_ROOT, playwrightCacheState } from './config.mjs';
 import { newRunId, createRunDir, artifactRecord, collectWebArtifacts, findRunDir, readStoredResult, writeStoredResult, stamp } from './evidence.mjs';
 import { createPlan, runContainer, releaseVolumes, sweepStaleVolumes, dockerCommand, RunnerError, targetSocketPath } from '../docker/runner.mjs';
 import { dotnetRunSpec } from '../dotnet/run.mjs';
@@ -153,8 +153,10 @@ function preflight(ctx, { config, deps, runsRoot, imageIds, needPlaywrightCache 
     if (deps.docker(['image', 'inspect', '--format', '{{.Id}}', ref]).status !== 0)
       throw new EnvironmentError(`pinned image ${id} (${ref.replace(/^.*\//, '')}) is not present locally; pull it through the reviewed image update path (runs never pull)`);
   }
-  if (needPlaywrightCache && !fs.existsSync(path.join(config.storageRoot, 'cache', 'playwright.img')))
-    throw new EnvironmentError('the Playwright cache is not prepared; run "node browser/prepare-cache.mjs" and the restore phase first (docs/browser-runner.md)');
+  if (needPlaywrightCache) {
+    const cache = playwrightCacheState(config);
+    if (!cache.ok) throw new EnvironmentError(`the Playwright cache is not ready (${cache.reason}); run "node browser/prepare-cache.mjs" then "node browser/restore-cache.mjs" (docs/browser-runner.md)`);
+  }
 }
 
 const imageInfo = (plan) => ({ reference: plan.image, digest: plan.image.split('@')[1] ?? null });
@@ -288,7 +290,8 @@ async function web(ctx, io) {
       if (rep) { data.problems = (rep.problems ?? []).slice(0, 10); data.blocked_requests = rep.blockedRequests?.length ?? 0; for (const p of data.problems) lines.push(`  ${p}`); }
     }
     if (exit === 1 && !message) {
-      if ([10, 11, 12, 13, 15].includes(wrapper)) message = { 10: 'the page reported console, page or HTTP errors', 11: 'navigation timed out', 12: 'the page tried to reach an undeclared destination (blocked)', 13: 'TLS error', 15: 'layout defect or a profile that did not render' }[wrapper];
+      if (wrapper === 10 && (data.problems ?? []).some((p) => /^capture failed:/.test(p))) { exit = 6; message = 'the browser wrapper crashed before testing the page; not evidence about the page. If the Playwright cache is not restored see docs/browser-runner.md'; }
+      else if ([10, 11, 12, 13, 15].includes(wrapper)) message = { 10: 'the page reported console, page or HTTP errors', 11: 'navigation timed out', 12: 'the page tried to reach an undeclared destination (blocked)', 13: 'TLS error', 15: 'layout defect or a profile that did not render' }[wrapper];
       else { exit = 6; message = `the browser wrapper failed unexpectedly (code ${wrapper}); not evidence about the page. If the Playwright cache is not restored see docs/browser-runner.md`; }
     }
   } else if (exit === 0) {
@@ -326,8 +329,9 @@ async function doctor(ctx, io) {
       add(`image ${id}`, present ? 'ok' : 'fail', present ? entry.reference.split('@')[1].slice(0, 19) : 'pinned image not present locally; pull through the reviewed update path');
     }
     for (const name of ['playwright', 'nuget-sdk-8', 'nuget-sdk-9', 'nuget-sdk-10']) {
+      if (name === 'playwright') { const c = playwrightCacheState(config); add('cache playwright', c.ok ? 'ok' : 'warn', c.ok ? c.reason : `${c.reason} (browser commands need node browser/prepare-cache.mjs and node browser/restore-cache.mjs)`); continue; }
       const there = fs.existsSync(path.join(config.storageRoot, 'cache', `${name}.img`));
-      add(`cache ${name}`, there ? 'ok' : 'warn', there ? 'present' : name === 'playwright' ? 'not prepared (browser commands need node browser/prepare-cache.mjs and the restore phase)' : 'created on first use');
+      add(`cache ${name}`, there ? 'ok' : 'warn', there ? 'present' : 'created on first use');
     }
     const repo = realpathOrNull(REPO_ROOT);
     add('allowlist', allowedRoots(config).includes(repo) ? 'ok' : 'warn', allowedRoots(config).includes(repo) ? 'dev-test repository is allowlisted' : 'dev-test repository is not in allowedProjects (web commands will be refused)');

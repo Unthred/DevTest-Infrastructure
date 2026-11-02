@@ -26,6 +26,10 @@ function sandbox(t, extra = {}) {
   return { root, storage, project, config, env: { DEV_TEST_CONFIG: configFile } };
 }
 
+function markRestored(sb) {
+  fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.restored.json'), JSON.stringify({ package: 'playwright-core', version: lock.packages['playwright-core'].version }));
+}
+
 // Runs the CLI with fakes for Docker and the runner. `runner(plan, opts)` stands in for runContainer.
 async function run(sb, argv, { runner, docker, files, startTarget } = {}) {
   const calls = { runs: [], docker: [], targets: [] };
@@ -171,7 +175,7 @@ test('dotnet test: result carries TRX summary and exit mapping; timeout override
 const REPORT_OK = JSON.stringify({ schema_version: 1, ok: true, problems: [] });
 test('web screenshot: positive run, target served from the page directory, no .NET image involved', async (t) => {
   const sb = sandbox(t);
-  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), '');
+  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), ''); markRestored(sb);
   const url = pathToFileURL(path.join(sb.project, 'page.html')).href;
   const r = await run(sb, ['web', 'screenshot', '--url', url, '--profile', 'phone-390', '--browser', 'firefox', '--json'], { files: { 'shot-phone-390-firefox.png': 'PNG', 'shot-phone-390-firefox.report.json': REPORT_OK } });
   assert.equal(r.code, 0);
@@ -188,7 +192,7 @@ test('web screenshot: positive run, target served from the page directory, no .N
 
 test('web: policy refusals start nothing and leak no secret', async (t) => {
   const sb = sandbox(t);
-  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), '');
+  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), ''); markRestored(sb);
   const secret = ['sk', 'live', 'abcdefghijklmnopqrstuvwxyz012345'].join('_');
   const cases = [
     ['http://192.168.1.5:8123/', /not offered/],
@@ -212,9 +216,26 @@ test('web: policy refusals start nothing and leak no secret', async (t) => {
   assert.equal(noCache.code, 3); assert.match(noCache.result.message, /Playwright cache/);
 });
 
-test('web exit mapping: page problems, blocked requests and wrapper faults', async (t) => {
+test('an unconfirmed Playwright restore is an environment fault (exit 3), in doctor and in web preflight', async (t) => {
   const sb = sandbox(t);
   fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), '');
+  const url = pathToFileURL(path.join(sb.project, 'page.html')).href;
+  const shot = await run(sb, ['web', 'screenshot', '--url', url, '--profile', 'desktop', '--json']);
+  assert.equal(shot.code, 3); assert.match(shot.result.message, /restore was never confirmed/); assert.equal(shot.calls.runs.length, 0);
+  const doc = await run(sb, ['doctor', '--json']);
+  assert.notEqual(doc.result.data.checks.find((c) => c.name === 'cache playwright').status, 'ok');
+  fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.restored.json'), JSON.stringify({ package: 'playwright-core', version: '0.0.0' }));
+  assert.equal((await run(sb, ['web', 'screenshot', '--url', url, '--profile', 'desktop', '--json'])).code, 3, 'a marker for another version is not ready');
+  markRestored(sb);
+  assert.equal((await run(sb, ['doctor', '--json'])).result.data.checks.find((c) => c.name === 'cache playwright').status, 'ok');
+  // Defence in depth: a wrapper that crashed before testing the page is never reported as a page failure.
+  const crashed = await run(sb, ['web', 'screenshot', '--url', url, '--profile', 'desktop', '--json'], { runner: (p) => ({ runId: p.runId, exitCode: 1, subjectExit: 10, cleanup: 'complete' }), files: { 'shot-desktop-chromium.png': 'PNG', 'shot-desktop-chromium.report.json': JSON.stringify({ problems: ['capture failed: Cannot find module /cache/package/index.mjs'] }) } });
+  assert.equal(crashed.code, 6);
+});
+
+test('web exit mapping: page problems, blocked requests and wrapper faults', async (t) => {
+  const sb = sandbox(t);
+  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), ''); markRestored(sb);
   const url = pathToFileURL(path.join(sb.project, 'page.html')).href;
   const withWrapper = (subjectExit) => ({ runner: (p) => ({ runId: p.runId, exitCode: 1, subjectExit, cleanup: 'complete' }), files: { 'shot-desktop-chromium.png': 'PNG', 'shot-desktop-chromium.report.json': JSON.stringify({ problems: ['the page tried to reach an undeclared destination'], blockedRequests: ['http://x/y'] }) } });
   for (const [wrapper, code] of [[10, 1], [11, 1], [12, 1], [13, 1], [15, 1], [2, 6], [14, 6], [137, 6]]) {
@@ -230,7 +251,7 @@ test('web exit mapping: page problems, blocked requests and wrapper faults', asy
 
 test('web responsive: --assert limits which rules fail the run; unrendered profiles always fail', async (t) => {
   const sb = sandbox(t);
-  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), '');
+  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), ''); markRestored(sb);
   const url = pathToFileURL(path.join(sb.project, 'page.html')).href;
   const summary = (rendered = true) => JSON.stringify({ profiles: [{ profile: 'phone-360', rendered, failures: 2, warnings: 0 }], failures: [{ profile: 'phone-360', check: 'clipped', element: 'div[1]' }, { profile: 'phone-360', check: 'chips-wrapped', element: 'ul[2]' }], blockedRequests: [] });
   const fake = (rendered) => ({ runner: (p) => ({ runId: p.runId, exitCode: 1, subjectExit: 15, cleanup: 'complete' }), files: { 'audit.summary.json': summary(rendered), 'audit.report.md': '# r', 'audit-phone-360-chromium.png': 'PNG' } });
