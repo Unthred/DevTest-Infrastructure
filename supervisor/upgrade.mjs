@@ -21,6 +21,14 @@ export const VERIFY_MAX_WAIT_MS = 60 * 60 * 1000;
 // the first retry after ENV_RETRY_MS, doubling each time up to ENV_RETRY_MAX_MS. Only a failed validator or test run latches.
 export const ENV_RETRY_MS = 10 * 60 * 1000;
 export const ENV_RETRY_MAX_MS = 4 * 60 * 60 * 1000;
+// Issue #302: what a live tick says about the new version. Only a thrown error or a skipped item that is a real fault fails it.
+// A lease held by a running job is an expected wait, reported under `waiting` and never `skipped`; an item flagged `expected`
+// is ignored too. Items needing the homeowner are reported under `blocked`: they are the condition, not a fault of the code.
+export function liveTickOutcome(tick) {
+  if (tick?.error) return { ok: false, reason: tick.error };
+  const faults = Array.isArray(tick?.skipped) ? tick.skipped.filter(item => !item?.expected) : [];
+  return faults.length ? { ok: false, reason: faults[0]?.reason } : { ok: true, reason: null };
+}
 export const envBackoffMs = attempts => Math.min(ENV_RETRY_MS * 2 ** Math.max(0, (attempts || 1) - 1), ENV_RETRY_MAX_MS);
 // Only the bootstrap installer cannot install itself: a change to it is a needs-homeowner card (issue #101). The main upgrader
 // (supervisor/upgrade.mjs, tools/upgrade-supervisor.sh, tools/rollback-supervisor.sh) installs like any other reviewed change.

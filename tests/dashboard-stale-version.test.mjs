@@ -253,3 +253,20 @@ test('issue #265: hand-deploy item and drift values come from live main and the 
   assert.ok(!v.attention.some(a => a.id === 'drift'));
   assert.match(v.attention.find(a => a.id === 'dashboard-stale').text, /Restart the dashboard server/);
 });
+
+test('issue #302: a rollback latch raises a Needs you item with the clear command and replaces the "next try" promise', async t => {
+  const root = tmp(t); install(root, OLD); fs.mkdirSync(path.join(root, 'team'));
+  fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({ lastUpgradeAt: NOW - 60_000 }));
+  let v = await view(root, { running: OLD });
+  assert.ok(!v.attention.some(a => a.id === 'upgrade-latched'));
+  assert.ok(v.estimates.waits.some(w => w.kind === 'upgrade'), 'unlatched: the rate-limit wait is shown');
+  fs.writeFileSync(path.join(root, 'team', 'self-upgrade.latch'), JSON.stringify({ at: NOW, from: OLD, to: NEW, reason: 'live tick failed: boom' }));
+  v = await view(root, { running: OLD });
+  const item = v.attention.filter(a => a.id === 'upgrade-latched');
+  assert.equal(item.length, 1); assert.equal(item[0].severity, 'action');
+  assert.ok(item[0].text.includes(NEW.slice(0, 7)) && item[0].text.includes('live tick failed: boom'));
+  const need = v.panels.needsYou.find(a => a.id === 'upgrade-latched');
+  assert.equal(need.command, 'ai-supervisor self-upgrade clear-latch');
+  assert.ok(!v.estimates.waits.some(w => /next try/.test(w.text)), 'no next try is promised while latched');
+  assert.ok(v.estimates.waits.some(w => w.kind === 'upgrade-latched' && /clear-latch/.test(w.text)));
+});

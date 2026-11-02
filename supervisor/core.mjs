@@ -10,6 +10,11 @@ export const defaultRegistry = new URL('./providers.json', import.meta.url).path
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped']);
 export const allowedActions = new Set(['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue', 'update_handover']);
 export class SupervisorError extends Error {}
+// A lease is held by another job (issue #302). `holder` is that job's id (null when the lease file is unreadable); whether the
+// holder is live or stale is decided by the caller, never here.
+export class LeaseHeld extends SupervisorError {
+  constructor(holder) { super('issue or worktree already leased; stale lease requires explicit recovery'); this.code = 'LEASE_HELD'; this.holder = holder; }
+}
 // A directory the dispatcher was told to use as a worktree is not a linked worktree of the repository (for example a standalone
 // clone). A condition for the homeowner to fix, not a crash: the dispatcher records it once instead of failing every tick.
 export class WorktreeUnusable extends SupervisorError {
@@ -183,19 +188,24 @@ export async function createJob(root, spec, registry = defaultRegistry, clock = 
 export function acquireLeases(root, job, clock = realClock) {
   fs.mkdirSync(path.join(root, 'leases'), { recursive: true, mode: 0o700 });
   const acquired = [];
+  let holder = null;
   try {
     for (const key of leaseKeys(job)) {
       const file = path.join(root, 'leases', key);
       try { fs.writeFileSync(file, JSON.stringify({ job: job.id, at: clock.now() }), { flag: 'wx', mode: 0o600 }); }
       catch (error) {
-        if (error.code === 'EEXIST' && JSON.parse(fs.readFileSync(file, 'utf8')).job === job.id) continue;
+        if (error.code === 'EEXIST') {
+          let held = null; try { held = JSON.parse(fs.readFileSync(file, 'utf8')).job; } catch { /* unreadable lease: holder unknown */ }
+          if (held === job.id) continue;
+          holder = typeof held === 'string' ? held : null;
+        }
         throw error;
       }
       acquired.push(file);
     }
   } catch (error) {
     for (const file of acquired) fs.unlinkSync(file);
-    if (error.code === 'EEXIST') throw new SupervisorError('issue or worktree already leased; stale lease requires explicit recovery');
+    if (error.code === 'EEXIST') throw new LeaseHeld(holder);
     throw error;
   }
 }

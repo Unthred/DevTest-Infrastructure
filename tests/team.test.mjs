@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, failingChecks, checkDetails, loneCancelled, latestChecks, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
-import { createJob, drive, readJob, stateRoot, validateSpec, WorktreeUnusable, gitCommonDir } from '../supervisor/core.mjs';
+import { createJob, drive, readJob, stateRoot, validateSpec, WorktreeUnusable, gitCommonDir, LeaseHeld } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
 import { ghRunner, githubClient } from '../supervisor/github.mjs';
@@ -1192,4 +1192,61 @@ test('#142 the fix-limit notice names the cause: a failing CI check, not a revie
   r.team.s.fixAttempts[`38:${H(0)}`] = 2; r.team.s.unblock.escalated[38] = { head: H(1), at: 1 }; r.team.s.verdicts[`38:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
   await r.team.notifyFixLimit({});
   assert.match(r.calls.comments.find(c => /fix rounds/.test(c[1]))[1], /a review rejection \(CHANGES verdict\)/);
+});
+
+// ---- issue #302: a held lease is a wait or a recovery, never a failed tick
+const leaseWorld = (t, { holder = { id: 'ab'.repeat(16), status: 'running', worktree: '/p/wt' }, alive = true, clean = true } = {}) => {
+  const alerts = [];
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], teamOpts: { alert: async m => alerts.push(m) } });
+  const real = w.jobs.create; let released = false; w.calls.released = [];
+  w.jobs.states[holder.id] = holder; w.jobs.alive = async () => alive;
+  w.jobs.release = async id => { released = true; w.calls.released.push(id); };
+  w.jobs.create = async spec => { if (!released) throw new LeaseHeld(holder.id); return real(spec); };
+  w.git.isClean = async () => clean;
+  return { ...w, alerts, holder };
+};
+const runReview = async w => { const report = { skipped: [], actions: [] }; const [act] = await w.team.plan(); await w.team.runAction(act, report); return report; };
+
+test('issue #302: one review per agent per tick, and none while its review worktree is in use', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'codex/issue-3-y', H(2))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED')] });
+  const reviews = (await w.team.plan()).filter(a => a.type === 'review');
+  assert.equal(reviews.length, 1, 'two reviews by the same agent would share one worktree');
+  // a review job of that agent is already running: nothing more is planned for it
+  w.jobs.active = [{ id: 'r1', status: 'running', provider: 'claude' }];
+  w.team.s.jobs.r1 = { kind: 'review', agent: 'claude', pr: 10, key: 'x' };
+  assert.equal((await w.team.plan()).filter(a => a.type === 'review' && a.agent === 'claude').length, 0);
+});
+
+test('issue #302: a lease held by a live job is an expected wait, not a skipped item', async t => {
+  const w = leaseWorld(t);
+  const report = await runReview(w);
+  assert.equal(report.skipped.length, 0); assert.equal(report.waiting.length, 1); assert.match(report.waiting[0].reason, /waiting for job abababab \(running\)/);
+  assert.deepEqual(w.calls.released, []); assert.deepEqual(w.calls.labels, []); assert.deepEqual(w.alerts, []);
+});
+
+test('issue #302: a finished holder with a clean worktree is released automatically and the action goes ahead', async t => {
+  const w = leaseWorld(t, { holder: { id: 'cd'.repeat(16), status: 'completed', worktree: '/p/wt' }, alive: false, clean: true });
+  const report = await runReview(w);
+  assert.deepEqual(w.calls.released, ['cd'.repeat(16)]);
+  assert.equal(report.recovered.length, 1); assert.equal(w.calls.created.length, 1);
+  assert.equal(report.skipped.length, 0); assert.equal(report.blocked, undefined);
+  assert.ok(w.jobs.states['cd'.repeat(16)], 'the holder job record is kept');
+});
+
+test('issue #302: an uncertain holder raises one Needs you item naming the holder and the next step, and is not released', async t => {
+  for (const [name, opts] of [
+    ['dead running job', { holder: { id: 'ef'.repeat(16), status: 'running', worktree: '/p/wt' }, alive: false }],
+    ['finished with uncommitted work', { holder: { id: 'ef'.repeat(16), status: 'completed', worktree: '/p/wt' }, alive: false, clean: false }],
+    ['failed job', { holder: { id: 'ef'.repeat(16), status: 'failed', worktree: '/p/wt' }, alive: false }],
+    ['no job record', { holder: { id: 'ef'.repeat(16), status: 'completed' }, alive: false }]]) {
+    const w = leaseWorld(t, opts);
+    if (name === 'no job record') delete w.jobs.states[opts.holder.id];
+    const report = await runReview(w);
+    assert.deepEqual(w.calls.released, [], name); assert.equal(report.skipped.length, 0, name); assert.equal(report.blocked.length, 1, name);
+    assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']], name);
+    assert.equal(w.calls.comments.length, 1, name); assert.match(w.calls.comments[0][1], /Needs the homeowner[^]*efefefef|Needs the homeowner[^]*ai-supervisor release/, name);
+    assert.match(w.alerts[0], /ef{32}|ai-supervisor/, name); assert.equal(w.alerts.length, 1, name);
+    await w.team.runAction((await w.team.plan())[0], { skipped: [] });   // the next tick repeats nothing
+    assert.equal(w.alerts.length, 1, name); assert.equal(w.calls.labels.length, 1, name);
+  }
 });

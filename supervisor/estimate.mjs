@@ -83,6 +83,8 @@ export function allowanceGates(budget = {}, now) {
 // A wait the dispatcher knows about but that is not part of any one issue: the self-upgrade rate limit (issue #47 / #134).
 export function globalWaits({ upgrade = null, now, tz }) {
   const waits = [];
+  // Issue #302: while the rollback latch is set no upgrade is tried at all, so no "next try" is promised.
+  if (upgrade?.latch) { waits.push({ kind: 'upgrade-latched', at: null, text: 'upgrades paused: a rolled-back upgrade set the latch; clear it with "ai-supervisor self-upgrade clear-latch" once the cause is understood' }); return waits; }
   const last = upgrade?.lastUpgradeAt;
   if (Number.isFinite(last) && last + MIN_UPGRADE_INTERVAL_MS > now) {
     const at = last + MIN_UPGRADE_INTERVAL_MS;
