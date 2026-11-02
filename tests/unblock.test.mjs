@@ -146,7 +146,7 @@ test('fix limit: red CI escalates once too', async t => {
 
 async function escalatedWorld(t, { body = 'Do the thing.\n- The dispatcher must never merge without approval.', comments } = {}) {
   const w = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'OPEN', body), issue(5, 'CLOSED')], ...(comments ? { comments } : {}) });
-  reject(w, 38, H(1), [{ kind: 'blocking', text: 'Add a retry limit to the poller' }, { kind: 'blocking', text: 'The dispatcher must never merge without approval' }, { kind: 'follow-up', text: 'Rename the helper for clarity please' }]);
+  reject(w, 38, H(1), [{ kind: 'blocking', text: 'Add a retry limit to the poller' }, { kind: 'blocking', text: 'The dispatcher must never merge without approval' }, { kind: 'follow-up', text: 'Rename the helper for clarity please' }, { kind: 'follow-up', text: 'Log the poller interval at debug level' }]);
   w.team.s.fixAttempts[`38:${H(0)}`] = 2;
   await w.team.tick();
   const [jobId, rec] = Object.entries(w.team.s.jobs)[0];
@@ -174,9 +174,9 @@ test('split: out-of-scope findings become one queued follow-up issue; homeowner-
 
 test('split: a homeowner comment protects its text; unreadable comments split nothing', async t => {
   const a = await escalatedWorld(t, { comments: [{ association: 'OWNER', body: 'Please also rename the helper for clarity before release.' }, { association: 'NONE', body: 'unrelated' }] });
-  a.write([{ finding: 'Rename the helper for clarity please', reason: 'cosmetic' }, { finding: 'Add a retry limit to the poller', reason: 'extra' }]);
+  a.write([{ finding: 'Rename the helper for clarity please', reason: 'cosmetic' }, { finding: 'Log the poller interval at debug level', reason: 'extra' }]);
   await a.finish();
-  assert.equal(a.w.calls.issues.length, 1); assert.doesNotMatch(a.w.calls.issues[0][2], /Rename the helper/); assert.match(a.w.calls.issues[0][2], /retry limit/);
+  assert.equal(a.w.calls.issues.length, 1); assert.doesNotMatch(a.w.calls.issues[0][2], /Rename the helper/); assert.match(a.w.calls.issues[0][2], /poller interval/);
   const b = await escalatedWorld(t); b.w.gh.issueComments = async () => { throw new Error('gh down'); };
   b.write([{ finding: 'Rename the helper for clarity please', reason: 'cosmetic' }]); await b.finish();
   assert.equal(b.w.calls.issues.length, 0); assert.deepEqual(b.w.team.s.unblock.queued, {});
@@ -215,6 +215,8 @@ test('labels: a Foreman-added needs-homeowner label is removed when its cause cl
   reject(f, 38, H(1)); f.team.s.fixAttempts[`38:${H(0)}`] = 2; f.team.s.unblock.escalated[38] = { head: H(1) };
   await f.team.tick(); assert.deepEqual(f.calls.labels, [[38, 'needs-homeowner']]); await f.team.tick(); assert.deepEqual(f.calls.removed, []);
   f.gh.pulls = [pr(38, 'claude/issue-23-x', H(2))]; await f.team.tick();
+  assert.deepEqual(f.calls.removed, [], 'a new head that is not yet reviewed does not clear the fix limit');
+  f.team.s.verdicts[`38:${H(2)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'x', findings: [], at: 1 }; await f.team.tick();
   assert.deepEqual(f.calls.removed, [[38, 'needs-homeowner']]);
   // a label Foreman did not add (the homeowner's own, or a lost-commits notice) is never touched
   const h = world(t, { pulls: [pr(9, 'claude/issue-23-x', H(3))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED', '', ['needs-homeowner'])] });
@@ -230,7 +232,7 @@ test('labels: the cancelled-CI notice clears when the check turns green; another
   w.gh.pulls[0] = { ...w.gh.pulls[0], statusCheckRollup: green };
   reject(w, 10, H(1)); w.gh.pulls[0] = { ...w.gh.pulls[0], statusCheckRollup: green };
   await w.team.tick(); assert.deepEqual(w.calls.removed, [], 'the fix-limit cause still holds the label');
-  w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'x', findings: [], at: 1 };
+  w.team.s.verdicts[`10:${H(2)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'x', findings: [], at: 1 };
   w.gh.pulls = [pr(10, 'claude/issue-23-x', H(2))]; await w.team.tick();
   assert.deepEqual(w.calls.removed, [[10, 'needs-homeowner']]);
 });
@@ -283,5 +285,74 @@ test('never automated: no unblock path merges, and a PASS on another head does n
 
 test('prompts: the escalated note is only in the escalated fix prompt', () => {
   assert.doesNotMatch(fixPrompt({ pr: 1, head: H(1), branch: 'b' }), /escalated/);
-  assert.match(fixPrompt({ pr: 1, head: H(1), branch: 'b', escalatedInbox: '/i/x' }), /Never propose anything that comes from the issue body/);
+  assert.match(fixPrompt({ pr: 1, head: H(1), branch: 'b', escalatedInbox: '/i/x' }), /Never propose a blocking finding or anything that comes from the issue body/);
+});
+
+// ---- review of head f165548 (issue #163): regressions for the blocking findings
+test('transient stop: a job already reported to the homeowner, a closed PR, a moved head or a closed issue is never auto-resumed', async t => {
+  const w = world(t, { pulls: [pr(10, 'claude/issue-23-x', H(1)), pr(11, 'claude/issue-23-y', H(2))], issues: [issue(23), issue(5, 'CLOSED'), issue(6, 'CLOSED')] });
+  const stop = (id, rec, over = {}) => { w.team.s.jobs[id] = { agent: 'claude', ingested: true, at: 1, ...rec }; w.jobs.states[id] = { id, status: 'failed', lastEvent: 'crash', updatedAt: w.clock.t - 5000, ...over }; };
+  stop('notified', { kind: 'implement', key: '23', issue: 23 }); w.team.s.notified['notified:blocked'] = 1;   // reported before the feature ran
+  stop('merged', { kind: 'fix', key: `9:${H(3)}`, pr: 9, head: H(3), branch: 'claude/issue-23-z' });             // PR no longer open
+  stop('moved', { kind: 'fix', key: `10:${H(4)}`, pr: 10, head: H(4), branch: 'claude/issue-23-x' });            // head moved since
+  stop('closed', { kind: 'implement', key: '6', issue: 6 });                                                        // issue closed
+  stop('live', { kind: 'fix', key: `11:${H(2)}`, pr: 11, head: H(2), branch: 'claude/issue-23-y' });             // still current
+  w.clock.t += 10_000_000;
+  for (let i = 0; i < 2; i++) await w.team.tick();
+  assert.deepEqual(w.calls.resumed, ['live']);
+  assert.deepEqual(Object.keys(w.team.s.unblock.noResume).sort(), ['closed', 'merged', 'moved', 'notified']);
+  assert.match(w.team.s.unblock.noResume.notified.why, /already reported/);
+  // the stale ones are handled as before: one Needs you notice each, nothing relaunched
+  assert.ok(w.calls.comments.some(c => c[0] === 9 && /job `merged`/.test(c[1])));
+  assert.ok(w.calls.comments.some(c => c[0] === 10 && /job `moved`/.test(c[1])));
+  noMerge(w);
+});
+
+test('split: a blocking finding is never split automatically, even when it paraphrases the acceptance criteria', async t => {
+  const { w, write, finish } = await escalatedWorld(t, { body: 'The budget limit stops automation and raises exactly one item.' });
+  w.team.s.verdicts[`38:${H(0)}`] = { verdict: 'CHANGES', reviewer: 'codex', findings: [{ kind: 'blocking', text: 'When per_day is exhausted Foreman keeps going and never tells anybody about it' }], at: 0 };
+  assert.equal(overlapsRequired('When per_day is exhausted Foreman keeps going and never tells anybody about it', 'The budget limit stops automation and raises exactly one item.'), false, 'the paraphrase passes the text check');
+  write([{ finding: 'When per_day is exhausted Foreman keeps going and never tells anybody about it', reason: 'out of scope' }, { finding: 'Add a retry limit to the poller', reason: 'extra' }]);
+  await finish();
+  assert.equal(w.calls.issues.length, 0); assert.deepEqual(w.team.s.unblock.queued, {});
+  assert.match(w.calls.comments.map(c => c[1]).join('\n'), /2 proposed split\(s\) refused: it is a blocking finding/);
+  // a finding first reported as a follow-up and later as blocking counts as blocking
+  const b = await escalatedWorld(t);
+  b.w.team.s.verdicts[`38:${H(0)}`] = { verdict: 'CHANGES', reviewer: 'codex', findings: [{ kind: 'blocking', text: 'Rename the helper for clarity please' }], at: 0 };
+  b.write([{ finding: 'Rename the helper for clarity please', reason: 'cosmetic' }]); await b.finish();
+  assert.equal(b.w.calls.issues.length, 0);
+});
+
+test('labels: the fix-limit flag clears only after a PASS on the new head, and a later rejection raises Needs you again', async t => {
+  const f = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  reject(f, 38, H(1)); f.team.s.fixAttempts[`38:${H(0)}`] = 2; f.team.s.unblock.escalated[38] = { head: H(1) };
+  await f.team.tick(); assert.deepEqual(f.calls.labels, [[38, 'needs-homeowner']]);
+  f.gh.pulls = [pr(38, 'claude/issue-23-x', H(2), { statusCheckRollup: [{ name: 'ci', status: 'IN_PROGRESS' }] })];   // pushed, CI pending, no review
+  await f.team.tick(); assert.deepEqual(f.calls.removed, [], 'an unreviewed head with pending CI keeps the label');
+  reject(f, 38, H(2)); await f.team.tick(); await f.team.tick();
+  assert.deepEqual(f.calls.removed, [], 'rejected again: the label stays');
+  // a head that passes clears it and re-arms the notice; a later rejection on another head is raised again
+  f.gh.pulls = [pr(38, 'claude/issue-23-x', H(3))]; f.team.s.verdicts[`38:${H(3)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'x', findings: [], at: 2 };
+  f.team.plan = async () => [];   // keep the PASS from merging in this fixture
+  await f.team.tick(); assert.deepEqual(f.calls.removed, [[38, 'needs-homeowner']]);
+  reject(f, 38, H(4)); await f.team.tick();
+  assert.equal(f.calls.labels.filter(l => l[0] === 38).length, 2, 'the new rejection is labelled again');
+  assert.equal(f.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 1, 'the notice marker is per PR, so the comment is not duplicated');
+});
+
+test('budget: a spent budget at the fix limit raises the limit item, and the fix-limit notice says no escalated round ran', async t => {
+  const e = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], cfg: config({ per_pr: 0 }) });
+  reject(e, 38, H(1)); e.team.s.fixAttempts[`38:${H(0)}`] = 2;
+  await e.team.tick(); await e.team.tick();
+  assert.equal(e.calls.created.length, 0); assert.deepEqual(e.team.s.unblock.escalated, {});
+  const items = e.calls.comments.filter(c => /Foreman stopped unblocking/.test(c[1]));
+  assert.equal(items.length, 1); assert.match(items[0][1], /per-PR limit of 0/);
+  const notice = e.calls.comments.filter(c => /fix rounds/.test(c[1]));
+  assert.equal(notice.length, 1); assert.match(notice[0][1], /no escalated round ran: Foreman reached the per-PR limit of 0/); assert.doesNotMatch(notice[0][1], /including one escalated round/);
+  // the resume path raises the limit item too
+  const j = world(t, { issues: [issue(23), issue(5, 'CLOSED')], cfg: config({ per_pr: 0 }) });
+  stoppedJob(j, 'j1', 'crash'); await j.team.tick(); await j.team.tick();
+  assert.deepEqual(j.calls.resumed, []);
+  assert.equal(j.calls.comments.filter(c => c[0] === 23 && /Foreman stopped unblocking/.test(c[1])).length, 1);
+  assert.equal(j.calls.comments.filter(c => c[0] === 23 && /Needs the homeowner.\*\* Supervised/.test(c[1])).length, 1);
 });
