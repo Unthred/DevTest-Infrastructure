@@ -1,0 +1,4 @@
+#!/bin/sh
+# Single entry point for DevTest builds and browser checks (docs/cli-contract.md). Arguments are passed through unchanged; no shell parsing.
+d=$(dirname "$(readlink -f "$0")")
+exec node "$d/../cli/main.mjs" "$@"
