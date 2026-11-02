@@ -490,3 +490,9 @@ test('#186 a failed PR job is dropped when no PR is open at all; kept while its 
   assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: none }))).panels.needsYou.length, 0, 'merged PR, no open PRs');
   assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: calmCache() }))).panels.needsYou.length, 1);
 });
+test('#186 a failed issue job whose issue is older than the cached issue window is dropped; kept while the issue is cached and open', async t => {
+  const failed = jb({ status: 'failed', kind: 'implement', issue: 9999, branch: 'claude/issue-9999-x', provider: 'claude', lastEvent: 'failed', updatedAt: NOW - 1000 });
+  assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: calmCache() }))).panels.needsYou.length, 0, 'issue not in the cache');
+  const c = calmCache(); c.issues.push({ number: 9999, title: 'x', state: 'OPEN', labels: [] });
+  assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: c }))).panels.needsYou.filter(x => /^job-/.test(x.id)).length, 1);
+});

@@ -303,7 +303,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
     // Issue #297: an issue that is closed, labelled epic or has an accepted split has nothing left to decide.
-    const closed = kind === 'issue' ? (cache?.issues || []).some(i => i.number === j.issue && (i.state !== 'OPEN' || i.labels?.includes('epic'))) || state.splits?.[j.issue]?.status === 'accepted' : Array.isArray(cache?.pulls) && !openPulls.has(j.issue);   // closed or merged: nothing left to decide (also when no PR is open at all)
+    const known = (cache?.issues || []).find(i => i.number === j.issue);   // the cache is the newest 200 issues of any state: a populated cache lacking the issue means it is older than that window (#186)
+    const closed = kind === 'issue' ? (known ? (known.state !== 'OPEN' || known.labels?.includes('epic')) : (cache?.issues || []).length > 0) || state.splits?.[j.issue]?.status === 'accepted' : Array.isArray(cache?.pulls) && !openPulls.has(j.issue);   // closed or merged: nothing left to decide (also when no PR is open at all)
     if (closed) continue;
     // Issue #186: the PR's own limit card already links this job, so it is not a second card for the same event.
     if (kind === 'pull' && prCarded.has(j.issue)) continue;
