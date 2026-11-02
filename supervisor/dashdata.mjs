@@ -151,10 +151,10 @@ export function mergeProbes(prev = {}, next = {}) {
 
 const rollup = (pr, team, now) => checksState(pr.statusCheckRollup, retriedIn(team.s?.cancelWatch, pr, now));
 // On-demand probe result (issue #110): merged into the tick cache so the next tick and the dashboard see it. Returns false when
-// there is no cache yet (the first tick creates it). The tick's own write merges the same way, so the newer reading wins.
+// there is no cache yet (a probes-only cache is created: no tick, empty lists, so the reading is never lost). The tick's own write
+// merges the same way, so the newer reading wins.
 export function storeProbes(root, probes) {
-  const prev = readCache(root);
-  if (!prev) return false;
+  const prev = readCache(root) || { schema: 1, tick: null, repository: null, pulls: [], issues: [], delivered: [], merged: [], pullFiles: {}, fetchedAt: null };
   atomicJson(cacheFile(root), { ...prev, probes: mergeProbes(prev.probes, probes) });
   return true;
 }

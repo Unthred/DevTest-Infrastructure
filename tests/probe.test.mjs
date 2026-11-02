@@ -192,7 +192,15 @@ test('probeNow runs the provider probe, stores the record in the cache and repor
   assert.ok(!JSON.stringify(out).includes('sess'));
   assert.deepEqual(await probeNow({ root, registry: 'unused', config: cfg, agent: 'claude', now: NOW, refresh: async () => ({ record: null, error: 'no-reading' }) }), { agent: 'claude', ok: false, error: 'no-reading' });
   await assert.rejects(probeNow({ root, registry: 'unused', config: cfg, agent: 'nobody', now: NOW }), /unknown agent/);
-  assert.equal(storeProbes(tmp(t), { claude: record }), false, 'no cache yet: the first tick creates it');
+});
+test('probeNow with no dashboard cache yet still persists the reading (probes-only cache, no tick) and reports it stored', async t => {
+  const root = tmp(t), record = cleanProbeRecord(claudeAl(0.3), NOW - 20000);
+  const out = await probeNow({ root, registry: 'unused', config: cfg, agent: 'claude', now: NOW, refresh: async () => ({ record }) });
+  assert.equal(out.ok, true); assert.equal(out.stored, true); assert.equal(out.ageSeconds, 20);
+  const cache = readCache(root);
+  assert.equal(cache.probes.claude.source, 'probe'); assert.equal(cache.tick, null);
+  assert.equal(latestAllowance([], cache.probes).claude.observedAt, record.observedAt, 'the next tick and the page read it');
+  assert.deepEqual(cache.pulls, []);
 });
 test('refreshProvider through a real registry: a custom manifest probe command is run, and a provider without a probe is unsupported', async t => {
   const dir = tmp(t);
