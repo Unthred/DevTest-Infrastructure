@@ -157,7 +157,12 @@ const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'm
 async function teamTick(root, registry, dryRun, hold = null) {
   // Issue #153: pending config migrations run once, before the first tick of a new version; a failing one stops the tick.
   if (!dryRun) {
-    const migrated = await runMigrations({ root, dir: migrationsDir, validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), next)) });
+    // The tick lock is held while migrations run, so two concurrent live ticks cannot run the same migration.
+    const migrationLock = tickLock(root);
+    if (!migrationLock) return { skipped: 'another tick is running' };
+    let migrated;
+    try { migrated = await runMigrations({ root, dir: migrationsDir, validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), next)) }); }
+    finally { migrationLock(); }
     if (migrated.failed) {
       const error = `config migration ${String(migrated.failed.number).padStart(3, '0')}-${migrated.failed.name} failed: ${migrated.failed.error}`;
       try { recordTick(root, { now: Date.now(), status: 'error', error, jobs: readJobs(root) }); } catch { /* the dashboard record is best effort */ }

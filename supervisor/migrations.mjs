@@ -51,6 +51,8 @@ export async function runMigrations({ root, dir, validate = () => {}, now = Date
   let all;
   try { all = listMigrations(dir); } catch (error) { return { applied: [], failed: { number: 0, name: 'migrations', error: String(error.message).slice(0, 200) } }; }
   const pending = all.filter(m => m.number > state.applied);
+  // A recorded failure whose migration is no longer pending (dropped by a hotfix or a rollback to an older version) is stale.
+  if (state.failed && !pending.some(m => m.number === state.failed.number)) { state.failed = null; saveState(root, { applied: state.applied, failed: null }); }
   const applied = [];
   const localFile = path.join(root, LOCAL_FILE);
   for (const mig of pending) {
