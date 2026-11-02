@@ -151,7 +151,7 @@ export function admits(a, type, pendingReviews = 0) {
   const cost = a.costs.cost(type), review = a.costs.cost('review');
   if (cost === null) return { ok: true };
   const reserve = type === 'review' ? 0 : pendingReviews * (review || 0);
-  if (a.used + cost + reserve >= 1) return { ok: false, why: `a ${type} job (about ${pct(cost)} of the weekly allowance${reserve ? ` plus ${pct(reserve)} kept for ${pendingReviews} pending review(s)` : ''}) would run into the weekly limit at ${pct(a.used)}` };
+  if (a.used + cost + reserve >= 1) return { ok: false, why: `a ${type} job (about ${pct(cost)} of the weekly allowance${reserve ? ` plus ${pct(reserve)} kept for ${pendingReviews} pending review(s)` : ''}) would run into the weekly limit at ${pct(a.used)}${a.planned ? ` (${pct(a.used - a.planned)} recorded plus ${pct(a.planned)} for jobs planned this tick)` : ''}` };
   return { ok: true };
 }
 

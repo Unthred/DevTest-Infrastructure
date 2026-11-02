@@ -437,3 +437,24 @@ test('#104 a draft for an unowned issue is not continued, even with an implement
   w.team.s.jobs.x = { kind: 'implement', agent: 'claude', issue: 40, unowned: true, ingested: true };
   assert.ok(!(await w.team.plan()).some(a => a.issue === 40));
 });
+
+test('issue #187: the cost of jobs already planned this tick is charged to the next candidate, and the held reason says so', async t => {
+  const { jobs, resetsAt } = calibrated();
+  const mk = used => world(t, { issues: [issue(2), issue(3), issue(23, 'CLOSED'), issue(5, 'CLOSED')], cfg: config({ limits: { roles: { implementer: 2, reviewer: 1 }, overall: 4, max_review_attempts: 2, max_fix_attempts: 2 } }),
+    allowance: { codex: codexAl(used, { resetsAt }), claude: claudeAl(0.95, { resetsAt: NOW + 2 * HOUR }) }, jobRecords: jobs });
+  const tight = mk(0.75), roomy = mk(0.65);
+  const impl = async w => (await w.team.plan()).filter(a => a.agent === 'codex' && a.type === 'implement').length;
+  assert.equal(await impl(tight), 1, '75% + 15% fits once; the second would need 15% more');
+  assert.equal(await impl(roomy), 2, 'at 65% both fit');
+  const why = tight.team.held.codex.implement;
+  assert.match(why, /weekly limit at 90%/);
+  assert.match(why, /75% recorded plus 15% for jobs planned this tick/);
+  assert.doesNotMatch(roomy.team.held.codex?.implement || '', /planned this tick/);
+});
+
+test('issue #187: an agent at a usage limit (mode still normal) does not take another agent\'s issue over either', async t => {
+  const w = world(t, { issues: [issue(2), issue(23, 'CLOSED'), issue(5, 'CLOSED')], allowance: { codex: codexAl(0.92), claude: claudeAl(0.4, { resetsAt: RESET }) } });
+  assert.equal((await w.team.plan()).find(a => a.agent === 'claude')?.reassignedFrom, 'codex', 'control: claude in allowance takes it');
+  w.team.limitedOf = agent => (agent === 'claude' ? { out: true, reason: 'claude 5-hour limit' } : { out: false });
+  assert.ok(!(await w.team.plan()).some(a => a.agent === 'claude' && a.type === 'implement'));
+});

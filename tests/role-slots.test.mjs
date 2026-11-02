@@ -183,10 +183,11 @@ test('a partial local roles override on an older shipped file with per_agent tak
 });
 
 test('an owner at its usage limit does not start its own implement job; the other agent takes it', async t => {
-  const w = world(t, { cfg: config({ limits: limits({ roles: { implementer: 2, reviewer: 1 } }) }), out: codexOut });
+  // roles 3/1: a third implementer slot would otherwise go to codex's own #2 (issue #187); claude's #5 and #6 fill two.
+  const w = world(t, { cfg: config({ limits: limits({ roles: { implementer: 3, reviewer: 1 }, overall: 4 }) }), out: codexOut });
   const plan = await w.team.plan();
   assert.ok(!plan.some(a => a.agent === 'codex' && a.type === 'implement'));
-  assert.ok(plan.some(a => a.agent === 'claude' && a.type === 'implement'));
+  assert.deepEqual(plan.filter(a => a.agent === 'claude' && a.type === 'implement').map(a => a.issue).sort(), [5, 6]);
 });
 
 test('load spreads: with one PR from each agent and ready issues, the second slot goes to the agent without a job this tick', async t => {
@@ -196,4 +197,23 @@ test('load spreads: with one PR from each agent and ready issues, the second slo
   const rv = plan.find(a => a.type === 'review'), im = plan.find(a => a.type === 'implement');
   assert.ok(rv && im);
   assert.notEqual(rv.agent, im.agent);
+});
+
+test('issue #187: the tie-break spreads load: claude reviews codex\'s PR, so the implement slot goes to codex, not to claude again', async t => {
+  const w = world(t, { pulls: [pr(11, 'codex/issue-3-b', H(2))] });
+  w.team.s.jobs.w2 = written('codex', 'big', 'codex/issue-3-b');
+  const plan = await w.team.plan();
+  assert.deepEqual(plan.map(a => [a.agent, a.type, a.pr ?? a.issue]), [['claude', 'review', 11], ['codex', 'implement', 2]]);
+});
+
+test('issue #187: validating twice, or a structuredClone of a validated config, gives the same deprecation text', () => {
+  const perAgent = config({ limits: { per_agent: 2, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } });
+  const once = validateTeamConfig(perAgent);
+  assert.match(once.deprecations[0], /mapped to limits.roles/);
+  for (const again of [validateTeamConfig(once), validateTeamConfig(structuredClone(once))]) {
+    assert.deepEqual(again.deprecations, once.deprecations); assert.deepEqual(again.limits.roles, { implementer: 2, reviewer: 2 });
+  }
+  // negative: an explicit, different roles block still wins and says so
+  const both = validateTeamConfig(config({ limits: { per_agent: 2, roles: { implementer: 1, reviewer: 3 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } }));
+  assert.match(both.deprecations[0], /ignored because limits.roles is set/); assert.deepEqual(both.limits.roles, { implementer: 1, reviewer: 3 });
 });
