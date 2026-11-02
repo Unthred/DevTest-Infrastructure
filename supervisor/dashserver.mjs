@@ -4,6 +4,7 @@ import http from 'node:http';
 import { SupervisorError } from './core.mjs';
 import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { buildView } from './dashboard.mjs';
+import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
 import { matchRoute, renderRoute } from './dashrender.mjs';
@@ -44,11 +45,12 @@ export function configSource(config) {
   return () => { try { good = config(); } catch (error) { if (!good) throw error; } return good; };
 }
 
-export async function currentView({ root, config, now = Date.now() }) {
+// `tz` is the zone for clock times on the page (issue #185); it defaults to the host zone, as 'team status' does.
+export async function currentView({ root, config, now = Date.now(), tz = defaultZone() }) {
   if (typeof config === 'function') config = config();
   const jobs = readJobs(root);
   const register = registerCached(config);
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, lastSeen: readLastSeen(root), register, registerUnreadable: !register });
+  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, tz, lastSeen: readLastSeen(root), register, registerUnreadable: !register });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request.

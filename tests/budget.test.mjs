@@ -458,3 +458,23 @@ test('issue #187: an agent at a usage limit (mode still normal) does not take an
   w.team.limitedOf = agent => (agent === 'claude' ? { out: true, reason: 'claude 5-hour limit' } : { out: false });
   assert.ok(!(await w.team.plan()).some(a => a.agent === 'claude' && a.type === 'implement'));
 });
+
+// issue #185: the served dashboard path (currentView) passes a zone, so the 'until' time is not shown in UTC
+test('currentView shows the reassignment time in the given zone, and in the host zone by default', async t => {
+  const { currentView } = await import('../supervisor/dashserver.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tz185-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
+  const jobs = [{ id: 'c'.repeat(32), provider: 'codex', kind: 'review', issue: 40, status: 'completed', createdAt: NOW - 5 * HOUR, updatedAt: NOW - 4 * HOUR, allowance: codexAl(0.92, { at: NOW - 4 * HOUR }) },
+    { id: 'd'.repeat(32), provider: 'claude', kind: 'review', issue: 41, status: 'completed', createdAt: NOW - 5 * HOUR, updatedAt: NOW - 4 * HOUR, allowance: claudeAl(0.4, { at: NOW - 4 * HOUR, resetsAt: RESET }) }];
+  for (const j of jobs) fs.writeFileSync(path.join(root, 'jobs', `${j.id}.json`), JSON.stringify(j));
+  fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, pulls: [], issues: [issue(2), issue(3)], merged: [] }));
+  const cfg = config();
+  const until = async extra => (await currentView({ root, config: cfg, now: NOW, ...extra })).queues.codex.find(q => q.type === 'issue' && q.ref === 2).reason.match(/ until (\w{3} \d\d:\d\d)/)[1];
+  const utc = await until({ tz: 'UTC' }), auckland = await until({ tz: 'Pacific/Auckland' });
+  assert.notEqual(utc, auckland, 'an explicit zone reaches the rendered time');
+  const saved = process.env.TZ;
+  try {
+    process.env.TZ = 'Pacific/Auckland';
+    assert.equal(await until({}), auckland, 'with no tz the host zone is used, not UTC');
+  } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
+});
