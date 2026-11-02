@@ -343,7 +343,11 @@ test('dashboard and team status show the mode, the weekly projection and why wor
   assert.equal(view.budget.claude.mode, 'normal');
   const p = view.plan.find(a => a.agent === 'claude');
   assert.deepEqual([p.type, p.issue, p.reassignedFrom], ['implement', 2, 'codex']);
-  assert.match(view.queues.codex.find(q => q.type === 'issue' && q.ref === 2).reason, /taken from codex by claude: codex has no allowance until/);
+  assert.match(view.queues.codex.find(q => q.type === 'issue' && q.ref === 2).reason, /reassigned for allowance from codex to claude: codex has no allowance until/);
+  // the 'until' time is shown in the configured zone, not the host's (issue #151)
+  const zoned = async tz => (await buildView({ config: cfg, root: '/nonexistent', jobs, events: [], state, cache, snapshots: [], now: NOW, tz })).queues.codex.find(q => q.type === 'issue' && q.ref === 2).reason;
+  const untilIn = async tz => (await zoned(tz)).match(/ until (\w{3} \d\d:\d\d)/)[1];
+  assert.notEqual(await untilIn('Pacific/Auckland'), await untilIn('Pacific/Pago_Pago'));
   assert.match(view.queues.codex.find(q => q.type === 'issue' && q.ref === 3).reason, /waits: codex is reviews only/);
   assert.match(view.agents.find(a => a.name === 'codex').idleReason.text, /^reviews only: weekly 92%/);
   assert.ok(view.panels.next.find(n => n.agent === 'claude').why.startsWith('reassigned for allowance'));
