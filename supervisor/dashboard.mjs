@@ -541,6 +541,10 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and ticks are stopped: ${f.error}. team.local.json was not changed.`, 300), ref: null, severity: 'action' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
+    // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.
+    { const w = sup.ticks.filter(t => Number.isFinite(t.at)).at(-1)?.warnings || [];
+      if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told the team needs you.', ref: null, severity: 'action' });
+      else if (w.length) attention.push({ id: 'alert-warning', text: redact(w[0].replace(/^team-alert: warning: /, 'Alerting: '), 200), ref: null, severity: 'warning' }); }
     const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
@@ -568,6 +572,7 @@ const NEXT_STEP = {
   homeowner: 'Open the issue and either answer it or remove the needs-homeowner label so the team can continue.',
   'tick-failed': 'Read the tick error; nothing is dispatched until a tick succeeds.',
   job: 'Read the job record, then retry it or close the issue.',
+  'alert-failed': 'Check the Unraid notification settings, then run team-alert --test on Tower; the alert is retried every tick until it is delivered.',
   migration: 'Fix team.local.json by hand (or remove the offending key), then the next tick retries the migration. The failed attempt left the file unchanged; backups are next to it.',
   rebase: 'Restore the dropped commits on the PR branch (the old head is still reachable by its id) before it is reviewed or merged.'
 };
