@@ -274,3 +274,42 @@ test('issue #120: a verdict or post-condition already in place when the job paus
   const rn = await drive(n.root, nj, n.registry, clk, n.run(n.root, nj), 1, async () => false);
   assert.notEqual(rn.status, 'completed');
 });
+
+// Issue #127 follow-ups for PR #122.
+test('issue #127: a limit with a pr_opened, new_head or continued post-condition already true is NOT completed; rebased and verdict are', async t => {
+  const kinds = { pr_opened: { kind: 'pr_opened', branch: 'x/issue-1-a' }, new_head: { kind: 'new_head', pr: 4, baseHead: 'c'.repeat(40) }, continued: { kind: 'continued', pr: 4 } };
+  for (const [name, pc] of Object.entries(kinds)) {
+    const s = sandbox(t, `${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, { ...s.spec, postcondition: pc }, s.registry);
+    const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job), 1, async () => true);
+    assert.notEqual(r.status, 'completed', name); assert.doesNotMatch(logOf(s, job), /completed_before_limit/, name);
+  }
+  const s = sandbox(t, `${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, { ...s.spec, postcondition: { kind: 'rebased', pr: 4, baseHead: 'c'.repeat(40) } }, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job), 4, async () => true);
+  assert.equal(r.status, 'completed'); assert.equal(r.attempts, 1);
+});
+
+test('issue #127: a checker that throws on a usage_limit run logs postcondition_exception and the job is not completed', async t => {
+  const s = sandbox(t, `${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, { ...s.spec, postcondition: { kind: 'verdict', ticket: 'a'.repeat(32), pr: 41, head: 'b'.repeat(40) } }, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job), 1, async () => { throw new TypeError('boom'); });
+  assert.notEqual(r.status, 'completed'); assert.match(logOf(s, job), /postcondition_exception:TypeError/); assert.doesNotMatch(logOf(s, job), /boom/);
+});
+
+test('issue #127: a 30 KB tool_result quoting "usage limit" on exit 0 completes with no classification', async t => {
+  const line = longToolResult('The diff adds: usage limit handling', 30000);
+  const s = sandbox(t, `process.stdout.write(${JSON.stringify(line)} + '\\n'); ${emit(claudeLive)}`, { observe: claude.observe }), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'completed'); assert.doesNotMatch(logOf(s, job), /classified:usage_limit|oversize_line/);
+});
+
+test('issue #127: an oversize stderr line and an oversize unterminated tail are discarded, never classified', async t => {
+  const big = 'usage limit '.repeat(7000);
+  const s = sandbox(t, `process.stderr.write(${JSON.stringify(big)} + '\\n'); ${emit(claudeLive)} process.stdout.write(${JSON.stringify(big)});`, { observe: claude.observe }), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'completed'); assert.match(logOf(s, job), /oversize_line:stderr/); assert.match(logOf(s, job), /oversize_line:stdout/); assert.doesNotMatch(logOf(s, job), /classified:usage_limit/);
+});
+
+test('issue #127: a multibyte character split across chunks is decoded intact', async t => {
+  const s = sandbox(t, `const b = Buffer.from(JSON.stringify({type:'result',result:'é'}) + '\\n'); const i = b.indexOf(0xc3) + 1; process.stdout.write(b.subarray(0, i)); setTimeout(() => process.stdout.write(b.subarray(i)), 50);`), job = await createJob(s.root, s.spec, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.equal(r.status, 'completed'); assert.doesNotMatch(logOf(s, job), /�/);
+});
