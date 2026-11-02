@@ -615,6 +615,9 @@ export class Team {
       const behind = pr.mergeable !== 'CONFLICTING' && pr.mergeStateStatus === 'BEHIND' && this.s.verdicts[key]?.verdict === 'PASS' && this.ciState(pr) === 'green';
       if (pr.mergeable !== 'CONFLICTING' && !behind) continue;
       if (busy('rebase', key) || (this.s.rebaseAttempts[key] || 0) >= L.max_fix_attempts) continue;
+      // Issue #266: with a merge backlog, rebase only the PR that is next to merge (merges go in PR-number order), and let a
+      // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
+      if (this.rebaseDeferred(pr, prs, issueByNo, busy)) break;
       if (!allow('rebase')) break;
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
@@ -710,6 +713,25 @@ export class Team {
       }
     }
     return null;
+  }
+
+  // Issue #266: whether a rebase of `pr` waits. The one rebase candidate is the PR next to merge (lowest number of all conflicting, or
+  // behind-with-PASS, PRs with rebase attempts left); any other waits. And when the latest implementer-role job was a rebase and an
+  // implement job is startable, the slot goes to that implement job (it alternates, so a rebase backlog never holds it tick after tick).
+  rebaseDeferred(pr, prs, issueByNo, busy) {
+    const L = this.c.limits;
+    const wants = p => {
+      if (!agentOfBranch(this.c, p.headRefName) || p.isDraft || !SHA.test(p.headRefOid)) return false;
+      const k = verdictKey(p.number, p.headRefOid);
+      const behind = p.mergeable !== 'CONFLICTING' && p.mergeStateStatus === 'BEHIND' && this.s.verdicts[k]?.verdict === 'PASS' && this.ciState(p) === 'green';
+      return (p.mergeable === 'CONFLICTING' || behind) && (this.s.rebaseAttempts[k] || 0) < L.max_fix_attempts;
+    };
+    const next = prs.filter(wants).sort((x, y) => x.number - y.number)[0];
+    if (next && next.number !== pr.number) return true;
+    const last = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && Number.isFinite(j.at)).sort((x, y) => y.at - x.at)[0];
+    if (last?.kind !== 'rebase') return false;
+    return this.agents().some(([ag]) => !this.limitedOf(ag).out && (!this.modes?.[ag] || admits(this.modes[ag], 'implement', 0).ok)
+      && this.issuesOf(ag).some(n => this.implementable(n, prs, issueByNo, busy) && !this.taken?.has(`issue:${n}`)));
   }
 
   // Why `agent` cannot take new implement work now, or null when it can: its mode is not normal, or its latest job hit a usage limit.
