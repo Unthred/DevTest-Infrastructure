@@ -31,8 +31,10 @@ export function validateReviewException(x, agentNames, now = Date.now()) {
     if (!Number.isFinite(t)) throw bad(`prs entry #${e.pr} needs an expires_at date`);
     if (t > now + MAX_WINDOW_MS) throw bad(`prs entry #${e.pr} expires more than 31 days from now`);
     if (!APPROVED_PRS.includes(e.pr)) throw bad(`prs entry #${e.pr} is not one of the pull requests D-027 approves (${APPROVED_PRS.map(n => '#' + n).join(', ')})`);
-    if (t > APPROVED_EXPIRY_MS) throw bad(`prs entry #${e.pr} expires after the 9 Nov 2026 limit D-027 fixes`);
+    if (t !== APPROVED_EXPIRY_MS) throw bad(`prs entry #${e.pr} must expire at exactly 2026-11-09T00:00:00Z (9 Nov 2026), the instant D-027 fixes`);
   }
+  const missing = APPROVED_PRS.filter(n => !seen.has(n));
+  if (missing.length) throw bad(`prs must list every pull request D-027 approves; missing ${missing.map(n => '#' + n).join(', ')}`);
 }
 
 // The listed, unexpired, not-yet-ended entry for a PR number, or null. 'ended' is the dispatcher's record { [pr]: { reason, at } }.

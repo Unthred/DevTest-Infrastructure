@@ -13,7 +13,7 @@ const DAY = 86400000;
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
 const REG = (ex = 'homeowner-approved') => `## D-020 — x\n- Status: homeowner-approved\n\n## D-024 — z\n- Status: homeowner-approved\n\n## D-027 — e\n- Status: ${ex}\n`;
 const exception = (over = {}) => ({ agent: 'claude', full_review: { model: 'opus', effort: 'medium' }, commit_review: { model: 'sonnet', effort: 'medium' },
-  prs: [{ pr: 137, expires_at: new Date(NOW + 5 * DAY).toISOString() }], ...over });
+  prs: [137, 216, 217, 222, 234].map(pr => ({ pr, expires_at: '2026-11-09T00:00:00Z' })), ...over });
 const config = (over = {}) => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
@@ -113,14 +113,14 @@ test('head moved after both PASSes: neither carries; both reviews run again on t
 test('expiry, ended and unapproved: the exception stops applying and the D-024 route returns', async t => {
   const w = world(t);
   assert.ok(w.team.exceptionFor(137));
-  w.now.t = NOW + 6 * DAY;   // past expires_at, PR still open
+  w.now.t = NOW + 7 * DAY;   // past expires_at, PR still open
   assert.equal(w.team.exceptionFor(137), null);
   const report = {}; await w.team.plan(); await w.team.endExceptions(report);
   assert.deepEqual(report.exceptionEnded, [{ pr: 137, reason: 'expired' }]);
   // a verdict job started under the exception is not recorded once it has ended
   const w2 = world(t);
   await w2.team.tick();
-  w2.now.t = NOW + 6 * DAY;
+  w2.now.t = NOW + 7 * DAY;
   const { report: rep } = await finish(w2);
   assert.match(rep.ingested[0].error, /exception ended/);
   assert.equal(Object.keys(w2.team.s.verdicts).length, 0);
@@ -160,11 +160,13 @@ test('config validation: dates, models, duplicates and unknown fields', () => {
   assert.throws(bad({ prs: [{ pr: 1 }] }), /review_exception/);
   assert.throws(bad({ prs: [{ pr: 1, expires_at: 'soon' }] }), /review_exception/);
   assert.throws(bad({ prs: [{ pr: 1, expires_at: '2099-01-01T00:00:00Z' }] }), /31 days/);
+  assert.throws(bad({ prs: [{ pr: 137, expires_at: '2026-11-09T00:00:00Z' }] }), /missing #216, #217, #222, #234/);
+  assert.throws(bad({ prs: [137, 216, 217, 222, 234].map((pr, i) => ({ pr, expires_at: i ? '2026-11-09T00:00:00Z' : '2026-11-08T00:00:00Z' })) }), /exactly 2026-11-09/);
   assert.throws(bad({ prs: [{ pr: 137, expires_at: '2026-11-09T00:00:00Z' }, { pr: 137, expires_at: '2026-11-09T00:00:00Z' }] }), /review_exception/);
   assert.throws(bad({ commit_review: { model: 'opus' } }), /different models/);
   // D-027 scope is enforced, not just recorded: no other PR, and no expiry past 9 Nov 2026
   assert.throws(bad({ prs: [{ pr: 999, expires_at: '2026-11-03T00:00:00Z' }] }), /not one of the pull requests D-027 approves/);
-  assert.throws(bad({ prs: [{ pr: 137, expires_at: '2026-11-09T00:00:01Z' }] }), /9 Nov 2026/);
+  assert.throws(bad({ prs: [{ pr: 137, expires_at: '2026-11-09T00:00:01Z' }] }), /exactly 2026-11-09/);
   assert.doesNotThrow(bad({ prs: [137, 216, 217, 222, 234].map(pr => ({ pr, expires_at: '2026-11-09T00:00:00Z' })) }));
   assert.throws(bad({ extra: 1 }), /review_exception/);
 });
@@ -174,7 +176,7 @@ test('a whole-PR exception PASS never merges once the exception has expired or l
     const w = world(t);
     assert.deepEqual(types((await w.team.tick()).actions), ['review:full']);
     await finish(w);   // Opus PASS of an Opus-written head, recorded under the exception
-    if (how === 'expired') w.now.t = NOW + 6 * DAY; else w.team.register = REG('superseded');
+    if (how === 'expired') w.now.t = NOW + 7 * DAY; else w.team.register = REG('superseded');
     assert.equal(w.team.exceptionFor(137), null);
     const actions = (await w.team.tick()).actions;
     assert.ok(!types(actions).includes('merge'), `${how}: the exception PASS must not merge`);
