@@ -200,6 +200,21 @@ test('split: an issue missing from the issue list is unreadable, so nothing is s
   assert.equal(w.calls.issues.length, 0); assert.deepEqual(w.team.s.unblock.queued, {});
 });
 
+test('split: an issue missing from the capped list is fetched directly, and a valid split goes ahead', async t => {
+  const { w, write, finish } = await escalatedWorld(t);
+  const own = w.gh.issues.find(i => i.number === 23);
+  w.gh.issues = w.gh.issues.filter(i => i.number !== 23);
+  w.gh.getIssue = async n => (n === 23 ? own : null);
+  write([{ finding: 'Log the poller interval at debug level', reason: 'extra' }]);
+  await finish();
+  assert.equal(w.calls.issues.length, 1);
+  // a direct lookup that returns the wrong issue stays unreadable
+  const b = await escalatedWorld(t);
+  b.w.gh.issues = b.w.gh.issues.filter(i => i.number !== 23); b.w.gh.getIssue = async () => issue(999);
+  b.write([{ finding: 'Log the poller interval at debug level', reason: 'extra' }]); await b.finish();
+  assert.equal(b.w.calls.issues.length, 0);
+});
+
 test('labels: a Foreman-added needs-homeowner label is removed when its cause clears, and the removal is recorded', async t => {
   // job cause
   const w = world(t, { issues: [issue(23), issue(5, 'CLOSED')], cfg: config({ cooldown_ms: 86_400_000 }) });

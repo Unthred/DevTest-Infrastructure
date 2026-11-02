@@ -38,6 +38,8 @@ export function githubClient(config, gh = ghRunner()) {
     getPull: async n => { const p = json(['pr', 'view', String(n), '--repo', repo, '--json', PR_FIELDS]); return p ? withLabels([p])[0] : p; },
     listIssues: async () => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '200', '--json', 'number,title,state,body,labels'])
       .map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) })),
+    // One issue by number, for when it is not in the capped list.
+    getIssue: async n => { const i = json(['issue', 'view', String(n), '--repo', repo, '--json', 'number,title,state,body,labels']); return i ? { ...i, labels: (i.labels || []).map(l => l.name) } : null; },
     // Comments with the author's association to the repository (OWNER = the homeowner), to tell homeowner-required text apart.
     issueComments: async n => (json(['issue', 'view', String(n), '--repo', repo, '--json', 'comments'])?.comments || []).map(c => ({ association: c.authorAssociation, body: String(c.body || '') })),
     comment: async (n, body) => { gh(['issue', 'comment', String(n), '--repo', repo, '--body-file', '-'], body, { retry: false }); },
