@@ -121,3 +121,18 @@ test('exception path: an unpinned or rejected-name Opus commit-review model is r
   team.exceptionFor = () => ({ agent: 'claude', commit_review: { model: 'Opus', effort: 'medium' }, full_review: S });
   assert.match(team.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer/);
 });
+
+test('an unpinned writer is never pinned to a review model of its agent (D-026)', t => {
+  const fable = { model: 'fable', effort: 'medium' };
+  const team = world(t, { fix: { effort: 'high' }, review: fable, review_candidates: [fable] });
+  team.providerModels.claude = { ...manifests.claude, aliases: ['fable', 'opus', 'sonnet', 'haiku'] };
+  const f = team.modelFor(act(), 'fix', {});
+  assert.equal(f.model, 'sonnet'); assert.equal(f.writeRefusal ?? null, null);
+  // every non-Opus alias is a review model: refused with a clear reason, not run on the review model or the CLI default
+  const only = world(t, { fix: { effort: 'high' }, review: fable, review_candidates: [fable] });
+  only.providerModels.claude = { ...manifests.claude, aliases: ['fable', 'opus'] };
+  assert.match(only.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer.*review model/);
+  // the exception path pins with the same check
+  only.exceptionFor = () => ({ agent: 'claude', commit_review: { effort: 'medium' }, full_review: S });
+  assert.match(only.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer/);
+});

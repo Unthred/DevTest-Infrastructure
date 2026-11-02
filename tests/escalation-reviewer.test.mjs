@@ -22,7 +22,8 @@ const config = ({ cands = ONE, codex = true, fix } = {}) => ({
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] }, ...(codex ? { codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } } : {}) },
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } });
 const PR = { number: 137, title: 't', headRefName: 'claude/issue-72-x', headRefOid: H(5), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green };
-const manifests = { claude: { aliases: ['opus', 'sonnet', 'haiku'], efforts: ['low', 'medium', 'high'] }, codex: { aliases: [], efforts: ['low', 'medium', 'high'] } };
+// Only Opus is an alias (sonnet and haiku match by pattern): an entry without a model cannot be pinned, so it stays unrecorded (issue #368).
+const manifests = { claude: { aliases: ['opus'], pattern: '^(sonnet|haiku)$', efforts: ['low', 'medium', 'high'] }, codex: { aliases: [], efforts: ['low', 'medium', 'high'] } };
 
 function world(t, { cfg = config(), out = {}, writers = ['sonnet'] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'esc-rev-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
