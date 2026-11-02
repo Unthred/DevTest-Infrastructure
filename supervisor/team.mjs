@@ -8,6 +8,7 @@ import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart 
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
+import { entryApproved } from './decisions.mjs';
 import { redact, redactLong } from './redact.mjs';
 import { EXCEPTION_DECISION, validateReviewException, activeException, endedNow, modelWrittenRanges } from './review-exception.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
@@ -174,8 +175,7 @@ export function loadTeamConfig(shippedFile, root) {
 
 // The access decision must be homeowner-approved in the register, or the dispatcher refuses to launch anything.
 export function decisionApproved(registerText, id) {
-  const m = registerText.match(new RegExp(`^## ${id} [^\\n]*\\n((?:(?!^## ).*\\n?)*)`, 'm'));
-  return !!m && /^- Status: homeowner-approved\s*$/m.test(m[1]);
+  return entryApproved(String(registerText || ''), id);
 }
 
 // Issue #249: the heading title, status and first sentence of an entry in the register, or null when it is absent.
@@ -192,6 +192,8 @@ export function decisionInfo(registerText, id) {
 export const INDEPENDENCE_DECISION = 'D-024';
 // The choices offered at the fix limit, on every path (card, PR notice, alert). No paid option, and no move to a stronger model.
 export const FIX_LIMIT_OPTIONS = 'wait for another agent to be able to review (allowance reset), split the PR into smaller pieces, change the approach, or fix it by hand (raising `max_fix_attempts` in team.local.json only allows more rounds on the same model)';
+// Issue #303: D-025 (a PASS carries across a clean, unchanged, green rebase) binds only once the homeowner approves it. See ENFORCED_DECISIONS.
+export const CARRY_DECISION = 'D-025';
 
 // Issue #149: judge each check by its latest run on the head. A push followed by a PR description edit starts two runs of the same
 // check about 20 s apart; the concurrency group cancels the first. That superseded cancelled run is not a failure.
@@ -1276,6 +1278,8 @@ export class Team {
   async carryVerdict(id, j, report) {
     const prior = this.s.verdicts[verdictKey(j.pr, j.head)];
     if (prior?.verdict !== 'PASS') return;
+    // Issue #303: without an approved D-025 nothing carries (and nothing is recorded as refused: approving it later lets a pending carry proceed).
+    if (!this.carryApproved()) return;
     const pr = await this.gh.getPull(j.pr);
     const done = () => { if (j.carry?.state === 'pending') { j.carry = { state: 'refused', reason: 'superseded', at: this.clock.now() }; this.save(); } };
     if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === j.head) return done();
@@ -1304,7 +1308,9 @@ export class Team {
     for (const [id, j] of Object.entries(this.s.jobs)) if (j.kind === 'rebase' && j.carry?.state === 'pending') await guard(`carry ${id}`, () => this.carryVerdict(id, j, report));
   }
   // A carried verdict is valid only against the head it was recorded for, with every condition recorded as met.
-  carryOk(entry, pr) { return carryValid(entry, pr); }
+  carryApproved() { return decisionApproved(this.register, CARRY_DECISION); }
+  // issue #303: a carried PASS recorded before D-025 lost its approval no longer merges
+  carryOk(entry, pr) { return entry?.carriedFrom ? this.carryApproved() && carryValid(entry, pr) : carryValid(entry, pr); }
   // Issue #296: a carry attempt for this exact head is still waiting (pending CI, or not yet retried). No review is planned for that
   // head meanwhile; the next tick either records the carry or refuses it with a reason, and only then does a full review become due.
   carryPending(pr) {

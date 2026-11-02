@@ -22,6 +22,19 @@ export function planningInputs({ config, jobs, probes = {}, snapshots = [], even
   return { allowances, allowanceOf, limitedOf, usage: { allowance: allowances, jobs, snapshots } };
 }
 
+// Issue #303: the register as a pull request's head has it (the object is cached per head; '' when it cannot be read).
+const headRegisters = new Map();
+export function readHeadRegister(config, pr) {
+  const key = `${pr.number}:${pr.headRefOid}`;
+  if (headRegisters.has(key)) return headRegisters.get(key);
+  if (!/^[0-9a-f]{40}$/.test(pr.headRefOid || '')) return '';
+  const shown = spawnSync('git', ['-C', config.repo_path, 'show', `${pr.headRefOid}:docs/DECISIONS.md`], { encoding: 'utf8', timeout: 30000 });
+  const text = shown.status === 0 ? shown.stdout : '';
+  if (shown.status !== 0) return '';   // a failed read (head not fetched yet) is not cached, so a later fetch is seen
+  if (headRegisters.size > 500) headRegisters.clear();
+  headRegisters.set(key, text); return text;
+}
+
 // The decision register that counts is the one merged into main, not a working copy. Returns '' when it cannot be read.
 export function readRegister(config) {
   const shown = spawnSync('git', ['-C', config.repo_path, 'show', 'origin/main:docs/DECISIONS.md'], { encoding: 'utf8', timeout: 30000 });

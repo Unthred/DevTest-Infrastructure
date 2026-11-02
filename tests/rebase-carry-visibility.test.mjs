@@ -22,6 +22,7 @@ const cfgRaw = () => ({ schema_version: 1, enabled: true, repository: 'o/r', rep
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [5] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [2] } } });
 const pr = (n, head, extra = {}) => ({ number: n, title: `t${n}`, headRefName: 'claude/issue-5-x', headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', statusCheckRollup: green, ...extra });
+const REG = '## D-025 — carry\n- Status: homeowner-approved\n';
 const PASS = { verdict: 'PASS', reviewer: 'codex', job: 'j1', findings: [], commandsRun: ['x'], at: 1 };
 
 function world(t, { pulls, equal = true, resolved = false }) {
@@ -31,7 +32,7 @@ function world(t, { pulls, equal = true, resolved = false }) {
     comment: async (n, b) => calls.comments.push([n, b]), hasComment: async (n, m) => calls.comments.some(([x, b]) => x === n && b.includes(m)) };
   const jobs = { states: { r1: { status: 'completed' } }, listActive: async () => [], get: async id => jobs.states[id] || null, create: async () => ({ id: 'a'.repeat(32) }) };
   const git = { checkRebase: async () => ({ commits: [], missing: [], resolvedConflicts: resolved }), ensureWorktree: async o => o.path, worktreeFor: async () => null, rangeEqual: async () => equal };
-  const team = new Team({ config: cfgRaw(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: '', clock: { now: () => NOW }, limitedOf: () => ({ out: false }) });
+  const team = new Team({ config: cfgRaw(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: REG, clock: { now: () => NOW }, limitedOf: () => ({ out: false }) });
   team.s.verdicts[`10:${H(1)}`] = { ...PASS };
   team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 10, head: H(1), base: 'main', ingested: false, at: 1 };
   return { team, calls, gh };
@@ -44,7 +45,7 @@ test('a recorded carry shows old head, new head and evidence on the dashboard ro
   assert.equal(state.verdicts[`10:${H(2)}`].carriedFrom, H(1));
   const cache = { tick: { at: NOW, status: 'ok', lastOkAt: NOW }, fetchedAt: NOW, pulls: [pr(10, H(2))], issues: [], merged: [] };
   const cfg = validateTeamConfig(cfgRaw());
-  const view = await buildView({ config: cfg, root: '/nonexistent', jobs: [], events: [], state, cache, snapshots: [], now: NOW });
+  const view = await buildView({ config: cfg, root: '/nonexistent', jobs: [], events: [], state, cache, snapshots: [], now: NOW, register: REG });
   const row = view.prs.find(p => p.number === 10);
   assert.deepEqual([row.carry.oldHead, row.carry.newHead, row.carry.valid], [H(1), H(2), true]);
   assert.deepEqual(row.carry.evidence, { resolvedConflicts: false, patchUnchanged: true, ci: 'green' });

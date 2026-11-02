@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Team, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
-import { planningInputs } from './planning.mjs';
+import { planningInputs, readHeadRegister } from './planning.mjs';
+import { proposalsAdded } from './decisions.mjs';
 import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf } from './dashui/logic.mjs';
@@ -211,7 +212,17 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
 const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 140), url: l.url }));
 // Issue #296: one line for a carried verdict: old head, new head and the evidence it was carried on.
 export const carryText = c => `carried from ${sha7(c.oldHead)} to ${sha7(c.newHead)} over a clean rebase: ${c.evidence?.resolvedConflicts === false ? 'no conflict resolved' : 'conflict check not met'}, ${c.evidence?.patchUnchanged === true ? 'patch unchanged' : 'patch not shown unchanged'}, CI ${c.evidence?.ci || 'unknown'}`;
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map() }) {
+// Issue #303: proposals that open pull requests add to the register and that main does not have yet. Never throws: an unreadable head adds none.
+export function pendingProposals(config, pulls, mainRegister, read = readHeadRegister) {
+  const out = [];
+  for (const p of pulls || []) {
+    if (p.isDraft) continue;
+    let text = ''; try { text = read(config, p) || ''; } catch { text = ''; }
+    for (const e of proposalsAdded(mainRegister, text)) out.push({ ...e, pr: p.number });
+  }
+  return out;
+}
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [] }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
@@ -267,6 +278,9 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     add(`decision-${info.id}`, `${info.id} (${info.title}) is not approved and holds ${n} reviewed PR${n === 1 ? '' : 's'} back from merging: ${prs.map(p => names.pr(p.number).text).join(', ')}`, null,
       { tried: `${info.summary} Each has an independent PASS, green checks and no conflict, but merges only once the register says homeowner-approved.`, action: `To approve, edit docs/DECISIONS.md on main so the ${info.id} entry reads "Status: homeowner-approved".`, links: prs.slice(0, 6).map(p => ({ text: names.pr(p.number).text, url: web('pull', p.number) })) });
   }
+  // Issue #303: one item per decision proposal awaiting the homeowner's sign-off, naming the entry and the pull request that adds it.
+  for (const p of proposals) add(`decision-proposal-${p.id}-${p.pr}`, `Decision ${p.id} (${redact(p.title, 120)}) is an agent proposal awaiting your sign-off, added by ${names.pr(p.pr).text}`, { kind: 'pull', n: p.pr },
+    { tried: 'Agents may only propose decisions; the entry does not bind until you approve it. CI fails any agent PR that marks an entry homeowner-approved without a recorded approval from you.', action: `To approve, comment "homeowner-approval: ${p.id}" on the pull request and set the entry to "Status: homeowner-approved" with its Source linking that comment, or reject the PR.`, links: [{ text: names.pr(p.pr).text, url: web('pull', p.pr) }] });
   // Issue #258: one item per PR that no configured agent can review, with the real reason of each agent.
   for (const u of unreviewed) {
     const what = names.pr(u.pr).text, uniq = x => [...new Set(x)];
@@ -545,7 +559,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: shortJob(j.id), name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? {} : { running });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: deploy needed.`, ref: null, severity: 'warning' });
