@@ -11,6 +11,7 @@ import { makeNamer, shortCommit } from './naming.mjs';
 import { entryApproved } from './decisions.mjs';
 import { redact, redactLong } from './redact.mjs';
 import { EXCEPTION_DECISION, validateReviewException, activeException, endedNow, modelWrittenRanges } from './review-exception.mjs';
+import { findHeadWriter } from './writerevidence.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -425,9 +426,9 @@ export function readSplitDraft(root, ticket) {
 }
 
 export class Team {
-  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
+  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
-    this.providerModels = providerModels; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
+    this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
     this.c = validateTeamConfig(config); this.root = root; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
@@ -435,7 +436,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -500,8 +501,42 @@ export class Team {
     const out = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && !cleanRebase(j) && this.c.agents[j.agent] && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)))
       .map(j => ({ provider: this.c.agents[j.agent].provider, model: j.model ?? null }));
     const author = agentOfBranch(this.c, pr.headRefName);
-    if (!out.length && author) out.push({ provider: this.c.agents[author].provider, model: null });
+    if (!out.length && author) {
+      // Issue #351: a head written outside a job. Its writer is known only from a session-log record the dispatcher found for this
+      // exact head (see recordHeadWriters); without one the writer is unknown (model null), which blocks that provider's models.
+      const head = pr.headRefOid ?? this.view?.prs?.find(p => p.number === pr.number)?.headRefOid, rec = this.s.headWriters?.[`${pr.number}:${head}`], provider = this.c.agents[author].provider;
+      const known = rec?.provider === provider ? (rec.models || []).map(m => this.aliasOf(provider, author, m)) : [];
+      if (known.length && known.every(Boolean)) out.push(...known.map(model => ({ provider, model })));
+      else out.push({ provider, model: null });
+    }
     return out;
+  }
+  // The configured/manifest alias that a recorded raw model id belongs to (for example 'opus' for a full model id); null when none
+  // matches, so an unrecognised id never counts as a different model.
+  aliasOf(provider, agent, raw) {
+    const named = Object.values(this.c.models?.agents?.[agent] || {}).flatMap(e => (Array.isArray(e) ? e : [e]).map(x => x?.model));
+    const aliases = [...new Set([...(this.providerModels[provider]?.aliases || []), ...named])].filter(x => typeof x === 'string' && x);
+    return aliases.find(a => raw === a || String(raw).toLowerCase().includes(a.toLowerCase())) ?? null;
+  }
+  // Issue #351: true when the head's writer is not known on the reviewer's provider (no job record and no session-log evidence).
+  writerUnknown(pr, provider) { return this.writersOf(pr).some(w => w.provider === provider && !w.model); }
+  // Issue #351: look for session-log evidence of who wrote each open job-less head. Evidence is bound to the exact head SHA, so any
+  // new commit has no record and starts unknown again; records of heads that are no longer open are dropped. Misses are retried
+  // after a few minutes only. Nothing a writer says about itself is read.
+  recordHeadWriters(prs) {
+    const open = new Set(), now = this.clock.now();
+    for (const pr of prs || []) {
+      const author = agentOfBranch(this.c, pr.headRefName);
+      if (!author || !SHA.test(pr.headRefOid)) continue;
+      const key = `${pr.number}:${pr.headRefOid}`; open.add(key);
+      if (this.s.headWriters[key] || now - (this.s.headWriterMiss[key] || 0) < 300000) continue;
+      if (Object.values(this.s.jobs).some(j => WRITER_KINDS.has(j.kind) && this.c.agents[j.agent] && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)))) continue;
+      let found = null; try { found = this.headWriterOf({ head: pr.headRefOid, branch: pr.headRefName, now }); } catch { found = null; }
+      if (found && found.provider === this.c.agents[author].provider && found.models?.length) this.s.headWriters[key] = { provider: found.provider, models: found.models, sessions: found.sessions || [], at: now, source: 'session-log' };
+      else this.s.headWriterMiss[key] = now;
+    }
+    for (const k of Object.keys(this.s.headWriters)) if (!open.has(k)) delete this.s.headWriters[k];
+    for (const k of Object.keys(this.s.headWriterMiss)) if (!open.has(k)) delete this.s.headWriterMiss[k];
   }
   // Issue #249: open PRs whose independent PASS is green and mergeable but held only because the decision that allows the merge is
   // not yet homeowner-approved. Empty once approved or when nothing is waiting.
@@ -552,6 +587,7 @@ export class Team {
     const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key }, 'review', {}, true).model ?? null;
     const reviewer = { provider: this.c.agents[agent].provider, model };
     if (independentOf(reviewer, this.writersOf(pr))) return null;
+    if (this.writerUnknown(pr, reviewer.provider)) return agent + ' cannot review PR #' + pr.number + ': the writer of this head is unknown (no job record and no session-log evidence for this exact head), so no ' + reviewer.provider + ' model can be shown to differ from it';
     return agent + ' would review PR #' + pr.number + ' on ' + (model || 'its default model') + ', the model that wrote it; a review needs a different model';
   }
   // Issue #297: every review model an agent could use on this PR, each with the reason it is refused (null = usable). Without a
@@ -560,7 +596,7 @@ export class Team {
     const n = this.c.models?.agents?.[agent]?.review_candidates?.length || 0, writers = this.writersOf(pr), provider = this.c.agents[agent].provider;
     return Array.from({ length: Math.max(n, 1) }, (_, i) => {
       const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key, ...(n ? { candidate: i } : {}) }, 'review', {}, true).model ?? null;
-      return { model, refusal: independentOf({ provider, model }, writers) ? null : 'it wrote this head' };
+      return { model, refusal: independentOf({ provider, model }, writers) ? null : writers.some(w => w.provider === provider && !w.model) ? 'writer unknown' : 'it wrote this head' };
     });
   }
   // Issue #316: would adding a writer on this agent's provider and 'model' to the PR leave no available independent reviewer?
@@ -699,6 +735,7 @@ export class Team {
     }
     this.modes = this.budgets(); this.held = {}; this.heldPr = {};
     await this.loadFiles(prs);
+    this.recordHeadWriters(prs);
     const active = await this.jobs.listActive();
     this.activeIds = new Set(active.map(j => j.id));
     // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
@@ -826,7 +863,7 @@ export class Team {
       }
       if (exhausted || !reasons.length) continue;
       const conflicting = pr.mergeable === 'CONFLICTING';
-      out.push({ pr: pr.number, head: pr.headRefOid, reasons, tried, unblock, waits, conflicting, ...(conflicting ? { rebaseAttempts: this.s.rebaseAttempts[key] || 0, maxRebase: this.c.limits.max_fix_attempts } : {}) });
+      out.push({ pr: pr.number, head: pr.headRefOid, reasons, tried, unblock, waits, conflicting, ...(this.agents().some(([a]) => this.writerUnknown(pr, this.c.agents[a].provider)) ? { writerUnknown: true } : {}), ...(conflicting ? { rebaseAttempts: this.s.rebaseAttempts[key] || 0, maxRebase: this.c.limits.max_fix_attempts } : {}) });
     }
     return out;
   }
