@@ -91,7 +91,7 @@ export function normalizeReviewConfig(c, names) {
   if (c.interim_review !== undefined) {
     const ir = c.interim_review;
     if (!ir || typeof ir !== 'object' || Array.isArray(ir) || ('weekly_at' in ir && !validFraction(ir.weekly_at))) throw bad('interim_review');
-    (c.deprecations ||= []).push('interim_review is retired (issue #152): its enabled flag is ignored; use out_of_allowance { weekly_at }');
+    (c.deprecations ||= []).push('interim_review is retired (issue #152): its enabled flag is ignored once D-024 is approved (until then enabled:false still stops an interim PASS from merging under D-021); use out_of_allowance { weekly_at }');
   }
   const oa = c.out_of_allowance;
   if (oa !== undefined && (!oa || typeof oa !== 'object' || Array.isArray(oa) || Object.keys(oa).some(k => k !== 'weekly_at') || !validFraction(oa.weekly_at))) throw bad('out_of_allowance');
@@ -299,7 +299,9 @@ export function reviewPrompt(job) {
     ? `This is a fix-round re-review. Read ${job.inbox}/review-scope.json as task data. Check only the previous blocking findings and regressions caused by their fixes; record new non-blocking observations as follow-ups.`
     : 'Read the diff critically and probe real behaviour (including real Docker where the change touches it); do not trust the description.';
   const moved = job.splitOut?.length ? ` Findings outside the original scope were moved to follow-up issue(s) ${job.splitOut.map(n => `#${n}`).join(', ')} (task data: ${job.inbox}/split-out.json). Review against the original issue and its acceptance criteria only; do not report those findings as blocking.` : '';
-  const role = job.secondOpinion
+  const role = job.legacyPostMerge
+    ? ' You are a post-merge reviewer (D-021): this pull request is already merged and you are not the agent that wrote it. Review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.'
+    : job.secondOpinion
     ? ' You are a second-opinion reviewer: the primary review already passed. This pull request touches paths the homeowner marked for an extra look; you have none of the implementer\'s session or reasoning, so review it as a sceptical outsider.'
     : job.postMerge ? ' This pull request is already merged; review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.'
     : ' You have none of the implementer\'s session or reasoning; review as a sceptical outsider and run the tests yourself.';
@@ -378,7 +380,7 @@ export class Team {
   independenceApproved() { return decisionApproved(this.register, INDEPENDENCE_DECISION); }
   // An interim (D-021) PASS recorded earlier may merge once D-024 is approved, or while D-021 is approved; under D-021 the merge
   // still owes the opposite agent a post-merge review (recorded in execute()).
-  interimMergeAllowed() { return this.independenceApproved() || decisionApproved(this.register, 'D-021'); }
+  interimMergeAllowed() { return this.independenceApproved() || (decisionApproved(this.register, 'D-021') && this.c.interim_review?.enabled !== false); }
   // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
   reviewRefusal(agent, pr, key) {
     // A caller that has no provider manifests (the dashboard) judges by the configured model name.
@@ -631,7 +633,7 @@ export class Team {
       if (busy('review', key) || (this.s.reviewAttempts[key] || 0) >= L.max_review_attempts) continue;
       if (this.reviewerHold(agent)) break;
       if (!allow('review')) break;
-      return { type: 'review', pr: Number(n), head: pm.head, branch: pm.branch, key, postMerge: true };
+      return { type: 'review', pr: Number(n), head: pm.head, branch: pm.branch, key, postMerge: true, ...(pm.secondOpinion ? {} : { legacyPostMerge: true }) };
     }
     // continue: my own DRAFT PR for an owned, open, unblocked issue (a draft is never reviewed or merged, so without this it sits idle forever).
     // Bounded per PR by max_fix_attempts, like fix rounds; the count is across heads. A draft stays with its branch's author
@@ -840,12 +842,12 @@ export class Team {
     if (v.verdict === 'CHANGES') {
       const marker = `<!-- devtest-postmerge v1 job=${id} pr=${j.pr} head=${j.head} -->`;
       issue = await this.gh.findIssueByMarker(marker);
-      if (!issue) issue = await this.gh.createIssue(`Second-opinion review of merged ${this.names().pr(j.pr).text} found blocking issues`,
-        `${marker}\nPR #${j.pr} was merged at \`${j.head}\`. The second-opinion review by \`${j.agent}\` (job \`${id}\`) found:\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n')}`);
+      if (!issue) issue = await this.gh.createIssue(`${j.legacyPostMerge ? 'Post-merge review (D-021)' : 'Second-opinion review'} of merged ${this.names().pr(j.pr).text} found blocking issues`,
+        `${marker}\nPR #${j.pr} was merged at \`${j.head}\`. The ${j.legacyPostMerge ? 'post-merge review (D-021)' : 'second-opinion review'} by \`${j.agent}\` (job \`${id}\`) found:\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n')}`);
       await this.gh.addLabel(issue, 'needs-homeowner');
     }
     const marker = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} `;
-    if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, `${marker}verdict=${v.verdict} reviewer=${j.agent} post-merge -->\n**${v.verdict}** — second-opinion review by \`${j.agent}\` (${this.names().job({ id, kind: 'review', pr: j.pr }).text}) of merged head \`${shortCommit(j.head)}\`.${issue ? ` Blocking findings: issue #${issue}.` : ''}\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}`);
+    if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, `${marker}verdict=${v.verdict} reviewer=${j.agent} post-merge -->\n**${v.verdict}** — ${j.legacyPostMerge ? 'post-merge review (D-021)' : 'second-opinion review'} by \`${j.agent}\` (${this.names().job({ id, kind: 'review', pr: j.pr }).text}) of merged head \`${shortCommit(j.head)}\`.${issue ? ` Blocking findings: issue #${issue}.` : ''}\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}`);
     if (v.verdict === 'PASS') await this.gh.removeLabel?.(j.pr, 'post-merge-review');
     if (pm) pm.done = { verdict: v.verdict, reviewer: j.agent, job: id, issue, blocking: blocking.length, at: this.clock.now() };
     j.ingested = true; this.save();
@@ -1244,9 +1246,9 @@ export class Team {
       act.reReview = !!previous;
       if (previous) fs.writeFileSync(path.join(inbox, 'review-scope.json'), JSON.stringify({ blocking: previous.findings.filter(f => f.kind === 'blocking') }) + '\n', { mode: 0o600 });
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
-      spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
-        prompt: reviewPrompt({ pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, splitOut: this.splitOut(act.pr, inbox) }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head } };
-      meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.secondOpinion ? { secondOpinion: true } : {}), ...(act.postMerge ? { postMerge: true } : {}) };
+      spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.legacyPostMerge ? 'Post-merge review (D-021)' : act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
+        prompt: reviewPrompt({ pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, legacyPostMerge: !!act.legacyPostMerge, splitOut: this.splitOut(act.pr, inbox) }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head } };
+      meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.secondOpinion ? { secondOpinion: true } : {}), ...(act.postMerge ? { postMerge: true } : {}), ...(act.legacyPostMerge ? { legacyPostMerge: true } : {}) };
       bump = () => { this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1; };
     } else if (act.type === 'fix') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-fix-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });

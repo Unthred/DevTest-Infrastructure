@@ -312,3 +312,30 @@ test('until D-024 is homeowner-approved an interim PASS merge still owes a post-
   await ok.team.execute(m3, {});
   assert.deepEqual(ok.team.s.postMerge, {}); assert.deepEqual(ok.calls.labels, []);
 });
+
+// Review fix (PR #168 follow-ups, issue #170)
+test('until D-024 is approved interim_review.enabled:false still stops an interim PASS merging; absent or true allows it; approved D-024 ignores it', async t => {
+  const mk = (ir, register) => { const w = world(t, { register, out: CODEX_OUT, cfg: config(ir === undefined ? {} : { interim_review: ir }) }); writer(w);
+    w.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j', interim: true, at: NOW - 1000 }; return w; };
+  assert.equal((await mk({ enabled: false }, UNAPPROVED).team.plan()).find(a => a.type === 'merge'), undefined);
+  assert.ok((await mk({ enabled: true }, UNAPPROVED).team.plan()).find(a => a.type === 'merge'));
+  assert.ok((await mk(undefined, UNAPPROVED).team.plan()).find(a => a.type === 'merge'));
+  assert.ok((await mk({ enabled: false }, REGISTER).team.plan()).find(a => a.type === 'merge'));
+});
+
+test('legacy D-021 post-merge reviews are worded as post-merge review (D-021); a kept second-opinion entry keeps its wording', async t => {
+  const w = world(t, { register: UNAPPROVED }); w.gh.pulls = [];
+  w.team.s.postMerge[77] = { head: H(5), branch: 'claude/issue-72-x', author: 'claude', at: NOW };
+  const act = (await w.team.plan()).find(a => a.postMerge); assert.equal(act.legacyPostMerge, true);
+  await w.team.execute(act);
+  const spec = w.calls.created.at(-1);
+  assert.match(spec.scope, /^Post-merge review \(D-021\) of PR #77/); assert.match(spec.prompt, /post-merge reviewer \(D-021\)/); assert.doesNotMatch(spec.prompt, /second-opinion/i);
+  await finish(w, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'bad' }] });
+  assert.match(w.calls.issues[0][1], /^Post-merge review \(D-021\) of merged PR #77/); assert.doesNotMatch(w.calls.issues[0][2], /second-opinion/);
+  const c = w.calls.comments.at(-1)[1]; assert.match(c, /post-merge review \(D-021\) by/); assert.doesNotMatch(c, /second-opinion/);
+  // a retained second-opinion entry is unchanged
+  const s = world(t); s.gh.pulls = []; s.team.c.second_opinion = SO;
+  s.team.s.postMerge[77] = { head: H(5), branch: 'claude/issue-72-x', author: 'claude', at: NOW, secondOpinion: true };
+  const a2 = (await s.team.plan()).find(a => a.postMerge); assert.equal(a2.legacyPostMerge, undefined);
+  await s.team.execute(a2); assert.match(s.calls.created.at(-1).scope, /^Second-opinion review of PR #77/);
+});
