@@ -147,12 +147,72 @@ test('a verified self-upgrade restarts the dashboard and records it; a failure i
   }
 });
 
-test('no restart when the upgrade is not verified (rolled back, still waiting)', async t => {
+test('an unverified upgrade never restarts onto the new version (still waiting; rolled back restarts onto the old one)', async t => {
   const root = tmp(t), calls = [];
   const deps = { config: { agents: {} }, restartDashboard: async s => { calls.push(s); return { ok: true }; }, rollback: async () => ({ ok: true }), alert: async () => {} };
   const up = new SelfUpgrade({ root, deps, clock: { now: () => NOW } });
   up.s.pending = { from: OLD, to: NEW, prs: [7], checks: {}, at: NOW - 1000 }; up.save();
   assert.equal(await up.verifyPending({ running: OLD, ok: true }), 'awaiting-verification');
   assert.equal(await up.verifyPending({ running: NEW, ok: false, reason: 'boom' }), 'rolled-back');
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, [OLD], 'only the rollback restarts, onto the restored version; the failed install never restarts onto the new one');
+});
+
+// ---- issue #135
+test('restart health check: a new process that answers passes; one that never answers fails and is reported', async t => {
+  const mk = () => {
+    const proc = fakeProc(t, { 100: ['node', cli(OLD), 'dashboard', 'serve', '--host', '192.168.1.5', '--port', '8731'] });
+    const kill = (pid, sig) => { if (sig === 0) { if (!fs.existsSync(path.join(proc, String(pid)))) throw Object.assign(new Error(), { code: 'ESRCH' }); return; } fs.rmSync(path.join(proc, String(pid)), { recursive: true }); };
+    const start = (w, args) => { fs.mkdirSync(path.join(proc, '200')); fs.writeFileSync(path.join(proc, '200', 'cmdline'), ['node', cli(NEW), ...args].join('\0') + '\0'); };
+    return { proc, kill, start };
+  };
+  const a = mk(), seen = [];
+  const ok = await restartDashboardServer(NEW, { procRoot: a.proc, kill: a.kill, start: a.start, sleep: async () => {}, health: async (h, p) => { seen.push([h, p]); return seen.length > 1; } });
+  assert.equal(ok.ok, true); assert.deepEqual(seen[0], ['192.168.1.5', '8731']);
+  const b = mk();
+  const bad = await restartDashboardServer(NEW, { procRoot: b.proc, kill: b.kill, start: b.start, sleep: async () => {}, tries: 3, health: async () => false });
+  assert.equal(bad.ok, false); assert.match(bad.reason, /health check/);
+});
+
+test('httpHealth is true for a 200 from /api/view.json and false for an error status or no listener', async t => {
+  const { httpHealth } = await import('../supervisor/upgrade.mjs');
+  let code = 200;
+  const server = http.createServer((req, res) => { res.statusCode = req.url === '/api/view.json' ? code : 404; res.end('{}'); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const port = server.address().port;
+  assert.equal(await httpHealth('127.0.0.1', port), true);
+  code = 500; assert.equal(await httpHealth('127.0.0.1', port), false);
+  await new Promise(r => server.close(r));
+  assert.equal(await httpHealth('127.0.0.1', port), false);
+});
+
+test('a rollback restarts the dashboard on the restored version; a failed restart alerts once with the action needed', async t => {
+  for (const res of [{ ok: true, restarted: true }, { ok: false, reason: 'did not stop' }]) {
+    const root = tmp(t), calls = [], alerts = [];
+    const deps = { config: { agents: {} }, restartDashboard: async s => { calls.push(s); return res; }, rollback: async () => ({ ok: true }), alert: async x => alerts.push(x) };
+    const up = new SelfUpgrade({ root, deps, clock: { now: () => NOW } });
+    up.s.pending = { from: OLD, to: NEW, prs: [7], checks: {}, at: NOW - 1000 }; up.save();
+    assert.equal(await up.verifyPending({ running: NEW, ok: false, reason: 'boom' }), 'rolled-back');
+    assert.deepEqual(calls, [OLD], 'restarted onto the restored version, not the failed one');
+    const rec = fs.readFileSync(path.join(root, 'team', 'upgrades.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    assert.equal(rec[0].result, 'rolled_back');
+    assert.equal(rec[1].result, res.ok ? 'dashboard_restarted' : 'dashboard_restart_failed');
+    assert.equal(alerts.filter(a => /Dashboard server was not restarted/.test(a)).length, res.ok ? 0 : 1);
+    if (!res.ok) assert.match(alerts.find(a => /not restarted/.test(a)), /old process keeps serving; restart it by hand/);
+  }
+  const root = tmp(t), calls = [];
+  const up = new SelfUpgrade({ root, deps: { config: { agents: {} }, restartDashboard: async s => { calls.push(s); return { ok: true }; }, rollback: async () => ({ ok: false, reason: 'x' }), alert: async () => {} }, clock: { now: () => NOW } });
+  up.s.pending = { from: OLD, to: NEW, prs: [7], checks: {}, at: NOW - 1000 }; up.save();
+  await up.verifyPending({ running: NEW, ok: false });
+  assert.deepEqual(calls, [], 'a failed rollback does not restart anything');
+});
+
+test('the badge shows "running X, installed Y, restart pending" in amber when they differ, and the status data carries the running commit', async t => {
+  const root = tmp(t); install(root, NEW);
+  const v = await view(root, { running: OLD });
+  assert.equal(v.version.running, OLD);
+  const html = renderPage(v);
+  assert.match(html, new RegExp(`running ${OLD.slice(0, 7)}, installed ${NEW.slice(0, 7)}, restart pending`));
+  assert.match(html, /badge sev-warning [^>]*>(<svg[^]*?<\/svg>)?running [0-9a-f]{7}, installed [0-9a-f]{7}, restart pending/);
+  const agree = renderPage(await view(root, { running: NEW }));
+  assert.doesNotMatch(agree, /restart pending/);
 });

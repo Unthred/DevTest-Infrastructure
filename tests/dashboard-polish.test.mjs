@@ -251,7 +251,7 @@ test('version badge: matches the installed link, flags a server still running ol
   assert.match(page({ installed: H(5), main: H(5), drift: false, running: H(5) }), /sev-ok[^>]*>[^]*?5555555 = main/);
   assert.match(page({ installed: H(5), main: H(5), drift: false, running: null }), /5555555 = main/, 'unknown running code is not an alarm');
   const stale = page({ installed: H(5), main: H(5), drift: false, running: H(4) });
-  assert.match(stale, /sev-warning[^>]*>[^]*?5555555 installed, 4444444 running: restart needed/); assert.doesNotMatch(stale, /= main/);
+  assert.match(stale, /sev-warning[^>]*>[^]*?running 4444444, installed 5555555, restart pending/); assert.doesNotMatch(stale, /= main/);
   assert.match(page({ installed: H(5), main: H(6), drift: true, running: H(5) }), /5555555 → 6666666 deploy needed/);
   assert.match(page(null), /Version<\/span><span class="badge sev-info[^>]*>[^]*?unknown/);
   assert.doesNotMatch((await s.get('/system')).body, /undefined|NaN/);

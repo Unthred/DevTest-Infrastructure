@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { checksState, agentOfBranch } from './team.mjs';
@@ -49,7 +50,7 @@ export function findDashboards(procRoot = '/proc', self = process.pid) {
   }
   return out;
 }
-export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50 } = {}) {
+export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50 } = {}) {
   const found = findDashboards(procRoot);
   if (!found.length) return { ok: true, restarted: false, reason: 'no dashboard server was running' };
   if (found.every(d => d.version === sha)) return { ok: true, restarted: false, reason: 'already on the new version' };
@@ -62,11 +63,21 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
   const args = ['dashboard', 'serve', '--host', old.host, ...(old.port ? ['--port', old.port] : [])];
   try { (start || defaultStart)(wrapper, args); } catch (error) { return { ok: false, reason: `could not start the dashboard server: ${String(error?.message || error).slice(0, 120)}` }; }
   for (let i = 0; i < tries; i++) {
-    if (findDashboards(procRoot).some(d => d.version === sha)) return { ok: true, restarted: true, host: old.host, port: old.port };
+    if (findDashboards(procRoot).some(d => d.version === sha)) {
+      // Health check (issue #135): the new process must answer, not merely exist. Retried while it binds its port.
+      if (!health) return { ok: true, restarted: true, host: old.host, port: old.port };
+      for (let j = 0; j < tries; j++) { if (await health(old.host, old.port)) return { ok: true, restarted: true, host: old.host, port: old.port }; await sleep(200); }
+      return { ok: false, reason: `the dashboard server started on ${short(sha)} but did not answer its health check` };
+    }
     await sleep(200);
   }
   return { ok: false, reason: `the dashboard server did not come back on ${short(sha)}` };
 }
+// GET /api/view.json must answer 200 (it needs the supervisor state, so this proves more than an open port).
+export const httpHealth = (host, port) => new Promise(resolve => {
+  const req = http.get({ host, port: Number(port) || 80, path: '/api/view.json', headers: { host: `${host}:${port}` }, timeout: 5000 }, res => { res.resume(); resolve(res.statusCode === 200); });
+  req.on('timeout', () => { req.destroy(); resolve(false); }); req.on('error', () => resolve(false));
+});
 const defaultStart = (wrapper, args) => { spawn(wrapper, args, { detached: true, stdio: 'ignore', env: process.env }).unref(); };
 
 export class SelfUpgrade {
@@ -184,12 +195,14 @@ export class SelfUpgrade {
 
   // After a verified upgrade the dashboard server is restarted so it does not keep serving old code. It never touches jobs or
   // the dispatcher; a failure is recorded and alerted once and the page's own mismatch warning stays up until it is fixed.
-  async restartDashboard(p) {
+  // p.to is the version the server must end on: the new one after an install; after a rollback p is {from: failed, to: restored}.
+  async restartDashboard(p, rollingBack = false) {
+    const target = p.to;
     if (typeof this.d.restartDashboard !== 'function') return;
     let r;
-    try { r = await this.d.restartDashboard(p.to); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
+    try { r = await this.d.restartDashboard(target); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
     this.record({ from: p.from, to: p.to, result: r.ok ? 'dashboard_restarted' : 'dashboard_restart_failed', reason: r.ok ? (r.restarted ? null : r.reason) : r.reason, ...(r.ok && r.restarted ? { restarted: true } : {}) });
-    if (!r.ok) await this.alert(`${p.to}:dashboard`, `Dashboard server was not restarted after the upgrade to ${short(p.to)}: ${r.reason}. Restart it by hand; the page warns that it may be out of date.`);
+    if (!r.ok) await this.alert(`${p.to}:dashboard${rollingBack ? ':rollback' : ''}`, `Dashboard server was not restarted on ${short(target)} after the ${rollingBack ? 'rollback' : 'upgrade'}: ${r.reason}. The old process keeps serving; restart it by hand (the page shows "restart pending" until then).`);
   }
 
   async rollback(from, to, reason, prs, checks) {
@@ -200,6 +213,8 @@ export class SelfUpgrade {
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(this.latchFile, JSON.stringify({ at: this.clock.now(), from, to, reason: note }), { mode: 0o600 });
     this.record({ from, to, prs, checks, result: result.ok ? 'rolled_back' : 'rollback_failed', reason: note });
+    // A rollback also restarts the dashboard so the badge and the running commit agree (issue #135); jobs are never touched.
+    if (result.ok) await this.restartDashboard({ from: to, to: from }, true);
     await this.alert(`${to}:rolledback`, `Upgrade to ${short(to)} rolled back: ${note}. Automatic upgrades are paused until the homeowner clears ${this.latchFile}.`);
     return result.ok ? 'rolled-back' : 'rollback-failed';
   }
@@ -297,7 +312,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
         return r.status === 0 ? { ok: true } : { ok: false, reason: tail(r) };
       } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     },
-    restartDashboard: async sha => restartDashboardServer(sha, { wrapper }),
+    restartDashboard: async sha => restartDashboardServer(sha, { wrapper, health: httpHealth }),
     alert: sendAlert
   };
 }
