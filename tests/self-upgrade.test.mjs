@@ -147,6 +147,25 @@ test('issue #101: a change to the bootstrap installer is refused as needs-homeow
   assert.equal(w.up.latch(), null, 'a refusal is not a rollback and must not latch');
 });
 
+test('issue #265: the bootstrap refusal is recorded once per target, raises one hand-deploy item and clears when the install moves', async t => {
+  const w = world(t, { files: ['supervisor/team.mjs', 'tools/bootstrap-install.sh'] });
+  w.deps.remoteUrl = () => 'https://example.invalid/r.git'; w.deps.commitsBehind = () => 4;
+  for (let i = 0; i < 5; i++) assert.equal(await w.up.step(), 'upgrader-changed');
+  assert.equal(w.records().filter(r => r.result === 'refused').length, 1, 'one record, not one per tick');
+  assert.deepEqual(w.up.s.handDeploy, { from: FROM, to: TO, files: ['tools/bootstrap-install.sh'], command: `bash tools/bootstrap-install.sh install https://example.invalid/r.git ${TO}`, at: w.up.s.handDeploy.at });
+  assert.equal(w.up.s.main.sha, TO); assert.equal(w.up.s.main.behind, 4);
+  // survives a restart of the process
+  const again = w.make(); assert.equal(await again.step(), 'upgrader-changed'); assert.equal(w.records().length, 1);
+  // a newer main is a new target: a new record and a new item
+  w.state.target = H('e'); assert.equal(await again.step(), 'upgrader-changed');
+  assert.equal(w.records().length, 2); assert.equal(again.s.handDeploy.to, H('e'));
+  // the homeowner installs by hand: the installed commit moves and the item clears
+  w.state.installed = H('e'); w.state.files = ['docs/x.md'];
+  assert.equal(await again.step(), 'current');
+  assert.equal(again.s.handDeploy, undefined); assert.equal(again.s.main.behind, 0);
+  assert.equal(w.records().length, 2);
+});
+
 test('issue #101: a change to the upgrader itself self-installs like any other reviewed change', async t => {
   const w = world(t, { files: ['supervisor/upgrade.mjs', 'tools/upgrade-supervisor.sh', 'tools/rollback-supervisor.sh'] });
   assert.equal(await w.up.step(), 'upgraded');

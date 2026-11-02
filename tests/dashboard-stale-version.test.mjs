@@ -31,7 +31,7 @@ test('a version mismatch gives one Warning card with the old and new version and
   const v = await view(root, { running: OLD });
   const cards = v.attention.filter(a => a.id === 'dashboard-stale');
   assert.equal(cards.length, 1); assert.equal(cards[0].severity, 'warning');
-  assert.equal(cards[0].text, `Dashboard is running ${OLD.slice(0, 7)}, Foreman is on ${NEW.slice(0, 7)}; what you see may be out of date.`);
+  assert.equal(cards[0].text, `Dashboard is running ${OLD.slice(0, 7)}, Foreman is on ${NEW.slice(0, 7)}; what you see may be out of date. Restart the dashboard server.`);
   const html = renderPage(v);
   assert.match(html, /what you see may be out of date/); assert.doesNotMatch(html, /No stalls, stale data or version drift/);
 });
@@ -233,4 +233,23 @@ test('the badge shows "running X, installed Y, restart pending" in amber when th
   assert.match(html, /badge sev-warning [^>]*>(<svg[^]*?<\/svg>)?Restart needed: [0-9a-f]{7} running, [0-9a-f]{7} installed/);
   const agree = renderPage(await view(root, { running: NEW }));
   assert.doesNotMatch(agree, /Restart needed/);
+});
+
+test('issue #265: hand-deploy item and drift values come from live main and the installed commit', async t => {
+  const root = tmp(t); install(root, OLD); fs.mkdirSync(path.join(root, 'team'));
+  const state = o => fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify(o));
+  const cmd = `bash tools/bootstrap-install.sh install https://example.invalid/r.git ${NEW}`;
+  state({ main: { sha: NEW, from: OLD, behind: 3, at: NOW }, handDeploy: { from: OLD, to: NEW, files: ['tools/bootstrap-install.sh'], command: cmd, at: NOW } });
+  let v = await view(root, { running: OLD });
+  const hd = v.attention.filter(a => a.id === 'hand-deploy');
+  assert.equal(hd.length, 1); assert.equal(hd[0].severity, 'action');
+  assert.ok(hd[0].text.includes(NEW.slice(0, 7)) && hd[0].text.includes('tools/bootstrap-install.sh') && hd[0].text.includes(cmd));
+  const drift = v.attention.find(a => a.id === 'drift');
+  assert.match(drift.text, /behind main bbbbbbb by 3 commits/);
+  // the installed commit moves (manual swap): the item and the stale drift go away
+  fs.unlinkSync(path.join(root, 'current')); install(root, NEW);
+  v = await view(root, { running: OLD });
+  assert.ok(!v.attention.some(a => a.id === 'hand-deploy'), 'item clears when the installed commit moves');
+  assert.ok(!v.attention.some(a => a.id === 'drift'));
+  assert.match(v.attention.find(a => a.id === 'dashboard-stale').text, /Restart the dashboard server/);
 });
