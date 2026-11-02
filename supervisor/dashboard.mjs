@@ -2,7 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import path from 'node:path';
-import { Team, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { Team, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { readMigrationState, readIncidents } from './migrations.mjs';
@@ -114,15 +114,16 @@ function reasons(team, cache, jobs, plan, states, names) {
     if (!author) continue;
     let reason;
     if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
+    else if (team.carryPending(pr)) reason = 'the rebase carry is waiting for CI; no review starts for this head until it is recorded or refused';
     else if (checks === 'pending') reason = 'waiting on CI';
     else if (checks === 'red') reason = 'CI failing';
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
     else if (v?.verdict === 'PASS' && v.carriedFrom && !team.carryOk(v, pr)) reason = `PASS carried from ${sha7(v.carriedFrom)} but its record does not match this head; not merged`;
-    else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}${v.carry ? ` (carried from ${sha7(v.carry.oldHead)} over a clean rebase: no conflict resolved, patch unchanged, CI green)` : ''}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
+    else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}${v.carry ? ` (${carryText(v.carry)})` : ''}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
     else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}${noReviewer.get(pr.number) ? `; no reviewer can take it: ${noReviewer.get(pr.number)}` : ''}`;
     queues[author].push({ type: 'pr', ref: pr.number, title: titleOfPr(pr), reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
-    if (!pr.isDraft && checks === 'green' && !v) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
+    if (!pr.isDraft && checks === 'green' && !v && !team.carryPending(pr)) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
       queues[reviewer].push({ type: 'review', ref: pr.number, title: titleOfPr(pr), reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : (team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.held?.[reviewer]?.review) ? ` (held: ${team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
@@ -208,6 +209,8 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
 // Issue #141: a Needs you card says what happened (text), what Foreman tried, the one action needed and where to look.
 // x = { tried, action, links: [{ text, url }] }. Same shape as the event-log cards of #100/#106 will use.
 const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 140), url: l.url }));
+// Issue #296: one line for a carried verdict: old head, new head and the evidence it was carried on.
+export const carryText = c => `carried from ${sha7(c.oldHead)} to ${sha7(c.newHead)} over a clean rebase: ${c.evidence?.resolvedConflicts === false ? 'no conflict resolved' : 'conflict check not met'}, ${c.evidence?.patchUnchanged === true ? 'patch unchanged' : 'patch not shown unchanged'}, CI ${c.evidence?.ci || 'unknown'}`;
 function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set() }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
@@ -636,7 +639,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     id: shortJob(j.id), fullId: j.id, desc: describeFor(j, { names, state }), name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100), overseer: jobOverseer(j, { ticks: sup.ticks, state, cache, now }) }));
-  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobs.find(j => j.id === v.job)), verdict: v.verdict || null, at: v.at ?? null,
+  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobs.find(j => j.id === v.job)), verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
@@ -647,12 +650,12 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     const prJobs = jobRows.filter(j => relIds.has(j.fullId));
     const key = p ? `${n}:${p.headRefOid}` : null;
     return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed',
-      checks: p ? checksState(p.statusCheckRollup) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length,
+      checks: p ? checksState(p.statusCheckRollup) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length, carry: p && key ? carryRecordOf(state.verdicts?.[key], p) : null,
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,
       timeline: [...vs.map(v => ({ at: v.at, text: `${v.reviewer}${v.model ? ` (${v.model})` : ''}: ${v.verdict} at ${v.head}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length === 1 ? '' : 's'})` : ''}` })),
-        ...(m ? [{ at: m.mergedAt, text: 'merged' }] : []), ...prJobs.map(j => ({ at: j.startedAt, text: `${j.agent}: ${j.kind} job ${j.status}` }))].filter(r => Number.isFinite(r.at)).sort((a, b) => a.at - b.at) };
+        ...vs.filter(v => v.carry).map(v => ({ at: v.carry.at ?? v.at, text: `verdict ${carryText(v.carry)}` })), ...(m ? [{ at: m.mergedAt, text: 'merged' }] : []), ...prJobs.map(j => ({ at: j.startedAt, text: `${j.agent}: ${j.kind} job ${j.status}` }))].filter(r => Number.isFinite(r.at)).sort((a, b) => a.at - b.at) };
   });
   const byNo = new Map((cache.issues || []).map(i => [i.number, i]));
   const queueReason = new Map(Object.values(queues).flat().filter(q => q.type === 'issue').map(q => [q.ref, q.reason]));

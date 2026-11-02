@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { STALE_TICK_MS, compactIssues, compactMerged, compactPulls, readCache, readEvents, readJobs, readLeases, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { buildView } from './dashboard.mjs';
-import { checksState } from './team.mjs';
+import { checksState, carryRecordOf } from './team.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { modeLine } from './budget.mjs';
@@ -44,7 +44,8 @@ function verdictOf(state, p) {
   const mine = Object.entries(state.verdicts || {}).filter(([k]) => k.startsWith(`${p.number}:`));
   const hit = mine.find(([k]) => k === `${p.number}:${p.headRefOid}`);
   const [key, v] = hit || mine.sort((a, b) => (b[1].at || 0) - (a[1].at || 0))[0] || [];
-  return v ? { verdict: v.verdict, reviewer: redact(v.reviewer, 20), current: !!hit, head: key.split(':')[1]?.slice(0, 7) || null } : null;
+  const carry = hit ? carryRecordOf(v, p) : null;   // issue #296: a carried verdict shows old head, new head and evidence
+  return v ? { verdict: v.verdict, reviewer: redact(v.reviewer, 20), current: !!hit, head: key.split(':')[1]?.slice(0, 7) || null, ...(carry ? { carry: { oldHead: carry.oldHead.slice(0, 7), newHead: carry.newHead.slice(0, 7), valid: carry.valid, evidence: carry.evidence } } : {}) } : null;
 }
 
 export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [], register = '', registerUnreadable = false }) {
@@ -158,7 +159,7 @@ export function renderStatus(s) {
   for (const p of s.problems) out.push(`  - ${p.text}`);
   head('Pull requests');
   if (!s.pulls.length) out.push('  none open');
-  for (const p of s.pulls) out.push(`  ${p.name} ${p.status}, CI ${p.ci}${p.verdict ? `, ${p.verdict.reviewer} said ${p.verdict.verdict}${p.verdict.current ? '' : ` on an older commit (${p.verdict.head})`}` : ', no verdict yet'}`);
+  for (const p of s.pulls) out.push(`  ${p.name} ${p.status}, CI ${p.ci}${p.verdict ? `, ${p.verdict.reviewer} said ${p.verdict.verdict}${p.verdict.current ? '' : ` on an older commit (${p.verdict.head})`}` : ', no verdict yet'}${p.verdict?.carry ? `; verdict carried from ${p.verdict.carry.oldHead} to ${p.verdict.carry.newHead} (no conflict resolved: ${p.verdict.carry.evidence.resolvedConflicts === false ? 'yes' : 'not shown'}, patch unchanged: ${p.verdict.carry.evidence.patchUnchanged === true ? 'yes' : 'not shown'}, CI ${p.verdict.carry.evidence.ci || 'unknown'})${p.verdict.carry.valid ? '' : ' - record does not match this head'}` : ''}`);
   head('Merged today');
   if (!s.mergedToday.length) out.push('  nothing yet');
   for (const m of s.mergedToday) out.push(`  ${m.name} at ${t(m.at)}`);

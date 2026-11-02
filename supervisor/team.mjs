@@ -248,6 +248,19 @@ export function checkDetails(runs, names) {
   }
   return out;
 }
+// A carried verdict is valid only against the head it was recorded for, with every condition recorded as met.
+export function carryValid(entry, pr) {
+  if (!entry?.carriedFrom) return true;
+  const c = entry.carry, e = c?.evidence;
+  return !!c && c.newHead === pr.headRefOid && c.oldHead === entry.carriedFrom && SHA.test(c.oldHead) && e?.resolvedConflicts === false && e.patchUnchanged === true && e.ci === 'green';
+}
+// Issue #296: the carry record of a verdict as plain data for the dashboard and team status: old head, new head and the evidence.
+export function carryRecordOf(entry, pr) {
+  if (!entry?.carriedFrom) return null;
+  const c = entry.carry || {}, e = c.evidence || {};
+  return { oldHead: String(c.oldHead || entry.carriedFrom), newHead: String(c.newHead || ''), valid: carryValid(entry, pr), at: c.at ?? null,
+    evidence: { resolvedConflicts: e.resolvedConflicts ?? null, patchUnchanged: e.patchUnchanged ?? null, ci: e.ci ?? null } };
+}
 export function agentOfBranch(config, branch) {
   for (const [name, a] of Object.entries(config.agents)) if (typeof branch === 'string' && branch.startsWith(a.branch_prefix)) return name;
   return null;
@@ -681,7 +694,7 @@ export class Team {
     for (const pr of prs || []) {
       const author = agentOfBranch(this.c, pr.headRefName), key = verdictKey(pr.number, pr.headRefOid);
       // Issue #297: a conflicting PR is listed too (marked); the rebase comes first, so it is not skipped.
-      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'green' || this.s.verdicts[key]) continue;
+      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'green' || this.s.verdicts[key] || this.carryPending(pr)) continue;
       if (Object.values(this.s.jobs).some(j => j.kind === 'review' && !j.ingested && j.pr === pr.number && j.head === pr.headRefOid)) continue;
       const reasons = [], tried = [], unblock = [], waits = [];
       let exhausted = false;
@@ -769,7 +782,7 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
-      if (this.s.verdicts[key] || busy('review', `${key}:${agent}`) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
+      if (this.s.verdicts[key] || this.carryPending(pr) || busy('review', `${key}:${agent}`) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
       // Independence (issue #152): a review on the model that wrote the head is refused.
       const refusal = this.reviewRefusal(agent, pr, `${key}:${agent}`);
@@ -1111,11 +1124,14 @@ export class Team {
     for (const [id, j] of Object.entries(this.s.jobs)) if (j.kind === 'rebase' && j.carry?.state === 'pending') await guard(`carry ${id}`, () => this.carryVerdict(id, j, report));
   }
   // A carried verdict is valid only against the head it was recorded for, with every condition recorded as met.
-  carryOk(entry, pr) {
-    if (!entry?.carriedFrom) return true;
-    const c = entry.carry, e = c?.evidence;
-    return !!c && c.newHead === pr.headRefOid && c.oldHead === entry.carriedFrom && SHA.test(c.oldHead) && e?.resolvedConflicts === false && e.patchUnchanged === true && e.ci === 'green';
+  carryOk(entry, pr) { return carryValid(entry, pr); }
+  // Issue #296: a carry attempt for this exact head is still waiting (pending CI, or not yet retried). No review is planned for that
+  // head meanwhile; the next tick either records the carry or refuses it with a reason, and only then does a full review become due.
+  carryPending(pr) {
+    return Object.values(this.s.jobs).some(j => j.kind === 'rebase' && j.pr === pr.number && j.carry?.state === 'pending' && j.carry.newHead === pr.headRefOid);
   }
+  // The carry record of a verdict as plain data for the dashboard and team status: old head, new head and the evidence.
+  carryRecord(entry, pr) { return carryRecordOf(entry, pr); }
   // Second-opinion review of a merged PR (issue #152, formerly the D-021 post-merge review): PASS clears the label; CHANGES opens one linked issue for the homeowner. Never touches merge state.
   async ingestPostMerge(id, j, v, report) {
     const pm = this.s.postMerge[j.pr];
