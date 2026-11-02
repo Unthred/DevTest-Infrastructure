@@ -204,5 +204,7 @@ export function readVersion(root, { running = codeVersion() } = {}) {
   const main = seen ? seen.sha : (!last || stale ? installed : last.to);
   const behind = seen && Number.isSafeInteger(seen.behind) ? seen.behind : null;
   const run = SHA40.test(running || '') ? running : null;
-  return { installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
+  // Issue #331: when the upgrade is rate-limited the header says when the next try is.
+  let nextTryAt = null; try { const l = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).lastUpgradeAt; if (Number.isFinite(l) && l + 3600000 > Date.now()) nextTryAt = l + 3600000; } catch { /* none */ }
+  return { installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, nextTryAt: installed === main ? null : nextTryAt, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
 }

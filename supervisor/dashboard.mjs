@@ -2,7 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import path from 'node:path';
-import { Team, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { Team, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs, readHeadRegister } from './planning.mjs';
 import { proposalsAdded } from './decisions.mjs';
@@ -117,7 +117,7 @@ function reasons(team, cache, jobs, plan, states, names) {
     let reason;
     if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
     else if (team.carryPending(pr)) reason = 'the rebase carry is waiting for CI; no review starts for this head until it is recorded or refused';
-    else if (checks === 'pending') reason = 'waiting on CI';
+    else if (checks === 'pending') reason = waitingOnText(pr.statusCheckRollup);
     else if (checks === 'red') reason = 'CI failing';
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
@@ -186,7 +186,7 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
       else part(0, `waiting for homeowner: fix limit reached on ${names.pr(p.number).text}`, 'pull', p.number);
     }
     else if (p.mergeable === 'CONFLICTING') part(1, `waiting to rebase ${names.pr(p.number).text}`, 'pull', p.number);
-    else if (checks === 'pending') part(1, `waiting on CI for ${names.pr(p.number).text}`, 'pull', p.number);
+    else if (checks === 'pending') part(1, `${waitingOnText(p.statusCheckRollup).replace('waiting on CI', 'waiting on CI for ' + names.pr(p.number).text)}`, 'pull', p.number);
     else if (v?.verdict === 'PASS') part(1, `${names.pr(p.number).text} has a PASS and merges on the next tick`, 'pull', p.number);
     else part(1, `waiting for review of ${names.pr(p.number).text}`, 'pull', p.number);
   }
@@ -313,6 +313,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       add(`rebase-lost-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} dropped ${tj.rebase.lost.length} commit(s): ${tj.rebase.lost.map(c => `${shortCommit(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
   }
   for (const pr of cache?.pulls || []) if (!pr.isDraft && !fixLimited.has(pr.number) && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
+  // Issue #331: a check run whose state contradicts itself for too long. One item per head and check; it clears when the check finishes or the head moves.
+  for (const pr of cache?.pulls || []) if (!pr.isDraft) for (const c of stuckChecks(pr.statusCheckRollup, now)) add(`ci-stuck-${pr.number}-${String(pr.headRefOid).slice(0, 7)}-${c.name.replace(/[^A-Za-z0-9]+/g, '-')}`, `Check stuck: "${c.name}" on ${names.pr(pr.number).text} has been inconsistent for ${Math.round(c.ageMs / 60000)} min; re-run that job.`, { kind: 'pull', n: pr.number });
   // issue #149: a cancelled check that was rerun once and is still cancelled
   for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
