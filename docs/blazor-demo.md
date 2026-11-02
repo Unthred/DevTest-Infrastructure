@@ -3,13 +3,13 @@
 `tools/blazor-demo.mjs` drives one sample through the single `dev-test` CLI (D-001) and checks the outcome. It starts no container itself, mounts no Docker socket and publishes no port (D-007, D-016).
 
 ```
-node tools/blazor-demo.mjs [--project-root <dir>] [--sdk 8|9|10] [--require-tests] [--run-dir <dir>] [--cli <path>]
+node tools/blazor-demo.mjs [--project-root <dir>] [--sdk 8|9|10] [--require-tests] [--no-docker-check] [--run-dir <dir>] [--cli <path>]
 ```
 Human text goes to stderr; stdout is one JSON object (`ok`, `steps`, `artifacts`). Exit 0 only if every step passed, 1 otherwise, 2 for a usage error.
 
 ## What it does
 1. `dev-test dotnet build` of the Razor component library `tests/fixtures/dotnet/Blazor` in the pinned SDK image.
-2. `dev-test dotnet test` of `tests/fixtures/dotnet/Tests`. **Blocked today**: xunit and the test SDK are not in any offline NuGet cache ([dotnet-testing.md](dotnet-testing.md)). The step is recorded as `blocked`, never `passed`; `--require-tests` turns it into a failure.
+2. `dev-test dotnet test` of `tests/fixtures/dotnet/Tests`. **Blocked today**: xunit and the test SDK are not in any offline NuGet cache ([dotnet-testing.md](dotnet-testing.md)). The step is recorded as `blocked`, never `passed`; `--require-tests` turns it into a failure. Only that offline-restore case (exit 1, status failed, no test summary, cleanup complete) is `blocked`; real test failures, exit 3/4/6/7 and incomplete cleanup fail the demo.
 3. `dev-test web screenshot` of the sample page (`tests/fixtures/blazor-demo/wwwroot`) at the `desktop` and `phone` profiles, and `dev-test web responsive` at the 8 standard profiles.
 4. Negative cases: the defective `browser/fixture/broken.html` must fail as a subject failure (exit 1), and an `http://` URL must be refused with exit 4.
 5. Stable artifacts: every run has its own evidence directory `<run-dir>/<UTC timestamp>-<run-id>/` (default `<storageRoot>/evidence`) holding `result.json` and `artifacts/` with hashes; the demo checks each artifact exists with a matching shape and that run directories are distinct.

@@ -62,8 +62,11 @@ export function runDemo(opts, { run = (args) => spawnCli(opts.cli, args), state 
 
   // 2. Tests. Needs the xunit packages in the offline NuGet cache (docs/dotnet-testing.md); until then this is recorded as blocked, not passed.
   const test = run(['dotnet', 'test', '--sdk', opts.sdk, '--project', path.join(opts.projectRoot, 'tests', 'fixtures', 'dotnet', 'Tests'), ...runDirArgs]);
-  const testOk = test.code === 0 && test.result?.status === 'passed';
-  record('dotnet test of the component', testOk || !opts.requireTests, { exit: test.code, result: testOk ? 'passed' : 'blocked', required: opts.requireTests, message: test.result?.message });
+  const testOk = test.code === 0 && test.result?.status === 'passed' && test.result?.cleanup === 'complete';
+  // Only the known offline-restore case is blocked: nothing ran (exit 1, failed, no test summary) and cleanup completed.
+  // Real test failures, infrastructure/environment faults (exit 3/4/6/7) and incomplete cleanup are failures (D-017).
+  const testBlocked = !testOk && test.code === 1 && test.result?.status === 'failed' && test.result?.data?.summary?.tests === null && test.result?.cleanup === 'complete';
+  record('dotnet test of the component', testOk || (testBlocked && !opts.requireTests), { exit: test.code, result: testOk ? 'passed' : testBlocked ? 'blocked' : 'failed', required: opts.requireTests, message: test.result?.message });
   keep(test.result);
 
   // 3. Browser runner against the sample page: screenshots at two profiles (positive).
