@@ -48,11 +48,15 @@ export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer
 function normalizeRoleLimits(c) {
   const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1 && v <= 8;
   c.deprecations = [];
+  // Idempotent: a roles block this function derived from per_agent on an earlier pass (loadTeamConfig, then the Team constructor)
+  // is recognised and not mistaken for an explicit one.
+  if (c.rolesDerived && L.roles && L.roles.implementer === L.per_agent && L.roles.reviewer === L.per_agent) delete L.roles;
+  delete c.rolesDerived;
   if ('per_agent' in L) {
     if (!ok(L.per_agent)) throw new SupervisorError('invalid team limit: per_agent');
     c.deprecations.push(L.roles ? 'limits.per_agent is deprecated and ignored because limits.roles is set; remove it' : 'limits.per_agent is deprecated: it is mapped to limits.roles { implementer, reviewer }; replace it with limits.roles');
   }
-  if (L.roles === undefined && 'per_agent' in L) L.roles = { implementer: L.per_agent, reviewer: L.per_agent };
+  if (L.roles === undefined && 'per_agent' in L) { L.roles = { implementer: L.per_agent, reviewer: L.per_agent }; Object.defineProperty(c, 'rolesDerived', { value: true, enumerable: false, configurable: true, writable: true }); }
   const R = L.roles;
   if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]))) throw new SupervisorError('invalid team limit: roles');
 }
@@ -121,7 +125,8 @@ export function applyLocalOverride(shipped, local) {
     if (typeof local.limits !== 'object' || Array.isArray(local.limits)) throw new SupervisorError('invalid team.local.json: limits');
     out.limits = { ...out.limits, ...local.limits };
     if ('per_agent' in local.limits && !('roles' in local.limits)) delete out.limits.roles;   // a deprecated local per_agent still takes effect over the shipped roles
-    else if ('roles' in local.limits) { delete out.limits.per_agent; out.limits.roles = { ...shipped.limits?.roles, ...local.limits.roles }; }
+    else if ('roles' in local.limits) { delete out.limits.per_agent; const base = shipped.limits?.roles ?? ('per_agent' in (shipped.limits || {}) ? { implementer: shipped.limits.per_agent, reviewer: shipped.limits.per_agent } : {});   // an older shipped file with per_agent supplies the roles a partial override leaves out
+      out.limits.roles = { ...base, ...local.limits.roles }; }
   }
   if (local.depends_on_overrides) out.depends_on_overrides = { ...out.depends_on_overrides, ...local.depends_on_overrides };
   for (const [name, o] of Object.entries(local.agents || {})) {
@@ -397,7 +402,7 @@ export class Team {
     for (const j of active) used[roleOfType(this.s.jobs[j.id]?.kind)]++;
     let total = active.length;
     const L = this.c.limits;
-    this.taken = new Set();
+    this.taken = new Set(); this.plannedUse = {};
     // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
@@ -418,11 +423,13 @@ export class Team {
         const cands = [];
         for (const [agent, a] of this.agents()) {
           const act = this.choose(agent, a, prs, issueByNo, role);
-          if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) });
+          if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) + 0.1 * actions.filter(x => x.agent === agent).length });   // tie-break: spread load to an agent without a slot this tick
         }
         if (!cands.length) break;
         const best = cands.sort((x, y) => x.rank - y.rank)[0];   // stable: ties keep the team.json agent order
         actions.push({ agent: best.agent, ...best.act }); used[role]++; total++;
+        const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
+        if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
         this.taken.add(`${best.act.type}:${best.act.key}`);
         if (best.act.type === 'review') this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`);
         if (best.act.issue) this.taken.add(`issue:${best.act.issue}`);
@@ -483,7 +490,7 @@ export class Team {
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
     // chosen instead. The reason is kept for the dashboard and `team status`.
-    const B = this.modes?.[agent] || null, owed = B ? this.pendingReviews(agent, prs) : 0;
+    const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent] } : B0, owed = B ? this.pendingReviews(agent, prs) : 0;
     const allow = type => { const r = admits(B, type, owed); if (!r.ok) (this.held[agent] ||= {})[type] ||= r.why; return r.ok; };
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
@@ -567,6 +574,7 @@ export class Team {
     for (const n of a.issues) {
       const issue = this.implementable(n, prs, issueByNo, busy);
       if (!issue || this.taken?.has(`issue:${n}`)) continue;
+      if (this.limitedOf(agent).out) return null;   // an owner at its usage limit does not start its own implement job; another agent may take it over
       if (!allow('implement')) return null;
       return { type: 'implement', issue: n, title: issue.title, key: String(n) };
     }
