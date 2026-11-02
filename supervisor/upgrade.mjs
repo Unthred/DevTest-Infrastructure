@@ -46,11 +46,11 @@ export function findDashboards(procRoot = '/proc', self = process.pid) {
     const cli = /(^|\/)(node|nodejs)$/.test(argv[0] || '') ? argv.findIndex((a, i) => i === 1 && /(^|\/)supervisor\/cli\.mjs$/.test(a)) : -1;
     if (cli < 0 || argv[cli + 1] !== 'dashboard' || argv[cli + 2] !== 'serve') continue;
     const opt = key => { const i = argv.indexOf(key); return i > cli && i + 1 < argv.length ? argv[i + 1] : null; };
-    out.push({ pid: Number(name), host: opt('--host'), port: opt('--port'), version: runningSha(argv[cli]) });
+    out.push({ pid: Number(name), host: opt('--host'), port: opt('--port'), version: runningSha(argv[cli]), argv });
   }
   return out;
 }
-export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50 } = {}) {
+export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50 } = {}) {
   const found = findDashboards(procRoot);
   if (!found.length) return { ok: true, restarted: false, reason: 'no dashboard server was running' };
   if (found.every(d => d.version === sha)) return { ok: true, restarted: false, reason: 'already on the new version' };
@@ -62,22 +62,37 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
   if (!gone()) return { ok: false, reason: 'the old dashboard server did not stop' };
   const args = ['dashboard', 'serve', '--host', old.host, ...(old.port ? ['--port', old.port] : [])];
   try { (start || defaultStart)(wrapper, args); } catch (error) { return { ok: false, reason: `could not start the dashboard server: ${String(error?.message || error).slice(0, 120)}` }; }
+  // The port cannot be shared, so the old process had to stop first. If the new one does not come up healthy, it is stopped and the
+  // old version is started again with its own original command line, so the dashboard is serving again (issue #135).
+  const healthPort = old.port || process.env.DASHBOARD_PORT || '8731';
+  const recover = async why => {
+    const fresh = findDashboards(procRoot).filter(d => d.version === sha);
+    for (const d of fresh) { try { kill(d.pid, 'SIGTERM'); } catch { /* already gone */ } }
+    for (let i = 0; i < tries && !fresh.every(d => { try { kill(d.pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } }); i++) await sleep(200);
+    let back = false;
+    if (old.argv?.length) {
+      try { (startOld || defaultStartArgv)(old.argv); back = true; } catch { back = false; }
+      if (back && health) { back = false; for (let j = 0; j < tries && !back; j++) { back = await health(old.host, healthPort); if (!back) await sleep(200); } }
+    }
+    return { ok: false, recovered: back, reason: `${why}; the new process was stopped and ${back ? `the old version${old.version ? ` ${short(old.version)}` : ''} is serving again` : 'the old version could NOT be started again, so nothing is serving now'}` };
+  };
   for (let i = 0; i < tries; i++) {
     if (findDashboards(procRoot).some(d => d.version === sha)) {
       // Health check (issue #135): the new process must answer, not merely exist. Retried while it binds its port.
       if (!health) return { ok: true, restarted: true, host: old.host, port: old.port };
-      for (let j = 0; j < tries; j++) { if (await health(old.host, old.port)) return { ok: true, restarted: true, host: old.host, port: old.port }; await sleep(200); }
-      return { ok: false, reason: `the dashboard server started on ${short(sha)} but did not answer its health check` };
+      for (let j = 0; j < tries; j++) { if (await health(old.host, healthPort)) return { ok: true, restarted: true, host: old.host, port: old.port }; await sleep(200); }
+      return recover(`the dashboard server started on ${short(sha)} but did not answer its health check`);
     }
     await sleep(200);
   }
-  return { ok: false, reason: `the dashboard server did not come back on ${short(sha)}` };
+  return recover(`the dashboard server did not come back on ${short(sha)}`);
 }
 // GET /api/view.json must answer 200 (it needs the supervisor state, so this proves more than an open port).
 export const httpHealth = (host, port) => new Promise(resolve => {
-  const req = http.get({ host, port: Number(port) || 80, path: '/api/view.json', headers: { host: `${host}:${port}` }, timeout: 5000 }, res => { res.resume(); resolve(res.statusCode === 200); });
+  const req = http.get({ host, port: Number(port) || Number(process.env.DASHBOARD_PORT) || 8731, path: '/api/view.json', headers: { host: `${host}:${port}` }, timeout: 5000 }, res => { res.resume(); resolve(res.statusCode === 200); });
   req.on('timeout', () => { req.destroy(); resolve(false); }); req.on('error', () => resolve(false));
 });
+const defaultStartArgv = argv => { spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore', env: process.env }).unref(); };
 const defaultStart = (wrapper, args) => { spawn(wrapper, args, { detached: true, stdio: 'ignore', env: process.env }).unref(); };
 
 export class SelfUpgrade {
@@ -202,7 +217,7 @@ export class SelfUpgrade {
     let r;
     try { r = await this.d.restartDashboard(target); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
     this.record({ from: p.from, to: p.to, result: r.ok ? 'dashboard_restarted' : 'dashboard_restart_failed', reason: r.ok ? (r.restarted ? null : r.reason) : r.reason, ...(r.ok && r.restarted ? { restarted: true } : {}) });
-    if (!r.ok) await this.alert(`${p.to}:dashboard${rollingBack ? ':rollback' : ''}`, `Dashboard server was not restarted on ${short(target)} after the ${rollingBack ? 'rollback' : 'upgrade'}: ${r.reason}. The old process keeps serving; restart it by hand (the page shows "restart pending" until then).`);
+    if (!r.ok) await this.alert(`${p.to}:dashboard${rollingBack ? ':rollback' : ''}`, `Dashboard server was not restarted on ${short(target)} after the ${rollingBack ? 'rollback' : 'upgrade'}: ${r.reason}. Check the dashboard and restart it by hand if needed (the page shows "restart pending" until then).`);
   }
 
   async rollback(from, to, reason, prs, checks) {

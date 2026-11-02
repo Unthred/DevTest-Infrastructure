@@ -101,7 +101,7 @@ test('findDashboards only matches dashboard serve; a worker, a tick or a job is 
     103: ['claude', '-p', 'dashboard serve --host 192.168.1.5'],
     104: ['vim', 'supervisor/cli.mjs', 'dashboard', 'serve']
   });
-  assert.deepEqual(findDashboards(proc, -1), [{ pid: 100, host: '192.168.1.5', port: '8731', version: OLD }]);
+  assert.deepEqual(findDashboards(proc, -1), [{ pid: 100, host: '192.168.1.5', port: '8731', version: OLD, argv: ['node', cli(OLD), 'dashboard', 'serve', '--host', '192.168.1.5', '--port', '8731'] }]);
 });
 
 test('after a simulated upgrade the dashboard server restarts on the new version, same host and port', async t => {
@@ -173,6 +173,24 @@ test('restart health check: a new process that answers passes; one that never an
   assert.equal(bad.ok, false); assert.match(bad.reason, /health check/);
 });
 
+test('issue #135: when the new process is unhealthy it is stopped and the old version serves again', async t => {
+  const oldArgv = ['node', cli(OLD), 'dashboard', 'serve', '--host', '192.168.1.5', '--port', '8731'];
+  const proc = fakeProc(t, { 100: oldArgv });
+  const kill = (pid, sig) => { if (sig === 0) { if (!fs.existsSync(path.join(proc, String(pid)))) throw Object.assign(new Error(), { code: 'ESRCH' }); return; } fs.rmSync(path.join(proc, String(pid)), { recursive: true }); };
+  const spawn = (pid, argv) => { fs.mkdirSync(path.join(proc, String(pid))); fs.writeFileSync(path.join(proc, String(pid), 'cmdline'), argv.join('\0') + '\0'); };
+  const restartedOld = [];
+  const r = await restartDashboardServer(NEW, {
+    procRoot: proc, kill, sleep: async () => {}, tries: 3,
+    start: (w, args) => spawn(200, ['node', cli(NEW), ...args]),
+    startOld: argv => { restartedOld.push(argv); spawn(300, argv); },
+    health: async () => findDashboards(proc, -1).some(d => d.version === OLD)
+  });
+  assert.equal(r.ok, false); assert.equal(r.recovered, true);
+  assert.match(r.reason, /is serving again/); assert.doesNotMatch(r.reason, /NOT/);
+  assert.deepEqual(restartedOld, [oldArgv]);
+  assert.deepEqual(findDashboards(proc, -1).map(d => d.version), [OLD], 'the unhealthy new process is gone and only the old version runs');
+});
+
 test('httpHealth is true for a 200 from /api/view.json and false for an error status or no listener', async t => {
   const { httpHealth } = await import('../supervisor/upgrade.mjs');
   let code = 200;
@@ -197,7 +215,7 @@ test('a rollback restarts the dashboard on the restored version; a failed restar
     assert.equal(rec[0].result, 'rolled_back');
     assert.equal(rec[1].result, res.ok ? 'dashboard_restarted' : 'dashboard_restart_failed');
     assert.equal(alerts.filter(a => /Dashboard server was not restarted/.test(a)).length, res.ok ? 0 : 1);
-    if (!res.ok) assert.match(alerts.find(a => /not restarted/.test(a)), /old process keeps serving; restart it by hand/);
+    if (!res.ok) assert.match(alerts.find(a => /not restarted/.test(a)), /restart it by hand if needed/);
   }
   const root = tmp(t), calls = [];
   const up = new SelfUpgrade({ root, deps: { config: { agents: {} }, restartDashboard: async s => { calls.push(s); return { ok: true }; }, rollback: async () => ({ ok: false, reason: 'x' }), alert: async () => {} }, clock: { now: () => NOW } });
