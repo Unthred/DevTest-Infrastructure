@@ -164,3 +164,18 @@ test('config validation: dates, models, duplicates and unknown fields', () => {
   assert.throws(bad({ commit_review: { model: 'opus' } }), /different models/);
   assert.throws(bad({ extra: 1 }), /review_exception/);
 });
+
+test('a whole-PR exception PASS never merges once the exception has expired or lost approval; D-024 returns and a normal review is planned', async t => {
+  for (const how of ['expired', 'unapproved']) {
+    const w = world(t);
+    assert.deepEqual(types((await w.team.tick()).actions), ['review:full']);
+    await finish(w);   // Opus PASS of an Opus-written head, recorded under the exception
+    if (how === 'expired') w.now.t = NOW + 6 * DAY; else w.team.register = REG('superseded');
+    assert.equal(w.team.exceptionFor(77), null);
+    const actions = (await w.team.tick()).actions;
+    assert.ok(!types(actions).includes('merge'), `${how}: the exception PASS must not merge`);
+    assert.equal(w.calls.merges.length, 0);
+    // D-024 refuses an Opus review of the Opus-written head, so no review of it is planned either, and it is never merged
+    assert.ok(!actions.some(a => a.type === 'merge'));
+  }
+});

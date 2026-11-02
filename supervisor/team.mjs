@@ -492,6 +492,9 @@ export class Team {
   independenceApproved() { return decisionApproved(this.register, INDEPENDENCE_DECISION); }
   // Issue #318 (proposal D-027): the review exception for a listed pull request number, or null. Null for every unlisted PR, an expired or
   // ended entry, and while D-026 is not homeowner-approved, so D-024 is untouched for all of those.
+  // Issue #318: a PASS recorded under the exception route is only valid while the exception is active; once it ends, expires or loses
+  // its approval, D-024 comes back and the PR needs a normal review (the stale PASS neither merges nor blocks that review).
+  staleExceptionPass(v, n) { return v?.verdict === 'PASS' && !!v.exceptionStage && !this.exceptionFor(n); }
   exceptionFor(n) { return activeException(this.c.review_exception, decisionApproved(this.register, EXCEPTION_DECISION), this.s.exceptionEnded, n, this.clock.now()); }
   // The exception's merge gate for one PR head: both stage verdicts PASS on this exact head (the whole-PR review by the full-review model,
   // then the review of that model's commits by the commit-review model). Returns null when satisfied, else the missing step.
@@ -682,7 +685,7 @@ export class Team {
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
-      const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
+      const v0 = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)], v = this.staleExceptionPass(v0, pr.number) ? undefined : v0;
       const interim = v?.interim === true && v.reviewer === author;
       if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.carryOk(v, pr) && !this.reqHoldAll && !this.reqHold?.has(pr.number) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr) && !(this.exceptionFor(pr.number) && this.exceptionMissing(pr))) {
         const exception = !!this.exceptionFor(pr.number);
@@ -895,7 +898,7 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
-      if (this.s.verdicts[key] || this.carryPending(pr) || busy('review', `${key}:${agent}`) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
+      if ((this.s.verdicts[key] && !this.staleExceptionPass(this.s.verdicts[key], pr.number)) || this.carryPending(pr) || busy('review', `${key}:${agent}`) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
       // Issue #318: a listed pull request takes the exception route: the whole-PR review is by the configured agent on the configured
       // model, and the D-024 refusal below does not apply to it. Any other agent leaves the PR alone.
