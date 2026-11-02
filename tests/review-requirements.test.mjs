@@ -196,3 +196,19 @@ test('secrets past the first 2000 characters are still redacted', async t => {
   const w = reqWorld(t); w.issue.body = `${'x '.repeat(1500)}\npassword=hunter2hunter2`;
   const text = await reqFile(w); assert.doesNotMatch(text, /hunter2/); assert.match(text, /password=\[secret\]/);
 });
+
+test('a key/value secret that straddles the 2000-character split is still redacted (issue #319)', async () => {
+  const { redactLong } = await import('../supervisor/redact.mjs');
+  const secret = ['hunter2', 'secret'].join('');
+  for (const text of ['w '.repeat(995) + `password: ${secret} more words`, 'ab '.repeat(660) + `token = ${secret} tail`, 'w '.repeat(998) + `password: bearer ${secret} tail`]) {
+    const out = redactLong(text, 30000);
+    assert.ok(!out.includes(secret), out.slice(1900, 2100));
+  }
+});
+
+test('replacement growth never drops the tail, and long lines are rejoined unchanged (issue #319)', async () => {
+  const { redactLong } = await import('../supervisor/redact.mjs');
+  assert.ok(redactLong('a@b.c '.repeat(600) + 'FINAL-WORDS-HERE', 30000).endsWith('FINAL-WORDS-HERE'));
+  const plain = 'word '.repeat(1000);
+  assert.equal(redactLong(plain, 30000), plain);
+});
