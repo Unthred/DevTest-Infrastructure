@@ -1,0 +1,30 @@
+#!/bin/bash
+# Slack/Unraid alert when the agent team is stuck or out of work. Read-only; no model calls.
+# Paths are overridable through the environment so the script can be tested; the defaults are the Tower paths.
+S=${TEAM_ALERT_SUPERVISOR:-/root/bin/ai-supervisor}; D=${TEAM_ALERT_DIR:-/mnt/cache/ai-supervisor}; ST=$D/alert.state; LOG=$D/reconcile.log
+NOTIFY=${TEAM_ALERT_NOTIFY:-/usr/local/emhttp/plugins/dynamix/scripts/notify}; now=$(date +%s)
+# Alerting is best effort (#143): a failure here is a warning and never makes the scheduled tick fail.
+warn(){ echo "team-alert: warning: $*" >&2; }
+trap 'exit 0' EXIT
+# The state file is created (mode 600) when it is missing; a missing file is the normal first run.
+[ -e "$ST" ] || ( umask 077; : > "$ST" ) 2>/dev/null || warn "cannot create $ST"
+send(){ $NOTIFY -e "AI agent team" -s "Tower | $1" -d "$2" -i "$3" >/dev/null 2>&1 || warn "notify failed"; }
+[ "$1" = "--test" ] && { send "Agents TEST - alert route works" "TEST message from team-alert. No action." normal; exit; }
+if [ -n "$($S status | awk '$4=="running"')" ]; then rm -f "$ST"; exit 0; fi
+last=$(grep -A1 ' tick$' "$LOG" 2>/dev/null | tail -1)
+planned=$($S team tick --dry-run 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log((JSON.parse(s).actions||[]).length)}catch{console.log(0)}})')
+paused=$($S status | awk '$4=="paused_limit"{print $2" #"$3}' | tr '\n' ' ')
+if echo "$last" | grep -q '"error"'; then kind=stuck; msg="Agents stuck - tick failing | $(echo "$last" | sed 's/.*"error":"\([^"]*\)".*/\1/' | cut -c1-80)"; wait=600
+elif [ "${planned:-0}" -gt 0 ]; then kind=stuck; msg="Agents stuck - $planned planned job(s) not starting | Check team-status"; wait=600
+elif [ -n "$paused" ]; then kind=paused; msg="Agents paused - usage limit: $paused| Auto-restart after reset"; wait=0
+else kind=idle; msg="Agents out of work - nothing planned | Waiting on reviews/CI or queue empty"; wait=1800; fi
+{ read -r pkind since lastsent < "$ST"; } 2>/dev/null
+case $since in ''|*[!0-9]*) since=$now; lastsent=0;; esac
+case $lastsent in ''|*[!0-9]*) lastsent=0;; esac
+[ "$pkind" != "$kind" ] && { since=$now; lastsent=0; }
+if [ $((now-since)) -ge $wait ] && [ $((now-${lastsent:-0})) -ge 7200 ]; then
+  lvl=warning; [ $kind = idle ] && lvl=normal
+  send "$msg" "$msg. Run team-status on Tower for detail." $lvl; lastsent=$now
+fi
+( umask 077; echo "$kind $since ${lastsent:-0}" > "$ST" ) 2>/dev/null || warn "cannot write $ST"
+exit 0
