@@ -490,6 +490,37 @@ test('a latched failed pre-check never holds dispatch, even with active jobs, an
   assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
 });
 
+test('review of PR #162: a newer main during a wait starts a fresh wait instead of inheriting the old start', async t => {
+  const w = world(t, { active: 1 });
+  assert.equal(await w.up.step(), 'busy');
+  w.state.now += 29 * 60 * 1000; w.state.target = H('9');
+  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
+  w.state.now += 2 * 60 * 1000;                                  // 31 min after the first target, 2 after the newer one
+  assert.equal(await w.up.step(), 'busy');
+  w.state.now += 28 * 60 * 1000;                                 // 30 min after the newer target
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records()[0].checks.quiet, 'forced-after-wait');
+  // the same target keeps its original start
+  const s = world(t, { active: 1 });
+  assert.equal(await s.up.step(), 'busy'); s.state.now += QUIET_MAX_WAIT_MS - 1;
+  assert.equal(await s.up.step(), 'busy'); s.state.now += 1;
+  assert.equal(await s.up.step(), 'upgraded');
+});
+
+test('review of PR #162: an environmental pre-check retry with active jobs holds dispatch again for the drain bound, then retries the check', async t => {
+  const w = world(t, { active: 1, pre: { ok: false, environmental: true, reason: 'checkout failed' } });
+  assert.equal(await w.up.step(), 'busy');
+  w.state.now += QUIET_MAX_WAIT_MS;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
+  w.state.now += ENV_RETRY_MS - 1;                               // latched inside the retry window: no hold
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
+  w.state.now += 1;                                              // window over: held again for the full bound
+  assert.equal(await w.up.step(), 'busy'); assert.ok(w.up.s.holding);
+  w.state.now += QUIET_MAX_WAIT_MS - 1;
+  assert.equal(await w.up.step(), 'busy'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
+  w.state.now += 1; w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
+});
+
 test('drain (issue #136): the bound is configurable and honoured, the hold records the running count, an install never touches running jobs', async t => {
   const w = world(t, { active: 3 });
   w.up.drainMaxMs = 5 * 60000;

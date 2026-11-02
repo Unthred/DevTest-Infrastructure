@@ -159,7 +159,7 @@ export class SelfUpgrade {
       return 'github-unreachable';
     }
     if (this.s.fetchFailures) { delete this.s.fetchFailures; delete this.s.fetchRetryAt; if (this.s.install?.result === 'transient' && !this.s.install.sha) delete this.s.install; this.save(); }
-    if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; this.save(); return 'current'; }
+    if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; delete this.s.waitingFor; this.save(); return 'current'; }
     if (!this.d.isAncestor(from, target)) {
       await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`);
       return 'diverged';
@@ -184,7 +184,8 @@ export class SelfUpgrade {
     // Checked before the quiet wait so a latched target never holds dispatch for a commit that will not be installed (#134).
     const latched = this.s.prechecked[target];
     if (latched && !(latched.environmental && now - latched.at >= envBackoffMs(latched.attempts))) return 'precheck-failed';
-    this.s.waitingSince ??= now;
+    // The wait belongs to one target: a newer main starts a fresh wait instead of inheriting the old start (review of PR #162).
+    if (this.s.waitingFor !== target || this.s.waitingSince == null) { this.s.waitingSince = now; this.s.waitingFor = target; }
     // Drain (issue #136): while jobs run and the bound is not reached, no new job starts; the install happens at the first job
     // boundary. At the bound the install goes ahead without waiting further; it replaces files only and never kills a running job.
     const running = await this.d.activeJobs();
@@ -193,7 +194,7 @@ export class SelfUpgrade {
     const pre = await this.d.preChecks(target);
     if (!pre.ok) {
       const attempts = pre.environmental ? (latched?.environmental ? (latched.attempts || 1) + 1 : 1) : 0;
-      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now; delete this.s.waitingSince;
+      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now; delete this.s.waitingSince; delete this.s.waitingFor;
       this.noteInstall(pre.environmental
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
         : { result: 'blocked', sha: target, reason: pre.reason });
@@ -204,7 +205,7 @@ export class SelfUpgrade {
     }
     checks.preChecks = 'ok';
     // The rate-limit stamp is written before the upgrade, so a crash mid-upgrade cannot cause an immediate second attempt.
-    this.s.lastUpgradeAt = now; delete this.s.waitingSince; this.save();
+    this.s.lastUpgradeAt = now; delete this.s.waitingSince; delete this.s.waitingFor; this.save();
     const up = await this.d.upgrade(target);
     if (!up.ok && up.environmental) {
       // The clean copy could not be taken at install time (GitHub unreachable): nothing was swapped, so retry, do not roll back.
