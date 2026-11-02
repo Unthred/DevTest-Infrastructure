@@ -110,7 +110,7 @@ test('sizing: no card has a fixed height or an inner scroll at its default size'
 test('sizing: KPI tiles share one shape (a sparkline slot even when there is no sparkline), so their heights match', async t => {
   const s = await serve(t); const body = (await s.get('/')).body;
   const tiles = body.split('<a class="card kpi"').slice(1).map(x => x.slice(0, x.indexOf('</a>')));
-  assert.equal(tiles.length, 6); for (const tile of tiles) { assert.equal((tile.match(/class="spark-slot"/g) || []).length, 1); assert.match(tile, /data-type="kpi"/); }
+  assert.equal(tiles.length, 7); for (const tile of tiles) { assert.equal((tile.match(/class="spark-slot"/g) || []).length, 1); assert.match(tile, /data-type="kpi"/); }
   assert.match(css, /\.kpi \.spark-slot\{[^}]*min-height:calc\(28px \+ var\(--sp1\)\)/);
   assert.doesNotMatch(css, /body\.overview \.card\.kpi/, 'no overview-only KPI size that differs between tiles');
 });

@@ -526,6 +526,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       const s = states[name], j = s.job;
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
       base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state, names });
+      // Issue #213: one entry per running or paused job, with its role, model and item, so concurrent jobs on one agent each get a card.
+      base.jobs = (s.jobs || []).map(x => { const r = state.jobs?.[x.id] || {}; return { id: shortJob(x.id), name: redact(names.job(x).text, 300), kind: x.kind || r.kind || 'job', role: roleOfType(r.kind || x.kind), model: redact(r.model || x.model || '', 40) || null, status: x.status, lastEvent: redact(x.lastEvent || '', 48), nextAttemptAt: x.nextAttemptAt || null, startedAt: x.createdAt, elapsedMs: now - x.createdAt, attempts: x.attempts || 0, paused: ['paused_limit', 'paused_manual'].includes(x.status) }; });
       if (j) base.job = { id: shortJob(j.id), name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
@@ -552,7 +554,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       estimates,
       generatedAt: now, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
-      agents, queues, plan,
+      agents, queues, plan, capacity: config.limits?.overall ?? 2,
       budget,
       attention,
       usage: usageView(config, jobs, states, allowance, now),

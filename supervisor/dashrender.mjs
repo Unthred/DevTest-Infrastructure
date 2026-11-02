@@ -214,7 +214,14 @@ const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="car
 function nowPanel(view) {
   const now = view.generatedAt;
   const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${esc(x.text)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}</div>`;
+  // Issue #213: one card per running or paused job (role, model, item, elapsed); an agent with none gets one idle/blocked/unknown card.
+  const jobItem = (a, j) => {
+    const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : 'Implementer';
+    const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`;
+    return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${j.name ? `${esc(j.name)} · ` : ''}${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${when}</div></li>`;
+  };
   return `${slots}<ul class="panel-list">${view.agents.map(a => {
+    if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j)).join('');
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}`
       : `<span>Idle: ${a.idleReason ? esc(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
@@ -273,7 +280,7 @@ const agentCols = view => ({ agent: { key: 'agent', label: 'Agent', html: r => a
 function overview(view, query) {
   const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE;
   const now = view.generatedAt;
-  const open = view.prs.filter(p => ['open', 'draft'].includes(p.status)), active = view.agents.filter(a => a.state === 'running').length;
+  const open = view.prs.filter(p => ['open', 'draft'].includes(p.status)), active = view.agents.reduce((n, a) => n + (a.jobs || []).filter(j => !j.paused).length, 0), available = view.agents.filter(a => a.state === 'idle').length;
   const tokens = Object.values(view.usage).reduce((s, u) => s + u.totalTokens, 0);
   const daily = Object.values(view.graphs.jobsPerDay).map(d => Object.values(d).reduce((a, b) => a + b, 0));
   const verdicts = view.verdicts;
@@ -285,7 +292,8 @@ function overview(view, query) {
     card({ id: 'warnings', title: `Warnings${warnCount ? ` (${warnCount})` : ''}`, span: 3, body: warningsPanel(view), href: '/system', cls: 'panel', type: 'panel' })
   ].join('');
   const kpis = [
-    kpi({ id: 'k-active', label: 'Agents running', value: view.agents.some(a => a.state === 'unknown') ? `? / ${view.agents.length}` : `${active} / ${view.agents.length}`, href: '/agents' }),
+    kpi({ id: 'k-active', label: 'Jobs running', value: view.agents.some(a => a.state === 'unknown') ? `? / ${view.capacity ?? view.agents.length}` : `${active} / ${view.capacity ?? view.agents.length}`, href: '/agents' }),
+    kpi({ id: 'k-avail', label: 'Agents available', value: view.agents.some(a => a.state === 'unknown') ? '?' : `${available} / ${view.agents.length}`, href: '/agents' }),
     kpi({ id: 'k-prs', label: 'Open pull requests', value: String(open.length), href: '/work', spark: sparkline(daily) }),
     kpi({ id: 'k-queue', label: 'Queued items', value: String(Object.values(view.queues).reduce((s, q) => s + q.length, 0)), href: '/work' }),
     kpi({ id: 'k-reviews', label: 'Reviews recorded', value: String(verdicts.length), href: '/reviews' }),
