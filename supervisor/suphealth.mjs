@@ -193,7 +193,7 @@ function fetchedAt(repo) {
 const UPGRADE_STEP = {
   current: ['ok', 'installed version is origin/main'], 'no-supervisor-change': ['ok', 'main is ahead with no supervisor change'], verified: ['ok', 'upgrade verified by a live tick'],
   upgraded: ['ok', 'upgraded; waiting for a live tick to verify it'], 'awaiting-verification': ['info', 'upgraded; waiting for a live tick to verify it'],
-  busy: ['info', 'upgrade waits for running jobs (at most 30 minutes)'], 'rate-limited': ['info', 'at most one upgrade per hour; waiting'],
+  busy: ['info', 'upgrade waits for running jobs (at most 30 minutes)'], 'rate-limited': ['info', 'short cooldown (2 minutes) after the last install; the next tick installs'],
   'precheck-failed': ['warning', 'pre-checks failed for this main; waits for a newer main'], 'not-eligible': ['warning', 'main has a change without a recorded PASS and green CI'],
   'upgrader-changed': ['warning', 'main changes the bootstrap installer: needs the homeowner'], 'github-unreachable': ['info', 'GitHub is unreachable; the install is retried with backoff'], diverged: ['warning', 'installed version is not an ancestor of main'],
   'not-versioned': ['warning', 'the installed supervisor is not a versioned install'], latched: ['action', 'automatic upgrades are paused by the rollback latch'],

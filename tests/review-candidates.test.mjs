@@ -27,7 +27,7 @@ const pr = (n, branch, head, extra = {}) => ({ number: n, title: `t${n}`, headRe
 const manifests = { claude: { aliases: ['opus', 'sonnet', 'haiku'], efforts: ['low', 'medium', 'high'] }, codex: { aliases: [], efforts: ['low', 'medium', 'high'] } };
 const OUT = { codex: 'codex weekly limit' };
 
-function world(t, { pulls = [pr(137, 'claude/issue-72-x', H(5))], out = OUT, cfg = config() } = {}) {
+function world(t, { pulls = [pr(137, 'claude/issue-72-x', H(5))], out = OUT, cfg = config(), headWriterOf = () => null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rev-cand-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = { created: [] };
   const gh = { pulls, issues: [], listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => [], listMergedPulls: async () => [],
@@ -36,7 +36,7 @@ function world(t, { pulls = [pr(137, 'claude/issue-72-x', H(5))], out = OUT, cfg
     create: async spec => { const id = (++jobs.seq).toString(16).padStart(32, '0'); calls.created.push(spec); jobs.states[id] = { id, status: 'queued', provider: spec.provider }; return { id }; } };
   const state = { out };
   const limitedOf = agent => (state.out[agent] ? { out: true, reason: state.out[agent] } : { out: false });
-  const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register: REGISTER, clock: { now: () => NOW }, limitedOf, providerModels: manifests });
+  const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register: REGISTER, clock: { now: () => NOW }, limitedOf, providerModels: manifests, headWriterOf });
   return { gh, jobs, team, calls, state };
 }
 const job = (w, id, over) => { w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '72', model: 'opus', branch: 'claude/issue-72-x', pr: 137, ingested: true, at: NOW - 5000, ...over }; };
@@ -175,4 +175,49 @@ test('recordRebase stores the classification on the job; a check without it reco
     await w.team.recordRebase('r1', w.team.s.jobs.r1, {});
     assert.equal(w.team.s.jobs.r1.rebase.resolvedConflicts, want);
   }
+});
+
+// Issue #351: a head written outside any job. The writer is known only from evidence Foreman finds itself.
+const HAND = pr(342, 'claude/issue-341-x', 'e270645'.padEnd(40, 'a'));
+test('no job record and no evidence: the writer is unknown, every Claude model is refused as "writer unknown", Codex out of allowance', async t => {
+  const w = world(t, { pulls: [HAND] });
+  assert.equal(await claudeReview(w), undefined);
+  const [u] = w.team.unreviewable(w.gh.pulls);
+  assert.equal(u.writerUnknown, true);
+  assert.ok(u.tried.filter(x => x.startsWith('claude')).every(x => /refused, writer unknown/.test(x)), u.tried.join('|'));
+  assert.doesNotMatch(u.reasons.join(' '), /the model that wrote it/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rev-cand-d-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); fs.chmodSync(root, 0o700);
+  const solo = config({ agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] } } }); delete solo.models.agents.codex;
+  const v = await buildView({ config: solo, root, jobs: [], events: [], state: { jobs: {} }, register: REGISTER,
+    cache: { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: w.gh.pulls.map(p => ({ ...p, labels: [] })), issues: [] }, snapshots: [], now: NOW });
+  const [item] = v.panels.needsYou.filter(a => a.id === 'noreviewer-342');
+  assert.ok(item); assert.match(item.text, /writer of this head is unknown/); assert.doesNotMatch(item.text, /wrote this head|the model that wrote it/);
+  assert.match(JSON.stringify(item), /Writer unknown/);
+});
+
+test('session-log evidence for the exact head records the writer; a different model reviews, the same model does not', async t => {
+  const seen = [];
+  const w = world(t, { pulls: [HAND], headWriterOf: a => { seen.push(a); return { provider: 'claude', models: ['claude-opus-5-5'], sessions: ['abcd1234'] }; } });
+  const act = await claudeReview(w);
+  assert.ok(act, 'a review on another model is possible'); await w.team.execute(act);
+  assert.equal(w.calls.created[0].model, 'sonnet');
+  assert.deepEqual(w.team.writersOf(HAND).map(x => x.model), ['opus']);
+  assert.equal(seen[0].head, HAND.headRefOid);
+});
+
+test('evidence of two writers, an unrecognised model id, or a provider mismatch leaves no model provably different', async t => {
+  for (const found of [{ provider: 'claude', models: ['claude-opus-5-5', 'claude-sonnet-5-5'] }, { provider: 'claude', models: ['claude-mystery-1'] }, { provider: 'codex', models: ['claude-opus-5-5'] }]) {
+    const w = world(t, { pulls: [HAND], headWriterOf: () => found });
+    assert.equal(await claudeReview(w), undefined, JSON.stringify(found));
+  }
+});
+
+test('a new head clears the record; a miss is retried only after five minutes; a job record wins over evidence', async t => {
+  let n = 0; const w = world(t, { pulls: [HAND], headWriterOf: () => (++n, { provider: 'claude', models: ['claude-opus-5-5'] }) });
+  await w.team.plan(); assert.ok(w.team.s.headWriters[`342:${HAND.headRefOid}`]);
+  w.gh.pulls = [{ ...HAND, headRefOid: 'f'.repeat(40) }]; await w.team.plan();
+  assert.deepEqual(Object.keys(w.team.s.headWriters), [`342:${'f'.repeat(40)}`]);
+  assert.deepEqual(w.team.writersOf(w.gh.pulls[0]).map(x => x.model), ['opus']);
+  const m = world(t, { pulls: [HAND], headWriterOf: () => (++n, null) }); const before = n;
+  await m.team.plan(); await m.team.plan(); assert.equal(n - before, 1, 'miss cached');
 });

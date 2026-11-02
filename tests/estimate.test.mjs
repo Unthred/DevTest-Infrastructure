@@ -106,11 +106,11 @@ test('2. an allowance limit moves the estimate past the reset time and says so',
 });
 
 test('3. a rate-limited upgrade appears as a wait with its next-try time', () => {
-  const w = globalWaits({ upgrade: { lastUpgradeAt: NOW - 30 * MIN }, now: NOW, tz: 'UTC' });
-  assert.deepEqual(w.map(x => [x.kind, x.at, x.text]), [['upgrade', NOW + 30 * MIN, 'upgrade waiting, next try 12:30']]);
-  assert.deepEqual(globalWaits({ upgrade: { lastUpgradeAt: NOW - 61 * MIN }, now: NOW, tz: 'UTC' }), []);   // limit over: no wait
+  const w = globalWaits({ upgrade: { lastUpgradeAt: NOW - 1 * MIN }, now: NOW, tz: 'UTC' });
+  assert.deepEqual(w.map(x => [x.kind, x.at, x.text]), [['upgrade', NOW + 1 * MIN, 'upgrade waiting, next try 12:01']]);
+  assert.deepEqual(globalWaits({ upgrade: { lastUpgradeAt: NOW - 3 * MIN }, now: NOW, tz: 'UTC' }), []);   // limit over: no wait
   assert.deepEqual(globalWaits({ upgrade: null, now: NOW, tz: 'UTC' }), []);
-  assert.deepEqual(est({ upgrade: { lastUpgradeAt: NOW - 30 * MIN } }).waits.map(x => x.text), ['upgrade waiting, next try 12:30']);
+  assert.deepEqual(est({ upgrade: { lastUpgradeAt: NOW - 1 * MIN } }).waits.map(x => x.text), ['upgrade waiting, next try 12:01']);
 });
 
 test('4. a step type with too little history shows "no estimate yet"', () => {

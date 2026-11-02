@@ -8,6 +8,7 @@ import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
 import { checksState, prerequisites } from './team.mjs';
 import { hasReading } from './allowance.mjs';
+import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 
 export const RETENTION_MS = 35 * 86400000;
 export const MAX_SNAPSHOTS = 12000;          // five-minute ticks for ~41 days; the age bound normally applies first
@@ -205,6 +206,6 @@ export function readVersion(root, { running = codeVersion() } = {}) {
   const behind = seen && Number.isSafeInteger(seen.behind) ? seen.behind : null;
   const run = SHA40.test(running || '') ? running : null;
   // Issue #331: when the upgrade is rate-limited the header says when the next try is.
-  let nextTryAt = null; try { const l = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).lastUpgradeAt; if (Number.isFinite(l) && l + 3600000 > Date.now()) nextTryAt = l + 3600000; } catch { /* none */ }
+  let nextTryAt = null; try { const l = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).lastUpgradeAt; if (Number.isFinite(l) && l + MIN_UPGRADE_INTERVAL_MS > Date.now()) nextTryAt = l + MIN_UPGRADE_INTERVAL_MS; } catch { /* none */ }
   return { installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, nextTryAt: installed === main ? null : nextTryAt, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
 }
