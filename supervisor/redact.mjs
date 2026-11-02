@@ -18,10 +18,11 @@ export function redact(value, max = 200) {
 }
 // Long free text (a requirements file) redacted without losing its tail: redact() reads only MAX_SCAN characters, so the text is
 // scanned in pieces of at most MAX_SCAN (split at line ends, then at spaces) and rejoined with its line ends. When the result would pass
-// `max`, it is cut on a piece boundary and `marker` is appended, so a cut is always visible and never mid-sentence.
+// `max`, it is cut on a piece boundary (a line end, or a word boundary inside a line longer than MAX_SCAN) and `marker` is appended, so a cut is always visible and never mid-sentence.
 export function redactLong(value, max, marker = '') {
   // Each piece is {text, glue}: glue is true when the piece continues the previous one on the same line (rejoined without a newline).
-  const tail = new RegExp(`(?:\\b${KEY}\\s*[=:]?\\s*(?:bearer\\s*)?|\\bbearer\\s*)$`, 'i');
+  // A piece must not end inside a secret: a bare or quoted key (with or without its separator), an unfinished bearer, or an open quoted value.
+  const tail = new RegExp(`(?:["']?\\b${KEY}["']?\\s*[=:]?\\s*(?:bearer\\s*)?|\\bbearer\\s*|"${KEY}"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*)$`, 'i');
   const pieces = [];
   for (const line of String(value ?? '').split(/\r?\n/)) {
     let rest = line, glue = false;
@@ -37,7 +38,7 @@ export function redactLong(value, max, marker = '') {
   const out = []; let used = 0, cut = false;
   for (const p of pieces) {
     const clean = redact(p.text, MAX_SCAN * 4); // replacements can be longer than the text they replace; never slice a piece here
-    const add = clean.length + (p.glue ? 0 : 1);
+    const add = clean.length + (out.length && !p.glue ? 1 : 0);
     if (used + add > max) { cut = true; break; }
     out.push(out.length ? (p.glue ? '' : '\n') + clean : clean); used += add;
   }

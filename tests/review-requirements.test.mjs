@@ -212,3 +212,28 @@ test('replacement growth never drops the tail, and long lines are rejoined uncha
   const plain = 'word '.repeat(1000);
   assert.equal(redactLong(plain, 30000), plain);
 });
+
+test('JSON-quoted and open-quoted secrets that straddle the split are redacted, also through writeRequirements (issue #319)', async t => {
+  const { redactLong } = await import('../supervisor/redact.mjs');
+  const secret = ['hunter2', 'secret'].join('');
+  const cases = [
+    `{"password": "${secret}"} tail`, `"password": "correct horse ${secret} staple" tail`, `{"api_key":"${secret}"} tail`, `"password" : "${secret}" tail`
+  ];
+  for (const c of cases) for (const n of [985, 990, 994, 995, 996, 997, 998, 999]) {
+    const out = redactLong('w '.repeat(n) + c, 30000);
+    assert.ok(!out.includes(secret), `${n}: ${out.slice(Math.max(0, out.indexOf('tail') - 120))}`);
+    assert.ok(out.endsWith('tail'));
+  }
+  for (const n of [990, 995]) {
+    const w = reqWorld(t); w.issue.body = 'w '.repeat(n) + `{"password": "${secret}"} tail`;
+    const text = await reqFile(w); assert.ok(!text.includes(secret)); assert.match(text, /"password": "\[secret\]"/);
+  }
+});
+
+test('a cut inside one over-long line falls at a word boundary and the marker follows (issue #319)', async () => {
+  const { redactLong } = await import('../supervisor/redact.mjs');
+  const out = redactLong('Head\n' + 'word '.repeat(8000) + '\nTail', 30000, '[CUT]');
+  assert.ok(out.endsWith('\n[CUT]')); assert.ok(out.startsWith('Head\n')); assert.ok(!out.includes('Tail'));
+  assert.match(out.slice(0, -'\n[CUT]'.length), /word$/);
+  assert.ok(out.length <= 30000 + 6);
+});
