@@ -88,6 +88,15 @@ export function expectedFiles(issue) {
   const found = text.match(/(?<![\w./-])(?:[\w.-]+\/)+[\w.-]*\w(?![\w/])|(?<![\w./-])[\w-]+\.(?:mjs|js|json|md|yml|yaml|cs|sh|html|css)\b/g) || [];
   return new Set(found.filter(f => /\.\w+$/.test(f)).map(f => f.replace(/^\.\//, '')));
 }
+export const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''); return m ? Number(m[1]) : null; };
+// Issue #344: what holds the running count below the sum of the chosen role counts, for the dashboard: an explicit overall limit, or
+// the open-PR cap pausing new implement work. Empty when nothing does.
+export function capNotes(L, pauseText = null) {
+  const sum = ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0), out = [];
+  if (Number.isSafeInteger(L?.overall) && L.overall >= 1 && L.overall < sum) out.push(`limits.overall is ${L.overall}, below the ${sum} slots the role counts allow, so at most ${L.overall} jobs run at once`);
+  if (pauseText) out.push(`${pauseText}; no new implement job starts while the open-PR cap (limits.max_open_prs) is reached`);
+  return out;
+}
 export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0));
 function normalizeRoleLimits(c) {
   const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1;   // no upper bound: the count per role is the homeowner's choice (#344)
@@ -768,7 +777,7 @@ export class Team {
     this.taken = new Set(); this.plannedUse = {};
     // Expected files of every running or planned implement job (issue #344): a new implement job whose expected files overlap one is refused.
     this.claimed = new Map();
-    for (const j of active) { const rec = this.s.jobs[j.id]; if (rec && ['implement', 'continue'].includes(rec.kind) && issueByNo.get(rec.issue)) for (const f of this.predictFiles(issueByNo.get(rec.issue))) this.claimed.set(f, rec.issue); }
+    for (const j of active) { const rec = this.s.jobs[j.id], n = rec && WRITER_KINDS.has(rec.kind) ? (rec.issue ?? issueOfBranch(rec.branch)) : null; if (n != null && issueByNo.get(n)) for (const f of this.predictFiles(issueByNo.get(n))) this.claimed.set(f, n); }
     // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
@@ -799,7 +808,9 @@ export class Team {
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
         this.taken.add(`${best.act.type}:${best.act.key}`);
         if (best.act.type === 'review') { this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`); }
-        if (best.act.issue) { this.taken.add(`issue:${best.act.issue}`); for (const f of this.predictFiles(issueByNo.get(best.act.issue))) this.claimed.set(f, best.act.issue); }
+        if (best.act.issue) this.taken.add(`issue:${best.act.issue}`);
+        const claimN = best.act.issue ?? (WRITER_KINDS.has(best.act.type) ? issueOfBranch(best.act.branch) : null);
+        if (claimN != null && issueByNo.get(claimN)) for (const f of this.predictFiles(issueByNo.get(claimN))) this.claimed.set(f, claimN);
       }
     }
     // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
@@ -808,12 +819,17 @@ export class Team {
   }
   predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
   // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
-  overlapHold(agent, n, issue) {
+  overlapHold(agent, n, issue, type = 'implement') {
     for (const f of this.predictFiles(issue)) {
       const other = this.claimed?.get(f);
-      if (other !== undefined && other !== n) { this.hold(agent, 'implement', `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
+      if (other !== undefined && other !== n) { this.hold(agent, type, `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
     }
     return false;
+  }
+  // The same refusal for a repair job (rebase, CI fix, fix, continue) on a PR: its issue's expected files must not overlap another writer's.
+  repairOverlap(agent, type, pr, issueByNo) {
+    const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
+    return !!issue && this.overlapHold(agent, n, issue, type);
   }
   // Lower is preferred when several agents could fill the same slot.
   slotRank(agent, act, prs) {
@@ -959,7 +975,7 @@ export class Team {
       // Issue #266: with a merge backlog, rebase only the PR that is next in rebase order (issue #326: the order of the author's issues queue, then PR number), and let a
       // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
       if (this.rebaseDeferred(pr, prs, issueByNo, busy)) continue;   // issue #326: a deferred PR is skipped; the list order must not decide which PR goes
-      if (this.writeBlock(pr, 'rebase')) continue;
+      if (this.writeBlock(pr, 'rebase') || this.repairOverlap(agent, 'rebase', pr, issueByNo)) continue;
       if (!allow('rebase')) break;
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
@@ -968,7 +984,7 @@ export class Team {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
-      if (busy('cifix', key) || (escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix')) continue;
+      if (busy('cifix', key) || (escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks: failingChecks(pr.statusCheckRollup, this.retried(pr)), key, ...(escalated ? { escalated: true } : {}) };
     }
@@ -978,7 +994,7 @@ export class Team {
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key)) continue;
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
-      if ((escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr)) continue;   // issue #318: a listed PR never escalates; it stops with one Needs you item
+      if ((escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // issue #318: a listed PR never escalates; it stops with one Needs you item
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
     }
@@ -1048,7 +1064,7 @@ export class Team {
     for (const pr of repair ? prs : []) {
       const n = this.draftIssue(agent, a, pr, issueByNo);
       if (n == null || !SHA.test(pr.headRefOid) || busy('continue', String(pr.number)) || busy('implement', String(n)) || this.taken?.has(`issue:${n}`)) continue;
-      if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts || this.writeBlock(pr, 'continue')) continue;
+      if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts || this.writeBlock(pr, 'continue') || this.repairOverlap(agent, 'continue', pr, issueByNo)) continue;
       if (!allow('continue')) break;
       return { type: 'continue', pr: pr.number, issue: n, head: pr.headRefOid, branch: pr.headRefName, key: String(pr.number) };
     }
@@ -1108,8 +1124,12 @@ export class Team {
       return i < 0 ? Infinity : i;
     };
     const ranked = prs.filter(wants).map(p => ({ p, r: rank(p) }));
-    const next = ranked.sort((x, y) => (x.r === y.r ? 0 : x.r < y.r ? -1 : 1) || x.p.number - y.p.number)[0]?.p;
-    if (next && next.number !== pr.number) return true;
+    // Issue #344: with N implementer slots the first N candidates in that order may rebase at once (their expected files are kept apart by
+    // the overlap guard, and a rebase that still conflicts is retried in the same order). One slot keeps the single next candidate.
+    const order = ranked.sort((x, y) => (x.r === y.r ? 0 : x.r < y.r ? -1 : 1) || x.p.number - y.p.number).map(x => x.p);
+    const n = Number.isSafeInteger(L.roles?.implementer) ? L.roles.implementer : 1;
+    if (order.length && !order.slice(0, n).some(p => p.number === pr.number)) return true;
+    if (n > 1) return false;   // alternation with implement jobs is only needed when one slot is shared
     const last = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && Number.isFinite(j.at)).sort((x, y) => y.at - x.at)[0];
     if (last?.kind !== 'rebase') return false;
     // An implement job is startable when choose() would return one for some agent (same allowance path); choose() is probed with

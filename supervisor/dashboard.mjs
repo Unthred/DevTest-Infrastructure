@@ -2,7 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import path from 'node:path';
-import { Team, overallCap, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs, readHeadRegister } from './planning.mjs';
@@ -602,7 +602,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       estimates,
       generatedAt: now, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
-      agents, queues, plan, capacity: overallCap(config.limits),
+      agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
       budget,
       attention,
       usage: usageView(config, jobs, states, allowance, now),

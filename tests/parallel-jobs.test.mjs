@@ -74,3 +74,31 @@ test('a job failing to start does not stop the others, and allowance reached mid
   await mid.team.tick();
   assert.equal(mid.calls.created.length, 1, 'the first start hit the limit; the rest did not start');
 });
+
+const conflicting = n => ({ ...pr(n), mergeable: 'CONFLICTING' });
+
+test('overlap also covers repair writers: a rebase of a PR whose issue names a file blocks an implement job naming it', async t => {
+  const w = world(t, { roles: { implementer: 2, reviewer: 1 }, issues: [issue(5, 'supervisor/team.mjs'), issue(20, 'supervisor/team.mjs'), issue(21, 'docs/other.md')], pulls: [conflicting(5)] });
+  const rep = await w.team.tick();
+  assert.deepEqual(w.calls.created.map(s => s.kind === 'rebase' ? 'rebase' : s.issue).sort(), [21, 'rebase']);
+  assert.match(JSON.stringify(w.team.held), /issue #20 waits/);
+  assert.ok(rep.actions.length === 2);
+});
+
+test('a repair job is refused when a running implement job expects the same file', async t => {
+  const w = world(t, { roles: { implementer: 2, reviewer: 1 }, issues: [issue(5, 'supervisor/team.mjs'), issue(20, 'supervisor/team.mjs')], pulls: [conflicting(5)] });
+  const acts = await w.team.plan();
+  assert.equal(acts.filter(a => a.type === 'rebase').length, 1);   // baseline: planned alone
+  w.team.jobs.listActive = async () => [{ id: 'a'.repeat(32), status: 'running' }];
+  w.team.s.jobs['a'.repeat(32)] = { kind: 'implement', agent: 'claude', issue: 20, key: '20' };
+  const acts2 = await w.team.plan();
+  assert.equal(acts2.filter(a => a.type === 'rebase').length, 0);
+});
+
+test('concurrent rebases: N implementer slots rebase the first N conflicting PRs in queue order; one slot keeps one', async t => {
+  for (const [n, want] of [[1, [1]], [2, [1, 2]], [3, [1, 2, 3]]]) {
+    const w = world(t, { roles: { implementer: n, reviewer: 1 }, pulls: [1, 2, 3, 4].map(conflicting) });
+    const acts = await w.team.plan();
+    assert.deepEqual(acts.filter(a => a.type === 'rebase').map(a => a.pr).sort(), want, `implementer ${n}`);
+  }
+});
