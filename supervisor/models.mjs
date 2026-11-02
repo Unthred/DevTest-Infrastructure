@@ -25,6 +25,8 @@ export function validateModelsConfig(m, agentNames) {
     if (!agentNames.includes(agent)) throw new SupervisorError(`invalid models config: unknown agent ${agent}`);
     if (!table || typeof table !== 'object' || Array.isArray(table)) throw new SupervisorError(`invalid models config: ${agent}`);
     for (const [type, e] of Object.entries(table)) {
+      // Issue #258: an ordered list of review models; the first one independent of the PR's writers is used.
+      if (type === 'review_candidates') { if (!Array.isArray(e) || !e.length || e.length > 8 || !e.every(entryOk)) throw new SupervisorError(`invalid models config: ${agent}.${type}`); continue; }
       if (![...JOB_TYPES, 'strong', 'low'].includes(type) || !entryOk(e)) throw new SupervisorError(`invalid models config: ${agent}.${type}`);
     }
   }
@@ -63,7 +65,7 @@ export function weeklyUtilization(allowance, now = Date.now()) {
 // ctx: { modelsConfig, agent, kind, manifestModels, escalation: {reason}|null, utilization: number|null, reReview, low }
 // reReview + low (issue #56): a fix-round re-review while the reviewer's allowance is low uses the agent's `low` entry when configured.
 export function resolveModel(ctx) {
-  const table = ctx.modelsConfig?.agents?.[ctx.agent];
+  const table = ctx.entryOverride && ctx.modelsConfig?.agents?.[ctx.agent] ? { ...ctx.modelsConfig.agents[ctx.agent], review: ctx.entryOverride } : ctx.modelsConfig?.agents?.[ctx.agent];
   let type = typeOfKind(ctx.kind);
   if ((type === 'interim-review' || type === 'split') && table && !table[type]) type = 'review';   // a split draft is a cheap read-only session (issue #244)
   if (!table || !table[type]) return { fields: {}, warnings: [] };
@@ -72,7 +74,7 @@ export function resolveModel(ctx) {
   const strong = table.strong || table.implement || table[type];
   let entry = table[type], source = 'configured', reason = `configured for ${type}`;
   const hot = Number.isFinite(ctx.utilization) && ctx.utilization >= threshold;
-  if (type === 'review' && ctx.reReview && ctx.low && table.low) { entry = table.low; source = 'allowance'; reason = 'fix-round re-review while the allowance is low: lower-cost entry'; }
+  if (type === 'review' && ctx.reReview && ctx.low && table.low && !ctx.entryOverride) { entry = table.low; source = 'allowance'; reason = 'fix-round re-review while the allowance is low: lower-cost entry'; }
   else if (hot && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `weekly allowance ${Math.round(ctx.utilization * 100)}% >= ${Math.round(threshold * 100)}%: cheaper model kept for ${type}`; }
   else if (ctx.low && ctx.escalation && REPAIR_TYPES.has(type)) { source = 'allowance'; reason = `allowance low: escalation suppressed for ${type}`; }
   else if (ctx.escalation && REPAIR_TYPES.has(type)) { entry = strong; source = 'escalated'; reason = `escalated: ${ctx.escalation.reason}`; }

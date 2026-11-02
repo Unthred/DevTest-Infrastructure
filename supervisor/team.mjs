@@ -360,7 +360,7 @@ export function readSplitDraft(root, ticket) {
 export class Team {
   constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
-    this.providerModels = providerModels; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.picked = new Set();
+    this.providerModels = providerModels; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
     this.c = validateTeamConfig(config); this.root = root; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
@@ -382,7 +382,17 @@ export class Team {
     // "Low" (issue #56): the agent is not in normal mode, or its weekly use is at or above the model threshold.
     const utilization = this.allowanceOf(act.agent), mode = this.modes?.[act.agent]?.mode;
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
-    const { fields, warnings } = resolveModel({ modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low });
+    const base = { modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low };
+    let { fields, warnings } = resolveModel(base);
+    // Issue #258: a review uses the first candidate of the agent's ordered list that is independent of every writer of the PR; the
+    // low-allowance fix-round re-review entry keeps its rule and is checked as it stands. With none independent the first candidate
+    // is returned and reviewRefusal() refuses it.
+    const cands = this.c.models?.agents?.[act.agent]?.review_candidates;
+    if (typeOfKind(kind) === 'review' && act.pr != null && Array.isArray(cands) && cands.length && !(act.reReview === true && low && this.c.models.agents[act.agent].low)) {
+      const writers = this.writersOf({ number: act.pr, headRefName: act.branch });
+      const tried = cands.map(entry => resolveModel({ ...base, entryOverride: entry }));
+      ({ fields, warnings } = tried.find(r => independentOf({ provider, model: r.fields.model ?? null }, writers)) || tried[0]);
+    }
     if (warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: warnings.join('; ') });
     return fields;
   }
@@ -397,7 +407,10 @@ export class Team {
   // recorded for it (implement, continue, fix, cifix, rebase), by provider and model. Without a record (a PR written by hand) only the
   // branch author's provider is known, so only a reviewer on another provider counts as independent.
   writersOf(pr) {
-    const out = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && this.c.agents[j.agent] && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)))
+    // Issue #258: a rebase that resolved no conflict is not authorship (homeowner decision 2 Nov 2026); resolving one is. A rebase whose
+    // record does not say (older jobs, an unreadable comparison) counts as a writer.
+    const cleanRebase = j => j.kind === 'rebase' && j.rebase?.resolvedConflicts === false;
+    const out = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && !cleanRebase(j) && this.c.agents[j.agent] && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)))
       .map(j => ({ provider: this.c.agents[j.agent].provider, model: j.model ?? null }));
     const author = agentOfBranch(this.c, pr.headRefName);
     if (!out.length && author) out.push({ provider: this.c.agents[author].provider, model: null });
@@ -422,7 +435,7 @@ export class Team {
   // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
   reviewRefusal(agent, pr, key) {
     // A caller that has no provider manifests (the dashboard) judges by the configured model name.
-    const model = this.modelFor({ agent, pr: pr.number, key }, 'review', {}, true).model ?? null;
+    const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key }, 'review', {}, true).model ?? null;
     const reviewer = { provider: this.c.agents[agent].provider, model };
     if (independentOf(reviewer, this.writersOf(pr))) return null;
     return agent + ' would review PR #' + pr.number + ' on ' + (model || 'its default model') + ', the model that wrote it; a review needs a different model';
@@ -506,7 +519,7 @@ export class Team {
       const b = /\/issue-(\d+)(\D|$)/.exec(m.headRefName || '');
       if (b && agentOfBranch(this.c, m.headRefName)) this.delivered.add(Number(b[1]));
     }
-    this.modes = this.budgets(); this.held = {};
+    this.modes = this.budgets(); this.held = {}; this.heldPr = {};
     await this.loadFiles(prs);
     const active = await this.jobs.listActive();
     // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
@@ -588,12 +601,44 @@ export class Team {
 
   // Issue #79: no review is scheduled for a reviewer at its usage limit (a used-up window, or its latest job paused on one); the
   // reason is kept for the dashboard and `team status`. A reviewer in `waiting` mode is held by allow() with the mode's own reason.
-  reviewerHold(agent) {
+  reviewerHold(agent, pr = null) {
     const l = this.limitedOf(agent);
     if (!l.out) return null;
     const why = `review held: ${agent} is out of allowance (${String(l.reason || 'usage limit').slice(0, 200)})`;
-    (this.held[agent] ||= {}).review ||= why;
+    this.hold(agent, 'review', why, pr);
     return why;
+  }
+  // Issue #258: every held reason is kept, not just the first. held[agent][type] lists the distinct reasons (one per held PR when they
+  // differ); heldPr["agent:type:pr"] is the reason for that one pull request.
+  hold(agent, type, why, pr = null) {
+    const h = (this.held[agent] ||= {}), seen = h[type] ? h[type].split(' | ') : [];
+    if (!seen.includes(why) && seen.length < 6) seen.push(why);
+    h[type] = seen.join(' | ');
+    if (pr != null) this.heldPr[`${agent}:${type}:${pr}`] ||= why;
+  }
+  // Issue #258: open PRs that are ready for a first review but that no configured agent can review now. Each entry names the PR, its
+  // head and, per agent, the real reason (its review model is a model that wrote the head, it is out of allowance, or it is waiting
+  // for a reset). A PR whose review attempts are used up has its own card and is left out, as is one with a review running.
+  unreviewable(prs) {
+    const out = [];
+    for (const pr of prs || []) {
+      const author = agentOfBranch(this.c, pr.headRefName), key = verdictKey(pr.number, pr.headRefOid);
+      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || this.s.verdicts[key]) continue;
+      if (Object.values(this.s.jobs).some(j => j.kind === 'review' && !j.ingested && j.pr === pr.number && j.head === pr.headRefOid)) continue;
+      const reasons = [];
+      let exhausted = false;
+      for (const [agent] of this.agents()) {
+        const refusal = this.reviewRefusal(agent, pr, `${key}:${agent}`), out_ = this.limitedOf(agent), mode = this.modes?.[agent];
+        if (refusal) reasons.push(`${agent}: ${refusal}`);
+        else if (out_.out) reasons.push(`${agent}: out of allowance (${String(out_.reason || 'usage limit').slice(0, 120)})`);
+        else if (mode?.mode === 'waiting') reasons.push(`${agent}: waiting for a reset (${String(mode.reason || '').slice(0, 120)})`);
+        else if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= this.c.limits.max_review_attempts) exhausted = true;
+        else { exhausted = true; reasons.length = 0; break; }   // an independent reviewer is available
+      }
+      if (exhausted || !reasons.length) continue;
+      out.push({ pr: pr.number, head: pr.headRefOid, reasons });
+    }
+    return out;
   }
 
   choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
@@ -605,7 +650,7 @@ export class Team {
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
     // chosen instead. The reason is kept for the dashboard and `team status`.
     const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent] } : B0, owed = B ? this.pendingReviews(agent, prs) : 0;
-    const allow = type => { const r = admits(B, type, owed); if (!r.ok) (this.held[agent] ||= {})[type] ||= r.why; return r.ok; };
+    const allow = type => { const r = admits(B, type, owed); if (!r.ok) this.hold(agent, type, r.why); return r.ok; };
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
     for (const pr of repair ? prs : []) {
@@ -650,8 +695,8 @@ export class Team {
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
       // Independence (issue #152): a review on the model that wrote the head is refused.
       const refusal = this.reviewRefusal(agent, pr, `${key}:${agent}`);
-      if (refusal) { (this.held[agent] ||= {}).review ||= 'review refused: ' + refusal; continue; }
-      if (this.reviewerHold(agent)) break;
+      if (refusal) { this.hold(agent, 'review', 'review refused: ' + refusal, pr.number); continue; }
+      if (this.reviewerHold(agent, pr.number)) break;
       if (!allow('review')) break;
       return { type: 'review', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key: `${key}:${agent}` };
     }
@@ -875,6 +920,7 @@ export class Team {
     if (!check) { j.rebase = { oldHead: j.head, newHead: pr.headRefOid, commits: [], unchecked: true }; this.save(); return false; }
     const slim = list => list.slice(0, 50).map(c => ({ sha: c.sha, subject: String(c.subject || '').slice(0, 100) }));
     j.rebase = { oldHead: j.head, newHead: pr.headRefOid, commits: slim(check.commits) };
+    if (typeof check.resolvedConflicts === 'boolean') j.rebase.resolvedConflicts = check.resolvedConflicts;   // absent = unknown
     if (check.missing.length) j.rebase.lost = slim(check.missing);
     this.save();
     if (!check.missing.length) return false;
