@@ -468,7 +468,7 @@ export class Team {
         const r = resolveModel({ modelsConfig: { ...mc, agents: { ...mc.agents, [act.agent]: table } }, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation: null, utilization: null, reReview: false, low: false });
         if (r.warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: r.warnings.join('; ') });
         // Issue #368: the exception path writes too, so Opus is refused here as well.
-        if (WRITER_KINDS.has(kind) && isOpusModel(r.fields.model)) return { ...r.fields, writeRefusal: opusRefusal(act.agent, r.fields.model, kind) };
+        if (WRITER_KINDS.has(kind)) { const o = this.opusWriter(provider, r); if (o) return { ...r.fields, writeRefusal: opusRefusal(act.agent, o, kind) }; return WRITER_KINDS.has(kind) ? this.pinWriter(provider, r.fields) : r.fields; }
         return r.fields;
       }
     }
@@ -476,12 +476,15 @@ export class Team {
     const utilization = this.allowanceOf(act.agent), mode = this.modes?.[act.agent]?.mode;
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
     const base = { modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low };
-    let { fields, warnings } = resolveModel(base);
+    const first = resolveModel(base);
+    let { fields, warnings } = first;
     // Issue #316 (homeowner decision 2 Nov 2026): a writing job never runs on a model its agent is configured to review with, and never
     // on a model that would leave the PR with no available independent reviewer. It is refused, not given a different model.
     if (WRITER_KINDS.has(kind)) {
-      const refusal = this.writeRefusal(act, kind, fields.model ?? null);
+      const opus = this.opusWriter(provider, first);
+      const refusal = this.writeRefusal(act, kind, fields.model ?? null, opus);   // judged as configured, so an unrecorded writer still strands conservatively
       if (refusal) fields = { ...fields, writeRefusal: refusal.slice(0, 300) };
+      else fields = this.pinWriter(provider, fields);
     }
     // Issue #258: a review uses the first candidate of the agent's ordered list that is independent of every writer of the PR; the
     // low-allowance fix-round re-review entry keeps its rule and is checked as it stands. With none independent the first candidate
@@ -636,8 +639,24 @@ export class Team {
     if (!agent || !this.c.agents[agent]) return null;
     return this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key: `wb:${pr.number}` }, kind, {}, true).writeRefusal || null;
   }
-  writeRefusal(act, kind, model) {
-    if (isOpusModel(model)) return opusRefusal(act.agent, model, kind);   // issue #368: before and independent of any review-model or stranding check
+  // Issue #368: the model a writing job would run on that is Opus, or could be. Judged on the configured entry's name before the manifest
+  // fallback (a rejected "Opus" must not slip to the CLI default); a writer left without a pinned model on a provider whose manifest
+  // offers Opus is refused too, since its unpinned CLI default may be Opus.
+  opusWriter(provider, r) {
+    for (const m of [r.entry?.model, r.fields?.model]) if (isOpusModel(m)) return String(m).slice(0, 40);
+    return null;
+  }
+  // Issue #368: a writing job whose model did not resolve (none configured, or one the manifest rejected) would run on the CLI default,
+  // which may be Opus. When the provider offers Opus, it is pinned to the provider's first non-Opus alias instead.
+  pinWriter(provider, fields) {
+    if (fields.model) return fields;
+    const spec = this.providerModels[provider], aliases = spec?.aliases || [];
+    const safe = aliases.find(a => !isOpusModel(a));
+    if (!aliases.some(isOpusModel) || !safe) return fields;
+    return { ...fields, model: safe, modelWarning: `${fields.modelWarning ? fields.modelWarning + '; ' : ''}no model pinned: ${safe} used so the CLI default (which may be Opus) never writes`.slice(0, 200) };
+  }
+  writeRefusal(act, kind, model, opus = null) {
+    if (opus || isOpusModel(model)) return opusRefusal(act.agent, opus || model, kind);   // issue #368: before and independent of any review-model or stranding check
     const table = this.c.models?.agents?.[act.agent];
     if (model && reviewModelsOf(table).has(model)) return `${act.agent}'s ${model} model is one of its configured review models, so it is not given ${kind} work`;
     if (act.pr != null) return this.strandsReviewer({ number: act.pr, headRefName: act.branch }, act.agent, model);
@@ -1041,7 +1060,7 @@ export class Team {
     if (!impl) return null;
     if (paused) { this.hold(agent, 'implement', this.pauseText(prs)); return null; }
     const implModel = this.modelFor({ agent, key: 'wb:implement' }, 'implement', {}, true);   // issue #368: an Opus implementer is held, not started
-    if (implModel.writeRefusal && isOpusModel(implModel.model)) { this.hold(agent, 'implement', implModel.writeRefusal); return null; }
+    if (implModel.writeRefusal?.startsWith('no permitted writer')) { this.hold(agent, 'implement', implModel.writeRefusal); return null; }
     for (const n of this.issuesOf(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
       if (!issue || this.taken?.has(`issue:${n}`)) continue;

@@ -98,3 +98,26 @@ test('planner: an Opus fix or ci-fix entry plans no fix; control: Sonnet plans o
   assert.equal((await world(t, { 'ci-fix': O }, red).plan()).some(a => a.type === 'cifix'), false);
   assert.equal((await world(t, {}, red).plan()).some(a => a.type === 'cifix'), true);
 });
+
+test('bad config: an Opus name the manifest rejects is still refused, not run on the CLI default', t => {
+  for (const model of ['Opus', 'opus[1m]', 'OPUS-4']) for (const kind of ['implement', 'fix', 'ci-fix', 'rebase', 'continue']) {
+    const key = kind === 'ci-fix' ? 'ci-fix' : kind;
+    const team = world(t, { [key]: { model, effort: 'medium' } });
+    const f = team.modelFor(act(), kind === 'ci-fix' ? 'cifix' : kind, {});
+    assert.match(f.writeRefusal, /no permitted writer.*Opus is never given/, `${model} ${kind}`);
+  }
+});
+
+test('bad config: a writing entry with no usable model is pinned to a non-Opus model, never left to the CLI default', t => {
+  for (const kind of ['implement', 'fix']) {
+    const f = world(t, { [kind]: { effort: 'high' } }).modelFor(act(), kind, {});
+    assert.equal(f.model, 'sonnet', kind); assert.equal(f.writeRefusal ?? null, null); assert.match(f.modelWarning, /no model pinned/);
+  }
+  assert.equal(world(t, { fix: { model: 'nonsense', effort: 'high' } }).modelFor(act(), 'fix', {}).model, 'sonnet');
+});
+
+test('exception path: an unpinned or rejected-name Opus commit-review model is refused for a fix', t => {
+  const team = world(t);
+  team.exceptionFor = () => ({ agent: 'claude', commit_review: { model: 'Opus', effort: 'medium' }, full_review: S });
+  assert.match(team.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer/);
+});
