@@ -453,6 +453,8 @@ function healthBody(c, view) {
     const u = c.lastUpgrade;
     dl = `<dt>Installed</dt><dd>${shaCopy(c.installed)}${c.installedAt ? ` <span class="sub">since ${esc(utc(c.installedAt))}</span>` : ''}</dd><dt>origin/main</dt><dd>${shaCopy(c.origin)}</dd>
 <dt>Upgrade step</dt><dd>${esc(c.step || 'not reported')}</dd>
+<dt>Last install</dt><dd>${c.install ? `${badge(c.install.severity, c.install.result)}${c.install.sha ? ` ${shaCopy(c.install.sha)}` : ''}${c.install.at ? ` <span class="sub">${esc(ago(c.install.at, now))}</span>` : ''}${c.install.reason ? `<br>${errCopy(c.install.reason)}` : ''}` : '<span class="muted">no record</span>'}</dd>
+<dt>Next attempt</dt><dd>${c.install?.nextAttemptAt ? esc(utc(c.install.nextAttemptAt)) : '<span class="muted">none scheduled</span>'}</dd>
 <dt>Last upgrade</dt><dd>${u ? `${badge(resultSeverity(u.result), u.result)} ${shaCopy(u.from)} → ${shaCopy(u.to)} <span class="sub">${esc(ago(u.at, now))}</span>${u.reason ? `<br>${errCopy(u.reason)}` : ''}` : '<span class="muted">no record</span>'}</dd>
 <dt>Pre-check latched</dt><dd>${list(c.prechecked.map(p => `<li>${shaCopy(p.sha)} since ${esc(utc(p.at))}${p.isMain ? ` ${badge('warning', 'is origin/main')}` : ''}</li>`))}</dd>
 ${c.latch ? `<dt>Rollback latch</dt><dd>${badge('action', 'Set')} ${errCopy(c.latch.reason)}</dd>` : ''}${c.pending ? `<dt>Pending</dt><dd>${shaCopy(c.pending.to)} awaiting a live tick</dd>` : ''}`;

@@ -226,3 +226,18 @@ test('drain (issue #136): team status shows "install pending since …, draining
     assert.match(text(await status({ root })), /draining \(1 job running\)/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('issue #101: team status shows the installed version, the last install result and the next attempt', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'installst-'));
+  try {
+    fs.mkdirSync(path.join(root, 'versions', H(5)), { recursive: true }); fs.symlinkSync(`versions/${H(5)}`, path.join(root, 'current'));
+    fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+    assert.match(text(await status({ root })), /installer: version 5555555\n/);
+    atomicJson(path.join(root, 'team', 'self-upgrade.json'), { install: { result: 'transient', sha: H(7), at: NOW - MIN, reason: 'clone failed', nextAttemptAt: NOW + 20 * MIN } });
+    const s = await status({ root });
+    assert.equal(s.install.result, 'transient');
+    assert.match(text(s), /installer: version 5555555; last install transient \(7777777\) at 11:59: clone failed; next attempt 12:20/);
+    atomicJson(path.join(root, 'team', 'self-upgrade.json'), { install: { result: 'verified', sha: H(7), at: NOW } });
+    assert.doesNotMatch(text(await status({ root })), /next attempt/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
