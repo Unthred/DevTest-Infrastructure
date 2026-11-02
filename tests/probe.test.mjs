@@ -241,13 +241,35 @@ test('dashboard page: the Refresh allowance button and the reading age appear fo
   assert.match(body, /Last reading 3h[^<]*ago[^<]*refreshed by a minimal probe run/);
 });
 
-// ---- never spends credits: a used-up window with overage not refused blocks a model-run probe (tick and on demand)
+// ---- never spends credits: a used-up window blocks the tick's probe (D-019); with overage not refused it also blocks on demand
 const usedUp = (overageStatus, usingOverage = false) => ({ provider: 'claude', status: 'allowed', observedAt: NOW - 3 * HOUR,
   windows: [{ type: 'seven_day', utilization: 1, resetsAt: NOW + 48 * HOUR, status: 'allowed' }], billing: { overageStatus, usingOverage } });
-test('probeDue: a used-up live window with overage allowed is never probed; with overage rejected it still is', () => {
-  assert.equal(probeDue({ mode: 'waiting', allowance: usedUp('allowed'), settings: S, now: NOW }), null);
-  assert.equal(probeDue({ mode: 'waiting', allowance: usedUp('unknown'), settings: S, now: NOW }), null);
-  assert.equal(probeDue({ mode: 'waiting', allowance: usedUp('rejected'), settings: S, now: NOW }).reason, 'stale');
+test('probeDue: a used-up live window is never probed, whatever the overage status (D-019: no provider call while waiting)', () => {
+  for (const o of ['allowed', 'unknown', 'rejected', 'disabled']) assert.equal(probeDue({ mode: 'waiting', allowance: usedUp(o), settings: S, now: NOW }), null, o);
+  // the reproduced case: five-hour window used up or status-limited, reset in 3 h, overage refused, reading 3 h old
+  const fiveHour = (w, overageStatus = 'rejected') => ({ provider: 'claude', status: 'allowed', observedAt: NOW - 3 * HOUR,
+    windows: [{ type: 'five_hour', resetsAt: NOW + 3 * HOUR, ...w }], billing: { overageStatus, usingOverage: false } });
+  for (const w of [{ utilization: 1, status: 'rejected' }, { utilization: 0.999, status: 'allowed' }, { utilization: null, status: 'rejected' }])
+    for (const o of ['rejected', 'disabled']) assert.equal(probeDue({ mode: 'waiting', allowance: fiveHour(w, o), settings: S, now: NOW }), null, `${JSON.stringify(w)} ${o}`);
+  // once that window has reset, the single post-reset probe still runs
+  const stored = { mode: 'waiting', until: NOW + 3 * HOUR };
+  assert.deepEqual(probeDue({ mode: 'waiting', stored, allowance: fiveHour({ utilization: 1, status: 'rejected' }), settings: S, now: NOW + 3 * HOUR + 2 * MINUTE }), { reason: 'stale', resetFor: null });
+  assert.deepEqual(probeDue({ mode: 'normal', stored, allowance: fiveHour({ utilization: 1, status: 'rejected' }), settings: S, now: NOW + 3 * HOUR + 2 * MINUTE }), { reason: 'reset', resetFor: stored.until });
+  // a window under the threshold with overage refused is still probed when stale
+  assert.equal(probeDue({ mode: 'waiting', allowance: fiveHour({ utilization: 0.5, status: 'allowed' }), settings: S, now: NOW }).reason, 'stale');
+});
+test('probeDue: no probe at all while a job of the provider is in the usage-limit wait, not even the reset probe', () => {
+  const stale = claudeAl(0.9, { at: NOW - 3 * HOUR });
+  assert.equal(probeDue({ mode: 'reviews_only', allowance: stale, settings: S, now: NOW, limitWait: true }), null);
+  const stored = { mode: 'waiting', until: NOW - 5 * MINUTE };
+  assert.equal(probeDue({ mode: 'normal', stored, allowance: claudeAl(1, { at: NOW - 6 * HOUR, resetsAt: NOW - 5 * MINUTE }), settings: S, now: NOW, limitWait: true }), null);
+});
+test('team: probesDue skips a provider whose job is paused on a usage limit; a transient rate-limit pause or another provider does not count', t => {
+  const w = world(t, { allowance: { claude: claudeAl(0.9, { at: NOW - 5 * HOUR }), codex: claudeAl(0.1, { at: NOW - 5 * HOUR }) } });
+  w.usage.jobs = [{ id: 'j1', provider: 'claude', status: 'paused_limit', lastEvent: 'usage_limit' }];
+  assert.deepEqual(w.team.probesDue(), []);
+  w.usage.jobs = [{ id: 'j1', provider: 'claude', status: 'paused_limit', lastEvent: 'transient_rate_limit' }, { id: 'j2', provider: 'codex', status: 'paused_limit', lastEvent: 'usage_limit' }];
+  assert.deepEqual(w.team.probesDue().map(d => d.agent), ['claude']);
 });
 test('probeNow refuses a model-run probe on overage risk and never calls the provider; a clean reading proceeds', async t => {
   const root = cacheRoot(t); let calls = 0;

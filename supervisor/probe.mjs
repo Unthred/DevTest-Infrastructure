@@ -19,14 +19,17 @@ export const RESET_GRACE_MS = MINUTE;          // "just after a reported reset t
 const MAX_LINE = 65536, MAX_OUTPUT = 4 * 1024 * 1024;
 
 // Could a model run now draw on paid overage? True while the newest reading shows overage in use for a window that has not
-// reset, or a window that has not reset is used up (utilization at exhausted_at, or a rejected/blocked status) and overage is
-// not explicitly refused. Pure.
+// reset, or a window that has not reset is used up and overage is not explicitly refused. Pure.
 const USED_UP = ['rejected', 'blocked', 'exhausted', 'limit_reached'], REFUSED = ['rejected', 'disabled'];
+const liveWindows = (allowance, now) => (allowance?.windows || []).filter(w => Number.isFinite(w?.resetsAt) && w.resetsAt > now);
+// Is a window that has not reset yet used up (utilization at exhausted_at, or a rejected/blocked status)? Pure.
+export function usedUpWindow(allowance, now, exhaustedAt = 0.995) {
+  return liveWindows(allowance, now).some(w => (Number.isFinite(w.utilization) && w.utilization >= exhaustedAt) || USED_UP.includes(w.status));
+}
 export function overageRisk(allowance, now, exhaustedAt = 0.995) {
-  const live = (allowance?.windows || []).filter(w => Number.isFinite(w?.resetsAt) && w.resetsAt > now);
-  if (allowance?.billing?.usingOverage === true && live.length) return true;
+  if (allowance?.billing?.usingOverage === true && liveWindows(allowance, now).length) return true;
   if (REFUSED.includes(allowance?.billing?.overageStatus)) return false;
-  return live.some(w => (Number.isFinite(w.utilization) && w.utilization >= exhaustedAt) || USED_UP.includes(w.status));
+  return usedUpWindow(allowance, now, exhaustedAt);
 }
 
 // The kind of the provider's manifest probe ('command', 'session-log') or null.
@@ -40,13 +43,15 @@ export function probeKind(registry, providerId) {
 
 // Whether a probe is due for one agent. Pure. Never while `normal` (jobs already refresh the reading), except the single
 // probe after a held agent's reported reset time has passed. At most one attempt per interval, successful or not.
+// D-019 (no provider call while waiting): never while a window that has not reset is used up, whatever the overage status,
+// and never while a job of the provider is in the usage-limit wait. The reset probe comes once the window has reset.
 //   mode: the computed mode now. stored: the mode the dispatcher recorded. allowance: newest reading of the provider.
-//   state: { at, resetFor } of the last attempt for this agent.
-export function probeDue({ mode, stored = null, allowance = null, state = null, settings, now }) {
-  if (settings.probe === false) return null;
+//   state: { at, resetFor } of the last attempt for this agent. limitWait: a job of this provider waits on a usage limit.
+export function probeDue({ mode, stored = null, allowance = null, state = null, settings, now, limitWait = false }) {
+  if (settings.probe === false || limitWait) return null;
   if (state?.at && now - state.at < settings.probe_interval_minutes * MINUTE) return null;
-  // Overage in use, or a live used-up window with overage not refused: another run could draw on credits. Never.
-  if (overageRisk(allowance, now, settings.exhausted_at)) return null;
+  // Overage in use could draw on credits; a live used-up window means the provider is out until it resets. Never.
+  if (overageRisk(allowance, now, settings.exhausted_at) || usedUpWindow(allowance, now, settings.exhausted_at)) return null;
   if (mode !== 'normal') {
     const age = Number.isFinite(allowance?.observedAt) && allowance.observedAt > 0 ? now - allowance.observedAt : Infinity;
     if (age >= settings.probe_age_hours * HOUR) return { reason: 'stale', resetFor: null };

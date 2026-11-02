@@ -808,7 +808,9 @@ export class Team {
     const now = this.clock.now(), settings = budgetSettings(this.c), out = [], seen = new Set();
     for (const [agent, a] of this.agents()) {
       if (seen.has(a.provider) || !canProbe(a.provider)) continue;
-      const due = probeDue({ mode: modes[agent].mode, stored: this.s.budget[agent] || null, allowance: this.usage.allowance?.[a.provider] || null, state: this.s.probes[agent] || null, settings, now });
+      // D-019: a job of this provider that stopped on a usage limit waits for its reset; no provider call meanwhile.
+      const limitWait = (this.usage.jobs || []).some(j => j.provider === a.provider && j.status === 'paused_limit' && j.lastEvent === 'usage_limit');
+      const due = probeDue({ mode: modes[agent].mode, stored: this.s.budget[agent] || null, allowance: this.usage.allowance?.[a.provider] || null, state: this.s.probes[agent] || null, settings, now, limitWait });
       if (due) { seen.add(a.provider); out.push({ agent, provider: a.provider, ...due }); }
     }
     return out;
