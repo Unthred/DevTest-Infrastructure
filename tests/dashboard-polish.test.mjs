@@ -72,8 +72,8 @@ test('resize: tablet has six columns, so the limits are halved and stay inside t
 });
 test('layout: saved sizes are validated and kept per breakpoint; a phone applies the order only', () => {
   const ids = ['a', 'b'], saved = { order: ['b', 'a', 'gone'], span: { a: 8, b: 99, gone: 3 }, h: { a: 240, b: 7, gone: 80, c: 'x' } };
-  assert.deepEqual(applyLayout(ids, saved, 'desktop'), { order: ['b', 'a'], span: { a: 8 }, h: { a: 240 } });
-  assert.deepEqual(applyLayout(ids, saved, 'phone'), { order: ['b', 'a'], span: {}, h: {} });
+  assert.deepEqual(applyLayout(ids, saved, 'desktop'), { order: ['b', 'a'], span: { a: 8 }, h: { a: 240 }, collapsed: [] });
+  assert.deepEqual(applyLayout(ids, saved, 'phone'), { order: ['b', 'a'], span: {}, h: {}, collapsed: [] });
 });
 test('every card the pages render has a default size inside its own type limits, and resize handles that match its type', async t => {
   const s = await serve(t); let seen = 0;
@@ -248,12 +248,12 @@ test('version badge: matches the installed link, flags a server still running ol
   const view = await currentView({ root: s.root, config, now: NOW });
   assert.equal(view.version.installed, H(5));
   const page = v => renderRoute({ ...view, version: v }, { page: 'overview' }).html;
-  assert.match(page({ installed: H(5), main: H(5), drift: false, running: H(5) }), /sev-ok[^>]*>[^]*?5555555 = main/);
-  assert.match(page({ installed: H(5), main: H(5), drift: false, running: null }), /5555555 = main/, 'unknown running code is not an alarm');
+  assert.match(page({ installed: H(5), main: H(5), drift: false, running: H(5) }), /sev-ok[^>]*>[^]*?Up to date \(5555555\)/);
+  assert.match(page({ installed: H(5), main: H(5), drift: false, running: null }), /Up to date \(5555555\)/, 'unknown running code is not an alarm');
   const stale = page({ installed: H(5), main: H(5), drift: false, running: H(4) });
-  assert.match(stale, /sev-warning[^>]*>[^]*?running 4444444, installed 5555555, restart pending/); assert.doesNotMatch(stale, /= main/);
-  assert.match(page({ installed: H(5), main: H(6), drift: true, running: H(5) }), /5555555 → 6666666 deploy needed/);
-  assert.match(page(null), /Version<\/span><span class="badge sev-info[^>]*>[^]*?unknown/);
+  assert.match(stale, /sev-warning[^>]*>[^]*?Restart needed: 4444444 running, 5555555 installed/); assert.doesNotMatch(stale, /= main/);
+  assert.match(page({ installed: H(5), main: H(6), drift: true, running: H(5) }), /sev-warning[^>]*>[^]*?Deploy needed: 5555555 → 6666666/);
+  assert.match(page(null), /Version<\/span><a class="pill"[^>]*><span class="badge sev-info[^>]*>[^]*?Version unknown/);
   assert.doesNotMatch((await s.get('/system')).body, /undefined|NaN/);
 });
 

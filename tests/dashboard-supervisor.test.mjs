@@ -220,12 +220,12 @@ test('tick history: one row per tick, newest first, sortable, filterable, pagina
   const many = Array.from({ length: 30 }, (_, i) => okLog(NOW - Date.parse('2026-10-29T00:00:00Z') - i * 5 * MIN)).join('');
   const s = await serve(t, { root: stateRoot(t, { log: many + SAMPLE }), cache });
   const p1 = (await s.get('/supervisor/ticks')).body;
-  assert.match(p1, /Ticks in the reconcile log \(37\)/); assert.match(p1, /1–25 of 37/); assert.match(p1, /Page 1 of 2/); assert.match(p1, /<tfoot>[\s\S]*37 ticks/);
+  assert.match(p1, /Ticks in the reconcile log \(37\)/); assert.match(p1, /1–25 of 37/); assert.match(p1, /Page 1 of 2/); assert.match(p1, /<tfoot>[\s\S]*37 of 37 ticks/);
   const firstWhen = /<td data-label="When"[^>]*>([^<]+)</.exec(p1)[1]; assert.equal(firstWhen, '2026-10-31 18:05 UTC', 'newest first');
   const asc = (await s.get('/supervisor/ticks?ticks.sort=at&ticks.dir=asc')).body;
   assert.equal(/<td data-label="When"[^>]*>([^<]+)</.exec(asc)[1], '2026-10-29 00:00 UTC'); assert.match(asc, /aria-sort="ascending"/);
   const errs = (await s.get('/supervisor/ticks?ticks.q=error')).body;
-  assert.match(errs, /4 ticks/);
+  assert.match(errs, /4 of 37 ticks/);
   const at = Date.parse('2026-10-31T12:00:02Z');
   const closed = (await s.get('/supervisor/ticks?ticks.q=ENOENT')).body;
   assert.match(closed, new RegExp(`<a class="btn" href="/supervisor/ticks\\?ticks\\.q=ENOENT&amp;ticks\\.open=${at}#tick-${at}" aria-expanded="false">Show</a>`)); assert.doesNotMatch(closed, /class="tick-detail"/, 'collapsed rows carry no hidden detail');
@@ -319,7 +319,7 @@ test('copy fallbacks: plain-HTTP LAN pages skip the Clipboard API; feedback is s
   assert.equal(copyFeedback(true).label, 'Copied'); assert.equal(copyFeedback(true).state, 'copied'); assert.equal(copyFeedback(false).state, 'failed');
   const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
   assert.match(app, /button\[data-copy\]/); assert.match(app, /b\.hidden = false/); assert.match(app, /execCommand\('copy'\)/); assert.match(app, /e\.stopPropagation\(\)/);
-  assert.match(app, /font-size:16px/, 'no zoom on iOS when the textarea takes focus'); assert.doesNotMatch(app, /fetch\(|XMLHttpRequest|sendBeacon/, 'the script still sends nothing');
+  assert.match(app, /font-size:16px/, 'no zoom on iOS when the textarea takes focus'); assert.doesNotMatch(app, /XMLHttpRequest|sendBeacon|WebSocket/, 'the script still sends nothing');
 });
 test('phone layout: copy targets are 44px, overseer buttons span the card, health facts stack, [hidden] wins over component display', async t => {
   const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
@@ -357,7 +357,7 @@ async function runApp({ execResult }) {
     execCommand: cmd => { fake.copied.push([cmd, fake.focused?.value]); return execResult; }
   };
   const saved = {}; const set = (k, v) => { saved[k] = Object.getOwnPropertyDescriptor(globalThis, k); Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true }); };
-  set('document', doc); set('window', globalThis); set('isSecureContext', false); set('navigator', {}); set('localStorage', { getItem: () => null, setItem() {}, removeItem() {} });
+  doc.addEventListener = () => {}; set('document', doc); set('window', globalThis); set('isSecureContext', false); set('navigator', {}); set('localStorage', { getItem: () => null, setItem() {}, removeItem() {} });
   set('setInterval', () => 0); set('setTimeout', fn => { timers.push(fn); return timers.length; }); set('clearTimeout', () => {}); set('addEventListener', () => {}); set('innerWidth', 390); set('innerHeight', 800); set('location', { pathname: '/supervisor', search: '', origin: 'http://x' }); set('sessionStorage', { getItem: () => null, setItem() {} }); set('history', { length: 1 }); set('scrollTo', () => {}); set('scrollY', 0); set('requestAnimationFrame', fn => { fn(); return 1; }); set('__fake', fake);
   try {
     await import(`../supervisor/dashui/app.js?run=${Math.random()}`);

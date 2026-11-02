@@ -229,8 +229,8 @@ test('the badge shows "running X, installed Y, restart pending" in amber when th
   const v = await view(root, { running: OLD });
   assert.equal(v.version.running, OLD);
   const html = renderPage(v);
-  assert.match(html, new RegExp(`running ${OLD.slice(0, 7)}, installed ${NEW.slice(0, 7)}, restart pending`));
-  assert.match(html, /badge sev-warning [^>]*>(<svg[^]*?<\/svg>)?running [0-9a-f]{7}, installed [0-9a-f]{7}, restart pending/);
+  assert.match(html, new RegExp(`Restart needed: ${OLD.slice(0, 7)} running, ${NEW.slice(0, 7)} installed`));
+  assert.match(html, /badge sev-warning [^>]*>(<svg[^]*?<\/svg>)?Restart needed: [0-9a-f]{7} running, [0-9a-f]{7} installed/);
   const agree = renderPage(await view(root, { running: NEW }));
-  assert.doesNotMatch(agree, /restart pending/);
+  assert.doesNotMatch(agree, /Restart needed/);
 });

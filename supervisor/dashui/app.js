@@ -1,7 +1,7 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
 // scroll restoration (all saved per breakpoint, in this browser only). It reads nothing from the network and sends nothing.
-import { COPY_FEEDBACK_MS, chooseRange, ROW_STEP, applyLayout, breakpointOf, copyFeedback, copyMethods, dockFromPoint, effectiveDock, moveItem, resizeBox, restorableScroll, sanitizeHidden, toggleSeries } from './logic.mjs';
+import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, sanitizeHidden, showBackToTop, tableChange, toggleCollapsed, toggleSeries } from './logic.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -62,7 +62,7 @@ for (const b of $$('[data-expand]')) b.addEventListener('click', () => {
 addEventListener('keydown', e => { if (e.key === 'Escape') collapse(); });
 
 // phone: tap a table row to open it (but not when the tap was on a button, link or the detail toggle inside it)
-for (const tr of $$('tr[tabindex]')) tr.addEventListener('click', e => { if (!e.target.closest('button,a,summary,details')) tr.classList.toggle('open'); });
+document.addEventListener('click', e => { const tr = e.target.closest?.('tr[tabindex]'); if (tr && !e.target.closest('button,a,summary,details')) tr.classList.toggle('open'); });
 
 // copy buttons (issue #72): the text is in data-copy. Plain HTTP on the LAN is not a secure context, so the Clipboard API is
 // often absent: fall back to a selected textarea and execCommand('copy'), and finally to a dialog with the text selected.
@@ -91,7 +91,9 @@ async function copyText(text) {
   return false;
 }
 const live = $('#copy-status');
-for (const b of $$('button[data-copy]')) {
+function bindCopy(scope = document) {
+for (const b of $$('button[data-copy]', scope)) {
+  if (b.dataset.bound) continue; b.dataset.bound = '1';
   b.hidden = false;
   const label = $('[data-copy-label]', b), original = label?.textContent;
   let timer = null;
@@ -105,6 +107,8 @@ for (const b of $$('button[data-copy]')) {
     timer = setTimeout(() => { delete b.dataset.state; if (label) label.textContent = original; b.setAttribute('aria-label', b.title); if (live) live.textContent = ''; }, COPY_FEEDBACK_MS);
   });
 }
+}
+bindCopy();
 addEventListener('keydown', e => { if (e.key === 'Escape') $('.copy-manual')?.remove(); });
 
 // Thin overlay scrollbars: native bars are hidden (html.sb-overlay) and a thumb is drawn over the scroller's edge, only while the
@@ -177,13 +181,13 @@ $('[data-back]')?.addEventListener('click', e => {
   if (same && history.length > 1) { e.preventDefault(); history.back(); }
 });
 // Scroll position per address, kept for this tab. Restored on back/forward and on the page's own periodic refresh.
-const scrollKey = 'dash.scroll.' + location.pathname + location.search;
+const scrollKeyNow = () => 'dash.scroll.' + location.pathname + location.search;   // read at use: in-place table changes move the address
 let scrollSave = 0;
-const saveScroll = () => { try { sessionStorage.setItem(scrollKey, JSON.stringify({ y: scrollY, t: Date.now() })); } catch { /* not remembered */ } };
+const saveScroll = () => { try { sessionStorage.setItem(scrollKeyNow(), JSON.stringify({ y: scrollY, t: Date.now() })); } catch { /* not remembered */ } };
 addEventListener('scroll', () => { clearTimeout(scrollSave); scrollSave = setTimeout(saveScroll, 150); }, { passive: true });
 addEventListener('pagehide', saveScroll);
 function restoreScroll() {
-  let rec = null; try { rec = JSON.parse(sessionStorage.getItem(scrollKey)); } catch { rec = null; }
+  let rec = null; try { rec = JSON.parse(sessionStorage.getItem(scrollKeyNow())); } catch { rec = null; }
   const navType = performance.getEntriesByType?.('navigation')?.[0]?.type;
   const recent = rec && Date.now() - rec.t < 90000;   // the meta refresh reloads within a minute
   if (!rec || !(navType === 'back_forward' || navType === 'reload' || recent)) return;
@@ -191,17 +195,116 @@ function restoreScroll() {
   if (y) scrollTo(0, y);
 }
 history.scrollRestoration = 'manual';
+// The periodic refresh is driven from here, not by a <meta refresh>: a declarative refresh keeps the address the page loaded
+// with, so it would undo an in-place table change (replaceState). Without script the <noscript> meta still refreshes.
+{
+  const secs = Number($('meta[name=refresh-seconds]')?.content) || 60;
+  setInterval(() => { saveScroll(); location.reload(); }, secs * 1000);
+}
 
 // movable and resizable cards
 const grid = $('.cards[data-layout]');
 const bpNow = () => breakpointOf(innerWidth);
+
+// collapsing cards (issue #61): double-click a card header or use its chevron. Saved with the layout, per breakpoint and page, by
+// card id (it works on every page, also where cards cannot be moved). "Reset layout" clears it with the rest.
+const layoutPage = grid?.dataset.layout || location.pathname;
+const layoutKey = () => `dash.layout.${layoutPage}.${bpNow()}`;
+const allCards = () => $$('.card[data-card]');
+const cardIds = () => allCards().map(c => c.dataset.card);
+const readCollapsed = () => sanitizeCollapsed(store.get(layoutKey())?.collapsed, cardIds());
+function paintCollapsed() {
+  const set = new Set(readCollapsed());
+  for (const c of allCards()) {
+    const on = set.has(c.dataset.card), b = $(':scope > header [data-collapse]', c);
+    c.classList.toggle('collapsed', on);
+    if (b) { b.hidden = false; b.setAttribute('aria-expanded', String(!on)); b.setAttribute('aria-label', `${on ? 'Expand' : 'Collapse'} ${$(':scope > header h2', c)?.textContent || 'card'}`); }
+  }
+}
+function toggleCard(c) {
+  if (c.classList.contains('expanded')) return;
+  const saved = store.get(layoutKey()) || {}, next = toggleCollapsed(readCollapsed(), c.dataset.card);
+  if (next.length) store.set(layoutKey(), { ...saved, collapsed: next }); else { const { collapsed, ...rest } = saved; if (Object.keys(rest).length) store.set(layoutKey(), rest); else store.del(layoutKey()); }
+  paintCollapsed();
+}
+paintCollapsed(); { let lastBp = bpNow(); addEventListener('resize', () => { if (bpNow() !== lastBp) { lastBp = bpNow(); paintCollapsed(); } }); }
+document.addEventListener('click', e => { const b = e.target.closest?.('[data-collapse]'); if (b) { toggleCard(b.closest('.card')); b.focus(); } });
+document.addEventListener('dblclick', e => {
+  const h = e.target.closest?.('.card > header'); if (!h || e.target.closest('button,a,input,select,textarea,.resize')) return;
+  getSelection()?.removeAllRanges(); toggleCard(h.closest('.card'));
+});
+// a link to something inside a collapsed card (a status pill) opens the card first
+function revealTarget() { const t = location.hash?.length > 1 ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null; const c = t?.closest?.('.card.collapsed'); if (c) toggleCard(c); }
+revealTarget(); addEventListener('hashchange', revealTarget);
+
+// Tables update in place (issue #61): sort, filter (live, debounced), page and page size change one table's address parameters,
+// fetch the same page and swap only that table's rows and footer. The scroll position and the focus never move; the address bar
+// follows with replaceState so the state stays bookmarkable. If anything fails, a normal navigation happens and the scroll
+// position is stored for the new address so it is restored.
+const tableSeq = new Map();
+function fallbackNavigate(url) {
+  try { sessionStorage.setItem('dash.scroll.' + location.pathname + (url.includes('?') ? url.slice(url.indexOf('?')) : ''), JSON.stringify({ y: scrollY, t: Date.now() })); } catch { /* not remembered */ }
+  location.assign(url);
+}
+async function loadTable(region, qs, { syncInput = false } = {}) {
+  const id = region.dataset.tregion, seq = (tableSeq.get(id) || 0) + 1, url = location.pathname + (qs ? '?' + qs : '');
+  tableSeq.set(id, seq);
+  const hadFocus = region.contains(document.activeElement) ? document.activeElement : null, focusTitle = hadFocus?.getAttribute?.('title');
+  try {
+    const res = await fetch(url, { headers: { accept: 'text/html' }, credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    if (tableSeq.get(id) !== seq) return;   // a newer request superseded this one
+    const next = [...doc.querySelectorAll('[data-tregion]')].find(r => r.dataset.tregion === id);
+    if (!next) throw new Error('table missing');
+    const y = scrollY;
+    $('[data-tdata]', region).replaceWith($('[data-tdata]', next));
+    $('[data-tclear]', region)?.replaceWith($('[data-tclear]', next));
+    if (syncInput) { const inp = $('input[type=search]', region); if (inp) inp.value = new URLSearchParams(qs).get(id + '.q') || ''; }
+    const size = $('select', region); if (size) size.value = new URLSearchParams(qs).get(id + '.size') || size.value;
+    bindCopy(region);
+    history.replaceState(history.state, '', url);
+    if (scrollY !== y) scrollTo(scrollX, y);
+    if (hadFocus && !document.contains(hadFocus) && focusTitle) $$('[title]', region).find(a => a.getAttribute('title') === focusTitle)?.focus({ preventScroll: true });
+  } catch { if (tableSeq.get(id) === seq) fallbackNavigate(url); }
+}
+for (const region of $$('[data-tregion]')) {
+  const id = region.dataset.tregion, form = $('form.tbar', region);
+  const search = $('input[type=search]', region);
+  const typed = debounce(() => loadTable(region, tableChange(location.search, id, { q: search.value.trim() })), FILTER_DEBOUNCE_MS);
+  search?.addEventListener('input', typed);
+  form?.addEventListener('submit', e => { e.preventDefault(); typed.cancel(); loadTable(region, tableChange(location.search, id, { q: search?.value.trim() })); });
+  $('select', region)?.addEventListener('change', e => { typed.cancel(); loadTable(region, tableChange(location.search, id, { size: e.target.value, q: search?.value.trim() })); });
+  region.addEventListener('click', e => {
+    const a = e.target.closest('a[href]');
+    if (!a || e.defaultPrevented || e.button > 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || !(a.closest('[data-tdata]') || a.closest('[data-tclear]'))) return;
+    const u = new URL(a.href, location.href); if (u.origin !== location.origin || u.pathname !== location.pathname) return;
+    e.preventDefault(); typed.cancel();
+    loadTable(region, mergeTableParams(location.search, u.search, id), { syncInput: true });
+  });
+}
+
+// back to top (issue #61): shown after scrolling down, smooth unless the viewer prefers reduced motion; focus returns to the page start
+{
+  const btn = $('#to-top');
+  if (btn) {
+    let pending = false;
+    const update = () => { pending = false; btn.hidden = !showBackToTop(scrollY); };
+    addEventListener('scroll', () => { if (!pending) { pending = true; requestAnimationFrame(update); } }, { passive: true });
+    btn.addEventListener('click', () => {
+      scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      const main = $('#main'); if (main) { main.tabIndex = -1; main.focus({ preventScroll: true }); }
+    });
+    update();
+  }
+}
 if (grid) {
   const page = grid.dataset.layout;
   const key = () => `dash.layout.${page}.${bpNow()}`;
   const cards = () => $$(':scope > .card[data-card]', grid);
   const ids = () => cards().map(c => c.dataset.card);
   let lay = { order: [], span: {}, h: {} };
-  const save = () => store.set(key(), lay);
+  const save = () => store.set(key(), { ...lay, collapsed: readCollapsed() });
   const spanProp = () => (bpNow() === 'tablet' ? '--tspan' : '--span');
   function apply() {
     const bp = bpNow();

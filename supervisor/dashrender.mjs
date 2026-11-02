@@ -1,7 +1,7 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
-import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, inRange, limitsOf, tableState, trail } from './dashui/logic.mjs';
+import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, countText, inRange, limitsOf, pillLinks, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { resultSeverity } from './suphealth.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -109,19 +109,20 @@ export function table({ id, path, query, cols, rows, searchKeys = [], totals = {
   const body = st.rows.map(r => `<tr${expandable ? ' tabindex="0"' : ''}>${cols.map(c => `<td data-label="${esc(c.label)}" class="${c.num ? 'num ' : ''}${c.more ? 'more' : ''}">${c.html ? c.html(r) : esc(r[c.key] ?? '–')}</td>`).join('')}</tr>`).join('');
   const foot = Object.keys(totals).length ? `<tfoot><tr>${cols.map((c, i) => {
     const op = totals[c.key]; let v = '';
-    if (op === 'sum') v = c.fmt ? c.fmt(st.footer[c.key]) : num(st.footer[c.key]); else if (op === 'avg') v = `avg ${c.fmt ? c.fmt(st.footer[c.key]) : dec1(st.footer[c.key])}`; else if (op === 'count') v = `${st.footer[c.key]} ${noun}`;
+    if (op === 'sum') v = c.fmt ? c.fmt(st.footer[c.key]) : num(st.footer[c.key]); else if (op === 'avg') v = `avg ${c.fmt ? c.fmt(st.footer[c.key]) : dec1(st.footer[c.key])}`; else if (op === 'count') v = countText(st.footer[c.key], st.all, noun);
     return `<td data-label="${esc(c.label)}"${c.num ? ' class="num"' : ''}>${i === 0 && !op ? 'Total' : esc(v)}</td>`;
   }).join('')}</tr></tfoot>` : '';
   const needle = q('q', '');
   const bar = `<form class="tbar" method="get" action="${esc(path)}" role="search">${[...query].filter(([k]) => !k.startsWith(`${id}.`)).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join('')}${sortKey ? `<input type="hidden" name="${id}.sort" value="${esc(sortKey)}"><input type="hidden" name="${id}.dir" value="${dir}">` : ''}
 <label class="sr"><span class="muted">Filter ${esc(noun)}</span> <input type="search" name="${id}.q" value="${esc(needle)}" placeholder="Filter ${esc(noun)}" aria-label="Filter ${esc(noun)}"></label>
 <label><span class="muted">Per page</span> <select name="${id}.size" aria-label="Rows per page">${PAGE_SIZES.map(s => `<option${s === st.pageSize ? ' selected' : ''}>${s}</option>`).join('')}</select></label>
-<button type="submit">Apply</button>${needle ? `<a class="btn" href="${href({ q: null, page: 1 })}">Clear</a>` : ''}</form>`;
-  const pager = `<nav class="pager" aria-label="${esc(noun)} pages">${st.total ? `<span>${st.from}–${st.to} of ${st.total}</span>` : ''}
+<span data-tclear>${needle ? `<a class="btn" href="${href({ q: null, page: 1 })}">Clear</a>` : ''}</span></form>`;
+  const pager = `<nav class="pager" aria-label="${esc(noun)} pages">${st.total ? `<span>${st.from}–${st.to} of ${st.total}</span>` : ''}<span class="count" data-count>${esc(countText(st.total, st.all, noun))}</span>
 ${st.page > 1 ? `<a href="${href({ page: st.page - 1 })}" rel="prev">Previous</a>` : '<span class="dis">Previous</span>'}<span class="cur" aria-current="page">Page ${st.page} of ${st.pages}</span>
 ${st.page < st.pages ? `<a href="${href({ page: st.page + 1 })}" rel="next">Next</a>` : '<span class="dis">Next</span>'}</nav>`;
   if (!rows.length) return emptyState || empty(`No ${noun} yet`, 'Nothing has been recorded.');
-  return `${bar}<div class="tbl-wrap"><table data-table="${esc(id)}"><thead><tr>${head}</tr></thead><tbody>${body || `<tr><td colspan="${cols.length}">${esc(`No ${noun} match the filter.`)}</td></tr>`}</tbody>${foot}</table></div>${pager}`;
+  // data-tregion: the script replaces [data-tdata] (and the Clear slot) in place when a control or link of this table is used (issue #61).
+  return `<div class="tregion" data-tregion="${esc(id)}">${bar}<div data-tdata><div class="tbl-wrap"><table data-table="${esc(id)}"><thead><tr>${head}</tr></thead><tbody>${body || `<tr><td colspan="${cols.length}">${esc(`No ${noun} match the filter.`)}</td></tr>`}</tbody>${foot}</table></div>${pager}</div></div>`;
 }
 
 // ---- charts: inline SVG, hover tooltips (<title>), per-series toggles (script), colours per agent
@@ -203,8 +204,8 @@ function card({ id, title, span = 6, body, href, tools = '', cls = '', movable =
   if (expandable) { type = 'chart'; cls = `${cls} chart-card`; }
   const lim = limitsOf(type);
   const handles = movable ? EDGES.filter(e => !(lim.vlock && /[ns]/.test(e) && e.length === 1)).map(e => `<span class="resize wide-only rz-${e}" data-edge="${e}" aria-hidden="true"></span>`).join('') : '';
-  return `<section class="card ${cls}" data-card="${esc(id)}" data-type="${esc(type)}" data-span="${span}" style="--span:${span}" aria-labelledby="h-${esc(id)}"><header>${movable ? `<span class="tbtn" data-handle title="Drag to move" aria-hidden="true">${icon('drag')}</span>` : ''}<h2 id="h-${esc(id)}">${esc(title)}</h2>
-<span class="tools">${tools}${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}${movable ? `${handles}<span class="resize wide-only rz-key" tabindex="0" role="slider" aria-label="Resize ${esc(title)} (arrow keys: left and right for width${lim.vlock ? '' : ', up and down for height'})" aria-valuemin="${lim.minSpan}" aria-valuemax="${lim.maxSpan}" aria-valuenow="${span}">${icon('resize')}</span>` : ''}</section>`;
+  return `<section class="card ${cls}" data-card="${esc(id)}" data-type="${esc(type)}" data-span="${span}" style="--span:${span}" id="c-${esc(id)}" aria-labelledby="h-${esc(id)}"><header>${movable ? `<span class="tbtn" data-handle title="Drag to move" aria-hidden="true">${icon('drag')}</span>` : ''}<h2 id="h-${esc(id)}">${esc(title)}</h2>
+<span class="tools">${tools}<button class="tbtn" type="button" data-collapse aria-expanded="true" aria-label="Collapse ${esc(title)}" title="Collapse or expand (or double-click the header)" hidden>${icon('down')}</button>${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}${movable ? `${handles}<span class="resize wide-only rz-key" tabindex="0" role="slider" aria-label="Resize ${esc(title)} (arrow keys: left and right for width${lim.vlock ? '' : ', up and down for height'})" aria-valuemin="${lim.minSpan}" aria-valuemax="${lim.maxSpan}" aria-valuenow="${span}">${icon('resize')}</span>` : ''}</section>`;
 }
 const grid = (layout, cards, cls = '') => `<div class="cards ${cls}" data-layout="${esc(layout)}">${cards}</div>`;
 const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div><div class="spark-slot">${spark}</div></a>`;
@@ -243,7 +244,7 @@ function nextPanel(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-action"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
+  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 function warningsPanel(view) {
@@ -254,13 +255,15 @@ function warningsPanel(view) {
 function statusBar(view, route, head = '') {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
+  const L = pillLinks({ health: view.health, attention: view.attention, version: v }), vs = versionStatus(v);
+  const pill = (href, inner, why) => `<a class="pill" href="${esc(href)}" title="${esc(why)}">${inner}</a>`;
   return `<header class="statusbar" role="banner"><div class="brand">${icon('pulse')} DevTest team</div>${head}
-<div class="stat" title="Overall health">${badge(view.health.severity, view.health.label, 'big')}</div>
-<div class="stat"><span class="k">Last tick</span>${tickBadge}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
+<div class="stat" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>
+<div class="stat"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat"><span class="k">Next</span>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : '<span class="muted">none</span>'}</div>
-<div class="stat"><span class="k">Data</span>${badge(fr.level, fr.label)}</div>
-<div class="stat"><span class="k">Team loop</span>${view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled')}</div>
-<div class="stat"><span class="k">Version</span>${v ? (v.running && v.running !== v.installed ? badge('warning', `running ${String(v.running).slice(0, 7)}, installed ${String(v.installed).slice(0, 7)}, restart pending`) : v.drift ? badge('warning', `${String(v.installed).slice(0, 7)} → ${String(v.main).slice(0, 7)} deploy needed`) : badge('ok', `${String(v.installed).slice(0, 7)} = main`)) : badge('info', 'unknown')}</div>
+<div class="stat"><span class="k">Data</span>${pill(L.data, badge(fr.level, fr.label), 'Data freshness follows the last tick')}</div>
+<div class="stat"><span class="k">Team loop</span>${pill(L.team, view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled'), 'Open the dispatcher facts')}</div>
+<div class="stat"><span class="k">Version</span>${pill(vs.href, badge(vs.level, vs.label), 'Open the version health card')}</div>
 <button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>
 <nav class="nav" id="nav" aria-label="Pages"><span class="dock-handle wide-only" data-dock-handle title="Drag to a screen edge to dock the navigation" aria-hidden="true">${icon('drag')}</span>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
 }
@@ -344,11 +347,11 @@ function jobDetail(view, query, path, route) {
 }
 function workPage(view, query, path) {
   const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref))}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
-  const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['title', 'agent', 'number', 'state', 'reason'],
+  const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'],
     cols: [{ key: 'number', label: 'Issue', num: true, html: r => issueLink(r.number) }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
     totals: { number: 'count', blockers: 'sum' }, emptyState: empty('No issues cached', 'The first tick fills the cache.', 'list') }) });
-  const prs = card({ id: 'prs', title: 'Pull requests', span: 12, movable: false, body: table({ id: 'prs', path, query, noun: 'pull requests', rows: view.prs, searchKeys: ['title', 'agent', 'status', 'number', 'verdict'],
+  const prs = card({ id: 'prs', title: 'Pull requests', span: 12, movable: false, body: table({ id: 'prs', path, query, noun: 'pull requests', rows: view.prs, searchKeys: ['name', 'title', 'agent', 'status', 'number', 'verdict'],
     cols: [{ key: 'number', label: 'Pull request', num: true, html: r => prLink(r.number) }, { key: 'agent', label: 'Author', html: r => agentTag(r.agent, view) }, { key: 'status', label: 'State' },
       { key: 'checks', label: 'CI', html: r => checksBadge(r.checks) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'reviewRounds', label: 'Review rounds', num: true, more: true },
       { key: 'fixRounds', label: 'Fix rounds', num: true, more: true }, { key: 'rebaseRounds', label: 'Rebase rounds', num: true, more: true }, { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true }],
@@ -443,8 +446,8 @@ function systemPage(view) {
 <dt>Health</dt><dd>${badge(view.health.severity, view.health.label)}</dd><dt>Last tick</dt><dd>${t ? `${badge(t.status === 'ok' ? 'ok' : 'action', t.status)} ${esc(utc(t.at))} (${esc(ago(t.at, now))})` : badge('action', 'none recorded')}</dd>
 <dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : 'none'}</dd>
 <dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${esc(utc(now))}</dd></dl>` });
-  const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${v.drift ? badge('warning', 'Deploy needed') : badge('ok', 'Up to date')}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
-  const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
+  const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${(vs => badge(vs.level, vs.label))(versionStatus(v))}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
+  const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
   return { title: 'System', body: grid('system', facts + ver + all) };
 }
 
@@ -534,8 +537,8 @@ export function renderRoute(view, route, { query = new URLSearchParams(), pathna
   const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work'], [null, 'Not found']] };
   const steps = trail(route.page, res.crumbs || []), parent = [...steps].reverse().find(([h]) => h)?.[0];
   const crumbs = steps.length ? `<a class="btn back" href="${esc(parent || '/')}" data-back>${icon('back')}Back</a><nav class="crumbs" aria-label="Breadcrumb"><ol>${steps.map(([h, t], i) => `<li>${h ? `<a href="${esc(h)}">${esc(t)}</a>` : `<span aria-current="page">${esc(t)}</span>`}${i < steps.length - 1 ? '<span class="sep" aria-hidden="true">›</span>' : ''}</li>`).join('')}</ol></nav>` : '';
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="${refreshSeconds}"><title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
-<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route, (crumbs ? `<div class="pagehead">${crumbs}<h1>${esc(res.title)}</h1></div>` : `<h1>${esc(res.title)}</h1>`))}<main id="main">${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><script type="module" src="/static/app.js"></script></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><noscript><meta http-equiv="refresh" content="${refreshSeconds}"></noscript><meta name="refresh-seconds" content="${refreshSeconds}"><title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
+<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route, (crumbs ? `<div class="pagehead">${crumbs}<h1>${esc(res.title)}</h1></div>` : `<h1>${esc(res.title)}</h1>`))}<main id="main">${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><button type="button" id="to-top" class="to-top" aria-label="Back to top" title="Back to top" hidden>${icon('up')}</button><script type="module" src="/static/app.js"></script></body></html>`;
   return { status: page ? 200 : 404, html };
 }
 // Kept for callers that only want the overview.
