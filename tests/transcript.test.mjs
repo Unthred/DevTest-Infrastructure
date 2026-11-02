@@ -7,7 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { TranscriptWriter, TRANSCRIPT_RETENTION_MS, pruneTranscripts, readTranscript, redactText, transcriptFile } from '../supervisor/transcript.mjs';
+import { TranscriptWriter, TRANSCRIPT_RETENTION_MS, ENTRY_TEXT_MAX, isSecretName, isSecretRead, pruneTranscripts, readTranscript, redactText, sanitizeEntry, secretValues, transcriptFile } from '../supervisor/transcript.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import { renderEntries, renderEntry, totals } from '../supervisor/dashui/watch.mjs';
@@ -312,4 +312,95 @@ test('Codex: secret read and ordinary command paired by item id, in either order
     item('item.completed', 'item_2', 'bao kv get -field=password secret/x', { exit_code: 0, aggregated_output: PAR_SECRET }),
     item('item.completed', 'item_1', 'ls', { exit_code: 0, aggregated_output: 'file-a file-b' })], codex);
   gone(disk, PAR_SECRET); assert.match(disk, /file-a file-b/);
+});
+
+// Escalated review fix (PR #137): one scanner for every secret-named pair form, and a seed for every form any review round probed,
+// so the documentation and the code cannot drift apart again. Each seed carries the same canary; none may survive.
+const CANARY = V('Zq7', 'canary', 'Xv');
+const SEEDS = [
+  // name=value, any case, bare or prefixed, spaced, exported, quoted, in a URL query
+  `PASSWORD=${CANARY}`, `password=${CANARY}`, `secret=${CANARY}`, `token=${CANARY}`, `client_secret=${CANARY}`, `apikey=${CANARY}`,
+  `token = ${CANARY}`, `password = ${CANARY}`, `export ha_token=${CANARY}`, `api_key="abc ${CANARY} ghi"`, `MY_SERVICE_KEY=${CANARY}`,
+  `https://api.example.org/y?access_token=${CANARY}&a=1`, `echo password=${CANARY}`, `config: password=${CANARY}`,
+  // *_PASS / *_PWD / *_PW
+  `DB_PASS=${CANARY}`, `MYSQL_PWD=${CANARY}`, `MQTT_PWD=${CANARY}`, `MQTT_PASS=${CANARY}`, `HA_PW=${CANARY}`,
+  // name: value (YAML, headers)
+  `password: ${CANARY}`, `api_key: ${CANARY}`, `token: ${CANARY}`, `mqtt_password: ${CANARY}`, `ha_token: ${CANARY}`, `X-Api-Key: ${CANARY}`,
+  `Cookie: sid=${CANARY}`, `cookie: sid=${CANARY}; theme=dark`, `Set-Cookie: sid=${CANARY}; Path=/`, `set-cookie: session=${CANARY}`,
+  `curl -H 'X-Api-Key: ${CANARY}' https://example.org`, `curl -H "Cookie: a=${CANARY}" https://example.org`,
+  // JSON: plain, escaped inside a raw stream line, camelCase, after a numeric field
+  `{"pass": "${CANARY}"}`, `{"accessToken":"${CANARY}"}`, `"input_tokens":12,"password":"${CANARY}"`, V('{\\"pass', 'word\\":\\"', CANARY, '\\"}'),
+  `{"type":"user","content":"line\\npassword: ${CANARY}\\nmore"}`,
+  // CLI flags
+  `mysql --password ${CANARY}`, `--token ${CANARY}`, `curl --token=${CANARY}`, `mysql -u root -p${CANARY}`, `curl -u admin:${CANARY} https://example.org`,
+  // credentials in URLs and Authorization headers
+  `https://user:${CANARY}@github.com/x.git`, `mqtt://ha:${CANARY}@10.0.0.5`, `Authorization: Basic ${CANARY}`,
+  // OpenBao/Vault table output
+  ['Key         Value', '---         -----', `password    ${CANARY}`].join('\n'),
+];
+
+test('redaction: every secret-named form from every review round is removed (seeded canary)', () => {
+  for (const seed of SEEDS) assert.ok(!redactText(seed).includes(CANARY), `leaked from ${JSON.stringify(seed)} -> ${JSON.stringify(redactText(seed))}`);
+  assert.ok(!redactText(SEEDS.join('\n')).includes(CANARY), 'all seeds in one text');
+});
+
+test('redaction: ordinary content survives (paths, counts, PWD, author names, SHAs, identifiers)', () => {
+  for (const keep of ['cat /mnt/user/projects/DevTest-Infrastructure-claude-review/supervisor/transcript.mjs',
+    'cd /mnt/user/projects/DevTest-Infrastructure-claude-review/supervisor', 'tokens: 1234', '"input_tokens":1234', 'PWD=/home/work',
+    'name: build', 'GIT_AUTHOR_NAME=Unthred', 'author: Unthred', 'bypass=true', 'git push -u origin main', 'see https://example.org/plain',
+    'commit ' + 'a1b2c3d4e5'.repeat(4), 'supervisor_transcript_redaction_long_identifier_name_here'])
+    assert.equal(redactText(keep), keep);
+  assert.equal(redactText(V('x Ab3dEf9hIj2lMn0p', 'Qr8tUv4xYz1bCd5fGh7jKl6n')), 'x [redacted token]', 'a random mixed token is still caught');
+});
+
+test('redaction: an already redacted value is not rewritten again', () => {
+  assert.equal(redactText(`GITHUB_TOKEN=${GH}`), 'GITHUB_TOKEN=[redacted token]');
+});
+
+test('secret names: short words count only as a whole segment; environment values follow the same rule', () => {
+  for (const n of ['DB_PASS', 'HA_PW', 'X_AUTH', 'apiKey', 'MY_SERVICE_KEY', 'X-Api-Key', 'client-secret', 'Set-Cookie', '--password']) assert.ok(isSecretName(n), n);
+  for (const n of ['PWD', 'OLDPWD', 'GIT_AUTHOR_NAME', 'BYPASS', 'name', 'key', 'compass']) assert.ok(!isSecretName(n), n);
+  assert.deepEqual(secretValues({ GIT_AUTHOR_NAME: 'Unthred', HA_PW: V('abc', 'def1'), MQTT_PASS: V('abc', 'def2'), PWD: '/home/work' }).sort(), [V('abc', 'def1'), V('abc', 'def2')]);
+});
+
+test('secret reads: the OpenBao HTTP API, delivered secret files, credential files and printing a secret variable count', () => {
+  for (const c of ['curl -H "X-Vault-Token: $T" https://openbao.lan:8200/v1/secret/data/devtest/foo | jq -r .data.data.value',
+    'curl -s "$BAO_ADDR/v1/kv/data/x"', 'cat /secrets/ha', 'cat /run/secrets/ha_password', 'printenv GH_TOKEN', 'echo $HA_TOKEN',
+    'cat .env', 'bao login -method=approle', 'cat ~/.git-credentials', 'cat config/secrets.yaml', 'bao kv get secret/x'])
+    assert.ok(isSecretRead(c), c);
+  for (const c of ['ls', 'printenv PATH', 'echo $HOME', 'node -e "console.log(process.env.X)"', 'cat README.md']) assert.ok(!isSecretRead(c), c);
+});
+
+test('secret reads: an HTTP API read and a secret-file read through the writer leave no value on disk, ordinary results stay', t => {
+  const bare = V('Sup3r-Cr4zy', '-Hunter2');
+  const disk = feed(t, [claudeLine({ type: 'assistant', message: { id: 'm3', content: [
+    { type: 'tool_use', id: 'toolu_api', name: 'Bash', input: { command: 'curl -H "X-Vault-Token: $T" https://openbao.lan:8200/v1/secret/data/devtest/foo | jq -r .data.data.value' } },
+    { type: 'tool_use', id: 'toolu_file', name: 'Read', input: { file_path: '/run/secrets/ha_password' } },
+    { type: 'tool_use', id: 'toolu_ls', name: 'Bash', input: { command: 'ls' } }] } }),
+  claudeLine({ type: 'user', message: { content: [claudeResult('toolu_api', bare), claudeResult('toolu_file', `${bare}2`), claudeResult('toolu_ls', 'file-a file-b')] } })]);
+  gone(disk, bare); assert.match(disk, /file-a file-b/);
+});
+
+test('secret reads: the evidence line of a dropped result is blanked as well', t => {
+  const root = tmp(t), w = new TranscriptWriter(root, ID, { secrets: [] });
+  w.append({ kind: 'tool_call', callId: 'c1', tool: 'Bash', text: 'bao kv get -field=password secret/x' });
+  w.append({ kind: 'tool_result', callId: 'c1', text: PAR_SECRET, evidence: { event: 'crash', line: `raw ${PAR_SECRET}` } });
+  const disk = fs.readFileSync(transcriptFile(root, ID), 'utf8');
+  gone(disk, PAR_SECRET); assert.match(disk, /"event":"crash"/);
+});
+
+test('exact secret values are also caught in their JSON-escaped form (raw stream evidence lines)', () => {
+  const value = V('quo"te\\', 'back-canary');
+  const raw = JSON.stringify({ text: `value ${value}` });
+  assert.ok(!redactText(raw, [value]).includes(JSON.stringify(value).slice(1, -1)));
+});
+
+test('redaction is bounded: pathological runs finish quickly, and a huge field is cut before redaction without leaking at the cut', () => {
+  for (const p of ['-', 'a-', 'a=', 'a: ', '--a ', 'mysql ', '"a":', 'a:']) {
+    const started = Date.now(); redactText(p.repeat(Math.ceil(64000 / p.length)));
+    assert.ok(Date.now() - started < 2000, `slow on ${JSON.stringify(p)}`);
+  }
+  const huge = 'x '.repeat(ENTRY_TEXT_MAX) + `password: ${CANARY} ` + 'y'.repeat(100000);
+  const out = sanitizeEntry({ kind: 'tool_result', text: huge }).text;
+  gone(out, CANARY); assert.match(out, /more characters not recorded/); assert.ok(out.length < ENTRY_TEXT_MAX + 100);
 });
