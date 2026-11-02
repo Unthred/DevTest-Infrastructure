@@ -408,3 +408,13 @@ test('split: the agent-written reason is not copied into the new issue body', as
   const src = fs.readFileSync(new URL('../supervisor/team.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /why split: \$\{x\.reason\}/);
 });
+
+test('budget spent: a timeout beside a cancelled sibling becomes red (cifix) without a false rerun notice', async t => {
+  const roll = [...cancelled('TIMED_OUT', 88), { name: 'lint', workflowName: 'lint', status: 'COMPLETED', conclusion: 'CANCELLED', startedAt: '2026-11-01T10:00:00Z', detailsUrl: 'https://github.com/o/r/actions/runs/89/job/1' }];
+  const w = world(t, { pulls: [pr(10, 'claude/issue-23-x', H(1), { statusCheckRollup: roll })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], cfg: config({ per_pr: 0 }) });
+  await w.team.tick(); w.clock.t += 3600000; const seen = []; for (let i = 0; i < 2; i++) seen.push(...(await w.team.tick()).actions); w.clock.t += 3600000; seen.push(...(await w.team.tick()).actions);
+  assert.deepEqual(w.calls.reruns, []);
+  assert.equal(w.team.ciState(w.gh.pulls[0]), 'red'); assert.equal(seen.find(a => a.agent === 'claude')?.type, 'cifix');
+  assert.equal(w.team.s.cancelWatch[`10:${H(1)}`].rerunAt, undefined, 'no rerun was made');
+  assert.equal(w.team.s.cancelWatch[`10:${H(1)}`].noticed, undefined, 'no "rerun once" notice');
+});

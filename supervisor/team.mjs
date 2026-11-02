@@ -244,7 +244,7 @@ export function latestChecks(rollup) {
 // Must equal the --limit of listPulls in github.mjs.
 const OPEN_PULLS_CAP = 100;
 // Issue #188: the one-rerun-settled flag from a cancelWatch map, so status views agree with the dispatcher.
-export function retriedIn(cancelWatch, pr, now) { const at = cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.rerunAt; return !!at && now - at >= RERUN_SETTLE_MS; }
+export function retriedIn(cancelWatch, pr, now) { const w = cancelWatch?.[`${pr.number}:${pr.headRefOid}`], at = w?.rerunAt ?? w?.timeoutAt; return !!at && now - at >= RERUN_SETTLE_MS; }
 export function loneCancelled(rollup, retried = false) { return latestChecks(rollup).filter(c => checkDone(c) && isCancelled(c, retried)); }
 export function checksState(rollup, retried = false) {
   if (!Array.isArray(rollup) || !rollup.length) return 'none';
@@ -1642,6 +1642,8 @@ export class Team {
         const room = this.unblockRoom(pr.number);
         // Issue #188: with the budget spent no rerun can be made, but a timeout must still become a real failure (cifix) after the wait.
         if (room && lone.every(c => c.conclusion === 'TIMED_OUT')) { w.rerunAt = now; w.runs = []; w.keys = lone.filter(c => c.name || c.context).map(c => checkKey(c)); this.save(); }
+        // A timeout beside a cancelled sibling (fail-fast matrix): no rerun is made, so rerunAt stays unset (no false "rerun once" notice); timeoutAt only lets the timeout count as red.
+        else if (room && lone.some(c => c.conclusion === 'TIMED_OUT') && !w.timeoutAt) { w.timeoutAt = now; this.save(); }
         if (room) { await guard(`unblock limit ${pr.number}`, () => this.raiseUnblockLimit(report, pr.number, room, 'pull')); continue; }
         w.rerunAt = now; w.runs = runs; w.keys = lone.filter(c => c.name || c.context).map(c => checkKey(c)); this.save();
         await guard(`rerun cancelled ${pr.number}`, () => this.unblock(report, { target: pr.number, tk: 'pull', what: `re-ran CI on PR #${pr.number}`, why: `check(s) ${lone.map(c => String(c.name || 'unnamed').slice(0, 60)).join(', ')} were ${lone.some(c => c.conclusion === 'TIMED_OUT') ? 'cancelled or timed out' : 'cancelled'} on the current head with no later run` },

@@ -110,7 +110,7 @@ The Usage page has a **Failed attempts** card (`view.failedSpend`): jobs that en
 
 ### Notes from the issue #188 review follow-ups
 - A needs-homeowner label added for a **per-day** unblock limit is removed once the UTC day has rolled over; a per-PR limit label stays until the homeowner acts. Removing a stale label is free: it is logged but does not use the per-PR or per-day unblock budget.
-- With the unblock budget spent, a timed-out check is still treated as red after the rerun wait (cifix starts); no rerun is made.
+- With the unblock budget spent, a timed-out check (alone or beside cancelled siblings) is still treated as red after the rerun wait (cifix starts); no rerun is made and no "rerun once" notice is posted.
 - The final-round scope split accepts only follow-up findings, which never hold a CHANGES verdict, so it cannot by itself clear a fix-limit rejection; in practice it duplicates the PASS follow-up issue flow. The agent's free-text reason is not copied into the issue body.
 - An automatic resume keeps the count of usage-limit stops, so a job still gets at most three usage-limit waits (D-019) across the resume.
 - `resumeTransient` skips jobs older than seven days and jobs that finished normally.
