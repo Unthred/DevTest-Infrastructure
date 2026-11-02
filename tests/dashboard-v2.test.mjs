@@ -380,7 +380,7 @@ test('#141 a labelled PR gives one card, removing the label clears it, and the e
 test('#141 open issues in no agent queue give one card listing them', async t => {
   const c = calmCache(); c.issues.push({ number: 77, title: 'Orphan', state: 'OPEN', labels: [], prerequisites: [] }, { number: 78, title: 'Closed orphan', state: 'CLOSED', labels: [], prerequisites: [] });
   const v = await needsOf(await serve(t, { cache: c }));
-  const card = v.panels.needsYou.find(x => x.id === 'unqueued'); assert.ok(card); assert.match(card.text, /1 open issue is in no queue.*#77/); assert.doesNotMatch(card.text, /#78/);
+  const card = v.panels.needsYou.find(x => x.id === 'unqueued'); assert.ok(card); assert.match(card.text, /1 open issue is in no agent's queue.*#77/); assert.doesNotMatch(card.text, /#78|never be started/);
   assert.equal(v.panels.needsYou.length, 1);
 });
 test('legend (issue #160): hiding keeps the item in the legend, the last visible series cannot be hidden, Show all restores', async () => {
