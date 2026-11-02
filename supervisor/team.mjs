@@ -198,7 +198,27 @@ export const CARRY_DECISION = 'D-025';
 // Issue #149: judge each check by its latest run on the head. A push followed by a PR description edit starts two runs of the same
 // check about 20 s apart; the concurrency group cancels the first. That superseded cancelled run is not a failure.
 const CHECK_OK = ['SUCCESS', 'NEUTRAL', 'SKIPPED'];
-const checkDone = c => (c.status ? c.status === 'COMPLETED' : !!c.state && c.state !== 'PENDING' && c.state !== 'EXPECTED');
+// Issue #331: GitHub can leave a check run at status IN_PROGRESS after it has a conclusion and a completed time (seen on PR #329).
+// A conclusion plus a completed time is done whatever the status says.
+const hasResult = c => !!c.conclusion && Number.isFinite(Date.parse(c.completedAt || ''));
+const checkDone = c => (c.status ? c.status === 'COMPLETED' || hasResult(c) : !!c.state && c.state !== 'PENDING' && c.state !== 'EXPECTED');
+// A check whose state contradicts itself (a conclusion but no completed time, or COMPLETED without a conclusion) for longer than this is "stuck".
+export const STUCK_CHECK_MS = 10 * 60000;
+const inconsistent = c => (!checkDone(c) ? !!c.conclusion : c.status === 'COMPLETED' && !c.conclusion);
+const checkLabel = c => { const n = c.name || c.context; return typeof n === 'string' && /^[A-Za-z0-9 ._:()\/-]{1,80}$/.test(n) ? n : 'a check'; };
+// Checks not finished on this rollup, with age from their start (null when unknown) and whether their state is inconsistent.
+export function unfinishedChecks(rollup, now = Date.now()) {
+  return latestChecks(rollup).filter(c => !checkDone(c)).map(c => {
+    const t = Date.parse(c.startedAt || '');
+    return { name: checkLabel(c), ageMs: Number.isFinite(t) ? Math.max(0, now - t) : null, inconsistent: inconsistent(c) };
+  });
+}
+export const stuckChecks = (rollup, now = Date.now()) => unfinishedChecks(rollup, now).filter(c => c.inconsistent && c.ageMs !== null && c.ageMs > STUCK_CHECK_MS);
+export function waitingOnText(rollup, now = Date.now()) {
+  const u = unfinishedChecks(rollup, now); if (!u.length || u.every(c => c.name === 'a check' && c.ageMs === null)) return 'waiting on CI';
+  const age = ms => (ms === null ? 'unknown time' : ms < 90000 ? 'under 2 minutes' : `${Math.round(ms / 60000)} min`);
+  return `waiting on CI: ${u.slice(0, 3).map(c => `${c.name} unfinished for ${age(c.ageMs)}`).join(', ')}${u.length > 3 ? `, and ${u.length - 3} more` : ''}`;
+}
 // Issue #163: a timed-out run is retried like a cancelled one. After the one rerun (`retried`) a further timeout is a real failure.
 const isCancelled = (c, retried = false) => c.conclusion === 'CANCELLED' || (!retried && c.conclusion === 'TIMED_OUT');
 const checkTime = c => { const t = Date.parse(c.startedAt || c.completedAt || ''); return Number.isFinite(t) ? t : null; };

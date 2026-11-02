@@ -110,6 +110,7 @@ export function versionStatus(v) {
   if (v.latched) return { level: 'action', label: `Upgrade latched at ${s7(v.installed)}`, href };
   if (['rolled_back', 'rollback_failed'].includes(v.result)) return { level: 'action', label: `Upgrade failed (${String(v.result).replace('_', ' ')})`, href };
   if (v.running && v.running !== v.installed) return { level: 'warning', label: `Restart needed: ${s7(v.running)} running, ${s7(v.installed)} installed`, href };
+  if (v.drift && Number.isSafeInteger(v.behind) && v.behind > 0 && Number.isFinite(v.nextTryAt)) return { level: 'warning', label: `${v.behind} commit${v.behind === 1 ? '' : 's'} behind, next try ${new Date(v.nextTryAt).toISOString().slice(11, 16)} UTC`, href };
   if (v.drift) return { level: 'warning', label: `Deploy needed: ${s7(v.installed)} → ${s7(v.main)}`, href };
   return { level: 'ok', label: `Up to date (${s7(v.installed)})`, href };
 }

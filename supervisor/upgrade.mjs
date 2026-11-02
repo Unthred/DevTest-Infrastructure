@@ -165,7 +165,11 @@ export class SelfUpgrade {
     if (this.s.pending) return 'awaiting-verification';
     const from = this.d.installed();
     if (!from) return 'not-versioned';
-    if (this.s.lastUpgradeAt && this.clock.now() - this.s.lastUpgradeAt < MIN_UPGRADE_INTERVAL_MS) return 'rate-limited';
+    if (this.s.lastUpgradeAt && this.clock.now() - this.s.lastUpgradeAt < MIN_UPGRADE_INTERVAL_MS) {
+      // Issue #331: the rate limit holds back the upgrade, not the display. Refresh main every tick so the header never claims "Up to date" on a stale ref.
+      if (!(this.s.fetchRetryAt && this.clock.now() < this.s.fetchRetryAt)) { try { this.noteMain(from, this.d.fetchMain()); } catch { /* display only: the next tick tries again */ } }
+      return 'rate-limited';
+    }
     let target;
     const t0 = this.clock.now();
     if (this.s.fetchRetryAt && t0 < this.s.fetchRetryAt) return 'github-unreachable';
