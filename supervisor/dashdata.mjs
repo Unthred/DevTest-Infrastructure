@@ -54,6 +54,15 @@ export function readTeamState(root) {
 export function readCache(root) {
   try { return JSON.parse(fs.readFileSync(cacheFile(root), 'utf8')); } catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return null; throw error; }
 }
+// "Last here" marker (issue #253): the one value the dashboard server writes. It moves only on an explicit Mark as read.
+const seenFile = root => path.join(dashDir(root), 'last-seen.json');
+export function readLastSeen(root) {
+  try { const v = JSON.parse(fs.readFileSync(seenFile(root), 'utf8')); return Number.isFinite(v?.at) ? v.at : null; } catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return null; throw error; }
+}
+export function writeLastSeen(root, at) {
+  fs.mkdirSync(dashDir(root), { recursive: true, mode: 0o700 });
+  atomicJson(seenFile(root), { at });
+}
 export function readSnapshots(root) {
   let text; try { text = fs.readFileSync(historyFile(root), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const out = [];
