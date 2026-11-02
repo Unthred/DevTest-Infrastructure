@@ -417,3 +417,27 @@ test('a failed team-alert notify is a Needs you item; other alert warnings are d
   const clean = await view('');
   assert.ok(![...clean.panels.needsYou, ...clean.panels.warnings].some(a => /^alert-/.test(a.id)));
 });
+
+test('#252 Copy all on Needs you and Warnings joins the item texts in order; job page and tick detail have copy buttons; none with a single/empty list', async t => {
+  const root = stateRoot(t, { log: SAMPLE });
+  writeJob(root, job({ status: 'blocked', lastEvent: 'retry_exhausted' }));
+  const s = await serve(t, { root, state: { verdicts: {}, jobs: {} }, cache: { ...cache, tick: { at: NOW - 20 * MIN, status: 'error', error: 'gh issue list failed', lastOkAt: NOW - 3600000 } } });
+  const over = (await s.get('/')).body;
+  const needs = over.slice(over.indexOf('data-card="needs"'), over.indexOf('data-card="warnings"'));
+  const items = copies(needs).filter(c => c.startsWith('DevTest overseer note') && !c.includes('\n\n---\n\n'));
+  assert.ok(items.length >= 2, 'fixture has several Needs you items');
+  const all = copies(needs).find(c => c.includes('\n\n---\n\n'));
+  assert.ok(all, 'a Copy all button'); assert.match(needs, /<span data-copy-label>Copy all<\/span>/);
+  assert.deepEqual(all.split('\n\n---\n\n'), items, 'same text per item, same order as shown');
+  const warn = over.slice(over.indexOf('data-card="warnings"'));
+  for (const c of copies(warn).filter(x => x.startsWith('DevTest overseer note'))) assert.match(c, /^What is wrong: /m);
+  const job32 = 'a'.repeat(32);
+  const page = (await s.get(`/work/job/${job32.slice(0, 8)}`)).body;
+  const jc = copies(page).find(c => c.startsWith('DevTest overseer note'));
+  assert.ok(jc, 'job page copy button'); assert.match(jc, /^Job: Action needed$/m); assert.match(jc, /^Job a{32}: status blocked/m); assert.match(jc, /^Command: ai-supervisor status a{32}$/m); assert.match(jc, /^Log \(reconcile\.log\)/m);
+  const at = Date.parse('2026-10-31T12:00:02Z');
+  const tk = (await s.get(`/supervisor/ticks?ticks.q=ENOENT&ticks.open=${at}`)).body;
+  assert.ok(copies(tk).some(c => /^2026-10-31 12:00 UTC tick /.test(c)), 'log excerpt copy in the tick detail');
+  const quiet = (await (await serve(t, { root: stateRoot(t), cache })).get('/')).body;
+  assert.doesNotMatch(quiet.slice(quiet.indexOf('data-card="needs"'), quiet.indexOf('data-card="warnings"')), /Copy all/, 'no Copy all on an empty list');
+});
