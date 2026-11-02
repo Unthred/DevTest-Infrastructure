@@ -38,6 +38,9 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
   const now = listCommits(run, `${base}..${newHead}`);
   // Pass 1: patch-id. Pass 2: a conflict resolution changes the patch (and so its patch-id) but a rebase keeps the author, author
   // date and subject, so a commit with no patch-id match is paired with an unused new commit of the same identity.
+  // Known limits (issue #164, pinned by tests, all fail safe): the fallback proves presence, not that the content survived a
+  // resolution; each new commit pairs at most once, so identical-identity twins need two new commits; --reset-author-date,
+  // --ignore-date, squashes and commits emptied by a resolution (git drops them) are reported missing.
   const used = new Set();
   const unmatched = [];
   for (const c of old) {

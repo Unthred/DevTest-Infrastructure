@@ -145,3 +145,54 @@ test('a rebase that resolves a conflict is not reported lost and is pushed', t =
   assert.equal(res.pushed, true); assert.deepEqual(res.missing, []);
   assert.equal(git(r.dir, '--git-dir', r.remote, 'rev-parse', 'feat'), res.newHead);
 });
+
+// Pinned limits of the identity fallback (issue #164). All fail safe: a commit that cannot be proven present is reported missing.
+function conflictRebase(r, resolved, extra = []) {
+  // a fixed past author date, so a reset to "now" always differs from it
+  git(r.seed, 'checkout', '-q', 'feat'); fs.writeFileSync(path.join(r.seed, 'base.txt'), 'FEAT\n'); git(r.seed, 'add', '-A');
+  execFileSync('git', [...G, 'commit', '-q', '-m', 'feat edits base'], { cwd: r.seed, env: { ...process.env, GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z' } }); git(r.seed, 'push', '-q', 'origin', 'feat');
+  git(r.seed, 'checkout', '-q', 'main'); commit(r.seed, 'base.txt', 'MAIN\n', 'main edits base'); git(r.seed, 'push', '-q', 'origin', 'main');
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  assert.throws(() => git(r.agent, 'rebase', ...extra, 'origin/main'));
+  fs.writeFileSync(path.join(r.agent, 'base.txt'), resolved); git(r.agent, 'add', '-A');
+  execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+  return pushRebase({ worktree: r.agent, branch: 'feat', base: 'main', oldHead });
+}
+
+test('a commit that conflict resolution made empty is dropped by git and reported missing, not pushed', t => {
+  const r = repo(t);
+  const res = conflictRebase(r, 'MAIN\n');             // resolved to exactly main's content: nothing left to commit
+  assert.equal(res.pushed, false); assert.equal(res.reason, 'missing');
+  assert.deepEqual(res.missing.map(m => m.subject), ['feat edits base']);
+});
+
+test('a rebase that resets author dates cannot be paired after a conflict and is reported missing (fails safe)', t => {
+  const r = repo(t);
+  const res = conflictRebase(r, 'MAIN+FEAT\n', ['--reset-author-date']);
+  assert.equal(res.pushed, false); assert.equal(res.reason, 'missing');
+  assert.deepEqual(res.missing.map(m => m.subject), ['feat edits base']);
+});
+
+test('squashing commits during a rebase is reported missing (fails safe)', t => {
+  const r = repo(t);
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  git(r.agent, 'reset', '-q', '--soft', 'origin/main'); git(r.agent, 'commit', '-q', '-m', 'squashed');
+  const res = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: git(r.agent, 'rev-parse', 'HEAD') });
+  assert.equal(res.missing.length, 2);
+});
+
+test('two old commits with the same author, second and subject need two distinct new commits', t => {
+  const r = repo(t);
+  const env = { ...process.env, GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z' };
+  git(r.seed, 'checkout', '-q', 'feat');
+  for (const [f, c] of [['x.txt', 'x1\n'], ['y.txt', 'y1\n']]) {
+    fs.writeFileSync(path.join(r.seed, f), c); git(r.seed, 'add', '-A');
+    execFileSync('git', [...G, 'commit', '-q', '-m', 'same subject'], { cwd: r.seed, env });
+  }
+  git(r.seed, 'push', '-q', 'origin', 'feat');
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  // drop the second of the twins: only one commit with that identity remains, so exactly one is reported missing
+  git(r.agent, 'reset', '-q', '--hard', 'HEAD~1');
+  const res = checkRebase({ repoPath: r.agent, base: 'origin/feat~3', oldHead, newHead: git(r.agent, 'rev-parse', 'HEAD') });
+  assert.equal(res.missing.length, 1); assert.equal(res.missing[0].subject, 'same subject');
+});
