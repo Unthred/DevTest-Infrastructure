@@ -182,7 +182,7 @@ async function teamTick(root, registry, dryRun, hold = null) {
       const team = await teamFor(root, registry, config);
       const report = await team.tick({ dryRun, hold });
       if (!dryRun) {
-        record({ ...tickOutcome(report), team, actions: report.actions });
+        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length });
         // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
         await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
       }

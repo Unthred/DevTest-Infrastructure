@@ -221,9 +221,9 @@ test('tick history: one row per tick, newest first, sortable, filterable, pagina
   const s = await serve(t, { root: stateRoot(t, { log: many + SAMPLE }), cache });
   const p1 = (await s.get('/supervisor/ticks')).body;
   assert.match(p1, /Ticks in the reconcile log \(37\)/); assert.match(p1, /1–25 of 37/); assert.match(p1, /Page 1 of 2/); assert.match(p1, /<tfoot>[\s\S]*37 of 37 ticks/);
-  const firstWhen = /<td data-label="When"[^>]*>([^<]+)</.exec(p1)[1]; assert.equal(firstWhen, '2026-10-31 18:05 UTC', 'newest first');
+  const firstWhen = /<td data-label="When"[^>]*><time[^>]*>([^<]+)</.exec(p1)[1]; assert.equal(firstWhen, '2026-10-31 18:05 UTC', 'newest first');
   const asc = (await s.get('/supervisor/ticks?ticks.sort=at&ticks.dir=asc')).body;
-  assert.equal(/<td data-label="When"[^>]*>([^<]+)</.exec(asc)[1], '2026-10-29 00:00 UTC'); assert.match(asc, /aria-sort="ascending"/);
+  assert.equal(/<td data-label="When"[^>]*><time[^>]*>([^<]+)</.exec(asc)[1], '2026-10-29 00:00 UTC'); assert.match(asc, /aria-sort="ascending"/);
   const errs = (await s.get('/supervisor/ticks?ticks.q=error')).body;
   assert.match(errs, /4 of 37 ticks/);
   const at = Date.parse('2026-10-31T12:00:02Z');

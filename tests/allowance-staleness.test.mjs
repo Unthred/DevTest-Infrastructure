@@ -73,9 +73,9 @@ test('Codex paused on a limit: the card shows the last known reading, its age an
   assert.equal(u.limit.retryAt, codexPaused.nextAttemptAt); assert.equal(u.source, 'session-log');
   const card = section(usageHtml(v), 'codex');
   assert.doesNotMatch(card, /Allowance: <b>unknown/); assert.doesNotMatch(card, /No allowance reported/);
-  assert.match(card, /Paused on a usage limit/); assert.match(card, /resets <b>2026-11-04 07:18 UTC<\/b> \(in 3d 8h; weekly window in the last reading\)/);
+  assert.match(card, /Paused on a usage limit/); assert.match(card, /resets <b><time[^>]*>2026-11-04 07:18 UTC<\/time><\/b> \(in 3d 8h; weekly window in the last reading\)/);
   assert.match(card, /reset 4h 36m ago; current use unknown/); assert.match(card, /\(expired\)/);
-  assert.match(card, /Last reading 8h 15m ago \(2026-10-31 14:41 UTC\), read from the local Codex session log \(no model call\)/);
+  assert.match(card, /Last reading 8h 15m ago \(<time[^>]*>2026-10-31 14:41 UTC<\/time>\), read from the local Codex session log \(no model call\)/);
   // a full live weekly window confirms the pause: no disagreement warning
   assert.ok(!v.attention.some(a => a.id === 'pause-codex'));
 });

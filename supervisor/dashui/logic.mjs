@@ -243,3 +243,39 @@ export function sanitizeHidden(stored, all, free = []) {
   if (all.length && all.every(k => list.includes(k))) { const last = list.findLast(k => all.includes(k)); return list.filter(k => k !== last); }
   return list;
 }
+
+// ---- local time (issue #76). Data stays in UTC; only rendering changes. The server renders every time as
+// <time datetime="…Z">… UTC</time>; the browser script rewrites it with this function in the viewer's own time zone.
+export function formatLocal(ms, tz) {
+  if (!Number.isFinite(ms)) return 'unknown';
+  let zone = tz; try { new Intl.DateTimeFormat('en-GB', { timeZone: zone }); } catch { zone = 'UTC'; }
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(new Date(ms)).map(p => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
+}
+export const timeOnly = (ms, tz) => formatLocal(ms, tz).slice(11);
+
+// ---- Activity (issue #76): idle ticks collapse, rows filter by agent, outcome and job kind.
+// A row is { at, text, link, kind: 'tick'|'job'|'review'|'merge'|…, idle?, agent?, outcome?, jobKind?, durationMs?, tokens? }.
+// A run of two or more adjacent idle rows (newest first) becomes one { kind: 'idle-run', count, from, to, ticks } row. Any row
+// that is not idle, from any source, ends a run, so a busy tick between two idle runs gives two runs.
+export function collapseIdle(rows) {
+  const out = []; let run = [];
+  const flush = () => {
+    if (run.length > 1) out.push({ at: run[0].at, kind: 'idle-run', idle: true, outcome: 'idle', agent: null, jobKind: null, count: run.length, from: run[run.length - 1].at, to: run[0].at, ticks: run, text: `${run.length} idle ticks` });
+    else out.push(...run);
+    run = [];
+  };
+  for (const r of rows) { if (r.idle) run.push(r); else { flush(); out.push(r); } }
+  flush();
+  return out;
+}
+export const ACTIVITY_FILTERS = ['agent', 'outcome', 'kind'];
+// Filters combine (all must match). A value not offered is ignored rather than hiding everything.
+export function activityFilters(query) {
+  const f = {};
+  for (const k of ACTIVITY_FILTERS) { const v = query.get(`act.${k}`); if (v) f[k] = v; }
+  return f;
+}
+export function filterActivity(rows, f) {
+  return rows.filter(r => (!f.agent || r.agent === f.agent) && (!f.outcome || r.outcome === f.outcome) && (!f.kind || r.jobKind === f.kind));
+}

@@ -11,6 +11,7 @@ import { defaultZone } from './clocktext.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { modeLine } from './budget.mjs';
 import { makeNamer } from './naming.mjs';
+import { agentLine } from './agentline.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;     // the reconcile cron runs `*/5 * * * *` (tools/install-reconcile-user-script.sh)
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -60,7 +61,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   // 1. agents
   const agents = view.agents.map(a => {
     const j = a.job, what = j ? j.name : null;
-    const text = a.state === 'running' ? `running: ${what}` : a.state === 'paused' ? `paused: ${what}${j.nextAttemptAt ? `, restarts about ${hhmm(j.nextAttemptAt, tz)}` : ''}` : a.state === 'blocked' ? `blocked: ${what}` : `idle${a.idleReason ? `: ${a.idleReason.text}` : ''}`;
+    const text = agentLine(a, ms => hhmm(ms, tz));
     return { name: a.name, state: a.state, idleReason: a.idleReason || null, job: j ? { kind: j.kind, ref: j.ref, id: j.id, name: j.name } : null, text };
   });
 

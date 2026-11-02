@@ -496,6 +496,9 @@ export function describeFor(j, { names, state }) {
 
 // Which model made a decision (issue #140): provider, model and effort of the job that produced it, as recorded on the job.
 const modelOf = j => (j ? [j.provider || 'unknown provider', j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
+// Raw events kept before idle ticks collapse (issue #76): idle ticks are the bulk of the history and fold into a few rows.
+export const ACTIVITY_LIMIT = 400;
+const OUTCOME = { created: 'queued', started: 'started', completed: 'completed', usage_limit: 'paused', manual_pause: 'paused', transient_rate_limit: 'paused', recovered: 'recovered', incomplete: 'blocked', retry_exhausted: 'blocked', blocked: 'blocked', crash: 'failed', auth_error: 'failed', approval_required: 'blocked', manual_stop: 'stopped' };
 function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names, root }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
@@ -506,22 +509,24 @@ function activity({ config, jobs, events, state, cache, snapshots, now, incident
   for (const e of events) {
     if (!eventNames[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover'].includes(e.kind)) continue;
     const j = jobById.get(e.job); if (!j) continue;
+    const done = ['completed', 'blocked', 'retry_exhausted', 'crash', 'manual_stop'].includes(e.kind);
     const what = e.kind === 'completed' ? describeFor(j, { names, state }) : `${names.job(j).text}: ${eventNames[e.kind] || redact(e.kind, 40)}`;
-    rows.push({ at: e.at, text: `${agentName(j)}: ${what}`, link: { url: names.job(j).url, text: names.job(j).text }, ...(root && transcriptExists(root, j.id) ? { transcript: j.id } : {}) });
+    rows.push({ at: e.at, kind: 'job', agent: agentName(j), outcome: OUTCOME[e.kind] || 'other', jobKind: j.kind || null, durationMs: done && j.updatedAt >= j.createdAt ? j.updatedAt - j.createdAt : null, tokens: done && j.usage ? j.usage.inputTokens + j.usage.outputTokens : null,
+      text: `${agentName(j)}: ${what}`, link: { url: names.job(j).url, text: names.job(j).text }, ...(root && transcriptExists(root, j.id) ? { transcript: j.id } : {}) });
   }
   for (const [id, tj] of Object.entries(state.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at))
-    rows.push({ at: tj.at, text: `${names.job({ id, kind: 'rebase', pr: tj.pr }).text}: ${shortCommit(tj.rebase.oldHead)} -> ${shortCommit(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
-  for (const u of state.unblock?.log || []) if (Number.isFinite(u.at)) rows.push({ at: u.at, text: `Foreman unblocked: ${u.what}, ${u.why}, ${u.result}`, link: link(u.tk === 'issue' ? 'issue' : 'pull', u.target) });
-  for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); const mdl = modelOf(jobById.get(v.job)); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on ${names.pr(Number(pr)).text} at ${shortCommit(head)}${mdl ? ` (${mdl})` : ''}`, link: link('pull', Number(pr)) }); }
-  for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged ${names.pr(m.pr).text}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
-  for (const i of incidents) if (i.kind === 'migration') rows.push({ at: i.at, text: `config migration ${String(i.number).padStart(3, '0')}-${i.name} ${i.result}${i.result === 'failed' ? `: ${redact(String(i.error ?? ''), 200)}` : `: ${redact(String(i.description || ''), 200)}`}`, link: null });
+    rows.push({ at: tj.at, kind: 'job', agent: tj.agent || null, outcome: tj.rebase.lost?.length ? 'blocked' : 'completed', jobKind: 'rebase', text: `${names.job({ id, kind: 'rebase', pr: tj.pr }).text}: ${shortCommit(tj.rebase.oldHead)} -> ${shortCommit(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
+  for (const u of state.unblock?.log || []) if (Number.isFinite(u.at)) rows.push({ at: u.at, kind: 'unblock', outcome: 'unblocked', text: `Foreman unblocked: ${u.what}, ${u.why}, ${u.result}`, link: link(u.tk === 'issue' ? 'issue' : 'pull', u.target) });
+  for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); const mdl = modelOf(jobById.get(v.job)); rows.push({ at: v.at, kind: 'review', agent: v.reviewer || null, outcome: String(v.verdict || 'other').toLowerCase(), jobKind: 'review', text: `${v.reviewer}: ${v.verdict} on ${names.pr(Number(pr)).text} at ${shortCommit(head)}${mdl ? ` (${mdl})` : ''}`, link: link('pull', Number(pr)) }); }
+  for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, kind: 'merge', agent: m.agent || null, outcome: 'merged', text: `merged ${names.pr(m.pr).text}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
+  for (const i of incidents) if (i.kind === 'migration') rows.push({ at: i.at, kind: 'migration', outcome: i.result === 'failed' ? 'failed' : 'completed', text: `config migration ${String(i.number).padStart(3, '0')}-${i.name} ${i.result}${i.result === 'failed' ? `: ${redact(String(i.error ?? ''), 200)}` : `: ${redact(String(i.description || ''), 200)}`}`, link: null });
   // ticks take part in the same newest-first ordering and 50-event bound as every other event (issue #32)
-  rows.push(...snapshots.map(s => ({ at: s.at, text: s.status === 'ok'
+  rows.push(...snapshots.map(s => ({ at: s.at, kind: 'tick', idle: s.status === 'ok' && !s.plan?.length && !s.ingested, outcome: s.status !== 'ok' ? s.status : s.plan?.length || s.ingested ? 'planned' : 'idle', text: s.status === 'ok'
     ? `tick ok${s.plan?.length ? `, plan: ${s.plan.map(a => `${a.agent || ''} ${a.type} ${(['implement', 'continue'].includes(a.type) ? names.issue(a.ref) : names.pr(a.ref)).text}`.trim()).join('; ')}` : ', nothing to dispatch'}`
     : `tick ${s.status}${cache?.tick?.at === s.at && cache.tick.error ? `: ${cache.tick.error}` : ''}` })));
   if (cache?.tick && cache.tick.status !== 'ok' && !snapshots.some(s => s.at === cache.tick.at))
-    rows.push({ at: cache.tick.at, text: `tick ${cache.tick.status}${cache.tick.error ? `: ${cache.tick.error}` : ''}` });
-  return rows.filter(r => Number.isFinite(r.at)).sort((a, b) => b.at - a.at).slice(0, 50).map(r => ({ ...r, text: redact(r.text, 300) }));
+    rows.push({ at: cache.tick.at, kind: 'tick', outcome: cache.tick.status, text: `tick ${cache.tick.status}${cache.tick.error ? `: ${cache.tick.error}` : ''}` });
+  return rows.filter(r => Number.isFinite(r.at)).sort((a, b) => b.at - a.at).slice(0, ACTIVITY_LIMIT).map(r => ({ ...r, text: redact(r.text, 300) }));
 }
 
 // Weekly burn and scheduling mode per agent, as the planner sees it (issue #56). Figures are the provider's own readings.
@@ -697,6 +702,18 @@ export function issueTimelinesOf({ jobs, state, names, jobRows, cache }) {
     .filter(t => t.events.length).sort((a, b) => b.last - a.last).slice(0, 60);
 }
 
+// Issue #76: why nothing is planned. Busy and paused agents with their job and resume time, and the items that cannot start:
+// open issues behind an unfinished prerequisite, and open pull requests waiting for a review.
+export function nextWhy({ states, issues, prs, names }) {
+  const busy = [], paused = [];
+  for (const [agent, s] of Object.entries(states)) {
+    if (s.state === 'running' && s.job) busy.push({ agent, job: redact(names.job(s.job).text, 300) });
+    else if (s.state === 'paused') paused.push({ agent, job: s.job ? redact(names.job(s.job).text, 300) : null, resumeAt: s.job?.nextAttemptAt ?? s.job?.resetAt ?? null });
+  }
+  const blocked = issues.filter(i => i.state === 'OPEN' && i.blockedBy.length), waiting = prs.filter(p => p.awaitingReview);
+  return { busy, paused, blocked: blocked.length, waitingReview: waiting.length };
+}
+
 function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
@@ -713,6 +730,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobById.get(v.job)), verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
+  const reviewing = new Set(Object.values(queues).flat().filter(q => q.type === 'review').map(q => q.ref));   // issue #76: PRs waiting for a review
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
   const prs = [...prNumbers].sort((a, b) => b - a).map(n => {
@@ -721,7 +739,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     const relIds = new Set(rel.map(j => j.id));
     const prJobs = jobRows.filter(j => relIds.has(j.fullId));
     const key = p ? `${n}:${p.headRefOid}` : null;
-    return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed',
+    return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed', awaitingReview: reviewing.has(n),
       checks: p ? checksState(p.statusCheckRollup, retriedIn(state.cancelWatch, p, now)) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length, carry: p && key ? carryRecordOf(state.verdicts?.[key], p) : null,
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
@@ -750,7 +768,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };

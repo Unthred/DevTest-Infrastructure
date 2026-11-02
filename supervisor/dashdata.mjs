@@ -158,7 +158,7 @@ export function tickOutcome(report) {
 }
 
 // Written by the tick (never by the dashboard server). `error` is the failure of this tick, if any.
-export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {} }) {
+export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0 }) {
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
@@ -170,7 +170,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   if (!team || (status !== 'ok' && status !== 'error')) return cache;
   const states = agentStates(team.c, jobs, now);
   const allowance = latestAllowance(jobs, cache.probes);
-  const snap = { at: now, status,
+  const snap = { at: now, status, ingested: Number.isSafeInteger(ingested) && ingested > 0 ? ingested : 0,
     plan: actions.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.secondOpinion ? { secondOpinion: true } : {}), ...(a.postMerge ? { postMerge: true } : {}) })),
     agents: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])),
     allowance: Object.fromEntries(Object.entries(team.c.agents).map(([n, a]) => [n, allowance[a.provider] ? { observedAt: allowance[a.provider].observedAt, windows: allowance[a.provider].windows.map(w => ({ type: w.type, windowMinutes: w.windowMinutes ?? null, utilization: w.utilization, resetsAt: w.resetsAt })) } : null])),
