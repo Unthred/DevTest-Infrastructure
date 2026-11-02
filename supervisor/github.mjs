@@ -40,6 +40,8 @@ export function githubClient(config, gh = ghRunner()) {
       .map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) })),
     // One issue by number, for when it is not in the capped list.
     getIssue: async n => { const i = json(['issue', 'view', String(n), '--repo', repo, '--json', 'number,title,state,body,labels']); return i ? { ...i, labels: (i.labels || []).map(l => l.name) } : null; },
+    // The association of the issue's author with the repository (OWNER = the homeowner); the issue body counts as homeowner text only when OWNER (issue #299).
+    issueAuthorAssociation: async n => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); return json(['api', '--method', 'GET', `repos/${repo}/issues/${n}`])?.author_association ?? null; },
     // Comments with the author's association to the repository (OWNER = the homeowner), to tell homeowner-required text apart.
     issueComments: async n => (json(['issue', 'view', String(n), '--repo', repo, '--json', 'comments'])?.comments || []).map(c => ({ association: c.authorAssociation, body: String(c.body || '') })),
     comment: async (n, body) => { gh(['issue', 'comment', String(n), '--repo', repo, '--body-file', '-'], body, { retry: false }); },
