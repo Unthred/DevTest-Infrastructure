@@ -2,6 +2,7 @@
 // No GitHub call and no model call anywhere in these tests; the "no gh" test proves the server cannot reach gh.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -301,7 +302,9 @@ test('server: serves a self-contained, escaped page with only same-origin script
 test('server: loading the page makes no GitHub or model call (gh and provider CLIs are never started)', async t => {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nogh-')); t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
   const marker = path.join(bin, 'called');
-  // git is not faked: the page reads the decision register from the local origin/main ref (D-021).
+  // git is a shim: the page may only run the local `git show origin/main:docs/DECISIONS.md` (D-021); anything else is recorded in the marker.
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\ncase "\$*" in *" show origin/main:docs/DECISIONS.md") exec ${realGit} "\$@";; esac\necho "git \$*" >> ${marker}\nexit 1\n`, { mode: 0o755 });
   for (const name of ['gh', 'claude', 'codex', 'curl']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho ${name} >> ${marker}\nexit 1\n`, { mode: 0o755 });
   const oldPath = process.env.PATH; process.env.PATH = `${bin}:${oldPath}`; t.after(() => { process.env.PATH = oldPath; });
   const s = await withServer(t, { jobs: [fx], cache: { tick: okTick(), pulls: [], issues: [issue(30)] } });

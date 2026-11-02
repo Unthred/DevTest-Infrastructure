@@ -24,13 +24,13 @@ export function validateBind(host, port) {
 }
 
 // The register on main changes rarely and reading it spawns git, so the server keeps it for a minute.
-// Keyed by repository path; an empty (failed) read is never kept, so the next request retries.
+// Keyed by repository path; a failed read is kept for only 5 s, so a hung or slow git costs one blocking call per 5 s, not one per request.
 const registerMemo = new Map();
 export function registerCached(config, read = readRegister, now = Date.now()) {
   const hit = registerMemo.get(config.repo_path);
-  if (hit && now - hit.at <= 60000) return hit.text;
+  if (hit && now - hit.at <= (hit.text ? 60000 : 5000)) return hit.text;
   const text = read(config);
-  if (text) registerMemo.set(config.repo_path, { at: now, text }); else registerMemo.delete(config.repo_path);
+  registerMemo.set(config.repo_path, { at: now, text });
   return text;
 }
 export const clearRegisterMemo = () => registerMemo.clear();
