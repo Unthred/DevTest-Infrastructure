@@ -208,7 +208,7 @@ export function prerequisites(body) {
   return m ? [...m[1].matchAll(/#(\d+)/g)].map(x => Number(x[1])) : [];
 }
 // Stops that Foreman resumes once (issue #163): provider/network faults, a crash, an incomplete run, a used-up allowance window.
-const TRANSIENT_STOPS = new Set(['crash', 'network_error', 'incomplete', 'transient_rate_limit', 'usage_limit', 'retry_exhausted']);
+const TRANSIENT_STOPS = new Set(['crash', 'network_error', 'incomplete', 'transient_rate_limit']);   // never usage_limit or retry_exhausted: D-019 bounds those launches, then the homeowner decides
 const redactEvent = e => String(e || 'an unknown event').replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40);
 const CAUSE_TEXT = { job: 'the job was resumed or completed', fixlimit: 'a new head was pushed and is no longer rejected', 'cancelled-ci': 'the check is green again' };
 // True when a finding repeats the homeowner-required text: any five consecutive words of it appear in the required text, or a
@@ -1018,8 +1018,9 @@ export class Team {
     const m = /\/issue-(\d+)(\D|$)/.exec(j.branch || '');
     let required = null;
     try {
-      const body = m ? (this.view?.issues || await this.gh.listIssues()).find(i => i.number === Number(m[1]))?.body || '' : '';
-      const comments = m && this.gh.issueComments ? await this.gh.issueComments(Number(m[1])) : null;
+      const found = m ? (this.view?.issues || await this.gh.listIssues()).find(i => i.number === Number(m[1])) : null;
+      const body = found ? String(found.body ?? '') : null;   // an issue that cannot be found is unreadable, not empty
+      const comments = m && body !== null && this.gh.issueComments ? await this.gh.issueComments(Number(m[1])) : null;
       if (comments) required = [body, ...comments.filter(c => c.association === 'OWNER').map(c => c.body)].join('\n');
     } catch { required = null; }
     const accepted = [], refused = [];

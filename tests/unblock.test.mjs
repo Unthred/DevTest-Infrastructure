@@ -101,7 +101,7 @@ test('transient stop: a real decision (auth, closed issue) is never auto-resumed
   stoppedJob(w, 'j1', 'auth_error'); await w.team.tick();
   assert.deepEqual(w.calls.resumed, []); assert.deepEqual(w.calls.labels, [[23, 'needs-homeowner']]);
   const o = world(t, { issues: [issue(23), issue(5, 'CLOSED')] }); o.team.limitedOf = () => ({ out: true, reason: 'weekly' });
-  stoppedJob(o, 'j2', 'usage_limit'); await o.team.tick();
+  stoppedJob(o, 'j2', 'crash'); await o.team.tick();
   assert.deepEqual(o.calls.resumed, []); assert.deepEqual(o.calls.labels, []);
 });
 
@@ -182,6 +182,22 @@ test('split: a homeowner comment protects its text; unreadable comments split no
   assert.equal(b.w.calls.issues.length, 0); assert.deepEqual(b.w.team.s.unblock.queued, {});
   assert.equal(overlapsRequired('retry limit on poller loop', 'a retry limit on poller loop here'), true);
   assert.equal(overlapsRequired('something totally different happens here today', 'the issue says other words entirely'), false);
+});
+
+test('transient stop: usage_limit and retry_exhausted (D-019 bounds) are never auto-resumed with reset attempts', async t => {
+  for (const ev of ['usage_limit', 'retry_exhausted']) {
+    const w = world(t, { issues: [issue(23), issue(5, 'CLOSED')] });
+    stoppedJob(w, 'j1', ev); w.clock.t += 10_000_000; await w.team.tick();
+    assert.deepEqual(w.calls.resumed, [], ev); assert.deepEqual(w.calls.labels, [[23, 'needs-homeowner']], ev);
+  }
+});
+
+test('split: an issue missing from the issue list is unreadable, so nothing is split', async t => {
+  const { w, write, finish } = await escalatedWorld(t);
+  w.gh.issues = w.gh.issues.filter(i => i.number !== 23);
+  write([{ finding: 'The dispatcher must never merge without approval', reason: 'try to split a required item' }]);
+  await finish();
+  assert.equal(w.calls.issues.length, 0); assert.deepEqual(w.team.s.unblock.queued, {});
 });
 
 test('labels: a Foreman-added needs-homeowner label is removed when its cause clears, and the removal is recorded', async t => {
