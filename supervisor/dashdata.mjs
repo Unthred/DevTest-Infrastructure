@@ -141,7 +141,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   const states = agentStates(team.c, jobs, now);
   const allowance = latestAllowance(jobs, cache.probes);
   const snap = { at: now, status,
-    plan: actions.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.interim ? { interim: true } : {}), ...(a.postMerge ? { postMerge: true } : {}) })),
+    plan: actions.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.secondOpinion ? { secondOpinion: true } : {}), ...(a.postMerge ? { postMerge: true } : {}) })),
     agents: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])),
     allowance: Object.fromEntries(Object.entries(team.c.agents).map(([n, a]) => [n, allowance[a.provider] ? { observedAt: allowance[a.provider].observedAt, windows: allowance[a.provider].windows.map(w => ({ type: w.type, windowMinutes: w.windowMinutes ?? null, utilization: w.utilization, resetsAt: w.resetsAt })) } : null])),
     redCi: team.view.prs.filter(p => rollup(p) === 'red').map(p => p.number) };

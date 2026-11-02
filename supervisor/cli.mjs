@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
-import { Team, loadTeamConfig, tickLock } from './team.mjs';
+import { Team, loadTeamConfig, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { alertSender } from './alert.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome } from './dashdata.mjs';
@@ -95,7 +95,7 @@ function realGit(repoPath) {
 }
 async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true) {
   // The decision register that counts is the one merged into main, not a working copy.
-  // A dry run reads it too when it can, so `team status` plans interim reviews (D-021) the way a real tick would.
+  // A dry run reads it too when it can, so `team status` plans the way a real tick would.
   const register = readRegister(config);
   if (!register && needRegister) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main');
   // Model routing (issue #64): what each CLI accepts comes from its manifest; the weekly allowance is the freshest the provider reported.
@@ -136,7 +136,7 @@ function selfUpgradeFor(root, registry) {
   const config = loadTeamConfig(teamConfigFile, root);
   const verdictFor = (pr, head) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')).verdicts?.[`${pr}:${head}`] || null; } catch { return null; } };
   const jobs = realJobs(root, registry);
-  return { config, upgrade: new SelfUpgrade({ root, deps: realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, sendAlert: alertSender(root, config) }) }) };
+  return { config, upgrade: new SelfUpgrade({ root, deps: realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }) }) };
 }
 // Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so running jobs
 // can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.

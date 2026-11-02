@@ -5,7 +5,7 @@
 import { SupervisorError } from './core.mjs';
 import { windowExpired } from './allowance.mjs';
 
-// 'interim-review' (D-021): a same-provider review while every other agent is out of allowance; falls back to the review entry.
+// 'interim-review' is retired (issue #152); the name is still accepted in a local models override and falls back to the review entry.
 export const JOB_TYPES = ['implement', 'fix', 'review', 'rebase', 'ci-fix', 'continue', 'interim-review'];
 export const typeOfKind = kind => (kind === 'cifix' ? 'ci-fix' : kind);
 // Work that is not downgraded by the weekly-allowance threshold (it has no strong entry above its own; implement/continue never escalate, issue #78).

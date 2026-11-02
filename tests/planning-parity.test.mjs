@@ -76,9 +76,11 @@ test('limitedOf takes usage_limit events from the view the same way the tick doe
   assert.equal(withEvent.limitedOf('claude').out, false);
 });
 
-// ---- D-021 interim review needs the register (issue #130)
+// ---- the register still gates launching jobs (issue #130); a same-provider review on another model is planned the same everywhere (issue #152)
 const REGISTER = fs.readFileSync(new URL('../docs/DECISIONS.md', import.meta.url), 'utf8');
-const interimConfig = () => ({ ...config(), interim_review: { enabled: true, decision: 'D-021', weekly_at: 0.95 } });
+const interimConfig = () => ({ ...config(), models: { agents: { claude: { implement: { model: 'sonnet', effort: 'medium' }, review: { model: 'opus', effort: 'medium' } } } } });
+// The dispatcher's record that claude wrote PR #119 on sonnet: the review model (opus) differs, so claude may review it while codex waits.
+const WRITTEN = { w0: { kind: 'implement', agent: 'claude', key: '79', model: 'sonnet', branch: 'claude/issue-79-x', ingested: true, at: 1 } };
 const key = a => `${a.agent}:${a.type}:${a.issue ?? a.pr}`;
 
 async function tickPlanWith(t, register) {
@@ -87,15 +89,16 @@ async function tickPlanWith(t, register) {
   const inputs = planningInputs({ config: interimConfig(), jobs, probes, snapshots: [], now: NOW });
   const team = new Team({ config: interimConfig(), root: stateRoot(path.join(root, 'state')), gh, jobs: { listActive: async () => [] }, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null },
     clock: { now: () => NOW }, register, allowanceOf: inputs.allowanceOf, limitedOf: inputs.limitedOf, usage: inputs.usage });
+  team.s.jobs = { ...WRITTEN };
   return (await team.tick({ dryRun: true })).actions || [];
 }
 
-test('with the real register the tick, the dashboard view and `team status` all plan the interim review', async t => {
+test('with the real register the tick, the dashboard view and `team status` all plan the review on another model', async t => {
   const actions = await tickPlanWith(t, REGISTER);
-  assert.ok(actions.some(a => a.type === 'review' && a.agent === 'claude' && a.interim), 'the tick plans claude interim review');
-  const view = await buildView({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], now: NOW, register: REGISTER });
+  assert.ok(actions.some(a => a.type === 'review' && a.agent === 'claude' && !a.interim), 'the tick plans claude review on another model');
+  const view = await buildView({ config: interimConfig(), root: tmp(t), jobs, events: [], state: { jobs: WRITTEN }, cache, snapshots: [], now: NOW, register: REGISTER });
   assert.deepEqual(view.plan.map(key), actions.map(key));
-  const status = await buildStatus({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], leases: [], now: NOW, tz: 'UTC', register: REGISTER });
+  const status = await buildStatus({ config: interimConfig(), root: tmp(t), jobs, events: [], state: { jobs: WRITTEN }, cache, snapshots: [], leases: [], now: NOW, tz: 'UTC', register: REGISTER });
   assert.deepEqual(status.next.plan.map(p => `${p.agent}:${p.type}:${p.ref}`), actions.map(key));
   assert.ok(!status.notes.some(n => /DECISIONS/.test(n)));
 });

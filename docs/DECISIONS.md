@@ -215,6 +215,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Keeping per-branch handover edits and merging them by hand; a merge driver that hides the conflict but still produces a new head and a re-review.
 - Superseded-by: none
 
+## D-024 — Review independence by session and model, not provider
+- Status: agent-proposal
+- Date: 2026-11-01
+- Source: homeowner decision 1 Nov 2026 as recorded in issue #152; amends D-021 (and the "opposite agent" wording of D-011); awaiting homeowner approval of this entry
+- Decision: A review is independent when it is a fresh session in a review worktree, the reviewer runs the tests itself, and the reviewer's model differs from the model that wrote the pull request head (taken from the dispatcher's job records). A review on the same model is refused. A different model on the same provider is a full review, so its PASS is merge-eligible with no follow-up. Post-merge reviews are no longer queued; entries queued earlier are dropped. An optional `second_opinion` configuration (path globs plus a reviewer) asks for one extra review from a different provider for pull requests touching sensitive paths (upgrader, scheduler, network, secrets) when that provider has allowance; unconfigured, none. A team of one agent is valid. Status, dashboard and notices name a role and what it waits for, never an agent that "owes" work. No paid overage or credits are used to obtain a reviewer.
+- Rationale: 1 Nov: six PRs (#119, #129, #131, #138, #144, #146) waited for a provider that was out until Wednesday, because only a different provider counted as independent. Session and model separation is the property that matters, and it needs no second provider.
+- Rejected: Treating only a different provider as independent; queuing a mandatory post-merge review for every same-provider merge; self-review in the authoring session or on the authoring model.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.

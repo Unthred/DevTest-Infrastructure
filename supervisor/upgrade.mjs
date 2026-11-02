@@ -147,9 +147,9 @@ export class SelfUpgrade {
   }
 
   // Every first-parent commit in (from, to] must be a merged PR whose merged head has a dispatcher-recorded PASS from the
-  // opposite agent and green CI. A direct commit to main, or any missing proof, makes the range ineligible. An interim
-  // (D-021) PASS from the author's own provider counts while interim review is enabled; the dispatcher records that flag
-  // only after checking D-021 is homeowner-approved, and the post-merge review still follows.
+  // independent reviewer and green CI. A direct commit to main, or any missing proof, makes the range ineligible. A PASS from the
+  // author's own provider counts when the dispatcher recorded it as independent (a different model, issue #152; or an earlier
+  // interim PASS recorded under D-021).
   async eligibility(from, to) {
     const prs = [];
     for (const c of this.d.mainCommits(from, to)) {
@@ -159,9 +159,9 @@ export class SelfUpgrade {
       if (!pull || pull.state !== 'MERGED' || pull.headRefOid !== c.head || !author) return { ok: false, prs, reason: `PR #${c.pr} could not be matched to its merged head` };
       prs.push(c.pr);
       const v = this.d.verdict(c.pr, c.head);
-      const interim = v?.interim === true && this.d.config.interim_review?.enabled === true;
-      if (v?.verdict !== 'PASS' || (v.reviewer === author && !interim) || !this.d.config.agents[v.reviewer])
-        return { ok: false, prs, reason: `PR #${c.pr} has no recorded PASS from the opposite agent at merged head ${short(c.head)}` };
+      const independent = v?.interim === true || (v?.independent === true && this.d.independenceApproved?.() === true);
+      if (v?.verdict !== 'PASS' || (v.reviewer === author && !independent) || !this.d.config.agents[v.reviewer])
+        return { ok: false, prs, reason: `PR #${c.pr} has no recorded PASS from an independent reviewer at merged head ${short(c.head)}` };
       if (checksState(pull.statusCheckRollup) !== 'green') return { ok: false, prs, reason: `CI was not green on PR #${c.pr} at merged head ${short(c.head)}` };
     }
     return { ok: true, prs };
@@ -175,7 +175,7 @@ const defaultRun = (cmd, args, { cwd, timeoutMs = 120000, input } = {}) => {
 };
 const tail = r => String(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' | ').slice(0, 200);
 
-export function realDeps({ root, config, gh, listActive, verdictFor, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert }) {
+export function realDeps({ root, config, gh, listActive, verdictFor, independenceApproved = () => false, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert }) {
   const repo = config.repo_path;
   const git = (...a) => { const r = run('git', ['-C', repo, ...a]); if (r.status !== 0) throw new Error(`git ${a[0]} failed`); return r.stdout.trim(); };
   const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'self-upgrade-'));
@@ -207,6 +207,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, wrapper = '
     }),
     mergedPull: n => gh.getMergedPull(n),
     verdict: verdictFor,
+    independenceApproved,
     activeJobs: async () => (await listActive()).length,
     preChecks: async sha => withCheckout(sha, checkout => {
       const v = run('node', ['tools/validate-project.mjs'], { cwd: checkout, timeoutMs: 300000 });

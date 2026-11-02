@@ -14,9 +14,9 @@ const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-
 const limits = (over = {}) => ({ roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2, ...over });
 const config = (over = {}) => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p',
-  access: { mode: 'full', decision: 'D-020' }, interim_review: { enabled: true, decision: 'D-021', weekly_at: 0.95 },
+  access: { mode: 'full', decision: 'D-020' }, out_of_allowance: { weekly_at: 0.95 },
   limits: limits(),
-  models: { agents: { claude: { implement: { model: 'opus', effort: 'high' }, review: { model: 'sonnet', effort: 'medium' }, 'interim-review': { model: 'haiku', effort: 'low' } },
+  models: { agents: { claude: { implement: { model: 'sonnet', effort: 'high' }, review: { model: 'opus', effort: 'low' } },
     codex: { implement: { model: 'big', effort: 'high' }, review: { model: 'mid', effort: 'medium' } } } },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [5, 6] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [2] } },
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } }, ...over });
@@ -41,15 +41,18 @@ const running = (w, id, kind, agent, extra = {}) => {
   w.jobs.active.push({ id, provider: w.team.c.agents[agent].provider, status: 'running' });
   w.team.s.jobs[id] = { kind, agent, key: String(extra.issue ?? extra.pr), ingested: false, ...extra };
 };
+// A recorded implementer job: who wrote the head, on which model (what Foreman's job records hold).
+const written = (agent, model, branch = 'claude/issue-72-x') => ({ kind: 'implement', agent, key: '1', model, branch, ingested: true, at: 1 });
 const codexOut = { codex: 'codex weekly limit' };
 
-test('one agent in allowance: an implement job and an interim review run at the same time, each with its role model', async t => {
+test('one agent in allowance: an implement job and a review on another model run at the same time, each with its role model', async t => {
   const w = world(t, { pulls: [pr(77, 'claude/issue-72-x', H(5))], out: codexOut });
+  w.team.s.jobs.w0 = written('claude', 'sonnet');
   const report = await w.team.tick();
   assert.deepEqual(w.calls.created.map(s => [s.provider, s.kind]).sort(), [['claude', 'implement'], ['claude', 'review']]);
   const by = Object.fromEntries(w.calls.created.map(s => [s.kind, s]));
-  assert.deepEqual([by.implement.model, by.implement.effort], ['opus', 'high']);
-  assert.deepEqual([by.review.model, by.review.effort], ['haiku', 'low']);   // the interim-review entry, never the implement entry
+  assert.deepEqual([by.implement.model, by.implement.effort], ['sonnet', 'high']);
+  assert.deepEqual([by.review.model, by.review.effort], ['opus', 'low']);   // the review entry, a different model from the one that wrote the PR
   assert.equal(report.actions.length, 2);
 });
 
@@ -70,12 +73,14 @@ test('negative: two implement jobs never run at once with implementer: 1, even f
   assert.equal(new Set(issues).size, issues.length); assert.equal(issues.length, 2);
 });
 
-test('an interim review fills the reviewer slot while the same agent implements; a second review waits', async t => {
+test('a review on another model fills the reviewer slot while the same agent implements; a second review waits', async t => {
   const w = world(t, { pulls: [pr(77, 'claude/issue-72-x', H(5)), pr(78, 'claude/issue-73-x', H(6))], out: codexOut });
+  w.team.s.jobs.w0 = written('claude', 'sonnet', 'claude/issue-72-x'); w.team.s.jobs.w1 = written('claude', 'sonnet', 'claude/issue-73-x');
   running(w, 'i', 'implement', 'claude', { issue: 5 });
   const acts = await w.team.plan();
-  assert.deepEqual(acts.map(a => [a.agent, a.type, a.pr, !!a.interim]), [['claude', 'review', 77, true]]);
+  assert.deepEqual(acts.map(a => [a.agent, a.type, a.pr]), [['claude', 'review', 77]]);
   const full = world(t, { pulls: [pr(77, 'claude/issue-72-x', H(5))], out: codexOut });
+  full.team.s.jobs.w0 = written('claude', 'sonnet');
   running(full, 'i', 'implement', 'claude', { issue: 5 }); running(full, 'r', 'review', 'claude', { pr: 76 });
   assert.deepEqual(await full.team.plan(), []);   // both slots busy (and overall 2 reached)
 });
@@ -88,10 +93,10 @@ test('the reviewer slot is not blocked by an implementer job, and a review does 
   assert.ok(roleOfType('review') === 'reviewer' && ['implement', 'continue', 'fix', 'cifix', 'rebase'].every(k => roleOfType(k) === 'implementer'));
 });
 
-test('with both agents available a review goes to the opposite agent of the author, not the author', async t => {
+test('with both agents available a review goes to the other provider first, though the author provider could review on another model', async t => {
   const w = world(t, { pulls: [pr(77, 'claude/issue-72-x', H(5))] });
   const rev = (await w.team.plan()).filter(a => a.type === 'review');
-  assert.deepEqual(rev.map(a => [a.agent, !!a.interim]), [['codex', false]]);
+  assert.deepEqual(rev.map(a => a.agent), ['codex']);
 });
 
 test('overall is still honoured across the slots', async t => {
