@@ -342,6 +342,12 @@ test('#141 a fix-limit PR gives one card instead of a CI warning; fewer fix roun
   const early = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state: { fixAttempts: { [`41:${H(1)}`]: 1 }, verdicts: {}, jobs: {} } }));
   assert.equal(early.panels.needsYou.length, 0); assert.ok(early.panels.warnings.some(w => w.id === 'ci-41'));
 });
+test('#141 no limit card while the final review or fix job is still running', async t => {
+  const rv = await needsOf(await serve(t, { jobs: [jb({ kind: 'review', issue: 41, status: 'running' })], cache: calmCache(), state: { reviewAttempts: { [`41:${H(1)}:codex`]: 2 }, verdicts: {}, jobs: {} } }));
+  assert.equal(rv.panels.needsYou.length, 0); assert.notEqual(rv.health.label, 'Needs you (1)');
+  const fx = await needsOf(await serve(t, { jobs: [jb({ kind: 'fix', issue: 41, status: 'running' })], cache: calmCache({ statusCheckRollup: red }), state: { fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {} } }));
+  assert.ok(!fx.panels.needsYou.some(c => /^fixlimit-/.test(c.id)));
+});
 test('#141 a review-limit PR gives one card', async t => {
   const v = await needsOf(await serve(t, { cache: calmCache(), state: { reviewAttempts: { [`41:${H(1)}:codex`]: 2 }, verdicts: {}, jobs: {} } }));
   assert.deepEqual(v.panels.needsYou.map(c => c.id), ['reviewlimit-41']);

@@ -220,8 +220,10 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const verdict = state.verdicts?.[`${pr.number}:${pr.headRefOid}`]?.verdict;
     const rejected = verdict === 'CHANGES' || checksState(pr.statusCheckRollup) === 'red';
     const fixes = fixCount(pr.number);
-    const fixLimit = !pr.isDraft && Number.isFinite(maxFix) && fixes >= maxFix && rejected;
-    const reviewLimit = !pr.isDraft && Number.isFinite(maxReview) && !verdict && Object.entries(state.reviewAttempts || {}).some(([k, v]) => k.startsWith(`${pr.number}:${pr.headRefOid}:`) && v >= maxReview);
+    // Attempts are counted when a job is created, so the limit cards wait until the last such job has finished.
+    const activeKinds = new Set([...jobs].filter(j => j.issue === pr.number && ACTIVE.includes(j.status)).map(j => j.kind));
+    const fixLimit = !pr.isDraft && Number.isFinite(maxFix) && fixes >= maxFix && rejected && !['fix', 'cifix', 'rebase'].some(k => activeKinds.has(k));
+    const reviewLimit = !pr.isDraft && Number.isFinite(maxReview) && !verdict && !activeKinds.has('review') && Object.entries(state.reviewAttempts || {}).some(([k, v]) => k.startsWith(`${pr.number}:${pr.headRefOid}:`) && v >= maxReview);
     const labelled = pr.labels?.includes('needs-homeowner');
     if (!fixLimit && !reviewLimit && !labelled) continue;
     if (fixLimit) fixLimited.add(pr.number);
