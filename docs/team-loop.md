@@ -63,3 +63,11 @@ A failure of one item (a lease conflict, one `gh` error, a failed comment) is re
 
 ## Checkouts that are not linked worktrees (issue #57)
 A job's worktree must be a linked worktree of the configured repository. The check resolves the git directory from the worktree's own absolute path (`git -C <worktree> rev-parse --git-common-dir`, resolved against that directory), never from the process working directory, so it behaves the same under cron, from `/`, or from a directory with no `.git`. A standalone clone (for example an agent's own `git clone` at the path the dispatcher would use) is not accepted. This is a condition for the homeowner, not a failed tick: the action is reported under `blocked` (not `skipped`), a "Needs the homeowner" notice is posted once on the PR, the action is not planned again for an hour, and the other agents and items carry on. Fix it by moving the work to a linked worktree (`git worktree add`) or removing the checkout.
+
+## Config migrations on install (issue #153)
+
+A release that replaces a `team.local.json` key ships a numbered migration, `supervisor/migrations/NNN-name.mjs`, exporting a one-line `description` and a pure `migrate(oldLocalConfig) -> newLocalConfig`. It is reviewed like any code; there are no shell hooks. Before a live tick, `runMigrations` runs every migration above the applied number, in order: it writes a mode-600 backup (`team.local.json.bak-<timestamp>-NNN` beside the file), applies the function, validates the result against the shipped config, writes it atomically, records the applied number in `<state root>/team/migrations.json` and appends a line to `<state root>/team/incidents.jsonl`. The dashboard Activity shows each one. A reinstall keeps the state root, so an applied migration never runs again. Without a `team.local.json` the migrations are recorded as applied and nothing is written.
+
+A failing migration (exception, invalid result, unreadable file) leaves `team.local.json` untouched, stops the tick, records the failure once and raises a **Needs you** item naming the migration. The next tick retries it, so fixing the file by hand clears the item. A dry run (`team status`, `team tick --dry-run`) runs no migration.
+
+Shipped: `001-drop-per-agent` removes `limits.per_agent` when `limits.roles` is not set locally, so the shipped roles apply.
