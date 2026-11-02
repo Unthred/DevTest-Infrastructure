@@ -213,3 +213,16 @@ test('issue #148 role slots: the implementer and reviewer slots are shown with a
   const done = await status({ jobs: [job({ id: a, status: 'completed' })], state: { jobs: { [a]: { kind: 'implement', agent: 'claude', model: 'sonnet', issue: 104 } } } });
   assert.equal(done.slots[0].text, 'Implementer: idle');
 });
+
+test('drain (issue #136): team status shows "install pending since …, draining (N jobs running)" only while holding', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'drainst-'));
+  try {
+    fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+    assert.equal((await status({ root })).hold, null); assert.doesNotMatch(text(await status({ root })), /draining/);
+    atomicJson(path.join(root, 'team', 'self-upgrade.json'), { holding: { to: H(7), since: NOW - 10 * MIN, jobs: 2 } });
+    const s = await status({ root });
+    assert.match(text(s), /install pending since 11:50 \(upgrade to 7777777\), draining \(2 jobs running\)/);
+    atomicJson(path.join(root, 'team', 'self-upgrade.json'), { holding: { to: H(7), since: NOW, jobs: 1 } });
+    assert.match(text(await status({ root })), /draining \(1 job running\)/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
