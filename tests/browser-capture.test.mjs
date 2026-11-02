@@ -47,6 +47,13 @@ async function run(t, scenario, extra = {}) {
   return { ...result, out: w.out, files: fs.readdirSync(w.out) };
 }
 
+test('a Playwright module that cannot be imported is a launch fault, not a page failure', async t => {
+  const w = world(t); await w.ready;
+  const r = await capture({ path: '/', browser: 'chromium', profile: 'desktop', wait: 'load', timeoutMs: 5000, name: 'p', fullPage: false, trace: false, out: w.out, socketDir: w.sockets, target: 'fixture', playwright: path.join(w.dir, 'missing', 'index.mjs') });
+  assert.equal(r.exit, EXIT.launch);
+  assert.match(r.report.problems.join(' '), /could not be loaded/);
+});
+
 test('a clean page: exit 0, screenshot written, report ok', async t => {
   const r = await run(t, {});
   assert.equal(r.exit, EXIT.ok); assert.equal(r.report.ok, true); assert.deepEqual(r.report.problems, []);

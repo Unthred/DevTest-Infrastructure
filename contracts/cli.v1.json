@@ -10,8 +10,8 @@
     { "name": "doctor", "args": [], "track": "core", "notes": "Read-only. Reports Docker, images, cache, OpenBao reachability and policy state." },
     { "name": "dotnet build", "args": ["--sdk <8|9|10>", "--project <path>"], "track": "dotnet" },
     { "name": "dotnet test", "args": ["--sdk <8|9|10>", "--project <path>", "[--coverage]"], "track": "dotnet" },
-    { "name": "web screenshot", "args": ["--url <url>", "--profile <name>"], "track": "browser" },
-    { "name": "web responsive", "args": ["--url <url>", "--profiles <list>", "[--assert <rule>...]"], "track": "browser" },
+    { "name": "web screenshot", "args": ["--url <url>", "--profile <name>", "[--browser <engine>]", "[--full-page]", "[--root <dir>]"], "track": "browser" },
+    { "name": "web responsive", "args": ["--url <url>", "--profiles <list>", "[--assert <rule>...]", "[--browser <engine>]", "[--root <dir>]"], "track": "browser" },
     { "name": "report", "args": ["<run-id>"], "track": "core" },
     { "name": "cleanup", "args": ["[--run-id <id>]", "[--older-than <duration>]", "[--dry-run]"], "track": "core" }
   ],
