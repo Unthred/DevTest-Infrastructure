@@ -30,8 +30,13 @@ function parseJson(text) { try { const v = JSON.parse(text); return v && typeof 
 export function parseReconcileLog(text) {
   const ticks = [];
   let cur = null;
-  const open = (at, rc = null) => { cur = { at, rc, result: null, stray: [] }; ticks.push(cur); return cur; };
-  const stray = line => { (cur || open(null)).stray.length < MAX_LINES_PER_TICK && cur.stray.push(scrub(line)); };
+  const open = (at, rc = null) => { cur = { at, rc, result: null, stray: [], warnings: [] }; ticks.push(cur); return cur; };
+  // team-alert is best effort (#143): its "team-alert: warning: ..." lines are warnings, never tick errors.
+  const stray = line => {
+    const t = cur || open(null);
+    if (/^team-alert: warning:/.test(line)) { t.warnings.length < MAX_LINES_PER_TICK && t.warnings.push(scrub(line)); return; }
+    t.stray.length < MAX_LINES_PER_TICK && t.stray.push(scrub(line));
+  };
   for (const raw of String(text || '').split('\n')) {
     const line = raw.trimEnd();
     if (!line.trim()) continue;
@@ -45,10 +50,10 @@ export function parseReconcileLog(text) {
         const obj = i >= 0 ? parseJson(out.slice(i).trim()) : null;
         if (obj) t.result = obj;
         const before = (obj ? out.slice(0, i) : out).trim();
-        if (before) t.stray.push(scrub(before));
+        if (before) stray(before);
       } else {
         open(at);
-        if (rest && rest !== 'tick') cur.stray.push(scrub(rest));
+        if (rest && rest !== 'tick') stray(rest);
       }
       continue;
     }
@@ -84,7 +89,7 @@ function summariseTick(t) {
   else if (!t.result) status = 'empty';
   else status = 'ok';
   return { at: Number.isFinite(t.at) ? t.at : null, rc: t.rc, status, note, actions, skipped, ingested, released: released.length, releasedIds: released,
-    resumed: Number(r.resumed) || 0, blocked: Number(r.blocked) || 0, selfUpgrade, errors: errors.slice(0, MAX_LINES_PER_TICK) };
+    resumed: Number(r.resumed) || 0, blocked: Number(r.blocked) || 0, selfUpgrade, warnings: t.warnings.slice(0, MAX_LINES_PER_TICK), errors: errors.slice(0, MAX_LINES_PER_TICK) };
 }
 
 // One plain line per tick, for the copy-for-overseer text and the tick history.

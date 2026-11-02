@@ -377,3 +377,12 @@ test('app.js copy: execCommand fallback on plain HTTP, visible confirmation, no 
   const dialog = bad.body.children.find(c => c.className === 'copy-manual' && !c.removed);
   assert.ok(dialog, 'manual dialog shown'); assert.equal(dialog.children[0].value, 'DevTest overseer note\nline two'); assert.equal(dialog.children[0].readOnly, true);
 });
+
+test('team-alert warnings after a clean reconcile tick are warnings, not a tick error (issue #143)', () => {
+  const log = '2026-10-31T18:00:00Z tick\n{"resumed":0,"blocked":0,"team":{"actions":[]}}\nteam-alert: warning: notify failed\nteam-alert: warning: cannot write /x/alert.state\n';
+  const [tick] = parseReconcileLog(log);
+  assert.equal(tick.status, 'ok'); assert.deepEqual(tick.errors, []);
+  assert.equal(tick.warnings.length, 2);
+  const [other] = parseReconcileLog('2026-10-31T18:00:00Z tick\n{"resumed":0}\nsomething else broke\n');
+  assert.equal(other.status, 'error');
+});

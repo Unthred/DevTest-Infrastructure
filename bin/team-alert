@@ -18,7 +18,9 @@ if echo "$last" | grep -q '"error"'; then kind=stuck; msg="Agents stuck - tick f
 elif [ "${planned:-0}" -gt 0 ]; then kind=stuck; msg="Agents stuck - $planned planned job(s) not starting | Check team-status"; wait=600
 elif [ -n "$paused" ]; then kind=paused; msg="Agents paused - usage limit: $paused| Auto-restart after reset"; wait=0
 else kind=idle; msg="Agents out of work - nothing planned | Waiting on reviews/CI or queue empty"; wait=1800; fi
-read -r pkind since lastsent < "$ST" 2>/dev/null
+{ read -r pkind since lastsent < "$ST"; } 2>/dev/null
+case $since in ''|*[!0-9]*) since=$now; lastsent=0;; esac
+case $lastsent in ''|*[!0-9]*) lastsent=0;; esac
 [ "$pkind" != "$kind" ] && { since=$now; lastsent=0; }
 if [ $((now-since)) -ge $wait ] && [ $((now-${lastsent:-0})) -ge 7200 ]; then
   lvl=warning; [ $kind = idle ] && lvl=normal

@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 // Issue #143: bin/team-alert creates its state file and never fails the tick.
 const script = path.resolve('bin/team-alert');
 function fixture(t, { statusOut = '', notifyOk = true } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-alert-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true, mode: 0o700 }));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-alert-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const sup = path.join(dir, 'sup'), notify = path.join(dir, 'notify');
   fs.writeFileSync(sup, `#!/bin/bash\n[ "$1" = status ] && printf '%s' ${JSON.stringify(statusOut)}\n[ "$1" = team ] && echo '{"actions":[]}'\nexit 0\n`, { mode: 0o755 });
   fs.writeFileSync(notify, `#!/bin/bash\n${notifyOk ? 'echo "$@" >> "$(dirname "$0")/sent"; exit 0' : 'exit 1'}\n`, { mode: 0o755 });
@@ -55,4 +55,12 @@ test('an overdue idle state sends one alert', t => {
   fs.writeFileSync(f.state, `idle ${Math.floor(Date.now() / 1000) - 99999} 0\n`, { mode: 0o600 });
   assert.equal(f.run().status, 0);
   assert.match(fs.readFileSync(path.join(f.dir, 'sent'), 'utf8'), /out of work/);
+});
+
+test('a corrupt state file is reset instead of aborting with a bash arithmetic error', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.state, 'idle 12x 0\n', { mode: 0o600 });
+  const r = f.run();
+  assert.equal(r.status, 0); assert.equal(String(r.stderr || ''), '');
+  assert.match(fs.readFileSync(f.state, 'utf8'), /^idle \d+ 0\n$/);
 });
