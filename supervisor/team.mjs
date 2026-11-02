@@ -1566,6 +1566,13 @@ export class Team {
   // Issue #149: a cancelled check with no later run of its name is pending, not red. After a bounded wait the dispatcher reruns it
   // once (gh run rerun); if it is still cancelled a further wait later, the PR is labelled needs-homeowner (Needs you). Recorded
   // before each effect, so a failed call is not repeated blindly and a rerun is never issued twice for the same head.
+  // True when every check that was rerun now has a latest run that completed with a genuine failure. A different check failing on the
+  // head does not count (nor does a timeout: the entry must stay so `retried` keeps treating it as a failure). The entry holding rerunAt must survive, or a rerun that ends cancelled again would be rerun a second time.
+  rerunFailed(pr, w) {
+    if (!w.names?.length) return false;
+    const latest = latestChecks(pr.statusCheckRollup);
+    return w.names.every(n => { const c = latest.find(x => (x.name || x.context) === n); return !!c && checkDone(c) && !isCancelled(c) && !CHECK_OK.includes(c.conclusion || c.state); });
+  }
   async watchCancelled(report, guard = (_, fn) => fn()) {
     const wait = this.c.limits.cancelled_wait_ms ?? CANCELLED_WAIT_MS, now = this.clock.now();
     const pulls = await this.gh.listPulls(), open = new Set(pulls.map(pr => `${pr.number}:${pr.headRefOid}`));
@@ -1580,7 +1587,7 @@ export class Team {
         // (no lone cancel either), so the entry is kept until the head goes green or has a genuine failure (a rerun that stays cancelled is not one; red belongs to the fix path, and a later manual cancel then gets its own rerun); a rerun that ends cancelled again leads to the
         // notice, never to a second rerun.
         const w = this.s.cancelWatch[key];
-        if (w && !w.noticed && (!w.rerunAt || this.ciState(pr) === 'green' || checksState(pr.statusCheckRollup) === 'red')) delete this.s.cancelWatch[key];
+        if (w && !w.noticed && (!w.rerunAt || this.ciState(pr) === 'green' || this.rerunFailed(pr, w))) delete this.s.cancelWatch[key];
         continue;
       }
       const w = this.s.cancelWatch[key] ||= { since: now };
@@ -1588,7 +1595,7 @@ export class Team {
         const runs = [...new Set(lone.map(c => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl || '')?.[1]).filter(Boolean))];
         const room = this.unblockRoom(pr.number);
         if (room) { await guard(`unblock limit ${pr.number}`, () => this.raiseUnblockLimit(report, pr.number, room, 'pull')); continue; }
-        w.rerunAt = now; w.runs = runs; this.save();
+        w.rerunAt = now; w.runs = runs; w.names = lone.map(c => c.name || c.context).filter(Boolean); this.save();
         await guard(`rerun cancelled ${pr.number}`, () => this.unblock(report, { target: pr.number, tk: 'pull', what: `re-ran CI on PR #${pr.number}`, why: `check(s) ${lone.map(c => String(c.name || 'unnamed').slice(0, 60)).join(', ')} were ${lone.some(c => c.conclusion === 'TIMED_OUT') ? 'cancelled or timed out' : 'cancelled'} on the current head with no later run` },
           async () => { for (const r of runs) await this.gh.rerunRun(r); return `rerun requested (once per head)`; }));
         (report.notified ||= []).push({ pr: pr.number, rerun: runs });

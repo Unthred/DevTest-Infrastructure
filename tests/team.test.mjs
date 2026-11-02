@@ -1123,6 +1123,22 @@ test('issue #167 watchCancelled: a rerun that ends red drops the watch, so a lat
   assert.deepEqual(w.calls.reruns, ['9', '9']); assert.equal(w.calls.labels.length, 0);
 });
 
+test('issue #167 watchCancelled: another check failing does not drop the watch, so a rerun that ends cancelled again leads to the notice, not a second rerun', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const url = { detailsUrl: 'https://github.com/o/r/actions/runs/9/job/1' };
+  const bad = done('FAILURE', 'gitguardian', T0);
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [bad, done('CANCELLED', 'test', T0, url)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.watchCancelled({}); clock.t += 5 * 60000; await w.team.watchCancelled({});
+  assert.deepEqual(w.calls.reruns, ['9']);
+  for (let i = 0; i < 6; i++) {
+    w.gh.pulls[0].statusCheckRollup = [bad, { status: 'IN_PROGRESS', name: 'test', workflowName: 'CI', startedAt: T1, ...url }];
+    await w.team.watchCancelled({}); assert.ok(w.team.s.cancelWatch[`10:${H(1)}`]?.rerunAt);
+    w.gh.pulls[0].statusCheckRollup = [bad, done('CANCELLED', 'test', T1, url)];
+    clock.t += 5 * 60000; await w.team.watchCancelled({});
+  }
+  assert.deepEqual(w.calls.reruns, ['9']); assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']]);
+});
+
 test('issue #167 watchCancelled: at the 100-PR list cap the prune is skipped; below it a missing PR is pruned', async t => {
   const clock = { t: 1000, now: () => clock.t };
   const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('SUCCESS', 'test', T0)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
