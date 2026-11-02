@@ -142,7 +142,7 @@ test('fixes: Sonnet only, never escalated; the fix limit stops the PR with one N
   const r = await w.team.tick();
   assert.deepEqual(types(r.actions), ['fix']);
   assert.equal(w.calls.created.at(-1).model, 'sonnet');
-  w.team.s.fixAttempts[vk] = 2;
+  w.team.s.exceptionFixes[77] = 2;
   assert.deepEqual(types(await w.team.plan()), [], 'no escalated round for a listed PR');
   const reasons = w.team.stallReasons(w.gh.pulls[0]);
   assert.equal(reasons.filter(x => x.code === 'fix-limit').length, 1);
@@ -178,4 +178,17 @@ test('a whole-PR exception PASS never merges once the exception has expired or l
     // D-024 refuses an Opus review of the Opus-written head, so no review of it is planned either, and it is never merged
     assert.ok(!actions.some(a => a.type === 'merge'));
   }
+});
+
+test('fix rounds spent before the exception began do not stop the Sonnet fix of a listed PR', async t => {
+  const w = world(t);
+  w.team.s.fixAttempts['77:' + H(3)] = 2;   // two earlier rounds on an older head, before the exception route
+  const vk = `77:${H(5)}`;
+  w.team.s.verdicts[vk] = { verdict: 'CHANGES', reviewer: 'claude', job: 'd'.repeat(32), model: 'opus', exceptionStage: 'full', independent: true, findings: [{ kind: 'blocking', text: 'x' }], commandsRun: ['x'], at: NOW };
+  assert.equal(w.team.fixCount(77), 0);
+  const r = await w.team.tick();
+  assert.deepEqual(types(r.actions), ['fix']);
+  assert.equal(w.calls.created.at(-1).model, 'sonnet');
+  assert.equal(w.team.s.exceptionFixes[77], 1);
+  assert.equal(w.team.s.fixAttempts[vk], 1);
 });

@@ -409,7 +409,7 @@ export class Team {
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -652,7 +652,8 @@ export class Team {
   }
   // Fix attempts (CHANGES fixes and CI fixes) are counted per PR, across heads: a fix that pushes a new head and is then rejected
   // again must not reset the budget (PR #38 reached five CHANGES verdicts under a per-head count). Keys stay `<pr>:<head>`.
-  fixCount(pr) { return Object.entries(this.s.fixAttempts).reduce((n, [k, v]) => n + (k === String(pr) || k.startsWith(`${pr}:`) ? v : 0), 0); }
+  // Issue #318: a listed PR counts only the fix rounds run under the exception, so rounds spent before it began do not stop its Sonnet fix.
+  fixCount(pr) { if (this.exceptionFor(pr)) return this.s.exceptionFixes[pr] || 0; return Object.entries(this.s.fixAttempts).reduce((n, [k, v]) => n + (k === String(pr) || k.startsWith(`${pr}:`) ? v : 0), 0); }
   agentOfProvider(provider) { return this.agents().find(([, a]) => a.provider === provider)?.[0] || null; }
 
   async plan() {
@@ -1924,7 +1925,7 @@ export class Team {
       spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, scope: `Fix the CHANGES verdict on PR #${act.pr}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: fixPrompt({ pr: act.pr, head: act.head, branch: act.branch, escalatedInbox, requirementsFile: rq?.file }), postcondition: { kind: 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) };
-      bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; };
+      bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; if (this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
     } else if (act.type === 'rebase' || act.type === 'cifix') {
       const rebase = act.type === 'rebase';
       const details = rebase ? [] : await this.thirdPartyChecks(act);
@@ -1937,7 +1938,7 @@ export class Team {
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head, ...(rebase ? { base: act.base } : { branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) }) };
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
-      bump = () => { this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; };
+      bump = () => { this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase && this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: 'continue', worktree: wt, issue: act.issue, scope: `Continue draft PR #${act.pr} for issue #${act.issue} on ${act.branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
