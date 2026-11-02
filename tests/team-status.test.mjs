@@ -162,7 +162,7 @@ test('install and upgrade scripts both provide a team-status wrapper that delega
 test('idle reasons (#50): each idle agent states why in plain words', async () => {
   const idle = async (cache, state = {}, agent = 'codex') => (await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, merged: [], ...cache }, state })).agents.find(a => a.name === agent);
   // fix limit reached -> waiting for homeowner, with a link
-  let a = await idle({ pulls: [pr(41, 'codex/issue-2-x', H(1))], issues: [issue(2), issue(3, 'CLOSED')] }, { verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'claude' } }, fixAttempts: { [`41:${H(0)}`]: 2 } });
+  let a = await idle({ pulls: [pr(41, 'codex/issue-2-x', H(1))], issues: [issue(2), issue(3, 'CLOSED')] }, { verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'claude' } }, fixAttempts: { [`41:${H(0)}`]: 2 }, unblock: { escalated: { 41: {} } } });
   assert.match(a.text, /waiting for homeowner: fix limit reached on #41/); assert.equal(a.idleReason.links[0].url, 'https://github.com/o/r/pull/41');
   // only work is a draft whose issue is closed -> not continuable
   a = await idle({ pulls: [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] });
