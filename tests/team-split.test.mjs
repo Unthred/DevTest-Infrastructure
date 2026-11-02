@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Team, readSplitDraft } from '../supervisor/team.mjs';
-import { stateRoot } from '../supervisor/core.mjs';
+import { stateRoot, LeaseHeld } from '../supervisor/core.mjs';
 
 const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n';
 const cfg = () => ({ schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
@@ -116,4 +116,17 @@ test('Accept split survives a crash half way: a child already filed is found by 
   w.gh.createIssue = create;
   const filed = await w.team.acceptSplit(23);
   assert.equal(filed.length, 2); assert.equal(w.calls.issues.length, 2, 'two issues in total, not three');
+});
+
+test('issue #302: a split draft blocked by a live review job holding the lease waits; it is not a skipped item', async t => {
+  const w = world(t);
+  const HOLD = 'bc'.repeat(16); w.jobs.states[HOLD] = { id: HOLD, status: 'running', kind: 'review', worktree: '/p/wt' }; w.jobs.alive = async () => true;
+  const real = w.jobs.create; let free = false;
+  w.jobs.create = async spec => { if (!free) throw new LeaseHeld(HOLD); return real(spec); };
+  const r = rep(); const guard = async (what, fn) => { try { await fn(); } catch (e) { r.skipped.push({ what, reason: e.message }); } };
+  await w.team.notifyBlocked(r, guard);
+  assert.equal(r.skipped.length, 0); assert.equal(r.waiting.length, 1); assert.match(r.waiting[0].reason, /waiting for job bcbcbcbc \(running\)/);
+  assert.equal(w.team.s.splits[23], undefined, 'nothing is recorded, so the split is retried once the lease is free');
+  free = true; await w.team.notifyBlocked(r, guard);
+  assert.equal(w.calls.created.length, 1); assert.equal(w.team.s.splits[23].status, 'drafting');
 });

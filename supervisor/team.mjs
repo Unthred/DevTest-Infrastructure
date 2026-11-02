@@ -1142,7 +1142,7 @@ export class Team {
   //    released (the job record is kept) and the action is retried once;
   //  - anything else (no record, blocked or failed, a dead "running" job, a dirty or unreadable worktree, no way to check): one
   //    Needs you item naming the holder and the exact next step. Nothing is released.
-  async leaseHeld(error, act, report) {
+  async leaseHeld(error, act, report, retry = () => this.execute(act, report)) {
     const what = `${act.type} ${act.pr ?? act.issue} (${act.agent})`;
     const id = typeof error.holder === 'string' ? error.holder : null;
     let job = null; try { job = id ? await this.jobs.get(id) : null; } catch { /* unreadable record: uncertain */ }
@@ -1164,7 +1164,7 @@ export class Team {
         try {
           await this.jobs.release(id);
           (report.recovered ||= []).push({ what, reason: `released the stale lease of finished job ${short}; its record is kept` });
-          await this.execute(act, report);
+          await retry();
           return;
         } catch (again) {
           if (!(again instanceof LeaseHeld)) throw again;
@@ -1205,7 +1205,13 @@ export class Team {
       kind: 'split', worktree: wt, issue: j.issue, scope: `Draft a split of issue #${j.issue}; read-only, no code`, allowed_actions: ['read'],
       prompt: splitPrompt({ issue: j.issue, inbox }), postcondition: { kind: 'split_drafted', ticket } };
     Object.assign(spec, this.modelFor({ agent: j.agent, key: `split:${j.issue}` }, 'split', report));
-    const created = await this.jobs.create(spec);
+    // A lease held by a running review job on the shared review worktree is an expected wait, not a skipped item (issue #302).
+    let created = null;
+    try { created = await this.jobs.create(spec); } catch (error) {
+      if (!(error instanceof LeaseHeld)) throw error;
+      await this.leaseHeld(error, { type: 'split', issue: j.issue, agent: j.agent }, report, async () => { created = await this.jobs.create(spec); });
+    }
+    if (!created) return;
     this.s.jobs[created.id] = { kind: 'split', agent: j.agent, key: `split:${j.issue}`, issue: j.issue, ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ingested: false, at: this.clock.now() };
     this.s.splits[j.issue] = { status: 'drafting', implementJob: id, draftJob: created.id, agent: j.agent, wasted, at: this.clock.now() };
     this.s.notified[nkey] = this.clock.now(); this.save();
