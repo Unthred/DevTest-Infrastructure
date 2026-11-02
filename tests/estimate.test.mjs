@@ -158,8 +158,8 @@ test('team status prints the estimates', async () => {
   const s = await status();
   const out = renderStatus(s);
   assert.match(out, /=== Estimated finish/);
-  assert.match(out, /issue #30 \(claude\): est\. \d\d:\d\d\u2013\d\d:\d\d/);
-  assert.match(out, /claude → implement issue #30 \(est\. /);
+  assert.match(out, /#30 issue 30 \(claude\): est\. \d\d:\d\d\u2013\d\d:\d\d/);
+  assert.match(out, /claude → implement #30 issue 30 \(est\. /);
   assert.ok(s.estimates.items.every(e => e.basis.length > 0));
   assert.ok(!/est\./.test(s.next.plan[0].text), 'plan text itself is unchanged');
 });

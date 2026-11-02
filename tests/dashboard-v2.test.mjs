@@ -174,7 +174,7 @@ test('every page has its own URL, answers 200 with the navigation bar, and marks
     assert.match(r.body, /<nav class="nav" id="nav" aria-label="Pages">/); assert.match(r.body, /aria-current="page"/); assert.match(r.body, /<main id="main">/); assert.match(r.body, /class="skip"/);
     for (const label of ['Overview', 'Agents', 'Work', 'Activity', 'Usage &amp; cost', 'Reviews', 'System']) assert.match(r.body, new RegExp(`<span>${label}</span>`), `${u} ${label}`);
   }
-  assert.match((await s.get('/work/pr/41')).body, /<a href="\/work"[^>]*>Work<\/a><span class="sep" aria-hidden="true">›<\/span><\/li><li><span aria-current="page">PR #41<\/span>/);
+  assert.match((await s.get('/work/pr/41')).body, /<a href="\/work"[^>]*>Work<\/a><span class="sep" aria-hidden="true">›<\/span><\/li><li><span aria-current="page">PR #41 · #30 Thirty<\/span>/);
   assert.match((await s.get('/agents/claude')).body, /aria-current="page"><svg[^>]*><use href="#i-users"/, 'an agent page highlights Agents');
   assert.match((await s.get('/work/issue/30')).body, /aria-current="page"><svg[^>]*><use href="#i-list"/);
   assert.doesNotMatch((await s.get('/work')).body, /<b>x<\/b>/); assert.doesNotMatch((await s.get('/work/pr/41')).body, /<b>bad<\/b>/);
@@ -193,8 +193,8 @@ test('PR drill-down: timeline, each round of findings, rounds count, CI; issue d
   assert.match(pr, /first finding/); assert.match(pr, /second finding/); assert.match(pr, /1 fix · 2 rebase|2 review · 1 fix · 2 rebase/); assert.match(pr, /CI green/); assert.match(pr, /Verdict history/); assert.match(pr, /Timeline/);
   assert.ok(pr.indexOf('CHANGES') < pr.indexOf('PASS') || pr.indexOf('PASS') < pr.indexOf('CHANGES')); assert.match(pr, /<td data-label="Tokens"[^>]*>500</, 'tokens of the PR job');
   const is = (await s.get('/work/issue/30')).body;
-  assert.match(is, /Blocking[\s\S]*issue #5/); assert.match(is, /Done[\s\S]*issue #2/);
-  const dep = (await s.get('/work/issue/5')).body; assert.match(dep, /Waiting on this issue[\s\S]*issue #30/);
+  assert.match(is, /Blocking[\s\S]*>#5 /); assert.match(is, /Done[\s\S]*>#2 /);
+  const dep = (await s.get('/work/issue/5')).body; assert.match(dep, /Waiting on this issue[\s\S]*>#30 /);
   assert.match((await s.get('/work/issue/3')).body, /Needs homeowner[\s\S]*Yes/);
 });
 test('Overview: four labelled panels, KPI tiles and charts all link to detail pages; no inline script', async t => {
@@ -211,7 +211,7 @@ test('Needs you lists every needs-homeowner item with what, why, the decision ne
   const s = await serve(t, { cache: { ...cache(), tick: { at: NOW - 20 * 60000, status: 'error', error: 'gh failed', lastOkAt: NOW - 3 * 3600000 } } });
   const body = (await s.get('/')).body;
   const needs = body.slice(body.indexOf('data-card="needs"'), body.indexOf('data-card="warnings"'));
-  assert.match(needs, /Issue #3 needs the homeowner/); assert.match(needs, /href="\/work\/issue\/3"/); assert.match(needs, /Decision: Open the issue/); assert.match(needs, /Action needed/);
+  assert.match(needs, /#3 [^<]* needs the homeowner/); assert.match(needs, /href="\/work\/issue\/3"/); assert.match(needs, /Decision: Open the issue/); assert.match(needs, /Action needed/);
   assert.match(needs, /Last tick failed[\s\S]*Decision: Read the tick error/); assert.match(needs, /<code class="cmd mono">ai-supervisor team tick --dry-run<\/code>/);
   const warn = body.slice(body.indexOf('data-card="warnings"'));
   assert.match(warn, /No tick for 20 minutes/); assert.match(warn, /sev-warning/); assert.doesNotMatch(needs, /No tick for/);
@@ -225,7 +225,7 @@ test('Needs you lists every needs-homeowner item with what, why, the decision ne
 test('Now panel: a running agent shows its job, issue link, elapsed time and attempt; an idle agent shows why in plain words', async t => {
   const s = await serve(t, { jobs: [jb()], cache: cache() });
   const body = (await s.get('/')).body, now = body.slice(body.indexOf('data-card="now"'), body.indexOf('data-card="next"'));
-  assert.match(now, /implement[^<]*<a href="\/work\/issue\/30">issue #30/); assert.match(now, /attempt 2/); assert.match(now, /elapsed 10m/); assert.match(now, /Running/);
+  assert.match(now, /<a href="\/job\/[^"]*"|<a href="\/work\/job\/[^"]*"[^>]*>implement · #30[^<]* · job [0-9a-f]{8}<\/a>/); assert.match(now, /attempt 2/); assert.match(now, /elapsed 10m/); assert.match(now, /Running/);
   assert.match(now, /Idle: /, 'codex has no job'); assert.doesNotMatch(now, /No current job/);
 });
 test('idle-reason text is plain English and names the blocker (issue #50 wording reaches the page)', async t => {

@@ -10,6 +10,7 @@ import { checksState } from './team.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { modeLine } from './budget.mjs';
+import { makeNamer } from './naming.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;     // the reconcile cron runs `*/5 * * * *` (tools/install-reconcile-user-script.sh)
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -17,7 +18,7 @@ const KIND = { implement: 'implementing', continue: 'continuing draft work for',
 const hhmm = (ms, tz) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
 const dayOf = (ms, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(ms));
 const mins = ms => Math.round(ms / 60000);
-const ref = (type, n) => (['implement', 'continue', 'issue'].includes(type) ? `issue #${n}` : `PR #${n}`);
+const IMPLEMENTING = ['implement', 'continue', 'issue'];
 
 export { readLeases };
 
@@ -49,15 +50,17 @@ function verdictOf(state, p) {
 export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [], register = '', registerUnreadable = false }) {
   // An unreadable register is reported once, as the Problems entry buildView adds.
   const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now, register, registerUnreadable, tz });
+  const names = makeNamer({ repo: view.repository, issues: cache?.issues, pulls: cache?.pulls, merged: cache?.merged, mergeLog: state.mergeLog, stateJobs: state.jobs });
+  const ref = (type, n) => (IMPLEMENTING.includes(type) ? names.issue(n) : names.pr(n)).text;   // the shared formatter, never an ad-hoc string
   const live = id => jobs.some(j => j.id === id && ACTIVE.includes(j.status));
   const problems = view.attention.map(a => ({ id: a.id, text: a.text }));
   const add = (id, text) => { if (!problems.some(p => p.id === id)) problems.push({ id, text: redact(text, 300) }); };
 
   // 1. agents
   const agents = view.agents.map(a => {
-    const j = a.job, what = j ? `${KIND[j.kind] || j.kind} ${['implement', 'continue'].includes(j.kind) ? `issue #${j.ref}` : `PR #${j.ref}`}` : null;
+    const j = a.job, what = j ? j.name : null;
     const text = a.state === 'running' ? `running: ${what}` : a.state === 'paused' ? `paused: ${what}${j.nextAttemptAt ? `, restarts about ${hhmm(j.nextAttemptAt, tz)}` : ''}` : a.state === 'blocked' ? `blocked: ${what}` : `idle${a.idleReason ? `: ${a.idleReason.text}` : ''}`;
-    return { name: a.name, state: a.state, idleReason: a.idleReason || null, job: j ? { kind: j.kind, ref: j.ref } : null, text };
+    return { name: a.name, state: a.state, idleReason: a.idleReason || null, job: j ? { kind: j.kind, ref: j.ref, id: j.id, name: j.name } : null, text };
   });
 
   const slots = view.slots;   // role slots (issue #148), from the shared view
@@ -89,16 +92,16 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   for (const a of view.agents) if (a.state === 'paused') add(`paused-${a.name}`, `${a.name} is paused${a.job.lastEvent === 'usage_limit' ? ' on a usage limit' : ''}${a.job.nextAttemptAt ? `; restart planned about ${hhmm(a.job.nextAttemptAt, tz)}` : ''}.`);
   const stale = [...new Set(leases.filter(l => !live(l.job)).map(l => l.job))];
   if (stale.length) add('stale-leases', `${stale.length} lease(s) held with nothing running for them; probably stale (needs explicit recovery).`);
-  for (const p of cache?.pulls || []) if (p.mergeable === 'CONFLICTING' && !p.isDraft) add(`conflict-${p.number}`, `PR #${p.number} has merge conflicts: ${p.title}`);
+  for (const p of cache?.pulls || []) if (p.mergeable === 'CONFLICTING' && !p.isDraft) add(`conflict-${p.number}`, `${names.pr(p.number).text} has merge conflicts`);
 
   // 4. pull requests
-  const pulls = (cache?.pulls || []).map(p => ({ number: p.number, title: redact(p.title, 80), status: prState(p), ci: ciState(p), verdict: verdictOf(state, p), url: p.url || null }));
+  const pulls = (cache?.pulls || []).map(p => ({ number: p.number, name: redact(names.pr(p.number).text, 300), title: redact(names.titleOf(names.issueOfPr(p.number)?.number) ?? p.title, 80), status: prState(p), ci: ciState(p), verdict: verdictOf(state, p), url: p.url || null }));
 
   // 5. merged today (local day); the tick caches the merged list, the dispatcher's own log fills any gap
   const today = dayOf(now, tz);
   const seen = new Set(), mergedToday = [];
-  for (const m of cache?.merged || []) if (Date.parse(m.mergedAt) && dayOf(Date.parse(m.mergedAt), tz) === today && !seen.has(m.number)) { seen.add(m.number); mergedToday.push({ number: m.number, at: Date.parse(m.mergedAt), title: redact(m.title, 80) }); }
-  for (const m of state.mergeLog || []) if (Number.isFinite(m.mergedAt) && dayOf(m.mergedAt, tz) === today && !seen.has(m.pr)) { seen.add(m.pr); mergedToday.push({ number: m.pr, at: m.mergedAt, title: '' }); }
+  for (const m of cache?.merged || []) if (Date.parse(m.mergedAt) && dayOf(Date.parse(m.mergedAt), tz) === today && !seen.has(m.number)) { seen.add(m.number); mergedToday.push({ number: m.number, name: redact(names.pr(m.number).text, 300), at: Date.parse(m.mergedAt), title: '' }); }
+  for (const m of state.mergeLog || []) if (Number.isFinite(m.mergedAt) && dayOf(m.mergedAt, tz) === today && !seen.has(m.pr)) { seen.add(m.pr); mergedToday.push({ number: m.pr, name: redact(names.pr(m.pr).text, 300), at: m.mergedAt, title: '' }); }
   mergedToday.sort((a, b) => a.at - b.at);
 
   // 6. schedule
@@ -113,7 +116,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   // A pending supervisor upgrade holds back new jobs (issue #134); self-upgrade.json is written by the upgrade step.
   let hold = null;
   try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') hold = { to: redact(h.to.slice(0, 7), 12), since: Number.isFinite(h.since) ? h.since : null, text: `holding new jobs: upgrade to ${redact(h.to.slice(0, 7), 12)} pending` }; } catch { /* no state file: nothing is held */ }
-  const estimates = { waits: view.estimates.waits.map(w => ({ kind: w.kind, at: w.at, text: redact(w.text, 200) })), items: Object.values(view.estimates.items).map(e => ({ kind: e.kind, ref: e.ref, agent: e.agent, status: e.status, text: redact(e.text, 200), finishP50: e.finish?.p50 ?? null, finishP90: e.finish?.p90 ?? null, waits: e.waits.map(w => redact(w.text, 200)), basis: e.basis.map(b => redact(b, 300)) })) };
+  const estimates = { waits: view.estimates.waits.map(w => ({ kind: w.kind, at: w.at, text: redact(w.text, 200) })), items: Object.values(view.estimates.items).map(e => ({ kind: e.kind, ref: e.ref, name: redact(ref(e.kind, e.ref), 300), agent: e.agent, status: e.status, text: redact(e.text, 200), finishP50: e.finish?.p50 ?? null, finishP90: e.finish?.p90 ?? null, waits: e.waits.map(w => redact(w.text, 200)), basis: e.basis.map(b => redact(b, 300)) })) };
   return { hold, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
 }
 
@@ -138,17 +141,17 @@ export function renderStatus(s) {
   for (const w of s.next.waiting) out.push(`  ${w.text}`);
   head('Estimated finish');
   if (!s.estimates.items.length) out.push('  nothing queued');
-  for (const e of s.estimates.items) out.push(`  ${e.kind === 'issue' ? 'issue #' : 'PR #'}${e.ref} (${e.agent}): ${e.text}${e.waits.length ? ` [${e.waits.join('; ')}]` : ''}`);
+  for (const e of s.estimates.items) out.push(`  ${e.name} (${e.agent}): ${e.text}${e.waits.length ? ` [${e.waits.join('; ')}]` : ''}`);
   for (const w of s.estimates.waits) out.push(`  wait: ${w.text}`);
   head('Problems');
   if (!s.problems.length) out.push('  none');
   for (const p of s.problems) out.push(`  - ${p.text}`);
   head('Pull requests');
   if (!s.pulls.length) out.push('  none open');
-  for (const p of s.pulls) out.push(`  #${p.number} ${p.status}, CI ${p.ci}${p.verdict ? `, ${p.verdict.reviewer} said ${p.verdict.verdict}${p.verdict.current ? '' : ` on an older commit (${p.verdict.head})`}` : ', no verdict yet'}: ${p.title}`);
+  for (const p of s.pulls) out.push(`  ${p.name} ${p.status}, CI ${p.ci}${p.verdict ? `, ${p.verdict.reviewer} said ${p.verdict.verdict}${p.verdict.current ? '' : ` on an older commit (${p.verdict.head})`}` : ', no verdict yet'}`);
   head('Merged today');
   if (!s.mergedToday.length) out.push('  nothing yet');
-  for (const m of s.mergedToday) out.push(`  #${m.number} at ${t(m.at)}${m.title ? `: ${m.title}` : ''}`);
+  for (const m of s.mergedToday) out.push(`  ${m.name} at ${t(m.at)}`);
   head('Allowance');
   if (!s.allowance?.length) out.push('  no allowance data');
   for (const a of s.allowance || []) out.push(`  ${a.text}`);

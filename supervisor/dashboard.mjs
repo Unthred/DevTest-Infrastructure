@@ -11,6 +11,7 @@ import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, supervisorHealth } from './suphealth.mjs';
 import { MODE_LABEL } from './budget.mjs';
 import { estimateQueue } from './estimate.mjs';
+import { jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -91,14 +92,15 @@ function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now =
   return team;
 }
 
-function reasons(team, cache, jobs, plan, states) {
+function reasons(team, cache, jobs, plan, states, names) {
   const c = team.c, S = team.s, prs = cache.pulls || [], issues = cache.issues || [];
   const byNo = new Map(issues.map(i => [i.number, i]));
   const planned = new Set(plan.map(a => `${a.agent}:${a.type}:${a.issue ?? a.pr}`));
   const queues = Object.fromEntries(Object.keys(c.agents).map(n => [n, []]));
   const activeJobs = jobs.filter(j => ACTIVE.includes(j.status));
   const busy = agent => states[agent].state !== 'idle' && states[agent].state !== 'blocked';
-  const label = pr => `PR #${pr.number}`;
+  const label = pr => names.pr(pr.number).text;
+  const titleOfPr = pr => names.titleOf(names.issueOfPr(pr.number)?.number) ?? pr.title;   // the issue's title, not the pull request's
   for (const pr of prs) {
     const author = agentOfBranch(c, pr.headRefName);
     const key = `${pr.number}:${pr.headRefOid}`;
@@ -113,11 +115,11 @@ function reasons(team, cache, jobs, plan, states) {
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? `PASS from ${v.reviewer}; merges on the next tick` : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
     else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}`;
-    queues[author].push({ type: 'pr', ref: pr.number, title: pr.title, reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
+    queues[author].push({ type: 'pr', ref: pr.number, title: titleOfPr(pr), reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
     if (!pr.isDraft && checks === 'green' && !v) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
-      queues[reviewer].push({ type: 'review', ref: pr.number, title: pr.title, reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : team.held?.[reviewer]?.review ? ` (held: ${team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
+      queues[reviewer].push({ type: 'review', ref: pr.number, title: titleOfPr(pr), reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : team.held?.[reviewer]?.review ? ` (held: ${team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
     }
   }
   for (const [agent, a] of Object.entries(c.agents)) for (const n of a.issues) {
@@ -133,17 +135,17 @@ function reasons(team, cache, jobs, plan, states) {
     const running = activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n);
     let reason;
     if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
-    else if (open.length) reason = `blocked by ${open.map(d => `#${d}`).join(', ')}`;
+    else if (open.length) reason = `blocked by ${open.map(d => names.issue(d).text).join(', ')}`;
     else if (running) reason = 'being implemented now';
     else if (hasPr) reason = 'PR open';
-    else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; PR #${prOf.number} open` : ''}`;
+    else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; ${names.pr(prOf.number).text} open` : ''}`;
     else if (S.implemented?.[n]) reason = 'started earlier; no PR yet';
     else if (taker) reason = `next: taken from ${agent} by ${taker.agent}: ${agent} has no allowance${untilText(team.ownerOut(agent)?.until, team)} (${taker.agent} takes it; ${agent} keeps ownership)`;
     else if (planned.has(`${agent}:implement:${n}`)) reason = 'next: implement';
     else if (mode && mode.mode !== 'normal') reason = `waits: ${agent} is ${MODE_LABEL[mode.mode]} (${mode.reason}); no agent with headroom can take it`;
     else if (team.held?.[agent]?.implement) reason = `waits: ${team.held[agent].implement}`;
     else if (busy(agent)) reason = 'ready; waits behind the running job';
-    else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? '#' : 'PR #'}${ahead.issue ?? ahead.pr}` : 'ready; waits for a free slot'; }
+    else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? names.issue(ahead.issue).text : names.pr(ahead.pr).text}` : 'ready; waits for a free slot'; }
     queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason, next: planned.has(`${agent}:implement:${n}`) });
   }
   for (const q of Object.values(queues)) q.sort((x, y) => (y.next - x.next) || (x.ref - y.ref));
@@ -152,49 +154,50 @@ function reasons(team, cache, jobs, plan, states) {
 
 // Why an idle agent is idle, in plain words (issue #50). Homeowner waits first, then what is in flight, then drafts, then blocked issues.
 // Returns { text, links } where links are { text, url } for the PRs and issues named; null when the agent is not idle or has a planned job.
-export function idleReason({ agent, config, team, cache, plan, state }) {
+export function idleReason({ agent, config, team, cache, plan, state, names = makeNamer({ repo: config.repository, issues: cache.issues, pulls: cache.pulls, merged: cache.merged }) }) {
   if (state !== 'idle') return null;
   if (config.enabled === false) return { text: 'the team loop is switched off', links: [] };
   const next = plan.find(a => a.agent === agent);
-  if (next) return { text: `about to start ${next.type === 'cifix' ? 'fix CI on' : next.type} ${['implement', 'continue'].includes(next.type) ? '#' : 'PR #'}${next.issue ?? next.pr} on the next tick`, links: [] };
+  if (next) return { text: `about to start ${next.type === 'cifix' ? 'fix CI on' : next.type} ${['implement', 'continue'].includes(next.type) ? names.issue(next.issue).text : names.pr(next.pr).text} on the next tick`, links: [] };
   const c = team.c, a = c.agents[agent], L = c.limits, S = team.s, prs = cache.pulls || [], issues = cache.issues || [];
   const byNo = new Map(issues.map(i => [i.number, i]));
   const url = (kind, n) => `https://github.com/${config.repository}/${kind}/${n}`;
   const parts = [], links = [];
   const m = team.modes?.[agent];
   if (m && m.mode !== 'normal') parts.push({ rank: 0, text: `${MODE_LABEL[m.mode]}: ${m.reason}` });
-  const part = (rank, text, kind, n) => { parts.push({ rank, text }); links.push({ text: `${kind === 'pull' ? 'PR' : 'issue'} #${n}`, url: url(kind, n) }); };
+  const part = (rank, text, kind, n) => { parts.push({ rank, text }); links.push({ text: (kind === 'pull' ? names.pr(n) : names.issue(n)).text, url: url(kind, n) }); };
   const mine = prs.filter(p => agentOfBranch(c, p.headRefName) === agent);
   for (const p of mine) {
     const v = S.verdicts?.[`${p.number}:${p.headRefOid}`], checks = checksState(p.statusCheckRollup);
     if (p.isDraft) {
-      if ((S.continueAttempts?.[p.number] || 0) >= L.max_fix_attempts) part(0, `waiting for homeowner: continue limit reached on draft #${p.number}`, 'pull', p.number);
-      else part(2, `only work is draft #${p.number}`, 'pull', p.number);
-    } else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) part(0, `waiting for homeowner: fix limit reached on #${p.number}`, 'pull', p.number);
-    else if (p.mergeable === 'CONFLICTING') part(1, `waiting to rebase #${p.number}`, 'pull', p.number);
-    else if (checks === 'pending') part(1, `waiting on CI for #${p.number}`, 'pull', p.number);
-    else if (v?.verdict === 'PASS') part(1, `#${p.number} has a PASS and merges on the next tick`, 'pull', p.number);
-    else part(1, `waiting for review of #${p.number}`, 'pull', p.number);
+      if ((S.continueAttempts?.[p.number] || 0) >= L.max_fix_attempts) part(0, `waiting for homeowner: continue limit reached on draft ${names.pr(p.number).text}`, 'pull', p.number);
+      else part(2, `only work is draft ${names.pr(p.number).text}`, 'pull', p.number);
+    } else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) part(0, `waiting for homeowner: fix limit reached on ${names.pr(p.number).text}`, 'pull', p.number);
+    else if (p.mergeable === 'CONFLICTING') part(1, `waiting to rebase ${names.pr(p.number).text}`, 'pull', p.number);
+    else if (checks === 'pending') part(1, `waiting on CI for ${names.pr(p.number).text}`, 'pull', p.number);
+    else if (v?.verdict === 'PASS') part(1, `${names.pr(p.number).text} has a PASS and merges on the next tick`, 'pull', p.number);
+    else part(1, `waiting for review of ${names.pr(p.number).text}`, 'pull', p.number);
   }
   const blockers = new Set();
   let openIssues = 0;
   for (const n of a.issues) {
     const issue = byNo.get(n);
     if (!issue || issue.state !== 'OPEN' || team.delivered?.has(n)) continue;
-    if (issue.labels.includes('needs-homeowner')) { part(0, `waiting for homeowner: #${n} needs the homeowner`, 'issue', n); continue; }
+    if (issue.labels.includes('needs-homeowner')) { part(0, `waiting for homeowner: ${names.issue(n).text} needs the homeowner`, 'issue', n); continue; }
     if (mine.some(p => new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName))) continue;
     openIssues++;
     const open = (c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => byNo.get(d)?.state !== 'CLOSED');
     if (open.length) open.forEach(d => blockers.add(d));
   }
-  if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => `#${d}`).join(', ')}` }); for (const d of blockers) links.push({ text: `issue #${d}`, url: url('issues', d) }); }
+  if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => names.issue(d).text).join(', ')}` }); for (const d of blockers) links.push({ text: names.issue(d).text, url: url('issues', d) }); }
   else if (openIssues && !(m && m.mode !== 'normal')) parts.push({ rank: 3, text: 'has an open issue but nothing started it yet (limits or a lease may be holding it)' });
   if (!parts.length) return { text: 'no open issue or pull request is assigned to it', links: [] };
   parts.sort((x, y) => x.rank - y.rank);
   return { text: parts.slice(0, 3).map(x => x.text).join('; '), links: links.slice(0, 6) };
 }
 
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {} }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, names }) {
+  const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref) => items.push({ id, text: redact(text, 300), ref: ref || null });
   const t = cache?.tick;
   if (!t) add('no-tick', 'No tick has ever been recorded: the dispatcher has not run since the dashboard was installed.');
@@ -202,27 +205,27 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     if (t.status === 'error') add('tick-failed', `Last tick failed at ${new Date(t.at).toISOString()}: ${t.error || 'no detail recorded'}`);
     if (teamEnabled !== false && t.status !== 'disabled' && now - t.at > STALE_TICK_MS) add('tick-stale', `No tick for ${Math.round((now - t.at) / 60000)} minutes (last ${new Date(t.at).toISOString()}); the reconcile cron may have stopped.`);
   }
-  for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner')) add(`homeowner-${i.number}`, `Issue #${i.number} needs the homeowner: ${i.title}`, { kind: 'issue', n: i.number });
+  for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner')) add(`homeowner-${i.number}`, `${names.issue(i.number).text} needs the homeowner`, { kind: 'issue', n: i.number });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0)))
-    add(`job-${j.id}`, `Job ${j.id.slice(0, 8)} (${j.provider} ${j.kind || 'job'} #${j.issue}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind: ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull', n: j.issue });
+    add(`job-${j.id}`, `${names.job(j).text} (${j.provider}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind: ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull', n: j.issue });
   // issue #158: a rebase that dropped commits, while the PR still sits on that rebased head
   for (const [id, tj] of Object.entries(state.jobs || {})) {
     const pr = (cache?.pulls || []).find(x => x.number === tj.pr);
     if (tj.kind === 'rebase' && tj.rebase?.lost?.length && pr && pr.headRefOid === tj.rebase.newHead)
-      add(`rebase-lost-${id.slice(0, 8)}`, `Rebase job ${id.slice(0, 8)} dropped ${tj.rebase.lost.length} commit(s) from PR #${tj.pr}: ${tj.rebase.lost.map(c => `${sha7(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
+      add(`rebase-lost-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} dropped ${tj.rebase.lost.length} commit(s): ${tj.rebase.lost.map(c => `${shortCommit(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
   }
-  for (const pr of cache?.pulls || []) if (!pr.isDraft && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on PR #${pr.number}: ${pr.title}`, { kind: 'pull', n: pr.number });
+  for (const pr of cache?.pulls || []) if (!pr.isDraft && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // issue #149: a cancelled check that was rerun once and is still cancelled
-  for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on PR #${pr.number}: ${pr.title}`, { kind: 'pull', n: pr.number });
+  for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
   const recent = snapshots.filter(s => now - s.at <= 30 * 60000).sort((a, b) => a.at - b.at);
   for (const [agent, s] of Object.entries(states)) {
     if (s.state !== 'idle') continue;
     const work = plan.filter(a => a.agent === agent);
     if (!work.length) continue;
-    if (teamEnabled === false) { add(`idle-${agent}`, `${agent} is idle with work waiting (${work.map(a => `${a.type} #${a.issue ?? a.pr}`).join(', ')}) and the team loop is disabled.`); continue; }
+    if (teamEnabled === false) { add(`idle-${agent}`, `${agent} is idle with work waiting (${work.map(a => `${a.type} ${planName(a)}`).join(', ')}) and the team loop is disabled.`); continue; }
     const mine = recent.filter(x => x.agents?.[agent] === 'idle' && x.plan?.some(a => a.agent === agent));
-    if (mine.length >= 2 && mine.at(-1).at - mine[0].at >= 9 * 60000) add(`idle-${agent}`, `${agent} has been idle for ${Math.round((now - mine[0].at) / 60000)}+ minutes while ${work.map(a => `${a.type} #${a.issue ?? a.pr}`).join(', ')} waits.`);
+    if (mine.length >= 2 && mine.at(-1).at - mine[0].at >= 9 * 60000) add(`idle-${agent}`, `${agent} has been idle for ${Math.round((now - mine[0].at) / 60000)}+ minutes while ${work.map(a => `${a.type} ${planName(a)}`).join(', ')} waits.`);
   }
   for (const [agent, s] of Object.entries(states)) {
     if (s.state !== 'paused') continue;
@@ -315,26 +318,26 @@ function graphs({ config, jobs, state, snapshots, now }) {
   return { allowance, jobsPerDay: days, verdicts, merges, tokensPerPr };
 }
 
-function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [] }) {
+function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
-  const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: `${kind === 'pull' ? 'PR' : 'issue'} #${n}` } : null);
+  const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: (kind === 'pull' ? names.pr(n) : names.issue(n)).text } : null);
   const jobLink = j => (['implement', 'continue'].includes(j.kind) ? link('issue', j.issue) : link('pull', j.issue));
   const agentName = j => Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
-  const names = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand' };
+  const eventNames = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand' };
   for (const e of events) {
-    if (!names[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover'].includes(e.kind)) continue;
+    if (!eventNames[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover'].includes(e.kind)) continue;
     const j = jobById.get(e.job); if (!j) continue;
-    rows.push({ at: e.at, text: `${agentName(j)}: ${names[e.kind] || redact(e.kind, 40)} (${j.kind || 'job'})`, link: jobLink(j) });
+    rows.push({ at: e.at, text: `${agentName(j)}: ${eventNames[e.kind] || redact(e.kind, 40)}: ${names.job(j).text}`, link: jobLink(j) });
   }
   for (const [id, tj] of Object.entries(state.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at))
-    rows.push({ at: tj.at, text: `rebase of PR #${tj.pr}: ${sha7(tj.rebase.oldHead)} -> ${sha7(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
-  for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on PR #${pr} at ${sha7(head)}`, link: link('pull', Number(pr)) }); }
-  for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged PR #${m.pr}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
+    rows.push({ at: tj.at, text: `${names.job({ id, kind: 'rebase', pr: tj.pr }).text}: ${shortCommit(tj.rebase.oldHead)} -> ${shortCommit(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
+  for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on ${names.pr(Number(pr)).text} at ${shortCommit(head)}`, link: link('pull', Number(pr)) }); }
+  for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged ${names.pr(m.pr).text}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
   for (const i of incidents) if (i.kind === 'migration') rows.push({ at: i.at, text: `config migration ${String(i.number).padStart(3, '0')}-${i.name} ${i.result}${i.result === 'failed' ? `: ${i.error}` : `: ${i.description || ''}`}`, link: null });
   // ticks take part in the same newest-first ordering and 50-event bound as every other event (issue #32)
   rows.push(...snapshots.map(s => ({ at: s.at, text: s.status === 'ok'
-    ? `tick ok${s.plan?.length ? `, plan: ${s.plan.map(a => `${a.agent || ''} ${a.type} #${a.ref}`.trim()).join('; ')}` : ', nothing to dispatch'}`
+    ? `tick ok${s.plan?.length ? `, plan: ${s.plan.map(a => `${a.agent || ''} ${a.type} ${(['implement', 'continue'].includes(a.type) ? names.issue(a.ref) : names.pr(a.ref)).text}`.trim()).join('; ')}` : ', nothing to dispatch'}`
     : `tick ${s.status}${cache?.tick?.at === s.at && cache.tick.error ? `: ${cache.tick.error}` : ''}` })));
   if (cache?.tick && cache.tick.status !== 'ok' && !snapshots.some(s => s.at === cache.tick.at))
     rows.push({ at: cache.tick.at, text: `tick ${cache.tick.status}${cache.tick.error ? `: ${cache.tick.error}` : ''}` });
@@ -359,16 +362,29 @@ export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: th
 // no record of (started by hand) counts against the implementer slot, as the planner counts it.
 const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer' };
 const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
-export function roleSlots(config, jobs, state) {
+export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.repository, stateJobs: state.jobs })) {
   return ROLES.map(role => {
     const held = jobs.filter(j => ACTIVE.includes(j.status) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {
       const r = state.jobs?.[j.id] || {}, agent = r.agent || Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
-      return { agent: redact(agent, 20), model: r.model ? redact(r.model, 40) : null, kind: r.kind || null, ref: r.pr ?? r.issue ?? j.issue ?? null, refType: r.pr != null ? 'PR' : 'issue' };
+      const ref = r.pr ?? r.issue ?? j.issue ?? null, refType = r.pr != null ? 'PR' : 'issue';
+      return { agent: redact(agent, 20), model: r.model ? redact(r.model, 40) : null, kind: r.kind || null, ref, refType, name: ref == null ? null : redact((refType === 'PR' ? names.pr(ref) : names.issue(ref)).text, 200) };
     });
     const label = SLOT_LABEL[role];
-    const text = held.length ? `${label}: ${held.map(h => [h.agent, h.model, h.ref != null ? `${h.refType === 'PR' ? 'PR #' : '#'}${h.ref}` : null, h.kind ? SLOT_WHAT[h.kind] || h.kind : null].filter(Boolean).join(' · ')).join('; ')}` : `${label}: idle`;
+    const text = held.length ? `${label}: ${held.map(h => [h.agent, h.model, h.name, h.kind ? SLOT_WHAT[h.kind] || h.kind : null].filter(Boolean).join(' · ')).join('; ')}` : `${label}: idle`;
     return { role, label, capacity: config.limits?.roles?.[role] ?? 1, held, text };
   });
+}
+
+// Every issue, pull request and job the page can name, formatted once by the shared formatter (issue #147). The renderer looks
+// references up here, so no page builds its own text. Keys: issue/pr by number, job by its 8-character id.
+export function refsOf({ names, cache, jobs, state }) {
+  const out = { issue: {}, pr: {}, job: {} };
+  const put = (map, key, ref) => { map[key] = { text: redact(ref.text, 300), full: redact(ref.full, 400), url: ref.url }; };
+  for (const i of cache.issues || []) put(out.issue, i.number, names.issue(i.number));
+  const prNos = new Set([...(cache.pulls || []).map(x => x.number), ...(cache.merged || []).map(x => x.number), ...(state.mergeLog || []).map(x => x.pr), ...Object.keys(state.verdicts || {}).map(k => Number(k.split(':')[0]))]);
+  for (const n of prNos) if (Number.isSafeInteger(n)) put(out.pr, n, names.pr(n));
+  for (const j of jobs) put(out.job, shortJob(j.id), names.job(j));
+  return out;
 }
 
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC' }) {
@@ -377,15 +393,16 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
   const c = cache || { pulls: [], issues: [] };
   const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now, events || [], register);
   return team.plan().then(plan => {
-    const queues = reasons(team, c, jobs, plan, states);
+    const names = makeNamer({ repo: config.repository, issues: c.issues, pulls: c.pulls, merged: c.merged, mergeLog: state.mergeLog, stateJobs: state.jobs });
+    const queues = reasons(team, c, jobs, plan, states, names);
     const agents = Object.entries(config.agents).map(([name, a]) => {
       const s = states[name], j = s.job;
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
-      base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state });
-      if (j) base.job = { id: j.id.slice(0, 8), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
+      base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state, names });
+      if (j) base.job = { id: shortJob(j.id), name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, names }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
@@ -394,13 +411,14 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and ticks are stopped: ${f.error}. team.local.json was not changed.`, 300), ref: null, severity: 'action' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
-    const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });
+    const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
     const budget = budgetView(team);
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {
       ...extra,
+      refs: refsOf({ names, cache: c, jobs, state }),
       estimates,
       generatedAt: now, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
@@ -409,7 +427,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       attention,
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots, now }),
-      activity: activity({ config, jobs, events, state, cache, snapshots, now, incidents: readIncidents(root) })
+      activity: activity({ config, jobs, events, state, cache, snapshots, now, incidents: readIncidents(root), names })
     };
   });
 }
@@ -439,13 +457,13 @@ export function freshness(tickAt, now) {
 const findingText = f => redact(typeof f === 'string' ? f : (f?.summary || f?.title || f?.message || JSON.stringify(f ?? '')), 240);
 const sumKeys = (obj, pr) => Object.entries(obj || {}).filter(([k]) => k.split(':')[0] === String(pr)).reduce((s, [, c]) => s + (Number(c) || 0), 0);
 
-function dashExtras({ config, cache, jobs, state, states, plan, queues, attention, now, ver, sup }) {
+function dashExtras({ config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
   const tokensOf = j => (j.usage ? j.usage.inputTokens + j.usage.outputTokens : null);
   const jobRows = jobs.filter(j => j.createdAt).sort((a, b) => b.createdAt - a.createdAt).slice(0, 300).map(j => ({
-    id: j.id.slice(0, 8), fullId: j.id, agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
+    id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100) }));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, verdict: v.verdict || null, at: v.at ?? null,
@@ -458,7 +476,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     const relIds = new Set(rel.map(j => j.id));
     const prJobs = jobRows.filter(j => relIds.has(j.fullId));
     const key = p ? `${n}:${p.headRefOid}` : null;
-    return { number: n, title: p?.title || `PR #${n}`, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed',
+    return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed',
       checks: p ? checksState(p.statusCheckRollup) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length,
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
@@ -470,7 +488,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
   const queueReason = new Map(Object.values(queues).flat().filter(q => q.type === 'issue').map(q => [q.ref, q.reason]));
   const issues = (cache.issues || []).slice().sort((a, b) => a.number - b.number).map(i => {
     const deps = i.prerequisites || [];
-    return { number: i.number, title: i.title, state: i.state, agent: agentNames.find(n => config.agents[n].issues.includes(i.number)) || null, needsHomeowner: (i.labels || []).includes('needs-homeowner'),
+    return { number: i.number, name: redact(names.issue(i.number).text, 300), title: i.title, state: i.state, agent: agentNames.find(n => config.agents[n].issues.includes(i.number)) || null, needsHomeowner: (i.labels || []).includes('needs-homeowner'),
       dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [] };
   });
   const tickAt = cache.tick?.at ?? null;
@@ -484,7 +502,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
   return {
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver,
-    panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
-    slots: roleSlots(config, jobs, state), jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
+    panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
+    slots: roleSlots(config, jobs, state, names), jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
   };
 }

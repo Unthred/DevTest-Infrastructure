@@ -232,7 +232,7 @@ test('tick history: one row per tick, newest first, sortable, filterable, pagina
   const enoent = (await s.get(`/supervisor/ticks?ticks.q=ENOENT&ticks.open=${at}`)).body;
   assert.match(enoent, new RegExp(`aria-expanded="true">Hide</a><div class="tick-detail" id="tick-${at}">[\\s\\S]*Skipped[\\s\\S]*<b>continue 28 \\(codex\\)</b>: <span class="err">ENOENT: no such file`));
   assert.equal((enoent.match(/class="tick-detail"/g) || []).length, 1, 'only the opened row expands');
-  assert.match(enoent, /Actions<\/dt><dd><ul class="mini "><li>codex continue <a href="\/work\/issue\/3">issue #3<\/a>/);
+  assert.match(enoent, /Actions<\/dt><dd><ul class="mini "><li>codex continue <a href="\/work\/issue\/3">#3[^<]*<\/a>/);
   assert.match((await s.get('/supervisor/ticks?ticks.page=2')).body, /26–37 of 37/);
 });
 test('upgrade history: records newest first with result, from/to commits (copyable), PRs and reason', async t => {
@@ -272,7 +272,7 @@ test('copy for overseer on an Action needed job item: what is wrong, job record 
   const needs = over.slice(over.indexOf('data-card="needs"'), over.indexOf('data-card="warnings"'));
   const block = copies(needs).find(c => c.startsWith('DevTest overseer note'));
   assert.ok(block, 'a copy-for-overseer button on the item'); assert.match(needs, /<span data-copy-label>Copy for overseer<\/span>/);
-  assert.match(block, /^What is wrong: Job b485512f \(codex review #41\) is blocked: retry_exhausted\.$/m);
+  assert.match(block, /^What is wrong: review · PR #41 · #30 [^\n]*· job b485512f \(codex\) is blocked: retry_exhausted\.$/m);
   assert.match(block, /^Job b485512f78df4a50af28f7b192a30710: status blocked, kind review, provider codex, ref #41, attempts 1, last event retry_exhausted, postcondition verdict PR #41 head 4444444, updated /m);
   assert.match(block, /^PR #41 latest review: CHANGES by codex at 4444444 \(current head\), .*1 blocking finding\(s\)$/m);
   assert.match(block, /^Command: ai-supervisor status b485512f78df4a50af28f7b192a30710$/m);
