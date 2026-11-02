@@ -450,22 +450,35 @@ export class Team {
     for (const pr of prs) { try { this.files.set(pr.number, await this.gh.listPullFiles(pr.number)); } catch { this.files.set(pr.number, null); } }
   }
   touchesSecondOpinion(pr) { const f = this.files?.get(pr.number); return f === undefined ? false : f === null || touchesPaths(f, this.c.second_opinion.paths); }
-  // The extra review that is owed for this open PR head, as { key } for the configured reviewer, or null.
-  secondOpinionDue(agent, pr) {
+  // The extra review that is owed for this open PR head, as { key } for the configured reviewer, or null. Allowance is not looked at
+  // here: an owed review stays owed while its reviewer is out (D-024); secondOpinionDue() asks whether it can run now.
+  secondOpinionOwed(agent, pr) {
     const so = this.c.second_opinion;
     if (!so || so.reviewer !== agent || pr.isDraft || !SHA.test(pr.headRefOid) || !agentOfBranch(this.c, pr.headRefName) || pr.mergeable === 'CONFLICTING' || checksState(pr.statusCheckRollup) !== 'green' || !this.touchesSecondOpinion(pr)) return null;
     const vk = verdictKey(pr.number, pr.headRefOid), key = vk + ':' + agent + ':second';
     if (this.s.verdicts[vk]?.verdict !== 'PASS' || this.s.secondOpinions[vk]) return null;
     const provider = this.c.agents[agent].provider;
-    if (this.writersOf(pr).some(w => w.provider === provider) || this.limitedOf(agent).out) return null;
+    if (this.writersOf(pr).some(w => w.provider === provider)) return null;
     if ((this.s.reviewAttempts[key] || 0) >= this.c.limits.max_review_attempts) return null;
     return { key };
   }
-  // Merge is held while an extra review is still owed and could run (its reviewer has allowance and attempts left). A reviewer that
-  // is out of allowance or has used its attempts does not hold the merge: the extra review is optional.
+  // The owed extra review, only when its reviewer has allowance to run it now.
+  secondOpinionDue(agent, pr) { const owed = this.secondOpinionOwed(agent, pr); return owed && !this.limitedOf(agent).out ? owed : null; }
+  // Merge is held (D-024) while an extra review is still owed, including while its reviewer is out of allowance: the PR waits for
+  // the review and does not merge without it. A PR the extra review does not apply to, or a reviewer that used its attempts at this
+  // head, does not hold the merge.
   secondOpinionPending(pr) {
     const so = this.c.second_opinion;
-    return !!so && !!this.c.agents[so.reviewer] && !!this.secondOpinionDue(so.reviewer, pr);
+    return !!so && !!this.c.agents[so.reviewer] && !!this.secondOpinionOwed(so.reviewer, pr);
+  }
+  // 'waiting for second opinion (<provider> out of allowance until <reset>)' when the owed reviewer is out of allowance, else null.
+  secondOpinionWaitText(pr) {
+    const so = this.c.second_opinion;
+    if (!so || !this.c.agents[so.reviewer] || !this.secondOpinionOwed(so.reviewer, pr)) return null;
+    const l = this.limitedOf(so.reviewer);
+    if (!l?.out) return null;
+    const until = Number.isFinite(l.until) ? ' until ' + new Intl.DateTimeFormat('en-GB', { timeZone: this.timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(l.until)).replace(',', '') : '';
+    return `waiting for second opinion (${this.c.agents[so.reviewer].provider} out of allowance${until})`;
   }
   // Weekly burn and scheduling mode per agent (issue #56), from provider-reported data only; null when no usage data is wired.
   budgets() {
@@ -881,7 +894,7 @@ export class Team {
     }
     if (v?.verdict === 'PASS') {
       if (this.waitingOnDecision([pr]).length) add('decision', 'a PASS is held until the independence decision is homeowner-approved');
-      if (this.c.second_opinion && this.secondOpinionPending(pr)) add('second-opinion', 'waiting for the second-opinion review');
+      if (this.c.second_opinion && this.secondOpinionPending(pr)) add('second-opinion', this.secondOpinionWaitText(pr) || 'waiting for the second-opinion review');
       if (pr.mergeable && pr.mergeable !== 'MERGEABLE' && pr.mergeable !== 'CONFLICTING') add('not-mergeable', 'GitHub reports it as ' + String(pr.mergeable).toLowerCase());
       if (!out.length) add('merge-pending', 'reviewed and green; waiting for the dispatcher to merge it');
     }
