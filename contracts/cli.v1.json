@@ -12,6 +12,7 @@
     { "name": "dotnet test", "args": ["--sdk <8|9|10>", "--project <path>", "[--coverage]"], "track": "dotnet" },
     { "name": "web screenshot", "args": ["--url <url>", "--profile <name>", "[--browser <engine>]", "[--full-page]", "[--root <dir>]"], "track": "browser" },
     { "name": "web responsive", "args": ["--url <url>", "--profiles <list>", "[--assert <rule>...]", "[--browser <engine>]", "[--root <dir>]"], "track": "browser" },
+    { "name": "web ha", "args": ["[--live]", "[--browser <engine>]"], "track": "browser", "notes": "Home Assistant read-only profile (D-009). Default: the anonymised local fixture, 3 pages at phone-390 and desktop-1280, with a click probe. --live never contacts anything: it reports exit 4 while live acceptance is blocked." },
     { "name": "report", "args": ["<run-id>"], "track": "core" },
     { "name": "cleanup", "args": ["[--run-id <id>]", "[--older-than <duration>]", "[--dry-run]"], "track": "core" }
   ],

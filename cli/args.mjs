@@ -18,6 +18,7 @@ export const COMMANDS = {
   'dotnet test': { options: { '--sdk': 'value', '--project': 'value', '--coverage': 'flag' }, required: ['--sdk', '--project'], positionals: [0, 0] },
   'web screenshot': { options: { '--url': 'value', '--profile': 'value', '--browser': 'value', '--full-page': 'flag', '--root': 'value' }, required: ['--url', '--profile'], positionals: [0, 0] },
   'web responsive': { options: { '--url': 'value', '--profiles': 'value', '--browser': 'value', '--assert': 'repeat', '--root': 'value' }, required: ['--url', '--profiles'], positionals: [0, 0] },
+  'web ha': { options: { '--live': 'flag', '--browser': 'value' }, required: [], positionals: [0, 0] },
   report: { options: {}, required: [], positionals: [1, 1] },
   cleanup: { options: { '--run-id': 'value', '--older-than': 'value', '--dry-run': 'flag' }, required: [], positionals: [0, 0] }
 };

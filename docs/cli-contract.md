@@ -12,6 +12,7 @@ Status: `agent-proposal` (D-017), implemented in source by issue #8 (`cli/`, `bi
 | `dev-test dotnet test --sdk <8\|9\|10> --project <path> [--coverage]` | Test; produce TRX and coverage artifacts (see [dotnet-testing.md](dotnet-testing.md)). |
 | `dev-test web screenshot --url <url> --profile <name> [--browser <engine>] [--full-page] [--root <dir>]` | Capture one screenshot. |
 | `dev-test web responsive --url <url> --profiles <list> [--assert <rule>...] [--browser <engine>] [--root <dir>]` | Capture across profiles and apply responsive assertions. |
+| `dev-test web ha [--live] [--browser <engine>]` | Home Assistant read-only browser profile ([ha-readonly.md](ha-readonly.md)). Without `--live`: the anonymised local fixture. With `--live`: reports why the real instance is blocked (exit 4); contacts nothing. |
 | `dev-test report <run-id>` | Show a stored result. |
 | `dev-test cleanup [--run-id <id>] [--older-than <duration>] [--dry-run]` | Remove run workspaces; never evidence unless named. |
 

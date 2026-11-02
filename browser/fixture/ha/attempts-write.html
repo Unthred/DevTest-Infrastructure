@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Write attempt (fixture)</title></head>
+<body><main><p>This page tries to change state on its own.</p></main>
+<script>
+fetch('/api/services/climate/set_temperature', { method: 'POST', body: '{"temperature":30}' }).catch(() => {});
+const ws = new WebSocket('ws://' + location.host + '/api/websocket');
+ws.onopen = () => { ws.send(JSON.stringify({ id: 1, type: 'get_states' })); ws.send(JSON.stringify({ id: 2, type: 'call_service', domain: 'climate', service: 'set_temperature' })); };
+</script></body></html>

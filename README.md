@@ -18,6 +18,7 @@ On-demand, pinned official Docker-based .NET SDK 8/9/10 builds/tests and Playwri
 
 ## Security
 - Use **OpenBao** for credentials wherever possible, with least privilege and no secrets in Git, artifacts, issue logs or CLI arguments.
+- Home Assistant read-only browser profile and its blocked live gate: [docs/ha-readonly.md](docs/ha-readonly.md) (issue #10).
 - Secret delivery is specified in [docs/secrets.md](docs/secrets.md) (D-022): host-side broker, tmpfs file mounts, scan and cleanup, mock backend without OpenBao.
 - Test browser sessions are read-only by default; no unattended mutation of Home Assistant, applications, network or other production systems.
 - No privileged Docker containers or Docker socket mounted inside test containers; use the existing trusted host-side runner.

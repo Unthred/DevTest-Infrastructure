@@ -266,6 +266,45 @@ test('web responsive: --assert limits which rules fail the run; unrendered profi
   assert.ok(none.calls.runs[0].args.includes('/src/browser/responsive.mjs'));
 });
 
+test('web ha: the fixture run maps summary, exit 16 and the read-only counts; no URL argument exists', async (t) => {
+  const sb = sandbox(t);
+  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), ''); markRestored(sb);
+  const summary = (extra = {}) => JSON.stringify({ pageSet: 'fixture', pages: [{ page: 'dashboard', profiles: [{ profile: 'phone-390', rendered: true, failures: 0, warnings: 1 }], failures: [] }],
+    readOnly: { blockedWrites: [], blockedFrames: [], blockedInteractions: ['click:button'] }, probe: { mode: 'clicks', attempted: 3, blocked: 3, mutated: 0 }, blockedRequests: [], ...extra });
+  const files = (s) => ({ 'ha.summary.json': s, 'ha.report.md': '# r', 'ha-dashboard-phone-390-chromium.png': 'PNG' });
+  const ok = await run(sb, ['web', 'ha', '--json'], { files: files(summary()) });
+  assert.equal(ok.code, 0); assert.match(ok.result.message, /not the live Home Assistant/);
+  { const a = ok.calls.runs[0].args; assert.equal(a[a.indexOf('--page-set') + 1], 'fixture'); }
+  assert.ok(ok.calls.runs[0].args.includes('/src/browser/ha-readonly.mjs') && ok.calls.runs[0].args.includes('clicks'));
+  assert.equal(ok.calls.targets[0].root, path.join(REPO_ROOT, 'browser', 'fixture', 'ha'), 'only the fixture directory is served');
+  assert.equal(ok.result.data.read_only.blocked_interactions, 1);
+  const wrote = await run(sb, ['web', 'ha', '--json'], { runner: (p) => ({ runId: p.runId, exitCode: 1, subjectExit: 16, cleanup: 'complete' }), files: files(summary({ readOnly: { blockedWrites: ['POST http://127.0.0.1:1/api/x'], blockedFrames: [], blockedInteractions: [] } })) });
+  assert.equal(wrote.code, 1); assert.match(wrote.result.message, /tried to change state/); assert.equal(wrote.result.data.read_only.blocked_writes, 1);
+  const layout = await run(sb, ['web', 'ha', '--json'], { runner: (p) => ({ runId: p.runId, exitCode: 1, subjectExit: 15, cleanup: 'complete' }), files: files(summary()) });
+  assert.equal(layout.code, 1);
+  assert.equal((await run(sb, ['web', 'ha', '--url', 'http://home.yeradonkey.com/', '--json'])).code, 2, 'no URL option: a live address cannot be passed in');
+  assert.equal((await run(sb, ['web', 'ha', '--browser', 'ie', '--json'])).code, 2);
+});
+
+test('web ha --live: blocked with reasons, nothing started, nothing contacted', async (t) => {
+  const sb = sandbox(t);
+  const policy = path.join(sb.root, 'policy.json');
+  fs.copyFileSync(new URL('../broker/policy.example.json', import.meta.url), policy);
+  fs.writeFileSync(sb.env.DEV_TEST_CONFIG, JSON.stringify({ ...sb.config, openbao: { address: 'http://127.0.0.1:8200', policyFile: policy } }));
+  const r = await run(sb, ['web', 'ha', '--live', '--json']);
+  assert.equal(r.code, 4); assert.equal(r.result.status, 'refused');
+  assert.equal(r.result.data.live.status, 'blocked'); assert.equal(r.result.data.live.host, 'home.yeradonkey.com');
+  assert.ok(r.result.data.live.reasons.some((x) => /OQ-2/.test(x)) && r.result.data.live.reasons.some((x) => /devtest- identity/.test(x)));
+  assert.deepEqual([r.calls.runs.length, r.calls.targets.length, r.calls.docker.length], [0, 0, 0]);
+  assert.match(r.result.message, /BLOCKED/); assert.match(r.result.message, /no success is claimed/);
+  // no policy configured, or an unreadable one, is also blocked and says so
+  fs.writeFileSync(sb.env.DEV_TEST_CONFIG, JSON.stringify(sb.config));
+  const none = await run(sb, ['web', 'ha', '--live', '--json']);
+  assert.equal(none.code, 4); assert.ok(none.result.data.live.reasons.some((x) => /no OpenBao credential policy/.test(x)));
+  fs.writeFileSync(sb.env.DEV_TEST_CONFIG, JSON.stringify({ ...sb.config, openbao: { policyFile: path.join(sb.root, 'missing.json') } }));
+  assert.ok((await run(sb, ['web', 'ha', '--live', '--json'])).result.data.live.reasons.some((x) => /unreadable/.test(x)));
+});
+
 test('report: shows a stored result; unknown or malformed ids are errors', async (t) => {
   const sb = sandbox(t);
   const built = await run(sb, ['dotnet', 'build', '--sdk', '8', '--project', sb.project, '--json']);

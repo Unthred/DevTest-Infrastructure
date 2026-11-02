@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Heating Settings (anonymised fixture)</title><link rel="stylesheet" href="/ha.css"><script src="/ha.js"></script></head>
+<body>
+<header><a href="/dashboard.html">Overview</a><a href="/heating-settings.html">Heating Settings</a><a href="/heating-season.html">Heating Season</a></header>
+<main>
+<section class="card" data-ui="card"><h2>Schedule offset</h2><div class="row"><label for="off">Offset (helper)</label><input id="off" type="range" min="0" max="10" value="3" data-mutates></div></section>
+<section class="card" data-ui="card"><h2>Mode</h2><div class="row"><label for="mode">Heating mode (helper)</label><select id="mode" data-mutates><option>Auto</option><option>Comfort</option><option>Eco</option></select></div></section>
+<section class="card" data-ui="card"><h2>Target temperatures</h2><div class="row"><button type="button" data-mutates aria-label="Lower day">−</button><span>Day 21 °C</span><button type="button" data-mutates aria-label="Raise day">+</button></div></section>
+</main>
+</body>
+</html>
