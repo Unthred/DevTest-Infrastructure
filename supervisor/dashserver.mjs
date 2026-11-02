@@ -1,5 +1,5 @@
 // Read-only team dashboard server (issue #32). Node built-ins only. It reads the supervisor state and the cache/history the
-// tick wrote; it makes no GitHub call and no model call, and exposes no endpoint that changes anything (GET/HEAD only).
+// tick wrote; it makes no GitHub call and no model call, and changes nothing except the Mark as read marker (POST /mark-read; every other request is GET/HEAD only).
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
 import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
@@ -54,7 +54,7 @@ export async function currentView({ root, config, now = Date.now() }) {
 const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'] };
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
-const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
+const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
   'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" };
 
 export function handler({ root, config, host, port, now = () => Date.now() }) {

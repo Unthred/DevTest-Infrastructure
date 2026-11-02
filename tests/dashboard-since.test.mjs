@@ -123,3 +123,10 @@ test('Mark as read refuses a cross-origin or missing Origin, a future or malform
   assert.equal((await s.get('/mark-read')).status, 404);
   assert.equal(readLastSeen(s.root), null);
 });
+
+test('responses keep the origin on same-origin POSTs so Mark as read works in a real browser (referrer-policy is not no-referrer)', async t => {
+  const s = await serve(t);
+  const r = await s.get('/');
+  const policy = r.headers['referrer-policy'];
+  assert.equal(policy, 'same-origin', 'no-referrer makes browsers send Origin: null on form POSTs, which markRead refuses');
+});
