@@ -387,3 +387,34 @@ test('legend (issue #160): app.js uses the shared handler, never hides the legen
   assert.match(js, /data-reset-layout\]'\)\?\.addEventListener\('click', \(\) => \{ store\.del\(key\(\)\); store\.del\(legendKey\)/);
   assert.match(js, /try \{ return JSON\.parse\(localStorage/, 'storage access is wrapped in try/catch');
 });
+
+// ---- issue #244: a too-large issue shows one Accept-split card; failed attempts show their tokens and cost
+test('#244 a proposed split is one Needs you card with the Accept split path and the spend; no duplicate job or label card', async t => {
+  const blocked = jb({ status: 'blocked', lastEvent: 'context_too_large', issue: 30, updatedAt: NOW - 1000, usage: { inputTokens: 3000000, outputTokens: 700000, costUsdEstimate: 2 } });
+  const c = cache(); c.issues = c.issues.map(i => (i.number === 30 ? { ...i, labels: ['needs-homeowner'] } : i));
+  const state = { jobs: {}, verdicts: {}, splits: { 30: { status: 'proposed', implementJob: blocked.id, agent: 'claude', wasted: { tokens: 3700000, cost: 2, attempts: 4 }, children: [{ title: 'A', scope: 'a' }, { title: 'B', scope: 'b' }] } } };
+  const v = await needsOf(await serve(t, { jobs: [blocked], cache: c, state }));
+  const ids = v.panels.needsYou.map(x => x.id).filter(id => id !== 'unqueued' && id !== 'homeowner-3');   // fixture noise: no agent queues, issue 3 already labelled
+  assert.deepEqual(ids, ['split-30']);
+  const card = v.panels.needsYou.find(x => x.id === 'split-30');
+  assert.equal(card.id, 'split-30'); assert.match(card.action, /Accept split.*team accept-split 30/); assert.match(card.tried, /3,700,000 tokens.*\$2\.00/);
+  // Drafting is not yet a decision; an accepted split is no longer one either.
+  for (const status of ['drafting', 'accepted']) {
+    state.splits[30].status = status;
+    const done = await needsOf(await serve(t, { jobs: [blocked], cache: c, state }));
+    assert.ok(!done.panels.needsYou.some(x => x.id === 'split-30'), status);
+    assert.ok(!done.panels.needsYou.some(x => x.id.startsWith('job-')), 'the blocked implement job is explained by the split, not a second card');
+  }
+});
+test('#244 failed attempts: tokens and cost are summed on the dashboard and shown on the Usage page', async t => {
+  const failed = jb({ id: 'b'.repeat(32), status: 'blocked', lastEvent: 'context_too_large', issue: 30, usage: { inputTokens: 3000000, outputTokens: 700000, costUsdEstimate: 2 } });
+  const ok = jb({ id: 'c'.repeat(32), status: 'completed', issue: 5, usage: { inputTokens: 500, outputTokens: 100, costUsdEstimate: 0.25 } });
+  const s = await serve(t, { jobs: [failed, ok], cache: cache() });
+  const v = JSON.parse((await s.get('/api/view.json')).body);
+  assert.equal(v.failedSpend.jobs, 1); assert.equal(v.failedSpend.tokens, 3700000); assert.equal(v.failedSpend.cost, 2);
+  assert.equal(v.failedSpend.rows.length, 1);
+  const page = (await s.get('/usage')).body;
+  assert.match(page, /Failed attempts: 1 job, 3,700,000 tokens, \$2\.00/);
+  const none = JSON.parse((await (await serve(t, { jobs: [ok], cache: cache() })).get('/api/view.json')).body);
+  assert.deepEqual([none.failedSpend.jobs, none.failedSpend.tokens, none.failedSpend.cost], [0, null, null]);
+});

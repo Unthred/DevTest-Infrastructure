@@ -82,3 +82,13 @@ Foreman clears a known, bounded, reversible cause itself and raises Needs you on
 - **Budget.** Every unblock (rerun, resume, escalation, label removal) counts against `limits.unblock.per_pr` and `per_day` (defaults 4 and 12, UTC day). At the limit Foreman stops and raises one Needs you item per limit that names it.
 - **Visibility.** Each unblock is `Foreman unblocked: <what>, <why>, <result>` in Activity (`state.unblock.log`) and in the tick report (`unblocked`).
 - **Never automated:** merging without an APPROVED verdict on the exact head, persistent changes to `team.local.json` limits, dismissing a secret-scanner finding, dropping homeowner-required scope, overage or paid credit, force-pushing to main. None of the code above calls `merge`.
+
+## An issue too large for one session (issue #244)
+When an `implement` job reports `context_limit`, every restart with the same scope would fail the same way (job 6c72e71d spent four sessions, about 3.7M input tokens, and produced nothing). So the supervisor core does not restart it: the job ends `blocked` with `context_too_large`. Other job kinds still get one fresh session.
+
+The team loop then, once per issue:
+1. Starts one cheap read-only `split` job (model entry `split`, falling back to the agent's `review` entry; allowed action `read` only). It writes `split-draft.json` to its inbox: 2 to 8 children, each a one-line title and scope. The file is shape-checked, length-bounded and redacted before use.
+2. Posts the proposal on the issue and labels it `needs-homeowner`. The dashboard shows one **Needs you** card with the spend of the failed attempt and the action. A draft that is missing or invalid raises no split item; the split job's own blocked state is reported the usual way.
+3. **Accept split**: `ai-agent --supervisor team accept-split <issue>` files each child as an issue (a marker makes a repeat or a crash half way safe), queues them for the same agent and comments on the parent. Foreman removes the label it added. The parent is never started again; close it when the children are done.
+
+The Usage page has a **Failed attempts** card (`view.failedSpend`): jobs that ended failed or blocked with their tokens and CLI cost estimate. Unknown stays unknown, not zero.

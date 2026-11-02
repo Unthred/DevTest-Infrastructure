@@ -22,7 +22,7 @@ They are different conditions and are never merged:
 |---|---|
 | `usage_limit` | Sleep to the verified reset time, then resume. |
 | `transient_rate_limit` | Bounded backoff with a retry cap. |
-| `context_limit` | Fresh session from handover, issue and Git state. Not a usage limit. |
+| `context_limit` | Fresh session from handover, issue and Git state, except for an `implement` job (issue #244): it stops as `context_too_large`, is not restarted with the same scope, and the team loop drafts a split (`docs/team-loop.md`). Not a usage limit. |
 | `auth_error` | Stop as `blocked`; needs a human. |
 | `approval_required` | Stop as `blocked`; the supervisor never approves on the agent's behalf. |
 | `network_error` | Bounded backoff. |

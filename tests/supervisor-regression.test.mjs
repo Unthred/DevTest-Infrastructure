@@ -108,7 +108,7 @@ test('reconcile revives a queued job with a dead worker only when it is due, ena
 });
 
 test('a context-limit requeue is immediately due, so a worker dying right after it does not strand the job', async t => {
-  const f = fixture(t, true), job = await createJob(f.root, f.spec, f.registry);
+  const f = fixture(t, true), job = await createJob(f.root, { ...f.spec, kind: 'fix' }, f.registry);   // an implement job is not restarted (issue #244)
   const events = path.join(f.root, 'events', `${job.id}.jsonl`);
   // Simulate the worker dying the instant after the requeue is persisted: the clock throws once the event exists.
   const dying = { now: () => { if (fs.existsSync(events) && fs.readFileSync(events, 'utf8').includes('context_fresh_session')) throw new Error('worker died'); return Date.now(); }, sleep: async () => {} };

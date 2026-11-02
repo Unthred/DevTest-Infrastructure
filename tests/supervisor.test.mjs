@@ -250,7 +250,7 @@ test('manifest rejects unknown field, billing fallback and missing capability; p
 
 test('context creates fresh session; network and crash retry with bounded fake time', async t => {
   for (const kind of ['context_limit', 'network_error', 'crash']) {
-    const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+    const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, kind: 'fix' }, f.registry, clock);   // implement jobs: see the next test (issue #244)
     job.sessionId = 'prior-session';
     let calls = 0, sessionOnRetry = null;
     const result = await drive(f.root, job, f.registry, clock, async (_config, _adapter, active) => {
@@ -262,6 +262,16 @@ test('context creates fresh session; network and crash retry with bounded fake t
     if (kind === 'context_limit') { assert.equal(sessionOnRetry, null); assert.deepEqual(clock.sleeps, []); }
     else assert.equal(clock.sleeps.length, 1);
   }
+});
+
+test('an implement job that hits context_limit is blocked as context_too_large and never restarted (issue #244)', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+  assert.equal(job.kind, 'implement');
+  let calls = 0;
+  const result = await drive(f.root, job, f.registry, clock, async () => { calls++; return { code: 1, event: 'context_limit' }; });
+  assert.equal(calls, 1);
+  assert.equal(result.status, 'blocked'); assert.equal(result.lastEvent, 'context_too_large');
+  assert.deepEqual(clock.sleeps, []);
 });
 
 test('attempt ID is persisted before each provider invocation and changes on resume', async t => {

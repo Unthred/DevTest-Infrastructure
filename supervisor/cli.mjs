@@ -288,7 +288,15 @@ async function main() {
       const status = await currentStatus({ root, config, register: readRegister(config), gh: a['no-github'] ? null : githubClient(config) });
       console.log(a.json === true ? JSON.stringify(status, null, 2) : renderStatus(status).trimEnd()); return;
     }
-    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json]');
+    if (a._[0] === 'accept-split') {   // issue #244: the "Accept split" path of the Needs you item
+      const n = Number(a._[1]);
+      if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team accept-split ISSUE');
+      const release = tickLock(root);
+      if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
+      try { console.log(JSON.stringify({ issue: n, filed: await (await teamFor(root, registry)).acceptSplit(n) })); } finally { release(); }
+      return;
+    }
+    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json] | team accept-split ISSUE');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
   }
   if (command === 'self-upgrade') {

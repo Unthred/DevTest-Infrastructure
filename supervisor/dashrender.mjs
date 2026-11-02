@@ -419,7 +419,12 @@ function usagePage(view, query, path) {
     { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd }];
   const byModel = card({ id: 'u-models', title: 'Tokens per job type and model', span: 12, movable: false, body: table({ id: 'models', path, query, noun: 'groups', rows: view.modelUsage || [], searchKeys: ['kind', 'model', 'effort'], totals: { jobs: 'sum', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: mcols,
     emptyState: empty('No model usage recorded', 'Token counts appear per job type and model after jobs finish.', 'chart') }) });
-  return { title: 'Usage & cost', body: grid('usage', win + chart + tokChart + byModel + table_) };
+  const fs_ = view.failedSpend || { jobs: 0, rows: [] };
+  const fcols = [{ key: 'name', label: 'Job' }, { key: 'status', label: 'Status' }, { key: 'attempts', label: 'Attempts', num: true },
+    { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
+  const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
+    emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
+  return { title: 'Usage & cost', body: grid('usage', win + chart + tokChart + byModel + failed + table_) };
 }
 function reviewsPage(view, query, path) {
   const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE;
