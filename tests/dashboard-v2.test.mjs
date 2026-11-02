@@ -11,7 +11,7 @@ import { SEVERITIES, applyLayout, breakpointOf, compareValues, filterRows, foote
 import { healthOf, freshness } from '../supervisor/dashboard.mjs';
 import { matchRoute, table } from '../supervisor/dashrender.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
-import { readVersion } from '../supervisor/dashdata.mjs';
+import { compactIssues, readVersion } from '../supervisor/dashdata.mjs';
 
 const NOW = Date.UTC(2026, 9, 30, 13, 0, 0);
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -415,9 +415,12 @@ test('#141 a labelled PR gives one card, removing the label clears it, and the e
 });
 test('#212 an issue in no agent list is eligible: no Needs-you card; exclusions are listed with reasons; a closed-unmerged PR raises a card', async t => {
   const c = calmCache();
-  c.issues.push({ number: 77, title: 'Unlisted', state: 'OPEN', labels: [], prerequisites: [] }, { number: 78, title: 'Closed', state: 'CLOSED', labels: [], prerequisites: [] },
-    { number: 79, title: 'Epic', state: 'OPEN', labels: ['epic'], prerequisites: [] }, { number: 80, title: 'Wait', state: 'OPEN', labels: [], prerequisites: [], body: 'Follow-up to PR #201' },
-    { number: 81, title: 'Gone', state: 'OPEN', labels: [], prerequisites: [], body: 'Follow-up to PR #202' }, { number: 82, title: 'Merged', state: 'OPEN', labels: [], prerequisites: [], body: 'Follow-up to PR #203' });
+  // Built through compactIssues, as the tick writes the cache: no body survives, only what was parsed from it.
+  const cached = compactIssues([{ number: 77, title: 'Unlisted', state: 'OPEN', labels: [] }, { number: 78, title: 'Closed', state: 'CLOSED', labels: [] },
+    { number: 79, title: 'Epic', state: 'OPEN', labels: ['epic'] }, { number: 80, title: 'Wait', state: 'OPEN', labels: [], body: 'Follow-up to PR #201' },
+    { number: 81, title: 'Gone', state: 'OPEN', labels: [], body: 'Follow-up to PR #202' }, { number: 82, title: 'Merged', state: 'OPEN', labels: [], body: 'Follow-up to PR #203' }]);
+  assert.ok(cached.every(i => !('body' in i)), 'the cache keeps no issue body');
+  c.issues.push(...cached);
   c.pulls.push({ number: 201, title: 'The open PR', headRefName: 'feature/x', headRefOid: 'a'.repeat(40), isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] });
   c.mergedNumbers = [203];
   const v = await needsOf(await serve(t, { cache: c }));

@@ -550,7 +550,7 @@ export class Team {
     if (label) return { kind: 'label', label, text: label === 'needs-homeowner' ? 'needs the homeowner' : `labelled ${label}` };
     const open = (this.c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => issueByNo.get(d)?.state !== 'CLOSED');
     if (open.length) return { kind: 'prerequisite', refs: open, text: `blocked by ${open.map(d => `#${d}`).join(', ')}` };
-    for (const p of pullPrerequisites(issue.title, issue.body)) {
+    for (const p of issue.pullPrerequisites ?? pullPrerequisites(issue.title, issue.body)) {   // a cached issue has no body, only the parsed list
       const live = prs.find(x => x.number === p);
       if (live) return { kind: 'pr-wait', refs: [p], text: `waiting for PR #${p}${live.title ? ` ${live.title}` : ''} to merge` };
       if (!(this.merged || []).some(m => m.number === p)) return { kind: 'pr-closed', refs: [p], text: `PR #${p} was closed without merging` };

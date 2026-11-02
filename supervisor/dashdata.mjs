@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
-import { checksState, retriedIn, prerequisites } from './team.mjs';
+import { checksState, retriedIn, prerequisites, pullPrerequisites } from './team.mjs';
 import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 
@@ -71,7 +71,8 @@ export function readSnapshots(root) {
   return out;
 }
 
-// What the cache keeps of GitHub data: just enough for the planner and the page, nothing else (no bodies, no comments).
+// What the cache keeps of GitHub data: just enough for the planner and the page, nothing else (no bodies, no comments;
+// the issue and PR references parsed from a body are kept instead).
 export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
   labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l?.name)).includes('needs-homeowner') ? ['needs-homeowner'] : [],
@@ -85,7 +86,8 @@ export const compactIssues = issues => (issues || []).map(i => ({ number: i.numb
   labels: (i.labels || []).includes('needs-homeowner')
     ? ['needs-homeowner', ...(i.labels || []).filter(l => l !== 'needs-homeowner').slice(0, 9).map(l => redact(l, 40))]
     : (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
-  prerequisites: prerequisites(i.body) }));
+  // Parsed from the full title and body before the body is dropped, so the dashboard's exclusions match the tick's (issue #212).
+  prerequisites: prerequisites(i.body), pullPrerequisites: pullPrerequisites(i.title, i.body) }));
 
 // idle | running | paused | blocked, per agent, from the supervisor's own job records.
 export function agentStates(config, jobs, now) {
