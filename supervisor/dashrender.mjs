@@ -31,7 +31,7 @@ export function matchRoute(pathname) {
   if ((m = /^\/agents\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'agent', id: m[1] };
   if ((m = /^\/work\/pr\/(\d{1,9})$/.exec(p))) return { page: 'pr', id: Number(m[1]) };
   if ((m = /^\/work\/issue\/(\d{1,9})$/.exec(p))) return { page: 'issue', id: Number(m[1]) };
-  if ((m = /^\/work\/job\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'job', id: m[1].slice(0, 8) };
+  if ((m = /^\/work\/job\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'job', id: m[1] };
   if (p === '/supervisor/ticks') return { page: 'ticks' };
   if (p === '/supervisor/upgrades') return { page: 'upgrades' };
   return null;
@@ -363,8 +363,16 @@ function agentDetail(view, query, path, route) {
 
 // One job, named by the shared formatter (issue #147): the page every job reference links to.
 function jobDetail(view, query, path, route) {
-  const j = view.jobs.find(x => x.id === route.id);
-  if (!j) return null;
+  // The 8-character id in a link, or the full id. Older jobs beyond the table's newest 300 have a page too; two jobs sharing a prefix get a chooser.
+  const all = [...(view.jobs || []), ...(view.olderJobs || [])];
+  const hits = all.filter(x => x.fullId === route.id || (route.id.length >= 4 && String(x.fullId || x.id).startsWith(route.id)));
+  const exact = hits.filter(x => x.fullId === route.id);
+  if (!hits.length) return null;
+  if (!exact.length && hits.length > 1) {
+    const list = hits.map(x => `<li><a href="/work/job/${esc(encodeURIComponent(x.fullId))}">${esc(x.fullId)}</a> ${esc(x.kind)} ${esc(x.status)}</li>`).join('');
+    return { title: `Job ${route.id}`, crumbs: [['/work', 'Work'], [null, `Job ${route.id}`]], body: grid('job', card({ id: 'facts', title: 'More than one job starts with this id', span: 12, movable: false, body: `<ul class="panel-list">${list}</ul>` }), 'fit') };
+  }
+  const j = exact[0] || hits[0];
   const ref = REFS.job[j.id];
   const subject = j.ref ? (['implement', 'continue'].includes(j.kind) ? issueLink(j.ref) : prLink(j.ref)) : '–';
   const facts = card({ id: 'facts', title: j.full || j.name, span: 12, movable: false, body: `<dl class="kv"><dt>Job</dt><dd>${idCopy(j.id, j.fullId, 'job ID')}</dd><dt>Agent</dt><dd>${agentTag(j.agent, view)}</dd><dt>Type</dt><dd>${esc(j.kind)}</dd><dt>Work</dt><dd>${subject}</dd>
@@ -556,8 +564,12 @@ function upgradesPage(view, query, path) {
 const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, activity: activityPage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
-export function renderRoute(view, route, { query = new URLSearchParams(), pathname = '/', refreshSeconds = 60 } = {}) {
+// REFS is a module-level lookup that the link helpers read; it is set for one synchronous render and cleared after (issue #182).
+export function renderRoute(view, route, opts = {}) {
   REFS = view.refs || { issue: {}, pr: {}, job: {} };
+  try { return renderRouteWith(view, route, opts); } finally { REFS = { issue: {}, pr: {}, job: {} }; }
+}
+function renderRouteWith(view, route, { query = new URLSearchParams(), pathname = '/', refreshSeconds = 60 } = {}) {
   const fn = PAGES[route.page];
   const page = fn ? fn(view, query, pathname.replace(/\/+$/, '') || '/', route) : null;
   const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work'], [null, 'Not found']] };

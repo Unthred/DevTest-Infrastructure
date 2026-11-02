@@ -230,3 +230,53 @@ test('Foreman stores titles in its state and on the job record, and refreshes th
   await team.loadNames();
   assert.equal(team.names().pr(146).text, 'PR #146 Renamed PR (for #104 ' + TITLE + ')');
 });
+
+// ---- issue #182 review follow-ups
+test('a PR whose issue cannot be found is named by its own title everywhere', async () => {
+  const names = makeNamer({ pulls: [{ number: 42, title: 'Stop adding AI credit lines', headRefName: 'claude/no-ai-attribution' }] });
+  assert.equal(names.pr(42).text, 'PR #42 Stop adding AI credit lines');
+  const c = cache(); c.pulls = [{ ...c.pulls[0], number: 42, title: 'Stop adding AI credit lines', headRefName: 'claude/no-ai-attribution', mergeable: 'CONFLICTING' }];
+  const v = await build({ cache: c });
+  const page = renderRoute(v, matchRoute('/work'), { pathname: '/work' }).html;
+  assert.match(strip(page), /Stop adding AI credit lines/);
+  assert.ok(v.prs.find(p => p.number === 42).title.includes('Stop adding AI credit lines'));
+  const out = renderStatus(await buildStatus({ config: (await import('../supervisor/team.mjs')).validateTeamConfig(config), root: '/nonexistent', jobs, events, state, cache: c, snapshots: [], leases: [], now: NOW, tz: 'UTC' }));
+  assert.match(out, /PR #42 Stop adding AI credit lines/);
+});
+
+test('a failed names read keeps the dashboard data and does not mark the tick as an error', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { validateTeamConfig } = await import('../supervisor/team.mjs');
+  const gh = { listPulls: async () => { throw new Error('rate limited'); }, listIssues: async () => [], listMergedPulls: async () => [] };
+  const team = new Team({ config: validateTeamConfig(config), root: stateRoot(path.join(dir, 'state')), gh, jobs: { listActive: async () => [] }, git: null, register: '', clock: { now: () => NOW } });
+  team.view = { prs: [], issues: [] };
+  await team.loadNames();                  // does not throw
+  assert.equal(team.view, null, 'names data never counts as the dashboard view');
+  assert.equal(team.nameView, null);
+  gh.listPulls = async () => cache().pulls; gh.listIssues = async () => cache().issues;
+  await team.loadNames();
+  assert.equal(team.view, null, 'a successful names read fills nameView, not view');
+  assert.equal(team.nameView.prs.length, 1);
+  assert.equal(team.names().pr(146).text.startsWith('PR #146'), true);
+});
+
+test('public commit references show 7 characters and link the full SHA', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { validateTeamConfig } = await import('../supervisor/team.mjs');
+  const team = new Team({ config: validateTeamConfig(config), root: stateRoot(path.join(dir, 'state')), gh: {}, jobs: { listActive: async () => [] }, git: null, register: '', clock: { now: () => NOW } });
+  assert.equal(team.commitRef(H(1)), `[\`1111111\`](https://github.com/o/r/commit/${H(1)})`);
+});
+
+test('an older job (beyond the newest 300) has a job page, and a shared 8-character prefix gets a chooser', async () => {
+  const many = Array.from({ length: 305 }, (_, i) => job(String(i).padStart(8, '0') + 'b'.repeat(24), { createdAt: NOW - 1000000 + i * 1000, status: 'completed' }));
+  const dup = [job('12345678' + 'c'.repeat(24), { createdAt: NOW - 5000, status: 'completed' }), job('12345678' + 'd'.repeat(24), { createdAt: NOW - 4000, status: 'completed' })];
+  const v = await build({ jobs: [...many, ...dup] });
+  const get = id => renderRoute(v, matchRoute(`/work/job/${id}`), { pathname: `/work/job/${id}` });
+  assert.equal(get('00000000').status, 200, 'the oldest job still resolves');
+  assert.equal(get('99999999').status, 404, 'an unknown job is a 404');
+  const amb = get('12345678');
+  assert.equal(amb.status, 200); assert.match(amb.html, /More than one job starts with this id/);
+  assert.match(amb.html, new RegExp('12345678' + 'c'.repeat(24))); assert.match(amb.html, new RegExp('12345678' + 'd'.repeat(24)));
+  const one = get('12345678' + 'd'.repeat(24));
+  assert.equal(one.status, 200); assert.doesNotMatch(one.html, /More than one job/);
+});

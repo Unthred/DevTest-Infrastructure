@@ -101,7 +101,7 @@ test('the job record stores old head, new head and commits; lost commits raise o
   await w.team.ingest(report);
   assert.deepEqual(w.calls.check, { base: 'origin/main', oldHead: H(1), newHead: H(2) });
   assert.deepEqual(w.team.s.jobs.r1.rebase, { oldHead: H(1), newHead: H(2), commits: [{ sha: H(3), subject: 'feature one' }], lost });
-  assert.equal(w.calls.comments.length, 1); assert.match(w.calls.comments[0][1], new RegExp(`${H(7).slice(0, 7)}\\\` fix two`));
+  assert.equal(w.calls.comments.length, 1); assert.match(w.calls.comments[0][1], new RegExp(`${H(7).slice(0, 7)}\\\`\\]\\(https://github.com/o/r/commit/${H(7)}\\) fix two`));
   assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']]); assert.equal(report.lostCommits.length, 1);
   await w.team.ingest({ ingested: [], skipped: [] }); assert.equal(w.calls.comments.length, 1);
 });

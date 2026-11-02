@@ -432,6 +432,7 @@ export class Team {
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
+    this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
     for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress']) this.s[k] ||= {};
@@ -1103,7 +1104,7 @@ export class Team {
     // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).
     const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
     if (!dryRun) {
-      await guard('load names', () => this.loadNames());
+      await this.loadNames();
       await this.ingest(report, guard); await this.retryCarries(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
@@ -1259,7 +1260,7 @@ export class Team {
             if (!followUpIssue) followUpIssue = await this.gh.createIssue(`Review follow-ups for ${this.names().pr(j.pr).text} at ${shortCommit(j.head)}`,
               `${marker}\nFollow-up from PR #${j.pr} at head \`${j.head}\`.\n\n${followUps.map(f => `- ${f.text}`).join('\n')}`);
           }
-          const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — ${j.exceptionStage === 'full' ? 'review-exception review of the whole pull request (D-027)' : j.exceptionStage === 'commits' ? 'review-exception review of the commits written by the other model (D-027)' : j.secondOpinion ? 'second-opinion review' : 'independent review'} on \`${j.model || 'the default model'}\` in a fresh session, by \`${j.agent}\` of exact head \`${shortCommit(j.head)}\` (recorded by the dispatcher from ${this.names().job({ id, kind: 'review', pr: j.pr }).text}; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}${followUpIssue ? `\n\nFollow-ups: issue #${followUpIssue}.` : ''}\n\n${checklistText(r.verdict)}Commands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
+          const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — ${j.exceptionStage === 'full' ? 'review-exception review of the whole pull request (D-027)' : j.exceptionStage === 'commits' ? 'review-exception review of the commits written by the other model (D-027)' : j.secondOpinion ? 'second-opinion review' : 'independent review'} on \`${j.model || 'the default model'}\` in a fresh session, by \`${j.agent}\` of exact head ${this.commitRef(j.head)} (recorded by the dispatcher from ${this.names().job({ id, kind: 'review', pr: j.pr }).text}; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}${followUpIssue ? `\n\nFollow-ups: issue #${followUpIssue}.` : ''}\n\n${checklistText(r.verdict)}Commands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
           // The verdict becomes merge-eligible only after its public record is posted; a failed comment records nothing,
           // so the next tick retries the whole step and nothing can merge on an unposted PASS.
           // Not retried blindly: if an earlier attempt was accepted but its response was lost, this job/head marker is already
@@ -1298,7 +1299,7 @@ export class Team {
     this.save();
     if (!check.missing.length) return false;
     (report.lostCommits ||= []).push({ pr: j.pr, job: id, lost: j.rebase.lost.map(c => c.sha) });
-    await this.postNotice(j.pr, `rebase-lost job=${id}`, `**Needs the homeowner.** ${this.names().job({ id, kind: 'rebase', pr: j.pr }).text} moved this PR from \`${shortCommit(j.head)}\` to \`${shortCommit(pr.headRefOid)}\`, and ${check.missing.length} commit(s) of the old head that are not on \`${j.base || 'main'}\` are not in the result (compared by patch-id):\n\n${j.rebase.lost.map(c => `- \`${shortCommit(c.sha)}\` ${c.subject}`).join('\n')}\n\nNo verdict carries to the new head. Required: restore the missing commits on the branch (the old head is still reachable by its id) before anything is reviewed or merged.`);
+    await this.postNotice(j.pr, `rebase-lost job=${id}`, `**Needs the homeowner.** ${this.names().job({ id, kind: 'rebase', pr: j.pr }).text} moved this PR from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)}, and ${check.missing.length} commit(s) of the old head that are not on \`${j.base || 'main'}\` are not in the result (compared by patch-id):\n\n${j.rebase.lost.map(c => `- ${this.commitRef(c.sha)} ${c.subject}`).join('\n')}\n\nNo verdict carries to the new head. Required: restore the missing commits on the branch (the old head is still reachable by its id) before anything is reviewed or merged.`);
     await this.gh.addLabel(j.pr, 'needs-homeowner');
     return true;
   }
@@ -1345,7 +1346,7 @@ export class Team {
     try { equal = (await this.git?.rangeEqual?.({ base: `origin/${j.base || 'main'}`, oldHead: j.head, newHead: pr.headRefOid })) === true; } catch { equal = false; }
     if (!equal) return refuse('the patch changed or could not be compared');
     const carry = { oldHead: j.head, newHead: pr.headRefOid, job: id, base: j.base || 'main', evidence: { resolvedConflicts: false, patchUnchanged: true, ci: 'green' }, at: this.clock.now() };
-    await this.postNotice(j.pr, `carry pr=${j.pr} head=${pr.headRefOid}`, `**Verdict carried.** The rebase from \`${shortCommit(j.head)}\` to \`${shortCommit(pr.headRefOid)}\` (${this.names().job({ id, kind: 'rebase', pr: j.pr }).text}) carries the **PASS** from \`${prior.reviewer}\` (job ${String(prior.job).slice(0, 8)})${prev ? ` and the second-opinion PASS from \`${prev.reviewer}\`` : ''} for the old head to the new head without a new review. Evidence: no conflict was resolved, the patch is unchanged (exact text and placement comparison), CI on the new head is green. Merge still re-verifies this record against the current head.`);
+    await this.postNotice(j.pr, `carry pr=${j.pr} head=${pr.headRefOid}`, `**Verdict carried.** The rebase from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)} (${this.names().job({ id, kind: 'rebase', pr: j.pr }).text}) carries the **PASS** from \`${prior.reviewer}\` (job ${String(prior.job).slice(0, 8)})${prev ? ` and the second-opinion PASS from \`${prev.reviewer}\`` : ''} for the old head to the new head without a new review. Evidence: no conflict was resolved, the patch is unchanged (exact text and placement comparison), CI on the new head is green. Merge still re-verifies this record against the current head.`);
     this.s.verdicts[key] = { ...prior, carriedFrom: j.head, carry, at: this.clock.now() };
     if (prev?.verdict === 'PASS') this.s.secondOpinions[key] = { ...prev, carriedFrom: j.head, carry, at: this.clock.now() };
     j.carry = { state: 'carried', newHead: pr.headRefOid, at: this.clock.now() };
@@ -1379,7 +1380,7 @@ export class Team {
       await this.gh.addLabel(issue, 'needs-homeowner');
     }
     const marker = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} `;
-    if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, `${marker}verdict=${v.verdict} reviewer=${j.agent} post-merge -->\n**${v.verdict}** — ${j.legacyPostMerge ? 'post-merge review (D-021)' : 'second-opinion review'} by \`${j.agent}\` (${this.names().job({ id, kind: 'review', pr: j.pr }).text}) of merged head \`${shortCommit(j.head)}\`.${issue ? ` Blocking findings: issue #${issue}.` : ''}\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}`);
+    if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, `${marker}verdict=${v.verdict} reviewer=${j.agent} post-merge -->\n**${v.verdict}** — ${j.legacyPostMerge ? 'post-merge review (D-021)' : 'second-opinion review'} by \`${j.agent}\` (${this.names().job({ id, kind: 'review', pr: j.pr }).text}) of merged head ${this.commitRef(j.head)}.${issue ? ` Blocking findings: issue #${issue}.` : ''}\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}`);
     if (v.verdict === 'PASS') await this.gh.removeLabel?.(j.pr, 'post-merge-review');
     if (pm) pm.done = { verdict: v.verdict, reviewer: j.agent, job: id, issue, blocking: blocking.length, at: this.clock.now() };
     j.ingested = true; this.save();
@@ -1387,7 +1388,12 @@ export class Team {
   }
   // The one place the dispatcher builds names for issues, PRs and jobs in alerts, notices and comments (issue #147).
   // Ingestion, notices and alerts run before plan() reads GitHub, so the titles they name are fetched first (best effort: a failure only means bare numbers).
-  async loadNames() { this.view = { prs: await this.gh.listPulls(), issues: await this.gh.listIssues() }; this.refreshTitles(this.view.prs, this.view.issues); }
+  // Best effort: a GitHub read failure only means bare numbers, so it neither marks the tick as an error nor touches this.view (issue #182).
+  async loadNames() {
+    this.view = null;   // this tick has read nothing for the dashboard yet; plan() sets it (issue #182)
+    try { this.nameView = { prs: await this.gh.listPulls(), issues: await this.gh.listIssues() }; this.refreshTitles(this.nameView.prs, this.nameView.issues); }
+    catch { this.nameView = null; }
+  }
   // Issue #204: titles are kept in state so the dashboard names work even when GitHub is unreachable. Every read of GitHub refreshes
   // the store and the titles saved on the job records. Bounded: only the newest TITLE_KEEP numbers of each kind stay.
   refreshTitles(prs = [], issues = [], merged = this.merged || []) {
@@ -1407,7 +1413,9 @@ export class Team {
     if (!implementing && issue != null) out.forIssue = issue;
     return out;
   }
-  names() { return makeNamer({ repo: this.c.repository, issues: this.view?.issues, pulls: this.view?.prs, merged: this.merged, mergeLog: this.s.mergeLog, stateJobs: this.s.jobs, titles: this.s.titles }); }
+  // A public commit reference: 7 characters as the text, the full SHA in the link target (issue #182).
+  commitRef(sha) { const c = this.names().commit(sha); return c.url ? `[\`${c.text}\`](${c.url})` : `\`${c.text}\``; }
+  names() { return makeNamer({ repo: this.c.repository, issues: (this.view || this.nameView)?.issues, pulls: (this.view || this.nameView)?.prs, merged: this.merged, mergeLog: this.s.mergeLog, stateJobs: this.s.jobs, titles: this.s.titles }); }
   async notifyBlocked(report, guard = (_, fn) => fn()) {
     for (const [id, j] of Object.entries(this.s.jobs)) {
       await guard(`notify ${id}`, () => this.notifyOne(id, j, report));
@@ -1585,7 +1593,7 @@ export class Team {
           w.noticed = now; this.save();
           try {
             await this.flag(pr.number, { key: 'cancelled-ci', kind: 'cancelled-ci', head: pr.headRefOid, tk: 'pull' });
-            await this.postNotice(pr.number, `cancelled-ci pr=${pr.number}`, `**Needs the homeowner.** CI check(s) ${lone.map(c => c.name).join(', ')} were cancelled on head \`${shortCommit(pr.headRefOid)}\` with no later run, were rerun once, and are still not green. Required: rerun CI by hand or push a new commit.`);
+            await this.postNotice(pr.number, `cancelled-ci pr=${pr.number}`, `**Needs the homeowner.** CI check(s) ${lone.map(c => c.name).join(', ')} were cancelled on head ${this.commitRef(pr.headRefOid)} with no later run, were rerun once, and are still not green. Required: rerun CI by hand or push a new commit.`);
           } catch (error) { delete w.noticed; this.save(); throw error; }
         });
       }
@@ -1793,7 +1801,7 @@ export class Team {
     // Fail closed: every PR with a hashed PASS is held before any I/O and released only once its requirements are confirmed
     // unchanged (or its PASS withdrawn), so a failure part-way through never lets an unchecked PR merge.
     this.reqHold = new Set(); this.reqHoldAll = true;
-    const prs = this.view?.prs || await this.gh.listPulls();
+    const prs = (this.view || this.nameView)?.prs || await this.gh.listPulls();
     const hashed = pr => { const v = SHA.test(pr.headRefOid) ? this.s.verdicts[verdictKey(pr.number, pr.headRefOid)] : null; return v?.verdict === 'PASS' && v.requirementsHash ? v : null; };
     for (const pr of prs) if (hashed(pr)) this.reqHold.add(pr.number);
     this.reqHoldAll = false;
@@ -1808,7 +1816,7 @@ export class Team {
       for (const k of Object.keys(this.s.reviewAttempts)) if (k.startsWith(key + ':')) delete this.s.reviewAttempts[k];
       this.save(); this.reqHold.delete(pr.number);
       const marker = `<!-- devtest-requirements-changed v1 pr=${pr.number} head=${pr.headRefOid} from=${v.requirementsHash.slice(0, 12)} to=${cur.hash.slice(0, 12)} -->`;
-      if (!(await this.gh.hasComment?.(pr.number, marker))) await this.gh.comment(pr.number, `${marker}\nThe requirements of issue #${cur.issue} changed after the PASS for \`${shortCommit(pr.headRefOid)}\`. That PASS no longer counts; the head is reviewed again against the current requirements before it can merge.`);
+      if (!(await this.gh.hasComment?.(pr.number, marker))) await this.gh.comment(pr.number, `${marker}\nThe requirements of issue #${cur.issue} changed after the PASS for ${this.commitRef(pr.headRefOid)}. That PASS no longer counts; the head is reviewed again against the current requirements before it can merge.`);
       (report.ingested ||= []).push({ pr: pr.number, requirementsChanged: true });
     }
   }
@@ -1830,7 +1838,7 @@ export class Team {
     const m = /\/issue-(\d+)(\D|$)/.exec(j.branch || '');
     let required = null;
     try {
-      let found = m ? (this.view?.issues || await this.gh.listIssues()).find(i => i.number === Number(m[1])) : null;
+      let found = m ? ((this.view || this.nameView)?.issues || await this.gh.listIssues()).find(i => i.number === Number(m[1])) : null;
       if (m && !found && this.gh.getIssue) { const direct = await this.gh.getIssue(Number(m[1])); if (direct && direct.number === Number(m[1])) found = direct; }   // the list is capped; ask for the issue itself
       const body = found ? String(found.body ?? '') : null;   // an issue that cannot be found is unreadable, not empty
       const comments = m && body !== null && this.gh.issueComments ? await this.gh.issueComments(Number(m[1])) : null;
@@ -1924,10 +1932,10 @@ export class Team {
       const issue = m ? Number(m[1]) : null;
       // Dashboard history (#32): who delivered, when the issue was started, when it merged. Bounded.
       this.s.mergeLog.push({ pr: act.pr, issue, agent: agentOfBranch(this.c, branch), reviewer: act.reviewer, startedAt: issue ? (this.s.implemented[issue] ?? null) : null, mergedAt: this.clock.now(), ...(act.exception ? { exception: EXCEPTION_DECISION, jobs: [act.job, act.commitsJob] } : {}) });
-      if (act.exception) { this.s.exceptionEnded[act.pr] = { reason: 'merged', at: this.clock.now() }; await this.gh.comment(act.pr, `Merged by the dispatcher using the one-off homeowner review exception (${EXCEPTION_DECISION}): PASS from the whole-pull-request review (job ${String(act.job).slice(0, 8)}) and PASS from the review of the commits written by the other model (job ${String(act.commitsJob).slice(0, 8)}), both on exact head \`${shortCommit(act.head)}\`. All other merge gates applied. The exception ends with this merge.`); }
+      if (act.exception) { this.s.exceptionEnded[act.pr] = { reason: 'merged', at: this.clock.now() }; await this.gh.comment(act.pr, `Merged by the dispatcher using the one-off homeowner review exception (${EXCEPTION_DECISION}): PASS from the whole-pull-request review (job ${String(act.job).slice(0, 8)}) and PASS from the review of the commits written by the other model (job ${String(act.commitsJob).slice(0, 8)}), both on exact head ${this.commitRef(act.head)}. All other merge gates applied. The exception ends with this merge.`); }
       this.s.mergeLog = this.s.mergeLog.slice(-500);
       if (issue) {
-        await this.gh.comment(issue, `${this.names().pr(act.pr).text} merged at \`${shortCommit(act.head)}\` by the dispatcher. Gates: ${act.exception ? 'REVIEW EXCEPTION (D-027) used: two PASSes on this head; ' : ''}${act.interim ? 'interim (D-021) ' : ''}PASS from \`${act.reviewer}\` (job ${String(act.job).slice(0, 8)}) recorded for this exact head, all checks green, mergeable.${act.interim ? ' A post-merge review by the opposite agent follows.' : ''} Merged is not deployed or verified working.`);
+        await this.gh.comment(issue, `${this.names().pr(act.pr).text} merged at ${this.commitRef(act.head)} by the dispatcher. Gates: ${act.exception ? 'REVIEW EXCEPTION (D-027) used: two PASSes on this head; ' : ''}${act.interim ? 'interim (D-021) ' : ''}PASS from \`${act.reviewer}\` (job ${String(act.job).slice(0, 8)}) recorded for this exact head, all checks green, mergeable.${act.interim ? ' A post-merge review by the opposite agent follows.' : ''} Merged is not deployed or verified working.`);
         await this.gh.board(issue, act.base === 'main' ? 'done' : 'in_review');
       }
       if (act.interim) await this.gh.addLabel(act.pr, 'post-merge-review');
