@@ -36,6 +36,18 @@
     "claude": { "provider": "claude", "branch_prefix": "claude/", "issues": [5, 6, 7, 10, 13, 14] },
     "codex": { "provider": "codex", "branch_prefix": "codex/", "issues": [3, 4, 8, 9, 11, 12] }
   },
+  "review_exception": {
+    "agent": "claude",
+    "full_review": { "model": "opus", "effort": "medium" },
+    "commit_review": { "model": "sonnet", "effort": "medium" },
+    "prs": [
+      { "pr": 137, "expires_at": "2026-11-09T00:00:00Z" },
+      { "pr": 216, "expires_at": "2026-11-09T00:00:00Z" },
+      { "pr": 217, "expires_at": "2026-11-09T00:00:00Z" },
+      { "pr": 222, "expires_at": "2026-11-09T00:00:00Z" },
+      { "pr": 234, "expires_at": "2026-11-09T00:00:00Z" }
+    ]
+  },
   "depends_on_overrides": {},
   "board": {
     "owner": "Unthred", "number": 13,
