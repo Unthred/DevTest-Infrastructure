@@ -1139,6 +1139,36 @@ test('issue #167 watchCancelled: another check failing does not drop the watch, 
   assert.deepEqual(w.calls.reruns, ['9']); assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']]);
 });
 
+test('issue #167 watchCancelled: a failing check of the same name in another workflow does not drop the watch: one rerun, then the notice', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const url = { detailsUrl: 'https://github.com/o/r/actions/runs/9/job/1' };
+  const bad = done('FAILURE', 'test', T0, { workflowName: 'Other' });
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [bad, done('CANCELLED', 'test', T0, url)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.watchCancelled({}); clock.t += 5 * 60000; await w.team.watchCancelled({});
+  assert.deepEqual(w.calls.reruns, ['9']);
+  for (let i = 0; i < 4; i++) {
+    w.gh.pulls[0].statusCheckRollup = [bad, { status: 'IN_PROGRESS', name: 'test', workflowName: 'CI', startedAt: T1, ...url }];
+    await w.team.watchCancelled({}); assert.ok(w.team.s.cancelWatch[`10:${H(1)}`]?.rerunAt, `kept while the rerun is in progress (cycle ${i})`);
+    w.gh.pulls[0].statusCheckRollup = [bad, done('CANCELLED', 'test', T1, url)];
+    clock.t += 5 * 60000; await w.team.watchCancelled({});
+  }
+  assert.deepEqual(w.calls.reruns, ['9']); assert.deepEqual(w.calls.labels, [[10, 'needs-homeowner']]);
+  // The rerun check itself (workflow CI) failing genuinely does drop the watch.
+  w.gh.pulls[0].statusCheckRollup = [bad, done('FAILURE', 'test', T1, url)];
+  delete w.team.s.cancelWatch[`10:${H(1)}`].noticed;
+  await w.team.watchCancelled({}); assert.equal(w.team.s.cancelWatch[`10:${H(1)}`], undefined);
+});
+
+test('issue #167 watchCancelled: a status context with no name is named in the notice by its context, never as undefined', async t => {
+  const clock = { t: 1000, now: () => clock.t };
+  const ctx = { state: 'ERROR', context: 'ci/legacy', conclusion: 'CANCELLED', startedAt: T0, detailsUrl: 'https://github.com/o/r/actions/runs/9/job/1' };
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [ctx] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
+  await w.team.watchCancelled({}); clock.t += 5 * 60000; await w.team.watchCancelled({});
+  clock.t += 5 * 60000; await w.team.watchCancelled({});
+  const notice = w.calls.comments.map(c => c[1]).find(b => b.includes('cancelled-ci pr=10'));
+  assert.ok(notice && notice.includes('ci/legacy') && !notice.includes('undefined'), notice);
+});
+
 test('issue #167 watchCancelled: at the 100-PR list cap the prune is skipped; below it a missing PR is pruned', async t => {
   const clock = { t: 1000, now: () => clock.t };
   const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('SUCCESS', 'test', T0)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });

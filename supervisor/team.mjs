@@ -227,11 +227,13 @@ const isCancelled = (c, retried = false) => c.conclusion === 'CANCELLED' || (!re
 const checkTime = c => { const t = Date.parse(c.startedAt || c.completedAt || ''); return Number.isFinite(t) ? t : null; };
 const CANCELLED_WAIT_MS = 5 * 60000;
 const RERUN_SETTLE_MS = 60000;
+// The identity of a check on a head: workflow plus name (or status context). Two workflows can each have a check called 'test'.
+const checkKey = (c, i) => `${c.workflowName || ''}\u0000${c.name || c.context || `#${i}`}`;
 export function latestChecks(rollup) {
   if (!Array.isArray(rollup)) return [];
   const latest = new Map();
   rollup.forEach((c, i) => {
-    const key = `${c.workflowName || ''}\u0000${c.name || c.context || `#${i}`}`;
+    const key = checkKey(c, i);
     const prev = latest.get(key), t = checkTime(c), pt = prev && checkTime(prev);
     if (!prev || (t !== null && pt !== null ? t >= pt : true)) latest.set(key, c);   // no timestamps: the later list entry wins
   });
@@ -1567,11 +1569,14 @@ export class Team {
   // once (gh run rerun); if it is still cancelled a further wait later, the PR is labelled needs-homeowner (Needs you). Recorded
   // before each effect, so a failed call is not repeated blindly and a rerun is never issued twice for the same head.
   // True when every check that was rerun now has a latest run that completed with a genuine failure. A different check failing on the
-  // head does not count (nor does a timeout: the entry must stay so `retried` keeps treating it as a failure). The entry holding rerunAt must survive, or a rerun that ends cancelled again would be rerun a second time.
+  // head does not count, including a check of the same name in another workflow: the rerun checks are matched by workflow plus name
+  // (`w.keys`), the identity latestChecks uses. Nor does a timeout: the entry must stay so `retried` keeps treating it as a failure.
+  // The entry holding rerunAt must survive, or a rerun that ends cancelled again would be rerun a second time. An entry recorded
+  // without keys (saved before #167) is never dropped here, only on green, a new head or a closed PR: still one rerun per head.
   rerunFailed(pr, w) {
-    if (!w.names?.length) return false;
-    const latest = latestChecks(pr.statusCheckRollup);
-    return w.names.every(n => { const c = latest.find(x => (x.name || x.context) === n); return !!c && checkDone(c) && !isCancelled(c) && !CHECK_OK.includes(c.conclusion || c.state); });
+    if (!w.keys?.length) return false;
+    const latest = new Map(latestChecks(pr.statusCheckRollup).map(c => [checkKey(c), c]));
+    return w.keys.every(k => { const c = latest.get(k); return !!c && checkDone(c) && !isCancelled(c) && !CHECK_OK.includes(c.conclusion || c.state); });
   }
   async watchCancelled(report, guard = (_, fn) => fn()) {
     const wait = this.c.limits.cancelled_wait_ms ?? CANCELLED_WAIT_MS, now = this.clock.now();
@@ -1595,7 +1600,7 @@ export class Team {
         const runs = [...new Set(lone.map(c => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl || '')?.[1]).filter(Boolean))];
         const room = this.unblockRoom(pr.number);
         if (room) { await guard(`unblock limit ${pr.number}`, () => this.raiseUnblockLimit(report, pr.number, room, 'pull')); continue; }
-        w.rerunAt = now; w.runs = runs; w.names = lone.map(c => c.name || c.context).filter(Boolean); this.save();
+        w.rerunAt = now; w.runs = runs; w.keys = lone.filter(c => c.name || c.context).map(c => checkKey(c)); this.save();
         await guard(`rerun cancelled ${pr.number}`, () => this.unblock(report, { target: pr.number, tk: 'pull', what: `re-ran CI on PR #${pr.number}`, why: `check(s) ${lone.map(c => String(c.name || 'unnamed').slice(0, 60)).join(', ')} were ${lone.some(c => c.conclusion === 'TIMED_OUT') ? 'cancelled or timed out' : 'cancelled'} on the current head with no later run` },
           async () => { for (const r of runs) await this.gh.rerunRun(r); return `rerun requested (once per head)`; }));
         (report.notified ||= []).push({ pr: pr.number, rerun: runs });
@@ -1604,7 +1609,7 @@ export class Team {
           w.noticed = now; this.save();
           try {
             await this.flag(pr.number, { key: 'cancelled-ci', kind: 'cancelled-ci', head: pr.headRefOid, tk: 'pull' });
-            await this.postNotice(pr.number, `cancelled-ci pr=${pr.number}`, `**Needs the homeowner.** CI check(s) ${lone.map(c => c.name).join(', ')} were cancelled on head ${this.commitRef(pr.headRefOid)} with no later run, were rerun once, and are still not green. Required: rerun CI by hand or push a new commit.`);
+            await this.postNotice(pr.number, `cancelled-ci pr=${pr.number}`, `**Needs the homeowner.** CI check(s) ${lone.map(c => String(c.name || c.context || 'unnamed').slice(0, 60)).join(', ')} were cancelled on head ${this.commitRef(pr.headRefOid)} with no later run, were rerun once, and are still not green. Required: rerun CI by hand or push a new commit.`);
           } catch (error) { delete w.noticed; this.save(); throw error; }
         });
       }
