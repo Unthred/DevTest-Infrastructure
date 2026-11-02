@@ -235,7 +235,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Superseded-by: none
 
 ## D-026 — Writing jobs never escalate, and never use a review model
-- Status: proposed
+- Status: agent-proposal
 - Date: 2026-11-02
 - Source: homeowner decision 2 Nov 2026 as recorded in issue #316; builds on D-024 and does not change it
 - Decision: (Awaiting homeowner sign-off.) No writing job (implement, continue, fix, ci-fix, rebase) is automatically moved to a stronger model; the escalation entry is retired. A model that an agent is configured to review with (its `review` entry and `review_candidates`) is not assigned writing jobs automatically; this is decided from role config, not from model names. A job whose model would also leave a PR with no available independent reviewer is not started. When the implementer's model cannot finish a fix, Foreman tries a fresh session on that model with the review findings, then splitting out-of-scope findings, then stops with one Needs you item. That item does not offer paid escalation.
