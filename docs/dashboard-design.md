@@ -15,7 +15,6 @@ Source of truth: `supervisor/dashui/style.css` (tokens at the top). Tests read t
 
 ## Security and constraints
 Read-only (GET/HEAD), no GitHub or model call on page load, no CDN. CSP: `script-src 'self'` serves only `/static/app.js` and `/static/logic.mjs` (fixed whitelist); no inline script. The script sends nothing anywhere; copy buttons only write to the local clipboard.
-Read-only (GET/HEAD), no GitHub or model call on page load, no CDN. CSP: `script-src 'self'` serves only `/static/app.js` and `/static/logic.mjs` (fixed whitelist); no inline script. The script sends nothing anywhere.
 
 ## Polish (issue #58)
 - **Resizing:** every movable card has handles on all four edges and corners (arrow keys on the corner grip). The real content reflows live. Width snaps to grid columns (12 desktop, 6 tablet), height to 40 px steps. Limits per card type are in `CARD_LIMITS` (`logic.mjs`): panels 3-12 columns, KPI tiles 2-4, charts 4-12, queues 3-12. A saved height is a `min-height`, so content is never clipped. KPI tiles and charts have no height handles: their height is their content (charts scale with width). Dragging the west or north edge outward grows the card; the grid keeps its order. Not offered on a phone.

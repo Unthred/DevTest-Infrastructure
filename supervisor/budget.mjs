@@ -12,6 +12,8 @@ import { SupervisorError } from './core.mjs';
 
 export const HOUR = 3600000;
 export const DEFAULT_BUDGET = { enabled: true, projected_limit: 1, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995 };
+// Early in a window one or two percent over an hour is noise, not a rate: projections use at least this share of the window as elapsed time (issue #159).
+export const MIN_ELAPSED_FRACTION = 0.05;
 export const REVIEWS_ONLY_TYPES = new Set(['review', 'fix', 'cifix', 'rebase']);
 const WEEK_MINUTES = 10080;
 const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
@@ -115,7 +117,7 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (short) out.shortWindow = { used: short.utilization, resetsAt: short.resetsAt };
   if (weekly) {
     const windowH = (weekly.windowMinutes || WEEK_MINUTES) / 60, hoursLeft = (weekly.resetsAt - now) / HOUR;
-    const average = weekly.utilization / Math.max(1, windowH - hoursLeft);
+    const average = weekly.utilization / Math.max(windowH * MIN_ELAPSED_FRACTION, windowH - hoursLeft);
     const recent = recentRate(history, weekly.resetsAt, now, settings.recent_hours);
     const rate = Math.max(average, recent ?? 0);
     Object.assign(out, { known: true, used: weekly.utilization, resetsAt: weekly.resetsAt, hoursLeft, ratePerHour: rate, rateSource: recent !== null && recent > average ? 'recent' : 'window average',

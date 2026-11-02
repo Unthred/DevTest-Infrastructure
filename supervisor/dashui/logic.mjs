@@ -107,14 +107,15 @@ export function spanLimits(type, bp) {
 // edge outward (left/up) grows the card, as in a window; the grid keeps its order. natH is the content's own height at that width.
 export function resizeBox({ edge, dx, dy, span, h, natH = 0, colW, type, bp = 'desktop' }) {
   const l = limitsOf(type), sl = spanLimits(type, bp), e = String(edge);
+  const cw = colW > 0 ? colW : 1, ddx = Number.isFinite(dx) && colW > 0 ? dx : 0, ddy = Number.isFinite(dy) ? dy : 0;   // NaN or a zero-width column resizes nothing
   let nSpan = span;
-  if (e.includes('e')) nSpan = span + Math.round(dx / colW);
-  if (e.includes('w')) nSpan = span - Math.round(dx / colW);
+  if (e.includes('e')) nSpan = span + Math.round(ddx / cw);
+  if (e.includes('w')) nSpan = span - Math.round(ddx / cw);
   nSpan = clamp(nSpan, sl.min, sl.max);
   let nH = h;
   if (!l.vlock && (e.includes('s') || e.includes('n'))) {
     const floor = Math.max(ROW_STEP, Math.ceil(natH / ROW_STEP) * ROW_STEP);
-    nH = clamp(Math.round((h + (e.includes('s') ? dy : -dy)) / ROW_STEP) * ROW_STEP, floor, Math.max(floor, l.maxH));
+    nH = clamp(Math.round((h + (e.includes('s') ? ddy : -ddy)) / ROW_STEP) * ROW_STEP, floor, Math.max(floor, l.maxH));
   }
   return { span: nSpan, h: l.vlock ? null : nH };
 }

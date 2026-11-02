@@ -71,7 +71,7 @@ export function codexRolloutFile(threadId, home = process.env.HOME || os.homedir
   if (!/^[a-zA-Z0-9-]{8,64}$/.test(threadId || '')) return null;
   for (let back = 0; back < 3; back++) {
     const day = new Date(now - back * 86400000);
-    const dir = path.join(home, '.codex', 'sessions', String(day.getUTCFullYear()), String(day.getUTCMonth() + 1).padStart(2, '0'), String(day.getUTCDate()).padStart(2, '0'));
+    const dir = path.join(home, '.codex', 'sessions', String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, '0'), String(day.getDate()).padStart(2, '0'));
     let names; try { names = fs.readdirSync(dir); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     const hit = names.find(n => n.startsWith('rollout-') && n.endsWith(`-${threadId}.jsonl`));
     if (hit) return path.join(dir, hit);
@@ -109,7 +109,7 @@ export function codexAllowanceProbe({ home = process.env.HOME || os.homedir(), n
   const files = [];
   for (let back = 0; back < 2; back++) {
     const day = new Date(now - back * 86400000);
-    const dir = path.join(home, '.codex', 'sessions', String(day.getUTCFullYear()), String(day.getUTCMonth() + 1).padStart(2, '0'), String(day.getUTCDate()).padStart(2, '0'));
+    const dir = path.join(home, '.codex', 'sessions', String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, '0'), String(day.getDate()).padStart(2, '0'));
     let names; try { names = fs.readdirSync(dir); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue; throw error; }
     for (const n of names) {
       if (!/^rollout-[\w.-]{1,160}\.jsonl$/.test(n)) continue;
