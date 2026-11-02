@@ -33,7 +33,7 @@ async function tickPlan(t) {
   const root = tmp(t);
   const gh = { listPulls: async () => pulls, listIssues: async () => [], listMergedPulls: async () => [], getPull: async n => pulls.find(p => p.number === n) || null, hasComment: async () => false };
   const inputs = planningInputs({ config: config(), jobs, probes, snapshots: [], now: NOW });
-  const team = new Team({ config: config(), root: stateRoot(path.join(root, 'state')), gh, jobs: { listActive: async () => [] }, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null },
+  const team = new Team({ register: '## D-020 — x\n- Status: homeowner-approved\n', config: config(), root: stateRoot(path.join(root, 'state')), gh, jobs: { listActive: async () => [] }, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null },
     clock: { now: () => NOW }, allowanceOf: inputs.allowanceOf, limitedOf: inputs.limitedOf, usage: inputs.usage });
   const report = await team.tick({ dryRun: true });
   return { team, report };

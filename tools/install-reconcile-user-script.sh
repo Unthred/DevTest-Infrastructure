@@ -30,6 +30,8 @@ for bin in "$node_bin" "$(command -v gh || true)" "$(command -v git || true)" "$
 done
 for d in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do case ":$run_path:" in *":$d:"*) ;; *) run_path="$run_path:$d" ;; esac; done
 for need in gh git flock; do PATH="$run_path" command -v "$need" >/dev/null || { printf 'required binary not found for the cron PATH: %s\n' "$need" >&2; exit 2; }; done
+# Enable gate (issue #40): nothing is scheduled unless the live tick path works under the cron environment.
+bash "$(dirname "$0")/verify-reconcile-env.sh" "$run_path" "$run_home" "$node_bin" "$cli" || { printf 'enable gate failed; no schedule was installed\n' >&2; exit 2; }
 mkdir "$script_dir"
 chmod 700 "$script_dir"
 printf 'AI Supervisor Reconcile\n' > "$script_dir/name"

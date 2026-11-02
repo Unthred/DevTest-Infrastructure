@@ -658,8 +658,8 @@ export class Team {
 
   // ---- execution
   async tick({ dryRun = false, hold = null } = {}) {
-    if (!dryRun && this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
-      throw new SupervisorError(`${this.c.access.decision} is not homeowner-approved in the decision register; refusing to launch jobs`);
+    if (this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
+      throw new SupervisorError(`${this.c.access.decision} is not homeowner-approved in the decision register; refusing to launch jobs${dryRun ? ' (a dry run applies the same check as a live tick)' : ''}`);
     const report = { ingested: [], notified: [], actions: [], skipped: [] };
     for (const w of this.c.deprecations || []) (report.warnings ||= []).push({ warning: w });
     // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).
