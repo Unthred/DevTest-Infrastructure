@@ -243,6 +243,8 @@ export function latestChecks(rollup) {
 // A cancelled check that nothing superseded: pending (not red) until the dispatcher reruns it once.
 // Must equal the --limit of listPulls in github.mjs.
 const OPEN_PULLS_CAP = 100;
+// Issue #188: the one-rerun-settled flag from a cancelWatch map, so status views agree with the dispatcher.
+export function retriedIn(cancelWatch, pr, now) { const at = cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.rerunAt; return !!at && now - at >= RERUN_SETTLE_MS; }
 export function loneCancelled(rollup, retried = false) { return latestChecks(rollup).filter(c => checkDone(c) && isCancelled(c, retried)); }
 export function checksState(rollup, retried = false) {
   if (!Array.isArray(rollup) || !rollup.length) return 'none';
@@ -307,6 +309,8 @@ export function prerequisites(body) {
   return m ? [...m[1].matchAll(/#(\d+)/g)].map(x => Number(x[1])) : [];
 }
 // Stops that Foreman resumes once (issue #163): provider/network faults, a crash, an incomplete run, a used-up allowance window.
+// Issue #188: resumeTransient looks only at jobs started within this window and stops reading a job once it finished normally.
+const RESUME_WINDOW_MS = 7 * 86400000;
 const TRANSIENT_STOPS = new Set(['crash', 'network_error', 'incomplete', 'transient_rate_limit']);   // never usage_limit or retry_exhausted: D-019 bounds those launches, then the homeowner decides
 const redactEvent = e => String(e || 'an unknown event').replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40);
 const CAUSE_TEXT = { split: 'the proposed split was accepted', 'secret-scan': 'the secret scanner no longer fails', job: 'the job was resumed or completed', fixlimit: 'a new head was reviewed with PASS and its CI is not red', 'cancelled-ci': 'the check is green again' };
@@ -490,7 +494,7 @@ export class Team {
   }
   // The check state of a PR's current head: after the one automatic rerun (issue #163) a timeout counts as a failure.
   // Only once the rerun has had time to replace the old result in the rollup (GitHub updates it a few seconds after `gh run rerun`).
-  retried(pr) { const at = this.s.cancelWatch[`${pr.number}:${pr.headRefOid}`]?.rerunAt; return !!at && this.clock.now() - at >= RERUN_SETTLE_MS; }
+  retried(pr) { return retriedIn(this.s.cancelWatch, pr, this.clock.now()); }
   ciState(pr) { return checksState(pr.statusCheckRollup, this.retried(pr)); }
   agents() { return Object.entries(this.c.agents); }
   // An agent's issue list, plus follow-up issues the dispatcher queued at its end (issue #163).
@@ -1636,6 +1640,8 @@ export class Team {
       if (!w.rerunAt && now - w.since >= wait) {
         const runs = [...new Set(lone.map(c => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl || '')?.[1]).filter(Boolean))];
         const room = this.unblockRoom(pr.number);
+        // Issue #188: with the budget spent no rerun can be made, but a timeout must still become a real failure (cifix) after the wait.
+        if (room && lone.every(c => c.conclusion === 'TIMED_OUT')) { w.rerunAt = now; w.runs = []; w.keys = lone.filter(c => c.name || c.context).map(c => checkKey(c)); this.save(); }
         if (room) { await guard(`unblock limit ${pr.number}`, () => this.raiseUnblockLimit(report, pr.number, room, 'pull')); continue; }
         w.rerunAt = now; w.runs = runs; w.keys = lone.filter(c => c.name || c.context).map(c => checkKey(c)); this.save();
         await guard(`rerun cancelled ${pr.number}`, () => this.unblock(report, { target: pr.number, tk: 'pull', what: `re-ran CI on PR #${pr.number}`, why: `check(s) ${lone.map(c => String(c.name || 'unnamed').slice(0, 60)).join(', ')} were ${lone.some(c => c.conclusion === 'TIMED_OUT') ? 'cancelled or timed out' : 'cancelled'} on the current head with no later run` },
@@ -1729,12 +1735,15 @@ export class Team {
   }
   // Spend one unblock and apply it. Counted and saved BEFORE the effect, so a crash or a failing call never allows a repeat; the outcome
   // is logged afterwards (a failed effect is logged as failed and rethrown). Returns false when the budget is spent.
-  async unblock(report, { target, tk = 'pull', what, why }, effect) {
-    const room = this.unblockRoom(target);
+  async unblock(report, { target, tk = 'pull', what, why, free = false }, effect) {
+    // `free`: removing a stale label only reverses Foreman's own stop, so it is logged but neither needs nor spends budget (issue #188).
+    const room = free ? null : this.unblockRoom(target);
     if (room) { await this.raiseUnblockLimit(report, target, room, tk); return false; }
     const u = this.s.unblock, day = this.dayKey();
-    u.pr[target] = (u.pr[target] || 0) + 1; u.day[day] = (u.day[day] || 0) + 1;
-    for (const d of Object.keys(u.day)) if (d < new Date(this.clock.now() - 14 * 86400000).toISOString().slice(0, 10)) delete u.day[d];
+    if (!free) {
+      u.pr[target] = (u.pr[target] || 0) + 1; u.day[day] = (u.day[day] || 0) + 1;
+      for (const d of Object.keys(u.day)) if (d < new Date(this.clock.now() - 14 * 86400000).toISOString().slice(0, 10)) delete u.day[d];
+    }
     this.save();
     let result;
     try { result = String((await effect()) ?? 'done').slice(0, 200); }
@@ -1791,9 +1800,11 @@ export class Team {
     if (!this.jobs.resume) return;
     const open = {};   // the open PRs and issues, read at most once per tick and only when a job is a candidate
     for (const [id, j] of Object.entries(this.s.jobs)) {
-      if (this.s.unblock.resumed[id] || this.s.unblock.noResume[id]) continue;   // (a blocked job is already `ingested`; resuming makes it ingestible again)
+      if (this.s.unblock.resumed[id] || this.s.unblock.noResume[id] || j.settled) continue;
+      if (j.at && this.clock.now() - j.at > RESUME_WINDOW_MS) continue;   // (a blocked job is already `ingested`; resuming makes it ingestible again)
       await guard(`resume ${id}`, async () => {
         const job = await this.jobs.get(id);
+        if (job && ['completed', 'stopped'].includes(job.status)) { j.settled = true; this.save(); return; }   // never transient again
         if (!job || !['blocked', 'failed'].includes(job.status) || !TRANSIENT_STOPS.has(job.lastEvent)) return;
         const stale = await this.staleResume(id, j, open);
         if (stale) { this.s.unblock.noResume[id] = { at: this.clock.now(), why: stale }; this.save(); return; }   // notifyOne handles it as before
@@ -1909,7 +1920,7 @@ export class Team {
     if (accepted.length) {
       const marker = `<!-- devtest-split v1 pr=${j.pr} job=${id} -->`;
       issue = await this.gh.findIssueByMarker(marker);
-      if (!issue) issue = await this.gh.createIssue(`Follow-up from PR #${j.pr}: findings outside the original scope`, `${marker}\nSplit out of PR #${j.pr} by Foreman during the final fix round (job \`${id}\`). These reviewer findings are outside the acceptance criteria of the original issue and the homeowner's comments; the PR is re-reviewed against the original scope.\n\n${accepted.map(x => `- ${x.finding}\n  - why split: ${x.reason}`).join('\n')}`);
+      if (!issue) issue = await this.gh.createIssue(`Follow-up from PR #${j.pr}: findings outside the original scope`, `${marker}\nSplit out of PR #${j.pr} by Foreman during the final fix round (job \`${id}\`). These reviewer findings are outside the acceptance criteria of the original issue and the homeowner's comments; the PR is re-reviewed against the original scope.\n\n${accepted.map(x => `- ${x.finding}`).join('\n')}`);
       const agent = j.agent;
       const q = this.s.unblock.queued[agent] ||= [];
       if (!q.includes(issue)) q.push(issue);
@@ -1933,7 +1944,7 @@ export class Team {
         const why = cleared.map(([, c]) => CAUSE_TEXT[c.kind] || c.kind).join('; ');
         const rearm = () => { for (const [, c] of cleared) if (c.kind === 'fixlimit') { delete this.s.notified[`fixlimit:${target}`]; delete this.s.notified[`fixlimit-alert:${target}`]; } };   // a later rejection is raised again
         if (left > 0) { for (const [k] of cleared) delete causes[k]; rearm(); this.save(); return; }   // another cause still holds the label
-        const ok = await this.unblock(report, { target: Number(target), tk: cleared[0][1].tk || 'pull', what: `removed needs-homeowner from #${target}`, why: `${why}` }, async () => {
+        const ok = await this.unblock(report, { target: Number(target), tk: cleared[0][1].tk || 'pull', what: `removed needs-homeowner from #${target}`, why: `${why}`, free: true }, async () => {
           for (const [k] of cleared) delete causes[k];
           delete flags[target]; rearm(); this.save();
           try {
@@ -1954,7 +1965,9 @@ export class Team {
     // A head move does not clear it: the old commit stays flagged. Only a scanner that no longer fails on the current head (or a closed PR) does.
     if (c.kind === 'secret-scan') return !pr || !failingChecks(pr.statusCheckRollup, this.retried(pr)).some(n => isSecretScanner({ name: n }));
     if (c.kind === 'cancelled-ci') return !pr || pr.headRefOid !== c.head || this.ciState(pr) === 'green';
-    return false;   // limit notices and anything else wait for the homeowner
+    // A per-day limit has cleared once the day has rolled over (the notice says so); a per-PR limit does not reset by itself.
+    if (c.kind === 'limit') { const m = /^limit:day:(\d{4}-\d{2}-\d{2})$/.exec(c.key || ''); return !!m && m[1] < this.dayKey(); }
+    return false;   // anything else waits for the homeowner
   }
   rejected(pr) { return this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'CHANGES' || this.ciState(pr) === 'red'; }
   // The dispatcher's own finished jobs free their issue/worktree leases, including jobs the homeowner resumed by hand.

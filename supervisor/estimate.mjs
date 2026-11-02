@@ -13,7 +13,7 @@
 //  - Allowance: a step by an agent that is out of allowance, or whose forecast runs out before the step would start, moves to
 //    the agent's reset time and the estimate says so.
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
-import { checksState } from './team.mjs';
+import { checksState, retriedIn } from './team.mjs';
 import { REVIEWS_ONLY_TYPES } from './budget.mjs';
 
 export const MIN_SAMPLES = 5;
@@ -127,7 +127,7 @@ export function estimateQueue({ queues = {}, pulls = [], jobs = [], state = {}, 
     if (i.type === 'pr') {
       const p = pullOf.get(i.ref); if (!p) continue;
       const v = Object.entries(state.verdicts || {}).filter(([k]) => k === `${p.number}:${p.headRefOid}`).map(([, x]) => x)[0] || null;
-      items.push({ kind: 'pr', ref: i.ref, agent: i.agent, title: i.title, reason: i.reason, pr: p, checks: checksState(p.statusCheckRollup), verdict: v });
+      items.push({ kind: 'pr', ref: i.ref, agent: i.agent, title: i.title, reason: i.reason, pr: p, checks: checksState(p.statusCheckRollup, retriedIn(state.cancelWatch, p, now)), verdict: v });
     } else {
       if (/^PR open|^reassigned.*PR #\d+ open/.test(i.reason)) continue;   // the open PR is its own item
       if (/^(blocked by|needs the homeowner)/.test(i.reason)) { items.push({ kind: 'issue', ref: i.ref, agent: i.agent, title: i.title, reason: i.reason, blocked: i.reason }); continue; }

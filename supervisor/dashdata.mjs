@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
-import { checksState, prerequisites } from './team.mjs';
+import { checksState, retriedIn, prerequisites } from './team.mjs';
 import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 
@@ -135,7 +135,7 @@ export function mergeProbes(prev = {}, next = {}) {
   return out;
 }
 
-const rollup = pr => checksState(pr.statusCheckRollup);
+const rollup = (pr, team, now) => checksState(pr.statusCheckRollup, retriedIn(team.s?.cancelWatch, pr, now));
 
 // A skipped action (lease conflict, gh error) is a partial failure: the dashboard must not show it as a successful tick.
 export function tickOutcome(report) {
@@ -161,7 +161,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     plan: actions.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.secondOpinion ? { secondOpinion: true } : {}), ...(a.postMerge ? { postMerge: true } : {}) })),
     agents: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])),
     allowance: Object.fromEntries(Object.entries(team.c.agents).map(([n, a]) => [n, allowance[a.provider] ? { observedAt: allowance[a.provider].observedAt, windows: allowance[a.provider].windows.map(w => ({ type: w.type, windowMinutes: w.windowMinutes ?? null, utilization: w.utilization, resetsAt: w.resetsAt })) } : null])),
-    redCi: team.view.prs.filter(p => rollup(p) === 'red').map(p => p.number) };
+    redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };
   appendSnapshot(root, snap, now);
   return cache;
 }

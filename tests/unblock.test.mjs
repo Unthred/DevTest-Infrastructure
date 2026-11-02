@@ -374,3 +374,37 @@ test('budget: a spent budget at the fix limit raises the limit item, and the fix
   assert.equal(j.calls.comments.filter(c => c[0] === 23 && /Foreman stopped unblocking/.test(c[1])).length, 1);
   assert.equal(j.calls.comments.filter(c => c[0] === 23 && /Needs the homeowner.\*\* Supervised/.test(c[1])).length, 1);
 });
+
+// ---- issue #188 review follow-ups
+test('limit cause: a per-day limit label is removed after the day rolls over; a per-PR limit label stays', async t => {
+  const w = world(t, { pulls: [pr(11, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], now: Date.UTC(2026, 10, 1, 12) });
+  const day = w.team.dayKey();
+  w.team.s.unblock.flags[11] = { [`limit:day:${day}`]: { key: `limit:day:${day}`, kind: 'limit', tk: 'pull', at: 1 } };
+  w.team.s.unblock.flags[12] = { 'limit:pr:12': { key: 'limit:pr:12', kind: 'limit', tk: 'pull', at: 1 } };
+  await w.team.tick(); assert.deepEqual(w.calls.removed, [], 'same day: still held');
+  w.clock.t += 86400000; await w.team.tick();
+  assert.deepEqual(w.calls.removed, [[11, 'needs-homeowner']]); assert.equal(w.team.s.unblock.flags[11], undefined);
+  assert.ok(w.team.s.unblock.flags[12], 'a per-PR limit does not reset by itself');
+});
+
+test('label removal is not budgeted: a spent per-PR budget still removes a stale label', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(2))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], cfg: config({ per_pr: 1 }) });
+  w.team.s.unblock.pr[38] = 1;
+  w.team.s.unblock.flags[38] = { 'job:x': { key: 'job:x', kind: 'job', job: 'x', tk: 'pull', at: 1 } };
+  w.jobs.states.x = { id: 'x', status: 'completed' };
+  await w.team.tick();
+  assert.deepEqual(w.calls.removed, [[38, 'needs-homeowner']]); assert.equal(w.team.s.unblock.pr[38], 1, 'no budget spent');
+  assert.deepEqual(w.team.s.unblock.limit, {}, 'no limit item raised');
+});
+
+test('budget spent: a timed-out check becomes red (cifix) after the wait instead of pending for good', async t => {
+  const w = world(t, { pulls: [pr(10, 'claude/issue-23-x', H(1), { statusCheckRollup: cancelled('TIMED_OUT', 88) })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], cfg: config({ per_pr: 0 }) });
+  await w.team.tick(); w.clock.t += 3600000; const r = await w.team.tick();
+  assert.deepEqual(w.calls.reruns, []);
+  assert.equal(w.team.ciState(w.gh.pulls[0]), 'red'); assert.equal(r.actions.find(a => a.agent === 'claude')?.type, 'cifix');
+});
+
+test('split: the agent-written reason is not copied into the new issue body', async t => {
+  const src = fs.readFileSync(new URL('../supervisor/team.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /why split: \$\{x\.reason\}/);
+});
