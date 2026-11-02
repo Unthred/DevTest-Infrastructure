@@ -92,7 +92,7 @@ test('a PR that already has no possible reviewer is not changed by the guard', t
   assert.equal(team.strandsReviewer(PR, 'claude', 'opus'), null);
 });
 
-test('the planner starts no fix for a PR whose writer would strand it, and the dashboard shows why', async t => {
+test('the planner starts no fix for a PR whose writer would strand it', async t => {
   const { team } = world(t, { cfg: config({ fix: UNKNOWN }), out: { codex: 'limit' } });
   team.gh.listIssues = async () => []; team.jobs.listActive = async () => []; team.jobs.list = async () => [];
   team.s.verdicts[`137:${PR.headRefOid}`] = { verdict: 'CHANGES', reviewer: 'codex' };
