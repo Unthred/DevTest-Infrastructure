@@ -18,6 +18,26 @@ export const MINUTE = 60000, HOUR = 3600000;
 export const RESET_GRACE_MS = MINUTE;          // "just after a reported reset time passes"
 const MAX_LINE = 65536, MAX_OUTPUT = 4 * 1024 * 1024;
 
+// Could a model run now draw on paid overage? True while the newest reading shows overage in use for a window that has not
+// reset, or a window that has not reset is used up (utilization at exhausted_at, or a rejected/blocked status) and overage is
+// not explicitly refused. Pure.
+const USED_UP = ['rejected', 'blocked', 'exhausted', 'limit_reached'], REFUSED = ['rejected', 'disabled'];
+export function overageRisk(allowance, now, exhaustedAt = 0.995) {
+  const live = (allowance?.windows || []).filter(w => Number.isFinite(w?.resetsAt) && w.resetsAt > now);
+  if (allowance?.billing?.usingOverage === true && live.length) return true;
+  if (REFUSED.includes(allowance?.billing?.overageStatus)) return false;
+  return live.some(w => (Number.isFinite(w.utilization) && w.utilization >= exhaustedAt) || USED_UP.includes(w.status));
+}
+
+// The kind of the provider's manifest probe ('command', 'session-log') or null.
+export function probeKind(registry, providerId) {
+  try {
+    const entry = JSON.parse(fs.readFileSync(registry, 'utf8')).providers?.[providerId];
+    if (!entry || typeof entry.manifest !== 'string' || entry.manifest.includes('..')) return null;
+    return JSON.parse(fs.readFileSync(path.join(path.dirname(registry), entry.manifest), 'utf8')).probe?.kind || null;
+  } catch { return null; }
+}
+
 // Whether a probe is due for one agent. Pure. Never while `normal` (jobs already refresh the reading), except the single
 // probe after a held agent's reported reset time has passed. At most one attempt per interval, successful or not.
 //   mode: the computed mode now. stored: the mode the dispatcher recorded. allowance: newest reading of the provider.
@@ -25,8 +45,8 @@ const MAX_LINE = 65536, MAX_OUTPUT = 4 * 1024 * 1024;
 export function probeDue({ mode, stored = null, allowance = null, state = null, settings, now }) {
   if (settings.probe === false) return null;
   if (state?.at && now - state.at < settings.probe_interval_minutes * MINUTE) return null;
-  // A reading that says paid overage is in use for a window that has not reset: another run could draw on credits. Never.
-  if (allowance?.billing?.usingOverage === true && (allowance.windows || []).some(w => Number.isFinite(w.resetsAt) && w.resetsAt > now)) return null;
+  // Overage in use, or a live used-up window with overage not refused: another run could draw on credits. Never.
+  if (overageRisk(allowance, now, settings.exhausted_at)) return null;
   if (mode !== 'normal') {
     const age = Number.isFinite(allowance?.observedAt) && allowance.observedAt > 0 ? now - allowance.observedAt : Infinity;
     if (age >= settings.probe_age_hours * HOUR) return { reason: 'stale', resetFor: null };

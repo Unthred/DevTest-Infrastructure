@@ -3,11 +3,19 @@
 // next tick; nothing here changes a mode, a latch or a job.
 import { SupervisorError } from './core.mjs';
 import { storeProbes } from './dashdata.mjs';
-import { refreshProvider } from './probe.mjs';
+import { refreshProvider, overageRisk, probeKind } from './probe.mjs';
+import { readJobs, readCache, latestAllowance } from './dashdata.mjs';
+import { budgetSettings } from './budget.mjs';
 
 export async function probeNow({ root, registry, config, agent, now = Date.now(), refresh = refreshProvider }) {
   const entry = config.agents?.[agent];
   if (!entry) throw new SupervisorError(`unknown agent: ${String(agent).slice(0, 40)}`);
+  // A model-run probe is refused while the newest reading shows overage in use, or a used-up window with overage not refused
+  // (never spends credits). The model-free session-log read is always allowed.
+  if (probeKind(registry, entry.provider) !== 'session-log') {
+    const newest = latestAllowance(readJobs(root), readCache(root)?.probes)[entry.provider];
+    if (overageRisk(newest, now, budgetSettings(config).exhausted_at)) return { agent, ok: false, error: 'overage-risk' };
+  }
   const r = await refresh(registry, entry.provider, { now });
   if (!r.record) return { agent, ok: false, error: r.error };
   const stored = storeProbes(root, { [entry.provider]: r.record });

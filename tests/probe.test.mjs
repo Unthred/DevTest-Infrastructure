@@ -240,3 +240,24 @@ test('dashboard page: the Refresh allowance button and the reading age appear fo
   assert.match(body, /Refresh allowance/);
   assert.match(body, /Last reading 3h[^<]*ago[^<]*refreshed by a minimal probe run/);
 });
+
+// ---- never spends credits: a used-up window with overage not refused blocks a model-run probe (tick and on demand)
+const usedUp = (overageStatus, usingOverage = false) => ({ provider: 'claude', status: 'allowed', observedAt: NOW - 3 * HOUR,
+  windows: [{ type: 'seven_day', utilization: 1, resetsAt: NOW + 48 * HOUR, status: 'allowed' }], billing: { overageStatus, usingOverage } });
+test('probeDue: a used-up live window with overage allowed is never probed; with overage rejected it still is', () => {
+  assert.equal(probeDue({ mode: 'waiting', allowance: usedUp('allowed'), settings: S, now: NOW }), null);
+  assert.equal(probeDue({ mode: 'waiting', allowance: usedUp('unknown'), settings: S, now: NOW }), null);
+  assert.equal(probeDue({ mode: 'waiting', allowance: usedUp('rejected'), settings: S, now: NOW }).reason, 'stale');
+});
+test('probeNow refuses a model-run probe on overage risk and never calls the provider; a clean reading proceeds', async t => {
+  const root = cacheRoot(t); let calls = 0;
+  const refresh = async () => { calls++; return { record: cleanProbeRecord(claudeAl(0.3), NOW) }; };
+  for (const al of [usedUp('allowed'), claudeAl(0.5, { overage: true })]) {
+    storeProbes(root, { claude: { ...al, source: 'probe' } });
+    assert.deepEqual(await probeNow({ root, registry: 'unused', config: cfg, agent: 'claude', now: NOW, refresh }), { agent: 'claude', ok: false, error: 'overage-risk' });
+  }
+  assert.equal(calls, 0);
+  storeProbes(root, { claude: { ...usedUp('rejected'), observedAt: NOW + 1000, source: 'probe' } });
+  assert.equal((await probeNow({ root, registry: 'unused', config: cfg, agent: 'claude', now: NOW, refresh })).ok, true);
+  assert.equal(calls, 1);
+});
