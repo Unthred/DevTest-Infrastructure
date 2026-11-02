@@ -541,6 +541,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${new Date(h.since).toISOString().slice(11, 16)} UTC` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
     // Issue #153: a failed config migration stops the ticks until the homeowner fixes team.local.json
     { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and ticks are stopped: ${f.error}. team.local.json was not changed.`, 300), ref: null, severity: 'action' }); }
+    // Issue #250: new implement jobs are paused while open PRs are at or above limits.max_open_prs; the item clears when they fall below.
+    { const text = team.pauseText(c.pulls || []); if (text) attention.push({ id: 'paused-new-work', text, ref: null, severity: 'info' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
     // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.

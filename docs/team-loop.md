@@ -93,3 +93,6 @@ The team loop then, once per issue:
 3. **Accept split**: `ai-agent --supervisor team accept-split <issue>` files each child as an issue (a marker makes a repeat or a crash half way safe), queues them for the same agent and comments on the parent. Foreman removes the label it added. The parent is never started again; close it when the children are done.
 
 The Usage page has a **Failed attempts** card (`view.failedSpend`): jobs that ended failed or blocked with their tokens and CLI cost estimate. Unknown stays unknown, not zero.
+
+## Open PR cap (issue #250)
+`limits.max_open_prs` (shipped default 8, overridable in `team.local.json`; unset means no cap) caps the open unmerged PRs of the configured agents, drafts included. At or above it no implement job starts (own or reassigned), and the implementer slot takes rebase, CI fix, fix, continue or review work instead; reviews keep the model-independence rule of D-024. The dashboard shows "Paused new work: N open PRs (cap M)" while paused and drops it once the count is below the cap.
