@@ -25,6 +25,7 @@ export function validateTeamConfig(c) {
     throw new SupervisorError('invalid team config: schema, repository or paths');
   const L = c.limits || {};
   for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
+  if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
   if ('stall_hours' in L && !(typeof L.stall_hours === 'number' && L.stall_hours > 0 && L.stall_hours <= 720)) throw new SupervisorError('invalid team limit: stall_hours');
   normalizeRoleLimits(c);
   if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
@@ -817,7 +818,7 @@ export class Team {
       if (busy('rebase', key) || (this.s.rebaseAttempts[key] || 0) >= L.max_fix_attempts) continue;
       // Issue #266: with a merge backlog, rebase only the PR that is next to merge (merges go in PR-number order), and let a
       // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
-      if (this.rebaseDeferred(pr, prs, issueByNo, busy)) break;
+      if (this.rebaseDeferred(pr, prs, issueByNo, busy)) continue;   // issue #326: a deferred PR is skipped; the list order must not decide which PR goes
       if (this.writeBlock(pr, 'rebase')) continue;
       if (!allow('rebase')) break;
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
@@ -980,6 +981,7 @@ export class Team {
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     let actions = await this.plan();
+    if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
     if (hold) {
       report.held = { reason: `upgrade to ${String(hold.to || '').slice(0, 7) || 'a newer supervisor'} pending`, actions: actions.filter(a => a.type !== 'merge').length };
@@ -994,6 +996,26 @@ export class Team {
     return report;
   }
 
+  // Issue #326: Foreman has queued or conflicting work but plans and starts nothing. Records when that began (this.s.idle) and what is
+  // waiting; any planned action or running job clears it. The dashboard shows a Needs you item once it lasts idle_minutes (default 30).
+  async trackIdle(actions) {
+    const prs = this.view?.prs || [], issues = this.view?.issues || [], issueByNo = new Map(issues.map(i => [i.number, i]));
+    const running = (await this.jobs.listActive()).length;
+    const work = [];
+    for (const p of prs) {
+      const k = verdictKey(p.number, p.headRefOid);
+      if (agentOfBranch(this.c, p.headRefName) && !p.isDraft && p.mergeable === 'CONFLICTING' && (this.s.rebaseAttempts[k] || 0) < this.c.limits.max_fix_attempts) work.push(`PR #${p.number} conflicts with its base branch`);
+    }
+    if (!this.pauseInfo(prs, issues)) for (const [name] of this.agents()) for (const n of this.issuesOf(name)) if (this.implementable(n, prs, issueByNo, () => false)) work.push(`issue #${n} is ready to implement`);
+    if (actions.length || running || !work.length) { if (this.s.idle) { delete this.s.idle; this.save(); } return; }
+    const why = [...new Set(Object.values(this.held || {}).flatMap(h => Object.values(h)))].join(' | ').slice(0, 300);
+    this.s.idle = { since: this.s.idle?.since ?? this.clock.now(), work: [...new Set(work)].slice(0, 8), reason: why || 'no agent could start it and no hold reason was recorded' };
+    this.save();
+  }
+  idleItem(now = this.clock.now()) {
+    const i = this.s.idle, min = Number.isFinite(this.c.limits?.idle_minutes) ? this.c.limits.idle_minutes : 30;
+    return i && Number.isFinite(i.since) && now - i.since >= min * 60000 ? { ...i, minutes: Math.floor((now - i.since) / 60000) } : null;
+  }
   // Issue #259: read-only stall check. Independent of the planner: an error here is recorded (the dashboard reports it) and never
   // stops the tick or any dispatch. It writes only this.s.progress and this.s.stalls.
   async checkStalls(report) {

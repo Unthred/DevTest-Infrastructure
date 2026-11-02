@@ -105,3 +105,57 @@ test('probing for a startable implement job leaves the dashboard hold reasons un
   await team.plan();
   assert.equal(team.held.claude?.implement, undefined);
 });
+
+// ---- issue #326: a deferred PR is skipped, never ends the search; idle Needs you item
+test('#326 conflicting PRs listed newest first: the lowest number is rebased', async t => {
+  const team = world(t, backlog().reverse());
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
+});
+test('#326 conflicting PRs listed oldest first: the lowest number is rebased', async t => {
+  const team = world(t, backlog());
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
+});
+test('#326 a single conflicting PR is rebased', async t => {
+  const team = world(t, [pr(305, H(5))]);
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [305]);
+});
+test('#326 negative: newest first, after a rebase with an implement job startable, the implement job still takes the slot', async t => {
+  const team = world(t, backlog().reverse());
+  team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 301, key: 'k', ingested: true, at: 100 };
+  assert.deepEqual((await team.plan()).map(a => [a.type, a.issue ?? a.pr]), [['implement', 258]]);
+});
+test('#326 negative: newest first, an exhausted lowest PR is skipped for the next lowest', async t => {
+  const team = world(t, backlog().reverse());
+  team.s.rebaseAttempts[`301:${H(1)}`] = 2;
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [302]);
+});
+
+test('#326 idle Needs you item: appears after idle_minutes with the work and reason, clears when a job starts', async t => {
+  let now = 1_800_000_000_000;
+  const team = world(t, [pr(301, H(1))]); team.clock = { now: () => now };
+  team.s.rebaseAttempts[`301:${H(1)}`] = 2;      // nothing can be planned for it
+  team.s.implemented[258] = 1; team.s.implemented[259] = 1;
+  team.s.rebaseAttempts[`301:${H(1)}`] = 0;
+  team.modes = {}; team.gh.listPulls = async () => team.gh.pulls;
+  // nothing can be planned for it
+  const realChoose = team.choose.bind(team); team.choose = () => null;
+  let acts = await team.plan(); assert.deepEqual(acts, []);
+  await team.trackIdle(acts);
+  assert.ok(team.s.idle); assert.equal(team.idleItem(now), null, 'not yet');
+  now += 29 * 60000; assert.equal(team.idleItem(now), null);
+  now += 2 * 60000; const item = team.idleItem(now);
+  assert.ok(item && item.minutes >= 30 && /#301 conflicts/.test(item.work.join()) && item.reason);
+  // a job starts: cleared
+  team.choose = realChoose;
+  acts = await team.plan(); assert.equal(acts[0].type, 'rebase');
+  await team.trackIdle(acts);
+  assert.equal(team.s.idle, undefined); assert.equal(team.idleItem(now), null);
+});
+test('#326 negative: no queued work means no idle item; idle_minutes is configurable and validated', async t => {
+  const team = world(t, []); team.s.implemented[258] = 1; team.s.implemented[259] = 1;
+  await team.plan(); await team.trackIdle([]);
+  assert.equal(team.s.idle, undefined);
+  const { validateTeamConfig } = await import('../supervisor/team.mjs');
+  const c = config(); c.limits.idle_minutes = 5; validateTeamConfig(c);
+  c.limits.idle_minutes = 0; assert.throws(() => validateTeamConfig(c), /idle_minutes/);
+});
