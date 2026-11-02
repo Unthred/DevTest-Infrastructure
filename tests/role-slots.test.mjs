@@ -157,3 +157,43 @@ test('repair work outranks a new implement across agents: a rejected or red PR o
   const none = world(t);
   assert.deepEqual((await none.team.plan()).map(x => [x.agent, x.type]), [['claude', 'implement']]);
 });
+
+// ---- review follow-ups (issue #154)
+test('per_agent only: loadTeamConfig then new Team reports the mapped-deprecation text once, not the "ignored because roles is set" text', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roles-load-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'team.json');
+  fs.writeFileSync(file, JSON.stringify(config({ limits: { per_agent: 2, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } })));
+  const { loadTeamConfig } = await import('../supervisor/team.mjs');
+  const loaded = loadTeamConfig(file, dir);
+  const w = world(t, { cfg: loaded });
+  assert.equal(w.team.c.deprecations.length, 1);
+  assert.match(w.team.c.deprecations[0], /mapped to limits\.roles/);
+  assert.doesNotMatch(w.team.c.deprecations[0], /ignored because/);
+  assert.deepEqual(w.team.c.limits.roles, { implementer: 2, reviewer: 2 });
+  // negative: an explicit roles next to per_agent is still reported as ignored, also after a second validation
+  const both = validateTeamConfig(validateTeamConfig(config({ limits: limits({ per_agent: 3 }) })));
+  assert.match(both.deprecations[0], /ignored because limits\.roles is set/);
+});
+
+test('a partial local roles override on an older shipped file with per_agent takes the other role from per_agent', () => {
+  const shipped = config({ limits: { per_agent: 2, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } });
+  const c = validateTeamConfig(applyLocalOverride(shipped, { limits: { roles: { implementer: 1 } } }));
+  assert.deepEqual(c.limits.roles, { implementer: 1, reviewer: 2 });
+  assert.throws(() => validateTeamConfig(applyLocalOverride(config({ limits: { overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } }), { limits: { roles: { implementer: 1 } } })), /roles/);   // no source for the missing role
+});
+
+test('an owner at its usage limit does not start its own implement job; the other agent takes it', async t => {
+  const w = world(t, { cfg: config({ limits: limits({ roles: { implementer: 2, reviewer: 1 } }) }), out: codexOut });
+  const plan = await w.team.plan();
+  assert.ok(!plan.some(a => a.agent === 'codex' && a.type === 'implement'));
+  assert.ok(plan.some(a => a.agent === 'claude' && a.type === 'implement'));
+});
+
+test('load spreads: with one PR from each agent and ready issues, the second slot goes to the agent without a job this tick', async t => {
+  const w = world(t, { pulls: [pr(10, 'claude/issue-1-a', H(1)), pr(11, 'codex/issue-3-b', H(2))] });
+  w.team.s.jobs.w1 = written('claude', 'sonnet', 'claude/issue-1-a'); w.team.s.jobs.w2 = written('codex', 'big', 'codex/issue-3-b');
+  const plan = await w.team.plan();
+  const rv = plan.find(a => a.type === 'review'), im = plan.find(a => a.type === 'implement');
+  assert.ok(rv && im);
+  assert.notEqual(rv.agent, im.agent);
+});
