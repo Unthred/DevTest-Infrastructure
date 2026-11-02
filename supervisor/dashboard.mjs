@@ -6,6 +6,7 @@ import { Team, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checks
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { readMigrationState, readIncidents } from './migrations.mjs';
+import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, supervisorHealth } from './suphealth.mjs';
@@ -302,7 +303,41 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const finding = pauseDisagreement(s.job, own && (!fresh || (own.observedAt || 0) >= (fresh.observedAt || 0)) ? own : fresh, now);
     if (finding) add(`pause-${agent}`, `${agent}: ${finding.text}.${finding.kind === 'disagrees' ? ' Check the provider yourself; the pause may be wrong.' : ''}`, { kind: 'issue', n: s.job.issue });
   }
+  stallItems({ items, state, cache, gated, names, now, web, limits });
   return items;
+}
+
+// Issue #259: PRs that made no progress past the limit. Read from the stored result of the tick's stall check, so a PR that has since
+// moved, merged or closed is dropped here at once. PRs stalled for the same set of reasons share one item, and a PR that already has an
+// item of its own (any item whose ref is that PR, or the decision hold) gets none. A failed check is its own item.
+function stallItems({ items, state, cache, gated, names, now, web, limits }) {
+  const st = state.stalls;
+  if (!st) return;
+  if (st.error) items.push({ id: 'stall-check-error', text: redact(`The stalled-PR check failed: ${st.error}. PRs that stopped making progress may not be reported; this is a bug in Foreman.`, 400), ref: null });
+  const open = new Map((cache?.pulls || []).filter(p => !p.isDraft).map(p => [p.number, p]));
+  const covered = new Set([...items.filter(i => i.ref?.kind === 'pull').map(i => i.ref.n), ...(gated?.prs || []).map(p => p.number)]);
+  const groups = new Map();
+  for (const it of st.items || []) {
+    const pr = open.get(it.pr);
+    if (!pr || pr.headRefOid !== it.head || covered.has(it.pr)) continue;
+    const codes = (it.reasons || []).map(r => r.code).sort(), key = codes.join('|') || 'unknown';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(it);
+  }
+  const span = ms => { const m = Math.round(ms / 60000), h = Math.floor(m / 60); return h ? `${h}h ${m % 60}m` : `${m}m`; };
+  const hours = Number.isFinite(limits?.stall_hours) ? limits.stall_hours : STALL_DEFAULT_HOURS;
+  for (const [key, list] of groups) {
+    list.sort((a, b) => a.pr - b.pr);
+    const reasons = list[0].reasons?.length ? list[0].reasons : null;
+    const homeowner = key.split('|').includes('homeowner');
+    const lines = list.map(it => `PR #${it.pr} "${it.title}" (head ${String(it.head).slice(0, 7)}, stalled ${span(now - it.since)}; last: ${it.last})`);
+    const why = reasons ? reasons.map(r => r.text).join('; ') : 'Foreman knows no reason it is waiting. That is a bug in Foreman; please report it';
+    const id = 'stalled-' + (key.replace(/[^a-z0-9]+/gi, '-').slice(0, 60) || 'unknown');
+    items.push({ id, text: redact(`${list.length} open PR${list.length === 1 ? ' has' : 's have'} made no progress for over ${hours} hours: ${lines.join('; ')}`, 1200), ref: list.length === 1 ? { kind: 'pull', n: list[0].pr } : null,
+      tried: redact(`No new head, no new review verdict and no running job. Current reason${reasons?.length > 1 ? 's' : ''}: ${why}.`, 800),
+      action: homeowner ? 'Merge it, or decide what to do with it; Foreman will not act on this branch.' : reasons ? 'Open the PR and clear what holds it, or tell Foreman what to change; the item clears as soon as the PR gets a new head or review verdict, merges or closes.' : 'Open the PR and decide; report the missing reason as a Foreman bug.',
+      links: list.slice(0, 6).map(it => ({ text: names.pr(it.pr).text, url: web('pull', it.pr) })).map(l => ({ text: redact(l.text, 140), url: l.url })) });
+  }
 }
 
 function usageView(config, jobs, states, allowance, now) {
