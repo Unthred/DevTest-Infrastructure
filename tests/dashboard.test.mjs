@@ -127,7 +127,7 @@ test('the freshest provider-reported allowance decides: a newer job record showi
 test('tick rules: failed tick shows time and (redacted) error; no tick for more than 10 minutes; never ticked', async t => {
   let v = await view(t, { cache: { tick: { at: NOW - 120000, status: 'error', error: 'gh pr list failed: HTTP 401 for alice@example.com' }, pulls: [], issues: [] } });
   const failed = v.attention.find(a => a.id === 'tick-failed');
-  assert.match(failed.text, /2026-10-30T/); assert.match(failed.text, /HTTP 401/); assert.doesNotMatch(failed.text, /alice@example\.com/);
+  assert.match(failed.text, new RegExp(`⟦t:${NOW - 120000}⟧`)); assert.match(failed.text, /HTTP 401/); assert.doesNotMatch(failed.text, /alice@example\.com/);
   v = await view(t, { cache: { tick: okTick(NOW - 11 * 60000), pulls: [], issues: [] } });
   assert.ok(ids(v).includes('tick-stale'));
   v = await view(t, { cache: { tick: okTick(NOW - 9 * 60000), pulls: [], issues: [] } });

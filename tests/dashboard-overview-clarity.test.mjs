@@ -194,3 +194,33 @@ test('time: the browser script rewrites <time data-local> in the viewer zone and
   const src = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
   assert.match(src, /time\[data-local\]/); assert.match(src, /formatLocal\(ms, zone\)/); assert.match(src, /#tznote/);
 });
+
+// ---- 5b. no server-rendered time is left unlocalised or unlabelled (review of PR #217)
+test('time: escT turns the marker into <time data-local> and escapes the rest', async () => {
+  const { escT } = await import('../supervisor/dashrender.mjs');
+  const { tmark } = await import('../supervisor/dashui/logic.mjs');
+  const ms = Date.parse('2026-11-02T21:30:00Z');
+  assert.equal(escT(`failed at ${tmark(ms)}: <b>`), `failed at ${lt(ms)}: &lt;b&gt;`);
+});
+test('time: warning texts carry a time marker, not a bare ISO or HH:MM UTC', async t => {
+  const v = await build(t, { jobs: [job()], cache: { tick: { at: NOW - 3 * 3600000, status: 'error', error: 'boom' } } });
+  const txt = JSON.stringify(v.attention);
+  assert.match(txt, /\u27e6t:\d+\u27e7/);
+  assert.doesNotMatch(txt, /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  const html = page(v, { page: 'overview' });
+  { const i = html.indexOf('\u27e6t:'); assert.equal(i, -1, html.slice(Math.max(0, i - 200), i + 60)); }
+});
+test('time: chart axis labels and tooltips are rewritten by the script from data-lms', async t => {
+  const v = await build(t, { jobs: [job()], snapshots: [{ at: NOW - 5 * MIN, status: 'ok', plan: [] }] });
+  const html = page(v, { page: 'usage' });
+  for (const m of html.matchAll(/<text[^>]*class="ax"[^>]*>/g)) assert.match(m[0], /data-lms="\d+"/);
+  for (const m of html.matchAll(/<title[^>]*>[^<]*(?:reset|at \d{4})[^<]*<\/title>/g)) assert.match(m[0], /data-lms="\d+"/);
+  const src = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  assert.match(src, /\[data-lms\]/); assert.match(src, /timeOnly\(ms, zone\)/);
+});
+test('time: estimates name the zone they are computed in', async t => {
+  const v = await build(t, { jobs: [job()], snapshots: [{ at: NOW - 5 * MIN, status: 'ok', plan: [{ agent: 'claude', type: 'implement', ref: 30 }] }] });
+  assert.equal(v.tz, 'UTC');
+  const html = page(v, { page: 'work' });
+  if (/class="sub est"/.test(html)) assert.match(html, /class="sub est"[^>]*>[\s\S]*?<span class="tzl">\(UTC\)<\/span>/);
+});

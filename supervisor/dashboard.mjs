@@ -10,7 +10,7 @@ import { planningInputs, readHeadRegister } from './planning.mjs';
 import { proposalsAdded } from './decisions.mjs';
 import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
-import { severityOf } from './dashui/logic.mjs';
+import { severityOf, tmark } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth } from './suphealth.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
@@ -81,7 +81,7 @@ export function pauseDisagreement(job, allowance, now, limits = {}) {
   const limiting = [...known].sort((a, b) => b.utilization - a.utilization)[0];
   if (limiting.utilization >= nearlyFull) return { kind: 'nearly_full', window: limiting, text: `paused on a usage limit; the limiting window is nearly full: ${windowPhrase(limiting, allowance.provider, now)}, so the pause is plausible` };
   const used = known.map(w => `${windowLabel(w, allowance.provider)} ${Math.round(w.utilization * 100)}%`).join(', ');
-  const at = allowance.observedAt ? ` (reported ${utcTime(allowance.observedAt)})` : '';
+  const at = allowance.observedAt ? ` (reported ${tmark(allowance.observedAt)})` : '';
   return { kind: 'disagrees', text: `paused on a usage limit but no window is near its limit: ${used} used; highest is ${windowPhrase(limiting, allowance.provider, now)}${at}` };
 }
 
@@ -251,8 +251,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   const t = cache?.tick;
   if (!t) add('no-tick', 'No tick has ever been recorded: the dispatcher has not run since the dashboard was installed.');
   else {
-    if (t.status === 'error') add('tick-failed', `Last tick failed at ${new Date(t.at).toISOString()}: ${t.error || 'no detail recorded'}`);
-    if (teamEnabled !== false && t.status !== 'disabled' && now - t.at > STALE_TICK_MS) add('tick-stale', `No tick for ${Math.round((now - t.at) / 60000)} minutes (last ${new Date(t.at).toISOString()}); the reconcile cron may have stopped.`);
+    if (t.status === 'error') add('tick-failed', `Last tick failed at ${tmark(t.at)}: ${t.error || 'no detail recorded'}`);
+    if (teamEnabled !== false && t.status !== 'disabled' && now - t.at > STALE_TICK_MS) add('tick-stale', `No tick for ${Math.round((now - t.at) / 60000)} minutes (last ${tmark(t.at)}); the reconcile cron may have stopped.`);
   }
   const maxFix = limits.max_fix_attempts, maxReview = limits.max_review_attempts;
   // Issue #244: an implement job that ran out of context is not restarted; its proposed split is the one decision needed.
@@ -612,7 +612,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const latch = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.latch'), 'utf8')); } catch (error) { return error.code === 'ENOENT' ? null : { reason: 'unreadable latch file' }; } })();
     if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
-    try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(h.since))}` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
+    try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${tmark(h.since)}` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
     // Issue #362: a storage warning is a Needs you item; nothing is ever deleted automatically.
     if (history?.storage?.warnings?.length) attention.push({ id: 'history-storage', text: redact(`History storage: ${history.storage.warnings.join(' ')}`, 400), ref: null, severity: 'warn', action: 'Free space on the volume or move the history archive; Foreman never deletes history by itself.' });
     // Issue #153: a failed config migration skips each tick (and is retried) until the homeowner fixes team.local.json
@@ -647,7 +647,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),
       estimates,
-      generatedAt: now, repository: config.repository, teamEnabled: config.enabled !== false,
+      generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
       budget,

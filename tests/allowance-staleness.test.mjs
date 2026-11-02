@@ -138,7 +138,7 @@ test('chart: a stale 100% stops at the reported reset with an expected-reset mar
   assert.equal(pts.at(-1).at, T('2026-10-31T21:35:00Z'));
   assert.deepEqual(v.graphs.allowance.claude.expected, [{ at: reset, window: '5-hour' }]);
   const html = renderPage(v, { route: { page: 'usage' }, query: new URLSearchParams('range=24h'), pathname: '/usage' });
-  assert.match(html, /class="reset expected" data-series="expected"><title>claude 5-hour window expected to reset 2026-10-31 21:40 UTC/);
+  assert.match(html, /class="reset expected" data-series="expected"><title[^>]*>claude 5-hour window expected to reset 2026-10-31 21:40 UTC/);
   assert.match(html, /Expected reset \(reading expired\)/);
   // 24h range: the line's last x is the 21:35 sample (x≈838), well short of the right edge at now (x=886)
   const xs = [...html.matchAll(/<polyline fill="none" stroke="var\(--claude\)"[^>]*points="([^"]+)"/g)].flatMap(m => m[1].split(' ').map(p => Number(p.split(',')[0])));

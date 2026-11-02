@@ -252,6 +252,8 @@ export function formatLocal(ms, tz) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(new Date(ms)).map(p => [p.type, p.value]));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
 }
+// A time inside plain text: a marker the renderer turns into <time data-local> (see escT in dashrender.mjs).
+export const tmark = ms => (Number.isFinite(ms) ? `\u27e6t:${ms}\u27e7` : 'unknown');
 export const timeOnly = (ms, tz) => formatLocal(ms, tz).slice(11);
 
 // ---- Activity (issue #76): idle ticks collapse, rows filter by agent, outcome and job kind.

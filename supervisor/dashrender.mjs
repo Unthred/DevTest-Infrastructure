@@ -1,7 +1,7 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
-import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, limitsOf, pillLinks, tableState, trail, versionStatus } from './dashui/logic.mjs';
+import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, limitsOf, pillLinks, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
 import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
@@ -12,6 +12,10 @@ import { agentLine } from './agentline.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
+// Times inside plain text (warnings, allowance notes) travel as a marker and become <time data-local> at render time.
+export const escT = text => esc(text).replace(/\u27e6t:(\d+)\u27e7/g, (_, ms) => lt(Number(ms)));
+// SVG text cannot hold <time>: the script rewrites any [data-lms] element from its template (data-tpl, "{t}" = the time).
+const lms = (ms, tpl, timeOnly) => `data-lms="${ms}" data-tpl="${esc(tpl)}"${timeOnly ? ' data-tonly' : ''}`;
 export const lt = ms => (Number.isFinite(ms) ? `<time class="lt" datetime="${new Date(ms).toISOString()}" data-local>${esc(utc(ms))}</time>` : 'unknown');
 export const dur = ms => { if (!Number.isFinite(ms) || ms < 0) return 'unknown'; const m = Math.floor(ms / 60000); return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`; };
 const ago = (ms, now) => (Number.isFinite(ms) ? `${dur(now - ms)} ago` : 'never');
@@ -150,16 +154,16 @@ function lineChart({ series, resets = [], expected = [], now, range, title }) {
   const t1 = now, t0 = Number.isFinite(RANGES[range]) ? now - RANGES[range] : Math.min(...pts.map(p => p.at));
   const x = t => L + ((t - t0) / (t1 - t0)) * (W - L - R), y = v => T + (1 - Math.min(1, Math.max(0, v))) * (H - T - B);
   let g = [0, 0.25, 0.5, 0.75, 1].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="gridline"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v * 100}%</text>`).join('');
-  for (let i = 0; i <= 4; i++) { const t = t0 + ((t1 - t0) * i) / 4; g += `<text x="${x(t)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}" class="ax">${esc(fmtAxisTime(t, range))}</text>`; }
-  for (const r of resets.filter(r => r.at >= t0)) g += `<line x1="${x(r.at)}" x2="${x(r.at)}" y1="${T}" y2="${H - B}" class="reset" data-series="reset"><title>${esc(r.window)} window reset ${esc(utc(r.at))}</title></line>`;
+  for (let i = 0; i <= 4; i++) { const t = t0 + ((t1 - t0) * i) / 4; g += `<text x="${x(t)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}" class="ax" ${lms(Math.round(t), '{t}', range === '24h')}>${esc(fmtAxisTime(t, range))}</text>`; }
+  for (const r of resets.filter(r => r.at >= t0)) g += `<line x1="${x(r.at)}" x2="${x(r.at)}" y1="${T}" y2="${H - B}" class="reset" data-series="reset"><title ${lms(r.at, `${r.window} window reset {t}`)}>${esc(r.window)} window reset ${esc(utc(r.at))}</title></line>`;
   const shownExpected = expected.filter(r => r.at >= t0 && r.at <= t1);
-  for (const r of shownExpected) g += `<line x1="${x(r.at).toFixed(1)}" x2="${x(r.at).toFixed(1)}" y1="${T}" y2="${H - B}" class="reset expected" data-series="expected"><title>${esc(r.window)} window expected to reset ${esc(utc(r.at))}: the reading before it has expired</title></line>`;
+  for (const r of shownExpected) g += `<line x1="${x(r.at).toFixed(1)}" x2="${x(r.at).toFixed(1)}" y1="${T}" y2="${H - B}" class="reset expected" data-series="expected"><title ${lms(r.at, `${r.window} window expected to reset {t}: the reading before it has expired`)}>${esc(r.window)} window expected to reset ${esc(utc(r.at))}: the reading before it has expired</title></line>`;
   for (const s of series) {
     if (!s.points.length) continue;
     // a gap (reading expired, then a new one) splits the line: nothing is drawn across the time no reading was current
     const segments = s.points.reduce((acc, p) => { if (p.gap || !acc.length) acc.push([]); acc.at(-1).push(p); return acc; }, []);
     g += `<g data-series="${esc(s.key)}">${segments.map(seg => `<polyline fill="none" stroke="${s.colour}" stroke-width="2.5" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ''} points="${seg.map(p => `${x(p.at).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ')}"/>`).join('')}`
-      + s.points.filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0).map(p => `<circle class="pt" tabindex="0" cx="${x(p.at).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="5" fill="${s.colour}"><title>${esc(s.label)}: ${pct(p.v)} at ${esc(utc(p.at))}</title></circle>`).join('') + '</g>';
+      + s.points.filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0).map(p => `<circle class="pt" tabindex="0" cx="${x(p.at).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="5" fill="${s.colour}"><title ${lms(p.at, `${s.label}: ${pct(p.v)} at {t}`)}>${esc(s.label)}: ${pct(p.v)} at ${esc(utc(p.at))}</title></circle>`).join('') + '</g>';
   }
   const items = [...series.filter(s => s.points.length).map(s => ({ key: s.key, label: s.label, colour: s.colour })), ...(resets.length ? [{ key: 'reset', label: 'Window reset', colour: 'var(--action)', marker: true }] : []), ...(shownExpected.length ? [{ key: 'expected', label: 'Expected reset (reading expired)', colour: 'var(--mut)', marker: true }] : [])];
   return `<figure class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">${g}</svg>${legend(items)}</figure>`;
@@ -251,12 +255,12 @@ function budgetBlock(view, name) {
 }
 // Issue #156: the estimated finish with its basis on hover; waits Foreman knows about get their own time.
 const estFor = (view, kind, ref) => view.estimates?.items?.[`${kind}:${ref}`] || null;
-function estHtml(e) {
+function estHtml(e, tz = 'UTC') {
   if (!e) return '';
   const tip = (e.basis || []).join('\n');
-  return `<div class="sub est" data-est="${esc(e.status)}" title="${esc(tip)}">${icon('clock')} ${esc(e.text)}${(e.waits || []).map(w => ` <span class="est-wait" data-wait="${esc(w.kind)}">${esc(w.text)}</span>`).join('')}</div>`;
+  return `<div class="sub est" data-est="${esc(e.status)}" title="${esc(tip)}">${icon('clock')} ${esc(e.text)} <span class="tzl">(${esc(tz)})</span>${(e.waits || []).map(w => ` <span class="est-wait" data-wait="${esc(w.kind)}">${esc(w.text)}</span>`).join('')}</div>`;
 }
-const globalWaitsHtml = view => (view.estimates?.waits || []).map(w => `<p class="sub est-wait" data-wait="${esc(w.kind)}">${icon('clock')} ${esc(w.text)}</p>`).join('');
+const globalWaitsHtml = view => (view.estimates?.waits || []).map(w => `<p class="sub est-wait" data-wait="${esc(w.kind)}">${icon('clock')} ${esc(w.text)} <span class="tzl">(${esc(view.tz || 'UTC')})</span></p>`).join('');
 // Issue #76: when nothing is planned, say why. Counts link to the Work lists, filtered.
 function nextWhyHtml(view) {
   const w = view.panels.nextWhy; if (!w) return '';
@@ -270,17 +274,17 @@ function nextWhyHtml(view) {
 function nextPanel(view) {
   const now = view.generatedAt, plan = view.panels.next;
   const when = view.nextTickAt ? `<p class="sub">${icon('clock')} Next tick <b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b></p>` : '<p class="sub">No tick is scheduled: the team loop is off or has never run.</p>';
-  return `${when}${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref))}${p.reassignedFrom ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
+  return `${when}${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref), view.tz)}${p.reassignedFrom ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
+  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 function warningsPanel(view) {
   const unknown = view.agents.filter(a => a.state === 'unknown');
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
-  return items.length ? `${copyAllBtn(items, 'warnings')}<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
+  return items.length ? `${copyAllBtn(items, 'warnings')}<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
 // Issue #76: each agent's own state and reason, from the same sentence `team status` prints (agentline.mjs).
 const TIME_MARK = /\u0001(\d+)\u0002/g;
@@ -404,7 +408,7 @@ function jobDetail(view, query, path, route) {
 }
 const showChip = (path, query, key, value, text) => (query.get(key) === value ? `<p class="chips"><span class="chip on">${esc(text)}</span> <a class="btn" href="${esc(withQuery(path, query, { [key]: null }))}">Show all</a></p>` : '');
 function workPage(view, query, path) {
-  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref))}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
+  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
   const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: showChip(path, query, 'issues.show', 'blocked', 'Showing only open issues blocked by dependencies') + table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.filter(i => query.get('issues.show') !== 'blocked' || (i.state === 'OPEN' && i.blockedBy.length)).map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'],
     cols: [{ key: 'number', label: 'Issue', num: true, html: r => issueLink(r.number) }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
@@ -558,7 +562,7 @@ function systemPage(view) {
 <dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : 'none'}</dd>
 <dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${lt(now)}</dd></dl>` });
   const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${(vs => badge(vs.level, vs.label))(versionStatus(v))}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
-  const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
+  const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
   return { title: 'System', body: grid('system', facts + ver + all) };
 }
 
