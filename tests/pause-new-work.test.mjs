@@ -84,3 +84,58 @@ test('the dashboard shows "Paused new work: N open PRs (cap M)" at the cap and c
   assert.equal(below.attention.some(a => a.id === 'paused-new-work'), false);
   assert.equal((await view(t, config(undefined), waiting(9))).attention.some(a => a.id === 'paused-new-work'), false);
 });
+
+// ---- issue #320: PRs that wait on the homeowner or an unstarted prerequisite issue must not deadlock the cap
+const withBody = (n, body, state = 'OPEN') => ({ ...issue(n), body, state });
+const parked = n => Array.from({ length: n }, (_, i) => pr(100 + i, `codex/issue-${200 + i}-x`, H(i + 1), { labels: ['needs-homeowner'] }));
+
+test('deadlock case: PRs waiting on an unstarted prerequisite do not fill the cap, so implement starts', async t => {
+  const issues = [withBody(5, ''), withBody(6, ''), ...[0, 1].map(i => withBody(200 + i, 'Prerequisites: #5')), ];
+  const pulls = [0, 1].map(i => pr(100 + i, `codex/issue-${200 + i}-x`, H(i + 1)));
+  // issue 5 is open and has no PR: both PRs wait on it
+  const team = world(t, { cfg: config(2), pulls, issues });
+  assert.equal(team.pauseInfo(pulls, issues), null);
+  assert.ok((await team.plan()).some(a => a.type === 'implement'));
+  // once #5 has a PR of its own it counts again, and the pair counts against the cap
+  const withFive = [...pulls, pr(9, 'claude/issue-5-a', H(7))];
+  assert.deepEqual(team.pauseInfo(withFive, issues), { open: 3, cap: 2 });
+  // and once #5 is closed the prerequisite no longer parks them
+  const closed = issues.map(i => i.number === 5 ? { ...i, state: 'CLOSED' } : i);
+  assert.deepEqual(team.pauseInfo(pulls, closed), { open: 2, cap: 2 });
+});
+
+test('normal cap case is unchanged: ordinary open PRs are counted and pause new work', async t => {
+  const pulls = waiting(3);
+  const team = world(t, { cfg: config(3), pulls });
+  assert.deepEqual(team.pauseInfo(pulls, []), { open: 3, cap: 3 });
+  assert.equal(team.capDeadlock(pulls, []), null);   // CI green, no verdict: they can still be reviewed
+});
+
+test('a needs-homeowner PR is parked and the text says so', async t => {
+  const pulls = [...waiting(1), ...parked(2).map((p, i) => ({ ...p, number: 300 + i, headRefName: `codex/issue-${300 + i}-x` }))];
+  const team = world(t, { cfg: config(1), pulls });
+  assert.deepEqual(team.pauseInfo(pulls, []), { open: 1, cap: 1, parked: 2 });
+  assert.match(team.pauseText(pulls, []), /2 more waiting on you/);
+});
+
+// Only one agent exists, so nobody independent may review its PRs (the review gate is unchanged): nothing can progress.
+const sameModel = cap => { const cfg = config(cap); delete cfg.agents.claude; return cfg; };
+const authored = n => Array.from({ length: n }, (_, i) => pr(100 + i, `codex/issue-${200 + i}-x`, H(i + 1)));
+
+test('Needs you item: appears when the cap blocks all work and no PR can progress, and clears when one can', async t => {
+  const stuck = await view(t, sameModel(2), authored(2));
+  const item = stuck.attention.find(a => a.id === 'cap-deadlock');
+  assert.ok(item, JSON.stringify(stuck.attention.map(a => a.id)));
+  assert.match(item.text, /#100, #101/);
+  assert.match(item.action, /merge or close/);
+  assert.equal(item.severity, 'action');
+  // normal cap case: reviewable PRs (a different model exists) can progress, so only the info line shows
+  const normal = await view(t, config(2), authored(2));
+  assert.equal(normal.attention.some(a => a.id === 'cap-deadlock'), false);
+  assert.ok(normal.attention.some(a => a.id === 'paused-new-work'));
+  // below the cap the item is gone
+  assert.equal((await view(t, sameModel(2), authored(1))).attention.some(a => a.id === 'cap-deadlock'), false);
+  // a draft can still be continued, so it is not a deadlock
+  const withDraft = [...authored(1), pr(101, 'codex/issue-201-x', H(2), { isDraft: true })];
+  assert.equal((await view(t, sameModel(2), withDraft)).attention.some(a => a.id === 'cap-deadlock'), false);
+});
