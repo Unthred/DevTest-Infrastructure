@@ -265,8 +265,16 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       { tried: `${info.summary} Each has an independent PASS, green checks and no conflict, but merges only once the register says homeowner-approved.`, action: `To approve, edit docs/DECISIONS.md on main so the ${info.id} entry reads "Status: homeowner-approved".`, links: prs.slice(0, 6).map(p => ({ text: names.pr(p.number).text, url: web('pull', p.number) })) });
   }
   // Issue #258: one item per PR that no configured agent can review, with the real reason of each agent.
-  for (const u of unreviewed) add(`noreviewer-${u.pr}`, `${names.pr(u.pr).text} at ${sha7(u.head)} has no reviewer that is independent and available: ${u.reasons.join('; ')}`, { kind: 'pull', n: u.pr },
-    { tried: 'Foreman tried every configured review model of every agent; each is either a model that wrote this head or cannot run now.', action: 'Wait for the named reviewer to have allowance again, review the PR by hand, or approve another review model.', links: [{ text: names.pr(u.pr).text, url: web('pull', u.pr) }] });
+  for (const u of unreviewed) {
+    const what = names.pr(u.pr).text, uniq = x => [...new Set(x)];
+    const unblock = u.unblock?.length ? `Approving ${uniq(u.unblock).join(' or ')} as a review model would unblock it` : u.waits?.length ? `No configured review model can be approved: every one wrote this head (naming a different model in review_candidates would need a decision). ${uniq(u.waits).join(' and ')} having allowance again would unblock it` : 'No configured review model can be approved to unblock it: every one wrote this head, and there is no other agent to review it';
+    const tried = `Foreman tried every configured review model of every agent: ${(u.tried?.length ? u.tried : u.reasons).join('; ')}.`;
+    if (u.conflicting) add(`noreviewer-${u.pr}`, `${what} at ${sha7(u.head)} conflicts with main and has no reviewer that is independent and available: ${u.reasons.join('; ')}`, { kind: 'pull', n: u.pr },
+      { tried: `${tried} The rebase comes first (${u.rebaseAttempts} of ${u.maxRebase} attempts used at this head). ${u.rebaseAttempts >= u.maxRebase ? 'Attempts are used up, so Foreman will not rebase it again by itself.' : 'Foreman rebases it next; the rebased head is a new head and is then held for a reviewer.'}`,
+        action: `Rebase it by hand if Foreman cannot. ${unblock}.`, links: [{ text: what, url: web('pull', u.pr) }] });
+    else add(`noreviewer-${u.pr}`, `${what} at ${sha7(u.head)} has no reviewer that is independent and available: ${u.reasons.join('; ')}`, { kind: 'pull', n: u.pr },
+      { tried, action: `${unblock}, or review the PR by hand.`, links: [{ text: what, url: web('pull', u.pr) }] });
+  }
   // Open issues no agent will ever be given (since #146 an issue in no agent's list is not dispatched).
   { const listed = new Set(Object.values(config.agents || {}).flatMap(a => a.issues || []));
     const orphans = (cache?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number) && !i.labels?.includes('needs-homeowner')).map(i => i.number).sort((a, b) => a - b);
@@ -274,7 +282,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       { tried: 'Foreman only dispatches issues listed under an agent in team.local.json; these are in no list, so nothing has been started for them.', action: 'Add each issue to an agent\'s issues list in team.local.json, or close it.', links: orphans.slice(0, 6).map(n => ({ text: `issue #${n}`, url: web('issue', n) })) }); }
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
-    const closed = kind === 'issue' ? (cache?.issues || []).some(i => i.number === j.issue && i.state !== 'OPEN') : (cache?.pulls || []).length > 0 && !openPulls.has(j.issue);   // closed or merged: nothing left to decide
+    // Issue #297: an issue that is closed, labelled epic or has an accepted split has nothing left to decide.
+    const closed = kind === 'issue' ? (cache?.issues || []).some(i => i.number === j.issue && (i.state !== 'OPEN' || i.labels?.includes('epic'))) || state.splits?.[j.issue]?.status === 'accepted' : (cache?.pulls || []).length > 0 && !openPulls.has(j.issue);   // closed or merged: nothing left to decide
     if (closed) continue;
     add(`job-${j.id}`, `${names.job(j).text} (${j.provider}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind, n: j.issue },
       { tried: `The ${j.kind || 'job'} job ran ${j.attempts || 1} attempt${(j.attempts || 1) === 1 ? '' : 's'} and ended ${j.status}; Foreman starts no new job for it.`, action: 'Read the job record, then retry it or close the issue.', links: [{ text: (kind === 'pull' ? names.pr(j.issue) : names.issue(j.issue)).text, url: web(kind, j.issue) }, { text: names.job(j).text, url: names.job(j).url }] });
