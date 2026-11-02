@@ -5,7 +5,7 @@ import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
+import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { Team, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
@@ -43,18 +43,24 @@ function startWorker(root, id, registry) {
 }
 function reconcileOnce(root, registry) {
   const dir = path.join(root, 'jobs');
-  let resumed = 0, blocked = 0;
+  let resumed = 0, blocked = 0, released = 0;
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     if (!name.endsWith('.json')) continue;
     const current = readJob(root, name.slice(0, -5));
     if (current.workerPid && processStart(current.workerPid) === current.workerStart) continue;
+    // Issue #132 backstop: a terminal job whose leases were kept because a process was alive (manual stop, orphaned child)
+    // never reaches transition() again. Once nothing of it runs, release them here.
+    if (terminal.has(current.status)) {
+      if (!jobProcessesAlive(current) && leaseKeys(current).some(key => fs.existsSync(path.join(root, 'leases', key)))) { releaseLeases(root, current); released++; }
+      continue;
+    }
     const eligible = ['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].every(key => current.capabilities?.[key] === 'supported');
     const due = current.nextAttemptAt != null && current.nextAttemptAt <= Date.now();
     if (['paused_limit', 'queued'].includes(current.status) && ((current.autoResume && eligible) || current.autoRestart) && due) {
       recover(root, current.id, false); startWorker(root, current.id, registry); resumed++;
     } else if (current.status === 'running') { transition(root, current, 'blocked', 'orphaned_worker'); blocked++; }
   }
-  return { resumed, blocked };
+  return { resumed, blocked, released };
 }
 const teamConfigFile = new URL('./team.json', import.meta.url).pathname;
 function realJobs(root, registry) {
@@ -284,7 +290,7 @@ async function main() {
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.
     while (true) {
       const result = reconcileOnce(root, registry);
-      if (result.resumed || result.blocked) console.log(JSON.stringify({ at: Date.now(), ...result }));
+      if (result.resumed || result.blocked || result.released) console.log(JSON.stringify({ at: Date.now(), ...result }));
       await realClock.sleep(60000);
     }
   }
@@ -299,7 +305,7 @@ async function main() {
   if (command === 'pause' || command === 'stop') {
     if (['completed', 'failed', 'blocked', 'stopped'].includes(job.status)) throw new SupervisorError('terminal job cannot be paused or stopped');
     if (job.workerPid && processStart(job.workerPid) === job.workerStart) {
-      if (job.childPid && processStart(job.childPid)) process.kill(job.workerPid, command === 'pause' ? 'SIGUSR1' : 'SIGTERM');
+      if (childAlive(job)) process.kill(job.workerPid, command === 'pause' ? 'SIGUSR1' : 'SIGTERM');
       else process.kill(job.workerPid, 'SIGTERM');
     }
     transition(root, job, command === 'pause' ? 'paused_manual' : 'stopped', command === 'pause' ? 'manual_pause' : 'manual_stop');

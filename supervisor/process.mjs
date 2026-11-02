@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { billingRisk, limitFromAllowance } from './allowance.mjs';
 import { addUsage, sessionFromLine, usageFromLine } from './usage.mjs';
 import { begin as beginSession, recordUsage, seed as sessionSeed, touch } from './session.mjs';
-import { checkpoint, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
+import { checkpoint, processInfo, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
 export async function runProcess(root, job, config, adapter, clock, options = {}) {
   if (typeof adapter.preflight === 'function') {
@@ -44,7 +44,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   const onTerm = () => signalChild('SIGTERM');
   process.on('SIGUSR1', onInt); process.on('SIGTERM', onTerm);
   // Publish the child only after the worker can accept a stop/pause signal.
-  job.childPid = child.pid; saveJob(root, job, clock);
+  job.childPid = child.pid; job.childStart = processInfo(child.pid)?.start || null; saveJob(root, job, clock);
   // A child that exits before reading its prompt closes the pipe; that is an exit status, not a supervisor crash.
   child.stdin.on('error', () => {});
   child.stdin.end(prompt(job, job.attempts > 1, job.attempts > 1 && !session.resume ? sessionSeed(job) : null));
@@ -116,7 +116,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     }
     const current = readJob(root, job.id);
     if (current.status === 'paused_manual' || current.status === 'stopped') job.status = current.status;
-    job.childPid = null; saveJob(root, job, clock);
+    job.childPid = null; job.childStart = null; saveJob(root, job, clock);
     if (stopping) return { code: 1, event: 'manual_stop' };
     return { code: result.code, event: observed || result.event, resetAt, resetSource, verified };
   } finally {

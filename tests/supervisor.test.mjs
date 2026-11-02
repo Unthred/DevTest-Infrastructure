@@ -409,6 +409,48 @@ test('#80 a terminal transition keeps the leases while a detached child is alive
   assert.throws(() => releaseLeases(f.root, job), /still running/);
   process.kill(child.pid, 'SIGKILL');
   for (let i = 0; i < 50 && fs.existsSync(`/proc/${child.pid}/stat`) && !/\) Z/.test(fs.readFileSync(`/proc/${child.pid}/stat`, 'utf8')); i++) await new Promise(r => setTimeout(r, 20));
-  job.childPid = null; releaseLeases(f.root, job);
+  releaseLeases(f.root, job);   // childPid is still set: a dead, reaped or zombie child must not keep the lease
   assert.deepEqual(leaseFiles(f.root), []);
+});
+
+test('#132 child liveness compares the recorded start time and treats a zombie as dead', async t => {
+  const { spawn } = await import('node:child_process');
+  const { childAlive, processInfo } = await import('../supervisor/core.mjs');
+  const live = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore' });
+  t.after(() => { try { process.kill(live.pid, 'SIGKILL'); } catch {} });
+  const start = processInfo(live.pid).start;
+  assert.equal(childAlive({ childPid: live.pid, childStart: start }), true);
+  assert.equal(childAlive({ childPid: live.pid }), true, 'no recorded start falls back to existence');
+  assert.equal(childAlive({ childPid: live.pid, childStart: String(Number(start) + 1) }), false, 'PID reuse: different start time');
+  assert.equal(childAlive({ childPid: null }), false);
+  // A zombie: killed grandchild whose parent shell never reaps it.
+  const sh = spawn('sh', ['-c', 'sleep 60 & echo $!; sleep 100'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => { try { process.kill(sh.pid, 'SIGKILL'); } catch {} });
+  const pid = await new Promise(resolve => sh.stdout.once('data', d => resolve(Number(String(d).trim()))));
+  const zstart = processInfo(pid).start;
+  assert.equal(childAlive({ childPid: pid, childStart: zstart }), true);
+  process.kill(pid, 'SIGKILL');
+  for (let i = 0; i < 100 && processInfo(pid)?.state !== 'Z'; i++) await new Promise(r => setTimeout(r, 20));
+  assert.equal(processInfo(pid)?.state, 'Z');
+  assert.equal(childAlive({ childPid: pid, childStart: zstart }), false);
+});
+
+test('#132 reconcile releases leases kept on a stopped job once its processes are gone, and not before', async t => {
+  const { spawn } = await import('node:child_process');
+  const { saveJob } = await import('../supervisor/core.mjs');
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { detached: true, stdio: 'ignore' }); child.unref();
+  t.after(() => { try { process.kill(child.pid, 'SIGKILL'); } catch {} });
+  const { processInfo } = await import('../supervisor/core.mjs');
+  job.status = 'stopped'; job.workerPid = null; job.childPid = child.pid; job.childStart = processInfo(child.pid).start; saveJob(f.root, job, clock);
+  assert.equal(leaseFiles(f.root).length, 2);
+  const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+  const reconcile = () => JSON.parse(execFileSync(process.execPath, [cli, 'reconcile', '--state-root', f.root, '--registry', f.registry], { encoding: 'utf8' }));
+  assert.equal(reconcile().released, 0);
+  assert.equal(leaseFiles(f.root).length, 2, 'kept while the child lives');
+  process.kill(child.pid, 'SIGKILL');
+  for (let i = 0; i < 100 && fs.existsSync(`/proc/${child.pid}/stat`) && processInfo(child.pid)?.state !== 'Z'; i++) await new Promise(r => setTimeout(r, 20));
+  assert.equal(reconcile().released, 1);
+  assert.deepEqual(leaseFiles(f.root), []);
+  assert.equal(reconcile().released, 0, 'idempotent');
 });
