@@ -39,8 +39,8 @@ test('at the cap no implement job starts and the implementer slot takes review w
   const team = world(t, { cfg: config(2), pulls });
   const acts = await team.plan();
   assert.equal(acts.some(a => a.type === 'implement'), false, JSON.stringify(acts));
-  // an agent's reviews share one review worktree (issue #302): one review per tick, the other PR waits for the next
-  assert.deepEqual(acts.map(a => [a.agent, a.type]), [['claude', 'review']]);
+  // each review has its own worktree (issue #344): both PRs are reviewed at once
+  assert.deepEqual(acts.map(a => [a.agent, a.type]), [['claude', 'review'], ['claude', 'review']]);
   assert.deepEqual(team.pauseInfo(pulls), { open: 2, cap: 2 });
   assert.equal(team.pauseText(pulls), 'Paused new work: 2 open PRs (cap 2)');
   // the same world without a cap: the implementer slot goes to implement

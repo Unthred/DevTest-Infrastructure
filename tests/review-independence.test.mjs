@@ -96,7 +96,7 @@ test('same provider, different model: a full review, then a merge with no post-m
   await w.team.execute(act);
   const spec = w.calls.created[0];
   assert.equal(spec.kind, 'review'); assert.equal(spec.model, 'opus');
-  assert.match(spec.worktree, /DevTest-Infrastructure-claude-review$/); assert.deepEqual(spec.allowed_actions, ['read', 'test', 'update_issue']);
+  assert.match(spec.worktree, /DevTest-Infrastructure-claude-review-77$/); assert.deepEqual(spec.allowed_actions, ['read', 'test', 'update_issue']);
   assert.match(spec.scope, /^Independent review of PR #77/); assert.match(spec.prompt, /run the tests yourself/); assert.doesNotMatch(spec.prompt, /interim|D-021/);
   await finish(w, { verdict: 'PASS' });
   const v = w.team.s.verdicts['77:' + H(5)];

@@ -42,7 +42,8 @@ test('implementer counts of 1, 2 and 5 fill exactly that many slots, on distinct
 });
 
 test('a count above the old ceiling of 8 is accepted, and running jobs use up the slots', async t => {
-  assert.equal((await plan(t, { roles: { implementer: 10, reviewer: 1 } })).length, 10);
+  const ten = await plan(t, { roles: { implementer: 10, reviewer: 1 } });
+  assert.equal(ten.length, 10); assert.equal(new Set(ten.map(a => a.issue)).size, 10);
   const active = [1, 2, 3].map(i => ({ id: 'j' + i, provider: 'claude', status: 'running' }));
   assert.equal((await plan(t, { roles: { implementer: 5, reviewer: 1 } }, active)).length, 2);   // 3 unrecorded jobs use 3 of the 5 implementer slots
 });

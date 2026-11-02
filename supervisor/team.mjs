@@ -80,6 +80,14 @@ export const ROLES = ['implementer', 'reviewer'];
 export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer');   // implement, continue, fix, cifix, rebase -> implementer; review -> reviewer
 // The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
 // role count is the only change needed. One implementer and one reviewer give 2, as before.
+// Issue #344: the one replaceable function that predicts which files an implement job will edit. No model call: it reads the paths the
+// issue title and body name. A wrong prediction is safe: two jobs on different branches never share a worktree, and an overlap the
+// prediction missed surfaces as a merge conflict, which the existing rebase job resolves in queue order.
+export function expectedFiles(issue) {
+  const text = `${issue?.title || ''}\n${issue?.body || ''}`;
+  const found = text.match(/(?<![\w./-])(?:[\w.-]+\/)+[\w.-]*\w(?![\w/])|(?<![\w./-])[\w-]+\.(?:mjs|js|json|md|yml|yaml|cs|sh|html|css)\b/g) || [];
+  return new Set(found.filter(f => /\.\w+$/.test(f)).map(f => f.replace(/^\.\//, '')));
+}
 export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0));
 function normalizeRoleLimits(c) {
   const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1;   // no upper bound: the count per role is the homeowner's choice (#344)
@@ -758,6 +766,9 @@ export class Team {
     let total = active.length;
     const L = this.c.limits;
     this.taken = new Set(); this.plannedUse = {};
+    // Expected files of every running or planned implement job (issue #344): a new implement job whose expected files overlap one is refused.
+    this.claimed = new Map();
+    for (const j of active) { const rec = this.s.jobs[j.id]; if (rec && ['implement', 'continue'].includes(rec.kind) && issueByNo.get(rec.issue)) for (const f of this.predictFiles(issueByNo.get(rec.issue))) this.claimed.set(f, rec.issue); }
     // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
@@ -787,18 +798,22 @@ export class Team {
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
         this.taken.add(`${best.act.type}:${best.act.key}`);
-        if (best.act.type === 'review') { this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`); this.taken.add(`review-wt:${best.agent}`); }
-        if (best.act.issue) this.taken.add(`issue:${best.act.issue}`);
+        if (best.act.type === 'review') { this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`); }
+        if (best.act.issue) { this.taken.add(`issue:${best.act.issue}`); for (const f of this.predictFiles(issueByNo.get(best.act.issue))) this.claimed.set(f, best.act.issue); }
       }
     }
     // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
     const order = n => this.agents().findIndex(([x]) => x === n);
     return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -1 : order(x.agent)) - (y.type === 'merge' ? -1 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
   }
-  // True while this agent's shared review worktree is taken: a review or split job of its own is active, or a review was planned this tick.
-  reviewWorktreeBusy(agent) {
-    if (this.taken?.has(`review-wt:${agent}`)) return true;
-    return [...(this.activeIds || [])].some(id => { const j = this.s.jobs[id]; return j && j.agent === agent && ['review', 'split'].includes(j.kind); });
+  predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
+  // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
+  overlapHold(agent, n, issue) {
+    for (const f of this.predictFiles(issue)) {
+      const other = this.claimed?.get(f);
+      if (other !== undefined && other !== n) { this.hold(agent, 'implement', `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
+    }
+    return false;
   }
   // Lower is preferred when several agents could fill the same slot.
   slotRank(agent, act, prs) {
@@ -969,7 +984,7 @@ export class Team {
     }
     // Issue #302: an agent's review jobs all share one review worktree, so it runs one review (or split draft) at a time. While that
     // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
-    const wtBusy = rev && this.reviewWorktreeBusy(agent);
+    const wtBusy = false;   // issue #344: every review has its own worktree and lease, so no review waits for another
     // review: any agent's PR whose head was written by another model, green CI, mergeable, no verdict yet on this exact head
     for (const pr of rev && !wtBusy ? prs : []) {
       const author = agentOfBranch(this.c, pr.headRefName);
@@ -1042,7 +1057,7 @@ export class Team {
     if (paused) { this.hold(agent, 'implement', this.pauseText(prs)); return null; }
     for (const n of this.issuesOf(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
-      if (!issue || this.taken?.has(`issue:${n}`)) continue;
+      if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
       if (this.limitedOf(agent).out) return null;   // an owner at its usage limit does not start its own implement job; another agent may take it over
       if (!allow('implement')) return null;
       return { type: 'implement', issue: n, title: issue.title, key: String(n) };
@@ -1058,7 +1073,7 @@ export class Team {
       if (other === agent || !ob) continue;
       for (const n of this.issuesOf(other)) {
         const issue = this.implementable(n, prs, issueByNo, busy);
-        if (!issue || this.taken?.has(`issue:${n}`)) continue;
+        if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
         if (!allow('implement')) return null;
         return { type: 'implement', issue: n, title: issue.title, key: String(n), reassignedFrom: other, reassignReason: `reassigned for allowance: ${other} ${ob.why}` };
       }
@@ -1171,7 +1186,13 @@ export class Team {
     if (!dryRun) await this.checkStalls(report);
     if (this.modes) report.allowance = Object.fromEntries(Object.entries(this.modes).map(([n, m]) => [n, { mode: m.mode, reason: m.reason, until: m.until, ...(this.held[n] ? { held: this.held[n] } : {}) }]));
     if (dryRun) return report;
-    for (const act of actions) await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
+    for (const act of actions) {
+      // Issue #344: several jobs start in one tick, so the allowance is checked again right before each start; a limit reached while
+      // an earlier job was starting holds the rest until the next tick (merges are not jobs).
+      const l = act.type !== 'merge' ? this.limitedOf(act.agent) : null;
+      if (l?.out) { (report.skipped ||= []).push({ what: `${act.type} ${act.pr ?? act.issue} (${act.agent})`, reason: `not started: ${act.agent} reached its usage limit (${String(l.reason || 'usage limit').slice(0, 120)}); it is retried when allowance returns` }); continue; }
+      await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
+    }
     this.save();
     return report;
   }
@@ -1548,12 +1569,12 @@ export class Team {
     const wasted = { tokens: inUse, cost: Number.isFinite(job.usage?.costUsdEstimate) ? job.usage.costUsdEstimate : null, attempts: job.attempts || 1 };
     const ticket = crypto.randomBytes(16).toString('hex'), inbox = path.join(this.dir, 'inbox', ticket);
     fs.mkdirSync(inbox, { recursive: true, mode: 0o700 });
-    const wt = await this.git.ensureWorktree({ path: path.join(this.c.worktree_base, `DevTest-Infrastructure-${j.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
+    const wt = await this.git.ensureWorktree({ path: path.join(this.c.worktree_base, `DevTest-Infrastructure-${j.agent}-split-${j.issue}`), branch: `${a.branch_prefix}split-${j.issue}`, base: 'origin/main' });
     const spec = { role: 'devtest', provider: a.provider, repository: this.c.repo_path, access: this.c.access?.mode === 'full' ? 'full' : 'standard', autoRestart: true,
       kind: 'split', worktree: wt, issue: j.issue, scope: `Draft a split of issue #${j.issue}; read-only, no code`, allowed_actions: ['read'],
       prompt: splitPrompt({ issue: j.issue, inbox }), postcondition: { kind: 'split_drafted', ticket } };
     Object.assign(spec, this.modelFor({ agent: j.agent, key: `split:${j.issue}` }, 'split', report));
-    // A lease held by a running review job on the shared review worktree is an expected wait, not a skipped item (issue #302).
+    // A lease held by a running review job on its worktree is an expected wait, not a skipped item (issue #302).
     let created = null;
     try { created = await this.jobs.create(spec); } catch (error) {
       if (!(error instanceof LeaseHeld)) throw error;
@@ -2048,7 +2069,7 @@ export class Team {
         exceptionNote = { commitsFile: path.join(inbox, 'model-commits.json'), model: ex?.full_review.model ?? null, count: ranges.length };
       }
       const rq = act.postMerge ? null : await this.writeRequirements(act.branch, inbox);
-      const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
+      const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review-${act.pr}`), branch: `${a.branch_prefix}review-${act.pr}`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.exceptionStage ? 'Review-exception review (D-027)' : act.legacyPostMerge ? 'Post-merge review (D-021)' : act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
         prompt: reviewPrompt({ exceptionStage: act.exceptionStage, exceptionNote, pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, legacyPostMerge: !!act.legacyPostMerge, splitOut: this.splitOut(act.pr, inbox), requirementsFile: rq?.file }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head, ...(rq ? { checklist: true } : {}) } };
       meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.secondOpinion ? { secondOpinion: true } : {}), ...(act.exceptionStage ? { exceptionStage: act.exceptionStage } : {}), ...(act.postMerge ? { postMerge: true } : {}), ...(act.legacyPostMerge ? { legacyPostMerge: true } : {}), ...(rq ? { checklist: true, requirementsHash: rq.hash } : {}) };
