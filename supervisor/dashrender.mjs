@@ -241,7 +241,7 @@ function nextPanel(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-action"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div><div class="sub">Decision: ${esc(a.decision)}</div>${a.command ? cmdBlock(a.command) : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
+  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-action"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 function warningsPanel(view) {
