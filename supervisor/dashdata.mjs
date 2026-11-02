@@ -185,7 +185,12 @@ export function readVersion(root, { running = codeVersion() } = {}) {
   // The records name main only as far as they went. If the link was moved after the newest record (a manual upgrade), they say
   // nothing about main beyond what is installed, so no drift is claimed.
   const stale = last && linked && linked !== last.to && Number.isFinite(last.at) && linkedAt > last.at;
-  const main = !last || stale ? installed : last.to;
+  // Issue #265: live origin/main as the upgrader last fetched it (self-upgrade.json), not the last attempted target. It is only
+  // trusted while it was fetched for the installed commit, so a manual swap does not claim stale drift.
+  let seen = null;
+  try { const m = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).main; if (m && SHA40.test(m.sha || '') && m.from === installed) seen = m; } catch { /* no state: fall back to the records */ }
+  const main = seen ? seen.sha : (!last || stale ? installed : last.to);
+  const behind = seen && Number.isSafeInteger(seen.behind) ? seen.behind : null;
   const run = SHA40.test(running || '') ? running : null;
-  return { installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
+  return { installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
 }

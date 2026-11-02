@@ -123,6 +123,17 @@ export class SelfUpgrade {
   save() { fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 }); atomicJson(this.stateFile, this.s); }
   latch() { try { return JSON.parse(fs.readFileSync(this.latchFile, 'utf8')); } catch { return fs.existsSync(this.latchFile) ? { reason: 'unreadable latch' } : null; } }
   clearLatch() { fs.rmSync(this.latchFile, { force: true }); }
+  installCommand(target) {
+    let url = null; try { url = this.d.remoteUrl?.(); } catch { url = null; }
+    return `bash tools/bootstrap-install.sh install ${url || '<REPO_URL>'} ${target}`;
+  }
+  noteMain(from, target) {
+    if (!SHA.test(target || '')) return;
+    let behind = null; if (from === target) behind = 0; else { try { const n = this.d.commitsBehind?.(from, target); if (Number.isSafeInteger(n) && n >= 0) behind = n; } catch { behind = null; } }
+    const m = this.s.main;
+    if (m && m.sha === target && m.from === from && m.behind === behind) return;
+    this.s.main = { sha: target, from, behind, at: this.clock.now() }; this.save();
+  }
   record(entry) {
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     fs.appendFileSync(this.recordFile, `${JSON.stringify({ at: this.clock.now(), ...entry })}\n`, { mode: 0o600 });
@@ -159,6 +170,9 @@ export class SelfUpgrade {
       return 'github-unreachable';
     }
     if (this.s.fetchFailures) { delete this.s.fetchFailures; delete this.s.fetchRetryAt; if (this.s.install?.result === 'transient' && !this.s.install.sha) delete this.s.install; this.save(); }
+    // Issue #265: the dashboard reads main and how far behind the install is from here (live origin/main), not from the last attempt.
+    this.noteMain(from, target);
+    if (this.s.handDeploy && this.s.handDeploy.from !== from) { delete this.s.handDeploy; this.save(); }   // the installed commit moved: the item is done
     if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; delete this.s.waitingFor; this.save(); return 'current'; }
     if (!this.d.isAncestor(from, target)) {
       await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`);
@@ -169,7 +183,11 @@ export class SelfUpgrade {
     const touched = files.filter(f => BOOTSTRAP_PATHS.includes(f));
     if (touched.length) {
       await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${short(target)}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically.`);
-      this.record({ from, to: target, result: 'refused', reason: 'changes the bootstrap installer', files: touched });
+      // Issue #265: one record per target (the alert above is already once per target), and one Needs you item until the install moves.
+      if (this.s.handDeploy?.to !== target) {
+        this.record({ from, to: target, result: 'refused', reason: 'changes the bootstrap installer', files: touched });
+        this.s.handDeploy = { from, to: target, files: touched.slice(0, 10), command: this.installCommand(target), at: this.clock.now() };
+      }
       this.noteInstall({ result: 'needs-homeowner', sha: target, reason: 'changes the bootstrap installer' }); this.save();
       return 'upgrader-changed';
     }
@@ -338,6 +356,8 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     installed: () => installedSha(root),
     fetchMain: () => { git('fetch', '--quiet', 'origin', 'main'); return git('rev-parse', 'origin/main'); },
     isAncestor: (a, b) => run('git', ['-C', repo, 'merge-base', '--is-ancestor', a, b]).status === 0,
+    remoteUrl,
+    commitsBehind: (a, b) => Number(git('rev-list', '--count', `${a}..${b}`)),
     changedFiles: (a, b) => git('diff', '--name-only', a, b).split('\n').filter(Boolean),
     mainCommits: (a, b) => git('rev-list', '--first-parent', '--parents', '--reverse', `${a}..${b}`).split('\n').filter(Boolean).map(line => {
       const [sha, ...parents] = line.split(' ');
