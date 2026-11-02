@@ -48,7 +48,7 @@ function verdictOf(state, p) {
 
 export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [], register = '', registerUnreadable = false }) {
   if (registerUnreadable) notes = [...notes, REGISTER_NOTE];
-  const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now, register, registerUnreadable });
+  const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now, register, registerUnreadable, tz });
   const live = id => jobs.some(j => j.id === id && ACTIVE.includes(j.status));
   const problems = view.attention.map(a => ({ id: a.id, text: a.text }));
   const add = (id, text) => { if (!problems.some(p => p.id === id)) problems.push({ id, text: redact(text, 300) }); };
@@ -63,7 +63,8 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   const slots = view.slots;   // role slots (issue #148), from the shared view
 
   // 2. what happens next
-  const plan = view.plan.map(p => { const n = p.issue ?? p.pr, what = `${p.secondOpinion || p.postMerge ? 'second-opinion ' : ''}${p.type === 'cifix' ? 'fix CI on' : p.type} ${ref(p.type, n)}`; return { agent: p.agent || null, type: p.type, ref: n, text: p.agent ? `${p.agent} → ${what}` : `dispatcher → ${what}` }; });
+  const est = (kind, n) => view.estimates?.items?.[`${kind}:${n}`] || null;
+  const plan = view.plan.map(p => { const n = p.issue ?? p.pr, e = est(['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', n), what = `${p.secondOpinion || p.postMerge ? 'second-opinion ' : ''}${p.type === 'cifix' ? 'fix CI on' : p.type} ${ref(p.type, n)}`; return { agent: p.agent || null, type: p.type, ref: n, estimate: e?.text || null, text: p.agent ? `${p.agent} → ${what}` : `dispatcher → ${what}` }; });
   const waiting = [];
   if (!view.teamEnabled) waiting.push({ agent: null, text: 'The team loop is switched off, so nothing will start by itself.' });
   for (const a of view.agents) {
@@ -112,7 +113,8 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   // A pending supervisor upgrade holds back new jobs (issue #134); self-upgrade.json is written by the upgrade step.
   let hold = null;
   try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') hold = { to: redact(h.to.slice(0, 7), 12), since: Number.isFinite(h.since) ? h.since : null, text: `holding new jobs: upgrade to ${redact(h.to.slice(0, 7), 12)} pending` }; } catch { /* no state file: nothing is held */ }
-  return { hold, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
+  const estimates = { waits: view.estimates.waits.map(w => ({ kind: w.kind, at: w.at, text: redact(w.text, 200) })), items: Object.values(view.estimates.items).map(e => ({ kind: e.kind, ref: e.ref, agent: e.agent, status: e.status, text: redact(e.text, 200), finishP50: e.finish?.p50 ?? null, finishP90: e.finish?.p90 ?? null, waits: e.waits.map(w => redact(w.text, 200)), basis: e.basis.map(b => redact(b, 300)) })) };
+  return { hold, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {
@@ -132,8 +134,12 @@ export function renderStatus(s) {
   for (const x of s.slots) out.push(`  ${x.text}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity} slots)` : ''}`);
   head('What happens next');
   if (s.hold) out.push(`  ${s.hold.text}${s.hold.since ? ` (since ${t(s.hold.since)})` : ''}`);
-  if (s.next.plan.length) for (const p of s.next.plan) out.push(`  ${p.text}`);
+  if (s.next.plan.length) for (const p of s.next.plan) out.push(`  ${p.text}${p.estimate ? ` (${p.estimate})` : ''}`);
   for (const w of s.next.waiting) out.push(`  ${w.text}`);
+  head('Estimated finish');
+  if (!s.estimates.items.length) out.push('  nothing queued');
+  for (const e of s.estimates.items) out.push(`  ${e.kind === 'issue' ? 'issue #' : 'PR #'}${e.ref} (${e.agent}): ${e.text}${e.waits.length ? ` [${e.waits.join('; ')}]` : ''}`);
+  for (const w of s.estimates.waits) out.push(`  wait: ${w.text}`);
   head('Problems');
   if (!s.problems.length) out.push('  none');
   for (const p of s.problems) out.push(`  - ${p.text}`);
