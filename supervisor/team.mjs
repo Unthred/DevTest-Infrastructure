@@ -27,7 +27,9 @@ export function validateTeamConfig(c) {
   if (c?.schema_version !== 1 || !/^[\w.-]+\/[\w.-]+$/.test(c.repository || '') || !path.isAbsolute(c.repo_path || '') || !path.isAbsolute(c.worktree_base || ''))
     throw new SupervisorError('invalid team config: schema, repository or paths');
   const L = c.limits || {};
-  for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
+  for (const k of ['max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
+  // Issue #344: no fixed ceiling on concurrency. `overall` is optional; absent, it follows the role counts (see overallCap).
+  if ('overall' in L && !(Number.isSafeInteger(L.overall) && L.overall >= 1)) throw new SupervisorError('invalid team limit: overall');
   if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
   if ('chain_seconds' in L && !(typeof L.chain_seconds === 'number' && L.chain_seconds >= 0 && L.chain_seconds <= 3600)) throw new SupervisorError('invalid team limit: chain_seconds');
   if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');
@@ -76,8 +78,11 @@ function validateUnblockLimits(u) {
 const TYPE_ORDER = ['merge', 'rebase', 'cifix', 'fix', 'review', 'continue', 'implement'];   // the per-agent priority of choose()
 export const ROLES = ['implementer', 'reviewer'];
 export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer');   // implement, continue, fix, cifix, rebase -> implementer; review -> reviewer
+// The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
+// role count is the only change needed. One implementer and one reviewer give 2, as before.
+export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0));
 function normalizeRoleLimits(c) {
-  const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1 && v <= 8;
+  const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1;   // no upper bound: the count per role is the homeowner's choice (#344)
   c.deprecations = [];
   // Idempotent: a roles block this function derived from per_agent on an earlier pass (loadTeamConfig, then the Team constructor)
   // is recognised and not mistaken for an explicit one.
@@ -770,7 +775,7 @@ export class Team {
     // to an agent on another provider than the PR author before one on the author's provider, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
-      while (used[role] < L.roles[role] && total < L.overall) {
+      while (used[role] < L.roles[role] && total < overallCap(L)) {
         const cands = [];
         for (const [agent, a] of this.agents()) {
           const act = this.choose(agent, a, prs, issueByNo, role);
