@@ -224,11 +224,11 @@ export function pendingProposals(config, pulls, mainRegister, read = readHeadReg
   }
   return out;
 }
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [] }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [], fixCount }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
-  const fixCount = pr => Object.entries(state.fixAttempts || {}).reduce((n, [k, v]) => n + (k === String(pr) || k.startsWith(`${pr}:`) ? (Number(v) || 0) : 0), 0);
+  const prCarded = new Set();   // PRs that already have a limit or needs-homeowner card; a failed job on one folds into it
   const openPulls = new Set((cache?.pulls || []).map(p => p.number));
   const fixLimited = new Set();
   const t = cache?.tick;
@@ -266,6 +266,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
         { tried: 'Foreman escalates once before it asks the homeowner; it asks only if that round fails.', links: [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }] });
       continue;
     }
+    prCarded.add(pr.number);
     const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: names.job(j).text, url: names.job(j).url }))];
     if (fixLimit) add(`fixlimit-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix})`, { kind: 'pull', n: pr.number },
       { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR. Each round was a fresh session on the same model; the final round could split out-of-scope findings. Foreman never moves a fix to a stronger model.${withheld.get(pr.number) ? ` No further round can run because ${withheld.get(pr.number)}.` : ''}`, action: `Choose one: ${FIX_LIMIT_OPTIONS}. Remove the needs-homeowner label when done.`, links });
@@ -302,8 +303,10 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
     // Issue #297: an issue that is closed, labelled epic or has an accepted split has nothing left to decide.
-    const closed = kind === 'issue' ? (cache?.issues || []).some(i => i.number === j.issue && (i.state !== 'OPEN' || i.labels?.includes('epic'))) || state.splits?.[j.issue]?.status === 'accepted' : (cache?.pulls || []).length > 0 && !openPulls.has(j.issue);   // closed or merged: nothing left to decide
+    const closed = kind === 'issue' ? (cache?.issues || []).some(i => i.number === j.issue && (i.state !== 'OPEN' || i.labels?.includes('epic'))) || state.splits?.[j.issue]?.status === 'accepted' : Array.isArray(cache?.pulls) && !openPulls.has(j.issue);   // closed or merged: nothing left to decide (also when no PR is open at all)
     if (closed) continue;
+    // Issue #186: the PR's own limit card already links this job, so it is not a second card for the same event.
+    if (kind === 'pull' && prCarded.has(j.issue)) continue;
     add(`job-${j.id}`, `${names.job(j).text} (${j.provider}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind, n: j.issue },
       { tried: `The ${j.kind || 'job'} job ran ${j.attempts || 1} attempt${(j.attempts || 1) === 1 ? '' : 's'} and ended ${j.status}; Foreman starts no new job for it.`, action: 'Read the job record, then retry it or close the issue.', links: [{ text: (kind === 'pull' ? names.pr(j.issue) : names.issue(j.issue)).text, url: web(kind, j.issue) }, { text: names.job(j).text, url: names.job(j).url }] });
   }
@@ -563,7 +566,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? {} : { running });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: deploy needed.`, ref: null, severity: 'warning' });
