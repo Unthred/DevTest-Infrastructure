@@ -5,7 +5,7 @@ const KEY = '(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|pri
 export function redact(value, max = 200) {
   return String(value ?? '').slice(0, MAX_SCAN)
     .replace(new RegExp(`("${KEY}"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"`, 'gi'), '$1"[secret]"')
-    .replace(new RegExp(`\\b(${KEY})(\\s*[=:]\\s*)(?!\\[)[^\\s,;&"']+`, 'gi'), '$1$2[secret]')
+    .replace(new RegExp(`\\b(${KEY})(\\s*[=:]\\s*)(?!\\[)(?:bearer\\s+)?[^\\s,;&"']+`, 'gi'), '$1$2[secret]')
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[userinfo]@')
     .replace(/\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]*/g, '[jwt]')
     .replace(/\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/g, '[aws-key]')

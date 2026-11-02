@@ -79,3 +79,12 @@ test('codexAllowanceProbe looks in the local-date day directory', () => {
   assert.ok(r && r.windows.length > 0);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test('redact hides a short bearer token after an Authorization key', () => {
+  const tok = ['abc', 'def', 'ghi', 'jkl'].join('');
+  for (const input of [`Authorization: Bearer ${tok}`, `authorization=Bearer ${tok}`, `Authorization: bearer ${tok}`]) {
+    const out = redact(input, 500);
+    assert.ok(!out.includes(tok), input.slice(0, 14));
+    assert.ok(!out.includes('Bearer abc'), input.slice(0, 14));
+  }
+});
