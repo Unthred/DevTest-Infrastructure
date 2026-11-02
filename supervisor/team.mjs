@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
-import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
+import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, isOpusModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { entryApproved } from './decisions.mjs';
 import { redact, redactLong } from './redact.mjs';
@@ -16,6 +16,8 @@ import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admit
 
 const SHA = /^[0-9a-f]{40}$/;
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+// Issue #368: the held reason shown when the configured writing model is Opus (no other writer is available for that job).
+const opusRefusal = (agent, model, kind) => `no permitted writer: ${agent}'s ${kind} model is ${model}, and Opus is never given implement or fix work; set a non-Opus ${kind} model in the models config`;
 const WRITER_KINDS = new Set(['implement', 'continue', 'fix', 'cifix', 'rebase']);
 // A reviewer is independent of the writers when, for each, the provider differs or both models are known and differ.
 export const independentOf = (reviewer, writers) => writers.every(w => w.provider !== reviewer.provider || (!!w.model && !!reviewer.model && w.model !== reviewer.model));
@@ -465,6 +467,8 @@ export class Team {
         const mc = this.c.models, table = { ...mc.agents[act.agent], [t]: entry };
         const r = resolveModel({ modelsConfig: { ...mc, agents: { ...mc.agents, [act.agent]: table } }, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation: null, utilization: null, reReview: false, low: false });
         if (r.warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: r.warnings.join('; ') });
+        // Issue #368: the exception path writes too, so Opus is refused here as well.
+        if (WRITER_KINDS.has(kind) && isOpusModel(r.fields.model)) return { ...r.fields, writeRefusal: opusRefusal(act.agent, r.fields.model, kind) };
         return r.fields;
       }
     }
@@ -475,7 +479,7 @@ export class Team {
     let { fields, warnings } = resolveModel(base);
     // Issue #316 (homeowner decision 2 Nov 2026): a writing job never runs on a model its agent is configured to review with, and never
     // on a model that would leave the PR with no available independent reviewer. It is refused, not given a different model.
-    if (WRITER_KINDS.has(kind) && !act.noWriteGuard) {
+    if (WRITER_KINDS.has(kind)) {
       const refusal = this.writeRefusal(act, kind, fields.model ?? null);
       if (refusal) fields = { ...fields, writeRefusal: refusal.slice(0, 300) };
     }
@@ -633,6 +637,7 @@ export class Team {
     return this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key: `wb:${pr.number}` }, kind, {}, true).writeRefusal || null;
   }
   writeRefusal(act, kind, model) {
+    if (isOpusModel(model)) return opusRefusal(act.agent, model, kind);   // issue #368: before and independent of any review-model or stranding check
     const table = this.c.models?.agents?.[act.agent];
     if (model && reviewModelsOf(table).has(model)) return `${act.agent}'s ${model} model is one of its configured review models, so it is not given ${kind} work`;
     if (act.pr != null) return this.strandsReviewer({ number: act.pr, headRefName: act.branch }, act.agent, model);
@@ -1035,6 +1040,8 @@ export class Team {
     // implement: next owned open issue whose prerequisites are closed and that has no work in flight
     if (!impl) return null;
     if (paused) { this.hold(agent, 'implement', this.pauseText(prs)); return null; }
+    const implModel = this.modelFor({ agent, key: 'wb:implement' }, 'implement', {}, true);   // issue #368: an Opus implementer is held, not started
+    if (implModel.writeRefusal && isOpusModel(implModel.model)) { this.hold(agent, 'implement', implModel.writeRefusal); return null; }
     for (const n of this.issuesOf(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
       if (!issue || this.taken?.has(`issue:${n}`)) continue;

@@ -76,9 +76,9 @@ test('no provider configured besides the writer: the job is refused', t => {
 
 test('a configured review model is never given writing work, whatever its escalation or allowance state', t => {
   const { team } = world(t, { cfg: config({ fix: { model: 'opus', effort: 'medium' } }) });
-  for (const kind of ['fix', 'cifix', 'rebase']) assert.match(team.modelFor(act(), kind, {}).writeRefusal, /review model/, kind);
+  for (const kind of ['fix', 'cifix', 'rebase']) assert.match(team.modelFor(act(), kind, {}).writeRefusal, /Opus is never given/, kind);
   const impl = world(t, { cfg: (() => { const c = config(); c.models.agents.claude.implement = { model: 'opus' }; return c; })() }).team;
-  assert.match(impl.modelFor({ agent: 'claude', key: '9' }, 'implement', {}).writeRefusal, /review model/);
+  assert.match(impl.modelFor({ agent: 'claude', key: '9' }, 'implement', {}).writeRefusal, /Opus is never given/);
 });
 
 test('no repair job escalates to the strong entry, even after two CHANGES or at the fix limit', t => {

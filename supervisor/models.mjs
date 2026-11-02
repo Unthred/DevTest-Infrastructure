@@ -87,6 +87,10 @@ export function resolveModel(ctx) {
   return { fields, warnings: checked.warnings };
 }
 
+// Issue #368: Opus never writes (implement, continue, fix, ci-fix, rebase), whatever the config says. Judged on the model name (an alias or a
+// full id), so a config that sets a writing entry to Opus without listing it as a review model is still refused.
+export const isOpusModel = m => typeof m === 'string' && /opus/i.test(m);
+
 // Models an agent reviews with (its `review` entry and every `review_candidates` entry), by name. Agent-agnostic: read from role config only.
 export function reviewModelsOf(table) {
   return new Set([table?.review, ...(Array.isArray(table?.review_candidates) ? table.review_candidates : [])].map(e => e?.model).filter(m => typeof m === 'string'));
