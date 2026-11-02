@@ -13,7 +13,7 @@
 //  - Allowance: a step by an agent that is out of allowance, or whose forecast runs out before the step would start, moves to
 //    the agent's reset time and the estimate says so.
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
-import { checksState, retriedIn } from './team.mjs';
+import { checksState, retriedIn, overallCap } from './team.mjs';
 import { REVIEWS_ONLY_TYPES } from './budget.mjs';
 
 export const MIN_SAMPLES = 5;
@@ -110,7 +110,7 @@ function chainOf(item, ctx) {
 export function estimateQueue({ queues = {}, pulls = [], jobs = [], state = {}, budget = {}, config, now, tz = 'UTC', upgrade = null }) {
   const stats = stepStats(jobs, state), fix = fixChance(state), gates = allowanceGates(budget, now);
   const agents = Object.keys(config.agents);
-  const L = config.limits || {}, cap = { implementer: L.roles?.implementer ?? 1, reviewer: L.roles?.reviewer ?? 1, overall: L.overall ?? 2 };
+  const L = config.limits || {}, cap = { implementer: L.roles?.implementer ?? 1, reviewer: L.roles?.reviewer ?? 1, overall: overallCap(L) };
   const has = t => (stats[t]?.n ?? 0) >= MIN_SAMPLES;
   const typical = (t, q) => stats[t][q];
   const pullOf = new Map(pulls.map(p => [p.number, p]));

@@ -116,7 +116,8 @@ test('the same issue or worktree is not planned twice: an unfinished job for it 
 
 test('limits.roles is validated; per_agent is deprecated, mapped to both slots and reported on the tick', async t => {
   assert.deepEqual(validateTeamConfig(config()).deprecations, []);
-  for (const bad of [{ implementer: 0, reviewer: 1 }, { implementer: 1 }, { implementer: 1, reviewer: 9 }, { implementer: 1, reviewer: 1, extra: 1 }, [], 'x'])
+  validateTeamConfig(config({ limits: limits({ roles: { implementer: 1, reviewer: 9 } }) }));   // no fixed ceiling (#344)
+  for (const bad of [{ implementer: 0, reviewer: 1 }, { implementer: 1 }, { implementer: 1, reviewer: 1, extra: 1 }, [], 'x'])
     assert.throws(() => validateTeamConfig(config({ limits: limits({ roles: bad }) })), /roles/);
   const old = config({ limits: { per_agent: 2, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } });
   const c = validateTeamConfig(old);

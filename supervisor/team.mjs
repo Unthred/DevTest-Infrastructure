@@ -27,7 +27,9 @@ export function validateTeamConfig(c) {
   if (c?.schema_version !== 1 || !/^[\w.-]+\/[\w.-]+$/.test(c.repository || '') || !path.isAbsolute(c.repo_path || '') || !path.isAbsolute(c.worktree_base || ''))
     throw new SupervisorError('invalid team config: schema, repository or paths');
   const L = c.limits || {};
-  for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
+  for (const k of ['max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
+  // Issue #344: no fixed ceiling on concurrency. `overall` is optional; absent, it follows the role counts (see overallCap).
+  if ('overall' in L && !(Number.isSafeInteger(L.overall) && L.overall >= 1)) throw new SupervisorError('invalid team limit: overall');
   if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
   if ('chain_seconds' in L && !(typeof L.chain_seconds === 'number' && L.chain_seconds >= 0 && L.chain_seconds <= 3600)) throw new SupervisorError('invalid team limit: chain_seconds');
   if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');
@@ -76,8 +78,28 @@ function validateUnblockLimits(u) {
 const TYPE_ORDER = ['merge', 'rebase', 'cifix', 'fix', 'review', 'continue', 'implement'];   // the per-agent priority of choose()
 export const ROLES = ['implementer', 'reviewer'];
 export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer');   // implement, continue, fix, cifix, rebase -> implementer; review -> reviewer
+// The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
+// role count is the only change needed. One implementer and one reviewer give 2, as before.
+// Issue #344: the one replaceable function that predicts which files an implement job will edit. No model call: it reads the paths the
+// issue title and body name. A wrong prediction is safe: two jobs on different branches never share a worktree, and an overlap the
+// prediction missed surfaces as a merge conflict, which the existing rebase job resolves in queue order.
+export function expectedFiles(issue) {
+  const text = `${issue?.title || ''}\n${issue?.body || ''}`;
+  const found = text.match(/(?<![\w./-])(?:[\w.-]+\/)+[\w.-]*\w(?![\w/])|(?<![\w./-])[\w-]+\.(?:mjs|js|json|md|yml|yaml|cs|sh|html|css)\b/g) || [];
+  return new Set(found.filter(f => /\.\w+$/.test(f)).map(f => f.replace(/^\.\//, '')));
+}
+export const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''); return m ? Number(m[1]) : null; };
+// Issue #344: what holds the running count below the sum of the chosen role counts, for the dashboard: an explicit overall limit, or
+// the open-PR cap pausing new implement work. Empty when nothing does.
+export function capNotes(L, pauseText = null) {
+  const sum = ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0), out = [];
+  if (Number.isSafeInteger(L?.overall) && L.overall >= 1 && L.overall < sum) out.push(`limits.overall is ${L.overall}, below the ${sum} slots the role counts allow, so at most ${L.overall} jobs run at once`);
+  if (pauseText) out.push(`${pauseText}; no new implement job starts while the open-PR cap (limits.max_open_prs) is reached`);
+  return out;
+}
+export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0));
 function normalizeRoleLimits(c) {
-  const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1 && v <= 8;
+  const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1;   // no upper bound: the count per role is the homeowner's choice (#344)
   c.deprecations = [];
   // Idempotent by value, so it survives a copy of the config: a roles block equal to the per_agent mapping is the mapping (explicit or
   // derived on an earlier pass, which cannot be told apart and does not need to be), and any other roles block wins over per_agent.
@@ -752,6 +774,9 @@ export class Team {
     let total = active.length;
     const L = this.c.limits;
     this.taken = new Set(); this.plannedUse = {};
+    // Expected files of every running or planned implement job (issue #344): a new implement job whose expected files overlap one is refused.
+    this.claimed = new Map();
+    for (const j of active) { const rec = this.s.jobs[j.id], n = rec && WRITER_KINDS.has(rec.kind) ? (rec.issue ?? issueOfBranch(rec.branch)) : null; if (n != null && issueByNo.get(n)) for (const f of this.predictFiles(issueByNo.get(n))) this.claimed.set(f, n); }
     // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
@@ -769,7 +794,7 @@ export class Team {
     // to an agent on another provider than the PR author before one on the author's provider, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
-      while (used[role] < L.roles[role] && total < L.overall) {
+      while (used[role] < L.roles[role] && total < overallCap(L)) {
         const cands = [];
         for (const [agent, a] of this.agents()) {
           const act = this.choose(agent, a, prs, issueByNo, role);
@@ -781,18 +806,29 @@ export class Team {
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
         this.taken.add(`${best.act.type}:${best.act.key}`);
-        if (best.act.type === 'review') { this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`); this.taken.add(`review-wt:${best.agent}`); }
+        if (best.act.type === 'review') { this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`); }
         if (best.act.issue) this.taken.add(`issue:${best.act.issue}`);
+        const claimN = best.act.issue ?? (WRITER_KINDS.has(best.act.type) ? issueOfBranch(best.act.branch) : null);
+        if (claimN != null && issueByNo.get(claimN)) for (const f of this.predictFiles(issueByNo.get(claimN))) this.claimed.set(f, claimN);
       }
     }
     // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
     const order = n => this.agents().findIndex(([x]) => x === n);
     return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -1 : order(x.agent)) - (y.type === 'merge' ? -1 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
   }
-  // True while this agent's shared review worktree is taken: a review or split job of its own is active, or a review was planned this tick.
-  reviewWorktreeBusy(agent) {
-    if (this.taken?.has(`review-wt:${agent}`)) return true;
-    return [...(this.activeIds || [])].some(id => { const j = this.s.jobs[id]; return j && j.agent === agent && ['review', 'split'].includes(j.kind); });
+  predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
+  // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
+  overlapHold(agent, n, issue, type = 'implement') {
+    for (const f of this.predictFiles(issue)) {
+      const other = this.claimed?.get(f);
+      if (other !== undefined && other !== n) { this.hold(agent, type, `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
+    }
+    return false;
+  }
+  // The same refusal for a repair job (rebase, CI fix, fix, continue) on a PR: its issue's expected files must not overlap another writer's.
+  repairOverlap(agent, type, pr, issueByNo) {
+    const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
+    return !!issue && this.overlapHold(agent, n, issue, type);
   }
   // Lower is preferred when several agents could fill the same slot.
   slotRank(agent, act, prs) {
@@ -938,7 +974,7 @@ export class Team {
       // Issue #266: with a merge backlog, rebase only the PR that is next in rebase order (issue #326: the order of the author's issues queue, then PR number), and let a
       // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
       if (this.rebaseDeferred(pr, prs, issueByNo, busy)) continue;   // issue #326: a deferred PR is skipped; the list order must not decide which PR goes
-      if (this.writeBlock(pr, 'rebase')) continue;
+      if (this.writeBlock(pr, 'rebase') || this.repairOverlap(agent, 'rebase', pr, issueByNo)) continue;
       if (!allow('rebase')) break;
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
@@ -947,7 +983,7 @@ export class Team {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
-      if (busy('cifix', key) || (escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix')) continue;
+      if (busy('cifix', key) || (escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks: failingChecks(pr.statusCheckRollup, this.retried(pr)), key, ...(escalated ? { escalated: true } : {}) };
     }
@@ -957,13 +993,13 @@ export class Team {
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key)) continue;
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
-      if ((escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr)) continue;   // issue #318: a listed PR never escalates; it stops with one Needs you item
+      if ((escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // issue #318: a listed PR never escalates; it stops with one Needs you item
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
     }
     // Issue #302: an agent's review jobs all share one review worktree, so it runs one review (or split draft) at a time. While that
     // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
-    const wtBusy = rev && this.reviewWorktreeBusy(agent);
+    const wtBusy = false;   // issue #344: every review has its own worktree and lease, so no review waits for another
     // review: any agent's PR whose head was written by another model, green CI, mergeable, no verdict yet on this exact head
     for (const pr of rev && !wtBusy ? prs : []) {
       const author = agentOfBranch(this.c, pr.headRefName);
@@ -1027,7 +1063,7 @@ export class Team {
     for (const pr of repair ? prs : []) {
       const n = this.draftIssue(agent, a, pr, issueByNo);
       if (n == null || !SHA.test(pr.headRefOid) || busy('continue', String(pr.number)) || busy('implement', String(n)) || this.taken?.has(`issue:${n}`)) continue;
-      if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts || this.writeBlock(pr, 'continue')) continue;
+      if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts || this.writeBlock(pr, 'continue') || this.repairOverlap(agent, 'continue', pr, issueByNo)) continue;
       if (!allow('continue')) break;
       return { type: 'continue', pr: pr.number, issue: n, head: pr.headRefOid, branch: pr.headRefName, key: String(pr.number) };
     }
@@ -1036,7 +1072,7 @@ export class Team {
     if (paused) { this.hold(agent, 'implement', this.pauseText(prs)); return null; }
     for (const n of this.issuesOf(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
-      if (!issue || this.taken?.has(`issue:${n}`)) continue;
+      if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
       if (this.limitedOf(agent).out) return null;   // an owner at its usage limit does not start its own implement job; another agent may take it over
       if (!allow('implement')) return null;
       return { type: 'implement', issue: n, title: issue.title, key: String(n) };
@@ -1052,7 +1088,7 @@ export class Team {
       if (other === agent || !ob) continue;
       for (const n of this.issuesOf(other)) {
         const issue = this.implementable(n, prs, issueByNo, busy);
-        if (!issue || this.taken?.has(`issue:${n}`)) continue;
+        if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
         if (!allow('implement')) return null;
         return { type: 'implement', issue: n, title: issue.title, key: String(n), reassignedFrom: other, reassignReason: `reassigned for allowance: ${other} ${ob.why}` };
       }
@@ -1087,8 +1123,12 @@ export class Team {
       return i < 0 ? Infinity : i;
     };
     const ranked = prs.filter(wants).map(p => ({ p, r: rank(p) }));
-    const next = ranked.sort((x, y) => (x.r === y.r ? 0 : x.r < y.r ? -1 : 1) || x.p.number - y.p.number)[0]?.p;
-    if (next && next.number !== pr.number) return true;
+    // Issue #344: with N implementer slots the first N candidates in that order may rebase at once (their expected files are kept apart by
+    // the overlap guard, and a rebase that still conflicts is retried in the same order). One slot keeps the single next candidate.
+    const order = ranked.sort((x, y) => (x.r === y.r ? 0 : x.r < y.r ? -1 : 1) || x.p.number - y.p.number).map(x => x.p);
+    const n = Number.isSafeInteger(L.roles?.implementer) ? L.roles.implementer : 1;
+    if (order.length && !order.slice(0, n).some(p => p.number === pr.number)) return true;
+    if (n > 1) return false;   // alternation with implement jobs is only needed when one slot is shared
     const last = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && Number.isFinite(j.at)).sort((x, y) => y.at - x.at)[0];
     if (last?.kind !== 'rebase') return false;
     // An implement job is startable when choose() would return one for some agent (same allowance path); choose() is probed with
@@ -1165,7 +1205,13 @@ export class Team {
     if (!dryRun) await this.checkStalls(report);
     if (this.modes) report.allowance = Object.fromEntries(Object.entries(this.modes).map(([n, m]) => [n, { mode: m.mode, reason: m.reason, until: m.until, ...(this.held[n] ? { held: this.held[n] } : {}) }]));
     if (dryRun) return report;
-    for (const act of actions) await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
+    for (const act of actions) {
+      // Issue #344: several jobs start in one tick, so the allowance is checked again right before each start; a limit reached while
+      // an earlier job was starting holds the rest until the next tick (merges are not jobs).
+      const l = act.type !== 'merge' ? this.limitedOf(act.agent) : null;
+      if (l?.out) { (report.skipped ||= []).push({ what: `${act.type} ${act.pr ?? act.issue} (${act.agent})`, reason: `not started: ${act.agent} reached its usage limit (${String(l.reason || 'usage limit').slice(0, 120)}); it is retried when allowance returns` }); continue; }
+      await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
+    }
     this.save();
     return report;
   }
@@ -1542,12 +1588,12 @@ export class Team {
     const wasted = { tokens: inUse, cost: Number.isFinite(job.usage?.costUsdEstimate) ? job.usage.costUsdEstimate : null, attempts: job.attempts || 1 };
     const ticket = crypto.randomBytes(16).toString('hex'), inbox = path.join(this.dir, 'inbox', ticket);
     fs.mkdirSync(inbox, { recursive: true, mode: 0o700 });
-    const wt = await this.git.ensureWorktree({ path: path.join(this.c.worktree_base, `DevTest-Infrastructure-${j.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
+    const wt = await this.git.ensureWorktree({ path: path.join(this.c.worktree_base, `DevTest-Infrastructure-${j.agent}-split-${j.issue}`), branch: `${a.branch_prefix}split-${j.issue}`, base: 'origin/main' });
     const spec = { role: 'devtest', provider: a.provider, repository: this.c.repo_path, access: this.c.access?.mode === 'full' ? 'full' : 'standard', autoRestart: true,
       kind: 'split', worktree: wt, issue: j.issue, scope: `Draft a split of issue #${j.issue}; read-only, no code`, allowed_actions: ['read'],
       prompt: splitPrompt({ issue: j.issue, inbox }), postcondition: { kind: 'split_drafted', ticket } };
     Object.assign(spec, this.modelFor({ agent: j.agent, key: `split:${j.issue}` }, 'split', report));
-    // A lease held by a running review job on the shared review worktree is an expected wait, not a skipped item (issue #302).
+    // A lease held by a running review job on its worktree is an expected wait, not a skipped item (issue #302).
     let created = null;
     try { created = await this.jobs.create(spec); } catch (error) {
       if (!(error instanceof LeaseHeld)) throw error;
@@ -2042,7 +2088,7 @@ export class Team {
         exceptionNote = { commitsFile: path.join(inbox, 'model-commits.json'), model: ex?.full_review.model ?? null, count: ranges.length };
       }
       const rq = act.postMerge ? null : await this.writeRequirements(act.branch, inbox);
-      const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review`), branch: `${a.branch_prefix}review-queue`, base: 'origin/main' });
+      const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review-${act.pr}`), branch: `${a.branch_prefix}review-${act.pr}`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.exceptionStage ? 'Review-exception review (D-027)' : act.legacyPostMerge ? 'Post-merge review (D-021)' : act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
         prompt: reviewPrompt({ exceptionStage: act.exceptionStage, exceptionNote, pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, legacyPostMerge: !!act.legacyPostMerge, splitOut: this.splitOut(act.pr, inbox), requirementsFile: rq?.file }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head, ...(rq ? { checklist: true } : {}) } };
       meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.secondOpinion ? { secondOpinion: true } : {}), ...(act.exceptionStage ? { exceptionStage: act.exceptionStage } : {}), ...(act.postMerge ? { postMerge: true } : {}), ...(act.legacyPostMerge ? { legacyPostMerge: true } : {}), ...(rq ? { checklist: true, requirementsHash: rq.hash } : {}) };

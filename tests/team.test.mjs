@@ -425,7 +425,7 @@ test('review dispatch gives a verdict inbox, review lease kind and read/test-onl
   const w = reviewWorld(t); await w.team.tick();
   const s = w.calls.created[0];
   assert.equal(s.kind, 'review'); assert.deepEqual(s.allowed_actions, ['read', 'test', 'update_issue']); assert.equal(s.postcondition.kind, 'verdict');
-  assert.match(s.prompt, /verdict\.json/); assert.ok(s.prompt.includes(H(1))); assert.equal(s.worktree, '/p/DevTest-Infrastructure-claude-review');
+  assert.match(s.prompt, /verdict\.json/); assert.ok(s.prompt.includes(H(1))); assert.equal(s.worktree, '/p/DevTest-Infrastructure-claude-review-10');
   assert.ok(!s.allowed_actions.includes('push_feature_branch'));
 });
 
@@ -1277,14 +1277,13 @@ const leaseWorld = (t, { holder = { id: 'ab'.repeat(16), status: 'running', work
 };
 const runReview = async w => { const report = { skipped: [], actions: [] }; const [act] = await w.team.plan(); await w.team.runAction(act, report); return report; };
 
-test('issue #302: one review per agent per tick, and none while its review worktree is in use', async t => {
+test('issue #344: reviews by one agent each get their own worktree, so a running review does not hold the next', async t => {
   const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'codex/issue-3-y', H(2))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED')] });
-  const reviews = (await w.team.plan()).filter(a => a.type === 'review');
-  assert.equal(reviews.length, 1, 'two reviews by the same agent would share one worktree');
-  // a review job of that agent is already running: nothing more is planned for it
+  assert.equal((await w.team.plan()).filter(a => a.type === 'review').length, 2);
+  // a review job of that agent is already running: the other PR is still planned, up to the reviewer slots
   w.jobs.active = [{ id: 'r1', status: 'running', provider: 'claude' }];
   w.team.s.jobs.r1 = { kind: 'review', agent: 'claude', pr: 10, key: 'x' };
-  assert.equal((await w.team.plan()).filter(a => a.type === 'review' && a.agent === 'claude').length, 0);
+  assert.equal((await w.team.plan()).filter(a => a.type === 'review' && a.agent === 'claude').length, 1);
 });
 
 test('issue #302: a lease held by a live job is an expected wait, not a skipped item', async t => {
