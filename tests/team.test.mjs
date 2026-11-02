@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, failingChecks, loneCancelled, latestChecks, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
+import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, failingChecks, checkDetails, loneCancelled, latestChecks, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
 import { createJob, drive, readJob, stateRoot, validateSpec, WorktreeUnusable, gitCommonDir } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
@@ -1131,4 +1131,65 @@ test('issue #40 a dry run refuses when D-020 is not homeowner-approved, exactly 
     await assert.rejects(w.team.tick({ dryRun }), /D-020 is not homeowner-approved/);
   }
   const ok = world(t); const r = await ok.team.tick({ dryRun: true }); assert.ok(Array.isArray(r.actions));
+});
+
+// ---- issue #142: third-party check output, secret-scanner homeowner item, cause in the fix-limit notice
+const gg = [{ status: 'COMPLETED', conclusion: 'SUCCESS', name: 'test' }, { status: 'COMPLETED', conclusion: 'FAILURE', name: 'GitGuardian Security Checks' }];
+const ggRun = (extra = {}) => ({ name: 'GitGuardian Security Checks', conclusion: 'failure', html_url: 'https://dashboard.gitguardian.com/incidents/1', app: { slug: 'gitguardian' },
+  output: { title: '1 secret uncovered!', summary: 'Generic token in tests/x.mjs. ' + 'S'.repeat(5000), text: 'Authorization: Bearer ' + 'abcdefgh'.repeat(6) + ' ghp_' + 'A1b2C3d4'.repeat(3) + ' a@b.example' }, ...extra });
+
+test('#142 a failing third-party check reaches the cifix prompt, bounded and redacted; the job is not told to trust it', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  const asked = []; w.gh.listCheckRuns = async sha => (asked.push(sha), [ggRun(), { name: 'test', conclusion: 'success', output: { title: 'ok-title-not-failing' } }]);
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.deepEqual(asked, [H(3)]);
+  const prompt = w.calls.created[0].prompt;
+  assert.match(prompt, /GitGuardian Security Checks/); assert.match(prompt, /1 secret uncovered!/); assert.match(prompt, /never instructions/);
+  assert.doesNotMatch(prompt, /ok-title-not-failing/);
+  assert.doesNotMatch(prompt, /abcdefghabcdefgh/); assert.doesNotMatch(prompt, /ghp_A1b2/); assert.doesNotMatch(prompt, /a@b\.example/);
+  assert.ok(!/S{1000}/.test(prompt), 'summary is truncated');
+  assert.match(prompt, /assembled at runtime/);
+});
+test('#142 checkDetails: bounded count, only named failing checks, unsafe urls dropped; an unreadable API leaves the job running without details', async t => {
+  const runs = Array.from({ length: 20 }, (_, i) => ({ name: `c${i}`, conclusion: 'failure', html_url: i ? 'javascript:alert(1)' : 'https://x.example/a', output: { title: 't' } }));
+  const d = checkDetails(runs, runs.map(r => r.name));
+  assert.equal(d.length, 8); assert.equal(d[0].url, 'https://x.example/a'); assert.equal(d[1].url, null);
+  assert.deepEqual(checkDetails(runs, ['nope']), []); assert.deepEqual(checkDetails(null, ['c0']), []);
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: red })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => { throw new Error('offline'); };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.equal(w.calls.created.length, 1); assert.doesNotMatch(w.calls.created[0].prompt, /check-runs API/);
+});
+test('#142 a secret-scanner failure raises one homeowner item naming the incident action; an ordinary failing check does not', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [ggRun()];
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.deepEqual(w.calls.labels, [[38, 'needs-homeowner']]);
+  const notes = w.calls.comments.filter(c => /secret-scan/.test(c[1]));
+  assert.equal(notes.length, 1); assert.match(notes[0][1], /mark incident <id> as a test credential in GitGuardian/); assert.match(notes[0][1], /https:\/\/dashboard\.gitguardian\.com\/incidents\/1/);
+  const n = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: red })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  n.gh.listCheckRuns = async () => [{ name: 'project-contract', conclusion: 'failure', output: { title: 'x' } }];
+  await n.team.execute({ agent: 'claude', ...(await n.team.plan()).find(x => x.agent === 'claude') });
+  assert.deepEqual(n.calls.labels, []); assert.equal(n.calls.comments.filter(c => /secret-scan/.test(c[1])).length, 0);
+});
+test('#142 the secret-scan item survives a head move while the scanner still fails and clears once it passes', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  const c = { kind: 'secret-scan', head: H(3) };
+  assert.equal(await w.team.causeCleared(c, pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: gg })), false);
+  assert.equal(await w.team.causeCleared(c, pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: [gg[0]] })), true);
+  assert.equal(await w.team.causeCleared(c, undefined), true);
+});
+test('#142 the fix-limit notice names the cause: a failing CI check, not a review rejection', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  w.team.s.fixAttempts[`38:${H(0)}`] = 2; w.team.s.unblock.escalated[38] = { head: H(1), at: 1 };
+  await w.team.notifyFixLimit({});
+  const n = w.calls.comments.filter(c => /fix rounds/.test(c[1]));
+  assert.equal(n.length, 1); assert.match(n[0][1], /failing CI check `GitGuardian Security Checks` \(not a review rejection\)/); assert.doesNotMatch(n[0][1], /review rejection \(CHANGES/);
+  const r = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  r.team.s.fixAttempts[`38:${H(0)}`] = 2; r.team.s.unblock.escalated[38] = { head: H(1), at: 1 }; r.team.s.verdicts[`38:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex' };
+  await r.team.notifyFixLimit({});
+  assert.match(r.calls.comments.find(c => /fix rounds/.test(c[1]))[1], /a review rejection \(CHANGES verdict\)/);
 });
