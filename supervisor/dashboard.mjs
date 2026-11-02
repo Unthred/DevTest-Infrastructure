@@ -11,7 +11,7 @@ import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, supervisorHealth } from './suphealth.mjs';
 import { MODE_LABEL } from './budget.mjs';
 import { estimateQueue } from './estimate.mjs';
-import { jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
+import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -203,7 +203,7 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
 
 // Issue #141: a Needs you card says what happened (text), what Foreman tried, the one action needed and where to look.
 // x = { tried, action, links: [{ text, url }] }. Same shape as the event-log cards of #100/#106 will use.
-const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 60), url: l.url }));
+const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 140), url: l.url }));
 function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
@@ -232,7 +232,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const labelled = pr.labels?.includes('needs-homeowner');
     if (!fixLimit && !reviewLimit && !labelled) continue;
     if (fixLimit) fixLimited.add(pr.number);
-    const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: `job ${j.id.slice(0, 8)}`, url: `/work/pr/${pr.number}` }))];
+    const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: names.job(j).text, url: names.job(j).url }))];
     if (fixLimit) add(`fixlimit-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix})`, { kind: 'pull', n: pr.number },
       { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR.`, action: 'Change the approach, fix the PR by hand, or raise max_fix_attempts in team.local.json; remove the needs-homeowner label when done.', links });
     else if (reviewLimit) add(`reviewlimit-${pr.number}`, `${names.pr(pr.number).text} could not be reviewed within ${maxReview} attempts`, { kind: 'pull', n: pr.number },
@@ -250,7 +250,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const closed = kind === 'issue' ? (cache?.issues || []).some(i => i.number === j.issue && i.state !== 'OPEN') : (cache?.pulls || []).length > 0 && !openPulls.has(j.issue);   // closed or merged: nothing left to decide
     if (closed) continue;
     add(`job-${j.id}`, `${names.job(j).text} (${j.provider}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind, n: j.issue },
-      { tried: `The ${j.kind || 'job'} job ran ${j.attempts || 1} attempt${(j.attempts || 1) === 1 ? '' : 's'} and ended ${j.status}; Foreman starts no new job for it.`, action: 'Read the job record, then retry it or close the issue.', links: [{ text: (kind === 'pull' ? names.pr(j.issue) : names.issue(j.issue)).text, url: web(kind, j.issue) }, { text: `job ${j.id.slice(0, 8)}`, url: `/work/${kind === 'pull' ? 'pr' : 'issue'}/${j.issue}` }] });
+      { tried: `The ${j.kind || 'job'} job ran ${j.attempts || 1} attempt${(j.attempts || 1) === 1 ? '' : 's'} and ended ${j.status}; Foreman starts no new job for it.`, action: 'Read the job record, then retry it or close the issue.', links: [{ text: (kind === 'pull' ? names.pr(j.issue) : names.issue(j.issue)).text, url: web(kind, j.issue) }, { text: names.job(j).text, url: names.job(j).url }] });
   }
   // issue #158: a rebase that dropped commits, while the PR still sits on that rebased head
   for (const [id, tj] of Object.entries(state.jobs || {})) {
@@ -362,6 +362,18 @@ function graphs({ config, jobs, state, snapshots, now }) {
   return { allowance, jobsPerDay: days, verdicts, merges, tokensPerPr };
 }
 
+// One-line description of a job (issue #204), from the job record, the dispatcher record, the verdicts and the PRs Foreman knows.
+// No model call: the same data every other view reads.
+export function describeFor(j, { names, state }) {
+  const rec = state.jobs?.[j.id] || null, kind = rec?.kind || j.kind;
+  let verdict = null, opened = null;
+  if (kind === 'review') {
+    const pr = rec?.pr ?? j.issue, start = j.createdAt || 0;
+    verdict = Object.entries(state.verdicts || {}).filter(([k, v]) => k.split(':')[0] === String(pr) && (!v.at || v.at >= start)).map(([, v]) => v).sort((a, b) => (a.at || 0) - (b.at || 0))[0] || null;
+  } else if (['implement', 'continue'].includes(kind)) opened = rec?.pr ?? names.prOfIssue(rec?.issue ?? j.issue);
+  return redact(describeJob({ ...j, kind }, { names, rec, verdict, opened }), 400);
+}
+
 function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
@@ -372,7 +384,8 @@ function activity({ config, jobs, events, state, cache, snapshots, now, incident
   for (const e of events) {
     if (!eventNames[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover'].includes(e.kind)) continue;
     const j = jobById.get(e.job); if (!j) continue;
-    rows.push({ at: e.at, text: `${agentName(j)}: ${eventNames[e.kind] || redact(e.kind, 40)}: ${names.job(j).text}`, link: jobLink(j) });
+    const what = e.kind === 'completed' ? describeFor(j, { names, state }) : `${names.job(j).text}: ${eventNames[e.kind] || redact(e.kind, 40)}`;
+    rows.push({ at: e.at, text: `${agentName(j)}: ${what}`, link: { url: names.job(j).url, text: names.job(j).text } });
   }
   for (const [id, tj] of Object.entries(state.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at))
     rows.push({ at: tj.at, text: `${names.job({ id, kind: 'rebase', pr: tj.pr }).text}: ${shortCommit(tj.rebase.oldHead)} -> ${shortCommit(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
@@ -407,7 +420,7 @@ export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: th
 // no record of (started by hand) counts against the implementer slot, as the planner counts it.
 const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer' };
 const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
-export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.repository, stateJobs: state.jobs })) {
+export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.repository, stateJobs: state.jobs, titles: state.titles })) {
   return ROLES.map(role => {
     const held = jobs.filter(j => (ACTIVE.includes(j.status) || isUnknownJob(j)) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {
       const r = state.jobs?.[j.id] || {}, agent = r.agent || Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
@@ -438,7 +451,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
   const c = cache || { pulls: [], issues: [] };
   const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now, events || [], register, tz);
   return team.plan().then(plan => {
-    const names = makeNamer({ repo: config.repository, issues: c.issues, pulls: c.pulls, merged: c.merged, mergeLog: state.mergeLog, stateJobs: state.jobs });
+    const names = makeNamer({ repo: config.repository, issues: c.issues, pulls: c.pulls, merged: c.merged, mergeLog: state.mergeLog, stateJobs: state.jobs, titles: state.titles });
     const queues = reasons(team, c, jobs, plan, states, names);
     const agents = Object.entries(config.agents).map(([name, a]) => {
       const s = states[name], j = s.job;
@@ -505,13 +518,27 @@ export function freshness(tickAt, now) {
 const findingText = f => redact(typeof f === 'string' ? f : (f?.summary || f?.title || f?.message || JSON.stringify(f ?? '')), 240);
 const sumKeys = (obj, pr) => Object.entries(obj || {}).filter(([k]) => k.split(':')[0] === String(pr)).reduce((s, [, c]) => s + (Number(c) || 0), 0);
 
+// Group by issue (issue #204): each issue's story, oldest first: implement, review, fixes, rebases, merge.
+export function issueTimelinesOf({ jobs, state, names, jobRows, cache }) {
+  const by = new Map(), add = (n, e) => { if (!Number.isSafeInteger(n)) return; if (!by.has(n)) by.set(n, []); by.get(n).push(e); };
+  const rowOf = new Map(jobRows.map(r => [r.fullId, r]));
+  for (const j of jobs) {
+    const r = rowOf.get(j.id), rec = state.jobs?.[j.id]; if (!r) continue;
+    const n = ['implement', 'continue'].includes(rec?.kind || j.kind) ? (rec?.issue ?? j.issue) : (rec?.forIssue ?? names.issueOfPr(rec?.pr ?? j.issue)?.number);
+    add(n, { at: j.createdAt, kind: rec?.kind || j.kind, text: r.desc, link: { url: names.job(j).url, text: names.job(j).text } });
+  }
+  for (const m of state.mergeLog || []) add(m.issue ?? names.issueOfPr(m.pr)?.number, { at: m.mergedAt, kind: 'merge', text: redact(`Merged ${names.pr(m.pr).text}${m.agent ? ` (${m.agent})` : ''}.`, 300), link: { url: names.pr(m.pr).url, text: names.pr(m.pr).text } });
+  return [...by.entries()].map(([n, events]) => ({ number: n, name: redact(names.issue(n).text, 300), full: redact(names.issue(n).full, 400), events: events.filter(e => Number.isFinite(e.at)).sort((a, b) => a.at - b.at), last: Math.max(...events.map(e => e.at || 0)) }))
+    .filter(t => t.events.length).sort((a, b) => b.last - a.last).slice(0, 60);
+}
+
 function dashExtras({ config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
   const tokensOf = j => (j.usage ? j.usage.inputTokens + j.usage.outputTokens : null);
   const jobRows = jobs.filter(j => j.createdAt).sort((a, b) => b.createdAt - a.createdAt).slice(0, 300).map(j => ({
-    id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
+    id: shortJob(j.id), fullId: j.id, desc: describeFor(j, { names, state }), name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100) }));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, verdict: v.verdict || null, at: v.at ?? null,
@@ -539,6 +566,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     return { number: i.number, name: redact(names.issue(i.number).text, 300), title: i.title, state: i.state, agent: agentNames.find(n => config.agents[n].issues.includes(i.number)) || null, needsHomeowner: (i.labels || []).includes('needs-homeowner'),
       dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [] };
   });
+  const issueTimelines = issueTimelinesOf({ jobs, state, names, jobRows, cache });
   const tickAt = cache.tick?.at ?? null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
   const needsYou = attention.filter(a => a.severity === 'action').map(a => {
@@ -551,6 +579,6 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver,
     panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
-    slots: roleSlots(config, jobs, state, names), jobs: jobRows, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
+    slots: roleSlots(config, jobs, state, names), jobs: jobRows, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
   };
 }

@@ -340,7 +340,8 @@ export class Team {
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'budget', 'cancelWatch', 'unblock']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'budget', 'cancelWatch', 'unblock', 'titles']) this.s[k] ||= {};
+    this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
   }
@@ -460,6 +461,7 @@ export class Team {
     // Delivered work: an issue with a merged PR linked to it (closing reference or its issue-<n> branch) is never re-planned.
     this.delivered = new Set();
     this.merged = await (this.gh.listMergedPulls?.() ?? []);
+    this.refreshTitles(prs, issues, this.merged);
     for (const m of this.merged) {
       for (const r of m.closingIssuesReferences || []) if (Number.isSafeInteger(r.number)) this.delivered.add(r.number);
       const b = /\/issue-(\d+)(\D|$)/.exec(m.headRefName || '');
@@ -853,8 +855,27 @@ export class Team {
   }
   // The one place the dispatcher builds names for issues, PRs and jobs in alerts, notices and comments (issue #147).
   // Ingestion, notices and alerts run before plan() reads GitHub, so the titles they name are fetched first (best effort: a failure only means bare numbers).
-  async loadNames() { this.view = { prs: await this.gh.listPulls(), issues: await this.gh.listIssues() }; }
-  names() { return makeNamer({ repo: this.c.repository, issues: this.view?.issues, pulls: this.view?.prs, merged: this.merged, mergeLog: this.s.mergeLog, stateJobs: this.s.jobs }); }
+  async loadNames() { this.view = { prs: await this.gh.listPulls(), issues: await this.gh.listIssues() }; this.refreshTitles(this.view.prs, this.view.issues); }
+  // Issue #204: titles are kept in state so the dashboard names work even when GitHub is unreachable. Every read of GitHub refreshes
+  // the store and the titles saved on the job records. Bounded: only the newest TITLE_KEEP numbers of each kind stay.
+  refreshTitles(prs = [], issues = [], merged = this.merged || []) {
+    const T = this.s.titles, TITLE_KEEP = 400, clip = t => redact(String(t ?? '').replace(/\s+/g, ' ').trim(), 200);
+    for (const i of issues) if (Number.isSafeInteger(i.number) && clip(i.title)) T.issue[i.number] = clip(i.title);
+    for (const p of [...merged, ...prs]) if (Number.isSafeInteger(p.number) && clip(p.title)) T.pr[p.number] = clip(p.title);
+    for (const k of ['issue', 'pr']) { const keys = Object.keys(T[k]).map(Number).sort((a, b) => b - a); for (const n of keys.slice(TITLE_KEEP)) delete T[k][n]; }
+    const names = makeNamer({ pulls: prs, merged, issues, mergeLog: this.s.mergeLog, stateJobs: this.s.jobs, titles: T });
+    for (const rec of Object.values(this.s.jobs)) Object.assign(rec, this.titlesFor(rec, names));
+  }
+  // The titles a job record carries: the PR's own and the issue's it serves (for an implementing job, the issue itself).
+  titlesFor(rec, names = this.names()) {
+    const out = {}, implementing = ['implement', 'continue'].includes(rec.kind), issue = implementing ? rec.issue : (rec.forIssue ?? names.issueOfPr(rec.pr)?.number);
+    const pt = rec.pr != null ? names.prTitleOf(rec.pr) : null, it = issue != null ? names.titleOf(issue) : null;
+    if (pt) out.prTitle = pt.slice(0, 200);
+    if (it) out.issueTitle = it.slice(0, 200);
+    if (!implementing && issue != null) out.forIssue = issue;
+    return out;
+  }
+  names() { return makeNamer({ repo: this.c.repository, issues: this.view?.issues, pulls: this.view?.prs, merged: this.merged, mergeLog: this.s.mergeLog, stateJobs: this.s.jobs, titles: this.s.titles }); }
   async notifyBlocked(report, guard = (_, fn) => fn()) {
     for (const [id, j] of Object.entries(this.s.jobs)) {
       await guard(`notify ${id}`, () => this.notifyOne(id, j, report));
@@ -1283,6 +1304,7 @@ export class Team {
     const create = async () => {
       const job = await this.jobs.create(spec);   // a lease conflict throws here, before any attempt is counted
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
+      Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job
       this.save();
       await bump(); this.save();
       return `started the ${spec.kind} job ${job.id.slice(0, 8)} on ${spec.model || 'the default model'}`;

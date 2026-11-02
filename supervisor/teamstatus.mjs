@@ -50,7 +50,7 @@ function verdictOf(state, p) {
 export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [], register = '', registerUnreadable = false }) {
   // An unreadable register is reported once, as the Problems entry buildView adds.
   const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now, register, registerUnreadable, tz });
-  const names = makeNamer({ repo: view.repository, issues: cache?.issues, pulls: cache?.pulls, merged: cache?.merged, mergeLog: state.mergeLog, stateJobs: state.jobs });
+  const names = makeNamer({ repo: view.repository, issues: cache?.issues, pulls: cache?.pulls, merged: cache?.merged, mergeLog: state.mergeLog, stateJobs: state.jobs, titles: state.titles });
   const ref = (type, n) => (IMPLEMENTING.includes(type) ? names.issue(n) : names.pr(n)).text;   // the shared formatter, never an ad-hoc string
   const live = id => jobs.some(j => j.id === id && ACTIVE.includes(j.status));
   const problems = view.attention.map(a => ({ id: a.id, text: a.text }));

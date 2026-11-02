@@ -235,3 +235,9 @@ html.sb-overlay,html.sb-overlay *{scrollbar-width:none}
   html[data-rail=collapsed][data-dock=left] .nav a,html[data-rail=collapsed][data-dock=right] .nav a{justify-content:center;padding:0}
 }
 @media(max-width:639px){.dockbar,.dock-handle,.nav-collapse{display:none!important}}
+/* Issue #204: long titles and descriptions cut with an ellipsis; the full text is in the title attribute (hover or tap). */
+.trunc{display:inline-block;max-width:min(60ch,100%);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.trunc:focus{max-width:none;white-space:normal;overflow-wrap:anywhere}
+a[title]{cursor:help}
+.issue-story{margin-bottom:var(--sp3)}.issue-story h3{margin:0 0 var(--sp1)}
+@media (max-width:640px){.trunc{max-width:34ch}.issue-story .trunc{max-width:100%}}
