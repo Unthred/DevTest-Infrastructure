@@ -66,6 +66,7 @@ export function readSnapshots(root) {
 // What the cache keeps of GitHub data: just enough for the planner and the page, nothing else (no bodies, no comments).
 export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
+  labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l?.name)).includes('needs-homeowner') ? ['needs-homeowner'] : [],
   statusCheckRollup: (p.statusCheckRollup || []).slice(0, 40).map(c => ({ name: redact(c.name || c.context || '', 80), status: c.status, conclusion: c.conclusion, state: c.state })) }));
 // The issue a merged PR closed: its closing reference, else the issue-<n> in its branch name (issue #147).
 const issueOfMerged = m => { const n = m.closingIssuesReferences?.[0]?.number ?? Number(/\/issue-(\d+)(\D|$)/.exec(m.headRefName || '')?.[1]); return Number.isSafeInteger(n) && n > 0 ? n : null; };

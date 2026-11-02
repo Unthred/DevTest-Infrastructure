@@ -196,25 +196,62 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
   return { text: parts.slice(0, 3).map(x => x.text).join('; '), links: links.slice(0, 6) };
 }
 
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, names }) {
+// Issue #141: a Needs you card says what happened (text), what Foreman tried, the one action needed and where to look.
+// x = { tried, action, links: [{ text, url }] }. Same shape as the event-log cards of #100/#106 will use.
+const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 60), url: l.url }));
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
-  const items = [], add = (id, text, ref) => items.push({ id, text: redact(text, 300), ref: ref || null });
+  const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
+  const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
+  const fixCount = pr => Object.entries(state.fixAttempts || {}).reduce((n, [k, v]) => n + (k === String(pr) || k.startsWith(`${pr}:`) ? (Number(v) || 0) : 0), 0);
+  const openPulls = new Set((cache?.pulls || []).map(p => p.number));
+  const fixLimited = new Set();
   const t = cache?.tick;
   if (!t) add('no-tick', 'No tick has ever been recorded: the dispatcher has not run since the dashboard was installed.');
   else {
     if (t.status === 'error') add('tick-failed', `Last tick failed at ${new Date(t.at).toISOString()}: ${t.error || 'no detail recorded'}`);
     if (teamEnabled !== false && t.status !== 'disabled' && now - t.at > STALE_TICK_MS) add('tick-stale', `No tick for ${Math.round((now - t.at) / 60000)} minutes (last ${new Date(t.at).toISOString()}); the reconcile cron may have stopped.`);
   }
-  for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner')) add(`homeowner-${i.number}`, `${names.issue(i.number).text} needs the homeowner`, { kind: 'issue', n: i.number });
-  for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0)))
-    add(`job-${j.id}`, `${names.job(j).text} (${j.provider}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind: ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull', n: j.issue });
+  const maxFix = limits.max_fix_attempts, maxReview = limits.max_review_attempts;
+  for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner')) add(`homeowner-${i.number}`, `${names.issue(i.number).text} needs the homeowner`, { kind: 'issue', n: i.number },
+    { tried: 'Foreman stopped work on this issue and labelled it needs-homeowner; it starts no new job until the label is removed.', links: [{ text: names.issue(i.number).text, url: web('issue', i.number) }] });
+  // One card per open PR that is labelled needs-homeowner or has hit the fix or review limit (the label and the notice are the same event).
+  for (const pr of cache?.pulls || []) {
+    const verdict = state.verdicts?.[`${pr.number}:${pr.headRefOid}`]?.verdict;
+    const rejected = verdict === 'CHANGES' || checksState(pr.statusCheckRollup) === 'red';
+    const fixes = fixCount(pr.number);
+    const fixLimit = !pr.isDraft && Number.isFinite(maxFix) && fixes >= maxFix && rejected;
+    const reviewLimit = !pr.isDraft && Number.isFinite(maxReview) && !verdict && Object.entries(state.reviewAttempts || {}).some(([k, v]) => k.startsWith(`${pr.number}:${pr.headRefOid}:`) && v >= maxReview);
+    const labelled = pr.labels?.includes('needs-homeowner');
+    if (!fixLimit && !reviewLimit && !labelled) continue;
+    if (fixLimit) fixLimited.add(pr.number);
+    const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: `job ${j.id.slice(0, 8)}`, url: `/work/pr/${pr.number}` }))];
+    if (fixLimit) add(`fixlimit-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix})`, { kind: 'pull', n: pr.number },
+      { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR.`, action: 'Change the approach, fix the PR by hand, or raise max_fix_attempts in team.local.json; remove the needs-homeowner label when done.', links });
+    else if (reviewLimit) add(`reviewlimit-${pr.number}`, `${names.pr(pr.number).text} could not be reviewed within ${maxReview} attempts`, { kind: 'pull', n: pr.number },
+      { tried: `Review jobs ran ${maxReview} times at this head without recording a verdict, so Foreman stopped reviewing it.`, action: 'Read the review job output, then review the PR by hand or push a new head to start a fresh review.', links });
+    else add(`homeowner-pr-${pr.number}`, `${names.pr(pr.number).text} needs the homeowner`, { kind: 'pull', n: pr.number },
+      { tried: 'Foreman labelled this PR needs-homeowner and posted the reason as a notice on it.', action: 'Read the notice on the PR and decide; remove the needs-homeowner label when it is handled.', links });
+  }
+  // Open issues no agent will ever be given (since #146 an issue in no agent's list is not dispatched).
+  { const listed = new Set(Object.values(config.agents || {}).flatMap(a => a.issues || []));
+    const orphans = (cache?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number) && !i.labels?.includes('needs-homeowner')).map(i => i.number).sort((a, b) => a - b);
+    if (orphans.length) add('unqueued', `${orphans.length} open issue${orphans.length === 1 ? ' is' : 's are'} in no queue and will never be started: ${orphans.map(n => `#${n}`).join(', ')}`, null,
+      { tried: 'Foreman only dispatches issues listed under an agent in team.local.json; these are in no list, so nothing has been started for them.', action: 'Add each issue to an agent\'s issues list in team.local.json, or close it.', links: orphans.slice(0, 6).map(n => ({ text: `issue #${n}`, url: web('issue', n) })) }); }
+  for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
+    const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
+    const closed = kind === 'issue' ? (cache?.issues || []).some(i => i.number === j.issue && i.state !== 'OPEN') : (cache?.pulls || []).length > 0 && !openPulls.has(j.issue);   // closed or merged: nothing left to decide
+    if (closed) continue;
+    add(`job-${j.id}`, `${names.job(j).text} (${j.provider}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind, n: j.issue },
+      { tried: `The ${j.kind || 'job'} job ran ${j.attempts || 1} attempt${(j.attempts || 1) === 1 ? '' : 's'} and ended ${j.status}; Foreman starts no new job for it.`, action: 'Read the job record, then retry it or close the issue.', links: [{ text: (kind === 'pull' ? names.pr(j.issue) : names.issue(j.issue)).text, url: web(kind, j.issue) }, { text: `job ${j.id.slice(0, 8)}`, url: `/work/${kind === 'pull' ? 'pr' : 'issue'}/${j.issue}` }] });
+  }
   // issue #158: a rebase that dropped commits, while the PR still sits on that rebased head
   for (const [id, tj] of Object.entries(state.jobs || {})) {
     const pr = (cache?.pulls || []).find(x => x.number === tj.pr);
     if (tj.kind === 'rebase' && tj.rebase?.lost?.length && pr && pr.headRefOid === tj.rebase.newHead)
       add(`rebase-lost-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} dropped ${tj.rebase.lost.length} commit(s): ${tj.rebase.lost.map(c => `${shortCommit(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
   }
-  for (const pr of cache?.pulls || []) if (!pr.isDraft && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
+  for (const pr of cache?.pulls || []) if (!pr.isDraft && !fixLimited.has(pr.number) && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // issue #149: a cancelled check that was rerun once and is still cancelled
   for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
@@ -402,7 +439,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: shortJob(j.id), name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, names }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root);
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
@@ -443,7 +480,8 @@ const NEXT_STEP = {
 };
 const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run' };
 export function healthOf({ attention, states, teamEnabled }) {
-  if (attention.some(a => a.severity === 'action')) return { state: 'needs_you', label: 'Needs you', severity: 'action' };
+  const open = attention.filter(a => a.severity === 'action').length;   // issue #141: the header shows how many
+  if (open) return { state: 'needs_you', label: `Needs you (${open})`, count: open, severity: 'action' };
   if (attention.some(a => /^(tick-stale|idle)/.test(a.id))) return { state: 'stuck', label: 'Stuck', severity: 'warning' };
   if (Object.values(states).some(s => s.state === 'paused')) return { state: 'paused', label: 'Paused', severity: 'warning' };
   if (Object.values(states).some(s => s.state === 'running')) return { state: 'running', label: 'Running', severity: 'ok' };
@@ -496,7 +534,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
   const needsYou = attention.filter(a => a.severity === 'action').map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
-    return { ...a, why: a.text, decision: NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
+    return { ...a, why: a.text, decision: a.action || NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
   });
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {

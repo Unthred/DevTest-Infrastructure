@@ -26,13 +26,14 @@ export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding
 export function githubClient(config, gh = ghRunner()) {
   const repo = config.repository;
   const json = args => JSON.parse(gh(args) || 'null');
-  const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url';
+  const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels';
+  const withLabels = prs => (Array.isArray(prs) ? prs.map(p => ({ ...p, labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l.name)) })) : prs);
   return {
-    listPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS]),
+    listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),
     listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,closingIssuesReferences']),
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
     listPullFiles: async n => (json(['pr', 'view', String(n), '--repo', repo, '--json', 'files'])?.files || []).map(f => String(f.path)),
-    getPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', PR_FIELDS]),
+    getPull: async n => { const p = json(['pr', 'view', String(n), '--repo', repo, '--json', PR_FIELDS]); return p ? withLabels([p])[0] : p; },
     listIssues: async () => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '200', '--json', 'number,title,state,body,labels'])
       .map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) })),
     comment: async (n, body) => { gh(['issue', 'comment', String(n), '--repo', repo, '--body-file', '-'], body, { retry: false }); },

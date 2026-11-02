@@ -64,3 +64,7 @@ Each queued issue and open PR shows `est. HH:MM–HH:MM` (p50–p90) on the Next
 - If an agent is out of allowance, or its forecast runs out before a step would start, that step moves to the reset time and the estimate says "(after Wed 07:18 reset)".
 - Known waits are listed with their own time: CI running, the allowance reset, and the self-upgrade rate limit ("upgrade waiting, next try 22:30").
 - A step type with fewer than 5 recorded jobs shows "no estimate yet" rather than a guess.
+
+## Needs you panel (issue #141)
+
+The panel lists every open item that needs the homeowner, derived from the cache and job records on each render, so a card clears as soon as its cause does. Sources today: open issues and PRs labelled `needs-homeowner`; PRs at the fix limit (still rejected) or the review limit; blocked or failed jobs whose issue or PR is still open; a rebase that dropped commits; a failed config migration; a failed tick; and open issues that are in no agent's queue. A red-CI warning on a PR at the fix limit becomes the fix-limit card. Each card carries `text` (what happened), `tried`, `decision` (the one action) and `links` (PR, job). The header shows `Needs you (N)` instead of Idle while any card is open. When the event log (#100, #106) lands it replaces the sources and keeps this card shape.

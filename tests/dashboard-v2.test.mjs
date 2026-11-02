@@ -319,3 +319,45 @@ test('routes: matchRoute accepts only the documented shapes', () => {
   assert.deepEqual(matchRoute('/'), { page: 'overview' }); assert.deepEqual(matchRoute('/work/pr/12'), { page: 'pr', id: 12 }); assert.deepEqual(matchRoute('/agents/'), { page: 'agents' });
   for (const bad of ['/work/pr/', '/work/pr/-1', '/agents/a b', '/agents/a/b', '/WORK', '/work/issue/1e3']) assert.equal(matchRoute(bad), null, bad);
 });
+
+// ---- issue #141: the Needs you panel lists every open needs-homeowner item and clears when it is resolved
+const red = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
+const calmCache = (pull = {}, extra = {}) => { const c = cache(extra); c.issues = c.issues.filter(i => i.number !== 3); c.pulls = [{ ...c.pulls[0], ...pull }]; return c; };
+const needsOf = async (s) => JSON.parse((await s.get('/api/view.json')).body);
+test('#141 a blocked job gives exactly one card with what, tried, action and links; closing the PR clears it', async t => {
+  const blocked = jb({ status: 'blocked', kind: 'cifix', issue: 41, provider: 'claude', lastEvent: 'blocked_needs_input', updatedAt: NOW - 1000 });
+  const v = await needsOf(await serve(t, { jobs: [blocked], cache: calmCache() }));
+  assert.equal(v.panels.needsYou.length, 1); const c = v.panels.needsYou[0];
+  assert.match(c.text, /is blocked/); assert.ok(c.tried && c.decision); assert.ok(c.links.some(l => l.url === 'https://github.com/o/r/pull/41')); assert.ok(c.links.some(l => /^job /.test(l.text)));
+  assert.equal(v.health.label, 'Needs you (1)'); assert.equal(v.health.count, 1);
+  const gone = calmCache(); gone.pulls = [{ ...gone.pulls[0], number: 99 }];
+  assert.equal((await needsOf(await serve(t, { jobs: [blocked], cache: gone }))).panels.needsYou.length, 0, 'the PR is no longer open');
+});
+test('#141 a fix-limit PR gives one card instead of a CI warning; fewer fix rounds leaves the warning', async t => {
+  const state = { fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {} };
+  const v = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red, labels: ['needs-homeowner'] }), state }));
+  assert.equal(v.panels.needsYou.length, 1, 'label and limit are one card');
+  assert.match(v.panels.needsYou[0].id, /^fixlimit-41$/); assert.match(v.panels.needsYou[0].tried, /2 fix rounds/);
+  assert.ok(!v.panels.warnings.some(w => w.id === 'ci-41'), 'the CI warning became the card');
+  const early = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state: { fixAttempts: { [`41:${H(1)}`]: 1 }, verdicts: {}, jobs: {} } }));
+  assert.equal(early.panels.needsYou.length, 0); assert.ok(early.panels.warnings.some(w => w.id === 'ci-41'));
+});
+test('#141 a review-limit PR gives one card', async t => {
+  const v = await needsOf(await serve(t, { cache: calmCache(), state: { reviewAttempts: { [`41:${H(1)}:codex`]: 2 }, verdicts: {}, jobs: {} } }));
+  assert.deepEqual(v.panels.needsYou.map(c => c.id), ['reviewlimit-41']);
+});
+test('#141 a labelled PR gives one card, removing the label clears it, and the empty state shows only when nothing is open', async t => {
+  const labelled = await serve(t, { cache: calmCache({ labels: ['needs-homeowner'] }) });
+  const v = await needsOf(labelled); assert.deepEqual(v.panels.needsYou.map(c => c.id), ['homeowner-pr-41']);
+  assert.match(v.health.label, /^Needs you \(1\)$/);
+  const page = (await labelled.get('/')).body; assert.match(page, /Needs you \(1\)/); assert.doesNotMatch(page, /Nothing needs you/); assert.match(page, /Tried: Foreman labelled this PR/);
+  const clear = await serve(t, { cache: calmCache({ labels: [] }), repo: registerRepo(t) });
+  assert.equal((await needsOf(clear)).panels.needsYou.length, 0); assert.equal((await needsOf(clear)).health.label, 'Idle');
+  assert.match((await clear.get('/')).body, /Nothing needs you/);
+});
+test('#141 open issues in no agent queue give one card listing them', async t => {
+  const c = calmCache(); c.issues.push({ number: 77, title: 'Orphan', state: 'OPEN', labels: [], prerequisites: [] }, { number: 78, title: 'Closed orphan', state: 'CLOSED', labels: [], prerequisites: [] });
+  const v = await needsOf(await serve(t, { cache: c }));
+  const card = v.panels.needsYou.find(x => x.id === 'unqueued'); assert.ok(card); assert.match(card.text, /1 open issue is in no queue.*#77/); assert.doesNotMatch(card.text, /#78/);
+  assert.equal(v.panels.needsYou.length, 1);
+});
