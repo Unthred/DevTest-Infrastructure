@@ -10,7 +10,7 @@ import path from 'node:path';
 import { pauseDisagreement, buildView } from '../supervisor/dashboard.mjs';
 import { renderPage } from '../supervisor/dashrender.mjs';
 import { MAX_SNAPSHOTS, appendSnapshot, compactIssues, compactPulls, readCache, readSnapshots, recordTick, redact, tickOutcome } from '../supervisor/dashdata.mjs';
-import { handler, validateBind, currentView } from '../supervisor/dashserver.mjs';
+import { handler, validateBind, currentView, clearRegisterMemo } from '../supervisor/dashserver.mjs';
 import { Team } from '../supervisor/team.mjs';
 import { addUsage, usageFromLine } from '../supervisor/usage.mjs';
 
@@ -300,16 +300,20 @@ test('server: serves a self-contained, escaped page with only same-origin script
   assert.ok(json.attention.some(a => a.id === 'pause-claude'));
 });
 test('server: loading the page makes no GitHub or model call (gh and provider CLIs are never started)', async t => {
+  clearRegisterMemo();   // registerMemo is module-global: an earlier test's cached read of '/p/r' would stop git ever running here
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nogh-')); t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
   const marker = path.join(bin, 'called');
   // git is a shim: the page may only run the local `git show origin/main:docs/DECISIONS.md` (D-021); anything else is recorded in the marker.
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
-  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\ncase "\$*" in *" show origin/main:docs/DECISIONS.md") exec ${realGit} "\$@";; esac\necho "git \$*" >> ${marker}\nexit 1\n`, { mode: 0o755 });
+  const ran = path.join(bin, 'git-show-ran');
+  // exact argv, not a suffix match
+  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\ncase "\$*" in "-C /p/r show origin/main:docs/DECISIONS.md") echo ran >> ${ran}; exec ${realGit} "\$@";; esac\necho "git \$*" >> ${marker}\nexit 1\n`, { mode: 0o755 });
   for (const name of ['gh', 'claude', 'codex', 'curl']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho ${name} >> ${marker}\nexit 1\n`, { mode: 0o755 });
   const oldPath = process.env.PATH; process.env.PATH = `${bin}:${oldPath}`; t.after(() => { process.env.PATH = oldPath; });
   const s = await withServer(t, { jobs: [fx], cache: { tick: okTick(), pulls: [], issues: [issue(30)] } });
   assert.equal((await s.get('/')).status, 200); assert.equal((await s.get('/api/view.json')).status, 200);
   assert.equal(fs.existsSync(marker), false);
+  assert.equal(fs.existsSync(ran), true, 'positive control: the shim saw `git show origin/main:docs/DECISIONS.md`');
 });
 test('server: unreadable state gives a generic 500 with no detail leaked', async t => {
   const s = await withServer(t, { cfg: { schema_version: 9 } });

@@ -10,6 +10,7 @@ import { stateRoot } from '../supervisor/core.mjs';
 import { buildView } from '../supervisor/dashboard.mjs';
 import { buildStatus } from '../supervisor/teamstatus.mjs';
 import { planningInputs } from '../supervisor/planning.mjs';
+import { recordTick } from '../supervisor/dashdata.mjs';
 
 const T = iso => Date.parse(iso);
 const NOW = T('2026-11-01T10:00:00Z');
@@ -143,12 +144,20 @@ test('`team status` reads the register from origin/main: no warning when readabl
     const shipped = JSON.parse(fs.readFileSync(path.join(pkg, 'supervisor', 'team.json'), 'utf8'));
     fs.writeFileSync(path.join(pkg, 'supervisor', 'team.json'), JSON.stringify({ ...shipped, repo_path: repoPath, worktree_base: path.dirname(repoPath) }));
     const root = tmp(t);
+    // The cached PR (green, mergeable) and an interim same-provider PASS (claude on its own PR) recorded for its exact head. Merging on that PASS needs D-021 or D-024 approved in the register, so the planned next action depends on the register the CLI passes in.
+    recordTick(root, { now: Date.now(), status: 'ok', team: { c: config(), view: { prs: pulls, issues: [] }, delivered: new Set() }, jobs: [], actions: [] });
+    fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ verdicts: { [`119:${pulls[0].headRefOid}`]: { verdict: 'PASS', reviewer: 'claude', interim: true, job: 'j'.repeat(32) } } }));
     fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
-    const out = execFileSync(process.execPath, [cli, 'team', 'status', '--no-github', '--state-root', root], { encoding: 'utf8' });
-    return out;
+    return execFileSync(process.execPath, [cli, 'team', 'status', '--json', '--no-github', '--state-root', root], { encoding: 'utf8' });
   };
-  const count = out => out.split('Cannot read docs/DECISIONS.md').length - 1;
-  assert.equal(count(run(repo)), 1, 'no origin/main yet: unreadable, reported once');
+  const count = out => JSON.parse(out).problems.filter(x => x.id === 'register-unreadable').length;
+  const planned = out => JSON.parse(out).next.plan.map(p => `${p.agent}:${p.type}:${p.ref}`);
+  const unreadable = run(repo);
+  assert.equal(count(unreadable), 1, 'no origin/main yet: unreadable, reported once');
+  assert.ok(!planned(unreadable).some(x => /:merge:119$/.test(x)), 'no register: the merge is not planned');
   git('update-ref', 'refs/remotes/origin/main', 'HEAD');
-  assert.equal(count(run(repo)), 0, 'origin/main has the register: no warning');
+  const readable = run(repo);
+  assert.equal(count(readable), 0, 'origin/main has the register: no warning');
+  assert.ok(planned(readable).some(x => /:merge:119$/.test(x)), 'the register the CLI read is used: the interim PASS leads to a planned merge');
 });
