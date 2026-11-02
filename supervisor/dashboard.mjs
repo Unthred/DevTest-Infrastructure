@@ -205,7 +205,7 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
 // Issue #141: a Needs you card says what happened (text), what Foreman tried, the one action needed and where to look.
 // x = { tried, action, links: [{ text, url }] }. Same shape as the event-log cards of #100/#106 will use.
 const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 140), url: l.url }));
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [] }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set() }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
@@ -241,6 +241,12 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const labelled = pr.labels?.includes('needs-homeowner');
     if (!fixLimit && !reviewLimit && !labelled) continue;
     if (fixLimit) fixLimited.add(pr.number);
+    // Issue #211: the dispatcher already has a next step (one escalated fix round), so nothing is asked of the homeowner yet.
+    if (fixLimit && escalating.has(pr.number) && !labelled) {
+      add(`escalating-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix}). Foreman is handling: one escalated fix round on the reviewer-tier model with the full review history, no action needed`, { kind: 'pull', n: pr.number },
+        { tried: 'Foreman escalates once before it asks the homeowner; it asks only if that round fails.', links: [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }] });
+      continue;
+    }
     const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: names.job(j).text, url: names.job(j).url }))];
     if (fixLimit) add(`fixlimit-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix})`, { kind: 'pull', n: pr.number },
       { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR.`, action: 'Change the approach, fix the PR by hand, or raise max_fix_attempts in team.local.json; remove the needs-homeowner label when done.', links });
@@ -488,7 +494,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: shortJob(j.id), name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? {} : { running });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });

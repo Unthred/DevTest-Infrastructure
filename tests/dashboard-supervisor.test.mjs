@@ -277,7 +277,7 @@ test('copy for overseer on an Action needed job item: what is wrong, job record 
   assert.match(block, /^Job b485512f78df4a50af28f7b192a30710: status blocked, kind review, provider codex, ref #41, attempts 1, last event retry_exhausted, postcondition verdict PR #41 head 4444444, updated /m);
   assert.match(block, /^PR #41 latest review: CHANGES by codex at 4444444 \(current head\), .*1 blocking finding\(s\)$/m);
   assert.match(block, /^Command: ai-supervisor status b485512f78df4a50af28f7b192a30710$/m);
-  assert.match(block, /^Log \(reconcile\.log\):\n  2026-10-31 18:00 UTC tick ok; ingested CHANGES on PR #41/m);
+  assert.match(block, /^Log \(reconcile\.log\) \(filtered: only ticks mentioning job b485512f78df4a50af28f7b192a30710 or #41; other ticks are omitted\):\n  2026-10-31 18:00 UTC tick ok; ingested CHANGES on PR #41/m);
   assert.match(block, /skipped review 41 \(codex\): lease held; token \[token\] from \[ip\]/);
   for (const bad of [FAKE_GH, '192.168.13.1', 'hidden-worktree-path', 'sess-secret-value', 'f'.repeat(32)]) {
     assert.ok(!block.includes(bad), `copy text holds ${bad}`); assert.ok(!over.includes(bad), `page holds ${bad}`);
