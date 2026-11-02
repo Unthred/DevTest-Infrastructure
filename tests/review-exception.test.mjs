@@ -8,12 +8,12 @@ import { Team, validateTeamConfig } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
-const NOW = Date.now();   // config validation reads the wall clock; the Team clock is fixed at this value
+const NOW = Date.parse('2026-11-02T12:00:00Z');   // config validation reads the wall clock; the Team clock is fixed at this value
 const DAY = 86400000;
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
 const REG = (ex = 'homeowner-approved') => `## D-020 — x\n- Status: homeowner-approved\n\n## D-024 — z\n- Status: homeowner-approved\n\n## D-027 — e\n- Status: ${ex}\n`;
 const exception = (over = {}) => ({ agent: 'claude', full_review: { model: 'opus', effort: 'medium' }, commit_review: { model: 'sonnet', effort: 'medium' },
-  prs: [{ pr: 77, expires_at: new Date(NOW + 5 * DAY).toISOString() }], ...over });
+  prs: [{ pr: 137, expires_at: new Date(NOW + 5 * DAY).toISOString() }], ...over });
 const config = (over = {}) => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
@@ -24,7 +24,7 @@ const config = (over = {}) => ({
 const pr = (n, head, extra = {}) => ({ number: n, title: `t${n}`, headRefName: `claude/issue-${n}-x`, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green, ...extra });
 const manifests = { claude: { aliases: ['opus', 'sonnet'], efforts: ['low', 'medium', 'high'] }, codex: { aliases: [], efforts: ['low', 'medium', 'high'] } };
 
-function world(t, { pulls = [pr(77, H(5))], cfg = config(), register = REG(), now = { t: NOW }, merged = {} } = {}) {
+function world(t, { pulls = [pr(137, H(5))], cfg = config(), register = REG(), now = { t: NOW }, merged = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-ex-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = { comments: [], merges: [], created: [] };
   const gh = { pulls,
@@ -38,7 +38,7 @@ function world(t, { pulls = [pr(77, H(5))], cfg = config(), register = REG(), no
   const git = { ensureWorktree: async o => o.path, worktreeFor: async () => null };
   const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register, clock: { now: () => now.t }, limitedOf: () => ({ out: false }), providerModels: manifests });
   // Opus wrote the PR head: D-024 alone would refuse an Opus review of it.
-  team.s.jobs.aaaaaaaa = { kind: 'implement', agent: 'claude', model: 'opus', pr: 77, branch: 'claude/issue-77-x', ingested: true, at: NOW - 1000 };
+  team.s.jobs.aaaaaaaa = { kind: 'implement', agent: 'claude', model: 'opus', pr: 137, branch: 'claude/issue-137-x', ingested: true, at: NOW - 1000 };
   return { gh, jobs, team, calls, now };
 }
 const finish = async (w, verdict = 'PASS') => {
@@ -63,11 +63,11 @@ test('listed PR: whole-PR Opus review, then Sonnet review of the Opus commits, t
   assert.equal(w.calls.merges.length, 0);
   await finish(w);
   assert.deepEqual(types((await w.team.tick()).actions), ['merge']);
-  assert.deepEqual(w.calls.merges, [[77, H(5)]]);
+  assert.deepEqual(w.calls.merges, [[137, H(5)]]);
   assert.equal(w.team.s.mergeLog.at(-1).exception, 'D-027');
-  assert.ok(w.calls.comments.some(([n, b]) => n === 77 && /review exception \(D-027\)/.test(b)));
-  assert.equal(w.team.s.exceptionEnded[77].reason, 'merged');
-  assert.equal(w.team.exceptionFor(77), null);
+  assert.ok(w.calls.comments.some(([n, b]) => n === 137 && /review exception \(D-027\)/.test(b)));
+  assert.equal(w.team.s.exceptionEnded[137].reason, 'merged');
+  assert.equal(w.team.exceptionFor(137), null);
 });
 
 test('unlisted PR: D-024 is unchanged (one independent PASS merges; an Opus review of an Opus-written head is still refused)', async t => {
@@ -84,7 +84,7 @@ test('unlisted PR: D-024 is unchanged (one independent PASS merges; an Opus revi
 
 test('a PASS missing: the commit review alone, or the whole-PR review alone, never merges', async t => {
   const w = world(t);
-  const vk = `77:${H(5)}`;
+  const vk = `137:${H(5)}`;
   w.team.s.exceptionReviews[vk] = { verdict: 'PASS', reviewer: 'claude', job: 'c'.repeat(32), model: 'sonnet', exceptionStage: 'commits', findings: [], commandsRun: ['x'], at: NOW };
   assert.ok(!types(await w.team.plan()).includes('merge'), 'commit PASS without the whole-PR PASS');
   assert.deepEqual(types(await w.team.plan()), ['review:full']);
@@ -102,21 +102,21 @@ test('a PASS missing: the commit review alone, or the whole-PR review alone, nev
 
 test('head moved after both PASSes: neither carries; both reviews run again on the new head', async t => {
   const w = world(t);
-  const vk = `77:${H(5)}`;
+  const vk = `137:${H(5)}`;
   w.team.s.verdicts[vk] = { verdict: 'PASS', reviewer: 'claude', job: 'd'.repeat(32), model: 'opus', exceptionStage: 'full', independent: true, findings: [], commandsRun: ['x'], at: NOW };
   w.team.s.exceptionReviews[vk] = { verdict: 'PASS', reviewer: 'claude', job: 'c'.repeat(32), model: 'sonnet', exceptionStage: 'commits', findings: [], commandsRun: ['x'], at: NOW };
   assert.deepEqual(types(await w.team.plan()), ['merge']);
-  w.gh.pulls[0] = pr(77, H(7));
+  w.gh.pulls[0] = pr(137, H(7));
   assert.deepEqual(types(await w.team.plan()), ['review:full']);
 });
 
 test('expiry, ended and unapproved: the exception stops applying and the D-024 route returns', async t => {
   const w = world(t);
-  assert.ok(w.team.exceptionFor(77));
+  assert.ok(w.team.exceptionFor(137));
   w.now.t = NOW + 6 * DAY;   // past expires_at, PR still open
-  assert.equal(w.team.exceptionFor(77), null);
+  assert.equal(w.team.exceptionFor(137), null);
   const report = {}; await w.team.plan(); await w.team.endExceptions(report);
-  assert.deepEqual(report.exceptionEnded, [{ pr: 77, reason: 'expired' }]);
+  assert.deepEqual(report.exceptionEnded, [{ pr: 137, reason: 'expired' }]);
   // a verdict job started under the exception is not recorded once it has ended
   const w2 = world(t);
   await w2.team.tick();
@@ -125,24 +125,24 @@ test('expiry, ended and unapproved: the exception stops applying and the D-024 r
   assert.match(rep.ingested[0].error, /exception ended/);
   assert.equal(Object.keys(w2.team.s.verdicts).length, 0);
   // closed / merged elsewhere ends it; an unknown state does not
-  const w3 = world(t, { merged: { 77: 'CLOSED' } });
+  const w3 = world(t, { merged: { 137: 'CLOSED' } });
   w3.gh.pulls = []; await w3.team.plan(); const r3 = {}; await w3.team.endExceptions(r3);
-  assert.deepEqual(r3.exceptionEnded, [{ pr: 77, reason: 'closed' }]);
+  assert.deepEqual(r3.exceptionEnded, [{ pr: 137, reason: 'closed' }]);
   const w4 = world(t); w4.gh.pulls = []; await w4.team.plan(); const r4 = {}; await w4.team.endExceptions(r4);
   assert.equal(r4.exceptionEnded, undefined);
-  assert.ok(w4.team.exceptionFor(77));
+  assert.ok(w4.team.exceptionFor(137));
   // not homeowner-approved: inactive
-  assert.equal(world(t, { register: REG('agent-proposal') }).team.exceptionFor(77), null);
+  assert.equal(world(t, { register: REG('agent-proposal') }).team.exceptionFor(137), null);
 });
 
 test('fixes: Sonnet only, never escalated; the fix limit stops the PR with one Needs you reason', async t => {
   const w = world(t);
-  const vk = `77:${H(5)}`;
+  const vk = `137:${H(5)}`;
   w.team.s.verdicts[vk] = { verdict: 'CHANGES', reviewer: 'claude', job: 'd'.repeat(32), model: 'opus', exceptionStage: 'full', independent: true, findings: [{ kind: 'blocking', text: 'x' }], commandsRun: ['x'], at: NOW };
   const r = await w.team.tick();
   assert.deepEqual(types(r.actions), ['fix']);
   assert.equal(w.calls.created.at(-1).model, 'sonnet');
-  w.team.s.exceptionFixes[77] = 2;
+  w.team.s.exceptionFixes[137] = 2;
   assert.deepEqual(types(await w.team.plan()), [], 'no escalated round for a listed PR');
   const reasons = w.team.stallReasons(w.gh.pulls[0]);
   assert.equal(reasons.filter(x => x.code === 'fix-limit').length, 1);
@@ -160,8 +160,12 @@ test('config validation: dates, models, duplicates and unknown fields', () => {
   assert.throws(bad({ prs: [{ pr: 1 }] }), /review_exception/);
   assert.throws(bad({ prs: [{ pr: 1, expires_at: 'soon' }] }), /review_exception/);
   assert.throws(bad({ prs: [{ pr: 1, expires_at: '2099-01-01T00:00:00Z' }] }), /31 days/);
-  assert.throws(bad({ prs: [{ pr: 1, expires_at: '2026-11-09T00:00:00Z' }, { pr: 1, expires_at: '2026-11-09T00:00:00Z' }] }), /review_exception/);
+  assert.throws(bad({ prs: [{ pr: 137, expires_at: '2026-11-09T00:00:00Z' }, { pr: 137, expires_at: '2026-11-09T00:00:00Z' }] }), /review_exception/);
   assert.throws(bad({ commit_review: { model: 'opus' } }), /different models/);
+  // D-027 scope is enforced, not just recorded: no other PR, and no expiry past 9 Nov 2026
+  assert.throws(bad({ prs: [{ pr: 999, expires_at: '2026-11-03T00:00:00Z' }] }), /not one of the pull requests D-027 approves/);
+  assert.throws(bad({ prs: [{ pr: 137, expires_at: '2026-11-09T00:00:01Z' }] }), /9 Nov 2026/);
+  assert.doesNotThrow(bad({ prs: [137, 216, 217, 222, 234].map(pr => ({ pr, expires_at: '2026-11-09T00:00:00Z' })) }));
   assert.throws(bad({ extra: 1 }), /review_exception/);
 });
 
@@ -171,7 +175,7 @@ test('a whole-PR exception PASS never merges once the exception has expired or l
     assert.deepEqual(types((await w.team.tick()).actions), ['review:full']);
     await finish(w);   // Opus PASS of an Opus-written head, recorded under the exception
     if (how === 'expired') w.now.t = NOW + 6 * DAY; else w.team.register = REG('superseded');
-    assert.equal(w.team.exceptionFor(77), null);
+    assert.equal(w.team.exceptionFor(137), null);
     const actions = (await w.team.tick()).actions;
     assert.ok(!types(actions).includes('merge'), `${how}: the exception PASS must not merge`);
     assert.equal(w.calls.merges.length, 0);
@@ -182,14 +186,14 @@ test('a whole-PR exception PASS never merges once the exception has expired or l
 
 test('fix rounds spent before the exception began do not stop the Sonnet fix of a listed PR', async t => {
   const w = world(t);
-  w.team.s.fixAttempts['77:' + H(3)] = 2;   // two earlier rounds on an older head, before the exception route
-  const vk = `77:${H(5)}`;
+  w.team.s.fixAttempts['137:' + H(3)] = 2;   // two earlier rounds on an older head, before the exception route
+  const vk = `137:${H(5)}`;
   w.team.s.verdicts[vk] = { verdict: 'CHANGES', reviewer: 'claude', job: 'd'.repeat(32), model: 'opus', exceptionStage: 'full', independent: true, findings: [{ kind: 'blocking', text: 'x' }], commandsRun: ['x'], at: NOW };
-  assert.equal(w.team.fixCount(77), 0);
+  assert.equal(w.team.fixCount(137), 0);
   const r = await w.team.tick();
   assert.deepEqual(types(r.actions), ['fix']);
   assert.equal(w.calls.created.at(-1).model, 'sonnet');
-  assert.equal(w.team.s.exceptionFixes[77], 1);
+  assert.equal(w.team.s.exceptionFixes[137], 1);
   assert.equal(w.team.s.fixAttempts[vk], 1);
 });
 

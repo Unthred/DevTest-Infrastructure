@@ -5,6 +5,10 @@ import { SupervisorError } from './core.mjs';
 
 export const EXCEPTION_DECISION = 'D-027';
 const MAX_ENTRIES = 20;
+// D-027 fixes the scope: exactly these pull requests, none after this instant. Widening either needs a new homeowner decision, so the
+// validator refuses any other entry rather than trusting the configuration file.
+export const APPROVED_PRS = Object.freeze([137, 216, 217, 222, 234]);
+export const APPROVED_EXPIRY_MS = Date.parse('2026-11-09T00:00:00Z');
 const MAX_WINDOW_MS = 31 * 86400000;   // an entry may not name an expiry further out than a month: the exception is time-limited by design
 
 const entryOk = e => e && typeof e === 'object' && !Array.isArray(e) && typeof e.model === 'string' && /^[\w.:-]{1,64}$/.test(e.model)
@@ -26,6 +30,8 @@ export function validateReviewException(x, agentNames, now = Date.now()) {
     const t = typeof e.expires_at === 'string' ? Date.parse(e.expires_at) : NaN;
     if (!Number.isFinite(t)) throw bad(`prs entry #${e.pr} needs an expires_at date`);
     if (t > now + MAX_WINDOW_MS) throw bad(`prs entry #${e.pr} expires more than 31 days from now`);
+    if (!APPROVED_PRS.includes(e.pr)) throw bad(`prs entry #${e.pr} is not one of the pull requests D-027 approves (${APPROVED_PRS.map(n => '#' + n).join(', ')})`);
+    if (t > APPROVED_EXPIRY_MS) throw bad(`prs entry #${e.pr} expires after the 9 Nov 2026 limit D-027 fixes`);
   }
 }
 
