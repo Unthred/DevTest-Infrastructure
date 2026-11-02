@@ -135,7 +135,7 @@ ${st.page < st.pages ? `<a href="${href({ page: st.page + 1 })}" rel="next">Next
 // ---- charts: inline SVG, hover tooltips (<title>), per-series toggles (script), colours per agent
 const fmtAxisTime = (t, range) => new Date(t).toISOString().slice(range === '24h' ? 11 : 5, range === '24h' ? 16 : 10);
 function legend(items) {
-  return `<div class="legend" role="group" aria-label="Series">${items.map(s => `<button type="button" aria-pressed="true" data-series="${esc(s.key)}"><i style="background:${s.colour}"></i>${esc(s.label)}</button>`).join('')}</div>`;
+  return `<div class="legend" role="group" aria-label="Series">${items.map(s => `<button type="button" aria-pressed="true" data-series="${esc(s.key)}"${s.marker ? ' data-marker="true"' : ''}><i style="background:${s.colour}"></i>${esc(s.label)}</button>`).join('')}</div>`;
 }
 function lineChart({ series, resets = [], expected = [], now, range, title }) {
   const pts = series.flatMap(s => s.points);
@@ -155,7 +155,7 @@ function lineChart({ series, resets = [], expected = [], now, range, title }) {
     g += `<g data-series="${esc(s.key)}">${segments.map(seg => `<polyline fill="none" stroke="${s.colour}" stroke-width="2.5" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ''} points="${seg.map(p => `${x(p.at).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ')}"/>`).join('')}`
       + s.points.filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0).map(p => `<circle class="pt" tabindex="0" cx="${x(p.at).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="5" fill="${s.colour}"><title>${esc(s.label)}: ${pct(p.v)} at ${esc(utc(p.at))}</title></circle>`).join('') + '</g>';
   }
-  const items = [...series.filter(s => s.points.length).map(s => ({ key: s.key, label: s.label, colour: s.colour })), ...(resets.length ? [{ key: 'reset', label: 'Window reset', colour: 'var(--action)' }] : []), ...(shownExpected.length ? [{ key: 'expected', label: 'Expected reset (reading expired)', colour: 'var(--mut)' }] : [])];
+  const items = [...series.filter(s => s.points.length).map(s => ({ key: s.key, label: s.label, colour: s.colour })), ...(resets.length ? [{ key: 'reset', label: 'Window reset', colour: 'var(--action)', marker: true }] : []), ...(shownExpected.length ? [{ key: 'expected', label: 'Expected reset (reading expired)', colour: 'var(--mut)', marker: true }] : [])];
   return `<figure class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">${g}</svg>${legend(items)}</figure>`;
 }
 function stackedChart({ days, title, range, now }) {
@@ -463,7 +463,7 @@ function usagePage(view, query, path) {
     { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
   const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
     emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
-  return { title: 'Usage & cost', body: grid('usage', win + chart + tokChart + byModel + failed + table_) };
+  return { title: 'Usage & cost', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
 }
 function reviewsPage(view, query, path) {
   const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE;
