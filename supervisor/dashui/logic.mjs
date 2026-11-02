@@ -252,8 +252,11 @@ export function formatLocal(ms, tz) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(new Date(ms)).map(p => [p.type, p.value]));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
 }
-// A time inside plain text: a marker the renderer turns into <time data-local> (see escT in dashrender.mjs).
-export const tmark = ms => (Number.isFinite(ms) ? `\u27e6t:${ms}\u27e7` : 'unknown');
+// A time inside plain text (review of PR #217): a readable, labelled UTC stamp "YYYY-MM-DD HH:MM UTC", so any consumer of
+// the view (team status, its --json, /api/view.json, overseer notes) gets plain text. Renderers that know the viewer's zone
+// rewrite each stamp with localStamps(): the dashboard into <time data-local> (escT), team status into its own time zone.
+export const tmark = ms => (Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(0, 10)} ${new Date(ms).toISOString().slice(11, 16)} UTC` : 'unknown');
+export const localStamps = (text, fn) => String(text).replace(/\b(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC\b/g, (_, d, hm) => fn(Date.parse(`${d}T${hm}:00Z`)));
 export const timeOnly = (ms, tz) => formatLocal(ms, tz).slice(11);
 
 // ---- Activity (issue #76): idle ticks collapse, rows filter by agent, outcome and job kind.

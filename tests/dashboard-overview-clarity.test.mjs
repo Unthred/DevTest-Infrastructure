@@ -196,19 +196,31 @@ test('time: the browser script rewrites <time data-local> in the viewer zone and
 });
 
 // ---- 5b. no server-rendered time is left unlocalised or unlabelled (review of PR #217)
-test('time: escT turns the marker into <time data-local> and escapes the rest', async () => {
+test('time: escT turns a labelled UTC stamp into <time data-local> and escapes the rest', async () => {
   const { escT } = await import('../supervisor/dashrender.mjs');
-  const { tmark } = await import('../supervisor/dashui/logic.mjs');
+  const { tmark, localStamps } = await import('../supervisor/dashui/logic.mjs');
   const ms = Date.parse('2026-11-02T21:30:00Z');
+  assert.equal(tmark(ms), '2026-11-02 21:30 UTC'); assert.equal(tmark(NaN), 'unknown');
   assert.equal(escT(`failed at ${tmark(ms)}: <b>`), `failed at ${lt(ms)}: &lt;b&gt;`);
+  assert.equal(localStamps(`at ${tmark(ms)} and ${tmark(ms + 60000)}`, x => formatLocal(x, 'Europe/Paris')), 'at 2026-11-02 22:30 CET and 2026-11-02 22:31 CET');
 });
-test('time: warning texts carry a time marker, not a bare ISO or HH:MM UTC', async t => {
-  const v = await build(t, { jobs: [job()], cache: { tick: { at: NOW - 3 * 3600000, status: 'error', error: 'boom' } } });
-  const txt = JSON.stringify(v.attention);
-  assert.match(txt, /\u27e6t:\d+\u27e7/);
-  assert.doesNotMatch(txt, /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
-  const html = page(v, { page: 'overview' });
-  { const i = html.indexOf('\u27e6t:'); assert.equal(i, -1, html.slice(Math.max(0, i - 200), i + 60)); }
+// Review of PR #217 (head 2f285a4): the time in an attention text is plain, readable text in the view itself, so no
+// internal marker reaches team status, its --json, /api/view.json or the overseer note.
+test('time: warning texts are plain labelled UTC in the view and <time data-local> on every page that shows them', async t => {
+  const root = tmp(t); fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({ holding: { to: 'f'.repeat(40), since: NOW - 10 * MIN, jobs: 1 } }));
+  const v = await buildView({ config: config(), root, jobs: [job()], events: [], state: {}, cache: { tick: { at: NOW - 3 * 3600000, status: 'error', error: 'boom' }, fetchedAt: NOW - MIN, pulls: [], issues: compactIssues([issue(30)]) }, snapshots: [], now: NOW, tz: 'UTC' });
+  const json = JSON.stringify(v);
+  assert.doesNotMatch(json, /\u27e6|\u27e7/, 'no internal marker in /api/view.json');
+  const byId = id => v.attention.find(a => a.id === id).text;
+  assert.match(byId('tick-failed'), /^Last tick failed at 2026-11-02 17:00 UTC: boom$/);
+  assert.match(byId('tick-stale'), /\(last 2026-11-02 17:00 UTC\)/);
+  assert.match(byId('upgrade-hold'), /^Install pending since 2026-11-02 19:50 UTC /);
+  for (const p of ['overview', 'system']) {
+    const html = page(v, { page: p });
+    assert.ok(!/\u27e6|\u27e7/.test(html), `${p}: marker in HTML`);
+    assert.ok(html.includes(`Last tick failed at ${lt(NOW - 3 * 3600000)}: boom`), `${p}: failed-tick time is a <time data-local>`);
+  }
 });
 test('time: chart axis labels and tooltips are rewritten by the script from data-lms', async t => {
   const v = await build(t, { jobs: [job()], snapshots: [{ at: NOW - 5 * MIN, status: 'ok', plan: [] }] });

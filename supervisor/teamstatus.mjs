@@ -12,6 +12,7 @@ import { validateTeamConfig } from './team.mjs';
 import { modeLine } from './budget.mjs';
 import { makeNamer } from './naming.mjs';
 import { agentLine } from './agentline.mjs';
+import { formatLocal, localStamps } from './dashui/logic.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;     // the reconcile cron runs `*/5 * * * *` (tools/install-reconcile-user-script.sh)
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
@@ -55,7 +56,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   const names = makeNamer({ repo: view.repository, issues: cache?.issues, pulls: cache?.pulls, merged: cache?.merged, mergeLog: state.mergeLog, stateJobs: state.jobs, titles: state.titles });
   const ref = (type, n) => (IMPLEMENTING.includes(type) ? names.issue(n) : names.pr(n)).text;   // the shared formatter, never an ad-hoc string
   const live = id => jobs.some(j => j.id === id && ACTIVE.includes(j.status));
-  const problems = view.attention.map(a => ({ id: a.id, text: a.text }));
+  const problems = view.attention.map(a => ({ id: a.id, text: localStamps(a.text, ms => formatLocal(ms, tz)) }));
   const add = (id, text) => { if (!problems.some(p => p.id === id)) problems.push({ id, text: redact(text, 300) }); };
 
   // 1. agents

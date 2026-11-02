@@ -321,7 +321,7 @@ export function relevantTicks(ticks, { job = null, ref = null } = {}, max = 5) {
   return ticks.filter(hit).slice(-max).map(tickLine);
 }
 export function overseerText({ title, severity, problem, facts = [], job = null, verdict = null, log = [], logFilter = null, command = null, now }) {
-  const out = [`DevTest overseer note, ${iso(now)}`, `${title}: ${LEVEL[severity] || severity}`, `What is wrong: ${String(problem).replace(/\u27e6t:(\d+)\u27e7/g, (_, ms) => iso(Number(ms)))}`];
+  const out = [`DevTest overseer note, ${iso(now)}`, `${title}: ${LEVEL[severity] || severity}`, `What is wrong: ${problem}`];
   for (const f of facts) if (f) out.push(`- ${f}`);
   if (job) out.push(job);
   if (verdict) out.push(verdict);

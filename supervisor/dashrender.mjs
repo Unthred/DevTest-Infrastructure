@@ -1,7 +1,7 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
-import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, limitsOf, pillLinks, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
+import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, limitsOf, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
 import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
@@ -13,7 +13,7 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
 // Times inside plain text (warnings, allowance notes) travel as a marker and become <time data-local> at render time.
-export const escT = text => esc(text).replace(/\u27e6t:(\d+)\u27e7/g, (_, ms) => lt(Number(ms)));
+export const escT = text => localStamps(esc(text), lt);
 // SVG text cannot hold <time>: the script rewrites any [data-lms] element from its template (data-tpl, "{t}" = the time).
 const lms = (ms, tpl, timeOnly) => `data-lms="${ms}" data-tpl="${esc(tpl)}"${timeOnly ? ' data-tonly' : ''}`;
 export const lt = ms => (Number.isFinite(ms) ? `<time class="lt" datetime="${new Date(ms).toISOString()}" data-local>${esc(utc(ms))}</time>` : 'unknown');

@@ -214,6 +214,20 @@ test('issue #148 role slots: the implementer and reviewer slots are shown with a
   assert.equal(done.slots[0].text, 'Implementer: idle');
 });
 
+// Review of PR #217 (head 2f285a4): attention times reached team status as a raw internal marker. They are shown in the
+// status time zone, in the text and in --json, and no marker survives.
+test('3. problems: attention times are shown in the status time zone, with no internal marker', async () => {
+  const at = NOW - 30 * MIN;
+  const s = await status({ tz: 'Europe/Paris', cache: { tick: tick(at, 'error', 'boom'), fetchedAt: NOW - MIN, pulls: [], issues: [issue(30)], merged: [] } });
+  const out = text(s), json = JSON.stringify(s);
+  for (const x of [out, json]) assert.doesNotMatch(x, /\u27e6|\u27e7|\u27e6t:/);
+  assert.match(out, /- Last tick failed at 2026-10-30 12:30 CET: boom/);
+  assert.match(out, /- No tick for 30 minutes \(last 2026-10-30 12:30 CET\)/);
+  assert.ok(s.problems.some(p => p.text === 'Last tick failed at 2026-10-30 12:30 CET: boom'), json);
+  const utc = await status({ cache: { tick: tick(at, 'error', 'boom'), fetchedAt: NOW - MIN, pulls: [], issues: [issue(30)], merged: [] } });
+  assert.match(text(utc), /- Last tick failed at 2026-10-30 11:30 UTC: boom/);
+});
+
 test('drain (issue #136): team status shows "install pending since …, draining (N jobs running)" only while holding', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'drainst-'));
   try {
