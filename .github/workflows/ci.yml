@@ -28,6 +28,18 @@ jobs:
       - name: Positive and negative validator tests
         run: node --test "tests/**/*.test.mjs"
 
+  ci-lint:
+    # Issue #12: shell syntax, workflow safety and image-lock checks. No Docker, no network, no secrets.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Lint shell, workflows and the image lock
+        run: node tools/ci/check-ci.mjs
+
   commit-attribution:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
