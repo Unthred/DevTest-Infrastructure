@@ -78,7 +78,7 @@ function limitView(job, allowance, now) {
   return { since: Number.isFinite(pausedAt(job)) ? pausedAt(job) : null, resetsAt: w ? w.resetsAt : null, basis: w ? `${windowLabel(w, allowance.provider)} window in the last reading` : null, retryAt: job.nextAttemptAt || null };
 }
 
-function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '') {
+function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '', tz = undefined) {
   const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })),
     // delivered-work issue numbers the tick cached, in the shape Team.plan() reads, so the page matches `team tick --dry-run`
     listMergedPulls: async () => [{ headRefName: '', closingIssuesReferences: (cache.delivered || []).map(number => ({ number })) }] };
@@ -86,7 +86,7 @@ function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now =
   // The same planning inputs as the tick (issues #56, #121): probes included, so the page shows the allowance modes, holds and
   // reassignments `team tick --dry-run` would.
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs, probes: cache.probes, snapshots, events, now });
-  const team = new Team({ config, root, gh, jobs: jobsApi, git: null, register, allowanceOf, limitedOf, usage, clock: { now: () => now } });
+  const team = new Team({ config, root, gh, jobs: jobsApi, git: null, register, allowanceOf, limitedOf, usage, clock: { now: () => now }, timeZone: tz });
   team.s = { ...team.s, ...state };      // the state the caller read, so the plan and the page agree
   for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable']) team.s[k] ||= {};
   return team;
@@ -140,7 +140,7 @@ function reasons(team, cache, jobs, plan, states, names) {
     else if (hasPr) reason = 'PR open';
     else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; ${names.pr(prOf.number).text} open` : ''}`;
     else if (S.implemented?.[n]) reason = 'started earlier; no PR yet';
-    else if (taker) reason = `next: taken from ${agent} by ${taker.agent}: ${agent} has no allowance${untilText(team.ownerOut(agent)?.until, team)} (${taker.agent} takes it; ${agent} keeps ownership)`;
+    else if (taker) reason = `next: reassigned for allowance from ${agent} to ${taker.agent}: ${agent} has no allowance${untilText(team.ownerOut(agent)?.until, team)} (${taker.agent} takes it; ${agent} keeps ownership)`;
     else if (planned.has(`${agent}:implement:${n}`)) reason = 'next: implement';
     else if (mode && mode.mode !== 'normal') reason = `waits: ${agent} is ${MODE_LABEL[mode.mode]} (${mode.reason}); no agent with headroom can take it`;
     else if (team.held?.[agent]?.implement) reason = `waits: ${team.held[agent].implement}`;
@@ -391,7 +391,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
-  const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now, events || [], register);
+  const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now, events || [], register, tz);
   return team.plan().then(plan => {
     const names = makeNamer({ repo: config.repository, issues: c.issues, pulls: c.pulls, merged: c.merged, mergeLog: state.mergeLog, stateJobs: state.jobs });
     const queues = reasons(team, c, jobs, plan, states, names);
