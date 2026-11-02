@@ -27,7 +27,10 @@ test('resume is never offered without a session id or while the capability is un
   assert.equal(codex.command(cfg('unverified'), job, true).at(-1), '-');
 });
 
-test('claude resume: `--resume <id>` is appended only for a supported capability, a session id and a resume request', { skip: !fs.existsSync('/mnt/cache/cursor-workspace/ai-rules-live/adapters/generated/claude/unraid/CLAUDE.md') && 'governance rule file absent on this host' }, () => {
+test('claude resume: `--resume <id>` is appended only for a supported capability, a session id and a resume request', (t) => {
+  // The adapter reads the host governance rule file; stub only that read so the gate is pinned on any host (CI included).
+  const real = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (file, ...rest) => String(file).endsWith('/CLAUDE.md') ? 'rules' : real(file, ...rest));
   const c = (resume) => ({ command: ['claude'], manifest: { capabilities: { resume } }, arguments: [], resumeArguments: [] });
   const argv = claude.command(c('supported'), job, true);
   assert.deepEqual(argv.slice(-2), ['--resume', job.sessionId]);
