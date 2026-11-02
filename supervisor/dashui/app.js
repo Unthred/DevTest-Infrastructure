@@ -1,7 +1,7 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
 // scroll restoration (all saved per breakpoint, in this browser only). It reads nothing from the network and sends nothing.
-import { COPY_FEEDBACK_MS, ROW_STEP, applyLayout, breakpointOf, copyFeedback, copyMethods, dockFromPoint, effectiveDock, moveItem, resizeBox, restorableScroll } from './logic.mjs';
+import { COPY_FEEDBACK_MS, ROW_STEP, applyLayout, breakpointOf, copyFeedback, copyMethods, dockFromPoint, effectiveDock, moveItem, resizeBox, restorableScroll, sanitizeHidden, toggleSeries } from './logic.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -30,12 +30,26 @@ function tickClock() {
 }
 tickClock(); setInterval(tickClock, 1000);
 
-// legend toggles
-for (const fig of $$('figure.chart')) for (const b of $$('.legend button', fig.closest('.card') || fig)) {
-  b.addEventListener('click', () => {
-    const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on));
-    for (const el of $$(`[data-series="${CSS.escape(b.dataset.series)}"]`, fig)) el.classList.toggle('off', !on);
-  });
+// legend toggles (issue #160): one handler for every chart. A hidden series stays in the legend (struck through), clicking it
+// again shows it, the last visible series cannot be hidden, "Show all" appears while anything is hidden. The hidden set is
+// kept per viewer and page in localStorage and re-applied after the page's own refresh; "Reset layout" clears it.
+const legendKey = 'dash.legend.' + location.pathname;
+const legendState = () => { const v = store.get(legendKey); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; };
+for (const fig of $$('figure.chart')) {
+  const legend = $('.legend', fig); if (!legend) continue;
+  const id = fig.closest('.card')?.dataset.card || $('svg', fig)?.getAttribute('aria-label') || 'chart';
+  const buttons = $$('button[data-series]', legend), all = buttons.map(b => b.dataset.series);
+  const showAll = document.createElement('button'); showAll.type = 'button'; showAll.className = 'legend-all'; showAll.textContent = 'Show all'; legend.append(showAll);
+  let hidden = sanitizeHidden(legendState()[id], all);
+  const paint = () => {
+    for (const b of buttons) b.setAttribute('aria-pressed', String(!hidden.includes(b.dataset.series)));
+    for (const el of $$('[data-series]', fig)) if (!legend.contains(el)) el.classList.toggle('off', hidden.includes(el.dataset.series));
+    showAll.hidden = hidden.length === 0;
+  };
+  const save = () => { const st = legendState(); if (hidden.length) st[id] = hidden; else delete st[id]; if (Object.keys(st).length) store.set(legendKey, st); else store.del(legendKey); };
+  for (const b of buttons) b.addEventListener('click', () => { hidden = toggleSeries(hidden, b.dataset.series, all); paint(); save(); });
+  showAll.addEventListener('click', () => { hidden = []; paint(); save(); });
+  paint();
 }
 
 // expand a chart card to a modal
@@ -252,7 +266,7 @@ if (grid) {
       e.preventDefault(); setSize(c, d[0], d[1] * pitch(), d[2] * ROW_STEP, { span: spanOf(c), h: c.offsetHeight }); save();
     });
   }
-  $('[data-reset-layout]')?.addEventListener('click', () => { store.del(key()); location.reload(); });
+  $('[data-reset-layout]')?.addEventListener('click', () => { store.del(key()); store.del(legendKey); location.reload(); });
 }
 requestAnimationFrame(() => requestAnimationFrame(restoreScroll));
 
