@@ -566,7 +566,7 @@ export class Team {
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
       const interim = v?.interim === true && v.reviewer === author;
-      if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.carryOk(v, pr) && !this.reqHold?.has(pr.number) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
+      if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.carryOk(v, pr) && !this.reqHoldAll && !this.reqHold?.has(pr.number) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
         // Until D-024 is approved, an interim merge owes the opposite agent a post-merge review (D-021).
         actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job, ...(interim && !this.independenceApproved() ? { interim: true, branch: pr.headRefName, author } : {}) });
         break;
@@ -1452,17 +1452,23 @@ export class Team {
   // Before a merge: a PASS that was given against requirements that have since changed no longer counts (the head stays, a new
   // review runs); requirements that cannot be read now hold the merge this tick.
   async recheckRequirements(report) {
-    this.reqHold = new Set();
-    for (const pr of this.view?.prs || await this.gh.listPulls()) {
-      if (!SHA.test(pr.headRefOid)) continue;
-      const key = verdictKey(pr.number, pr.headRefOid), v = this.s.verdicts[key];
-      if (v?.verdict !== 'PASS' || !v.requirementsHash) continue;
+    // Fail closed: every PR with a hashed PASS is held before any I/O and released only once its requirements are confirmed
+    // unchanged (or its PASS withdrawn), so a failure part-way through never lets an unchecked PR merge.
+    this.reqHold = new Set(); this.reqHoldAll = true;
+    const prs = this.view?.prs || await this.gh.listPulls();
+    const hashed = pr => { const v = SHA.test(pr.headRefOid) ? this.s.verdicts[verdictKey(pr.number, pr.headRefOid)] : null; return v?.verdict === 'PASS' && v.requirementsHash ? v : null; };
+    for (const pr of prs) if (hashed(pr)) this.reqHold.add(pr.number);
+    this.reqHoldAll = false;
+    for (const pr of prs) {
+      const v = hashed(pr);
+      if (!v) continue;
+      const key = verdictKey(pr.number, pr.headRefOid);
       const cur = await this.trustedRequirements(pr.headRefName);
       if (!cur) { this.reqHold.add(pr.number); (report.skipped ||= []).push({ what: `requirements of PR #${pr.number}`, reason: 'could not be read; merge held' }); continue; }
-      if (cur.hash === v.requirementsHash) continue;
+      if (cur.hash === v.requirementsHash) { this.reqHold.delete(pr.number); continue; }
       delete this.s.verdicts[key]; delete this.s.secondOpinions[key];
       for (const k of Object.keys(this.s.reviewAttempts)) if (k.startsWith(key + ':')) delete this.s.reviewAttempts[k];
-      this.save();
+      this.save(); this.reqHold.delete(pr.number);
       const marker = `<!-- devtest-requirements-changed v1 pr=${pr.number} head=${pr.headRefOid} from=${v.requirementsHash.slice(0, 12)} to=${cur.hash.slice(0, 12)} -->`;
       if (!(await this.gh.hasComment?.(pr.number, marker))) await this.gh.comment(pr.number, `${marker}\nThe requirements of issue #${cur.issue} changed after the PASS for \`${shortCommit(pr.headRefOid)}\`. That PASS no longer counts; the head is reviewed again against the current requirements before it can merge.`);
       (report.ingested ||= []).push({ pr: pr.number, requirementsChanged: true });

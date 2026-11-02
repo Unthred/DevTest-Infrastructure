@@ -157,3 +157,18 @@ test('fix and CI-fix jobs get the same requirements', async t => {
     assert.match(data, /ALPHA/); assert.match(data, /BETA/); assert.doesNotMatch(data, /STRANGER-TEXT/);
   }
 });
+
+test('a failure part-way through the recheck still holds every PR that was not checked yet', async t => {
+  const w = reqWorld(t, { pulls: [pr(77, 'claude/issue-72-x', H(5)), pr(78, 'claude/issue-73-y', H(6))] }); await startReview(w);
+  await finish(w, { verdict: 'PASS', requirements: [ok], descriptionClaims: [] });
+  const v77 = w.team.s.verdicts['77:' + H(5)];
+  w.team.s.verdicts['78:' + H(6)] = { ...v77 };
+  const real = w.team.trustedRequirements.bind(w.team);
+  w.team.trustedRequirements = async b => { if (b.includes('issue-72')) throw new Error('gh down mid-loop'); return real(b); };
+  await assert.rejects(() => w.team.recheckRequirements({ ingested: [], skipped: [] }), /mid-loop/);
+  const acts = await w.team.plan();
+  assert.equal(acts.some(a => a.type === 'merge' && (a.pr === 77 || a.pr === 78)), false, 'neither unchecked PASS merges');
+  // once the recheck completes and confirms the requirements, the hold is released
+  w.team.trustedRequirements = real; await w.team.recheckRequirements({ ingested: [], skipped: [] });
+  assert.equal(w.team.reqHold.has(77), false);
+});
