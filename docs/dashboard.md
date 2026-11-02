@@ -53,3 +53,14 @@ Copy buttons (all pages): next to every command shown, job and commit IDs (the f
 The page is served over plain HTTP on the LAN, which is not a secure context, so the Clipboard API is usually unavailable. The script copies through a selected textarea and `execCommand('copy')`; if that fails it opens a dialog with the text selected. The button shows "Copied" (or "Select and copy") for 1.6 s and announces it through a live region. The buttons are hidden until the script runs. Phone: 44 px copy targets, full-width overseer buttons, stacked facts.
 
 Gate: `tests/dashboard-supervisor.test.mjs` (unit, handler and fake-DOM tests); on Tower, `ionice -c 3 nice -n 19 node tests/supervisor-page-smoke.mjs` renders the pages from a fixture and runs the #6 layout audit at all eight standard widths in the pinned Playwright container (evidence under `/mnt/cache/appdata/devtest-infrastructure/evidence/issue-72/`).
+
+## Estimated finish time (issue #156)
+
+Each queued issue and open PR shows `est. HH:MM–HH:MM` (p50–p90) on the Next panel, the Work queues and the agent queue table, and `team status` prints the same text under "Estimated finish". Hovering shows the basis. The estimate is computed by `supervisor/estimate.mjs` from Foreman's own records only (no model or GitHub call):
+
+- Step durations (implement, continue, review, fix, ci-fix, rebase) are the recorded `updatedAt - createdAt` of completed jobs; "CI" is the gap between a producing job ending and the next review of that PR starting. Percentiles are nearest-rank.
+- Fix rounds: the chance is the share of reviewed PRs that got a CHANGES verdict. The p50 path includes a fix round (fix, CI, re-review) at 50% or more, the p90 path at 10% or more.
+- Items are placed in queue order into the role slots and the overall cap; running jobs hold their slot for the rest of their typical time; the merge happens on the next tick.
+- If an agent is out of allowance, or its forecast runs out before a step would start, that step moves to the reset time and the estimate says "(after Wed 07:18 reset)".
+- Known waits are listed with their own time: CI running, the allowance reset, and the self-upgrade rate limit ("upgrade waiting, next try 22:30").
+- A step type with fewer than 5 recorded jobs shows "no estimate yet" rather than a guess.
