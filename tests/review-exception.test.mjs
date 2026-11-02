@@ -192,3 +192,9 @@ test('fix rounds spent before the exception began do not stop the Sonnet fix of 
   assert.equal(w.team.s.exceptionFixes[77], 1);
   assert.equal(w.team.s.fixAttempts[vk], 1);
 });
+
+test('shipped team.json lists exactly the five approved PRs, all expiring 9 Nov 2026 (D-027)', () => {
+  const shipped = JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
+  assert.deepEqual(shipped.review_exception.prs.map(e => e.pr).sort((a, b) => a - b), [137, 216, 217, 222, 234]);
+  for (const e of shipped.review_exception.prs) assert.equal(Date.parse(e.expires_at), Date.parse('2026-11-09T00:00:00Z'));
+});
