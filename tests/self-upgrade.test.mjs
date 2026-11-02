@@ -269,7 +269,7 @@ test('a failing rollback is reported as such and still latches', async t => {
   assert.equal(w.records()[0].result, 'rollback_failed'); assert.ok(w.up.latch());
 });
 
-test('rate limit: at most one automatic upgrade per hour', async t => {
+test('rate limit: a short cooldown (2 minutes) after an install, not an hour (issue #353)', async t => {
   const w = world(t);
   assert.equal(await w.up.step(), 'upgraded');
   await w.up.verifyPending({ running: TO, ok: true });
@@ -278,6 +278,23 @@ test('rate limit: at most one automatic upgrade per hour', async t => {
   assert.equal(await w.up.step(), 'rate-limited'); assert.deepEqual(w.log, []);
   w.state.now += 1;
   assert.equal(await w.make().step(), 'upgraded');
+});
+
+test('issue #353: a second merge installs within minutes of the first verified install, not after an hour', async t => {
+  assert.ok(MIN_UPGRADE_INTERVAL_MS <= 5 * 60 * 1000);
+  const w = world(t);
+  assert.equal(await w.up.step(), 'upgraded');
+  await w.up.verifyPending({ running: TO, ok: true });
+  w.state.installed = TO; w.state.target = H('9');
+  w.state.now += 5 * 60 * 1000;
+  assert.equal(await w.make().step(), 'upgraded');
+});
+
+test('issue #353: the short cooldown does not bypass verification of an unverified install, or the busy wait', async t => {
+  const w = world(t);
+  assert.equal(await w.up.step(), 'upgraded');
+  w.state.installed = TO; w.state.target = H('9'); w.state.now += 10 * 60 * 1000; w.log.length = 0;
+  assert.equal(await w.make().step(), 'awaiting-verification'); assert.deepEqual(w.log, []);
 });
 
 test('an alert channel that throws never breaks the upgrade decision, and is not retried every tick', async t => {

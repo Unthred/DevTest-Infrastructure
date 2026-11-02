@@ -15,7 +15,9 @@ import { makeNamer, shortCommit } from './naming.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 export const QUIET_MAX_WAIT_MS = 30 * 60 * 1000;
-export const MIN_UPGRADE_INTERVAL_MS = 60 * 60 * 1000;
+// Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
+// A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
+export const MIN_UPGRADE_INTERVAL_MS = 2 * 60 * 1000;
 export const VERIFY_MAX_WAIT_MS = 60 * 60 * 1000;
 // An environmental failure (clone, fetch, checkout or GitHub unreachable) is retried with backoff and never latches a commit (#69, #101):
 // the first retry after ENV_RETRY_MS, doubling each time up to ENV_RETRY_MAX_MS. Only a failed validator or test run latches.

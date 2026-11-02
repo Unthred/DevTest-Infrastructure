@@ -63,11 +63,11 @@ function upgrader(t, state) {
 }
 
 test('while rate-limited, main is still refreshed each tick and the header shows N commits behind with the next try', async t => {
-  const state = { now: Date.now() - 10 * 60000, installed: H(1), main: H(1), behind: 0 };
+  const state = { now: Date.now() - 20000, installed: H(1), main: H(1), behind: 0 };
   const { dir, up } = upgrader(t, state);
-  up.s.lastUpgradeAt = state.now - 60000; up.save();
+  up.s.lastUpgradeAt = state.now - 10000; up.save();
   assert.equal(await up.step(), 'rate-limited');
-  state.main = H(2); state.behind = 2; state.now += 60000;
+  state.main = H(2); state.behind = 2; state.now += 30000;
   assert.equal(await up.step(), 'rate-limited');
   const saved = JSON.parse(fs.readFileSync(path.join(dir, 'team', 'self-upgrade.json'), 'utf8'));
   assert.deepEqual([saved.main.sha, saved.main.behind], [H(2), 2]);
