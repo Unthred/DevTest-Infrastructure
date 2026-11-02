@@ -559,7 +559,6 @@ export class Team {
   }
   // Open issues in no agent's list, in number order: eligible for whichever agent has a free slot (issue #212). Config only orders and assigns.
   unlisted() {
-    if (this.missingLabels?.length) return [];
     const listed = new Set(this.agents().flatMap(([a]) => this.issuesOf(a)));
     return (this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)).map(i => i.number).sort((a, b) => a - b);
   }
@@ -822,10 +821,21 @@ export class Team {
     this.delivered = new Set();
     this.merged = await (this.gh.listMergedPulls?.() ?? []);
     this.refreshTitles(prs, issues, this.merged);
-    // Fail closed (issue #212 review): unlisted issues are auto-eligible only once the repository has every excluding label, so a
-    // missing label can never let an epic or tracking issue be dispatched. An adapter without listLabels does not gate.
-    const labels = this.gh.listLabels ? await this.gh.listLabels() : null;
-    this.missingLabels = labels ? EXCLUDING_LABELS.filter(l => !labels.includes(l)) : [];
+    // A PR referenced by a follow-up that is in neither list may have merged outside the bounded merged window: ask GitHub for its
+    // state (cached per Team) and only call it closed-unmerged when GitHub says so (issue #212 review).
+    this.knownMerged ??= new Set();
+    const openNos = new Set(prs.map(p => p.number)), seen = new Set(this.merged.map(m => m.number));
+    for (const i of issues) {
+      if (i.state !== 'OPEN') continue;
+      for (const p of i.pullPrerequisites ?? pullPrerequisites(i.title, i.body)) {
+        if (openNos.has(p) || seen.has(p)) continue;
+        if (!this.knownMerged.has(p)) {
+          let st = null; try { st = String((await this.gh.getMergedPull?.(p))?.state || '').toUpperCase(); } catch { st = null; }
+          if (st === 'MERGED') this.knownMerged.add(p); else if (st !== 'CLOSED') { seen.add(p); continue; }   // no lookup available: keep the listed-window inference
+        }
+        if (this.knownMerged.has(p)) { this.merged.push({ number: p, headRefName: '', closingIssuesReferences: [] }); seen.add(p); }
+      }
+    }
     for (const m of this.merged) {
       for (const r of m.closingIssuesReferences || []) if (Number.isSafeInteger(r.number)) this.delivered.add(r.number);
       const b = /\/issue-(\d+)(\D|$)/.exec(m.headRefName || '');

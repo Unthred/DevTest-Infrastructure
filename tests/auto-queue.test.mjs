@@ -85,10 +85,16 @@ test('prerequisites parse the "Prerequisites (note):" form', () => {
   assert.deepEqual(pullPrerequisites('x', '**Prerequisites (wait):** PR #9'), [9]);
 });
 
-test('fails closed: unlisted issues wait while an excluding label is missing from the repository', async t => {
+test('an issue is eligible even when excluding labels do not exist in the repository', async t => {
   const w = world(t, { issues: [issue(7)] });
-  w.team.gh.listLabels = async () => ['epic', 'tracking'];
-  assert.deepEqual(implemented(await w.team.plan()), []);
-  w.team.gh.listLabels = async () => EXCLUDING_LABELS;
+  w.team.gh.listLabels = async () => [];
   assert.deepEqual(implemented(await w.team.plan()), [7]);
+});
+
+test('a follow-up whose PR merged outside the bounded merged list becomes eligible; a CLOSED PR does not', async t => {
+  const w = world(t, { issues: [issue(7, 'Follow-up to PR #3'), issue(8, 'Follow-up to PR #4')] });
+  w.team.gh.getMergedPull = async n => ({ number: n, state: n === 3 ? 'MERGED' : 'CLOSED' });
+  assert.deepEqual(implemented(await w.team.plan()), [7]);
+  const ex = w.team.exclusion(8, new Map(w.team.view.issues.map(i => [i.number, i])), []);
+  assert.equal(ex.kind, 'pr-closed');
 });
