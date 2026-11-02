@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, atomicJson, processStart } from './core.mjs';
+import { stallCheck, stallLimitMs } from './stall.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { redact } from './redact.mjs';
@@ -24,6 +25,7 @@ export function validateTeamConfig(c) {
     throw new SupervisorError('invalid team config: schema, repository or paths');
   const L = c.limits || {};
   for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
+  if ('stall_hours' in L && !(typeof L.stall_hours === 'number' && L.stall_hours > 0 && L.stall_hours <= 720)) throw new SupervisorError('invalid team limit: stall_hours');
   normalizeRoleLimits(c);
   validateUnblockLimits(L.unblock);
   validateSelfUpgrade(c.self_upgrade);
@@ -367,7 +369,7 @@ export class Team {
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -827,6 +829,7 @@ export class Team {
       actions = actions.filter(a => a.type === 'merge');
     }
     report.actions = actions;
+    if (!dryRun) await this.checkStalls(report);
     if (this.modes) report.allowance = Object.fromEntries(Object.entries(this.modes).map(([n, m]) => [n, { mode: m.mode, reason: m.reason, until: m.until, ...(this.held[n] ? { held: this.held[n] } : {}) }]));
     if (dryRun) return report;
     for (const act of actions) await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
@@ -834,6 +837,56 @@ export class Team {
     return report;
   }
 
+  // Issue #259: read-only stall check. Independent of the planner: an error here is recorded (the dashboard reports it) and never
+  // stops the tick or any dispatch. It writes only this.s.progress and this.s.stalls.
+  async checkStalls(report) {
+    const now = this.clock.now();
+    try {
+      const prs = this.view?.prs;
+      if (!Array.isArray(prs)) throw new Error('no pull request list from this tick');
+      const active = await this.jobs.listActive();
+      const byNo = new Map(prs.map(p => [p.number, p]));
+      const running = new Set();
+      for (const a of active) { const j = this.s.jobs[a.id]; if (j?.pr && byNo.has(j.pr)) running.add(j.pr); else if (j?.branch) for (const p of prs) if (p.headRefName === j.branch) running.add(p.number); }
+      const verdictOf = n => Object.entries(this.s.verdicts).filter(([k, v]) => k.startsWith(n + ':') && Number.isFinite(v?.at)).map(([, v]) => v).sort((a, b) => b.at - a.at)[0] || null;
+      const lastJobOf = n => { const pr = byNo.get(n); const j = Object.values(this.s.jobs).filter(x => (x.pr === n || (x.branch && pr && x.branch === pr.headRefName)) && Number.isFinite(x.at)).sort((a, b) => b.at - a.at)[0]; return j ? { kind: j.kind, status: j.ingested ? 'ended' : 'ran', at: j.at } : null; };
+      const r = stallCheck({ prev: this.s.progress, prs, running, verdictOf, lastJobOf, reasonsOf: pr => this.stallReasons(pr), now, limitMs: stallLimitMs(this.c.limits) });
+      this.s.progress = r.progress;
+      this.s.stalls = { checkedAt: now, items: r.items };
+      if (r.items.length) report.stalled = r.items.map(i => i.pr);
+    } catch (error) {
+      const message = String(error?.message || error).slice(0, 200);
+      this.s.stalls = { checkedAt: now, items: [], error: message };
+      (report.skipped ||= []).push({ what: 'stall check', reason: message });
+    }
+  }
+  // Every current reason this open PR is not moving, as { code, text } (the code groups PRs that share a reason; the text names no PR).
+  // An empty list means Foreman knows no reason, which is itself reported as a bug.
+  stallReasons(pr) {
+    const out = [], add = (code, text) => out.push({ code, text });
+    const author = agentOfBranch(this.c, pr.headRefName);
+    if (pr.labels?.includes('needs-homeowner')) add('needs-homeowner', 'labelled needs-homeowner');
+    if (!author) { add('homeowner', 'waiting for the homeowner to merge or decide (not a Foreman branch; Foreman does not act on it)'); return out; }
+    const ci = this.ciState(pr), key = verdictKey(pr.number, pr.headRefOid), v = this.s.verdicts[key];
+    if (ci === 'red') add('ci-red', 'CI is failing'); else if (ci === 'pending') add('ci-pending', 'CI has not finished'); else if (ci === 'none') add('ci-none', 'no CI result is reported');
+    if (pr.mergeable === 'CONFLICTING') add('conflict', 'it conflicts with the base branch');
+    if (v?.verdict === 'CHANGES') { add('changes', 'the reviewer asked for changes'); if (this.fixCount(pr.number) >= this.c.limits.max_fix_attempts) add('fix-limit', 'the fix-round limit is reached'); }
+    if (!v) {
+      for (const [agent] of this.agents()) {
+        const refusal = this.reviewRefusal(agent, pr, key + ':' + agent);
+        if (refusal) add('review-refused-' + agent, 'no independent review: ' + refusal.replace(/PR #\d+/g, 'this PR'));
+        else if (this.held[agent]?.review) add('review-held-' + agent, this.held[agent].review);
+        if ((this.s.reviewAttempts[key + ':' + agent] || 0) >= this.c.limits.max_review_attempts) add('review-attempts-' + agent, agent + ' used all its review attempts at this head');
+      }
+    }
+    if (v?.verdict === 'PASS') {
+      if (this.waitingOnDecision([pr]).length) add('decision', 'a PASS is held until the independence decision is homeowner-approved');
+      if (this.c.second_opinion && this.secondOpinionPending(pr)) add('second-opinion', 'waiting for the second-opinion review');
+      if (pr.mergeable && pr.mergeable !== 'MERGEABLE' && pr.mergeable !== 'CONFLICTING') add('not-mergeable', 'GitHub reports it as ' + String(pr.mergeable).toLowerCase());
+      if (!out.length) add('merge-pending', 'reviewed and green; waiting for the dispatcher to merge it');
+    }
+    return out;
+  }
   // Issue #152: post-merge reviews are no longer queued. Entries queued earlier are dropped unless the merged PR touched the
   // second-opinion paths and a second_opinion reviewer is configured; those run as a second opinion. An unreadable file list keeps the entry.
   async pruneLegacyPostMerge(report) {
