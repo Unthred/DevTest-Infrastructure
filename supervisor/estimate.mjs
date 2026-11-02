@@ -14,6 +14,7 @@
 //    the agent's reset time and the estimate says so.
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 import { checksState } from './team.mjs';
+import { REVIEWS_ONLY_TYPES } from './budget.mjs';
 
 export const MIN_SAMPLES = 5;
 export const TICK_MS = 5 * 60000;
@@ -73,8 +74,8 @@ export function allowanceGates(budget = {}, now) {
   for (const [agent, b] of Object.entries(budget)) {
     if (!b) continue;
     const reset = Number.isFinite(b.until) ? b.until : Number.isFinite(b.resetsAt) ? b.resetsAt : null;
-    if (b.mode && b.mode !== 'normal' && reset > now) out[agent] = { from: now, until: reset, mode: b.mode, implementerOnly: b.mode === 'reviews_only' };
-    else if (Number.isFinite(b.runsOutAt) && Number.isFinite(b.resetsAt) && b.runsOutAt < b.resetsAt && b.resetsAt > now) out[agent] = { from: Math.max(now, b.runsOutAt), until: b.resetsAt, mode: 'forecast', implementerOnly: false };
+    if (b.mode && b.mode !== 'normal' && reset > now) out[agent] = { from: now, until: reset, mode: b.mode, reviewsOnly: b.mode === 'reviews_only' };
+    else if (Number.isFinite(b.runsOutAt) && Number.isFinite(b.resetsAt) && b.runsOutAt < b.resetsAt && b.resetsAt > now) out[agent] = { from: Math.max(now, b.runsOutAt), until: b.resetsAt, mode: 'forecast', reviewsOnly: false };
   }
   return out;
 }
@@ -166,7 +167,7 @@ export function estimateQueue({ queues = {}, pulls = [], jobs = [], state = {}, 
         const ri = take(roleFree[role]), oi = take(overallFree);
         let s0 = Math.max(t, roleFree[role][ri], overallFree[oi]);
         const g = gates[who];
-        if (g && s0 >= g.from && s0 < g.until && !(g.implementerOnly && role === 'reviewer')) { s0 = g.until; moved ??= { agent: who, at: g.until, mode: g.mode }; }
+        if (g && s0 >= g.from && s0 < g.until && !(g.reviewsOnly && (s === 'interim-review' || REVIEWS_ONLY_TYPES.has(s)))) { s0 = g.until; moved ??= { agent: who, at: g.until, mode: g.mode }; }
         start ??= s0;
         t = s0 + d; roleFree[role][ri] = t; overallFree[oi] = t;
       });

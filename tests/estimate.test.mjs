@@ -178,3 +178,22 @@ test('the dashboard shows the estimate on Next and queue rows with the basis on 
   const agent = renderRoute(view, { page: 'agent', id: 'claude' }).html;
   assert.match(agent, /Est\. finish/);
 });
+
+test('a reviews_only author is not delayed for fix, CI fix or rebase steps', () => {
+  const h = history();
+  for (let i = 0; i < 5; i++) {
+    const id = hex(900 + i), at = NOW - (10 + i) * 60 * MIN;
+    h.jobs.push({ id, provider: 'claude', kind: 'cifix', issue: 100 + i, status: 'completed', createdAt: at, updatedAt: at + 12 * MIN });
+    h.state.jobs[id] = { kind: 'cifix', pr: 100 + i };
+  }
+  const red = { number: 42, title: 'pr 42', headRefName: 'claude/issue-42-x', headRefOid: 'b'.repeat(40), mergeable: 'MERGEABLE', isDraft: false, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] };
+  const q = { claude: [{ type: 'pr', ref: 42, title: 'pr 42', reason: 'x', next: false }], codex: [] };
+  const reset = NOW + 72 * 3600000;
+  const run = budget => estimateQueue({ queues: q, pulls: [red], budget, config: config(), now: NOW, tz: 'UTC', ...h }).items['pr:42'];
+  const normal = run({}), only = run({ claude: { mode: 'reviews_only', until: reset, resetsAt: reset } });
+  assert.equal(normal.status, only.status);
+  assert.deepEqual(only.finish, normal.finish);
+  assert.doesNotMatch(only.text, /reset/);
+  // implement steps are still held to the reset
+  assert.ok(est({ budget: { claude: { mode: 'reviews_only', until: reset, resetsAt: reset } } }).items['issue:30'].finish.p50 > reset);
+});
