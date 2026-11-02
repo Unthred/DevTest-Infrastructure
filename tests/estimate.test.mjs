@@ -197,3 +197,48 @@ test('a reviews_only author is not delayed for fix, CI fix or rebase steps', () 
   // implement steps are still held to the reset
   assert.ok(est({ budget: { claude: { mode: 'reviews_only', until: reset, resetsAt: reset } } }).items['issue:30'].finish.p50 > reset);
 });
+
+// ---- review follow-ups for PR #174: every exempt step type is covered, and forecast gates stay strict
+const prRow = (n, extra = {}) => ({ number: n, title: `pr ${n}`, headRefName: `claude/issue-${n}-x`, headRefOid: 'b'.repeat(40), mergeable: 'MERGEABLE', isDraft: false, statusCheckRollup: green, ...extra });
+const prQueue = n => ({ claude: [{ type: 'pr', ref: n, title: `pr ${n}`, reason: 'x', next: false }], codex: [] });
+const runPr = (pull, budget, h = history()) => estimateQueue({ queues: prQueue(pull.number), pulls: [pull], budget, config: config(), now: NOW, tz: 'UTC', ...h }).items[`pr:${pull.number}`];
+const RESET = NOW + 72 * 3600000;
+const onlyBudget = { claude: { mode: 'reviews_only', until: RESET, resetsAt: RESET } };
+
+test('a reviews_only author is not delayed for a fix step after a CHANGES verdict', () => {
+  const h = history();
+  h.state.verdicts[`43:${'b'.repeat(40)}`] = { verdict: 'CHANGES', reviewer: 'codex', at: NOW };
+  const normal = runPr(prRow(43), {}, h), only = runPr(prRow(43), onlyBudget, h);
+  assert.match(only.basis[1], /: fix → CI → review/);
+  assert.equal(only.status, 'estimated');
+  assert.deepEqual(only.finish, normal.finish);
+  assert.doesNotMatch(only.text, /reset/);
+});
+
+test('the p90 extra fix round is not delayed for a reviews_only author', () => {
+  const h = history();   // 20% fix chance: p90 adds fix, ci, review after the review
+  const normal = runPr(prRow(44), {}, h), only = runPr(prRow(44), onlyBudget, h);
+  assert.match(only.basis[1], /p90 adds a fix round/);
+  assert.deepEqual(only.finish, normal.finish);
+  assert.ok(only.finish.p90 < RESET);
+});
+
+test('every step name the estimate simulates for a PR is classified by the budget gate sets', async () => {
+  const { REVIEWS_ONLY_TYPES } = await import('../supervisor/budget.mjs');
+  // rebase is not simulated (a conflicting PR has no estimate path) but admits() holds it exempt; implement/continue are held
+  for (const s of ['review', 'fix', 'cifix', 'rebase']) assert.ok(REVIEWS_ONLY_TYPES.has(s), s);
+  for (const s of ['implement', 'continue']) assert.ok(!REVIEWS_ONLY_TYPES.has(s), s);
+  const conflicting = runPr(prRow(45, { mergeable: 'CONFLICTING' }), onlyBudget);
+  assert.equal(conflicting.status, 'estimated');   // PASS verdict absent: waits for a review, no rebase step in the chain
+});
+
+test('a forecast gate holds every step, reviews included, to the reset', async () => {
+  const { allowanceGates } = await import('../supervisor/estimate.mjs');
+  const g = allowanceGates({ claude: { runsOutAt: NOW, resetsAt: RESET } }, NOW).claude;
+  assert.equal(g.mode, 'forecast');
+  assert.equal(g.reviewsOnly, false);
+  const gates = allowanceGates({ codex: { runsOutAt: NOW, resetsAt: RESET } }, NOW);
+  const e = runPr(prRow(46), { codex: { runsOutAt: NOW, resetsAt: RESET } });
+  assert.ok(e.finish.p50 > RESET, 'the codex review waits for the reset under a forecast');
+  assert.equal(gates.codex.reviewsOnly, false);
+});

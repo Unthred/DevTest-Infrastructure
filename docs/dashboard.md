@@ -62,6 +62,7 @@ Each queued issue and open PR shows `est. HH:MM–HH:MM` (p50–p90) on the Next
 - Fix rounds: the chance is the share of reviewed PRs that got a CHANGES verdict. The p50 path includes a fix round (fix, CI, re-review) at 50% or more, the p90 path at 10% or more.
 - Items are placed in queue order into the role slots and the overall cap; running jobs hold their slot for the rest of their typical time; the merge happens on the next tick.
 - If an agent is out of allowance, or its forecast runs out before a step would start, that step moves to the reset time and the estimate says "(after Wed 07:18 reset)".
+  A forecast stands for running out completely, so it holds every step, reviews included, to the reset. An agent in `reviews_only` mode keeps its review, fix, CI fix and rebase steps and only its implement and continue steps move.
 - Known waits are listed with their own time: CI running, the allowance reset, and the self-upgrade rate limit ("upgrade waiting, next try 22:30").
 - A step type with fewer than 5 recorded jobs shows "no estimate yet" rather than a guess.
 

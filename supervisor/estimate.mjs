@@ -75,7 +75,7 @@ export function allowanceGates(budget = {}, now) {
     if (!b) continue;
     const reset = Number.isFinite(b.until) ? b.until : Number.isFinite(b.resetsAt) ? b.resetsAt : null;
     if (b.mode && b.mode !== 'normal' && reset > now) out[agent] = { from: now, until: reset, mode: b.mode, reviewsOnly: b.mode === 'reviews_only' };
-    else if (Number.isFinite(b.runsOutAt) && Number.isFinite(b.resetsAt) && b.runsOutAt < b.resetsAt && b.resetsAt > now) out[agent] = { from: Math.max(now, b.runsOutAt), until: b.resetsAt, mode: 'forecast', reviewsOnly: false };
+    else if (Number.isFinite(b.runsOutAt) && Number.isFinite(b.resetsAt) && b.runsOutAt < b.resetsAt && b.resetsAt > now) out[agent] = { from: Math.max(now, b.runsOutAt), until: b.resetsAt, mode: 'forecast', reviewsOnly: false };   // deliberate: a forecast stands for running out completely, so reviews are held to the reset too (unlike reviews_only mode)
   }
   return out;
 }
