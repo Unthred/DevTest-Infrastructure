@@ -491,7 +491,7 @@ export class Team {
   }
   independenceApproved() { return decisionApproved(this.register, INDEPENDENCE_DECISION); }
   // Issue #318 (proposal D-027): the review exception for a listed pull request number, or null. Null for every unlisted PR, an expired or
-  // ended entry, and while D-026 is not homeowner-approved, so D-024 is untouched for all of those.
+  // ended entry, and while D-027 is not homeowner-approved, so D-024 is untouched for all of those.
   // Issue #318: a PASS recorded under the exception route is only valid while the exception is active; once it ends, expires or loses
   // its approval, D-024 comes back and the PR needs a normal review (the stale PASS neither merges nor blocks that review).
   staleExceptionPass(v, n) { return v?.verdict === 'PASS' && !!v.exceptionStage && !this.exceptionFor(n); }

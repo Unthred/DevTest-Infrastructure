@@ -11,7 +11,7 @@ const H = n => String(n).repeat(40).slice(0, 40);
 const NOW = Date.now();   // config validation reads the wall clock; the Team clock is fixed at this value
 const DAY = 86400000;
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
-const REG = (ex = 'homeowner-approved') => `## D-020 — x\n- Status: homeowner-approved\n\n## D-024 — z\n- Status: homeowner-approved\n\n## D-026 — e\n- Status: ${ex}\n`;
+const REG = (ex = 'homeowner-approved') => `## D-020 — x\n- Status: homeowner-approved\n\n## D-024 — z\n- Status: homeowner-approved\n\n## D-027 — e\n- Status: ${ex}\n`;
 const exception = (over = {}) => ({ agent: 'claude', full_review: { model: 'opus', effort: 'medium' }, commit_review: { model: 'sonnet', effort: 'medium' },
   prs: [{ pr: 77, expires_at: new Date(NOW + 5 * DAY).toISOString() }], ...over });
 const config = (over = {}) => ({

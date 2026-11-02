@@ -1,6 +1,6 @@
 // One-off homeowner review exception for named pull requests (issue #318, proposal D-027). Pure helpers; the dispatcher (team.mjs)
 // applies them. The exception never changes D-024 for an unlisted pull request: every function here answers "no" for a PR that is
-// not listed, whose entry has expired or ended, or while D-026 is not homeowner-approved.
+// not listed, whose entry has expired or ended, or while D-027 is not homeowner-approved.
 import { SupervisorError } from './core.mjs';
 
 export const EXCEPTION_DECISION = 'D-027';
