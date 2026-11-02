@@ -758,17 +758,44 @@ export class Team {
   // Issue #250: the cap on open unmerged PRs (limits.max_open_prs; absent = no cap). At or above it no new implement job starts, so
   // the implementer slot takes repair or review work instead. Returns { open, cap } while paused, else null. Drafts count: they are
   // unmerged work too. Only PRs of configured agents are counted.
-  pauseInfo(prs) {
+  // Issue #320: a PR that cannot move until something outside the cap happens is parked and not counted: it is labelled
+  // needs-homeowner, its PASS is held on a homeowner decision, or its issue has an open prerequisite that has no PR yet (so only a
+  // new implement job, which the cap would block, can unblock it). Otherwise such PRs could fill the cap and nothing could clear it.
+  parkedReason(pr, issueByNo, prs) {
+    if (pr.labels?.includes('needs-homeowner')) return 'needs-homeowner';
+    if (this.waitingOnDecision([pr]).length) return 'decision';
+    const m = /\/issue-(\d+)(\D|$)/.exec(pr.headRefName || ''), issue = m ? issueByNo?.get(Number(m[1])) : null;
+    if (!issue) return null;
+    const deps = this.c.depends_on_overrides?.[issue.number] ?? issue.prerequisites ?? prerequisites(issue.body);
+    const open = deps.find(d => issueByNo.get(d)?.state === 'OPEN' && !prs.some(p => p !== pr && agentOfBranch(this.c, p.headRefName) && new RegExp('/issue-' + d + '(\\D|$)').test(p.headRefName)));
+    return open ? 'waits-on-#' + open : null;
+  }
+  pauseInfo(prs, issues = this.view?.issues) {
     const cap = this.c.limits.max_open_prs;
     if (!Number.isSafeInteger(cap)) return null;
-    const open = (prs || []).filter(p => agentOfBranch(this.c, p.headRefName)).length;
-    return open >= cap ? { open, cap } : null;
+    const issueByNo = new Map((issues || []).map(i => [i.number, i]));
+    const mine = (prs || []).filter(p => agentOfBranch(this.c, p.headRefName));
+    const counted = mine.filter(p => !this.parkedReason(p, issueByNo, prs));
+    return counted.length >= cap ? { open: counted.length, cap, ...(mine.length > counted.length ? { parked: mine.length - counted.length } : {}) } : null;
   }
-  pauseText(prs) { const p = this.pauseInfo(prs); return p ? `Paused new work: ${p.open} open PRs (cap ${p.cap})` : null; }
+  pauseText(prs, issues) { const p = this.pauseInfo(prs, issues); return p ? `Paused new work: ${p.open} open PRs (cap ${p.cap})${p.parked ? `; ${p.parked} more waiting on you or an unstarted issue are not counted` : ''}` : null; }
+  // Issue #320: the cap blocks new work and none of the counted PRs can move on its own (each has a reason that needs the
+  // homeowner). Returns the PRs and the cap, or null.
+  capDeadlock(prs, issues = this.view?.issues) {
+    const info = this.pauseInfo(prs, issues);
+    if (!info) return null;
+    const issueByNo = new Map((issues || []).map(i => [i.number, i]));
+    const MOVES = new Set(['ci-pending', 'merge-pending', 'conflict', 'ci-red', 'changes']);
+    const counted = (prs || []).filter(p => agentOfBranch(this.c, p.headRefName) && !this.parkedReason(p, issueByNo, prs));
+    // A review-* reason only stalls a PR when no agent can review it (unreviewable); another agent may still be able to.
+    const moves = p => p.isDraft || (this.stallReasons(p).filter(r => !r.code.startsWith('review-')).every(r => MOVES.has(r.code)) && !this.unreviewable([p]).length);
+    if (counted.some(moves)) return null;
+    return { prs: counted.map(p => p.number), cap: info.cap };
+  }
 
   choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
     const L = this.c.limits;
-    const paused = !!this.pauseInfo(prs);
+    const paused = !!this.pauseInfo(prs, [...issueByNo.values()]);
     // While new work is paused the implementer slot also takes reviews (review independence, D-024, is still checked below).
     const impl = role !== 'reviewer', rev = role !== 'implementer' || (paused && !implementOnly);
     const repair = impl && !implementOnly;

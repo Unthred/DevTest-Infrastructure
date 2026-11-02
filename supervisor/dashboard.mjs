@@ -559,7 +559,10 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     // Issue #153: a failed config migration stops the ticks until the homeowner fixes team.local.json
     { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and this tick was skipped: ${f.error}. team.local.json was not changed. After a self-upgrade the previous version may be back in place and still ticking.`, 300), ref: null, severity: 'action' }); }
     // Issue #250: new implement jobs are paused while open PRs are at or above limits.max_open_prs; the item clears when they fall below.
-    { const text = team.pauseText(c.pulls || []); if (text) attention.push({ id: 'paused-new-work', text, ref: null, severity: 'info' }); }
+    { const text = team.pauseText(c.pulls || [], c.issues || []); if (text) attention.push({ id: 'paused-new-work', text, ref: null, severity: 'info' });
+      // Issue #320: the cap blocks all new work and no open PR can progress: one Needs you item names the PRs and the choices.
+      const dl = team.capDeadlock(c.pulls || [], c.issues || []);
+      if (dl) attention.push({ id: 'cap-deadlock', text: `New work is stuck at the open-PR cap (${dl.cap}) and none of these ${dl.prs.length} open PRs can move on its own: ${dl.prs.map(n => '#' + n).join(', ')}.`, ref: null, severity: 'action', action: 'Choose one: merge or close one of these PRs, resolve what each is waiting on, or raise limits.max_open_prs in team.local.json.' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
     // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.
