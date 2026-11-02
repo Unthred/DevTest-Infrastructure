@@ -30,11 +30,12 @@ export function matchRoute(pathname) {
   if ((m = /^\/agents\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'agent', id: m[1] };
   if ((m = /^\/work\/pr\/(\d{1,9})$/.exec(p))) return { page: 'pr', id: Number(m[1]) };
   if ((m = /^\/work\/issue\/(\d{1,9})$/.exec(p))) return { page: 'issue', id: Number(m[1]) };
+  if ((m = /^\/work\/job\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'job', id: m[1].slice(0, 8) };
   if (p === '/supervisor/ticks') return { page: 'ticks' };
   if (p === '/supervisor/upgrades') return { page: 'upgrades' };
   return null;
 }
-const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', ticks: 'supervisor', upgrades: 'supervisor' })[page] || page;
+const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', job: 'work', ticks: 'supervisor', upgrades: 'supervisor' })[page] || page;
 
 // ---- icons: authored for this project (24x24, 2px stroke); no third-party icon set is bundled
 const ICONS = {
@@ -62,8 +63,14 @@ const stateBadge = s => badge(stateSev[s] || 'info', ({ running: 'Running', idle
 const checksBadge = c => (c === 'green' ? badge('ok', 'CI green') : c === 'red' ? badge('action', 'CI failing') : c === 'pending' ? badge('info', 'CI running') : c ? badge('info', 'No CI') : '<span class="muted">–</span>');
 const verdictBadge = v => (v === 'PASS' ? badge('ok', 'PASS') : v === 'CHANGES' ? badge('warning', 'CHANGES') : '<span class="muted">none</span>');
 const agentTag = (name, view) => (name ? `<a href="/agents/${esc(encodeURIComponent(name))}"><span class="agent-dot" style="background:${colourOf(name, Object.keys(view.usage || {}).indexOf(name))}"></span>${esc(name)}</a>` : '<span class="muted">–</span>');
-const prLink = n => `<a href="/work/pr/${Number(n)}">PR #${Number(n)}</a>`;
-const issueLink = n => `<a href="/work/issue/${Number(n)}">issue #${Number(n)}</a>`;
+// Names come from the shared formatter (naming.mjs) through view.refs, set once per render; a title cut short shows in full on hover.
+let REFS = { issue: {}, pr: {}, job: {} };
+const named = (href, ref, fallback) => `<a href="${esc(href)}"${ref && ref.full !== ref.text ? ` title="${esc(ref.full)}"` : ''}>${esc(ref ? ref.text : fallback)}</a>`;
+const prLink = n => named(`/work/pr/${Number(n)}`, REFS.pr[Number(n)], `PR #${Number(n)}`);
+const issueLink = n => named(`/work/issue/${Number(n)}`, REFS.issue[Number(n)], `#${Number(n)}`);
+const jobPath = id => `/work/job/${encodeURIComponent(String(id).slice(0, 8))}`;
+const jobLink = id => named(jobPath(id), REFS.job[String(id).slice(0, 8)], `job ${String(id).slice(0, 8)}`);
+const jobIdCell = (full, what = 'job ID') => `${jobLink(full)}${full ? copyBtn(full, what) : ''}`;
 const refOf = r => (r ? (r.kind === 'pull' ? prLink(r.n) : issueLink(r.n)) : '');
 const ext = (url, text) => `<a href="${esc(url)}">${esc(text)}</a>`;
 // ---- copy buttons (issue #72): the text to copy is in data-copy; dashui/app.js does the copying and shows "Copied".
@@ -206,7 +213,7 @@ function nowPanel(view) {
   const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${esc(x.text)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}</div>`;
   return `${slots}<ul class="panel-list">${view.agents.map(a => {
     const j = a.job, level = stateSev[a.state] || 'info';
-    const what = j ? `${esc(j.kind)} ${jobRef({ kind: j.kind, ref: j.ref })} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}`
+    const what = j ? `${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}`
       : `<span>Idle: ${a.idleReason ? esc(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
     return `<li class="sev-${level}"><div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div></li>`;
   }).join('')}</ul>`;
@@ -295,7 +302,7 @@ function agentsPage(view, query, path) {
 }
 function jobCols(view, { agent = true } = {}) {
   return [
-    { key: 'id', label: 'Job', html: r => idCopy(r.id, r.fullId, 'job ID') },
+    { key: 'id', label: 'Job', html: r => jobIdCell(r.fullId) },
     ...(agent ? [{ key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }] : []),
     { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? jobRef(r, view) : '–') },
     { key: 'status', label: 'Status', html: r => badge(({ completed: 'ok', running: 'ok', queued: 'info', paused_limit: 'warning', paused_manual: 'warning', blocked: 'action', failed: 'action' })[r.status] || 'info', r.status) },
@@ -314,21 +321,31 @@ function agentDetail(view, query, path, route) {
   const queueRows = q.map(i => ({ ...i, next: i.next ? 'next' : '' }));
   const cur = a.job ? card({ id: 'cur', title: 'Current job', span: 12, movable: false, body: nowPanel({ ...view, agents: [a] }) }) : card({ id: 'cur', title: 'Current job', span: 12, movable: false, body: nowPanel({ ...view, agents: [a] }) });
   const queue = card({ id: 'queue', title: `Queue (${q.length})`, span: 12, movable: false, body: table({ id: 'q', path, query, noun: 'queue items', rows: queueRows, searchKeys: ['title', 'reason', 'type'],
-    cols: [{ key: 'next', label: 'Next', html: r => (r.next ? badge('info', 'Next') : '') }, { key: 'type', label: 'Type' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.type === 'issue' ? issueLink(r.ref) : prLink(r.ref)) }, { key: 'title', label: 'Title' }, { key: 'est', label: 'Est. finish', html: r => { const e = r.type === 'review' ? null : estFor(view, r.type === 'issue' ? 'issue' : 'pr', r.ref); return e ? `<span title="${esc((e.basis || []).join('\n'))}" data-est="${esc(e.status)}">${esc(e.text)}</span>` : ''; } }, { key: 'reason', label: 'Reason', more: true }],
+    cols: [{ key: 'next', label: 'Next', html: r => (r.next ? badge('info', 'Next') : '') }, { key: 'type', label: 'Type' }, { key: 'ref', label: 'Item', num: true, html: r => (r.type === 'issue' ? issueLink(r.ref) : prLink(r.ref)) }, { key: 'est', label: 'Est. finish', html: r => { const e = r.type === 'review' ? null : estFor(view, r.type === 'issue' ? 'issue' : 'pr', r.ref); return e ? `<span title="${esc((e.basis || []).join('\n'))}" data-est="${esc(e.status)}">${esc(e.text)}</span>` : ''; } }, { key: 'reason', label: 'Reason', more: true }],
     totals: { next: 'count' }, emptyState: empty('Queue is empty', 'No work is waiting for this agent.', 'check') }) });
   const hist = card({ id: 'hist', title: `Job history (${jobs.length})`, span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: jobs, searchKeys: ['id', 'kind', 'status', 'branch'], cols: jobCols(view, { agent: false }).map(c => ({ ...c, total: undefined })), totals: jobTotals,
     emptyState: empty('No jobs yet', 'This agent has not run a job.', 'list') }) });
   return { title: `Agent ${a.name}`, crumbs: [['/agents', 'Agents'], [null, a.name]], body: grid('agent', cur + queue + hist, 'fit') };
 }
 
+// One job, named by the shared formatter (issue #147): the page every job reference links to.
+function jobDetail(view, query, path, route) {
+  const j = view.jobs.find(x => x.id === route.id);
+  if (!j) return null;
+  const ref = REFS.job[j.id];
+  const subject = j.ref ? (['implement', 'continue'].includes(j.kind) ? issueLink(j.ref) : prLink(j.ref)) : '–';
+  const facts = card({ id: 'facts', title: j.full || j.name, span: 12, movable: false, body: `<dl class="kv"><dt>Job</dt><dd>${idCopy(j.id, j.fullId, 'job ID')}</dd><dt>Agent</dt><dd>${agentTag(j.agent, view)}</dd><dt>Type</dt><dd>${esc(j.kind)}</dd><dt>Work</dt><dd>${subject}</dd>
+<dt>Status</dt><dd>${esc(j.status)}</dd><dt>Attempts</dt><dd>${Number(j.attempts)}</dd><dt>Model</dt><dd>${esc(j.model || 'default')}</dd><dt>Started</dt><dd>${esc(utc(j.startedAt))}</dd><dt>Elapsed</dt><dd>${esc(dur(j.elapsedMs))}</dd><dt>Tokens</dt><dd>${esc(num(j.tokens))}</dd></dl>` });
+  return { title: ref ? ref.text : j.name, crumbs: [['/work', 'Work'], [null, ref ? ref.text : j.name]], body: grid('job', facts, 'fit') };
+}
 function workPage(view, query, path) {
-  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)} ${esc(i.title)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref))}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
+  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref))}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
   const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['title', 'agent', 'number', 'state', 'reason'],
-    cols: [{ key: 'number', label: '#', num: true, html: r => issueLink(r.number) }, { key: 'title', label: 'Title' }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
+    cols: [{ key: 'number', label: 'Issue', num: true, html: r => issueLink(r.number) }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
     totals: { number: 'count', blockers: 'sum' }, emptyState: empty('No issues cached', 'The first tick fills the cache.', 'list') }) });
   const prs = card({ id: 'prs', title: 'Pull requests', span: 12, movable: false, body: table({ id: 'prs', path, query, noun: 'pull requests', rows: view.prs, searchKeys: ['title', 'agent', 'status', 'number', 'verdict'],
-    cols: [{ key: 'number', label: '#', num: true, html: r => prLink(r.number) }, { key: 'title', label: 'Title' }, { key: 'agent', label: 'Author', html: r => agentTag(r.agent, view) }, { key: 'status', label: 'State' },
+    cols: [{ key: 'number', label: 'Pull request', num: true, html: r => prLink(r.number) }, { key: 'agent', label: 'Author', html: r => agentTag(r.agent, view) }, { key: 'status', label: 'State' },
       { key: 'checks', label: 'CI', html: r => checksBadge(r.checks) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'reviewRounds', label: 'Review rounds', num: true, more: true },
       { key: 'fixRounds', label: 'Fix rounds', num: true, more: true }, { key: 'rebaseRounds', label: 'Rebase rounds', num: true, more: true }, { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true }],
     totals: { number: 'count', reviewRounds: 'avg', fixRounds: 'avg', tokens: 'sum' }, emptyState: empty('No pull requests yet', 'Pull requests appear once an agent opens one.', 'list') }) });
@@ -337,22 +354,22 @@ function workPage(view, query, path) {
 function prDetail(view, query, path, route) {
   const p = view.prs.find(x => x.number === route.id);
   if (!p) return null;
-  const facts = card({ id: 'facts', title: `PR #${p.number}: ${p.title}`, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(p.status)}</dd><dt>Author</dt><dd>${agentTag(p.agent, view)}</dd><dt>CI</dt><dd>${checksBadge(p.checks)}</dd><dt>Latest verdict</dt><dd>${verdictBadge(p.verdict)}</dd>
-<dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, `PR #${p.number}`)}</dd></dl>` });
+  const facts = card({ id: 'facts', title: p.full || p.name, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(p.status)}</dd><dt>Author</dt><dd>${agentTag(p.agent, view)}</dd><dt>CI</dt><dd>${checksBadge(p.checks)}</dd><dt>Latest verdict</dt><dd>${verdictBadge(p.verdict)}</dd>
+<dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd></dl>` });
   const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${esc(utc(r.at))}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
   const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${esc(utc(v.at))}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
   const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
-  return { title: `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs, 'fit') };
+  return { title: p.name || `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, p.name || `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs, 'fit') };
 }
 function issueDetail(view, query, path, route) {
   const i = view.issues.find(x => x.number === route.id);
   if (!i) return null;
   const dependents = view.issues.filter(o => o.dependsOn.includes(i.number));
-  const deps = i.dependsOn.length ? `<ul class="panel-list">${i.dependsOn.map(d => { const di = view.issues.find(x => x.number === d); const blocked = i.blockedBy.includes(d); return `<li class="sev-${blocked ? 'warning' : 'ok'}"><div class="t">${blocked ? badge('warning', 'Blocking') : badge('ok', 'Done')} ${issueLink(d)} ${esc(di?.title || '')}</div></li>`; }).join('')}</ul>` : empty('No prerequisites', 'This issue does not wait on another one.', 'check');
-  const facts = card({ id: 'facts', title: `Issue #${i.number}: ${i.title}`, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(i.state)}</dd><dt>Assigned to</dt><dd>${agentTag(i.agent, view)}</dd><dt>Status</dt><dd>${esc(i.reason || '–')}</dd>
-<dt>Needs homeowner</dt><dd>${i.needsHomeowner ? badge('action', 'Yes') : 'No'}</dd><dt>On GitHub</dt><dd>${ext(i.url, `issue #${i.number}`)}</dd></dl>` });
-  return { title: `Issue #${i.number}`, crumbs: [['/work', 'Work'], [null, `Issue #${i.number}`]], body: grid('issue', facts + card({ id: 'deps', title: 'Dependencies and blockers', span: 6, movable: false, body: deps })
-    + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? `<ul class="panel-list">${dependents.map(d => `<li class="sev-info"><div class="t">${issueLink(d.number)} ${esc(d.title)}</div></li>`).join('')}</ul>` : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') }), 'fit') };
+  const deps = i.dependsOn.length ? `<ul class="panel-list">${i.dependsOn.map(d => { const di = view.issues.find(x => x.number === d); const blocked = i.blockedBy.includes(d); return `<li class="sev-${blocked ? 'warning' : 'ok'}"><div class="t">${blocked ? badge('warning', 'Blocking') : badge('ok', 'Done')} ${issueLink(d)}</div></li>`; }).join('')}</ul>` : empty('No prerequisites', 'This issue does not wait on another one.', 'check');
+  const facts = card({ id: 'facts', title: i.name || `#${i.number}`, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(i.state)}</dd><dt>Assigned to</dt><dd>${agentTag(i.agent, view)}</dd><dt>Status</dt><dd>${esc(i.reason || '–')}</dd>
+<dt>Needs homeowner</dt><dd>${i.needsHomeowner ? badge('action', 'Yes') : 'No'}</dd><dt>On GitHub</dt><dd>${ext(i.url, i.name || `#${i.number}`)}</dd></dl>` });
+  return { title: i.name || `#${i.number}`, crumbs: [['/work', 'Work'], [null, i.name || `#${i.number}`]], body: grid('issue', facts + card({ id: 'deps', title: 'Dependencies and blockers', span: 6, movable: false, body: deps })
+    + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? `<ul class="panel-list">${dependents.map(d => `<li class="sev-info"><div class="t">${issueLink(d.number)}</div></li>`).join('')}</ul>` : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') }), 'fit') };
 }
 
 function activityPage(view, query, path) {
@@ -419,7 +436,7 @@ function systemPage(view) {
 const list = (items, cls = '') => (items.length ? `<ul class="mini ${cls}">${items.join('')}</ul>` : '<span class="muted">none</span>');
 const tickRef = a => (a.type === 'implement' || a.type === 'continue' ? (a.issue ? issueLink(a.issue) : `#${Number(a.ref)}`) : a.pr ? prLink(a.pr) : `#${Number(a.ref)}`);
 function tickDetail(t) {
-  return `<dl class="kv"><dt>Verdicts ingested</dt><dd>${list(t.ingested.map(i => `<li>${verdictBadge(i.verdict)} ${i.pr ? prLink(i.pr) : ''} ${i.job ? `job ${idCopy(i.job.slice(0, 8), i.job, 'job ID')}` : ''}</li>`))}</dd>
+  return `<dl class="kv"><dt>Verdicts ingested</dt><dd>${list(t.ingested.map(i => `<li>${verdictBadge(i.verdict)} ${i.pr ? prLink(i.pr) : ''} ${i.job ? jobIdCell(i.job) : ''}</li>`))}</dd>
 <dt>Actions</dt><dd>${list(t.actions.map(a => `<li>${esc(a.agent)} ${esc(a.type === 'cifix' ? 'fix CI' : a.type)} ${tickRef(a)}</li>`))}</dd>
 <dt>Skipped</dt><dd>${t.note ? `<span class="muted">${esc(t.note)}</span>` : list(t.skipped.map(s => `<li><b>${esc(s.what)}</b>: ${errCopy(s.reason)}</li>`))}</dd>
 <dt>Self-upgrade</dt><dd>${esc(t.selfUpgrade || '–')}</dd><dt>Leases released</dt><dd>${t.released}</dd>${t.rc !== null ? `<dt>Exit code</dt><dd>rc=${Number(t.rc)}</dd>` : ''}
@@ -459,7 +476,7 @@ function supervisorPage(view, query, path) {
   const cards = s.cards.map(c => card({ id: `h-${c.id}`, title: c.title, span: c.id === 'version' || c.id === 'tick' ? 6 : 4, href: DRILL[c.id], cls: `health hc-${c.severity}`, body: healthBody(c, view) })).join('');
   const lc = s.cards.find(c => c.id === 'leases');
   const leases = card({ id: 'h-leases-table', title: `Leases (${lc.leases.length})`, span: 12, movable: false, body: table({ id: 'leases', path, query, noun: 'leases', rows: lc.leases, searchKeys: ['job', 'agent', 'kind', 'status', 'state', 'reason'],
-    cols: [{ key: 'job', label: 'Job', html: r => idCopy(r.job.slice(0, 8), r.job, 'job ID') }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }, { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? `#${Number(r.ref)}` : '–') },
+    cols: [{ key: 'job', label: 'Job', html: r => jobIdCell(r.job) }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }, { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? (['implement', 'continue'].includes(r.kind) ? issueLink(r.ref) : prLink(r.ref)) : '–') },
       { key: 'ageMs', label: 'Age', num: true, html: r => esc(dur(r.ageMs)) }, { key: 'state', label: 'State', html: r => badge(r.state === 'stale' ? 'action' : r.state === 'held' ? 'warning' : 'ok', r.state) }, { key: 'status', label: 'Job status', more: true },
       { key: 'reason', label: 'Why', more: true, html: r => `${esc(r.reason)}${r.command ? cmdBlock(r.command) : ''}` }],
     totals: { job: 'count' }, emptyState: empty('No lease held', 'Leases appear while a supervised job owns an issue or worktree.', 'check') }) });
@@ -489,10 +506,11 @@ function upgradesPage(view, query, path) {
       { key: 'prText', label: 'PRs', html: r => (r.prs.length ? r.prs.map(prLink).join(', ') : '–') }, { key: 'reason', label: 'Reason', html: r => (r.reason ? errCopy(r.reason) : '–') }, { key: 'checkText', label: 'Checks', more: true }],
     totals: { at: 'count' }, emptyState: empty('No self-upgrade record', 'Records appear in team/upgrades.jsonl when the supervisor upgrades itself.', 'info') }) })) };
 }
-const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, activity: activityPage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, activity: activityPage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
 export function renderRoute(view, route, { query = new URLSearchParams(), pathname = '/', refreshSeconds = 60 } = {}) {
+  REFS = view.refs || { issue: {}, pr: {}, job: {} };
   const fn = PAGES[route.page];
   const page = fn ? fn(view, query, pathname.replace(/\/+$/, '') || '/', route) : null;
   const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work'], [null, 'Not found']] };

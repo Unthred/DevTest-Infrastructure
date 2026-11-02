@@ -40,7 +40,7 @@ test('eligible range: pre-checks, upgrade, dry-run, alert and record; then the l
   assert.equal(await w.up.step(), 'upgraded');
   assert.deepEqual(w.log.map(x => x[0]), ['pre', 'upgrade', 'dry', 'alert']);
   assert.deepEqual(w.log[1], ['upgrade', TO]);
-  assert.match(w.alerts()[0], new RegExp(`^Supervisor upgraded to ${TO.slice(0, 7)} \\(PRs #7\\)\\.$`));
+  assert.match(w.alerts()[0], new RegExp(`^Supervisor upgraded to ${TO.slice(0, 7)} \\(PR #7\\)\\.$`));
   assert.equal(w.up.s.pending.to, TO);
   assert.deepEqual(w.records().map(r => r.result), ['upgraded']);
   assert.deepEqual(w.records()[0].checks, { eligibility: 'ok', quiet: 'idle', preChecks: 'ok', dryRun: 'ok' });
@@ -109,7 +109,7 @@ test('CI red, pending or absent on the merged head refuses; one bad PR among sev
   assert.equal(await w.up.step(), 'not-eligible'); assert.match(w.alerts()[0], /PR #8/);
   // both reviewed: both PRs are named in the alert
   w.state.verdicts[`8:${H('e')}`] = { verdict: 'PASS', reviewer: 'claude' }; w.up.s.alerted = {};
-  assert.equal(await w.up.step(), 'upgraded'); assert.match(w.alerts().at(-1), /\(PRs #7, #8\)/);
+  assert.equal(await w.up.step(), 'upgraded'); assert.match(w.alerts().at(-1), /\(PR #7, PR #8\)/);
 });
 
 test('busy: waits while a job runs, upgrades after 30 minutes or when idle', async t => {

@@ -134,10 +134,10 @@ test('queue reasons: waiting on CI, blocked by #n, awaiting review of sha, draft
   assert.match(q('claude', 14), /CHANGES from codex on 4444444; fix waits for a free slot/);
   assert.match(q('codex', 15), /PASS from claude; merges on the next tick/);
   assert.match(q('claude', 16), /PASS from codex but not mergeable \(conflicting\)/);
-  assert.equal(q('claude', 30), 'blocked by #5');
+  assert.match(q('claude', 30), /^blocked by #5 issue 5$/);
   assert.equal(q('codex', 3), 'needs the homeowner');
   assert.match(q('codex', 2), /ready; waits behind review PR #13/);
-  assert.match(v.queues.codex.find(i => i.type === 'review' && i.ref === 13).reason, /review PR #13 at 3333333 \(next\)/);
+  assert.match(v.queues.codex.find(i => i.type === 'review' && i.ref === 13).reason, /review PR #13 · #7 at 3333333 \(next\)/);
   assert.equal(v.queues.codex[0].next, true);          // the planned item is listed first
 });
 test('the queue is the dispatcher\'s own plan(): identical actions to Team.plan on the same data', async t => {

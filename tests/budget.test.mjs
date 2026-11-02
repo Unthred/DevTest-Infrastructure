@@ -356,7 +356,7 @@ test('dashboard and team status show the mode, the weekly projection and why wor
   const s = await buildStatus({ config: cfg, root: '/nonexistent', jobs, events: [], state, cache, snapshots: [], leases: [], now: NOW, tz: 'Europe/London' });
   const out = renderStatus(s);
   assert.match(out, /=== Allowance\n {2}claude: normal — weekly 40%, projected 80% at reset[^\n]*; weekly resets Wed 07:18\n {2}codex: reviews only until Wed 07:18 — weekly 92%/);
-  assert.match(out, /claude → implement issue #2 \(reassigned from codex for allowance\)/);
+  assert.match(out, /claude → implement #2 Issue 2 title here \(reassigned from codex for allowance\)/);
 });
 
 // ---- Issue #104: ownership is a preference, not a lock

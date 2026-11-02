@@ -10,6 +10,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { checksState, agentOfBranch } from './team.mjs';
+import { makeNamer, shortCommit } from './naming.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 export const QUIET_MAX_WAIT_MS = 30 * 60 * 1000;
@@ -19,7 +20,7 @@ export const VERIFY_MAX_WAIT_MS = 60 * 60 * 1000;
 export const ENV_RETRY_MS = 60 * 60 * 1000;
 // A change to any of these cannot be deployed by the upgrader it modifies: the homeowner deploys it by hand.
 export const UPGRADER_PATHS = ['tools/upgrade-supervisor.sh', 'tools/rollback-supervisor.sh', 'supervisor/upgrade.mjs'];
-const short = sha => String(sha).slice(0, 7);
+const short = shortCommit;
 
 export function installedSha(root) {
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); return m ? m[1] : null; } catch { return null; }
@@ -39,6 +40,11 @@ export class SelfUpgrade {
     this.recordFile = path.join(this.dir, 'upgrades.jsonl');          // dashboard (#32) input: one JSON object per line
     this.s = { alerted: {}, prechecked: {} };
     try { this.s = { ...this.s, ...JSON.parse(fs.readFileSync(this.stateFile, 'utf8')) }; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  // PRs named by the shared formatter (issue #147); best effort, bare numbers if GitHub cannot be read.
+  async prNames(prs) {
+    let names = null; try { names = await this.d.names?.(); } catch { names = null; }
+    return (prs || []).map(n => (names ? names.pr(n).text : `PR #${n}`)).join(', ') || 'no pull requests';
   }
   save() { fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 }); atomicJson(this.stateFile, this.s); }
   latch() { try { return JSON.parse(fs.readFileSync(this.latchFile, 'utf8')); } catch { return fs.existsSync(this.latchFile) ? { reason: 'unreadable latch' } : null; } }
@@ -115,7 +121,7 @@ export class SelfUpgrade {
     checks.dryRun = 'ok';
     this.s.pending = { from, to: target, prs: eligibility.prs, checks, at: now }; this.save();
     this.record({ from, to: target, prs: eligibility.prs, checks, result: 'upgraded' });
-    await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (PRs ${eligibility.prs.map(n => `#${n}`).join(', ')}).`);
+    await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (${await this.prNames(eligibility.prs)}).`);
     return 'upgraded';
   }
 
@@ -206,6 +212,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
       return { sha, pr: m ? Number(m[1]) : null, head: parents[1] || null };
     }),
     mergedPull: n => gh.getMergedPull(n),
+    names: async () => makeNamer({ repo: config.repository, issues: await gh.listIssues(), merged: await gh.listMergedPulls() }),
     verdict: verdictFor,
     independenceApproved,
     activeJobs: async () => (await listActive()).length,

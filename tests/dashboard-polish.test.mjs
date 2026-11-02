@@ -138,7 +138,7 @@ test('every page except Overview has a breadcrumb trail and a Back control that 
     assert.match(body, /<a class="btn back" href="\/[^"]*" data-back>/, u);
   }
   const pr = (await s.get('/work/pr/41')).body;
-  assert.match(pr, /Overview<\/a><span class="sep"[^>]*>›<\/span><\/li><li><a href="\/work">Work<\/a><span class="sep"[^>]*>›<\/span><\/li><li><span aria-current="page">PR #41<\/span>/);
+  assert.match(pr, /Overview<\/a><span class="sep"[^>]*>›<\/span><\/li><li><a href="\/work">Work<\/a><span class="sep"[^>]*>›<\/span><\/li><li><span aria-current="page">PR #41 · #30 Thirty<\/span>/);
   assert.match(pr, /<a class="btn back" href="\/work" data-back>/, 'Back goes to the parent page without script');
   assert.match((await s.get('/agents/claude')).body, /<a class="btn back" href="\/agents" data-back>/);
   assert.match((await s.get('/work')).body, /<a class="btn back" href="\/" data-back>/);
