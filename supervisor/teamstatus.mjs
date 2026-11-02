@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { STALE_TICK_MS, compactIssues, compactMerged, compactPulls, readCache, readEvents, readJobs, readLeases, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { buildView } from './dashboard.mjs';
-import { checksState, carryRecordOf } from './team.mjs';
+import { checksState, retriedIn, carryRecordOf } from './team.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { modeLine } from './budget.mjs';
@@ -39,7 +39,7 @@ export async function refreshIfStale({ cache, gh, now }) {
 }
 
 const prState = p => (p.isDraft ? 'draft' : p.mergeable === 'CONFLICTING' ? 'conflicting' : 'ready');
-const ciState = p => ({ green: 'green', red: 'red', pending: 'running', none: 'not run' })[checksState(p.statusCheckRollup)];
+const ciState = (p, state, now) => ({ green: 'green', red: 'red', pending: 'running', none: 'not run' })[checksState(p.statusCheckRollup, retriedIn(state?.cancelWatch, p, now))];
 function verdictOf(state, p) {
   const mine = Object.entries(state.verdicts || {}).filter(([k]) => k.startsWith(`${p.number}:`));
   const hit = mine.find(([k]) => k === `${p.number}:${p.headRefOid}`);
@@ -96,7 +96,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   for (const p of cache?.pulls || []) if (p.mergeable === 'CONFLICTING' && !p.isDraft) add(`conflict-${p.number}`, `${names.pr(p.number).text} has merge conflicts`);
 
   // 4. pull requests
-  const pulls = (cache?.pulls || []).map(p => ({ number: p.number, name: redact(names.pr(p.number).text, 300), title: redact(names.titleOf(names.issueOfPr(p.number)?.number) ?? p.title, 80), status: prState(p), ci: ciState(p), verdict: verdictOf(state, p), url: p.url || null }));
+  const pulls = (cache?.pulls || []).map(p => ({ number: p.number, name: redact(names.pr(p.number).text, 300), title: redact(names.titleOf(names.issueOfPr(p.number)?.number) ?? p.title, 80), status: prState(p), ci: ciState(p, state, now), verdict: verdictOf(state, p), url: p.url || null }));
 
   // 5. merged today (local day); the tick caches the merged list, the dispatcher's own log fills any gap
   const today = dayOf(now, tz);

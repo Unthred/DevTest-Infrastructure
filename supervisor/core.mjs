@@ -342,7 +342,9 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       if (done) { transition(root, job, 'completed', 'completed_before_limit', clock); return job; }
     }
     if (result.event === 'usage_limit' && restartable() && (job.autoRestart || config.manifest.capabilities.usage_limit_detection === 'supported')) {
-      if (job.attempts >= maxAttempts) { transition(root, job, 'blocked', 'retry_exhausted', clock); return job; }
+      // Issue #188: usageLimitHits survives the one automatic resume (which resets `attempts`), so D-019's bound of three waits holds per job.
+      job.usageLimitHits = (job.usageLimitHits || 0) + 1;
+      if (job.attempts >= maxAttempts || job.usageLimitHits >= maxAttempts) { transition(root, job, 'blocked', 'retry_exhausted', clock); return job; }
       const now = clock.now();
       const verifiedReset = result.verified === true && result.resetSource === 'provider_reported' && result.resetAt > now;
       // Issue #80: without a verified reset in the result, the provider's allowance window still names one.

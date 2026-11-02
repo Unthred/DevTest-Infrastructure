@@ -2,7 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import path from 'node:path';
-import { Team, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { Team, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs, readHeadRegister } from './planning.mjs';
@@ -113,7 +113,7 @@ function reasons(team, cache, jobs, plan, states, names) {
     const author = agentOfBranch(c, pr.headRefName);
     const key = `${pr.number}:${pr.headRefOid}`;
     const v = S.verdicts?.[key];
-    const checks = checksState(pr.statusCheckRollup);
+    const checks = team.ciState(pr);
     if (!author) continue;
     let reason;
     if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
@@ -178,7 +178,7 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
   const part = (rank, text, kind, n) => { parts.push({ rank, text }); links.push({ text: (kind === 'pull' ? names.pr(n) : names.issue(n)).text, url: url(kind, n) }); };
   const mine = prs.filter(p => agentOfBranch(c, p.headRefName) === agent);
   for (const p of mine) {
-    const v = S.verdicts?.[`${p.number}:${p.headRefOid}`], checks = checksState(p.statusCheckRollup);
+    const v = S.verdicts?.[`${p.number}:${p.headRefOid}`], checks = team.ciState(p);
     if (p.isDraft) {
       if ((S.continueAttempts?.[p.number] || 0) >= L.max_fix_attempts) part(0, `waiting for homeowner: continue limit reached on draft ${names.pr(p.number).text}`, 'pull', p.number);
       else part(2, `only work is draft ${names.pr(p.number).text}`, 'pull', p.number);
@@ -251,7 +251,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   // One card per open PR that is labelled needs-homeowner or has hit the fix or review limit (the label and the notice are the same event).
   for (const pr of cache?.pulls || []) {
     const verdict = state.verdicts?.[`${pr.number}:${pr.headRefOid}`]?.verdict;
-    const rejected = verdict === 'CHANGES' || checksState(pr.statusCheckRollup) === 'red';
+    const rejected = verdict === 'CHANGES' || checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) === 'red';
     const fixes = fixCount(pr.number);
     // Attempts are counted when a job is created, so the limit cards wait until the last such job has finished.
     const activeKinds = new Set([...jobs].filter(j => j.issue === pr.number && ACTIVE.includes(j.status)).map(j => j.kind));
@@ -313,11 +313,11 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     if (tj.kind === 'rebase' && tj.rebase?.lost?.length && pr && pr.headRefOid === tj.rebase.newHead)
       add(`rebase-lost-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} dropped ${tj.rebase.lost.length} commit(s): ${tj.rebase.lost.map(c => `${shortCommit(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
   }
-  for (const pr of cache?.pulls || []) if (!pr.isDraft && !fixLimited.has(pr.number) && checksState(pr.statusCheckRollup) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
+  for (const pr of cache?.pulls || []) if (!pr.isDraft && !fixLimited.has(pr.number) && checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // Issue #331: a check run whose state contradicts itself for too long. One item per head and check; it clears when the check finishes or the head moves.
   for (const pr of cache?.pulls || []) if (!pr.isDraft) for (const c of stuckChecks(pr.statusCheckRollup, now)) add(`ci-stuck-${pr.number}-${String(pr.headRefOid).slice(0, 7)}-${c.name.replace(/[^A-Za-z0-9]+/g, '-')}`, `Check stuck: "${c.name}" on ${names.pr(pr.number).text} has been inconsistent for ${Math.round(c.ageMs / 60000)} min; re-run that job.`, { kind: 'pull', n: pr.number });
   // issue #149: a cancelled check that was rerun once and is still cancelled
-  for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
+  for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
   const recent = snapshots.filter(s => now - s.at <= 30 * 60000).sort((a, b) => a.at - b.at);
   for (const [agent, s] of Object.entries(states)) {
@@ -678,7 +678,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     const prJobs = jobRows.filter(j => relIds.has(j.fullId));
     const key = p ? `${n}:${p.headRefOid}` : null;
     return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed',
-      checks: p ? checksState(p.statusCheckRollup) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length, carry: p && key ? carryRecordOf(state.verdicts?.[key], p) : null,
+      checks: p ? checksState(p.statusCheckRollup, retriedIn(state.cancelWatch, p, now)) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length, carry: p && key ? carryRecordOf(state.verdicts?.[key], p) : null,
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,
