@@ -188,6 +188,15 @@ export class SelfUpgrade {
       this.record({ from, to: target, prs: eligibility.prs, checks, result: 'precheck_failed', reason: up.reason });
       return 'precheck-failed';
     }
+    if (!up.ok && up.blocked) {
+      // The install-time validator, tests or payload check failed before anything was swapped: block only this commit until a newer
+      // main, with one alert. No rollback and no global latch (#101).
+      this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
+      this.noteInstall({ result: 'blocked', sha: target, reason: up.reason }); this.save();
+      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).`);
+      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: up.reason });
+      return 'precheck-failed';
+    }
     if (!up.ok) {
       const rb = await this.rollback(from, target, `upgrade script failed: ${up.reason}`, eligibility.prs, checks);
       return rb;
@@ -286,7 +295,9 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
       if (r.status === 0) return { ok: true };
       const reason = tail(r);
       if (r.status === BOOTSTRAP_EXIT.transient) return { ok: false, environmental: true, reason };
-      return { ok: false, reason: r.status === BOOTSTRAP_EXIT.payload ? `refused: ${reason}` : reason };
+      // Exit 11 (validator/tests) and 12 (payload re-verify) happen before the swap: block the commit, never roll back.
+      const blocked = r.status === BOOTSTRAP_EXIT.checks || r.status === BOOTSTRAP_EXIT.payload;
+      return { ok: false, ...(blocked ? { blocked: true } : {}), reason: r.status === BOOTSTRAP_EXIT.payload ? `refused: ${reason}` : reason };
     } catch (error) { return { ok: false, environmental: true, reason: String(error?.message || error).slice(0, 160) }; }
     finally { fs.rmSync(dir, { recursive: true, force: true }); }
   };

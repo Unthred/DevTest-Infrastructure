@@ -518,3 +518,23 @@ test('drain (issue #136): the drain bound is a validated, overridable team setti
   for (const bad of [{ drain_max_minutes: 0 }, { drain_max_minutes: 721 }, { drain_max_minutes: 1.5 }, { drain_max_minutes: '5' }, { other: 1 }, [], null])
     assert.throws(() => validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: bad })), /self_upgrade/);
 });
+
+test('issue #101: an install-time test failure blocks only that commit: no rollback, no global latch, one alert, a newer main proceeds', async t => {
+  const w = world(t, { up: { ok: false, blocked: true, reason: 'tests: flaky' } });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  assert.equal(w.log.some(x => x[0] === 'rollback'), false); assert.equal(w.up.latch(), null);
+  assert.equal(w.up.s.install.result, 'blocked');
+  w.state.now += 5 * 3600000;
+  assert.equal(await w.up.step(), 'precheck-failed', 'the same commit stays blocked');
+  assert.equal(w.alerts().filter(a => /install-time check failed/.test(a)).length, 1);
+});
+
+test('issue #101: realDeps maps install exit codes 11 and 12 to blocked (no rollback), 13 and others to a plain failure', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-map-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.symlinkSync(`versions/${'a'.repeat(40)}`, path.join(dir, 'current'));
+  const mk = status => realDeps({ root: dir, config: { repo_path: '/x', agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {},
+    run: cmd => cmd === 'git' ? { status: 0, stdout: 'x', stderr: '' } : { status, stdout: '', stderr: 'boom' } });
+  for (const code of [11, 12]) { const r = await mk(code).upgrade('b'.repeat(40)); assert.equal(r.ok, false); assert.equal(r.blocked, true); assert.equal(r.environmental, undefined); }
+  const swap = await mk(13).upgrade('b'.repeat(40)); assert.equal(swap.ok, false); assert.equal(swap.blocked, undefined); assert.equal(swap.environmental, undefined);
+  assert.equal((await mk(10).upgrade('b'.repeat(40))).environmental, true);
+});
