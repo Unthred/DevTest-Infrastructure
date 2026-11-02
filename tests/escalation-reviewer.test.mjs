@@ -22,7 +22,8 @@ const config = ({ cands = ONE, codex = true, fix } = {}) => ({
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] }, ...(codex ? { codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } } : {}) },
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } });
 const PR = { number: 137, title: 't', headRefName: 'claude/issue-72-x', headRefOid: H(5), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green };
-const manifests = { claude: { aliases: ['opus', 'sonnet', 'haiku'], efforts: ['low', 'medium', 'high'] }, codex: { aliases: [], efforts: ['low', 'medium', 'high'] } };
+// Only Opus is an alias (sonnet and haiku match by pattern): an entry without a model cannot be pinned, so it stays unrecorded (issue #368).
+const manifests = { claude: { aliases: ['opus'], pattern: '^(sonnet|haiku)$', efforts: ['low', 'medium', 'high'] }, codex: { aliases: [], efforts: ['low', 'medium', 'high'] } };
 
 function world(t, { cfg = config(), out = {}, writers = ['sonnet'] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'esc-rev-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -76,9 +77,9 @@ test('no provider configured besides the writer: the job is refused', t => {
 
 test('a configured review model is never given writing work, whatever its escalation or allowance state', t => {
   const { team } = world(t, { cfg: config({ fix: { model: 'opus', effort: 'medium' } }) });
-  for (const kind of ['fix', 'cifix', 'rebase']) assert.match(team.modelFor(act(), kind, {}).writeRefusal, /review model/, kind);
+  for (const kind of ['fix', 'cifix', 'rebase']) assert.match(team.modelFor(act(), kind, {}).writeRefusal, /Opus is never given/, kind);
   const impl = world(t, { cfg: (() => { const c = config(); c.models.agents.claude.implement = { model: 'opus' }; return c; })() }).team;
-  assert.match(impl.modelFor({ agent: 'claude', key: '9' }, 'implement', {}).writeRefusal, /review model/);
+  assert.match(impl.modelFor({ agent: 'claude', key: '9' }, 'implement', {}).writeRefusal, /Opus is never given/);
 });
 
 test('no repair job escalates to the strong entry, even after two CHANGES or at the fix limit', t => {
