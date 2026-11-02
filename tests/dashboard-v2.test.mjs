@@ -453,7 +453,7 @@ function fakeEl(tag, attrs = {}, kids = []) {
     all: () => el.children.flatMap(c => [c, ...c.all()]),
     contains: n => n === el || el.children.some(c => c.contains(n)),
     closest: () => null,
-    querySelectorAll: sel => el.all().filter(c => sel === 'figure.chart' ? c.tag === 'figure' : sel === '.legend' ? c.attrs.class === 'legend' : sel === 'svg' ? c.tag === 'svg' : sel === 'button[data-series]' ? c.tag === 'button' && 'data-series' in c.attrs : sel === '[data-series]' ? 'data-series' in c.attrs : false),
+    querySelectorAll: sel => el.all().filter(c => sel === 'figure.chart' ? c.tag === 'figure' : sel === '.legend' ? c.attrs.class === 'legend' : sel === 'svg' ? c.tag === 'svg' : sel === 'button[data-series]' ? c.tag === 'button' && 'data-series' in c.attrs : sel === '[data-series]' ? 'data-series' in c.attrs : sel === '[data-reset-layout]' ? 'data-reset-layout' in c.attrs : false),
     querySelector: sel => el.querySelectorAll(sel)[0] ?? null };
   el.append(...kids); return el;
 }
@@ -499,7 +499,6 @@ test('legend (issue #190): clicking Reset layout clears the layout and legend st
   for (const [path, layout] of [['/usage', 'dash.layout.usage.desktop'], ['/', 'dash.layout.overview.desktop']]) {
     const pg = legendPage(); const legendKey = 'dash.legend.' + path;
     const reset = fakeEl('button', { 'data-reset-layout': '' }); pg.doc.append(reset);
-    const orig = pg.doc.querySelector; pg.doc.querySelector = s => (s === '[data-reset-layout]' ? reset : orig(s));
     initLegends({ document: pg.doc, store: pg.store, legendKey });
     pg.btn('claude').click(); pg.store.set(layout, { a: 1 }); pg.store.set('dash.layout.other', { b: 1 });
     assert.ok(pg.mem.has(legendKey) && pg.mem.has(layout));
