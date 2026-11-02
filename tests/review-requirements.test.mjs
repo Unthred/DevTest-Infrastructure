@@ -172,3 +172,68 @@ test('a failure part-way through the recheck still holds every PR that was not c
   w.team.trustedRequirements = real; await w.team.recheckRequirements({ ingested: [], skipped: [] });
   assert.equal(w.team.reqHold.has(77), false);
 });
+
+// Issue #319: requirements.json must never lose text silently (redact() alone read only 2000 characters).
+const reqFile = async w => { const { file } = await startReview(w); return JSON.parse(fs.readFileSync(file, 'utf8')).requirements; };
+test('a body below the cap is written whole, a body above the old 2000 limit too', async t => {
+  const w = reqWorld(t); w.issue.body = Array.from({ length: 150 }, (_, i) => `Requirement ${i}: keep this sentence whole.`).join('\n');
+  const text = await reqFile(w); assert.ok(w.issue.body.length > 2000);
+  assert.ok(text.includes('Requirement 149: keep this sentence whole.')); assert.match(text, /Amendment BETA/); assert.doesNotMatch(text, /\[CUT/);
+});
+test('an amendment at the end of a long body is kept', async t => {
+  const w = reqWorld(t); w.issue.body = `${'Filler requirement line.\n'.repeat(400)}Homeowner decision LAST-WORD.`;
+  assert.match(await reqFile(w), /Homeowner decision LAST-WORD\./);
+});
+test('a body above the cap is cut on a line boundary with a visible marker naming where to read the rest', async t => {
+  const { REQUIREMENTS_MAX } = await import('../supervisor/team.mjs');
+  const w = reqWorld(t); w.issue.body = Array.from({ length: 2000 }, (_, i) => `Requirement ${i} is stated in full.`).join('\n');
+  const text = await reqFile(w);
+  assert.ok(text.length < REQUIREMENTS_MAX + 400); assert.match(text, /\[CUT: .*gh issue view 72 --comments/);
+  const body = text.slice(0, text.indexOf('\n[CUT')); assert.ok(body.split("\n").slice(1).every(l => /^Requirement \d+ is stated in full\.$/.test(l)), 'no line is cut mid-sentence');
+  assert.doesNotMatch(text, /Amendment BETA/);
+});
+test('secrets past the first 2000 characters are still redacted', async t => {
+  const w = reqWorld(t); w.issue.body = `${'x '.repeat(1500)}\npassword=hunter2hunter2`;
+  const text = await reqFile(w); assert.doesNotMatch(text, /hunter2/); assert.match(text, /password=\[secret\]/);
+});
+
+test('a key/value secret that straddles the 2000-character split is still redacted (issue #319)', async () => {
+  const { redactLong } = await import('../supervisor/redact.mjs');
+  const secret = ['hunter2', 'secret'].join('');
+  for (const text of ['w '.repeat(995) + `password: ${secret} more words`, 'ab '.repeat(660) + `token = ${secret} tail`, 'w '.repeat(998) + `password: bearer ${secret} tail`]) {
+    const out = redactLong(text, 30000);
+    assert.ok(!out.includes(secret), out.slice(1900, 2100));
+  }
+});
+
+test('replacement growth never drops the tail, and long lines are rejoined unchanged (issue #319)', async () => {
+  const { redactLong } = await import('../supervisor/redact.mjs');
+  assert.ok(redactLong('a@b.c '.repeat(600) + 'FINAL-WORDS-HERE', 30000).endsWith('FINAL-WORDS-HERE'));
+  const plain = 'word '.repeat(1000);
+  assert.equal(redactLong(plain, 30000), plain);
+});
+
+test('JSON-quoted and open-quoted secrets that straddle the split are redacted, also through writeRequirements (issue #319)', async t => {
+  const { redactLong } = await import('../supervisor/redact.mjs');
+  const secret = ['hunter2', 'secret'].join('');
+  const cases = [
+    `{"password": "${secret}"} tail`, `"password": "correct horse ${secret} staple" tail`, `{"api_key":"${secret}"} tail`, `"password" : "${secret}" tail`
+  ];
+  for (const c of cases) for (const n of [985, 990, 994, 995, 996, 997, 998, 999]) {
+    const out = redactLong('w '.repeat(n) + c, 30000);
+    assert.ok(!out.includes(secret), `${n}: ${out.slice(Math.max(0, out.indexOf('tail') - 120))}`);
+    assert.ok(out.endsWith('tail'));
+  }
+  for (const n of [990, 995]) {
+    const w = reqWorld(t); w.issue.body = 'w '.repeat(n) + `{"password": "${secret}"} tail`;
+    const text = await reqFile(w); assert.ok(!text.includes(secret)); assert.match(text, /"password": "\[secret\]"/);
+  }
+});
+
+test('a cut inside one over-long line falls at a word boundary and the marker follows (issue #319)', async () => {
+  const { redactLong } = await import('../supervisor/redact.mjs');
+  const out = redactLong('Head\n' + 'word '.repeat(8000) + '\nTail', 30000, '[CUT]');
+  assert.ok(out.endsWith('\n[CUT]')); assert.ok(out.startsWith('Head\n')); assert.ok(!out.includes('Tail'));
+  assert.match(out.slice(0, -'\n[CUT]'.length), /word$/);
+  assert.ok(out.length <= 30000 + 6);
+});

@@ -8,7 +8,7 @@ import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart 
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
-import { redact } from './redact.mjs';
+import { redact, redactLong } from './redact.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -235,6 +235,8 @@ export function failingChecks(rollup, retried = false) {
 // task data. Free text from the check is never interpolated unvalidated: it is JSON-encoded, truncated and passed through redact().
 const SECRET_SCANNER = /gitguardian|gitleaks|trufflehog|secret[ -]?scan|detect-secrets/i;
 const CHECK_LIMITS = { checks: 8, title: 200, summary: 800, text: 1500 };
+// Longest requirements text handed to a reviewer or fix job; beyond it the file ends with a visible [CUT: ...] marker (issue #319).
+export const REQUIREMENTS_MAX = 30000;
 const cleanText = (value, max) => redact(value, max).replace(/\s+/g, ' ').trim();
 export const isSecretScanner = check => SECRET_SCANNER.test(`${check?.name || ''} ${check?.app || ''}`);
 export function checkDetails(runs, names) {
@@ -1617,7 +1619,7 @@ export class Team {
     const r = await this.trustedRequirements(branch);
     if (!r) return null;
     const file = path.join(inbox, 'requirements.json');
-    fs.writeFileSync(file, JSON.stringify({ issue: r.issue, trusted: 'issue body and comments by the repository owner only', requirements: redact(r.text, 30000) }) + '\n', { mode: 0o600 });
+    fs.writeFileSync(file, JSON.stringify({ issue: r.issue, trusted: 'issue body and comments by the repository owner only', requirements: redactLong(r.text, REQUIREMENTS_MAX, `[CUT: the requirements continue beyond ${REQUIREMENTS_MAX} characters and the rest is not shown here. Read the remainder in full with: gh issue view ${r.issue} --comments. Later owner comments override earlier text, so do not treat this file as complete.]`) }) + '\n', { mode: 0o600 });
     return { file, hash: r.hash };
   }
   // Before a merge: a PASS that was given against requirements that have since changed no longer counts (the head stays, a new
