@@ -238,6 +238,8 @@ export function latestChecks(rollup) {
   return [...latest.values()];
 }
 // A cancelled check that nothing superseded: pending (not red) until the dispatcher reruns it once.
+// Must equal the --limit of listPulls in github.mjs.
+const OPEN_PULLS_CAP = 100;
 export function loneCancelled(rollup, retried = false) { return latestChecks(rollup).filter(c => checkDone(c) && isCancelled(c, retried)); }
 export function checksState(rollup, retried = false) {
   if (!Array.isArray(rollup) || !rollup.length) return 'none';
@@ -1567,16 +1569,18 @@ export class Team {
   async watchCancelled(report, guard = (_, fn) => fn()) {
     const wait = this.c.limits.cancelled_wait_ms ?? CANCELLED_WAIT_MS, now = this.clock.now();
     const pulls = await this.gh.listPulls(), open = new Set(pulls.map(pr => `${pr.number}:${pr.headRefOid}`));
-    for (const key of Object.keys(this.s.cancelWatch)) if (!open.has(key)) delete this.s.cancelWatch[key];   // head moved or PR closed
+    // Head moved or PR closed. Skipped when the list is at the listPulls cap (100): a PR beyond it would look closed, and its
+    // watch (with the recorded rerun) would be dropped and the rerun repeated.
+    if (pulls.length < OPEN_PULLS_CAP) for (const key of Object.keys(this.s.cancelWatch)) if (!open.has(key)) delete this.s.cancelWatch[key];
     for (const pr of pulls) {
       if (pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const lone = loneCancelled(pr.statusCheckRollup, this.retried(pr)), key = `${pr.number}:${pr.headRefOid}`;
       if (!lone.length) {
         // Before the rerun, no lone cancel means it was superseded: forget it. After the rerun the check is queued or in progress
-        // (no lone cancel either), so the entry is kept until the head goes green; a rerun that ends cancelled again leads to the
+        // (no lone cancel either), so the entry is kept until the head goes green or has a genuine failure (a rerun that stays cancelled is not one; red belongs to the fix path, and a later manual cancel then gets its own rerun); a rerun that ends cancelled again leads to the
         // notice, never to a second rerun.
         const w = this.s.cancelWatch[key];
-        if (w && !w.noticed && (!w.rerunAt || this.ciState(pr) === 'green')) delete this.s.cancelWatch[key];
+        if (w && !w.noticed && (!w.rerunAt || this.ciState(pr) === 'green' || checksState(pr.statusCheckRollup) === 'red')) delete this.s.cancelWatch[key];
         continue;
       }
       const w = this.s.cancelWatch[key] ||= { since: now };
