@@ -110,7 +110,7 @@ function realGit(repoPath) {
 }
 async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true) {
   // The decision register that counts is the one merged into main, not a working copy.
-  // A dry run reads it too when it can, so `team status` plans the way a real tick would.
+  // A dry run needs it too: the enable gate (issue #40) must fail exactly where a live tick would.
   const register = readRegister(config);
   if (!register && needRegister) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main');
   // Model routing (issue #64): what each CLI accepts comes from its manifest; the weekly allowance is the freshest the provider reported.
@@ -130,6 +130,26 @@ function probeAllowances(config) {
   }
   return out;
 }
+// Enable gate (issue #40): everything a live tick needs that a dry-run plan alone would not prove. Read-only, no model call.
+// Provider preflights run against the configured product repository, never the caller's working directory.
+async function gatePreflight(registry, config) {
+  const checks = {};
+  const run = async (name, fn) => { try { const r = await fn(); checks[name] = r === true ? 'ok' : r; } catch (error) { checks[name] = `failed: ${String(error?.message || error).slice(0, 160)}`; } };
+  await run('git', () => { const r = spawnSync('git', ['-C', config.repo_path, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 15000 }); if (r.error?.code === 'ENOENT') throw new SupervisorError('required binary not found: git'); if (r.status !== 0 || fs.realpathSync(r.stdout.trim()) !== fs.realpathSync(config.repo_path)) throw new SupervisorError(`repo_path is not a Git repository root: ${config.repo_path}`); return true; });
+  await run('github', async () => { await githubClient(config).listPulls(); return true; });
+  await run('register', () => { const text = readRegister(config); if (!text) throw new SupervisorError('cannot read docs/DECISIONS.md from origin/main'); if (config.access?.mode === 'full' && !decisionApproved(text, config.access.decision)) throw new SupervisorError(`${config.access.decision} is not homeowner-approved`); return true; });
+  const here = process.cwd();
+  try {
+    if (checks.git === 'ok') process.chdir(config.repo_path);
+    for (const id of [...new Set(Object.values(config.agents || {}).map(a => a.provider))]) {
+      await run(`provider:${id}`, async () => {
+        const ok = (await provider(registry, id)).adapter.preflight?.({ role: 'implementer', worktree: config.repo_path });
+        return ok === 'not_found' ? 'failed: provider binary not found on PATH' : ok === false ? 'failed: not logged in or launcher refused the product root' : true;
+      });
+    }
+  } finally { process.chdir(here); }
+  return { ok: Object.values(checks).every(v => v === 'ok'), checks };
+}
 const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 async function teamTick(root, registry, dryRun, hold = null) {
   // Issue #153: pending config migrations run once, before the first tick of a new version; a failing one stops the tick.
@@ -148,7 +168,7 @@ async function teamTick(root, registry, dryRun, hold = null) {
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };
   try {
-    const team = await teamFor(root, registry, config, !dryRun);
+    const team = await teamFor(root, registry, config);
     const report = await team.tick({ dryRun, hold });
     if (!dryRun) record({ ...tickOutcome(report), team, actions: report.actions });
     return report;
@@ -191,7 +211,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -254,6 +274,12 @@ async function main() {
     const server = await serve({ root, config: () => loadTeamConfig(teamConfigFile, root), host: a.host || process.env.DASHBOARD_HOST, port: Number(a.port || process.env.DASHBOARD_PORT || DEFAULT_PORT) });
     console.log(`dashboard listening on http://${server.address().address}:${server.address().port}/ (read-only)`);
     return;   // the server keeps the process alive
+  }
+  if (command === 'preflight') {
+    const result = await gatePreflight(registry, loadTeamConfig(teamConfigFile, root));
+    console.log(JSON.stringify(result));
+    if (!result.ok) process.exitCode = 3;
+    return;
   }
   if (command === 'team') {
     if (a._[0] === 'status') {

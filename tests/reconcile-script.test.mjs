@@ -14,7 +14,9 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
   const existing = { '/existing/script': { script: '/existing/script', frequency: 'custom', id: 'other', custom: '17 6 * * *' } };
   fs.writeFileSync(path.join(root, 'schedule.json'), JSON.stringify(existing));
   fs.writeFileSync(path.join(root, 'customSchedule.cron'), '# Generated cron schedule for user.scripts\n17 6 * * * existing\n');
-  const env = { ...process.env, AI_SUPERVISOR_USER_SCRIPTS_ROOT: root, AI_SUPERVISOR_RECONCILE_TEST: '1' };
+  const fake = path.join(root, 'fakenode'), fakeCli = path.join(root, 'cli.mjs');
+  fs.writeFileSync(fake, '#!/bin/sh\necho \'{"ok":true,"actions":[]}\'\n', { mode: 0o755 }); fs.writeFileSync(fakeCli, '');
+  const env = { ...process.env, AI_SUPERVISOR_USER_SCRIPTS_ROOT: root, AI_SUPERVISOR_RECONCILE_TEST: '1', AI_SUPERVISOR_NODE: fake, AI_SUPERVISOR_CLI: fakeCli };
   execFileSync('bash', [install], { env, stdio: 'ignore' });
   const installed = JSON.parse(fs.readFileSync(path.join(root, 'schedule.json'), 'utf8'));
   assert.deepEqual(installed['/existing/script'], existing['/existing/script']);
@@ -34,7 +36,7 @@ function cronWorld(t, { nodeBody } = {}) {
   fs.mkdirSync(bin); fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
   const exe = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   exe('gh', 'echo "[]"'); exe('git', 'echo git');
-  exe('node', nodeBody || 'case "$2" in reconcile) gh pr list >/dev/null || exit 4; echo \'{"team":{"actions":[]}}\';; esac');
+  exe('node', nodeBody || 'case "$2" in reconcile) gh pr list >/dev/null || exit 4; echo \'{"team":{"actions":[]}}\';; team) echo \'{"actions":[]}\';; esac');
   fs.writeFileSync(path.join(root, 'cli.mjs'), '');
   fs.writeFileSync(path.join(plugin, 'schedule.json'), '{}'); fs.writeFileSync(path.join(plugin, 'customSchedule.cron'), '# x\n');
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_USER_SCRIPTS_ROOT: plugin, AI_SUPERVISOR_RECONCILE_TEST: '1',
@@ -111,4 +113,62 @@ test('issue #35 an unreadable CLI or non-executable node leaves a failing log li
   fs.chmodSync(node, 0o600);
   w.cron();
   assert.match(fs.readFileSync(w.log, 'utf8').trim().split('\n').at(-1), /rc=127 node not executable/);
+});
+
+// ---- issue #40: the enable gate
+const verify = new URL('../tools/verify-reconcile-env.sh', import.meta.url).pathname;
+const installed = w => fs.existsSync(path.dirname(w.script)) || fs.readFileSync(path.join(w.plugin, 'schedule.json'), 'utf8') !== '{}';
+// A fake node that records how it was called and fails the named subcommand.
+const gateNode = (failOn, log) => [
+  `echo "$PWD|$HOME|$*|${'$'}{CALLER_MARK:-unset}" >> '${log}'`,
+  'case "$2" in',
+  'preflight) ' + (failOn === 'preflight' ? "echo '{\"ok\":false}'; exit 3;;" : "echo '{\"ok\":true}';;"),
+  'team) ' + ({ tick: 'echo boom >&2; exit 1;;', skip: "echo '{\"skipped\":\"another tick is running\"}';;", garbage: 'echo nope;;' }[failOn] || "echo '{\"actions\":[]}';;"),
+  'esac'].join('\n');
+
+test('issue #40 the gate runs preflight and a dry-run tick under env -i, from a neutral directory, then installs', t => {
+  const gl = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gatelog-')), 'gate.log');
+  const w = cronWorld(t, { nodeBody: gateNode('none', gl) });
+  const env = { ...w.env, GATE_LOG: gl, CALLER_MARK: 'leaked' };
+  const r = spawnSync('bash', [install], { env, encoding: 'utf8', cwd: os.tmpdir() });
+  assert.equal(r.status, 0, r.stderr);
+  const calls = fs.readFileSync(gl, 'utf8').trim().split('\n').filter(l => /cli\.mjs/.test(l));
+  assert.equal(calls.length, 2);
+  assert.match(calls[0], /^\/\|.*\|.*cli\.mjs preflight\|unset$/); assert.match(calls[1], /^\/\|.*\|.*cli\.mjs team tick --dry-run\|unset$/);   // cwd /, environment not inherited
+  assert.ok(installed(w));
+});
+
+for (const [failOn, why] of [['preflight', /preflight/], ['tick', /team tick --dry-run/], ['skip', /no plan returned/], ['garbage', /no plan returned/]]) {
+  test(`issue #40 the gate refuses to install when ${failOn} fails, and leaves no schedule behind`, t => {
+    const w = cronWorld(t, { nodeBody: gateNode(failOn, os.devNull) });
+    const r = spawnSync('bash', [install], { env: { ...w.env, GATE_LOG: path.join(w.root, 'gate.log') }, encoding: 'utf8' });
+    assert.equal(r.status, 2); assert.match(r.stderr, why); assert.match(r.stderr, /no schedule was installed/);
+    assert.ok(!installed(w)); assert.equal(fs.readFileSync(path.join(w.plugin, 'customSchedule.cron'), 'utf8'), '# x\n');
+  });
+}
+
+test('issue #40 the gate script alone: exit 1 on a failing step, 2 on bad arguments or a missing cli, 0 on a real plan', t => {
+  const w = cronWorld(t, { nodeBody: gateNode('none', os.devNull) });
+  const node = path.join(w.bin, 'node'), cli = path.join(w.root, 'cli.mjs'), env = { ...process.env, GATE_LOG: path.join(w.root, 'g.log') };
+  assert.equal(spawnSync('bash', [verify, '/usr/bin:/bin', w.root, node, cli], { env }).status, 0);
+  assert.equal(spawnSync('bash', [verify], { env }).status, 2);
+  assert.equal(spawnSync('bash', [verify, '/usr/bin:/bin', w.root, node, path.join(w.root, 'missing.mjs')], { env }).status, 2);
+  fs.writeFileSync(node, '#!/bin/sh\nexit 1\n');
+  assert.equal(spawnSync('bash', [verify, '/usr/bin:/bin', w.root, node, cli], { env }).status, 1);
+});
+
+test('issue #40 real cli: preflight names a failing gh, an unreadable register and a missing provider, from any cwd, and exits 3', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-pf40-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n', { mode: 0o755 });
+  // git: --version style calls succeed, but reading the register from origin/main fails (the false pass at 97f0227)
+  fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\ncase "$*" in *show*) exit 42;; *) echo /nonexistent;; esac\n', { mode: 0o755 });
+  const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+  const r = spawnSync(process.execPath, [cli, 'preflight'], { cwd: '/', encoding: 'utf8', env: { PATH: bin, HOME: root, AI_SUPERVISOR_STATE_ROOT: root } });
+  assert.equal(r.status, 3, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.ok, false);
+  assert.match(out.checks.github, /^failed: gh pr list failed/); assert.match(out.checks.register, /^failed: cannot read docs\/DECISIONS\.md/);
+  assert.match(out.checks.git, /^failed/);
+  assert.match(out.checks['provider:claude'], /^failed/); assert.match(out.checks['provider:codex'], /^failed/);
 });

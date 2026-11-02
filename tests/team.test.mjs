@@ -1123,3 +1123,12 @@ test('issue #149 watchCancelled: a cancelled run that gets superseded before the
   await f.team.tick(); clock.t += 6 * 60000; await f.team.tick(); await f.team.tick();
   assert.equal(n, 1);
 });
+
+// ---- issue #40: the dry run applies the live tick's D-020 check
+test('issue #40 a dry run refuses when D-020 is not homeowner-approved, exactly as a live tick does', async t => {
+  for (const dryRun of [true, false]) {
+    const w = world(t, { teamOpts: { register: REGISTER.replace('D-020 — x\n- Status: homeowner-approved', 'D-020 — x\n- Status: agent-proposal') } });
+    await assert.rejects(w.team.tick({ dryRun }), /D-020 is not homeowner-approved/);
+  }
+  const ok = world(t); const r = await ok.team.tick({ dryRun: true }); assert.ok(Array.isArray(r.actions));
+});
