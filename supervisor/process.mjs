@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { billingRisk, limitFromAllowance } from './allowance.mjs';
 import { addUsage, sessionFromLine, usageFromLine } from './usage.mjs';
 import { begin as beginSession, recordUsage, seed as sessionSeed, touch } from './session.mjs';
@@ -48,7 +49,9 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   // A child that exits before reading its prompt closes the pipe; that is an exit status, not a supervisor crash.
   child.stdin.on('error', () => {});
   child.stdin.end(prompt(job, job.attempts > 1, job.attempts > 1 && !session.resume ? sessionSeed(job) : null));
+  // Cap in UTF-16 code units (JS string length), not bytes: 64Ki units is 64 KiB for ASCII and more in UTF-8.
   const CAP = 65536;
+  const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }; // no split multibyte characters
   // Issue #120: a line longer than the buffer cap is discarded whole, up to its newline, and never classified from a
   // fragment (a dropped opening brace turned a JSON tail into "plain text" that quoted a diff mentioning a usage limit).
   const discarding = { stdout: false, stderr: false };
@@ -62,7 +65,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     observeEvent(result, stream, line);
   };
   const onData = stream => chunk => {
-    let text = chunk.toString('utf8');
+    let text = decoders[stream].write(chunk);
     while (text.length) {
       const nl = text.indexOf('\n');
       if (discarding[stream]) {

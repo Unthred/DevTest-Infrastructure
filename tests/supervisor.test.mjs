@@ -384,7 +384,7 @@ test('#80 a paused job whose postcondition is met completes instead of resuming 
   const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, autoRestart: true, postcondition: { kind: 'pr_opened' } }, f.registry, clock);
   let calls = 0, checks = 0;
   const result = await drive(f.root, job, f.registry, clock, async () => { calls++; return { code: 1, event: 'usage_limit' }; }, 4,
-    async () => ++checks >= 2); // not met when the limit hit (e.g. PR opened while paused), met by the time of resume
+    async () => ++checks >= 1); // issue #127: pr_opened is not checked when the limit hits, only before the session resumes
   assert.equal(result.status, 'completed'); assert.equal(result.lastEvent, 'completed_before_resume');
   assert.equal(calls, 1); assert.deepEqual(leaseFiles(f.root), []);
 });
