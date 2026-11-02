@@ -1141,7 +1141,8 @@ export class Team {
     const m = /\/issue-(\d+)(\D|$)/.exec(j.branch || '');
     let required = null;
     try {
-      const found = m ? (this.view?.issues || await this.gh.listIssues()).find(i => i.number === Number(m[1])) : null;
+      let found = m ? (this.view?.issues || await this.gh.listIssues()).find(i => i.number === Number(m[1])) : null;
+      if (m && !found && this.gh.getIssue) { const direct = await this.gh.getIssue(Number(m[1])); if (direct && direct.number === Number(m[1])) found = direct; }   // the list is capped; ask for the issue itself
       const body = found ? String(found.body ?? '') : null;   // an issue that cannot be found is unreadable, not empty
       const comments = m && body !== null && this.gh.issueComments ? await this.gh.issueComments(Number(m[1])) : null;
       if (comments) required = [body, ...comments.filter(c => c.association === 'OWNER').map(c => c.body)].join('\n');
