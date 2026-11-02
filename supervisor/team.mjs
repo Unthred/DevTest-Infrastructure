@@ -28,6 +28,9 @@ export function validateTeamConfig(c) {
   const L = c.limits || {};
   for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
   if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
+  if ('chain_seconds' in L && !(typeof L.chain_seconds === 'number' && L.chain_seconds >= 0 && L.chain_seconds <= 3600)) throw new SupervisorError('invalid team limit: chain_seconds');
+  if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');
+  if ('chain_poll_seconds' in L && !(typeof L.chain_poll_seconds === 'number' && L.chain_poll_seconds >= 1 && L.chain_poll_seconds <= 300)) throw new SupervisorError('invalid team limit: chain_poll_seconds');
   if ('stall_hours' in L && !(typeof L.stall_hours === 'number' && L.stall_hours > 0 && L.stall_hours <= 720)) throw new SupervisorError('invalid team limit: stall_hours');
   normalizeRoleLimits(c);
   if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
@@ -1067,7 +1070,32 @@ export class Team {
   }
 
   // ---- execution
+  // Issue #338: after a pass, while jobs run, wait (bounded) for one to finish and run another full pass, so a freed slot refills
+  // within seconds, not at the next five-minute tick. Every later pass is a complete tickPass (ingest, budgets, plan, all gates,
+  // the same hold); nothing here starts a job. Off unless limits.chain_seconds is set; limits.chain_passes bounds the extra passes.
   async tick({ dryRun = false, hold = null } = {}) {
+    const report = await this.tickPass({ dryRun, hold });
+    const L = this.c.limits || {}, windowMs = (L.chain_seconds || 0) * 1000, maxPasses = L.chain_passes ?? 3, pollMs = (L.chain_poll_seconds || 10) * 1000;
+    if (dryRun || !(windowMs > 0) || maxPasses < 1) return report;
+    const deadline = this.clock.now() + windowMs;
+    for (let n = 0; n < maxPasses; n++) {
+      let before;
+      try { before = new Set((await this.jobs.listActive()).map(j => j.id)); } catch { break; }
+      if (!before.size) break;   // nothing running to wait for: a tick that plans nothing never loops
+      let ended = false;
+      while (!ended && this.clock.now() < deadline) {
+        await this.sleep(Math.min(pollMs, Math.max(0, deadline - this.clock.now())));
+        try { const now = new Set((await this.jobs.listActive()).map(j => j.id)); ended = [...before].some(id => !now.has(id)); } catch { break; }
+      }
+      if (!ended) break;
+      const next = await this.tickPass({ dryRun: false, hold });
+      for (const [k, v] of Object.entries(next)) report[k] = Array.isArray(v) && Array.isArray(report[k]) ? report[k].concat(v) : (k in report && !Array.isArray(v) ? report[k] : v);
+      (report.chained ||= []).push({ pass: n + 2, actions: next.actions.map(a => `${a.type} ${a.pr ?? a.issue}`) });
+    }
+    return report;
+  }
+
+  async tickPass({ dryRun = false, hold = null } = {}) {
     if (this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision))
       throw new SupervisorError(`${this.c.access.decision} is not homeowner-approved in the decision register; refusing to launch jobs${dryRun ? ' (a dry run applies the same check as a live tick)' : ''}`);
     const report = { ingested: [], notified: [], actions: [], skipped: [] };
