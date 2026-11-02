@@ -93,7 +93,8 @@ export function agentStates(config, jobs, now) {
     else if (paused) { state = 'paused'; job = paused; }
     else if (unknown) { state = 'unknown'; job = null; }
     else if (latest && ['blocked', 'failed'].includes(latest.status) && now - (latest.updatedAt || 0) < 48 * 3600000) { state = 'blocked'; job = latest; }
-    out[name] = { state, job, last: latest || null };
+    // Issue #213: every live or paused job of this agent (a role can run beside another on one agent), not just the newest.
+    out[name] = { state, job, jobs: active, last: latest || null };
   }
   return out;
 }
