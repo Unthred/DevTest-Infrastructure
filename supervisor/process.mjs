@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { billingRisk, limitFromAllowance } from './allowance.mjs';
 import { addUsage, sessionFromLine, usageFromLine } from './usage.mjs';
 import { begin as beginSession, recordUsage, seed as sessionSeed, touch } from './session.mjs';
+import { TranscriptWriter, oneLine, pruneTranscripts } from './transcript.mjs';
 import { checkpoint, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
 export async function runProcess(root, job, config, adapter, clock, options = {}) {
@@ -13,6 +14,23 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   }
   // Issue #74: a new job always starts a fresh session; a later attempt resumes only a recent, small session.
   const session = beginSession(root, job, clock);
+  // Issue #123: a redacted, size-capped transcript of the stream. A transcript fault never stops or fails the job.
+  let transcript = null; const tstate = {};
+  try { pruneTranscripts(root, clock.now()); transcript = new TranscriptWriter(root, job.id, { clock }); } catch { transcript = null; }
+  const record = (stream, line, result) => {
+    if (!transcript) return;
+    try {
+      let entries = typeof adapter.transcript === 'function' ? adapter.transcript(line, tstate) : null;
+      // Not JSON: the provider CLI's own text (stderr, banners). A JSON line the adapter does not map is protocol noise.
+      if (entries === null) entries = line.trim() && !/^\s*[{\[]/.test(line) ? [{ kind: 'log', stream, text: line }] : [];
+      if (result?.event) {
+        const evidence = { event: result.event, line };
+        if (entries.length) { const i = Math.max(0, entries.findIndex(e => e.kind !== 'usage')); entries[i] = { ...entries[i], evidence }; }
+        else entries = [{ kind: 'log', stream, text: oneLine(line, 500), evidence }];
+      }
+      for (const e of entries) transcript.append({ stream, ...e });
+    } catch { /* the transcript is best effort */ }
+  };
   const argv = adapter.command(config, job, session.resume);
   const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   let observed = null, resetAt = null, resetSource = 'none', verified = false;
@@ -59,6 +77,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     const sessionUsage = sessionFromLine(line); if (sessionUsage) recordUsage(job, sessionUsage);
     const result = adapter.observe(line, clock.now());
     if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
+    record(stream, line, result);
     observeEvent(result, stream, line);
   };
   const onData = stream => chunk => {
@@ -90,7 +109,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
       child.on('error', () => resolve({ code: 1, event: 'crash' }));
       child.on('close', code => resolve({ code: code ?? 1 }));
     });
-    for (const stream of ['stdout', 'stderr']) if (buffers[stream] && !discarding[stream]) { const rest = buffers[stream].slice(0, 16384); observeEvent(adapter.observe(rest, clock.now()), stream, rest); }
+    for (const stream of ['stdout', 'stderr']) if (buffers[stream] && !discarding[stream]) { const rest = buffers[stream].slice(0, 16384); const late = adapter.observe(rest, clock.now()); record(stream, rest, late); observeEvent(late, stream, rest); }
     if (typeof adapter.postRun === 'function') { const late = adapter.postRun(job); if (late) allowance = late; }
     touch(job, clock);
     if (usage) job.usage = addUsage(job.usage, usage);
