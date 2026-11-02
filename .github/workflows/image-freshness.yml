@@ -1,0 +1,23 @@
+name: Image freshness
+
+# Issue #12: a weekly reminder, not a merge gate. Fails (and so notifies) when a pinned image digest is older than the update cadence.
+# It only reads docker/images.lock.json; it pulls no image and needs no Docker, network credential or secret.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Pinned image digests are within the update cadence
+        run: node tools/ci/check-ci.mjs --max-age-days 45
