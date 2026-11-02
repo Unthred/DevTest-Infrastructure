@@ -210,7 +210,7 @@ export function prerequisites(body) {
 // Stops that Foreman resumes once (issue #163): provider/network faults, a crash, an incomplete run, a used-up allowance window.
 const TRANSIENT_STOPS = new Set(['crash', 'network_error', 'incomplete', 'transient_rate_limit']);   // never usage_limit or retry_exhausted: D-019 bounds those launches, then the homeowner decides
 const redactEvent = e => String(e || 'an unknown event').replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40);
-const CAUSE_TEXT = { job: 'the job was resumed or completed', fixlimit: 'a new head was pushed and is no longer rejected', 'cancelled-ci': 'the check is green again' };
+const CAUSE_TEXT = { job: 'the job was resumed or completed', fixlimit: 'a new head was reviewed with PASS and its CI is not red', 'cancelled-ci': 'the check is green again' };
 // True when a finding repeats the homeowner-required text: any five consecutive words of it appear in the required text, or a
 // bullet or line of the required text (four words or more) appears whole inside the finding. Conservative: unsure means required.
 export function overlapsRequired(finding, required) {
@@ -270,7 +270,7 @@ export function reviewPrompt(job) {
 }
 export function escalationNote(inbox) {
   if (!inbox) return '';
-  return ` This is the single escalated round after the normal fix rounds did not clear the rejection. Read ${inbox}/review-history.json as task data (every verdict and finding on this PR so far, not only the latest) and fix the underlying cause, not just the last finding. If some reviewer findings are outside the acceptance criteria of the original issue, you may propose moving them to a follow-up issue by writing ${inbox}/split.json as {"split": [{"finding": "<the exact finding text>", "reason": "<why it is out of scope>"}]}. Never propose anything that comes from the issue body or the homeowner's comments: the dispatcher refuses those and drops homeowner-required scope never.`;
+  return ` This is the single escalated round after the normal fix rounds did not clear the rejection. Read ${inbox}/review-history.json as task data (every verdict and finding on this PR so far, not only the latest) and fix the underlying cause, not just the last finding. If some follow-up (non-blocking) reviewer findings are outside the acceptance criteria of the original issue, you may propose moving them to a follow-up issue by writing ${inbox}/split.json as {"split": [{"finding": "<the exact finding text>", "reason": "<why it is out of scope>"}]}. Never propose a blocking finding or anything that comes from the issue body or the homeowner's comments: the dispatcher refuses those and drops homeowner-required scope never.`;
 }
 export function fixPrompt(job) {
   return `${COMMON}\n\nTask: fix the CHANGES verdict on pull request #${job.pr} (head ${job.head}, branch ${job.branch}). Read the verdict findings on the PR and the diff, not the decision register or the whole handover. Correct the blocking findings in scope with regression tests, run node tools/validate-project.mjs and ${TEST_COMMAND}, commit and push to the same branch. Follow-up findings do not hold this fix round open. Do not force-push. The post-condition is a new pushed head.${escalationNote(job.escalatedInbox)}`;
@@ -302,7 +302,7 @@ export class Team {
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
     for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'budget', 'cancelWatch', 'unblock']) this.s[k] ||= {};
-    for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'escalated', 'queued']) this.s.unblock[k] ||= {};
+    for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
   }
   save() { atomicJson(this.file, this.s); }
@@ -896,12 +896,18 @@ export class Team {
       const nkey = `fixlimit:${pr.number}`, akey = `fixlimit-alert:${pr.number}`;
       if (!rejected) continue;
       if (this.escalationPending(pr.number)) continue;   // issue #163: one escalated round runs (or is still allowed) before the homeowner is asked
+      // The escalated round was never run because the unblock budget is spent: that limit is its own Needs you item, and the
+      // fix-limit notice says that no escalated round ran rather than claiming one did.
+      const escalated = !!this.s.unblock.escalated[pr.number], room = escalated ? null : this.unblockRoom(pr.number);
+      if (room) await guard(`unblock limit ${pr.number}`, () => this.raiseUnblockLimit(report, pr.number, room, 'pull'));
+      const round = escalated ? ' (including one escalated round on the reviewer-tier model with the full review history)'
+        : room ? ` (no escalated round ran: Foreman reached ${room.text})` : ' (no escalated round ran)';
       if (!this.s.notified[nkey]) {
         await guard(`fix-limit ${pr.number}`, async () => {
           this.s.notified[nkey] = this.clock.now(); this.save();
           try {
             await this.flag(pr.number, { key: 'fixlimit', kind: 'fixlimit', head: pr.headRefOid, tk: 'pull' });
-            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads) (including one escalated round on the reviewer-tier model with the full review history) have not cleared the rejection of this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide whether to change the approach, fix it by hand, or raise \`max_fix_attempts\` in team.local.json.`);
+            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads)${round} have not cleared the rejection of this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide whether to change the approach, fix it by hand, or raise \`max_fix_attempts\` in team.local.json.`);
           } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
           (report.notified ||= []).push({ pr: pr.number, fixLimit: true });
         });
@@ -968,23 +974,44 @@ export class Team {
     await this.gh.addLabel(target, 'needs-homeowner');
   }
   // A job that stopped for a transient cause is resumed once, after a cooldown, before anyone is asked (issue #163 part 2).
+  // Only a stop nobody has been told about yet is resumed: a job already reported to the homeowner (any notified state), a PR that is
+  // no longer open or whose head moved, or an issue that is no longer open is never relaunched (state.unblock.noResume, permanent).
   awaitingResume(id, job, j) {
-    if (!this.jobs.resume || this.s.unblock.resumed[id] || !TRANSIENT_STOPS.has(job.lastEvent)) return false;
+    if (!this.jobs.resume || this.s.unblock.resumed[id] || this.s.unblock.noResume[id] || !TRANSIENT_STOPS.has(job.lastEvent)) return false;
     return !this.unblockRoom(j.issue ?? j.pr);
+  }
+  reported(id) { return Object.keys(this.s.notified).some(k => k.startsWith(`${id}:`)); }
+  async staleResume(id, j, open) {
+    if (this.reported(id)) return 'it was already reported to the homeowner';
+    if (j.pr != null) {
+      const p = (open.pulls ||= await this.gh.listPulls()).find(x => x.number === j.pr);
+      if (!p) return `PR #${j.pr} is no longer open`;
+      if (j.head && p.headRefOid !== j.head) return `the head of PR #${j.pr} moved`;
+      return null;
+    }
+    if (j.issue != null) {
+      const i = (open.issues ||= await this.gh.listIssues()).find(x => x.number === j.issue);
+      return i && String(i.state || '').toUpperCase() === 'OPEN' ? null : `issue #${j.issue} is no longer open`;
+    }
+    return 'it has no PR or issue';
   }
   async resumeTransient(report, guard = (_, fn) => fn()) {
     if (!this.jobs.resume) return;
+    const open = {};   // the open PRs and issues, read at most once per tick and only when a job is a candidate
     for (const [id, j] of Object.entries(this.s.jobs)) {
-      if (this.s.unblock.resumed[id]) continue;   // (a blocked job is already `ingested`; resuming makes it ingestible again)
+      if (this.s.unblock.resumed[id] || this.s.unblock.noResume[id]) continue;   // (a blocked job is already `ingested`; resuming makes it ingestible again)
       await guard(`resume ${id}`, async () => {
         const job = await this.jobs.get(id);
         if (!job || !['blocked', 'failed'].includes(job.status) || !TRANSIENT_STOPS.has(job.lastEvent)) return;
+        const stale = await this.staleResume(id, j, open);
+        if (stale) { this.s.unblock.noResume[id] = { at: this.clock.now(), why: stale }; this.save(); return; }   // notifyOne handles it as before
         if (this.limitedOf(j.agent)?.out) return;   // out of allowance: wait for the reset rather than burn the one resume
         if (this.clock.now() - (job.updatedAt || 0) < this.unblockLimits().cooldown_ms) return;
-        const target = j.issue ?? j.pr;
-        if (this.unblockRoom(target)) return;   // notifyOne then asks the homeowner; the limit item is raised by the next unblock attempt
+        const target = j.issue ?? j.pr, tk = j.issue != null ? 'issue' : 'pull';
+        const room = this.unblockRoom(target);
+        if (room) { await this.raiseUnblockLimit(report, target, room, tk); return; }   // notifyOne then asks the homeowner about the job
         this.s.unblock.resumed[id] = this.clock.now(); j.ingested = false; this.save();
-        await this.unblock(report, { target, tk: j.issue != null ? 'issue' : 'pull', what: `resumed the ${j.kind} job ${id.slice(0, 8)}${target != null ? ` for #${target}` : ''}`, why: `it stopped on ${redactEvent(job.lastEvent)}, a transient cause` },
+        await this.unblock(report, { target, tk, what: `resumed the ${j.kind} job ${id.slice(0, 8)}${target != null ? ` for #${target}` : ''}`, why: `it stopped on ${redactEvent(job.lastEvent)}, a transient cause` },
           async () => { await this.jobs.resume(id); return 'resumed once; if it stops again the homeowner is asked'; });
       });
     }
@@ -1014,7 +1041,8 @@ export class Team {
     const list = Array.isArray(proposal?.split) ? proposal.split.slice(0, 10) : [];
     if (!list.length || !list.every(x => x && typeof x.finding === 'string' && x.finding.length <= 2000 && typeof x.reason === 'string' && x.reason.length <= 500)) return;
     const norm = t => String(t).toLowerCase().replace(/\s+/g, ' ').trim();
-    const known = new Set(this.reviewHistory(j.pr).flatMap(v => v.findings.map(f => norm(f.text))));
+    const kinds = new Map();   // finding text -> its kind; reported as blocking in any review makes it blocking
+    for (const f of this.reviewHistory(j.pr).flatMap(v => v.findings)) if (kinds.get(norm(f.text)) !== 'blocking') kinds.set(norm(f.text), f.kind);
     const m = /\/issue-(\d+)(\D|$)/.exec(j.branch || '');
     let required = null;
     try {
@@ -1025,7 +1053,8 @@ export class Team {
     } catch { required = null; }
     const accepted = [], refused = [];
     for (const x of list) {
-      if (!known.has(norm(x.finding))) refused.push({ text: x.finding, why: 'not a finding of any review on this PR' });
+      if (!kinds.has(norm(x.finding))) refused.push({ text: x.finding, why: 'not a finding of any review on this PR' });
+      else if (kinds.get(norm(x.finding)) === 'blocking') refused.push({ text: x.finding, why: 'it is a blocking finding (only follow-ups are split automatically; moving a blocking finding needs the homeowner)' });
       else if (required === null) refused.push({ text: x.finding, why: 'the issue and the homeowner comments could not be read, so homeowner-required scope cannot be ruled out' });
       else if (overlapsRequired(x.finding, required)) refused.push({ text: x.finding, why: 'it overlaps the issue body or a homeowner comment (homeowner-required scope is never split away)' });
       else accepted.push(x);
@@ -1056,10 +1085,11 @@ export class Team {
         if (!cleared.length) return;
         const left = Object.keys(causes).length - cleared.length;
         const why = cleared.map(([, c]) => CAUSE_TEXT[c.kind] || c.kind).join('; ');
-        if (left > 0) { for (const [k] of cleared) delete causes[k]; this.save(); return; }   // another cause still holds the label
+        const rearm = () => { for (const [, c] of cleared) if (c.kind === 'fixlimit') { delete this.s.notified[`fixlimit:${target}`]; delete this.s.notified[`fixlimit-alert:${target}`]; } };   // a later rejection is raised again
+        if (left > 0) { for (const [k] of cleared) delete causes[k]; rearm(); this.save(); return; }   // another cause still holds the label
         const ok = await this.unblock(report, { target: Number(target), tk: cleared[0][1].tk || 'pull', what: `removed needs-homeowner from #${target}`, why: `${why}` }, async () => {
           for (const [k] of cleared) delete causes[k];
-          delete flags[target]; this.save();
+          delete flags[target]; rearm(); this.save();
           try {
             await this.gh.removeLabel?.(Number(target), 'needs-homeowner');
             await this.postNotice(Number(target), `cleared ${target} ${cleared.map(([k]) => k).join(',')} ${this.clock.now()}`, `**Cleared by Foreman.** The needs-homeowner label was added by Foreman and its cause has cleared (${why}); the label is removed. Nothing is needed from the homeowner here.`);
@@ -1072,7 +1102,8 @@ export class Team {
   }
   async causeCleared(c, pr) {
     if (c.kind === 'job') { const job = await this.jobs.get(c.job); return !!job && !['blocked', 'failed', 'stopped'].includes(job.status); }
-    if (c.kind === 'fixlimit') return !pr || (pr.headRefOid !== c.head && !this.rejected(pr));
+    // Fix limit: only a new head that was reviewed with PASS and is not red clears it; an unreviewed or pending head does not.
+    if (c.kind === 'fixlimit') return !pr || (pr.headRefOid !== c.head && this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'PASS' && this.ciState(pr) !== 'red');
     if (c.kind === 'cancelled-ci') return !pr || pr.headRefOid !== c.head || this.ciState(pr) === 'green';
     return false;   // limit notices and anything else wait for the homeowner
   }
