@@ -82,7 +82,7 @@ test('while rate-limited, main is still refreshed each tick and the header shows
   assert.equal(v.drift, true); assert.equal(v.behind, 2); assert.ok(v.nextTryAt > Date.now());
   const s = versionStatus(v);
   assert.equal(s.level, 'warning');
-  assert.match(s.label, /^2 commits behind, next try \d\d:\d\d UTC$/);
+  assert.match(s.label, /^2 commits behind, next try \d{4}-\d\d-\d\d \d\d:\d\d UTC$/);
 });
 
 test('a failed fetch while rate-limited changes nothing and the normal up-to-date header stays', async t => {

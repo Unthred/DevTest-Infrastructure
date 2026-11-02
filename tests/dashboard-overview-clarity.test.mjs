@@ -245,3 +245,28 @@ test('time: no visible timestamp is rendered as plain utc() text', () => {
   assert.deepEqual(bad, []);
   assert.doesNotMatch(src, /\$\{when\}\)`/);
 });
+
+// Review of PR #217 (head a7294a5): the version badge's "next try" was plain `HH:MM UTC` text. Rendering guard: on every page, with the
+// version drifting and rate-limited, a displayed time is a <time data-local> element (or a chart data-lms template); no `HH:MM UTC` stays
+// as plain text. Attribute text (titles, templates) is not displayed text and is ignored.
+const plainTimes = html => html
+  .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, '')
+  .replace(/<time\b[\s\S]*?<\/time>/g, '')
+  .replace(/<title\b[^>]*data-lms[\s\S]*?<\/title>/g, '')
+  .replace(/<text\b[^>]*data-lms[\s\S]*?<\/text>/g, '')
+  .replace(/<[^>]+>/g, ' ')
+  .match(/\d{1,2}:\d{2}\s*UTC/g) || [];
+test('time: the version badge next-try time is a local <time> and no page shows a plain UTC clock time', async t => {
+  const v = await build(t, { jobs: [job(), paused()] });
+  v.version = { installed: 'a'.repeat(40), main: 'b'.repeat(40), drift: true, behind: 2, nextTryAt: Date.parse('2026-07-01T12:34:00Z'), latched: false };
+  const home = page(v);
+  assert.match(header(home), /2 commits behind, next try <time class="lt" datetime="2026-07-01T12:34:00.000Z" data-local>2026-07-01 12:34 UTC<\/time>/);
+  for (const p of ['overview', 'agents', 'work', 'activity', 'usage', 'reviews', 'supervisor', 'ticks', 'upgrades', 'system']) {
+    const html = renderRoute(v, { page: p }, { query: new URLSearchParams(), pathname: `/${p}` }).html;
+    assert.deepEqual(plainTimes(html), [], `page ${p} shows a plain UTC time: ${(html.replace(/<time\b[\s\S]*?<\/time>/g,'').match(/.{50}\d{1,2}:\d{2}\s*UTC.{10}/)||[''])[0]}`);
+  }
+});
+test('time: the plain-time guard itself catches a bare UTC clock time', () => {
+  assert.deepEqual(plainTimes('<p>next try 12:34 UTC</p>'), ['12:34 UTC']);
+  assert.deepEqual(plainTimes('<p>next try <time data-local>2026-07-01 12:34 UTC</time></p>'), []);
+});
