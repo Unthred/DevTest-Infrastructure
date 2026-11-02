@@ -25,7 +25,8 @@ function writeRegistry(dir, id, adapter, command, capabilities = {}) {
 }
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-test-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // A detached worker may still be writing when the test ends (ENOTEMPTY on CI), so removal retries.
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const repo = path.join(dir, 'repo'), worktree = path.join(dir, 'worktree'), state = path.join(dir, 'state');
   fs.mkdirSync(repo);
   git(repo, 'init', '-q', '-b', 'main');
