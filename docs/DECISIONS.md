@@ -234,6 +234,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Carrying on job success alone; carrying across a resolved conflict; carrying while required CI is red, pending or unknown.
 - Superseded-by: none
 
+## D-026 — Writing jobs never escalate, and never use a review model
+- Status: agent-proposal
+- Date: 2026-11-02
+- Source: homeowner decision 2 Nov 2026 as recorded in issue #316; builds on D-024 and does not change it
+- Decision: (Awaiting homeowner sign-off.) No writing job (implement, continue, fix, ci-fix, rebase) is automatically moved to a stronger model; the escalation entry is retired. A model that an agent is configured to review with (its `review` entry and `review_candidates`) is not assigned writing jobs automatically; this is decided from role config, not from model names. A job whose model would also leave a PR with no available independent reviewer is not started. When the implementer's model cannot finish a fix, Foreman tries a fresh session on that model with the review findings, then splitting out-of-scope findings, then stops with one Needs you item. That item does not offer paid escalation.
+- Rationale: 2 Nov: Opus escalation fixes made every Claude model a writer, and five PRs (#137, #216, #217, #222, #234) could not be reviewed while Codex was out of allowance.
+- Rejected: Withholding the escalation only when it would strand the PR; offering paid escalation as an option; changing D-024.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.

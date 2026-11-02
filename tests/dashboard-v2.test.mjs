@@ -346,16 +346,20 @@ test('#141 a fix-limit PR gives one card instead of a CI warning; fewer fix roun
   const early = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state: { fixAttempts: { [`41:${H(1)}`]: 1 }, verdicts: {}, jobs: {} } }));
   assert.equal(early.panels.needsYou.length, 0); assert.ok(early.panels.warnings.some(w => w.id === 'ci-41'));
 });
-test('#211 no Action needed while an escalated fix round is planned; Action needed once the escalated round has failed', async t => {
+test('#211 no Action needed while the final fix round is planned; Action needed once the final round has failed', async t => {
   const state = { fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {} };
   const planned = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state }));
   assert.ok(!planned.panels.needsYou.some(c => /^fixlimit-/.test(c.id)), 'Foreman has a next step, so nothing is asked of the homeowner');
   assert.equal(planned.health.label === 'Needs you (1)', false);
   assert.ok(!planned.panels.warnings.some(w => w.id === 'ci-41'));
-  assert.match(JSON.stringify(planned), /Foreman is handling: one escalated fix round.*no action needed/, 'the page says what Foreman is doing');
+  assert.match(JSON.stringify(planned), /Foreman is handling: one final fix round.*no action needed/, 'the page says what Foreman is doing');
   const failed = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state: { ...state, unblock: { escalated: { 41: true }, pr: {}, day: {}, log: [] } } }));
   assert.deepEqual(failed.panels.needsYou.map(c => c.id), ['fixlimit-41']);
   assert.match(failed.panels.needsYou[0].overseer, /Action needed/);
+  // the usual path (the final round ran and was rejected, no write block) gives the same choices, history included
+  const card = failed.panels.needsYou[0];
+  assert.match(card.action, /wait for another agent to be able to review.*split the PR into smaller pieces.*fix it by hand/); assert.doesNotMatch(card.action, /pay|credit|paid/i);
+  assert.match(card.tried, /fresh session on the same model/); assert.match(card.tried, /final round could split/); assert.match(card.tried, /never moves a fix to a stronger model/);
   assert.match(failed.panels.needsYou[0].overseer, /\(filtered: only ticks mentioning PR #41; other ticks are omitted\)/);
 });
 test('#141 no limit card while the final review or fix job is still running', async t => {
@@ -380,7 +384,7 @@ test('#141 a labelled PR gives one card, removing the label clears it, and the e
 test('#141 open issues in no agent queue give one card listing them', async t => {
   const c = calmCache(); c.issues.push({ number: 77, title: 'Orphan', state: 'OPEN', labels: [], prerequisites: [] }, { number: 78, title: 'Closed orphan', state: 'CLOSED', labels: [], prerequisites: [] });
   const v = await needsOf(await serve(t, { cache: c }));
-  const card = v.panels.needsYou.find(x => x.id === 'unqueued'); assert.ok(card); assert.match(card.text, /1 open issue is in no queue.*#77/); assert.doesNotMatch(card.text, /#78/);
+  const card = v.panels.needsYou.find(x => x.id === 'unqueued'); assert.ok(card); assert.match(card.text, /1 open issue is in no agent's queue.*#77/); assert.doesNotMatch(card.text, /#78|never be started/);
   assert.equal(v.panels.needsYou.length, 1);
 });
 test('legend (issue #160): hiding keeps the item in the legend, the last visible series cannot be hidden, Show all restores', async () => {

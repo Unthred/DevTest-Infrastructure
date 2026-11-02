@@ -17,7 +17,7 @@ const config = (over = {}) => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p',
   access: { mode: 'full', decision: 'D-020' }, out_of_allowance: { weekly_at: 0.95 },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
-  models: { agents: { claude: { implement: { model: 'sonnet', effort: 'medium' }, review: { model: 'opus', effort: 'medium' } }, codex: { implement: { effort: 'high' }, review: { effort: 'low' } } } },
+  models: { agents: { claude: { implement: { model: 'sonnet', effort: 'medium' }, fix: { model: 'sonnet', effort: 'medium' }, 'ci-fix': { model: 'sonnet', effort: 'medium' }, review: { model: 'opus', effort: 'medium' } }, codex: { implement: { effort: 'high' }, review: { effort: 'low' } } } },
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } },
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } }, ...over });
 const pr = (n, branch, head, extra = {}) => ({ number: n, title: `t${n}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green, ...extra });

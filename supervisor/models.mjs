@@ -71,13 +71,13 @@ export function resolveModel(ctx) {
   if (!table || !table[type]) return { fields: {}, warnings: [] };
   const threshold = ctx.modelsConfig.allowance_threshold ?? DEFAULT_THRESHOLD;
   if (type === 'rebase') ctx = { ...ctx, escalation: null };
-  const strong = table.strong || table.implement || table[type];
   let entry = table[type], source = 'configured', reason = `configured for ${type}`;
   const hot = Number.isFinite(ctx.utilization) && ctx.utilization >= threshold;
   if (type === 'review' && ctx.reReview && ctx.low && table.low && !ctx.entryOverride) { entry = table.low; source = 'allowance'; reason = 'fix-round re-review while the allowance is low: lower-cost entry'; }
   else if (hot && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `weekly allowance ${Math.round(ctx.utilization * 100)}% >= ${Math.round(threshold * 100)}%: cheaper model kept for ${type}`; }
-  else if (ctx.low && ctx.escalation && REPAIR_TYPES.has(type)) { source = 'allowance'; reason = `allowance low: escalation suppressed for ${type}`; }
-  else if (ctx.escalation && REPAIR_TYPES.has(type)) { entry = strong; source = 'escalated'; reason = `escalated: ${ctx.escalation.reason}`; }
+  // Issue #316 (homeowner decision 2 Nov 2026): a repair job never moves to a stronger model by itself. The configured entry is kept and
+  // the retry is a fresh session with the review findings; the old `strong` entry is accepted in a config but no longer used.
+  else if (ctx.escalation && REPAIR_TYPES.has(type)) reason = `${type} keeps its configured model (${ctx.escalation.reason}): a fresh session with the review findings, no automatic move to a stronger model`;
   else if (hot) reason = `${type} keeps its model although weekly allowance is ${Math.round(ctx.utilization * 100)}%`;
   const checked = checkEntry(entry, ctx.manifestModels);
   const fields = { modelSource: source, modelReason: reason.slice(0, 200) };
@@ -87,7 +87,12 @@ export function resolveModel(ctx) {
   return { fields, warnings: checked.warnings };
 }
 
-// CHANGES verdicts are keyed `<pr>:<head>`; two on one PR (across heads) escalate its repair jobs.
+// Models an agent reviews with (its `review` entry and every `review_candidates` entry), by name. Agent-agnostic: read from role config only.
+export function reviewModelsOf(table) {
+  return new Set([table?.review, ...(Array.isArray(table?.review_candidates) ? table.review_candidates : [])].map(e => e?.model).filter(m => typeof m === 'string'));
+}
+
+// CHANGES verdicts are keyed `<pr>:<head>`; two on one PR (across heads) mark its repair jobs as a repeat (a fresh session with the findings; no stronger model since issue #316).
 export function repeatedChanges(verdicts, pr) {
   return Object.entries(verdicts || {}).filter(([k, v]) => k.startsWith(`${pr}:`) && v.verdict === 'CHANGES').length >= 2;
 }
