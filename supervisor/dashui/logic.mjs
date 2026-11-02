@@ -227,15 +227,19 @@ export const copyFeedback = ok => (ok ? { state: 'copied', label: 'Copied', anno
 
 // ---- chart legends (issue #160): one shared handler for every chart.
 // `hidden` is the list of series keys the viewer hid; `all` is every series key the chart's legend offers.
-// A chart never hides its last visible series: toggling it is a no-op.
-export function toggleSeries(hidden, key, all) {
-  const set = new Set((hidden || []).filter(k => all.includes(k)));
+// A chart never hides its last visible data series: toggling it is a no-op. `free` lists marker-only keys (reference lines such as
+// "Window reset"); they toggle freely and never count as a series, so a chart cannot be left showing only markers.
+export function toggleSeries(hidden, key, all, free = []) {
+  const set = new Set((hidden || []).filter(k => all.includes(k) || free.includes(k)));
   if (set.has(key)) { set.delete(key); return [...set]; }
+  if (free.includes(key)) { set.add(key); return [...set]; }
   if (!all.includes(key) || all.every(k => k === key || set.has(k))) return [...set];
   set.add(key); return [...set];
 }
-// Stored state may be stale (a series that no longer exists) or hand-edited: keep only known keys, and never all of them.
-export function sanitizeHidden(stored, all) {
-  const list = Array.isArray(stored) ? stored.filter(k => typeof k === 'string' && all.includes(k)) : [];
-  return all.length && all.every(k => list.includes(k)) ? list.slice(0, -1) : [...new Set(list)];
+// Stored state may be stale (a series that no longer exists), duplicated or hand-edited: keep only known keys once each, and never
+// every data series (the last data series in the list is dropped, so it shows again).
+export function sanitizeHidden(stored, all, free = []) {
+  const list = Array.isArray(stored) ? [...new Set(stored.filter(k => typeof k === 'string' && (all.includes(k) || free.includes(k))))] : [];
+  if (all.length && all.every(k => list.includes(k))) { const last = list.findLast(k => all.includes(k)); return list.filter(k => k !== last); }
+  return list;
 }

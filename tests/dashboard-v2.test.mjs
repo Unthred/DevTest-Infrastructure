@@ -431,11 +431,72 @@ test('legend (issue #160): hiding keeps the item in the legend, the last visible
   assert.deepEqual(sanitizeHidden(['a', 'gone', 7], all), ['a'], 'stale or malformed stored keys are dropped');
   assert.deepEqual(sanitizeHidden(['a', 'b', 'c'], all).length, 2, 'stored state can never hide everything');
   assert.deepEqual(sanitizeHidden('junk', all), []); assert.deepEqual(sanitizeHidden(null, all), []);
+  assert.equal(sanitizeHidden(['a', 'b', 'c', 'c'], all).length, 2, 'duplicates are removed before the all-hidden guard (issue #190)');
+  assert.deepEqual(sanitizeHidden(['a', 'a'], all), ['a']);
+  // marker-only keys never count as a series
+  const data = ['claude', 'codex'], marks = ['reset', 'expected'];
+  assert.deepEqual(toggleSeries(['claude'], 'codex', data, marks), ['claude'], 'last data series stays even though markers exist');
+  assert.deepEqual(toggleSeries(['claude'], 'reset', data, marks).sort(), ['claude', 'reset'], 'markers toggle freely');
+  assert.deepEqual(toggleSeries(['reset'], 'reset', data, marks), []);
+  assert.deepEqual(sanitizeHidden(['claude', 'codex', 'reset'], data, marks), ['claude', 'reset'], 'stored state hiding every data series is trimmed, markers kept');
+});
+// A tiny fake DOM: enough of Element for initLegends (issue #190), so behaviour is tested rather than source text.
+function fakeEl(tag, attrs = {}, kids = []) {
+  let cls;
+  const el = { tag, attrs: { ...attrs }, children: [], parent: null, listeners: {}, classes: new Set(), hidden: false, textContent: '',
+    get className() { return cls; }, set className(v) { cls = v; el.attrs.class = v; },
+    get dataset() { return new Proxy({}, { get: (_, k) => el.attrs['data-' + k], set: (_, k, v) => { el.attrs['data-' + k] = v; return true; } }); },
+    setAttribute(k, v) { el.attrs[k] = String(v); }, getAttribute: k => el.attrs[k] ?? null,
+    classList: { toggle: (c, on) => { on ? el.classes.add(c) : el.classes.delete(c); }, contains: c => el.classes.has(c) },
+    append(...n) { for (const c of n) { c.parent = el; el.children.push(c); } },
+    addEventListener(t, f) { (el.listeners[t] ||= []).push(f); }, click() { for (const f of el.listeners.click || []) f(); },
+    all: () => el.children.flatMap(c => [c, ...c.all()]),
+    contains: n => n === el || el.children.some(c => c.contains(n)),
+    closest: () => null,
+    querySelectorAll: sel => el.all().filter(c => sel === 'figure.chart' ? c.tag === 'figure' : sel === '.legend' ? c.attrs.class === 'legend' : sel === 'svg' ? c.tag === 'svg' : sel === 'button[data-series]' ? c.tag === 'button' && 'data-series' in c.attrs : sel === '[data-series]' ? 'data-series' in c.attrs : false),
+    querySelector: sel => el.querySelectorAll(sel)[0] ?? null };
+  el.append(...kids); return el;
+}
+function legendPage(stored) {
+  const item = (k, marker) => fakeEl('button', { 'data-series': k, ...(marker ? { 'data-marker': 'true' } : {}), 'aria-pressed': 'true' });
+  const line = k => fakeEl('g', { 'data-series': k });
+  const fig = fakeEl('figure', {}, [fakeEl('svg', { 'aria-label': 'allowance' }, [line('claude'), line('codex'), line('reset')]), fakeEl('div', { class: 'legend' }, [item('claude'), item('codex'), item('reset', true)])]);
+  const doc = fakeEl('body', {}, [fig]); doc.createElement = tag => fakeEl(tag);
+  const mem = new Map(stored ? [['k', JSON.stringify(stored)]] : []);
+  const store = { get: k => (mem.has(k) ? JSON.parse(mem.get(k)) : null), set: (k, v) => mem.set(k, JSON.stringify(v)), del: k => mem.delete(k) };
+  const by = k => fig.all().filter(c => c.attrs['data-series'] === k);
+  return { doc, store, mem, fig, btn: k => by(k).find(c => c.tag === 'button'), shape: k => by(k).find(c => c.tag === 'g'), showAll: () => fig.all().find(c => c.attrs.class === 'legend-all') };
+}
+test('legend (issue #190): driven through a fake DOM: hide, restore, persist, guard ignores reset markers, Show all', async () => {
+  const { initLegends } = await import('../supervisor/dashui/legend.mjs');
+  const pg = legendPage(); initLegends({ document: pg.doc, store: pg.store, legendKey: 'k' });
+  assert.equal(pg.showAll().hidden, true, 'Show all is hidden while nothing is hidden');
+  pg.btn('claude').click();
+  assert.ok(pg.shape('claude').classes.has('off')); assert.equal(pg.btn('claude').attrs['aria-pressed'], 'false'); assert.equal(pg.showAll().hidden, false);
+  assert.deepEqual(JSON.parse(pg.mem.get('k')).allowance, ['claude'], 'persisted by chart id');
+  pg.btn('codex').click();
+  assert.ok(!pg.shape('codex').classes.has('off'), 'the last data series cannot be hidden although the reset marker is still visible');
+  pg.btn('reset').click(); assert.ok(pg.shape('reset').classes.has('off'), 'the marker hides on its own');
+  pg.btn('claude').click(); assert.ok(!pg.shape('claude').classes.has('off'), 'clicking again restores');
+  pg.btn('claude').click(); pg.showAll().click();
+  assert.ok(![pg.shape('claude'), pg.shape('reset')].some(e => e.classes.has('off'))); assert.equal(pg.mem.has('k'), false, 'Show all clears the stored state');
+  assert.ok(![...pg.fig.all()].some(c => c.attrs.class === 'legend' && c.classes.has('off')), 'the legend itself is never hidden');
+});
+test('legend (issue #190): stored state is re-applied, and a tampered list cannot hide every data series', async () => {
+  const { initLegends } = await import('../supervisor/dashui/legend.mjs');
+  const ok = legendPage({ allowance: ['claude', 'reset'] }); initLegends({ document: ok.doc, store: ok.store, legendKey: 'k' });
+  assert.ok(ok.shape('claude').classes.has('off') && ok.shape('reset').classes.has('off') && !ok.shape('codex').classes.has('off'));
+  const bad = legendPage({ allowance: ['claude', 'codex', 'codex', 'reset'] }); initLegends({ document: bad.doc, store: bad.store, legendKey: 'k' });
+  assert.ok(!bad.shape('codex').classes.has('off') && bad.shape('claude').classes.has('off'), 'duplicate-padded list still leaves a data series visible');
+});
+test('legend (issue #190): Reset layout exists on Overview and Usage, markers are flagged in the rendered legend', async () => {
+  const src = fs.readFileSync(new URL('../supervisor/dashrender.mjs', import.meta.url), 'utf8');
+  assert.equal((src.match(/data-reset-layout/g) || []).length, 2, 'both chart pages offer Reset layout');
+  assert.match(src, /data-marker="true"/); assert.equal((src.match(/marker: true/g) || []).length, 2);
 });
 test('legend (issue #160): app.js uses the shared handler, never hides the legend itself, persists safely and clears on Reset layout', () => {
   const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
-  assert.match(js, /legend\.contains\(el\)/, 'the .off class is never put on a legend button');
-  assert.match(js, /toggleSeries\(hidden/); assert.match(js, /Show all/); assert.match(js, /sanitizeHidden\(legendState\(\)\[id\]/);
+  assert.match(js, /initLegends\(\{ document, store, legendKey \}\)/, 'app.js delegates to the tested legend module');
   assert.match(js, /data-reset-layout\]'\)\?\.addEventListener\('click', \(\) => \{ store\.del\(key\(\)\); store\.del\(legendKey\)/);
   assert.match(js, /try \{ return JSON\.parse\(localStorage/, 'storage access is wrapped in try/catch');
 });
