@@ -563,6 +563,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       // Issue #320: the cap blocks all new work and no open PR can progress: one Needs you item names the PRs and the choices.
       const dl = team.capDeadlock(c.pulls || [], c.issues || []);
       if (dl) attention.push({ id: 'cap-deadlock', text: `New work is stuck at the open-PR cap (${dl.cap}) and none of these ${dl.prs.length} open PRs can move on its own: ${dl.prs.map(n => '#' + n).join(', ')}.`, ref: null, severity: 'action', action: 'Choose one: merge or close one of these PRs, resolve what each is waiting on, or raise limits.max_open_prs in team.local.json.' }); }
+    // Issue #326: queued or conflicting work, but nothing planned or started for idle_minutes; clears when a job starts.
+    { const idle = team.idleItem(now); if (idle) attention.push({ id: 'foreman-idle', text: redact(`Foreman has work waiting but has started nothing for ${idle.minutes} minutes: ${idle.work.join('; ')}. Reason: ${idle.reason}`, 600), ref: null, severity: 'action', action: 'Resolve what is holding the work (allowance, review independence, a conflict Foreman cannot rebase) or start it by hand.' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
     // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.
