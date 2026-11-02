@@ -319,3 +319,23 @@ test('routes: matchRoute accepts only the documented shapes', () => {
   assert.deepEqual(matchRoute('/'), { page: 'overview' }); assert.deepEqual(matchRoute('/work/pr/12'), { page: 'pr', id: 12 }); assert.deepEqual(matchRoute('/agents/'), { page: 'agents' });
   for (const bad of ['/work/pr/', '/work/pr/-1', '/agents/a b', '/agents/a/b', '/WORK', '/work/issue/1e3']) assert.equal(matchRoute(bad), null, bad);
 });
+test('legend (issue #160): hiding keeps the item in the legend, the last visible series cannot be hidden, Show all restores', async () => {
+  const { toggleSeries, sanitizeHidden } = await import('../supervisor/dashui/logic.mjs');
+  const all = ['a', 'b', 'c'];
+  let h = toggleSeries([], 'a', all); assert.deepEqual(h, ['a']);
+  h = toggleSeries(h, 'a', all); assert.deepEqual(h, [], 'clicking again restores');
+  h = toggleSeries(toggleSeries([], 'a', all), 'b', all); assert.deepEqual(h.sort(), ['a', 'b']);
+  assert.deepEqual(toggleSeries(h, 'c', all).sort(), ['a', 'b'], 'the last visible series is not hidden');
+  assert.deepEqual(toggleSeries([], 'only', ['only']), [], 'a single-series chart never hides it');
+  assert.deepEqual(toggleSeries([], 'zzz', all), [], 'unknown key ignored');
+  assert.deepEqual(sanitizeHidden(['a', 'gone', 7], all), ['a'], 'stale or malformed stored keys are dropped');
+  assert.deepEqual(sanitizeHidden(['a', 'b', 'c'], all).length, 2, 'stored state can never hide everything');
+  assert.deepEqual(sanitizeHidden('junk', all), []); assert.deepEqual(sanitizeHidden(null, all), []);
+});
+test('legend (issue #160): app.js uses the shared handler, never hides the legend itself, persists safely and clears on Reset layout', () => {
+  const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  assert.match(js, /legend\.contains\(el\)/, 'the .off class is never put on a legend button');
+  assert.match(js, /toggleSeries\(hidden/); assert.match(js, /Show all/); assert.match(js, /sanitizeHidden\(legendState\(\)\[id\]/);
+  assert.match(js, /data-reset-layout\]'\)\?\.addEventListener\('click', \(\) => \{ store\.del\(key\(\)\); store\.del\(legendKey\)/);
+  assert.match(js, /try \{ return JSON\.parse\(localStorage/, 'storage access is wrapped in try/catch');
+});
