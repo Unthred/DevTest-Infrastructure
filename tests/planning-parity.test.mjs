@@ -109,20 +109,46 @@ test('negative control: without the register nothing is planned, and the view an
   const item = view.attention.find(a => a.id === 'register-unreadable');
   assert.ok(item && item.severity === 'warning');
   const status = await buildStatus({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], leases: [], now: NOW, tz: 'UTC', registerUnreadable: true });
-  assert.ok(status.notes.some(n => /DECISIONS\.md/.test(n)));
+  assert.ok(status.problems.some(x => x.id === 'register-unreadable'));
+  assert.ok(!status.notes.some(n => /DECISIONS\.md/.test(n)), 'the sentence is not repeated under notes');
   const ok = await buildView({ config: interimConfig(), root: tmp(t), jobs, events: [], state: {}, cache, snapshots: [], now: NOW, register: REGISTER });
   assert.ok(!ok.attention.some(a => a.id === 'register-unreadable'));
 });
 
-test('registerCached keys by repository path and never keeps an empty read', async () => {
+test('registerCached keys by repository path and keeps an empty read for only 5 s', async () => {
   const { registerCached, clearRegisterMemo } = await import('../supervisor/dashserver.mjs');
   clearRegisterMemo();
   const calls = [];
   const read = text => c => { calls.push(c.repo_path); return text; };
   assert.equal(registerCached({ repo_path: '/a' }, read(''), 1000), '');
-  assert.equal(registerCached({ repo_path: '/a' }, read('A'), 1001), 'A', 'an empty read is retried at once');
-  assert.equal(registerCached({ repo_path: '/a' }, read('A2'), 2000), 'A', 'a good read is kept for 60 s');
-  assert.equal(registerCached({ repo_path: '/b' }, read('B'), 2001), 'B', 'another repository does not share the entry');
-  assert.equal(registerCached({ repo_path: '/a' }, read('A3'), 62000), 'A3', 'expires after 60 s');
+  assert.equal(registerCached({ repo_path: '/a' }, read('A'), 3000), '', 'a failed read is not retried within 5 s');
+  assert.equal(registerCached({ repo_path: '/a' }, read('A'), 6001), 'A', 'a failed read is retried after 5 s');
+  assert.equal(registerCached({ repo_path: '/a' }, read('A2'), 7000), 'A', 'a good read is kept for 60 s');
+  assert.equal(registerCached({ repo_path: '/b' }, read('B'), 6002), 'B', 'another repository does not share the entry');
+  assert.equal(registerCached({ repo_path: '/a' }, read('A3'), 66002), 'A3', 'expires after 60 s');
   assert.equal(calls.length, 4);
+});
+
+// The CLI wiring: `team status` must hand readRegister's result to currentStatus (issue #145). Real CLI, git fixture (never a linked worktree).
+test('`team status` reads the register from origin/main: no warning when readable, exactly one when not', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const repo = tmp(t);
+  const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...a], { stdio: 'pipe' });
+  git('init', '-q', '-b', 'main'); fs.mkdirSync(path.join(repo, 'docs')); fs.writeFileSync(path.join(repo, 'docs', 'DECISIONS.md'), REGISTER);
+  git('add', '.'); git('commit', '-q', '-m', 'register');
+  // repo_path is not overridable locally, so run a copy of the package whose team.json points at the fixture.
+  const pkg = tmp(t); fs.cpSync(new URL('../supervisor', import.meta.url).pathname, path.join(pkg, 'supervisor'), { recursive: true });
+  const cli = path.join(pkg, 'supervisor', 'cli.mjs');
+  const run = repoPath => {
+    const shipped = JSON.parse(fs.readFileSync(path.join(pkg, 'supervisor', 'team.json'), 'utf8'));
+    fs.writeFileSync(path.join(pkg, 'supervisor', 'team.json'), JSON.stringify({ ...shipped, repo_path: repoPath, worktree_base: path.dirname(repoPath) }));
+    const root = tmp(t);
+    fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
+    const out = execFileSync(process.execPath, [cli, 'team', 'status', '--no-github', '--state-root', root], { encoding: 'utf8' });
+    return out;
+  };
+  const count = out => out.split('Cannot read docs/DECISIONS.md').length - 1;
+  assert.equal(count(run(repo)), 1, 'no origin/main yet: unreadable, reported once');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  assert.equal(count(run(repo)), 0, 'origin/main has the register: no warning');
 });

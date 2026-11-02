@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { STALE_TICK_MS, compactIssues, compactMerged, compactPulls, readCache, readEvents, readJobs, readLeases, readSnapshots, readTeamState, redact } from './dashdata.mjs';
-import { buildView, REGISTER_NOTE } from './dashboard.mjs';
+import { buildView } from './dashboard.mjs';
 import { checksState } from './team.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { validateTeamConfig } from './team.mjs';
@@ -47,7 +47,7 @@ function verdictOf(state, p) {
 }
 
 export async function buildStatus({ config, root, jobs, events, state, cache, snapshots, leases, now, tz = defaultZone(), notes = [], register = '', registerUnreadable = false }) {
-  if (registerUnreadable) notes = [...notes, REGISTER_NOTE];
+  // An unreadable register is reported once, as the Problems entry buildView adds.
   const view = await buildView({ config, root, jobs, events, state, cache, snapshots, now, register, registerUnreadable, tz });
   const live = id => jobs.some(j => j.id === id && ACTIVE.includes(j.status));
   const problems = view.attention.map(a => ({ id: a.id, text: a.text }));
