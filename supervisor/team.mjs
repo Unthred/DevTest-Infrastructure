@@ -79,15 +79,14 @@ export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer
 function normalizeRoleLimits(c) {
   const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1 && v <= 8;
   c.deprecations = [];
-  // Idempotent: a roles block this function derived from per_agent on an earlier pass (loadTeamConfig, then the Team constructor)
-  // is recognised and not mistaken for an explicit one.
-  if (c.rolesDerived && L.roles && L.roles.implementer === L.per_agent && L.roles.reviewer === L.per_agent) delete L.roles;
-  delete c.rolesDerived;
+  // Idempotent by value, so it survives a copy of the config: a roles block equal to the per_agent mapping is the mapping (explicit or
+  // derived on an earlier pass, which cannot be told apart and does not need to be), and any other roles block wins over per_agent.
   if ('per_agent' in L) {
     if (!ok(L.per_agent)) throw new SupervisorError('invalid team limit: per_agent');
-    c.deprecations.push(L.roles ? 'limits.per_agent is deprecated and ignored because limits.roles is set; remove it' : 'limits.per_agent is deprecated: it is mapped to limits.roles { implementer, reviewer }; replace it with limits.roles');
+    const mapped = L.roles === undefined || (L.roles && typeof L.roles === 'object' && L.roles.implementer === L.per_agent && L.roles.reviewer === L.per_agent && Object.keys(L.roles).length === 2);
+    c.deprecations.push(mapped ? 'limits.per_agent is deprecated: it is mapped to limits.roles { implementer, reviewer }; replace it with limits.roles' : 'limits.per_agent is deprecated and ignored because limits.roles is set; remove it');
+    if (L.roles === undefined) L.roles = { implementer: L.per_agent, reviewer: L.per_agent };
   }
-  if (L.roles === undefined && 'per_agent' in L) { L.roles = { implementer: L.per_agent, reviewer: L.per_agent }; Object.defineProperty(c, 'rolesDerived', { value: true, enumerable: false, configurable: true, writable: true }); }
   const R = L.roles;
   if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]))) throw new SupervisorError('invalid team limit: roles');
 }
@@ -924,7 +923,7 @@ export class Team {
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
     // chosen instead. The reason is kept for the dashboard and `team status`.
-    const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent] } : B0, owed = B ? this.pendingReviews(agent, prs) : 0;
+    const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent], planned: this.plannedUse[agent] } : B0, owed = B ? this.pendingReviews(agent, prs) : 0;
     const allow = type => { const r = admits(B, type, owed); if (!r.ok) this.hold(agent, type, r.why); return r.ok; };
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
@@ -1047,7 +1046,7 @@ export class Team {
     // it is in normal mode and its role allows taking work over. Only ready, unstarted issues move; drafts and issues with a PR or
     // a started job stay with their author. The issue keeps its owner; the work is done on this agent's branch, so the owner (or
     // another agent) reviews it and D-011 holds. Ownership returns once the owner has allowance again and no work has started.
-    if (!B || B.mode !== 'normal' || !B.known || !mayTakeOver(this.c, agent)) return null;
+    if (!B || B.mode !== 'normal' || !B.known || !mayTakeOver(this.c, agent) || this.limitedOf(agent).out) return null;   // an agent at a usage limit takes nothing over either
     for (const [other, o] of this.agents()) {
       const ob = this.ownerOut(other);
       if (other === agent || !ob) continue;
@@ -1103,7 +1102,7 @@ export class Team {
   // Whether the agent's mode admits a job of this type now, with the reserve for owed reviews and the cost already planned this tick;
   // no side effects (choose() records the reason in this.held).
   admitsNow(agent, type, prs) {
-    const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent] } : B0;
+    const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent], planned: this.plannedUse[agent] } : B0;
     return admits(B, type, B ? this.pendingReviews(agent, prs) : 0);
   }
 
