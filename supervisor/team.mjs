@@ -394,7 +394,8 @@ export class Team {
     if (typeOfKind(kind) === 'review' && act.pr != null && Array.isArray(cands) && cands.length && !(act.reReview === true && low && this.c.models.agents[act.agent].low)) {
       const writers = this.writersOf({ number: act.pr, headRefName: act.branch });
       const tried = cands.map(entry => resolveModel({ ...base, entryOverride: entry }));
-      ({ fields, warnings } = tried.find(r => independentOf({ provider, model: r.fields.model ?? null }, writers)) || tried[0]);
+      // act.candidate (issue #297): judge one named candidate, for the Needs you card that lists every model tried.
+      ({ fields, warnings } = Number.isInteger(act.candidate) && tried[act.candidate] ? tried[act.candidate] : tried.find(r => independentOf({ provider, model: r.fields.model ?? null }, writers)) || tried[0]);
     }
     if (warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: warnings.join('; ') });
     return fields;
@@ -442,6 +443,25 @@ export class Team {
     const reviewer = { provider: this.c.agents[agent].provider, model };
     if (independentOf(reviewer, this.writersOf(pr))) return null;
     return agent + ' would review PR #' + pr.number + ' on ' + (model || 'its default model') + ', the model that wrote it; a review needs a different model';
+  }
+  // Issue #297: every review model an agent could use on this PR, each with the reason it is refused (null = usable). Without a
+  // candidate list there is one entry, the agent's review model.
+  reviewTries(agent, pr, key) {
+    const n = this.c.models?.agents?.[agent]?.review_candidates?.length || 0, writers = this.writersOf(pr), provider = this.c.agents[agent].provider;
+    return Array.from({ length: Math.max(n, 1) }, (_, i) => {
+      const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key, ...(n ? { candidate: i } : {}) }, 'review', {}, true).model ?? null;
+      return { model, refusal: independentOf({ provider, model }, writers) ? null : 'it wrote this head' };
+    });
+  }
+  // Review models whose approval would unblock: models of this agent's provider known to its manifest that no writer used. Empty when
+  // none is known (the dashboard has no manifests) or an unrecorded writer makes no model provably different.
+  unblockModels(agent, pr) {
+    const provider = this.c.agents[agent].provider, writers = this.writersOf(pr);
+    if (writers.some(w => w.provider === provider && !w.model)) return [];
+    const used = new Set(writers.filter(w => w.provider === provider).map(w => w.model));
+    // The dashboard has no manifests, so the models named in the agent's own config count as known too.
+    const named = Object.values(this.c.models?.agents?.[agent] || {}).flatMap(e => (Array.isArray(e) ? e : [e]).map(x => x?.model));
+    return [...new Set([...(this.providerModels[provider]?.aliases || []), ...named])].filter(x => typeof x === 'string' && !used.has(x));
   }
   // Second opinion (issue #152). Files per open PR are read once per plan; null = unreadable, which counts as touching (fail closed).
   async loadFiles(prs) {
@@ -639,20 +659,25 @@ export class Team {
     const out = [];
     for (const pr of prs || []) {
       const author = agentOfBranch(this.c, pr.headRefName), key = verdictKey(pr.number, pr.headRefOid);
-      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || this.s.verdicts[key]) continue;
+      // Issue #297: a conflicting PR is listed too (marked); the rebase comes first, so it is not skipped.
+      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'green' || this.s.verdicts[key]) continue;
       if (Object.values(this.s.jobs).some(j => j.kind === 'review' && !j.ingested && j.pr === pr.number && j.head === pr.headRefOid)) continue;
-      const reasons = [];
+      const reasons = [], tried = [], unblock = [], waits = [];
       let exhausted = false;
       for (const [agent] of this.agents()) {
         const refusal = this.reviewRefusal(agent, pr, `${key}:${agent}`), out_ = this.limitedOf(agent), mode = this.modes?.[agent];
-        if (refusal) reasons.push(`${agent}: ${refusal}`);
-        else if (out_.out) reasons.push(`${agent}: out of allowance (${String(out_.reason || 'usage limit').slice(0, 120)})`);
-        else if (mode?.mode === 'waiting') reasons.push(`${agent}: waiting for a reset (${String(mode.reason || '').slice(0, 120)})`);
+        if (refusal) {
+          reasons.push(`${agent}: ${refusal}`);
+          for (const m of this.reviewTries(agent, pr, `${key}:${agent}`)) tried.push(`${agent} on ${m.model || 'its default model'}: ${m.refusal ? 'refused, ' + m.refusal : 'independent'}`);
+          for (const m of this.unblockModels(agent, pr)) unblock.push(`${agent} reviewing on ${m}`);
+        } else if (out_.out) { const why = `out of allowance (${String(out_.reason || 'usage limit').slice(0, 120)})`; reasons.push(`${agent}: ${why}`); tried.push(`${agent}: ${why}`); waits.push(agent); }
+        else if (mode?.mode === 'waiting') { const why = `waiting for a reset (${String(mode.reason || '').slice(0, 120)})`; reasons.push(`${agent}: ${why}`); tried.push(`${agent}: ${why}`); waits.push(agent); }
         else if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= this.c.limits.max_review_attempts) exhausted = true;
         else { exhausted = true; reasons.length = 0; break; }   // an independent reviewer is available
       }
       if (exhausted || !reasons.length) continue;
-      out.push({ pr: pr.number, head: pr.headRefOid, reasons });
+      const conflicting = pr.mergeable === 'CONFLICTING';
+      out.push({ pr: pr.number, head: pr.headRefOid, reasons, tried, unblock, waits, conflicting, ...(conflicting ? { rebaseAttempts: this.s.rebaseAttempts[key] || 0, maxRebase: this.c.limits.max_fix_attempts } : {}) });
     }
     return out;
   }
