@@ -66,3 +66,42 @@ test('negative: a next-to-merge PR that exhausted its rebase attempts does not b
   team.s.rebaseAttempts[`301:${H(1)}`] = 2;
   assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [302]);
 });
+
+// ---- multi-agent, unusable worktree and budget cases (review round on PR #268)
+const twoConfig = () => { const c = config(); c.models.agents.codex = { implement: { model: 'sonnet', effort: 'high' }, review: { model: 'opus', effort: 'low' } };
+  c.agents.codex = { provider: 'codex', branch_prefix: 'codex/', issues: [] }; return c; };
+function world2(t, pulls) {
+  const team = world(t, pulls); team.c = twoConfig(); return team;
+}
+const cpr = (n, head, extra = {}) => pr(n, head, { headRefName: `codex/issue-${n}-x`, ...extra });
+const costs = { cost: type => ({ implement: 0.10, review: 0.05, rebase: 0.01 })[type] ?? 0.01 };
+const mode = (m, used = 0.1) => ({ mode: m, reason: 'test', known: true, used, costs });
+
+test('a lowest-numbered PR whose author is waiting does not hold another agent\'s rebase', async t => {
+  const team = world2(t, [cpr(300, H(3)), pr(301, H(1))]);
+  team.s.implemented[258] = 1; team.s.implemented[259] = 1;
+  team.budgets = () => ({ claude: mode('normal'), codex: mode('waiting') });
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => [a.agent, a.pr]), [['claude', 301]]);
+});
+
+test('a lowest-numbered PR whose rebase worktree is unusable does not hold the next rebase', async t => {
+  const team = world(t, [pr(301, H(1)), pr(302, H(2))]);
+  team.s.unusable[`rebase:301:${H(1)}`] = { worktree: '/p/x', at: 1_800_000_000_000 };
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [302]);
+});
+
+test('the rebase is not deferred for an implement job the reserve for owed reviews refuses', async t => {
+  const team = world2(t, [pr(301, H(1)), cpr(305, H(5), { mergeable: 'MERGEABLE' })]);
+  team.budgets = () => ({ claude: mode('normal', 0.86), codex: mode('normal', 0.1) });
+  team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 300, key: 'k', ingested: true, at: 100 };
+  const acts = await team.plan();
+  assert.ok(acts.some(a => a.type === 'rebase' && a.pr === 301), JSON.stringify(acts));
+});
+
+test('probing for a startable implement job leaves the dashboard hold reasons untouched', async t => {
+  const team = world(t, backlog());
+  team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 301, key: 'k', ingested: true, at: 100 };
+  team.budgets = () => ({ claude: mode('normal', 0.1) });
+  await team.plan();
+  assert.equal(team.held.claude?.implement, undefined);
+});

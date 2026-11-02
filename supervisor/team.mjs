@@ -596,9 +596,10 @@ export class Team {
     return why;
   }
 
-  choose(agent, a, prs, issueByNo, role = null) {
+  choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
     const L = this.c.limits;
-    const impl = role !== 'reviewer', rev = role !== 'implementer';   // role null (a caller outside plan()) considers both
+    const impl = role !== 'reviewer', rev = role !== 'implementer';
+    const repair = impl && !implementOnly;
     const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key) || !!this.taken?.has(`${kind}:${key}`);
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
@@ -607,7 +608,7 @@ export class Team {
     const allow = type => { const r = admits(B, type, owed); if (!r.ok) (this.held[agent] ||= {})[type] ||= r.why; return r.ok; };
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
-    for (const pr of impl ? prs : []) {
+    for (const pr of repair ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       // Issue #79: rebase only on a conflict, or right before merge (a PR that already has its PASS and green CI, and that GitHub
@@ -622,7 +623,7 @@ export class Team {
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
-    for (const pr of impl ? prs : []) {
+    for (const pr of repair ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
@@ -631,7 +632,7 @@ export class Team {
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks: failingChecks(pr.statusCheckRollup, this.retried(pr)), key, ...(escalated ? { escalated: true } : {}) };
     }
     // fix: my PR with a CHANGES verdict on its current head
-    for (const pr of impl ? prs : []) {
+    for (const pr of repair ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key)) continue;
@@ -680,7 +681,7 @@ export class Team {
     // continue: my own DRAFT PR for an owned, open, unblocked issue (a draft is never reviewed or merged, so without this it sits idle forever).
     // Bounded per PR by max_fix_attempts, like fix rounds; the count is across heads. A draft stays with its branch's author
     // (never reassigned): another agent continuing it would later review its own work.
-    for (const pr of impl ? prs : []) {
+    for (const pr of repair ? prs : []) {
       const n = this.draftIssue(agent, a, pr, issueByNo);
       if (n == null || !SHA.test(pr.headRefOid) || busy('continue', String(pr.number)) || busy('implement', String(n)) || this.taken?.has(`issue:${n}`)) continue;
       if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts) continue;
@@ -720,18 +721,36 @@ export class Team {
   // implement job is startable, the slot goes to that implement job (it alternates, so a rebase backlog never holds it tick after tick).
   rebaseDeferred(pr, prs, issueByNo, busy) {
     const L = this.c.limits;
+    // Candidates are PRs whose author could start the rebase now: same conditions as choose() (not busy or unusable, attempts left,
+    // author not at a usage limit, mode admits a rebase with the reserve and planned use choose() applies). A PR nobody can rebase
+    // now never holds the others back.
     const wants = p => {
-      if (!agentOfBranch(this.c, p.headRefName) || p.isDraft || !SHA.test(p.headRefOid)) return false;
+      const author = agentOfBranch(this.c, p.headRefName);
+      if (!author || p.isDraft || !SHA.test(p.headRefOid)) return false;
       const k = verdictKey(p.number, p.headRefOid);
       const behind = p.mergeable !== 'CONFLICTING' && p.mergeStateStatus === 'BEHIND' && this.s.verdicts[k]?.verdict === 'PASS' && this.ciState(p) === 'green';
-      return (p.mergeable === 'CONFLICTING' || behind) && (this.s.rebaseAttempts[k] || 0) < L.max_fix_attempts;
+      if (p.mergeable !== 'CONFLICTING' && !behind) return false;
+      if (busy('rebase', k) || (this.s.rebaseAttempts[k] || 0) >= L.max_fix_attempts) return false;
+      if (this.limitedOf(author).out) return false;
+      return this.admitsNow(author, 'rebase', prs).ok;
     };
     const next = prs.filter(wants).sort((x, y) => x.number - y.number)[0];
     if (next && next.number !== pr.number) return true;
     const last = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && Number.isFinite(j.at)).sort((x, y) => y.at - x.at)[0];
     if (last?.kind !== 'rebase') return false;
-    return this.agents().some(([ag]) => !this.limitedOf(ag).out && (!this.modes?.[ag] || admits(this.modes[ag], 'implement', 0).ok)
-      && this.issuesOf(ag).some(n => this.implementable(n, prs, issueByNo, busy) && !this.taken?.has(`issue:${n}`)));
+    // An implement job is startable when choose() would return one for some agent (same allowance path); choose() is probed with
+    // rebases skipped and its dashboard hold reasons left untouched.
+    const held = this.held; this.held = JSON.parse(JSON.stringify(held));
+    try {
+      return this.agents().some(([ag, a]) => this.choose(ag, a, prs, issueByNo, 'implementer', { implementOnly: true })?.type === 'implement');
+    } finally { this.held = held; }
+  }
+
+  // Whether the agent's mode admits a job of this type now, with the reserve for owed reviews and the cost already planned this tick;
+  // no side effects (choose() records the reason in this.held).
+  admitsNow(agent, type, prs) {
+    const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent] } : B0;
+    return admits(B, type, B ? this.pendingReviews(agent, prs) : 0);
   }
 
   // Why `agent` cannot take new implement work now, or null when it can: its mode is not normal, or its latest job hit a usage limit.
