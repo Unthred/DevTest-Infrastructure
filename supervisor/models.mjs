@@ -6,7 +6,7 @@ import { SupervisorError } from './core.mjs';
 import { windowExpired } from './allowance.mjs';
 
 // 'interim-review' is retired (issue #152); the name is still accepted in a local models override and falls back to the review entry.
-export const JOB_TYPES = ['implement', 'fix', 'review', 'rebase', 'ci-fix', 'continue', 'interim-review'];
+export const JOB_TYPES = ['implement', 'fix', 'review', 'rebase', 'ci-fix', 'continue', 'interim-review', 'split'];
 export const typeOfKind = kind => (kind === 'cifix' ? 'ci-fix' : kind);
 // Work that is not downgraded by the weekly-allowance threshold (it has no strong entry above its own; implement/continue never escalate, issue #78).
 export const STRONG_TYPES = new Set(['implement', 'continue']);
@@ -65,7 +65,7 @@ export function weeklyUtilization(allowance, now = Date.now()) {
 export function resolveModel(ctx) {
   const table = ctx.modelsConfig?.agents?.[ctx.agent];
   let type = typeOfKind(ctx.kind);
-  if (type === 'interim-review' && table && !table[type]) type = 'review';
+  if ((type === 'interim-review' || type === 'split') && table && !table[type]) type = 'review';   // a split draft is a cheap read-only session (issue #244)
   if (!table || !table[type]) return { fields: {}, warnings: [] };
   const threshold = ctx.modelsConfig.allowance_threshold ?? DEFAULT_THRESHOLD;
   if (type === 'rebase') ctx = { ...ctx, escalation: null };

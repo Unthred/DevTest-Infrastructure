@@ -99,7 +99,7 @@ export function validateSpec(spec) {
   const handover = spec.handover ? path.resolve(worktree, spec.handover) : null;
   if (handover && !handover.startsWith(worktree + path.sep)) throw new SupervisorError('handover must be in worktree');
   const kind = spec.kind ?? 'implement';
-  if (!['implement', 'continue', 'review', 'fix', 'rebase', 'cifix'].includes(kind)) throw new SupervisorError('invalid job kind');
+  if (!['implement', 'continue', 'review', 'fix', 'rebase', 'cifix', 'split'].includes(kind)) throw new SupervisorError('invalid job kind');
   const access = spec.access ?? 'standard';
   if (!['standard', 'full'].includes(access)) throw new SupervisorError('invalid access mode');
   if (access === 'full') {
@@ -349,6 +349,11 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       job.nextAttemptAt = clock.now() + delay;
       transition(root, job, 'paused_limit', 'transient_rate_limit', clock);
       await clock.sleep(delay); continue;
+    }
+    // Issue #244: an implement job whose issue overflowed the context is not restarted with the same scope; every restart would
+    // fail the same way. It stops as `context_too_large` and the team loop drafts a split of the issue instead.
+    if (result.event === 'context_limit' && job.kind === 'implement') {
+      transition(root, job, 'blocked', 'context_too_large', clock); return job;
     }
     if (result.event === 'context_limit' && restartable() && job.attempts < maxAttempts) {
       // Due immediately: if this worker dies before relaunching, reconcile can still revive the job.

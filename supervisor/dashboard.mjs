@@ -218,7 +218,15 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     if (teamEnabled !== false && t.status !== 'disabled' && now - t.at > STALE_TICK_MS) add('tick-stale', `No tick for ${Math.round((now - t.at) / 60000)} minutes (last ${new Date(t.at).toISOString()}); the reconcile cron may have stopped.`);
   }
   const maxFix = limits.max_fix_attempts, maxReview = limits.max_review_attempts;
-  for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner')) add(`homeowner-${i.number}`, `${names.issue(i.number).text} needs the homeowner`, { kind: 'issue', n: i.number },
+  // Issue #244: an implement job that ran out of context is not restarted; its proposed split is the one decision needed.
+  const splitting = new Set(Object.entries(state.splits || {}).filter(([, sp]) => ['drafting', 'proposed'].includes(sp.status)).map(([n]) => Number(n)));
+  const splitJobs = new Set(Object.values(state.splits || {}).map(sp => sp.implementJob));
+  for (const [n, sp] of Object.entries(state.splits || {})) if (sp.status === 'proposed' && (cache?.issues || []).some(i => i.number === Number(n) && i.state === 'OPEN')) {
+    const spent = sp.wasted?.tokens ? `${sp.wasted.tokens.toLocaleString('en-GB')} tokens${Number.isFinite(sp.wasted.cost) ? ` (about $${sp.wasted.cost.toFixed(2)})` : ''} spent on the failed attempt` : 'the failed attempt used an unknown number of tokens';
+    add(`split-${n}`, `${names.issue(Number(n)).text} was too large for one session; a split into ${sp.children?.length || 0} issues is proposed`, { kind: 'issue', n: Number(n) },
+      { tried: `The implement job ran out of context (${spent}). Foreman did not restart it with the same scope; a cheap session drafted the split and posted it on the issue.`, action: `Accept split: run ai-agent --supervisor team accept-split ${n} to file the children and queue them, or reshape the issue by hand and remove the needs-homeowner label.`, links: [{ text: names.issue(Number(n)).text, url: web('issue', n) }] });
+  }
+  for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner') && !splitting.has(i.number)) add(`homeowner-${i.number}`, `${names.issue(i.number).text} needs the homeowner`, { kind: 'issue', n: i.number },
     { tried: 'Foreman stopped work on this issue and labelled it needs-homeowner; it starts no new job until the label is removed.', links: [{ text: names.issue(i.number).text, url: web('issue', i.number) }] });
   // One card per open PR that is labelled needs-homeowner or has hit the fix or review limit (the label and the notice are the same event).
   for (const pr of cache?.pulls || []) {
@@ -245,7 +253,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const orphans = (cache?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number) && !i.labels?.includes('needs-homeowner')).map(i => i.number).sort((a, b) => a - b);
     if (orphans.length) add('unqueued', `${orphans.length} open issue${orphans.length === 1 ? ' is' : 's are'} in no queue and will never be started: ${orphans.map(n => `#${n}`).join(', ')}`, null,
       { tried: 'Foreman only dispatches issues listed under an agent in team.local.json; these are in no list, so nothing has been started for them.', action: 'Add each issue to an agent\'s issues list in team.local.json, or close it.', links: orphans.slice(0, 6).map(n => ({ text: `issue #${n}`, url: web('issue', n) })) }); }
-  for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
+  for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
     const closed = kind === 'issue' ? (cache?.issues || []).some(i => i.number === j.issue && i.state !== 'OPEN') : (cache?.pulls || []).length > 0 && !openPulls.has(j.issue);   // closed or merged: nothing left to decide
     if (closed) continue;
@@ -301,6 +309,14 @@ function usageView(config, jobs, states, allowance, now) {
 }
 
 // Tokens per job type and model, so the homeowner can see whether the routing pays off (issue #64). Counts only.
+// Issue #244: what failed attempts cost. A job that ended failed or blocked produced no deliverable; its tokens and CLI cost estimate
+// are shown on their own so wasted work is visible. Totals count only what the CLI reported (unknown stays unknown, not zero).
+export function failedSpend(rows) {
+  const failed = rows.filter(r => ['failed', 'blocked'].includes(r.status));
+  const known = failed.filter(r => Number.isFinite(r.tokens)), priced = failed.filter(r => Number.isFinite(r.cost));
+  return { jobs: failed.length, tokens: known.length ? known.reduce((s, r) => s + r.tokens, 0) : null, cost: priced.length ? priced.reduce((s, r) => s + r.cost, 0) : null,
+    rows: failed.map(r => ({ id: r.id, name: r.name, kind: r.kind, status: r.status, attempts: r.attempts, tokens: r.tokens, cost: r.cost, startedAt: r.startedAt })) };
+}
 export function modelUsage(rows) {
   const groups = new Map();
   for (const r of rows) {
@@ -579,6 +595,7 @@ function dashExtras({ config, cache, jobs, state, states, plan, queues, attentio
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver,
     panels: { needsYou, warnings: attention.filter(a => a.severity !== 'action'), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
+    failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, supervisor
   };
 }
