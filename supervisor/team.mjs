@@ -816,7 +816,7 @@ export class Team {
       const behind = pr.mergeable !== 'CONFLICTING' && pr.mergeStateStatus === 'BEHIND' && this.s.verdicts[key]?.verdict === 'PASS' && this.ciState(pr) === 'green';
       if (pr.mergeable !== 'CONFLICTING' && !behind) continue;
       if (busy('rebase', key) || (this.s.rebaseAttempts[key] || 0) >= L.max_fix_attempts) continue;
-      // Issue #266: with a merge backlog, rebase only the PR that is next to merge (merges go in PR-number order), and let a
+      // Issue #266: with a merge backlog, rebase only the PR that is next in rebase order (issue #326: the order of the author's issues queue, then PR number), and let a
       // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
       if (this.rebaseDeferred(pr, prs, issueByNo, busy)) continue;   // issue #326: a deferred PR is skipped; the list order must not decide which PR goes
       if (this.writeBlock(pr, 'rebase')) continue;
@@ -947,7 +947,8 @@ export class Team {
       const i = m && ag ? this.issuesOf(ag).indexOf(Number(m[1])) : -1;
       return i < 0 ? Infinity : i;
     };
-    const next = prs.filter(wants).sort((x, y) => (rank(x) === rank(y) ? 0 : rank(x) < rank(y) ? -1 : 1) || x.number - y.number)[0];
+    const ranked = prs.filter(wants).map(p => ({ p, r: rank(p) }));
+    const next = ranked.sort((x, y) => (x.r === y.r ? 0 : x.r < y.r ? -1 : 1) || x.p.number - y.p.number)[0]?.p;
     if (next && next.number !== pr.number) return true;
     const last = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && Number.isFinite(j.at)).sort((x, y) => y.at - x.at)[0];
     if (last?.kind !== 'rebase') return false;
