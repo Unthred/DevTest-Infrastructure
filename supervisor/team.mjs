@@ -27,6 +27,7 @@ export function validateTeamConfig(c) {
   for (const k of ['overall', 'max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
   if ('stall_hours' in L && !(typeof L.stall_hours === 'number' && L.stall_hours > 0 && L.stall_hours <= 720)) throw new SupervisorError('invalid team limit: stall_hours');
   normalizeRoleLimits(c);
+  if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
   validateUnblockLimits(L.unblock);
   validateSelfUpgrade(c.self_upgrade);
   const agents = Object.entries(c.agents || {});
@@ -643,9 +644,22 @@ export class Team {
     return out;
   }
 
+  // Issue #250: the cap on open unmerged PRs (limits.max_open_prs; absent = no cap). At or above it no new implement job starts, so
+  // the implementer slot takes repair or review work instead. Returns { open, cap } while paused, else null. Drafts count: they are
+  // unmerged work too. Only PRs of configured agents are counted.
+  pauseInfo(prs) {
+    const cap = this.c.limits.max_open_prs;
+    if (!Number.isSafeInteger(cap)) return null;
+    const open = (prs || []).filter(p => agentOfBranch(this.c, p.headRefName)).length;
+    return open >= cap ? { open, cap } : null;
+  }
+  pauseText(prs) { const p = this.pauseInfo(prs); return p ? `Paused new work: ${p.open} open PRs (cap ${p.cap})` : null; }
+
   choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
     const L = this.c.limits;
-    const impl = role !== 'reviewer', rev = role !== 'implementer';
+    const paused = !!this.pauseInfo(prs);
+    // While new work is paused the implementer slot also takes reviews (review independence, D-024, is still checked below).
+    const impl = role !== 'reviewer', rev = role !== 'implementer' || (paused && !implementOnly);
     const repair = impl && !implementOnly;
     const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key) || !!this.taken?.has(`${kind}:${key}`);
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
@@ -737,6 +751,7 @@ export class Team {
     }
     // implement: next owned open issue whose prerequisites are closed and that has no work in flight
     if (!impl) return null;
+    if (paused) { this.hold(agent, 'implement', this.pauseText(prs)); return null; }
     for (const n of this.issuesOf(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
       if (!issue || this.taken?.has(`issue:${n}`)) continue;
