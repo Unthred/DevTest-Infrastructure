@@ -402,3 +402,18 @@ test('#140 a review verdict names the provider, model and effort of the job that
   if (block) assert.doesNotMatch(block, /Action needed: Action needed/);
   assert.ok(!copies(over).some(c => /Action needed: Action needed/.test(c)));
 });
+
+test('a failed team-alert notify is a Needs you item; other alert warnings are dashboard warnings (issue #215)', async t => {
+  const tickAt = new Date(NOW - MIN).toISOString().replace(/\.\d+Z$/, 'Z');
+  const view = async line => {
+    const root = stateRoot(t, { log: `${tickAt} tick\n{"resumed":0,"blocked":0,"team":{"actions":[]}}\n${line}` });
+    return JSON.parse((await (await serve(t, { root, state: { jobs: {} }, cache })).get('/api/view.json')).body);
+  };
+  const bad = await view('team-alert: warning: notify failed: alert not delivered\n');
+  assert.ok(bad.panels.needsYou.some(a => a.id === 'alert-failed'), 'needs you');
+  const soft = await view('team-alert: warning: cannot write /x/alert.state\n');
+  assert.ok(!soft.panels.needsYou.some(a => a.id === 'alert-failed'));
+  assert.ok(soft.panels.warnings.some(a => a.id === 'alert-warning'), 'warning panel');
+  const clean = await view('');
+  assert.ok(![...clean.panels.needsYou, ...clean.panels.warnings].some(a => /^alert-/.test(a.id)));
+});

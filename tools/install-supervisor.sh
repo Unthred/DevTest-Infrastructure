@@ -51,5 +51,14 @@ EOF
 chmod 755 "$status_tmp"
 bash -n "$status_tmp"
 mv -f "$status_tmp" "$status_cmd"
+# team-alert ships from the reviewed commit (issue #215), not as a hand-edited copy. Only the script is replaced; alert.state is
+# runtime state beside it and is never read, written or removed here.
+alert_dir=/mnt/cache/ai-supervisor/bin
+[ ! -L "$alert_dir" ] || { printf 'unsafe team-alert directory symlink\n' >&2; exit 2; }
+mkdir -p "$alert_dir"; chmod 700 "$alert_dir"
+alert_tmp="$alert_dir/.team-alert-$commit"
+cp "$source_root/bin/team-alert" "$alert_tmp"; chmod 755 "$alert_tmp"
+bash -n "$alert_tmp"; cmp -s "$source_root/bin/team-alert" "$alert_tmp" || { printf 'installed team-alert differs from the reviewed commit\n' >&2; exit 2; }
+mv -f "$alert_tmp" "$alert_dir/team-alert"
 "$launcher" --supervisor help >/dev/null
 printf 'installed=%s backup=%s\n' "$commit" "$backup"
