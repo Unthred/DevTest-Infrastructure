@@ -8,6 +8,7 @@ import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart 
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
+import { entryApproved } from './decisions.mjs';
 import { redact, redactLong } from './redact.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 
@@ -172,8 +173,7 @@ export function loadTeamConfig(shippedFile, root) {
 
 // The access decision must be homeowner-approved in the register, or the dispatcher refuses to launch anything.
 export function decisionApproved(registerText, id) {
-  const m = registerText.match(new RegExp(`^## ${id} [^\\n]*\\n((?:(?!^## ).*\\n?)*)`, 'm'));
-  return !!m && /^- Status: homeowner-approved\s*$/m.test(m[1]);
+  return entryApproved(String(registerText || ''), id);
 }
 
 // Issue #249: the heading title, status and first sentence of an entry in the register, or null when it is absent.

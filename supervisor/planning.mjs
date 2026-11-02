@@ -30,6 +30,7 @@ export function readHeadRegister(config, pr) {
   if (!/^[0-9a-f]{40}$/.test(pr.headRefOid || '')) return '';
   const shown = spawnSync('git', ['-C', config.repo_path, 'show', `${pr.headRefOid}:docs/DECISIONS.md`], { encoding: 'utf8', timeout: 30000 });
   const text = shown.status === 0 ? shown.stdout : '';
+  if (shown.status !== 0) return '';   // a failed read (head not fetched yet) is not cached, so a later fetch is seen
   if (headRegisters.size > 500) headRegisters.clear();
   headRegisters.set(key, text); return text;
 }

@@ -6,12 +6,17 @@ export const APPROVED = 'homeowner-approved';
 
 // id -> { title, status, source } for every entry in a register text. A duplicate id keeps the first (and is reported by `duplicates`).
 export function parseRegister(text) {
-  const out = new Map(), dup = [];
+  const out = new Map(), dup = [], bad = [];
   for (const m of String(text || '').matchAll(ENTRY)) {
     if (out.has(m[1])) { dup.push(m[1]); continue; }
-    out.set(m[1], { title: m[2].trim(), status: /^- Status: (\S+)\s*$/m.exec(m[3])?.[1] ?? null, source: /^- Source: (.*)$/m.exec(m[3])?.[1] ?? '' });
+    const statuses = m[3].match(/^- Status:.*$/gm) || [];
+    if (statuses.length > 1) bad.push(`${m[1]} has ${statuses.length} Status lines; an entry has exactly one`);
+    out.set(m[1], { title: m[2].trim(), status: statuses.length > 1 ? null : /^- Status: (\S+)\s*$/m.exec(m[3])?.[1] ?? null, source: /^- Source: (.*)$/m.exec(m[3])?.[1] ?? '' });
   }
+  // Every D-NNN heading must be one the parser reads, so no entry can hide from the check (an en dash, a colon, a shadow heading).
+  for (const h of String(text || '').match(/^## D-\d{3}\b.*$/gm) || []) if (!/^## D-\d{3} [—-] /.test(h)) bad.push(`heading "${h.slice(0, 60)}" is not "## D-NNN — title"; the register parser cannot read it`);
   out.duplicates = dup;
+  out.malformed = bad;
   return out;
 }
 
@@ -50,6 +55,7 @@ export function decisionViolations(baseText, headText, approvals = new Map()) {
     else if (b.status === APPROVED && !approvedBy(id, false)) bad.push(`${id} changes status ${APPROVED} -> ${h.status} without a verifiable homeowner instruction (comment "homeowner-approval: ${id}" by the repository owner)`);
   }
   for (const [id, b] of base) if (!head.has(id)) bad.push(`${id} was removed; entries are never deleted (supersede them instead)`);
+  for (const x of head.malformed) bad.push(x);
   for (const id of head.duplicates) bad.push(`${id} appears twice in the register`);
   return bad;
 }
@@ -68,3 +74,10 @@ export const ENFORCED_DECISIONS = Object.freeze({
   'D-024': 'review independence by model: an independent same-provider PASS merges only once D-024 is approved',
   'D-025': 'verdict carry across a clean rebase: no PASS carries until D-025 is approved'
 });
+
+// The code gate reads the register through the same parser as CI. A repeated Status line, a duplicate id or a heading the
+// parser rejects anywhere in the register means nothing is approved.
+export function entryApproved(registerText, id) {
+  const reg = parseRegister(registerText);
+  return reg.malformed.length === 0 && !reg.duplicates.includes(id) && reg.get(id)?.status === APPROVED;
+}

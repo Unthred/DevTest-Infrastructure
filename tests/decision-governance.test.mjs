@@ -137,3 +137,28 @@ test('D-020, D-021 and D-024 gates follow the register', t => {
   assert.equal(decisionApproved(REG(), t0.c.access.decision), false, 'D-020 unapproved refuses full access');
   assert.equal(decisionApproved(REG('D-020'), t0.c.access.decision), true);
 });
+
+test('parser divergence cannot hide an approval: a second Status line or an unreadable heading is a violation and never approved', () => {
+  const dup = BASE.replace('- Status: agent-proposal\n', '- Status: agent-proposal\n- Status: homeowner-approved\n');
+  assert.ok(decisionViolations(BASE, dup).some(x => /Status lines/.test(x)));
+  assert.equal(decisionApproved(dup, 'D-002'), false);
+  const shadow = `## D-002 – shadow\n- Status: homeowner-approved\n\n` + BASE;
+  assert.ok(decisionViolations(BASE, shadow).some(x => /cannot read/.test(x)));
+  assert.equal(decisionApproved(shadow, 'D-002'), false);
+  const colon = BASE + '## D-003: x\n- Status: homeowner-approved\n\n';
+  assert.ok(decisionViolations(BASE, colon).length > 0);
+  assert.equal(decisionApproved(BASE, 'D-001'), true);
+});
+
+test('readHeadRegister does not cache a failed read', async () => {
+  const { readHeadRegister } = await import('../supervisor/planning.mjs');
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-src-')), clone = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-clone-'));
+  const git = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }).trim();
+  git(src, 'init', '-q'); fs.mkdirSync(path.join(src, 'docs')); fs.writeFileSync(path.join(src, 'docs/DECISIONS.md'), BASE);
+  git(src, 'add', '.'); git(src, 'commit', '-qm', 'x'); const sha = git(src, 'rev-parse', 'HEAD');
+  git(clone, 'init', '-q');
+  const pr = { number: 99991, headRefOid: sha };
+  assert.equal(readHeadRegister({ repo_path: clone }, pr), '');
+  git(clone, 'fetch', '-q', src, 'HEAD');
+  assert.equal(readHeadRegister({ repo_path: clone }, pr), BASE);
+});
