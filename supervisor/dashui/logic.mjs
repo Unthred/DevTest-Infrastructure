@@ -153,3 +153,18 @@ export function copyMethods({ secure = false, clipboard = false, execCommand = f
 }
 export const COPY_FEEDBACK_MS = 1600;
 export const copyFeedback = ok => (ok ? { state: 'copied', label: 'Copied', announce: 'Copied to the clipboard' } : { state: 'failed', label: 'Select and copy', announce: 'Could not copy automatically; the text is selected for you to copy' });
+
+// ---- chart legends (issue #160): one shared handler for every chart.
+// `hidden` is the list of series keys the viewer hid; `all` is every series key the chart's legend offers.
+// A chart never hides its last visible series: toggling it is a no-op.
+export function toggleSeries(hidden, key, all) {
+  const set = new Set((hidden || []).filter(k => all.includes(k)));
+  if (set.has(key)) { set.delete(key); return [...set]; }
+  if (!all.includes(key) || all.every(k => k === key || set.has(k))) return [...set];
+  set.add(key); return [...set];
+}
+// Stored state may be stale (a series that no longer exists) or hand-edited: keep only known keys, and never all of them.
+export function sanitizeHidden(stored, all) {
+  const list = Array.isArray(stored) ? stored.filter(k => typeof k === 'string' && all.includes(k)) : [];
+  return all.length && all.every(k => list.includes(k)) ? list.slice(0, -1) : [...new Set(list)];
+}
