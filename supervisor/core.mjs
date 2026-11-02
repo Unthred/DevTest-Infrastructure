@@ -140,7 +140,7 @@ export function validateManifest(m, id) {
     if (!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).some(key => !allowed.includes(key)) || required.some(key => !(key in object)))
       throw new SupervisorError(`invalid ${label}: unknown or missing field`);
   };
-  exact(m, ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'resume', 'access', 'models', 'capabilities', 'billing', 'events'],
+  exact(m, ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'resume', 'access', 'models', 'capabilities', 'billing', 'probe', 'events'],
     ['schema_version', 'id', 'display_name', 'adapter_version', 'launch', 'capabilities', 'billing'], 'provider manifest');
   if (m.schema_version !== 1 || m.id !== id || !/^[a-z][a-z0-9-]{1,31}$/.test(m.id) || !m.display_name || !/^\d+\.\d+\.\d+$/.test(m.adapter_version))
     throw new SupervisorError('invalid provider manifest identity/version');
@@ -160,6 +160,14 @@ export function validateManifest(m, id) {
   exact(m.capabilities, caps, caps.slice(0, 7), 'capabilities');
   if (Object.values(m.capabilities).some(x => !['supported', 'unsupported', 'unverified'].includes(x)) || m.capabilities.launch !== 'supported' || m.capabilities.checkpoint !== 'supported')
     throw new SupervisorError('invalid provider capabilities');
+  if (m.probe) {
+    exact(m.probe, ['kind', 'command', 'args', 'timeout_seconds'], ['kind'], 'probe');
+    if (!['command', 'session-log'].includes(m.probe.kind)) throw new SupervisorError('invalid probe kind');
+    if (m.probe.kind === 'command') {
+      if (typeof m.probe.command !== 'string' || !m.probe.command || !Array.isArray(m.probe.args) || !m.probe.args.every(x => typeof x === 'string' && x.length <= 4096 && !/[\0\r\n]/.test(x))) throw new SupervisorError('invalid probe command');
+      if (m.probe.timeout_seconds !== undefined && !(Number.isInteger(m.probe.timeout_seconds) && m.probe.timeout_seconds >= 5 && m.probe.timeout_seconds <= 300)) throw new SupervisorError('invalid probe timeout');
+    }
+  }
   exact(m.billing, ['model', 'fallback_to_other_billing'], ['model', 'fallback_to_other_billing'], 'billing');
   if (!['subscription', 'api', 'unknown'].includes(m.billing.model) || m.billing.fallback_to_other_billing !== false) throw new SupervisorError('billing fallback must be false');
   if (m.events && (!Array.isArray(m.events) || !m.events.every(x => ['usage_limit', 'transient_rate_limit', 'context_limit', 'auth_error', 'preflight_failed', 'approval_required', 'network_error', 'crash'].includes(x)))) throw new SupervisorError('invalid events');

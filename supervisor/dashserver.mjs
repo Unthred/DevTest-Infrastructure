@@ -1,5 +1,6 @@
-// Read-only team dashboard server (issue #32). Node built-ins only. It reads the supervisor state and the cache/history the
-// tick wrote; it makes no GitHub call and no model call, and changes nothing except the Mark as read marker (POST /mark-read; every other request is GET/HEAD only).
+// Team dashboard server (issue #32). Node built-ins only. It reads the supervisor state and the cache/history the tick wrote; it makes
+// no GitHub call and no model call. GET/HEAD only, except two form posts: POST /mark-read moves the Mark as read marker (issue #253), and
+// POST /probe/<agent> runs one minimal allowance probe (issue #110).
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
 import { readTimeline, computeGaps, allSnapshots, storageReport } from './history.mjs';
@@ -11,6 +12,8 @@ import fs from 'node:fs';
 import { matchRoute, renderRoute } from './dashrender.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
+import { defaultRegistry } from './core.mjs';
+import { probeNow } from './probenow.mjs';
 
 export const DEFAULT_PORT = 8731;
 
@@ -99,7 +102,7 @@ function stream({ root, req, res, id, after, now, active }) {
   res.write('retry: 2000\n\n'); pump();
 }
 
-export function handler({ root, config, host, port, now = () => Date.now() }) {
+export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry }) {
   const source = configSource(config);
   const activeStreams = new Set();
   const allowedHost = `${host}:${port}`;
@@ -120,6 +123,20 @@ export function handler({ root, config, host, port, now = () => Date.now() }) {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
     if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
+    // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
+    // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.
+    const probePath = req.method === 'POST' ? /^\/probe\/([A-Za-z0-9_-]{1,40})$/.exec(reqPath) : null;
+    if (probePath) {
+      if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+      if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+      req.resume();
+      try {
+        const out = await probe({ root, registry, config: source(), agent: probePath[1], now: now() });
+        return send(303, 'text/plain; charset=utf-8', out.ok ? 'refreshed\n' : 'no reading\n', { location: `/usage?probe=${out.ok ? 'ok' : 'failed'}` });
+      } catch (error) {
+        return send(error instanceof SupervisorError ? 404 : 500, 'text/plain; charset=utf-8', error instanceof SupervisorError ? 'unknown agent' : 'probe failed');
+      }
+    }
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain; charset=utf-8', 'read-only dashboard', { allow: 'GET, HEAD' });
     if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');   // blocks DNS-rebinding
     const [, search = ''] = (req.url || '/').split('?'), path = reqPath;

@@ -12,6 +12,7 @@ import { entryApproved } from './decisions.mjs';
 import { redact, redactLong } from './redact.mjs';
 import { EXCEPTION_DECISION, validateReviewException, activeException, endedNow, modelWrittenRanges } from './review-exception.mjs';
 import { findHeadWriter } from './writerevidence.mjs';
+import { probeDue } from './probe.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 
@@ -499,7 +500,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -799,6 +800,21 @@ export class Team {
     }
     return out;
   }
+  // Allowance probes owed now (issue #110): [{ agent, provider, reason, resetFor }], at most one per provider. Read-only; the caller
+  // runs them and calls noteProbe. Only for providers whose manifest declares a probe (`canProbe`), and never on a dry run.
+  probesDue(canProbe = () => true) {
+    const modes = this.budgets();
+    if (!modes) return [];
+    const now = this.clock.now(), settings = budgetSettings(this.c), out = [], seen = new Set();
+    for (const [agent, a] of this.agents()) {
+      if (seen.has(a.provider) || !canProbe(a.provider)) continue;
+      const due = probeDue({ mode: modes[agent].mode, stored: this.s.budget[agent] || null, allowance: this.usage.allowance?.[a.provider] || null, state: this.s.probes[agent] || null, settings, now });
+      if (due) { seen.add(a.provider); out.push({ agent, provider: a.provider, ...due }); }
+    }
+    return out;
+  }
+  // The attempt is recorded whether or not it produced a reading, so a failing probe cannot run more than once per interval.
+  noteProbe(agent, due) { this.s.probes[agent] = { at: this.clock.now(), resetFor: due.resetFor ?? this.s.probes[agent]?.resetFor ?? null }; this.save(); }
   // Reviews `agent` could do (open, non-draft, no verdict from it on the current head, attempts left).
   pendingReviews(agent, prs) {
     return prs.filter(pr => {

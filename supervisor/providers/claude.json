@@ -69,6 +69,24 @@
     "model": "subscription",
     "fallback_to_other_billing": false
   },
+  "probe": {
+    "kind": "command",
+    "command": "claude",
+    "args": [
+      "-p",
+      "reply OK",
+      "--model",
+      "haiku",
+      "--strict-mcp-config",
+      "--tools",
+      "",
+      "--no-session-persistence",
+      "--output-format",
+      "stream-json",
+      "--verbose"
+    ],
+    "timeout_seconds": 90
+  },
   "events": [
     "usage_limit",
     "transient_rate_limit",
