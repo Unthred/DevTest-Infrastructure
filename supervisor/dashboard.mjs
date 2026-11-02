@@ -2,7 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import path from 'node:path';
-import { Team, ROLES, agentOfBranch, checksState, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { Team, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { readMigrationState, readIncidents } from './migrations.mjs';
@@ -204,7 +204,7 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
 // Issue #141: a Needs you card says what happened (text), what Foreman tried, the one action needed and where to look.
 // x = { tried, action, links: [{ text, url }] }. Same shape as the event-log cards of #100/#106 will use.
 const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 140), url: l.url }));
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
@@ -247,6 +247,12 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       { tried: `Review jobs ran ${maxReview} times at this head without recording a verdict, so Foreman stopped reviewing it.`, action: 'Read the review job output, then review the PR by hand or push a new head to start a fresh review.', links });
     else add(`homeowner-pr-${pr.number}`, `${names.pr(pr.number).text} needs the homeowner`, { kind: 'pull', n: pr.number },
       { tried: 'Foreman labelled this PR needs-homeowner and posted the reason as a notice on it.', action: 'Read the notice on the PR and decide; remove the needs-homeowner label when it is handled.', links });
+  }
+  // Issue #249: an unapproved decision that holds green, passed PRs back is one item naming it, what it unblocks and how to approve.
+  if (gated?.prs.length && gated.info?.status === 'agent-proposal') {
+    const { info, prs } = gated, n = prs.length;
+    add(`decision-${info.id}`, `${info.id} (${info.title}) is not approved and holds ${n} reviewed PR${n === 1 ? '' : 's'} back from merging: ${prs.map(p => names.pr(p.number).text).join(', ')}`, null,
+      { tried: `${info.summary} Each has an independent PASS, green checks and no conflict, but merges only once the register says homeowner-approved.`, action: `To approve, edit docs/DECISIONS.md on main so the ${info.id} entry reads "Status: homeowner-approved".`, links: prs.slice(0, 6).map(p => ({ text: names.pr(p.number).text, url: web('pull', p.number) })) });
   }
   // Open issues no agent will ever be given (since #146 an issue in no agent's list is not dispatched).
   { const listed = new Set(Object.values(config.agents || {}).flatMap(a => a.issues || []));
@@ -478,7 +484,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: shortJob(j.id), name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) } }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? {} : { running });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });

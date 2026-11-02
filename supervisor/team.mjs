@@ -172,6 +172,15 @@ export function decisionApproved(registerText, id) {
   return !!m && /^- Status: homeowner-approved\s*$/m.test(m[1]);
 }
 
+// Issue #249: the heading title, status and first sentence of an entry in the register, or null when it is absent.
+export function decisionInfo(registerText, id) {
+  const m = String(registerText || '').match(new RegExp(`^## ${id} [—-] ([^\\n]*)\\n((?:(?!^## ).*\\n?)*)`, 'm'));
+  if (!m) return null;
+  const status = /^- Status: (\S+)\s*$/m.exec(m[2])?.[1] ?? null;
+  const decision = /^- Decision: (.*)$/m.exec(m[2])?.[1] ?? '';
+  return { id, title: m[1].trim(), status, summary: (/^.*?\.(?=\s|$)/.exec(decision)?.[0] ?? decision).trim() };
+}
+
 // Issue #152: D-024 (review independence by model, no mandatory post-merge review) binds only once the homeowner approves it.
 // Until then D-021/D-011 stand: a merge needs a reviewer other than the author, and queued post-merge reviews are kept.
 export const INDEPENDENCE_DECISION = 'D-024';
@@ -393,6 +402,18 @@ export class Team {
     const author = agentOfBranch(this.c, pr.headRefName);
     if (!out.length && author) out.push({ provider: this.c.agents[author].provider, model: null });
     return out;
+  }
+  // Issue #249: open PRs whose independent PASS is green and mergeable but held only because the decision that allows the merge is
+  // not yet homeowner-approved. Empty once approved or when nothing is waiting.
+  waitingOnDecision(prs) {
+    if (this.independenceApproved()) return [];
+    return prs.filter(pr => {
+      const author = agentOfBranch(this.c, pr.headRefName);
+      if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) return false;
+      const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
+      if (v?.verdict !== 'PASS' || v.reviewer !== author || !this.c.agents[v.reviewer] || this.ciState(pr) !== 'green' || pr.mergeable !== 'MERGEABLE') return false;
+      return v.independent === true || (v.interim === true && !this.interimMergeAllowed());
+    });
   }
   independenceApproved() { return decisionApproved(this.register, INDEPENDENCE_DECISION); }
   // An interim (D-021) PASS recorded earlier may merge once D-024 is approved, or while D-021 is approved; under D-021 the merge
