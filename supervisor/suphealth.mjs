@@ -319,13 +319,14 @@ export function relevantTicks(ticks, { job = null, ref = null } = {}, max = 5) {
     || (Number.isSafeInteger(ref) && (t.actions.some(a => a.ref === ref || a.pr === ref || a.issue === ref) || t.ingested.some(i => i.pr === ref) || t.skipped.some(s => new RegExp(`(^|\\D)${ref}(\\D|$)`).test(s.what))));
   return ticks.filter(hit).slice(-max).map(tickLine);
 }
-export function overseerText({ title, severity, problem, facts = [], job = null, verdict = null, log = [], command = null, now }) {
+export function overseerText({ title, severity, problem, facts = [], job = null, verdict = null, log = [], logFilter = null, command = null, now }) {
   const out = [`DevTest overseer note, ${iso(now)}`, `${title}: ${LEVEL[severity] || severity}`, `What is wrong: ${problem}`];
   for (const f of facts) if (f) out.push(`- ${f}`);
   if (job) out.push(job);
   if (verdict) out.push(verdict);
   if (command) out.push(`Command: ${command}`);
-  out.push(log.length ? 'Log (reconcile.log):' : 'Log (reconcile.log): no related line');
+  const filt = logFilter ? ` (filtered: only ticks mentioning ${logFilter}; other ticks are omitted)` : '';
+  out.push(log.length ? `Log (reconcile.log)${filt}:` : `Log (reconcile.log)${filt}: no related line`);
   for (const l of log) out.push(`  ${l}`);
   return out.map(l => scrub(l, 700)).join('\n').slice(0, 4000);
 }
@@ -358,10 +359,10 @@ export function cardOverseer(c, { ticks, jobs, state, cache, now }) {
 }
 // For an Action needed item (attention id job-<id>, homeowner-<n>, tick-failed, …).
 export function attentionOverseer(a, { ticks, jobs, state, cache, now, command }) {
-  let job = null, verdict = null, log = [];
+  let job = null, verdict = null, log = [], logFilter = null;
   const m = /^job-([a-f0-9]{32})$/.exec(a.id || '');
-  if (m) { const j = jobs.find(x => x.id === m[1]); job = jobSummary(j) || `Job ${m[1]}: no record`; verdict = latestVerdict(state, jobPr(j), cache); log = relevantTicks(ticks, { job: m[1], ref: j?.issue }); }
-  else if (a.ref) { verdict = a.ref.kind === 'pull' ? latestVerdict(state, a.ref.n, cache) : null; log = relevantTicks(ticks, { ref: a.ref.n }); }
+  if (m) { const j = jobs.find(x => x.id === m[1]); job = jobSummary(j) || `Job ${m[1]}: no record`; verdict = latestVerdict(state, jobPr(j), cache); log = relevantTicks(ticks, { job: m[1], ref: j?.issue }); logFilter = `job ${m[1]}${Number.isSafeInteger(j?.issue) ? ` or #${j.issue}` : ''}`; }
+  else if (a.ref) { verdict = a.ref.kind === 'pull' ? latestVerdict(state, a.ref.n, cache) : null; log = relevantTicks(ticks, { ref: a.ref.n }); logFilter = `${a.ref.kind === 'pull' ? 'PR' : 'issue'} #${a.ref.n}`; }
   else if (/^tick/.test(a.id || '')) log = ticks.slice(-3).map(tickLine);
-  return overseerText({ title: 'Attention item', severity: a.severity || 'action', problem: a.text, facts: /^decision-/.test(a.id || '') ? [a.tried, a.action] : [], job, verdict, log, command, now });
+  return overseerText({ title: 'Attention item', severity: a.severity || 'action', problem: a.text, facts: /^decision-/.test(a.id || '') ? [a.tried, a.action] : [], job, verdict, log, logFilter, command, now });
 }

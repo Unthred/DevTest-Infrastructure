@@ -346,6 +346,18 @@ test('#141 a fix-limit PR gives one card instead of a CI warning; fewer fix roun
   const early = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state: { fixAttempts: { [`41:${H(1)}`]: 1 }, verdicts: {}, jobs: {} } }));
   assert.equal(early.panels.needsYou.length, 0); assert.ok(early.panels.warnings.some(w => w.id === 'ci-41'));
 });
+test('#211 no Action needed while an escalated fix round is planned; Action needed once the escalated round has failed', async t => {
+  const state = { fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {} };
+  const planned = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state }));
+  assert.ok(!planned.panels.needsYou.some(c => /^fixlimit-/.test(c.id)), 'Foreman has a next step, so nothing is asked of the homeowner');
+  assert.equal(planned.health.label === 'Needs you (1)', false);
+  assert.ok(!planned.panels.warnings.some(w => w.id === 'ci-41'));
+  assert.match(JSON.stringify(planned), /Foreman is handling: one escalated fix round.*no action needed/, 'the page says what Foreman is doing');
+  const failed = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state: { ...state, unblock: { escalated: { 41: true }, pr: {}, day: {}, log: [] } } }));
+  assert.deepEqual(failed.panels.needsYou.map(c => c.id), ['fixlimit-41']);
+  assert.match(failed.panels.needsYou[0].overseer, /Action needed/);
+  assert.match(failed.panels.needsYou[0].overseer, /\(filtered: only ticks mentioning PR #41; other ticks are omitted\)/);
+});
 test('#141 no limit card while the final review or fix job is still running', async t => {
   const rv = await needsOf(await serve(t, { jobs: [jb({ kind: 'review', issue: 41, status: 'running' })], cache: calmCache(), state: { reviewAttempts: { [`41:${H(1)}:codex`]: 2 }, verdicts: {}, jobs: {} } }));
   assert.equal(rv.panels.needsYou.length, 0); assert.notEqual(rv.health.label, 'Needs you (1)');
