@@ -297,8 +297,11 @@ export class Team {
     if (!out.length && author) out.push({ provider: this.c.agents[author].provider, model: null });
     return out;
   }
-  // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
   independenceApproved() { return decisionApproved(this.register, INDEPENDENCE_DECISION); }
+  // An interim (D-021) PASS recorded earlier may merge once D-024 is approved, or while D-021 is approved; under D-021 the merge
+  // still owes the opposite agent a post-merge review (recorded in execute()).
+  interimMergeAllowed() { return this.independenceApproved() || decisionApproved(this.register, 'D-021'); }
+  // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
   reviewRefusal(agent, pr, key) {
     // A caller that has no provider manifests (the dashboard) judges by the configured model name.
     const model = this.modelFor({ agent, pr: pr.number, key }, 'review', {}, true).model ?? null;
@@ -399,8 +402,10 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
-      if (v?.verdict === 'PASS' && (v.reviewer !== author || v.interim === true || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && checksState(pr.statusCheckRollup) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
-        actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job });
+      const interim = v?.interim === true && v.reviewer === author;
+      if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && checksState(pr.statusCheckRollup) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) {
+        // Until D-024 is approved, an interim merge owes the opposite agent a post-merge review (D-021).
+        actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job, ...(interim && !this.independenceApproved() ? { interim: true, branch: pr.headRefName, author } : {}) });
         break;
       }
     }
@@ -533,9 +538,13 @@ export class Team {
       if (!allow('review')) break;
       return { type: 'review', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key: so.key, secondOpinion: true };
     }
-    // second opinion on a merged PR whose earlier queue entry touches the configured paths (entries that do not were dropped).
+    // Merged PRs in the post-merge queue. Until D-024 is approved, D-021 stands: every queued entry is reviewed by an agent other than
+    // its author once that agent has allowance again. Once approved, only entries kept as a second opinion (they touch the configured
+    // paths) remain, for the configured reviewer; the others were dropped.
+    const legacyPostMerge = !this.independenceApproved();
     for (const [n, pm] of Object.entries(rev ? this.s.postMerge : {})) {
-      if (pm.done || !pm.secondOpinion || pm.author === agent || this.c.second_opinion?.reviewer !== agent || !SHA.test(pm.head || '') || this.limitedOf(agent).out) continue;
+      if (pm.done || pm.author === agent || !SHA.test(pm.head || '') || this.limitedOf(agent).out) continue;
+      if (!legacyPostMerge && (!pm.secondOpinion || this.c.second_opinion?.reviewer !== agent)) continue;
       const key = `${n}:${pm.head}:${agent}:post`;
       if (busy('review', key) || (this.s.reviewAttempts[key] || 0) >= L.max_review_attempts) continue;
       if (this.reviewerHold(agent)) break;
@@ -877,7 +886,11 @@ export class Team {
 
   async execute(act, report = {}) {
     if (act.type === 'merge') {
-      await this.gh.merge(act.pr, act.head);      // GitHub refuses unless the head still equals act.head
+      // D-021 (until D-024 is approved): an interim merge owes the opposite agent a post-merge review. Recorded before the merge, so a
+      // crash after it cannot lose the debt; a refused merge removes it again.
+      if (act.interim) { this.s.postMerge[act.pr] = { head: act.head, branch: act.branch, author: act.author, interimReviewer: act.reviewer, interimJob: act.job, at: this.clock.now() }; this.save(); }
+      try { await this.gh.merge(act.pr, act.head); }      // GitHub refuses unless the head still equals act.head
+      catch (error) { if (act.interim) { delete this.s.postMerge[act.pr]; this.save(); } throw error; }
       this.s.merged[act.pr] = act.head;
       const branch = (await this.gh.getPull(act.pr))?.headRefName || '';
       const m = /issue-(\d+)/.exec(branch);
@@ -886,9 +899,10 @@ export class Team {
       this.s.mergeLog.push({ pr: act.pr, issue, agent: agentOfBranch(this.c, branch), reviewer: act.reviewer, startedAt: issue ? (this.s.implemented[issue] ?? null) : null, mergedAt: this.clock.now() });
       this.s.mergeLog = this.s.mergeLog.slice(-500);
       if (issue) {
-        await this.gh.comment(issue, `PR #${act.pr} merged at \`${act.head}\` by the dispatcher. Gates: PASS from \`${act.reviewer}\` (job \`${act.job}\`) recorded for this exact head, all checks green, mergeable. Merged is not deployed or verified working.`);
+        await this.gh.comment(issue, `PR #${act.pr} merged at \`${act.head}\` by the dispatcher. Gates: ${act.interim ? 'interim (D-021) ' : ''}PASS from \`${act.reviewer}\` (job \`${act.job}\`) recorded for this exact head, all checks green, mergeable.${act.interim ? ' A post-merge review by the opposite agent follows.' : ''} Merged is not deployed or verified working.`);
         await this.gh.board(issue, act.base === 'main' ? 'done' : 'in_review');
       }
+      if (act.interim) await this.gh.addLabel(act.pr, 'post-merge-review');
       return;
     }
     const a = this.c.agents[act.agent], base = this.c.worktree_base, ticket = crypto.randomBytes(16).toString('hex');

@@ -269,3 +269,46 @@ test('until D-024 is homeowner-approved the tick keeps queued post-merge reviews
     assert.deepEqual(Object.keys(w.team.s.postMerge), kept);
   }
 });
+
+// Review fix 2 (PR #168): while D-024 is unapproved the queued D-021 post-merge reviews still run, for an agent other than the author.
+test('until D-024 is homeowner-approved a queued post-merge review is scheduled for the opposite agent, with no second_opinion config', async t => {
+  const w = world(t, { register: UNAPPROVED }); w.gh.pulls = [];
+  w.team.s.postMerge[10] = { head: H(1), branch: 'claude/issue-1-x', author: 'claude', at: NOW };
+  const acts = await w.team.plan();
+  const post = acts.filter(a => a.type === 'review' && a.postMerge);
+  assert.deepEqual(post.map(a => [a.agent, a.pr, a.head, a.key]), [['codex', 10, H(1), `10:${H(1)}:codex:post`]], 'codex, never the author');
+  // the author's own provider never reviews it, even when the opposite agent is out of allowance
+  w.state.out = CODEX_OUT;
+  assert.equal((await w.team.plan()).find(a => a.postMerge), undefined);
+  // approved D-024: an entry not kept as a second opinion is not scheduled
+  const ok = world(t); ok.gh.pulls = [];
+  ok.team.s.postMerge[10] = { head: H(1), branch: 'claude/issue-1-x', author: 'claude', at: NOW };
+  assert.equal((await ok.team.plan()).find(a => a.postMerge), undefined);
+});
+
+test('until D-024 is homeowner-approved an interim PASS merge still owes a post-merge review (label and queue entry)', async t => {
+  const w = world(t, { register: UNAPPROVED, out: CODEX_OUT }); writer(w);
+  w.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j', interim: true, at: NOW - 1000 };
+  const merge = (await w.team.plan()).find(a => a.type === 'merge');
+  assert.ok(merge); assert.equal(merge.interim, true);
+  await w.team.execute(merge, {});
+  assert.deepEqual(w.calls.merges, [[77, H(5)]]);
+  assert.equal(w.team.s.postMerge[77].head, H(5)); assert.equal(w.team.s.postMerge[77].author, 'claude');
+  assert.deepEqual(w.calls.labels, [[77, 'post-merge-review']]);
+  // a refused merge removes the debt again
+  const r = world(t, { register: UNAPPROVED, out: CODEX_OUT }); writer(r);
+  r.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j', interim: true, at: NOW - 1000 };
+  const m2 = (await r.team.plan()).find(a => a.type === 'merge'); r.gh.pulls[0].headRefOid = H(6);
+  await assert.rejects(r.team.execute(m2, {}), /head moved/);
+  assert.equal(r.team.s.postMerge[77], undefined);
+  // neither D-021 nor D-024 approved: an interim PASS does not merge
+  const none = world(t, { register: UNAPPROVED.replace(/(## D-021[^\n]*\n- Status: )homeowner-approved/, '$1agent-proposal'), out: CODEX_OUT }); writer(none);
+  none.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j', interim: true, at: NOW - 1000 };
+  assert.equal((await none.team.plan()).find(a => a.type === 'merge'), undefined);
+  // approved D-024: it merges with no post-merge entry
+  const ok = world(t, { out: CODEX_OUT }); writer(ok);
+  ok.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j', interim: true, at: NOW - 1000 };
+  const m3 = (await ok.team.plan()).find(a => a.type === 'merge'); assert.equal(m3.interim, undefined);
+  await ok.team.execute(m3, {});
+  assert.deepEqual(ok.team.s.postMerge, {}); assert.deepEqual(ok.calls.labels, []);
+});
