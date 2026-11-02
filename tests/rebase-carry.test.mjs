@@ -19,14 +19,15 @@ const config = () => ({
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } });
 const pr = (n, branch, head, extra = {}) => ({ number: n, title: `t${n}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', statusCheckRollup: green, ...extra });
 
-function world(t, { pulls, out = {}, equal = true, modes = null, resolved = false }) {
+const APPROVED_D25 = '## D-025 — carry\n- Status: homeowner-approved\n';
+function world(t, { pulls, out = {}, equal = true, modes = null, resolved = false, register: o_register = APPROVED_D25 }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carry-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = { comments: [], created: [], range: [] };
   const gh = { pulls, listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => [], listMergedPulls: async () => [],
     comment: async (n, b) => calls.comments.push([n, b]), hasComment: async (n, m) => calls.comments.some(([x, b]) => x === n && b.includes(m)) };
   const jobs = { states: {}, listActive: async () => [], get: async id => jobs.states[id] || null, create: async spec => { calls.created.push(spec); return { id: 'a'.repeat(32) }; } };
   const git = { checkRebase: async a => ({ commits: [], missing: [], ...(resolved === 'unknown' ? {} : { resolvedConflicts: resolved }) }), ensureWorktree: async o => o.path, worktreeFor: async () => null, rangeEqual: async a => { calls.range.push(a); if (equal instanceof Error) throw equal; return equal; } };
-  const team = new Team({ config: config(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: '', clock: { now: () => 1000 }, limitedOf: a => (out[a] ? { out: true, reason: out[a] } : { out: false }) });
+  const team = new Team({ config: config(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: o_register, clock: { now: () => 1000 }, limitedOf: a => (out[a] ? { out: true, reason: out[a] } : { out: false }) });
   if (modes) team.budgets = () => modes;
   return { team, gh, jobs, calls };
 }
