@@ -30,4 +30,4 @@ Per profile: `<name>-<profile>-<browser>.png` (full page) and `.layout.json`; ov
 `browser/fixture/responsive/broken.html` is deliberately broken (700px block, clipped card title, 500px input, 12px button, wrapping chips, overlay over a button); `fixed.html` is the corrected page. `tests/responsive-smoke.mjs` proves the broken page fails at every standard profile with each seeded defect in Chromium, Firefox and WebKit, and the corrected one passes at all eight with PNG widths exactly viewport x DPR.
 
 ## Evidence
-`node tests/responsive-smoke.mjs` (Tower, real Docker; needs `node browser/prepare-cache.mjs`). Unit tests: `tests/responsive.test.mjs`. Not covered: authenticated or TCP targets (OQ-2, #10), pixel baselines, the `dev-test` CLI (#8).
+`node tests/responsive-smoke.mjs` (Tower, real Docker; needs `node browser/prepare-cache.mjs`). Unit tests: `tests/responsive.test.mjs`. Not covered: TCP targets (OQ-2); the Home Assistant profile is in [ha-readonly.md](ha-readonly.md), pixel baselines, the `dev-test` CLI (#8).

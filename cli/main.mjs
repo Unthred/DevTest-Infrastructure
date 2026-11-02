@@ -15,6 +15,7 @@ import { DotnetCommandError, discoverProject } from '../dotnet/commands.mjs';
 import { createStaticServer, listenOnSocket } from '../browser/static-server.mjs';
 import { checkHealth } from '../broker/openbao.mjs';
 import { validatePolicy, CREDENTIAL_KEY } from '../broker/broker.mjs';
+import { evaluateLiveGate } from '../browser/ha-live-gate.mjs';
 
 export const EXIT = { ok: 0, subject_failed: 1, usage: 2, environment: 3, policy_refused: 4, timeout: 5, internal: 6, cleanup_incomplete: 7, interrupted: 130 };
 const STATUS = { 0: 'passed', 1: 'failed', 2: 'error', 3: 'error', 4: 'refused', 5: 'timeout', 6: 'error', 7: 'error', 130: 'interrupted' };
@@ -26,6 +27,7 @@ const DESCRIPTIONS = {
   'dotnet test': 'Test in a pinned SDK container; TRX, JUnit and optional coverage artifacts.',
   'web screenshot': 'Capture one screenshot of a local page in a network-less Playwright container.',
   'web responsive': 'Capture across profiles and apply responsive layout assertions.',
+  'web ha': 'Home Assistant read-only browser profile: anonymised local fixture by default; --live reports whether the real instance may be used (it is blocked).',
   report: 'Show a stored result by run id.',
   cleanup: 'Remove run workspaces; evidence only when its run id is named.'
 };
@@ -93,6 +95,7 @@ async function dispatch(ctx, io) {
     case 'help': return help(ctx.positionals.join(' '));
     case 'doctor': return doctor(ctx, io);
     case 'dotnet build': case 'dotnet test': return dotnet(ctx, io);
+    case 'web ha': return ctx.options['--live'] ? haLive(ctx, io) : web(ctx, io);
     case 'web screenshot': case 'web responsive': return web(ctx, io);
     case 'report': return report(ctx, io);
     case 'cleanup': return cleanup(ctx, io);
@@ -241,8 +244,10 @@ async function web(ctx, io) {
   const { deps, env } = io;
   const { config } = loadConfig(env);
   const cfg = effectiveConfig(ctx, config);
-  const target = resolveWebTarget(ctx.options['--url'], cfg, ctx.options['--root'], io.cwd);
   const repo = realpathOrNull(REPO_ROOT);
+  const isHa = ctx.command === 'web ha';
+  // The Home Assistant profile serves only its own anonymised fixture directory from the repository: no URL argument exists.
+  const target = isHa ? { root: repo, serveRoot: path.join(repo, 'browser', 'fixture', 'ha'), pagePath: '/', project: repo } : resolveWebTarget(ctx.options['--url'], cfg, ctx.options['--root'], io.cwd);
   if (!allowedRoots(cfg).includes(repo)) throw new EnvironmentError(`the dev-test repository (${REPO_ROOT}) must be in "allowedProjects": the browser scripts run from its read-only mount`);
   const runsRoot = evidenceRoot(ctx, cfg);
   preflight(ctx, { config: cfg, deps, runsRoot, imageIds: ['playwright'], needPlaywrightCache: true });
@@ -250,7 +255,9 @@ async function web(ctx, io) {
   const browser = ctx.options['--browser'] ?? 'chromium';
   const navMs = Math.min(15000, Math.max(1000, Math.floor((cfg.limits.timeoutMs ?? 120000) / 2)));
   const common = ['--target', 'page', '--path', target.pagePath, '--browser', browser, '--timeout-ms', String(navMs)];
-  const command = responsive
+  const command = isHa
+    ? ['node', '/src/browser/ha-readonly.mjs', '--target', 'page', '--page-set', 'fixture', '--browser', browser, '--timeout-ms', String(navMs), '--probe', 'clicks', '--name', 'ha']
+    : responsive
     ? ['node', '/src/browser/responsive.mjs', ...common, '--profiles', ctx.options['--profiles'], '--name', 'audit']
     : ['node', '/src/browser/capture.mjs', ...common, '--profile', ctx.options['--profile'], '--name', 'shot', ...(ctx.options['--full-page'] ? ['--full-page'] : [])];
   const plan = deps.createPlan({ project: repo, runId: ctx.runId, image: 'playwright', phase: 'test', targets: ['page'], command }, cfg);
@@ -271,7 +278,13 @@ async function web(ctx, io) {
   if (exit === 1) {
     const wrapper = result.subjectExit;
     data.wrapper_exit = wrapper;
-    if (responsive) {
+    if (isHa) {
+      const summary = read('ha.summary.json');
+      if (summary?.pages) {
+        haData(summary, data, lines);
+        if (wrapper === 16) { message = 'the page tried to change state (write request, non-read WebSocket frame or unprompted interaction) or the interaction guard was bypassed; it was blocked'; lines.push(...summary.readOnly.blockedWrites.slice(0, 5).map((w) => `  blocked write: ${w}`)); }
+      }
+    } else if (responsive) {
       const summary = read('audit.summary.json');
       const asserted = new Set(ctx.options['--assert'] ?? []);
       if (summary?.profiles) {
@@ -291,11 +304,12 @@ async function web(ctx, io) {
     }
     if (exit === 1 && !message) {
       if (wrapper === 10 && (data.problems ?? []).some((p) => /^capture failed:/.test(p))) { exit = 6; message = 'the browser wrapper crashed before testing the page; not evidence about the page. If the Playwright cache is not restored see docs/browser-runner.md'; }
-      else if ([10, 11, 12, 13, 15].includes(wrapper)) message = { 10: 'the page reported console, page or HTTP errors', 11: 'navigation timed out', 12: 'the page tried to reach an undeclared destination (blocked)', 13: 'TLS error', 15: 'layout defect or a profile that did not render' }[wrapper];
+      else if ([10, 11, 12, 13, 15, 16].includes(wrapper)) message = { 16: 'a state-changing action was attempted and blocked (read-only profile)', 10: 'the page reported console, page or HTTP errors', 11: 'navigation timed out', 12: 'the page tried to reach an undeclared destination (blocked)', 13: 'TLS error', 15: 'layout defect or a profile that did not render' }[wrapper];
       else { exit = 6; message = `the browser wrapper failed unexpectedly (code ${wrapper}); not evidence about the page. If the Playwright cache is not restored see docs/browser-runner.md`; }
     }
   } else if (exit === 0) {
-    message = responsive ? `no layout defect across the selected profile(s)` : 'screenshot captured with no page errors';
+    if (isHa) { const s = read('ha.summary.json'); if (s?.pages) haData(s, data, lines); }
+    message = isHa ? 'fixture: 3 pages at phone-390 and desktop-1280 rendered, no layout defect, no state-changing action reached the page. This is the local fixture, not the live Home Assistant' : responsive ? `no layout defect across the selected profile(s)` : 'screenshot captured with no page errors';
     if (!artifacts.some((a) => a.kind === 'screenshot')) { exit = 6; message = 'run reported success but produced no screenshot'; }
     if (responsive && ctx.options['--assert']) data.asserted = ctx.options['--assert'];
   }
@@ -303,6 +317,29 @@ async function web(ctx, io) {
   if (result.cleanup !== 'complete' && exit !== 130 && exit !== 5) { exit = exit === 6 ? 6 : 7; message = `${message ?? ''} (cleanup incomplete)`.trim(); }
   message ??= { 3: 'environment precondition missing', 4: 'refused by runner policy', 5: 'time limit exceeded; the container was stopped and removed', 6: 'runner failed; not evidence about the page', 7: 'finished but cleanup was incomplete', 130: 'interrupted' }[exit];
   return { exit, runId: plan.runId, message, workspace: dir, artifacts, cleanup: result.cleanup, image: imageInfo(plan), sourceCommit: deps.commit(target.project), data, lines, persist: { dir } };
+}
+
+function haData(summary, data, lines) {
+  data.page_set = summary.pageSet;
+  data.pages = summary.pages.map((p) => ({ page: p.page, profiles: p.profiles.map((x) => ({ profile: x.profile, rendered: x.rendered, failures: x.failures, warnings: x.warnings })) }));
+  data.read_only = { blocked_writes: summary.readOnly.blockedWrites.length, blocked_frames: summary.readOnly.blockedFrames.length, blocked_interactions: summary.readOnly.blockedInteractions.length, probe: summary.probe };
+  data.blocked_requests = summary.blockedRequests?.length ?? 0;
+  for (const p of summary.pages) for (const f of p.failures.slice(0, 10)) lines.push(`  ${p.page} / ${f.profile}: ${f.check} on ${f.element}`);
+}
+
+// `web ha --live`: decides, and reports, whether the real Home Assistant may be used. It reads the credential POLICY (paths, never values),
+// the decision register and the runner's network capability. It starts nothing and logs in to nothing. Today it is blocked, and says why.
+async function haLive(ctx, io) {
+  const { config } = loadConfig(io.env);
+  const file = config.openbao?.policyFile;
+  let policy = null, policyNote = null;
+  if (!file) policyNote = 'no OpenBao credential policy is configured (openbao.policyFile)';
+  else { try { policy = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { policyNote = `the credential policy is unreadable (${error.name === 'SyntaxError' ? 'not JSON' : error.code ?? error.name})`; } }
+  const gate = evaluateLiveGate({ policy: policy ?? undefined, networkRoute: 'unavailable' });
+  const reasons = policyNote ? [policyNote, ...gate.reasons.filter((r) => !/^credential policy unusable/.test(r))] : gate.reasons;
+  const status = 'blocked';
+  return { exit: 4, runId: ctx.runId, message: `live Home Assistant acceptance is BLOCKED (${gate.host}); nothing was contacted and no success is claimed`,
+    data: { live: { status, host: gate.host, reasons }, fixture_alternative: 'dev-test web ha' }, lines: reasons.map((r) => `  - ${r}`) };
 }
 
 // ---------- doctor ----------
