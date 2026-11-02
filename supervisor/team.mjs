@@ -187,6 +187,8 @@ export function decisionInfo(registerText, id) {
 // Issue #152: D-024 (review independence by model, no mandatory post-merge review) binds only once the homeowner approves it.
 // Until then D-021/D-011 stand: a merge needs a reviewer other than the author, and queued post-merge reviews are kept.
 export const INDEPENDENCE_DECISION = 'D-024';
+// The choices offered at the fix limit, on every path (card, PR notice, alert). No paid option, and no move to a stronger model.
+export const FIX_LIMIT_OPTIONS = 'wait for another agent to be able to review (allowance reset), split the PR into smaller pieces, change the approach, or fix it by hand (raising `max_fix_attempts` in team.local.json only allows more rounds on the same model)';
 
 // Issue #149: judge each check by its latest run on the head. A push followed by a PR description edit starts two runs of the same
 // check about 20 s apart; the concurrency group cancels the first. That superseded cancelled run is not a failure.
@@ -408,7 +410,7 @@ export class Team {
   // model, or the PR has drawn CHANGES twice. Allowance: reported weekly use at or above the threshold keeps the cheap model
   // for everything but implement/continue. Both reasons are stored on the job. Invalid values degrade to the CLI default.
   modelFor(act, kind, report, lenient = false) {
-    const escalation = act.escalated ? { reason: 'fix limit reached: one escalated round with the full review history' } : this.s.escalations[`${kind}:${act.key ?? act.pr}`] || (act.pr && isRepair(typeOfKind(kind)) && repeatedChanges(this.s.verdicts, act.pr) ? { reason: `PR #${act.pr} has drawn CHANGES twice` } : null);
+    const escalation = act.escalated ? { reason: 'fix limit reached: one final round with the full review history' } : this.s.escalations[`${kind}:${act.key ?? act.pr}`] || (act.pr && isRepair(typeOfKind(kind)) && repeatedChanges(this.s.verdicts, act.pr) ? { reason: `PR #${act.pr} has drawn CHANGES twice` } : null);
     const provider = this.c.agents[act.agent].provider;
     // "Low" (issue #56): the agent is not in normal mode, or its weekly use is at or above the model threshold.
     const utilization = this.allowanceOf(act.agent), mode = this.modes?.[act.agent]?.mode;
@@ -1430,8 +1432,8 @@ export class Team {
       const rejected = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'CHANGES' || this.ciState(pr) === 'red';
       const nkey = `fixlimit:${pr.number}`, akey = `fixlimit-alert:${pr.number}`;
       if (!rejected) continue;
-      if (this.escalationPending(pr.number, pr)) continue;   // issue #163: one escalated round runs (or is still allowed) before the homeowner is asked
-      // The escalated round was never run because the unblock budget is spent: that limit is its own Needs you item, and the
+      if (this.escalationPending(pr.number, pr)) continue;   // issue #163: one final round runs (or is still allowed) before the homeowner is asked
+      // The final round was never run because the unblock budget is spent: that limit is its own Needs you item, and the
       // fix-limit notice says that no final round ran rather than claiming one did.
       const escalated = !!this.s.unblock.escalated[pr.number], room = escalated ? null : this.unblockRoom(pr.number), block = escalated || room ? null : this.writeBlock(pr);
       if (room) await guard(`unblock limit ${pr.number}`, () => this.raiseUnblockLimit(report, pr.number, room, 'pull'));
@@ -1442,7 +1444,7 @@ export class Team {
           this.s.notified[nkey] = this.clock.now(); this.save();
           try {
             await this.flag(pr.number, { key: 'fixlimit', kind: 'fixlimit', head: pr.headRefOid, tk: 'pull' });
-            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads)${round} have not cleared ${this.rejectionCause(pr)} on this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide whether to change the approach, fix it by hand, or raise \`max_fix_attempts\` in team.local.json.`);
+            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads)${round} have not cleared ${this.rejectionCause(pr)} on this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide which: ${FIX_LIMIT_OPTIONS}.`);
           } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
           (report.notified ||= []).push({ pr: pr.number, fixLimit: true });
         });
@@ -1451,7 +1453,7 @@ export class Team {
       // alert is retried on the next tick; a failing channel never undoes the notice.
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed: change the approach, fix it by hand, or raise max_fix_attempts in team.local.json.`);
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${FIX_LIMIT_OPTIONS}.`);
           this.s.notified[akey] = this.clock.now(); this.save();
         } catch { (report.skipped ||= []).push({ what: `alert fix-limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
       }
@@ -1551,12 +1553,12 @@ export class Team {
       });
     }
   }
-  // Fix limit (issue #163 part 3): one escalated round per PR on the reviewer-tier model with the full review history.
+  // Fix limit (issue #163 part 3): one final round per PR, a fresh session on the same model, with the full review history.
   canEscalate(pr, prObj = null) { return !this.s.unblock.escalated[pr] && !this.unblockRoom(pr) && !(prObj && this.writeBlock(prObj)); }
   escalationPending(pr, prObj = null) {
     return this.canEscalate(pr, prObj) || Object.values(this.s.jobs).some(j => j.pr === pr && j.escalated && !j.ingested);
   }
-  // Findings moved to follow-up issues by an escalated round: written as task data for the re-review, which is against the original scope.
+  // Findings moved to follow-up issues by the final round: written as task data for the re-review, which is against the original scope.
   splitOut(pr, inbox) {
     const out = Object.values(this.s.jobs).filter(j => j.pr === pr && j.split).map(j => j.split);
     if (!out.length) return null;
@@ -1620,7 +1622,7 @@ export class Team {
     return Object.entries(this.s.verdicts).filter(([k]) => k.startsWith(`${pr}:`)).sort((a, b) => (a[1].at || 0) - (b[1].at || 0))
       .map(([k, v]) => ({ head: k.slice(String(pr).length + 1), verdict: v.verdict, reviewer: v.reviewer, findings: (v.findings || []).map(f => ({ kind: f.kind, text: f.text })) }));
   }
-  // After an escalated round: findings the job proposes to split out are checked, and only the ones that are provably the reviewer's
+  // After the final round: findings the job proposes to split out are checked, and only the ones that are provably the reviewer's
   // own and not homeowner-required (issue body or the owner's comments) become one follow-up issue, queued at the end of the author's list.
   async processSplit(id, j, report) {
     const file = path.join(this.dir, 'inbox', j.ticket || 'none', 'split.json');
@@ -1652,15 +1654,15 @@ export class Team {
     if (accepted.length) {
       const marker = `<!-- devtest-split v1 pr=${j.pr} job=${id} -->`;
       issue = await this.gh.findIssueByMarker(marker);
-      if (!issue) issue = await this.gh.createIssue(`Follow-up from PR #${j.pr}: findings outside the original scope`, `${marker}\nSplit out of PR #${j.pr} by Foreman during the escalated fix round (job \`${id}\`). These reviewer findings are outside the acceptance criteria of the original issue and the homeowner's comments; the PR is re-reviewed against the original scope.\n\n${accepted.map(x => `- ${x.finding}\n  - why split: ${x.reason}`).join('\n')}`);
+      if (!issue) issue = await this.gh.createIssue(`Follow-up from PR #${j.pr}: findings outside the original scope`, `${marker}\nSplit out of PR #${j.pr} by Foreman during the final fix round (job \`${id}\`). These reviewer findings are outside the acceptance criteria of the original issue and the homeowner's comments; the PR is re-reviewed against the original scope.\n\n${accepted.map(x => `- ${x.finding}\n  - why split: ${x.reason}`).join('\n')}`);
       const agent = j.agent;
       const q = this.s.unblock.queued[agent] ||= [];
       if (!q.includes(issue)) q.push(issue);
       j.split = { issue, findings: accepted.map(x => x.finding) };
       this.save();
     }
-    await this.postNotice(j.pr, `split job=${id}`, `**Escalated round: scope split.** ${issue ? `${accepted.length} reviewer finding(s) outside the original scope moved to issue #${issue}, queued at the end of \`${j.agent}\`'s list. The PR is re-reviewed against the original scope.` : 'No finding was split out.'}${refused.length ? ` ${refused.length} proposed split(s) refused: ${refused.map(r => r.why).join('; ')}.` : ''}`);
-    this.logUnblock(report, { target: j.pr, tk: 'pull', what: `split ${accepted.length} finding(s) of PR #${j.pr} into ${issue ? `issue #${issue}` : 'no issue'}`, why: 'escalated fix round proposed findings outside the original scope', result: refused.length ? `${refused.length} refused (homeowner-required or unverifiable)` : 'queued' });
+    await this.postNotice(j.pr, `split job=${id}`, `**Final round: scope split.** ${issue ? `${accepted.length} reviewer finding(s) outside the original scope moved to issue #${issue}, queued at the end of \`${j.agent}\`'s list. The PR is re-reviewed against the original scope.` : 'No finding was split out.'}${refused.length ? ` ${refused.length} proposed split(s) refused: ${refused.map(r => r.why).join('; ')}.` : ''}`);
+    this.logUnblock(report, { target: j.pr, tk: 'pull', what: `split ${accepted.length} finding(s) of PR #${j.pr} into ${issue ? `issue #${issue}` : 'no issue'}`, why: 'final fix round proposed findings outside the original scope', result: refused.length ? `${refused.length} refused (homeowner-required or unverifiable)` : 'queued' });
   }
   // Issue #163 part 4: needs-homeowner labels Foreman added are removed when their cause clears, and the removal is recorded.
   async clearStale(report, guard = (_, fn) => fn()) {
@@ -1739,7 +1741,7 @@ export class Team {
     const a = this.c.agents[act.agent], base = this.c.worktree_base, ticket = crypto.randomBytes(16).toString('hex');
     const common = { role: 'devtest', provider: a.provider, repository: this.c.repo_path, access: this.c.access?.mode === 'full' ? 'full' : 'standard', autoRestart: true };
     let spec, meta, bump = () => {}, escalatedInbox = null;
-    if (act.escalated) {   // issue #163: the one escalated round gets the full review history as task data and may propose a scope split
+    if (act.escalated) {   // issue #163: the one final round gets the full review history as task data and may propose a scope split
       escalatedInbox = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(escalatedInbox, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(escalatedInbox, 'review-history.json'), JSON.stringify({ pr: act.pr, verdicts: this.reviewHistory(act.pr) }) + '\n', { mode: 0o600 });
     }
@@ -1813,7 +1815,7 @@ export class Team {
       return `started the ${spec.kind} job ${job.id.slice(0, 8)} on ${spec.model || 'the default model'}`;
     };
     if (!act.escalated) { await create(); return; }
-    // The one escalated round: counted against the unblock budget, recorded before the job starts, never repeated for this PR.
+    // The one final round: counted against the unblock budget, recorded before the job starts, never repeated for this PR.
     const room = this.unblockRoom(act.pr);
     if (room) { await this.raiseUnblockLimit(report, act.pr, room, 'pull'); return; }
     this.s.unblock.escalated[act.pr] = { head: act.head, at: this.clock.now() }; this.save();

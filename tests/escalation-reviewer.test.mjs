@@ -105,3 +105,34 @@ test('control: with the other provider available the same PR does get a fix plan
   team.s.verdicts[`137:${PR.headRefOid}`] = { verdict: 'CHANGES', reviewer: 'codex' };
   assert.equal((await team.plan()).some(a => a.type === 'fix'), true);
 });
+
+// The planner skips: each writing kind is held back by writeBlock, not only fix. Driven through plan(), not modelFor().
+function planWorld(t, pr, { out = { codex: 'limit' }, verdict = false } = {}) {
+  const { team } = world(t, { cfg: config({ fix: UNKNOWN }), out });
+  team.gh.listPulls = async () => [pr]; team.gh.listIssues = async () => []; team.jobs.listActive = async () => []; team.jobs.list = async () => [];
+  if (verdict) team.s.verdicts[`137:${pr.headRefOid}`] = { verdict: 'CHANGES', reviewer: 'codex' };
+  return team;
+}
+const RED = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'ci' }];
+const plansOf = async team => (await team.plan()).map(a => a.type);
+
+test('the planner starts no rebase for a conflicting PR whose writer would strand it; control: it does when codex can review', async t => {
+  const conflict = { ...PR, mergeable: 'CONFLICTING' };
+  assert.equal((await plansOf(planWorld(t, conflict))).includes('rebase'), false);
+  assert.equal((await plansOf(planWorld(t, conflict, { out: {} }))).includes('rebase'), true);
+});
+
+test('the planner starts no cifix for a red PR whose writer would strand it; control: it does when codex can review', async t => {
+  const red = { ...PR, statusCheckRollup: RED };
+  assert.equal((await plansOf(planWorld(t, red))).includes('cifix'), false);
+  assert.equal((await plansOf(planWorld(t, red, { out: {} }))).includes('cifix'), true);
+});
+
+test('the planner starts no continue for a draft whose writer would strand it; control: it does when codex can review', async t => {
+  const draft = { ...PR, isDraft: true };
+  const issues = [{ number: 72, state: 'OPEN', title: 'x', body: '', labels: [], assignees: [] }];
+  const mk = out => { const team = planWorld(t, draft, { out }); team.gh.listIssues = async () => issues; team.c.agents.claude.issues = [72]; return team; };
+  const blocked = await plansOf(mk({ codex: 'limit' })), open = await plansOf(mk({}));
+  assert.equal(blocked.includes('continue'), false);
+  assert.equal(open.includes('continue'), true, 'control: the draft is continued when codex can review');
+});

@@ -133,6 +133,9 @@ test('fix limit: no notice while the escalation is pending; one escalated fix ru
   await w.team.tick(); await w.team.tick();
   assert.equal(w.calls.created.length, 1, 'no second escalation');
   assert.equal(w.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 1); assert.deepEqual(w.calls.labels.filter(l => l[0] === 38), [[38, 'needs-homeowner']]);
+  // the notice and the AI-channel alert give the same choices as the card, with no paid option
+  const noticeText = w.calls.comments.find(c => /fix rounds/.test(c[1]))[1];
+  for (const text of [noticeText, w.calls.alerts.find(x => /fix rounds/.test(x))]) { assert.match(text, /wait for another agent to be able to review/); assert.match(text, /split the PR into smaller pieces/); assert.match(text, /fix it by hand/); assert.doesNotMatch(text, /pay|credit|paid|stronger model/i); }
   noMerge(w);
 });
 

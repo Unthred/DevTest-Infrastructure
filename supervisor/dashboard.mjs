@@ -2,7 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import path from 'node:path';
-import { Team, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { Team, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { readMigrationState, readIncidents } from './migrations.mjs';
@@ -247,15 +247,15 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const labelled = pr.labels?.includes('needs-homeowner');
     if (!fixLimit && !reviewLimit && !labelled) continue;
     if (fixLimit) fixLimited.add(pr.number);
-    // Issue #211: the dispatcher already has a next step (one escalated fix round), so nothing is asked of the homeowner yet.
+    // Issue #211: the dispatcher already has a next step (one final fix round), so nothing is asked of the homeowner yet.
     if (fixLimit && escalating.has(pr.number) && !labelled) {
-      add(`escalating-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix}). Foreman is handling: one escalated fix round on the reviewer-tier model with the full review history, no action needed`, { kind: 'pull', n: pr.number },
+      add(`escalating-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix}). Foreman is handling: one final fix round, a fresh session on the same model with the full review history, no action needed`, { kind: 'pull', n: pr.number },
         { tried: 'Foreman escalates once before it asks the homeowner; it asks only if that round fails.', links: [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }] });
       continue;
     }
     const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: names.job(j).text, url: names.job(j).url }))];
     if (fixLimit) add(`fixlimit-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix})`, { kind: 'pull', n: pr.number },
-      { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR.${withheld.get(pr.number) ? ` Each round was a fresh session on the same model with the review findings, and the last round could split out-of-scope findings into follow-up issues. Foreman never moves a fix to a stronger model by itself, and no further round can run because ${withheld.get(pr.number)}.` : ''}`, action: withheld.get(pr.number) ? 'Choose one: wait for another agent to be able to review (allowance reset), split the PR into smaller pieces, or fix it by hand. Remove the needs-homeowner label when done.' : 'Change the approach, fix the PR by hand, or raise max_fix_attempts in team.local.json; remove the needs-homeowner label when done.', links });
+      { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR. Each round was a fresh session on the same model; the final round could split out-of-scope findings. Foreman never moves a fix to a stronger model.${withheld.get(pr.number) ? ` No further round can run because ${withheld.get(pr.number)}.` : ''}`, action: `Choose one: ${FIX_LIMIT_OPTIONS}. Remove the needs-homeowner label when done.`, links });
     else if (reviewLimit) add(`reviewlimit-${pr.number}`, `${names.pr(pr.number).text} could not be reviewed within ${maxReview} attempts`, { kind: 'pull', n: pr.number },
       { tried: `Review jobs ran ${maxReview} times at this head without recording a verdict, so Foreman stopped reviewing it.`, action: 'Read the review job output, then review the PR by hand or push a new head to start a fresh review.', links });
     else add(`homeowner-pr-${pr.number}`, `${names.pr(pr.number).text} needs the homeowner`, { kind: 'pull', n: pr.number },
