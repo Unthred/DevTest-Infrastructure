@@ -181,13 +181,13 @@ $('[data-back]')?.addEventListener('click', e => {
   if (same && history.length > 1) { e.preventDefault(); history.back(); }
 });
 // Scroll position per address, kept for this tab. Restored on back/forward and on the page's own periodic refresh.
-const scrollKey = 'dash.scroll.' + location.pathname + location.search;
+const scrollKeyNow = () => 'dash.scroll.' + location.pathname + location.search;   // read at use: in-place table changes move the address
 let scrollSave = 0;
-const saveScroll = () => { try { sessionStorage.setItem(scrollKey, JSON.stringify({ y: scrollY, t: Date.now() })); } catch { /* not remembered */ } };
+const saveScroll = () => { try { sessionStorage.setItem(scrollKeyNow(), JSON.stringify({ y: scrollY, t: Date.now() })); } catch { /* not remembered */ } };
 addEventListener('scroll', () => { clearTimeout(scrollSave); scrollSave = setTimeout(saveScroll, 150); }, { passive: true });
 addEventListener('pagehide', saveScroll);
 function restoreScroll() {
-  let rec = null; try { rec = JSON.parse(sessionStorage.getItem(scrollKey)); } catch { rec = null; }
+  let rec = null; try { rec = JSON.parse(sessionStorage.getItem(scrollKeyNow())); } catch { rec = null; }
   const navType = performance.getEntriesByType?.('navigation')?.[0]?.type;
   const recent = rec && Date.now() - rec.t < 90000;   // the meta refresh reloads within a minute
   if (!rec || !(navType === 'back_forward' || navType === 'reload' || recent)) return;
@@ -195,6 +195,12 @@ function restoreScroll() {
   if (y) scrollTo(0, y);
 }
 history.scrollRestoration = 'manual';
+// The periodic refresh is driven from here, not by a <meta refresh>: a declarative refresh keeps the address the page loaded
+// with, so it would undo an in-place table change (replaceState). Without script the <noscript> meta still refreshes.
+{
+  const secs = Number($('meta[name=refresh-seconds]')?.content) || 60;
+  setInterval(() => { saveScroll(); location.reload(); }, secs * 1000);
+}
 
 // movable and resizable cards
 const grid = $('.cards[data-layout]');
