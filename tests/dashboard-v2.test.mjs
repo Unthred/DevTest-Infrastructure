@@ -94,15 +94,19 @@ test('layout: saved per breakpoint, phone is reorder-only, stale ids dropped and
   assert.equal(breakpointOf(390), 'phone'); assert.equal(breakpointOf(768), 'tablet'); assert.equal(breakpointOf(1280), 'desktop');
   const ids = ['now', 'next', 'needs'];
   const saved = { order: ['needs', 'gone', 'now'], span: { now: 8, next: 99, gone: 3, needs: 1.5 } };
-  assert.deepEqual(applyLayout(ids, saved, 'desktop'), { order: ['needs', 'now', 'next'], span: { now: 8 }, h: {} });
-  assert.deepEqual(applyLayout(ids, saved, 'phone'), { order: ['needs', 'now', 'next'], span: {}, h: {} });
-  assert.deepEqual(applyLayout(ids, null, 'desktop'), { order: ids, span: {}, h: {} }); assert.deepEqual(applyLayout(ids, { order: 'x', span: 3 }, 'desktop'), { order: ids, span: {}, h: {} });
+  assert.deepEqual(applyLayout(ids, saved, 'desktop'), { order: ['needs', 'now', 'next'], span: { now: 8 }, h: {}, collapsed: [] });
+  assert.deepEqual(applyLayout(ids, saved, 'phone'), { order: ['needs', 'now', 'next'], span: {}, h: {}, collapsed: [] });
+  assert.deepEqual(applyLayout(ids, null, 'desktop'), { order: ids, span: {}, h: {}, collapsed: [] }); assert.deepEqual(applyLayout(ids, { order: 'x', span: 3 }, 'desktop'), { order: ids, span: {}, h: {}, collapsed: [] });
   assert.deepEqual(moveItem(ids, 'next', -1), ['next', 'now', 'needs']); assert.deepEqual(moveItem(ids, 'now', -1), ids); assert.deepEqual(moveItem(ids, 'needs', 1), ids); assert.deepEqual(moveItem(ids, 'nope', 1), ids);
 });
 test('the browser script keys the saved layout by breakpoint and never reads or sends anything over the network', () => {
   const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
   assert.match(js, /dash\.layout\.\$\{page\}\.\$\{bpNow\(\)\}/);
-  assert.doesNotMatch(js, /fetch\(|XMLHttpRequest|WebSocket|sendBeacon|eval\(|new Function|innerHTML|document\.write|import\(/);
+  assert.doesNotMatch(js, /XMLHttpRequest|WebSocket|sendBeacon|eval\(|new Function|innerHTML|document\.write|import\(/);
+  // Issue #61: the one network use is a same-origin GET of the page's own address to update a table in place; nothing is sent.
+  assert.equal((js.match(/fetch\(/g) || []).length, 1, 'exactly one fetch');
+  assert.match(js, /url = location\.pathname \+ \(qs/); assert.match(js, /fetch\(url, \{ headers: \{ accept: 'text\/html' \}, credentials: 'same-origin' \}\)/);
+  assert.doesNotMatch(js, /method:\s*['"](?!GET)|body:\s/, 'no request carries a body');
 });
 
 // ---- rendered tables
@@ -119,10 +123,10 @@ test('table: header links sort, the active column is aria-sorted and toggles dir
 test('table: footer shows count and sum over all matching rows; pagination links and page-size selector; filter box', () => {
   const big = Array.from({ length: 30 }, (_, i) => ({ n: `r${i}`, v: 1 }));
   const html = T({ rows: big, query: 't.page=2' });
-  assert.match(html, /<tfoot>[\s\S]*30 things[\s\S]*30[\s\S]*<\/tfoot>/); assert.match(html, /26–30 of 30/); assert.match(html, /Page 2 of 2/);
+  assert.match(html, /<tfoot>[\s\S]*30 of 30 things[\s\S]*30[\s\S]*<\/tfoot>/); assert.match(html, /26–30 of 30/); assert.match(html, /Page 2 of 2/);
   assert.match(html, /rel="prev"/); assert.doesNotMatch(html, /rel="next"/); assert.match(html, /<option selected>25<\/option>/);
   assert.match(html, /type="search" name="t\.q"/); assert.match(html, /<option>10<\/option><option selected>25<\/option><option>50<\/option><option>100<\/option>/);
-  const filtered = T({ rows: big, query: 't.q=r2' }); assert.match(filtered, /<tfoot>[\s\S]*11 things/); assert.match(filtered, /Clear/);
+  const filtered = T({ rows: big, query: 't.q=r2' }); assert.match(filtered, /<tfoot>[\s\S]*11 of 30 things/); assert.match(filtered, /Clear/);
   assert.match(T({ rows: big, query: 't.q=zzz' }), /No things match the filter/);
   assert.match(T({ rows: big, query: 't.size=10&t.page=9' }), /Page 3 of 3/, 'an out-of-range page is clamped');
   assert.doesNotMatch(T({ query: 't.size=7' }), /<option selected>7/, 'unoffered size ignored');
@@ -241,7 +245,7 @@ test('Next panel shows the dispatcher plan and a live countdown to the next tick
   const body = (await s.get('/')).body;
   assert.match(body, new RegExp(`data-countdown="${NOW - 60000 + 300000}"`)); assert.match(body, /in 4m/);
   const bar = body.slice(body.indexOf('class="statusbar"'), body.indexOf('<nav class="nav"'));
-  for (const w of ['Overall health', 'Last tick', 'Tick ok', 'Next', 'Data', 'Fresh', 'Team loop', 'Enabled', 'Version', 'deploy needed']) assert.ok(bar.includes(w), w);
+  for (const w of ['Overall health', 'Last tick', 'Tick ok', 'Next', 'Data', 'Fresh', 'Team loop', 'Enabled', 'Version', 'Deploy needed']) assert.ok(bar.includes(w), w);
   assert.match(bar, /1m ago/); assert.match(bar, /badge sev-warning[^>]*>[\s\S]*1111111 → 2222222/);
   const offline = (await (await serve(t, { cache: { ...cache(), tick: undefined } })).get('/')).body;
   assert.match(offline, /No tick yet/); assert.match(offline, /sev-action[^>]*>[\s\S]*No data/);

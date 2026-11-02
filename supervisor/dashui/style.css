@@ -245,3 +245,23 @@ a[title]{cursor:help}
 /* issue #140: app bar carries the back button and page title; a gap before stacked card groups */
 .statusbar .pagehead{margin:0;flex:1 1 auto;min-width:0}.statusbar h1{font-size:var(--fs-lg);margin:0}
 .cards.stacked{margin-top:var(--sp3)}
+
+/* ---- issue #61: collapsing cards, back to top, clickable status pills, highlighted targets */
+.card.collapsed{min-height:0}
+.card.collapsed>header{margin-bottom:0}
+.card.collapsed>*:not(header){display:none!important}
+[data-collapse] .icon{transition:transform .15s}.card.collapsed [data-collapse] .icon{transform:rotate(-90deg)}
+.card>header{cursor:default}
+a.pill{text-decoration:none;color:inherit;border-radius:999px;display:inline-flex}
+a.pill:hover .badge{filter:brightness(.95);box-shadow:0 0 0 2px var(--line)}
+a.pill:focus-visible{outline-offset:3px}
+:target{scroll-margin-top:calc(var(--bar-h) + var(--sp4))}
+.card:target{outline:3px solid var(--focus);outline-offset:2px}
+li:target{outline:3px solid var(--focus);outline-offset:2px;border-radius:var(--r-sm);background:var(--surface2)}
+.count{color:var(--mut);margin-left:auto}
+.to-top{position:fixed;right:max(var(--sp4),env(safe-area-inset-right));bottom:max(var(--sp4),env(safe-area-inset-bottom));z-index:40;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--fg);box-shadow:var(--shadow-lg);cursor:pointer;padding:0}
+.to-top:hover{background:var(--surface2)}
+/* never on top of the content or the bottom tab bar: sit above the bar, small, in the corner */
+html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-area-inset-bottom))}
+@media(max-width:639px){.to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-area-inset-bottom));width:44px;height:44px;opacity:.92}}
+@media print{.to-top{display:none!important}}

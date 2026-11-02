@@ -34,8 +34,9 @@ export function sortRows(rows, key, dir = 'asc') {
   if (!key) return rows.slice();
   return rows.map((r, i) => [r, i]).sort((x, y) => compareValues(x[0][key], y[0][key], dir) || x[1] - y[1]).map(x => x[0]);   // stable
 }
+// Case-insensitive "contains" over the given keys. "#41" matches number 41 (people type the number the way the page shows it).
 export function filterRows(rows, query, keys) {
-  const q = String(query || '').trim().toLowerCase();
+  const q = String(query || '').trim().toLowerCase().replace(/^#/, '');
   if (!q) return rows.slice();
   return rows.filter(r => keys.some(k => String(r[k] ?? '').toLowerCase().includes(q)));
 }
@@ -58,7 +59,71 @@ export function footer(rows, spec) {
 }
 export function tableState(rows, { sort, dir = 'asc', q = '', page = 1, pageSize = DEFAULT_PAGE_SIZE, searchKeys = [], totals = {} } = {}) {
   const filtered = sortRows(filterRows(rows, q, searchKeys), sort, dir);
-  return { ...paginate(filtered, page, pageSize), footer: footer(filtered, totals) };
+  return { ...paginate(filtered, page, pageSize), footer: footer(filtered, totals), all: rows.length };
+}
+
+// ---- live tables (issue #61). The URL stays the single source of truth: a control change or a link click becomes a new URL for
+// ONE table (its `<id>.*` parameters) merged into the current address, fetched in place; nothing else on the page is touched.
+// Replace every `<id>.` parameter of `current` by those of `incoming`; other parameters (other tables, range) are kept.
+export function mergeTableParams(current, incoming, id) {
+  const cur = new URLSearchParams(current), inc = new URLSearchParams(incoming), out = new URLSearchParams();
+  for (const [k, v] of cur) if (!k.startsWith(`${id}.`)) out.append(k, v);
+  for (const [k, v] of inc) if (k.startsWith(`${id}.`)) out.append(k, v);
+  return out.toString();
+}
+// A control change: set the given params of table `id`; empty/null removes one. Any change but a page change goes back to page 1.
+export function tableChange(current, id, set) {
+  const q = new URLSearchParams(current);
+  for (const [k, v] of Object.entries(set)) { if (v === null || v === undefined || v === '') q.delete(`${id}.${k}`); else q.set(`${id}.${k}`, String(v)); }
+  if (!('page' in set)) q.delete(`${id}.page`);
+  return q.toString();
+}
+// Trailing-edge debounce with an injectable clock so the behaviour can be tested without waiting.
+export function debounce(fn, ms, timers = { set: setTimeout, clear: clearTimeout }) {
+  let t = null;
+  const run = (...a) => { if (t !== null) timers.clear(t); t = timers.set(() => { t = null; fn(...a); }, ms); };
+  run.cancel = () => { if (t !== null) timers.clear(t); t = null; };
+  return run;
+}
+export const FILTER_DEBOUNCE_MS = 250;
+// "n of m": n rows match the filter, m rows exist.
+export const countText = (n, m, noun) => `${n} of ${m} ${noun}`;
+
+// ---- collapsing cards (issue #61): saved with the layout, per breakpoint, by card id
+export function toggleCollapsed(list, id) {
+  const set = new Set(Array.isArray(list) ? list : []);
+  if (set.has(id)) set.delete(id); else set.add(id);
+  return [...set];
+}
+export const sanitizeCollapsed = (saved, ids) => (Array.isArray(saved) ? [...new Set(saved.filter(i => typeof i === 'string' && ids.includes(i)))] : []);
+
+// ---- back-to-top button (issue #61): shown once the page has scrolled down a little
+export const BACK_TO_TOP_AFTER = 400;
+export const showBackToTop = (y, after = BACK_TO_TOP_AFTER) => Number.isFinite(y) && y > after;
+
+// ---- status colours (issue #61): one rule everywhere. Up to date = green; something to do = amber with a label that says what;
+// failed or latched = red. Never amber for "nothing is wrong".
+export function versionStatus(v) {
+  const s7 = x => String(x || '').slice(0, 7);
+  const href = '/supervisor#c-h-version';
+  if (!v) return { level: 'info', label: 'Version unknown', href };
+  if (v.latched) return { level: 'action', label: `Upgrade latched at ${s7(v.installed)}`, href };
+  if (['rolled_back', 'rollback_failed'].includes(v.result)) return { level: 'action', label: `Upgrade failed (${String(v.result).replace('_', ' ')})`, href };
+  if (v.running && v.running !== v.installed) return { level: 'warning', label: `Restart needed: ${s7(v.running)} running, ${s7(v.installed)} installed`, href };
+  if (v.drift) return { level: 'warning', label: `Deploy needed: ${s7(v.installed)} → ${s7(v.main)}`, href };
+  return { level: 'ok', label: `Up to date (${s7(v.installed)})`, href };
+}
+
+// ---- header status pills (issue #61): where each pill leads. #att-<id> is an attention item, #c-<id> a card; the target is
+// highlighted with :target. Returns an href per pill.
+export function pillLinks({ health, attention = [], version } = {}) {
+  const first = re => attention.find(a => re.test(String(a.id)));
+  const att = a => (a ? `/system#att-${a.id}` : '/system');
+  let healthHref = '/agents';
+  if (health?.state === 'needs_you') healthHref = att(attention.find(a => a.severity === 'action'));
+  else if (health?.state === 'stuck') healthHref = first(/^tick-stale/) ? '/supervisor#c-h-tick' : att(first(/^idle/));
+  else if (health?.state === 'paused' || health?.state === 'unknown') healthHref = first(/^(pause|idle)/) ? att(first(/^(pause|idle)/)) : '/agents';
+  return { health: healthHref, tick: '/supervisor#c-h-tick', data: '/supervisor#c-h-tick', team: '/system#c-sys', version: versionStatus(version).href };
 }
 
 // ---- time range for charts
@@ -78,11 +143,12 @@ export function applyLayout(ids, saved, bp) {
   const order = Array.isArray(saved?.order) ? saved.order.filter(i => ids.includes(i)) : [];
   const full = [...order, ...ids.filter(i => !order.includes(i))];
   const span = {}, h = {};
+  const collapsed = sanitizeCollapsed(saved?.collapsed, ids);
   if (bp !== 'phone') {
     for (const [k, v] of Object.entries(saved?.span || {})) if (ids.includes(k) && Number.isInteger(v) && v >= 1 && v <= 12) span[k] = v;
     for (const [k, v] of Object.entries(saved?.h || {})) if (ids.includes(k) && Number.isInteger(v) && v >= ROW_STEP && v <= 4000) h[k] = v;
   }
-  return { order: full, span, h };
+  return { order: full, span, h, collapsed };
 }
 
 // ---- card resizing (issue #58): snap to the grid, limits per card type, never smaller than the content

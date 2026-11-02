@@ -74,3 +74,14 @@ The panel lists every open item that needs the homeowner, derived from the cache
 A verified supervisor self-upgrade also restarts the dashboard server: the upgrade step finds the `cli.mjs dashboard serve` process (never a worker, tick or job), stops it, starts the same `--host` and `--port` from the new version, and records `dashboard_restarted` (or `dashboard_restart_failed`, with an alert) in `team/upgrades.jsonl`. If no dashboard server is running it does nothing. This code lives in `supervisor/upgrade.mjs`, an upgrader path, so the first deployment is by hand.
 
 Until the server is on the installed version, the Warnings panel shows "Dashboard is running <old>, Foreman is on <new>; what you see may be out of date." The server re-reads `team.local.json` on every request (a bad edit keeps the last good configuration). A job record whose status this version does not know, or that cannot be parsed, shows the agent as **Unknown**, never Idle.
+
+## Polish part 2 (issue #61)
+
+- **Collapse cards:** double-click a card header, or use its chevron (touch and keyboard; shown once the script runs). The header stays. The state is saved with the layout, per breakpoint and page, in this browser; "Reset layout" clears it. A link to something inside a collapsed card opens the card.
+- **Tables update in place:** sorting, the filter box, paging and the page-size selector fetch the same address and swap only that table's rows, footer and pager. The scroll position and focus stay, the address bar follows (`replaceState`) so every state is still bookmarkable, and a failed update falls back to a normal navigation with the scroll position stored for the new address. Each control change touches only that table's `<id>.*` parameters.
+- **Filters are live:** typing filters after a 250 ms pause across number (`#41` works), title, agent and status. The footer shows "n of m".
+- **No Apply button:** the page-size selector applies on change; Enter in the filter box applies at once. Without script the filter still works with Enter; the page-size selector needs the script.
+- **Back to top:** a 44 px button appears after scrolling down; smooth unless the viewer prefers reduced motion; on a phone and with a bottom dock it sits above the tab bar.
+- **Status colours:** the version pill reads *Up to date* (green), *Deploy needed* or *Restart needed* (amber, with the versions), *Upgrade failed* (rolled back) or *Upgrade latched* (red). The same rule feeds the System page.
+- **Clickable header pills:** health, last tick, data, team loop and version each link to what explains them (`/system#att-<id>` for a Needs-you item, `/supervisor#c-h-tick`, `/supervisor#c-h-version`, `/system#c-sys`). The target card or item is outlined with `:target`.
+- The script now makes one same-origin GET (the table update above); it still sends nothing.
