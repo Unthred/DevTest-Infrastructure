@@ -327,8 +327,10 @@ export function agentOfBranch(config, branch) {
   for (const [name, a] of Object.entries(config.agents)) if (typeof branch === 'string' && branch.startsWith(a.branch_prefix)) return name;
   return null;
 }
+// `Prerequisites: #1`, `**Prerequisites:** #1` and `**Prerequisites (do not start before these are closed):** #1`.
+const PREREQ_LINE = /Prerequisites(?:\s*\([^)\n]*\))?\s*:\*{0,2}\s*([^\n]*)/i;
 export function prerequisites(body) {
-  const m = /Prerequisites:\*{0,2}\s*([^\n]*)/i.exec(body || '');
+  const m = PREREQ_LINE.exec(body || '');
   return m ? [...m[1].matchAll(/(?<!(?:PR|pull request)\s*)#(\d+)/gi)].map(x => Number(x[1])) : [];
 }
 // Issue #212: a follow-up issue for an open pull request waits for that PR. Recognised: "Follow-up to/of/from PR #N", "Split out of PR #N",
@@ -337,7 +339,7 @@ export function pullPrerequisites(title, body) {
   const out = new Set(), text = `${title || ''}\n${body || ''}`;
   for (const m of text.matchAll(/(?:follow-?up\s+(?:to|of|from|for)|split out of|blocked by|waits? (?:for|on))\s+(?:PR|pull request)\s*#(\d+)/gi)) out.add(Number(m[1]));
   for (const m of text.matchAll(/devtest-split v1 pr=(\d+)/g)) out.add(Number(m[1]));
-  const line = /Prerequisites:\*{0,2}\s*([^\n]*)/i.exec(body || '');
+  const line = PREREQ_LINE.exec(body || '');
   if (line) for (const m of line[1].matchAll(/(?:PR|pull request)\s*#(\d+)/gi)) out.add(Number(m[1]));
   return [...out];
 }
@@ -557,6 +559,7 @@ export class Team {
   }
   // Open issues in no agent's list, in number order: eligible for whichever agent has a free slot (issue #212). Config only orders and assigns.
   unlisted() {
+    if (this.missingLabels?.length) return [];
     const listed = new Set(this.agents().flatMap(([a]) => this.issuesOf(a)));
     return (this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)).map(i => i.number).sort((a, b) => a - b);
   }
@@ -819,6 +822,10 @@ export class Team {
     this.delivered = new Set();
     this.merged = await (this.gh.listMergedPulls?.() ?? []);
     this.refreshTitles(prs, issues, this.merged);
+    // Fail closed (issue #212 review): unlisted issues are auto-eligible only once the repository has every excluding label, so a
+    // missing label can never let an epic or tracking issue be dispatched. An adapter without listLabels does not gate.
+    const labels = this.gh.listLabels ? await this.gh.listLabels() : null;
+    this.missingLabels = labels ? EXCLUDING_LABELS.filter(l => !labels.includes(l)) : [];
     for (const m of this.merged) {
       for (const r of m.closingIssuesReferences || []) if (Number.isSafeInteger(r.number)) this.delivered.add(r.number);
       const b = /\/issue-(\d+)(\D|$)/.exec(m.headRefName || '');

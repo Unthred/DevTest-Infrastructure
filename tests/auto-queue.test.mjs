@@ -79,3 +79,16 @@ test('parsers: PR references are not issue prerequisites; PR phrasing variants a
   assert.deepEqual(pullPrerequisites('Follow-up from PR #206: x', 'Split out of PR #207.\nPrerequisites: #1, PR #208\nWaits for pull request #209'), [206, 207, 209, 208]);
   assert.deepEqual(pullPrerequisites('Plain', 'mentions PR #5 in passing'), []);
 });
+
+test('prerequisites parse the "Prerequisites (note):" form', () => {
+  assert.deepEqual(prerequisites('**Prerequisites (do not start before these are closed):** #30, #31'), [30, 31]);
+  assert.deepEqual(pullPrerequisites('x', '**Prerequisites (wait):** PR #9'), [9]);
+});
+
+test('fails closed: unlisted issues wait while an excluding label is missing from the repository', async t => {
+  const w = world(t, { issues: [issue(7)] });
+  w.team.gh.listLabels = async () => ['epic', 'tracking'];
+  assert.deepEqual(implemented(await w.team.plan()), []);
+  w.team.gh.listLabels = async () => EXCLUDING_LABELS;
+  assert.deepEqual(implemented(await w.team.plan()), [7]);
+});
