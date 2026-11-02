@@ -83,6 +83,7 @@ function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now =
   const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })),
     // delivered-work issue numbers the tick cached, in the shape Team.plan() reads, so the page matches `team tick --dry-run`
     listMergedPulls: async () => [{ headRefName: '', closingIssuesReferences: (cache.delivered || []).map(number => ({ number })) }] };
+  gh.listPullFiles = async n => { const f = cache.pullFiles?.[n]; if (f === null) throw new Error('file list unreadable'); return f || []; };   // the tick's file lists
   const jobsApi = { listActive: async () => jobs.filter(j => ACTIVE.includes(j.status)).map(j => ({ id: j.id, provider: j.provider, status: j.status })) };
   // The same planning inputs as the tick (issues #56, #121): probes included, so the page shows the allowance modes, holds and
   // reassignments `team tick --dry-run` would.
@@ -117,7 +118,7 @@ function reasons(team, cache, jobs, plan, states, names) {
     else if (checks === 'red') reason = 'CI failing';
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
-    else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? `PASS from ${v.reviewer}; merges on the next tick` : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
+    else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
     else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}${noReviewer.get(pr.number) ? `; no reviewer can take it: ${noReviewer.get(pr.number)}` : ''}`;
     queues[author].push({ type: 'pr', ref: pr.number, title: titleOfPr(pr), reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
     if (!pr.isDraft && checks === 'green' && !v) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head

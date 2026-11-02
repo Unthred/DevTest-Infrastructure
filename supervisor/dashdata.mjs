@@ -139,8 +139,10 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
-  if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.fetchedAt = now; }
-  else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.merged = prev.merged || []; cache.fetchedAt = prev.fetchedAt ?? null; }
+  if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.fetchedAt = now;
+    // file lists the tick read for the second-opinion hold (null = unreadable), so the page shows the same hold as the tick
+    cache.pullFiles = team.files instanceof Map ? Object.fromEntries([...team.files].map(([n, f]) => [n, Array.isArray(f) ? f.slice(0, 300).map(x => redact(String(x), 200)) : null])) : (prev.pullFiles || {}); }
+  else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.merged = prev.merged || []; cache.pullFiles = prev.pullFiles || {}; cache.fetchedAt = prev.fetchedAt ?? null; }
   atomicJson(cacheFile(root), cache);
   if (!team || (status !== 'ok' && status !== 'error')) return cache;
   const states = agentStates(team.c, jobs, now);

@@ -39,7 +39,7 @@ function world(t, { pulls = [pr(77, 'claude/issue-72-x', H(5))], out = {}, cfg =
     create: async spec => { const id = (++jobs.seq).toString(16).padStart(32, '0'); calls.created.push(spec); jobs.states[id] = { id, status: 'queued', provider: spec.provider }; return { id }; } };
   const git = { ensureWorktree: async o => o.path, worktreeFor: async () => null };
   const state = { out };
-  const limitedOf = agent => (state.out[agent] ? { out: true, reason: state.out[agent] } : { out: false });
+  const limitedOf = agent => (state.out[agent] ? { out: true, reason: state.out[agent], until: state.until ?? null } : { out: false });
   const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register, clock: { now: () => NOW }, limitedOf, providerModels: manifests });
   return { gh, jobs, team, calls, state };
 }
@@ -175,6 +175,29 @@ test('second opinion: a PR on a configured path gets one extra review from anoth
   assert.ok(acts.some(a => a.type === 'merge')); assert.equal(acts.some(a => a.type === 'review'), false, 'one extra review only');
 });
 
+test('second opinion: reviewer out of allowance holds the merge (D-024), allowance returns, review runs, then it merges', async t => {
+  const w = soWorld(t, { out: { codex: 'weekly limit' } });
+  w.state.until = Date.UTC(2026, 10, 4, 9, 30);
+  let acts = await w.team.plan();
+  assert.equal(acts.some(a => a.type === 'merge'), false, 'merge held while the reviewer is out');
+  assert.equal(acts.some(a => a.type === 'review'), false, 'no review can run while out');
+  const text = w.team.stallReasons(w.gh.pulls[0]).find(r => r.code === 'second-opinion').text;
+  assert.match(text, /^waiting for second opinion \(codex out of allowance until Wed 09:30\)$/);
+  w.state.out = {};
+  acts = await w.team.plan();
+  const extra = acts.find(a => a.type === 'review');
+  assert.ok(extra && extra.secondOpinion && extra.agent === 'codex'); assert.equal(acts.some(a => a.type === 'merge'), false);
+  await w.team.execute(extra); await finish(w, { verdict: 'PASS' });
+  acts = await w.team.plan();
+  assert.ok(acts.some(a => a.type === 'merge'));
+});
+
+test('second opinion: unconfigured, an out-of-allowance reviewer changes nothing', async t => {
+  const w = soWorld(t, { so: null, out: { codex: 'weekly limit' } });
+  assert.deepEqual((await w.team.plan()).filter(a => a.type === 'merge').map(a => a.type), ['merge']);
+  assert.equal(w.team.secondOpinionWaitText(w.gh.pulls[0]), null);
+});
+
 test('second opinion: CHANGES from the extra review rejects the head; it is not asked twice', async t => {
   const w = soWorld(t);
   await w.team.execute((await w.team.plan()).find(a => a.type === 'review'));
@@ -185,11 +208,10 @@ test('second opinion: CHANGES from the extra review rejects the head; it is not 
   assert.equal(acts.some(a => a.type === 'review'), false);
 });
 
-test('second opinion: not configured, other paths, unreadable list, reviewer out of allowance or same provider as the writer', async t => {
+test('second opinion: not configured, other paths, unreadable list or same provider as the writer', async t => {
   const merges = async w => (await w.team.plan()).filter(a => a.type === 'merge' || a.type === 'review').map(a => a.type);
   assert.deepEqual(await merges(soWorld(t, { so: null })), ['merge'], 'no config: no extra review');
   assert.deepEqual(await merges(soWorld(t, { files: ['docs/x.md'] })), ['merge'], 'path not touched');
-  assert.deepEqual(await merges(soWorld(t, { out: { codex: 'weekly limit' } })), ['merge'], 'reviewer out of allowance: optional, no hold');
   assert.deepEqual(await merges(soWorld(t, { so: { ...SO, reviewer: 'claude' } })), ['merge'], 'same provider as the writer');
   const bad = soWorld(t); bad.gh.listPullFiles = async () => { throw new Error('gh down'); };
   assert.deepEqual(await merges(bad), ['review'], 'unreadable file list fails closed: merge held, extra review planned');

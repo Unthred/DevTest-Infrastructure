@@ -212,3 +212,19 @@ test('the tick stores probe readings in the cache, keeps the newer one, and the 
   assert.equal(readCache(root).probes.codex.observedAt, codexProbe.observedAt);            // an older probe never replaces a newer one
   assert.deepEqual(mergeProbes({}, { '../x': codexProbe, codex: { provider: 'codex', windows: [] } }), {});
 });
+
+// Issue #251 review fix: the page must show the second-opinion hold (not "merges on the next tick") while the reviewer is out.
+test('dashboard PR row shows the second-opinion wait from the tick file lists, and merges-next-tick when the files do not match', async t => {
+  const sha = 'a'.repeat(40);
+  const cfg = { ...config(), second_opinion: { reviewer: 'codex', paths: ['supervisor/**'] } };
+  const pr = { number: 77, title: 't', headRefName: 'claude/issue-72-x', headRefOid: sha, isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] };
+  const state = { verdicts: { [`77:${sha}`]: { verdict: 'PASS', reviewer: 'codex' } } };
+  const row = async pullFiles => {
+    const cache = { ...cacheOf({ codex: codexProbe }), pulls: [pr], pullFiles };
+    const v = await buildView({ config: cfg, root: tmp(t), jobs: [codexPaused], events: [], state, cache, snapshots: [], now: NOW });
+    return v.queues.claude.find(q => q.type === 'pr' && q.ref === 77).reason;
+  };
+  assert.match(await row({ 77: ['supervisor/team.mjs'] }), /waiting for second opinion \(codex out of allowance/);
+  assert.match(await row({ 77: null }), /waiting for second opinion/);
+  assert.match(await row({ 77: ['docs/x.md'] }), /merges on the next tick/);
+});
