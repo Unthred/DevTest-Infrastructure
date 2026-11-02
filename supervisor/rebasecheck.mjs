@@ -53,7 +53,24 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
     const m = now.find(n => !used.has(n.sha) && n.ident === c.ident && n.subject === c.subject);
     if (m) used.add(m.sha); else missing.push({ sha: c.sha, subject: c.subject });
   }
-  return { oldHead, newHead, commits: now.map(c => ({ sha: c.sha, subject: c.subject })), missing };
+  return { oldHead, newHead, commits: now.map(c => ({ sha: c.sha, subject: c.subject })), missing, resolvedConflicts: resolvedConflicts(run, base, oldHead, newHead) };
+}
+
+// Issue #258: did the rebase resolve a conflict? A trial three-way merge of the old head onto the point the new head was rebased onto
+// (the merge base of the new head and the base, so a base that moved on since does not matter) is conflict-free and has exactly the
+// new head's tree when the rebase was clean. true = a conflict or any difference from that clean result; null = could not be
+// judged (the caller then counts the job as a writer). Read-only: merge-tree writes objects only.
+function resolvedConflicts(run, base, oldHead, newHead) {
+  try {
+    const point = run(['merge-base', base, newHead]).trim();
+    if (!SHA.test(point)) return null;
+    const mb = run(['merge-base', point, oldHead]).trim();
+    if (!SHA.test(mb)) return null;
+    let tree;
+    try { tree = run(['merge-tree', '--write-tree', '--merge-base=' + mb, point, oldHead]).trim().split('\n')[0]; } catch { return true; }   // non-zero: the merge conflicts
+    const result = run(['rev-parse', newHead + '^{tree}']).trim();
+    return !(SHA.test(tree) && tree === result);
+  } catch { return null; }
 }
 
 // Step 1 of a rebase job: fetch right now and start the branch from the remote head. A stale local copy is discarded; local

@@ -102,6 +102,7 @@ function reasons(team, cache, jobs, plan, states, names) {
   const activeJobs = jobs.filter(j => ACTIVE.includes(j.status));
   const busy = agent => states[agent].state !== 'idle' && states[agent].state !== 'blocked';
   const label = pr => names.pr(pr.number).text;
+  const noReviewer = new Map(team.unreviewable(prs).map(u => [u.pr, u.reasons.join('; ')]));   // issue #258: each agent's real reason
   const titleOfPr = pr => names.titleOf(names.issueOfPr(pr.number)?.number) ?? pr.title;   // the issue's title, not the pull request's
   for (const pr of prs) {
     const author = agentOfBranch(c, pr.headRefName);
@@ -116,12 +117,12 @@ function reasons(team, cache, jobs, plan, states, names) {
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? `PASS from ${v.reviewer}; merges on the next tick` : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
-    else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}`;
+    else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}${noReviewer.get(pr.number) ? `; no reviewer can take it: ${noReviewer.get(pr.number)}` : ''}`;
     queues[author].push({ type: 'pr', ref: pr.number, title: titleOfPr(pr), reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
     if (!pr.isDraft && checks === 'green' && !v) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
-      queues[reviewer].push({ type: 'review', ref: pr.number, title: titleOfPr(pr), reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : team.held?.[reviewer]?.review ? ` (held: ${team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
+      queues[reviewer].push({ type: 'review', ref: pr.number, title: titleOfPr(pr), reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : (team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.held?.[reviewer]?.review) ? ` (held: ${team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
     }
   }
   for (const [agent, a] of Object.entries(c.agents)) for (const n of a.issues) {
@@ -204,7 +205,7 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
 // Issue #141: a Needs you card says what happened (text), what Foreman tried, the one action needed and where to look.
 // x = { tried, action, links: [{ text, url }] }. Same shape as the event-log cards of #100/#106 will use.
 const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 140), url: l.url }));
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [] }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
@@ -254,6 +255,9 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     add(`decision-${info.id}`, `${info.id} (${info.title}) is not approved and holds ${n} reviewed PR${n === 1 ? '' : 's'} back from merging: ${prs.map(p => names.pr(p.number).text).join(', ')}`, null,
       { tried: `${info.summary} Each has an independent PASS, green checks and no conflict, but merges only once the register says homeowner-approved.`, action: `To approve, edit docs/DECISIONS.md on main so the ${info.id} entry reads "Status: homeowner-approved".`, links: prs.slice(0, 6).map(p => ({ text: names.pr(p.number).text, url: web('pull', p.number) })) });
   }
+  // Issue #258: one item per PR that no configured agent can review, with the real reason of each agent.
+  for (const u of unreviewed) add(`noreviewer-${u.pr}`, `${names.pr(u.pr).text} at ${sha7(u.head)} has no reviewer that is independent and available: ${u.reasons.join('; ')}`, { kind: 'pull', n: u.pr },
+    { tried: 'Foreman tried every configured review model of every agent; each is either a model that wrote this head or cannot run now.', action: 'Wait for the named reviewer to have allowance again, review the PR by hand, or approve another review model.', links: [{ text: names.pr(u.pr).text, url: web('pull', u.pr) }] });
   // Open issues no agent will ever be given (since #146 an issue in no agent's list is not dispatched).
   { const listed = new Set(Object.values(config.agents || {}).flatMap(a => a.issues || []));
     const orphans = (cache?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number) && !i.labels?.includes('needs-homeowner')).map(i => i.number).sort((a, b) => a - b);
@@ -484,7 +488,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: shortJob(j.id), name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) } }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? {} : { running });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
