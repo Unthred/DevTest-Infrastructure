@@ -7,7 +7,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
-import { Team, loadTeamConfig, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
+import { runMigrations } from './migrations.mjs';
+import { Team, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { alertSender } from './alert.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome } from './dashdata.mjs';
@@ -115,7 +116,17 @@ function probeAllowances(config) {
   }
   return out;
 }
+const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 async function teamTick(root, registry, dryRun, hold = null) {
+  // Issue #153: pending config migrations run once, before the first tick of a new version; a failing one stops the tick.
+  if (!dryRun) {
+    const migrated = await runMigrations({ root, dir: migrationsDir, validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), next)) });
+    if (migrated.failed) {
+      const error = `config migration ${String(migrated.failed.number).padStart(3, '0')}-${migrated.failed.name} failed: ${migrated.failed.error}`;
+      try { recordTick(root, { now: Date.now(), status: 'error', error, jobs: readJobs(root) }); } catch { /* the dashboard record is best effort */ }
+      return { skipped: [{ what: 'config migration', reason: error }] };
+    }
+  }
   const config = loadTeamConfig(teamConfigFile, root);
   // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
   const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: probeAllowances(config), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };

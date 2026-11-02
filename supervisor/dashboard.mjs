@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Team, ROLES, agentOfBranch, checksState, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { STALE_TICK_MS, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
+import { readMigrationState, readIncidents } from './migrations.mjs';
 import { severityOf } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, supervisorHealth } from './suphealth.mjs';
@@ -313,7 +314,7 @@ function graphs({ config, jobs, state, snapshots, now }) {
   return { allowance, jobsPerDay: days, verdicts, merges, tokensPerPr };
 }
 
-function activity({ config, jobs, events, state, cache, snapshots, now }) {
+function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [] }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: `${kind === 'pull' ? 'PR' : 'issue'} #${n}` } : null);
@@ -329,6 +330,7 @@ function activity({ config, jobs, events, state, cache, snapshots, now }) {
     rows.push({ at: tj.at, text: `rebase of PR #${tj.pr}: ${sha7(tj.rebase.oldHead)} -> ${sha7(tj.rebase.newHead)}, ${tj.rebase.commits.length} commit(s): ${tj.rebase.commits.slice(0, 8).map(c => sha7(c.sha)).join(' ')}${tj.rebase.lost?.length ? `; LOST ${tj.rebase.lost.map(c => sha7(c.sha)).join(' ')}` : ''}`, link: link('pull', tj.pr) });
   for (const [key, v] of Object.entries(state.verdicts || {})) { const [pr, head] = key.split(':'); rows.push({ at: v.at, text: `${v.reviewer}: ${v.verdict} on PR #${pr} at ${sha7(head)}`, link: link('pull', Number(pr)) }); }
   for (const m of state.mergeLog || []) rows.push({ at: m.mergedAt, text: `merged PR #${m.pr}${m.agent ? ` (${m.agent})` : ''}`, link: link('pull', m.pr) });
+  for (const i of incidents) if (i.kind === 'migration') rows.push({ at: i.at, text: `config migration ${String(i.number).padStart(3, '0')}-${i.name} ${i.result}${i.result === 'failed' ? `: ${i.error}` : `: ${i.description || ''}`}`, link: null });
   // ticks take part in the same newest-first ordering and 50-event bound as every other event (issue #32)
   rows.push(...snapshots.map(s => ({ at: s.at, text: s.status === 'ok'
     ? `tick ok${s.plan?.length ? `, plan: ${s.plan.map(a => `${a.agent || ''} ${a.type} #${a.ref}`.trim()).join('; ')}` : ', nothing to dispatch'}`
@@ -387,6 +389,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}: deploy needed.`, ref: null, severity: 'warning' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Holding new jobs: upgrade to ${sha7(h.to)} pending.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
+    // Issue #153: a failed config migration stops the ticks until the homeowner fixes team.local.json
+    { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and ticks are stopped: ${f.error}. team.local.json was not changed.`, 300), ref: null, severity: 'action' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
     const extra = dashExtras({ config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup });
@@ -399,7 +403,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       attention,
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots, now }),
-      activity: activity({ config, jobs, events, state, cache, snapshots, now })
+      activity: activity({ config, jobs, events, state, cache, snapshots, now, incidents: readIncidents(root) })
     };
   });
 }
@@ -410,6 +414,7 @@ const NEXT_STEP = {
   homeowner: 'Open the issue and either answer it or remove the needs-homeowner label so the team can continue.',
   'tick-failed': 'Read the tick error; nothing is dispatched until a tick succeeds.',
   job: 'Read the job record, then retry it or close the issue.',
+  migration: 'Fix team.local.json by hand (or remove the offending key), then the next tick retries the migration. The failed attempt left the file unchanged; backups are next to it.',
   rebase: 'Restore the dropped commits on the PR branch (the old head is still reachable by its id) before it is reviewed or merged.'
 };
 const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run' };
