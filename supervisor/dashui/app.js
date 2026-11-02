@@ -1,7 +1,7 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
 // scroll restoration (all saved per breakpoint, in this browser only). It reads nothing from the network and sends nothing.
-import { COPY_FEEDBACK_MS, ROW_STEP, applyLayout, breakpointOf, copyFeedback, copyMethods, dockFromPoint, effectiveDock, moveItem, resizeBox, restorableScroll, sanitizeHidden, toggleSeries } from './logic.mjs';
+import { COPY_FEEDBACK_MS, chooseRange, ROW_STEP, applyLayout, breakpointOf, copyFeedback, copyMethods, dockFromPoint, effectiveDock, moveItem, resizeBox, restorableScroll, sanitizeHidden, toggleSeries } from './logic.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -212,7 +212,7 @@ if (grid) {
       const id = c.dataset.card;
       c.style.setProperty('--span', bp === 'desktop' && lay.span[id] ? lay.span[id] : c.dataset.span);   // the server-rendered span is the default
       if (bp === 'tablet' && lay.span[id]) c.style.setProperty('--tspan', lay.span[id]); else c.style.removeProperty('--tspan');
-      if (lay.h[id]) c.style.setProperty('--h', lay.h[id] + 'px'); else c.style.removeProperty('--h');
+      if (lay.h[id]) { c.style.setProperty('--h', lay.h[id] + 'px'); c.style.alignSelf = 'start'; } else { c.style.removeProperty('--h'); c.style.alignSelf = ''; }   // a sized card is its own height, not the row's
       const k = $('.rz-key', c); if (k) k.setAttribute('aria-valuenow', lay.span[id] || c.dataset.span);
     }
   }
@@ -229,13 +229,13 @@ if (grid) {
   // The content's own height at the current width: the card with its minimum height removed. A saved height is a min-height,
   // so the content can never be clipped; it can only make the card taller than asked.
   function naturalHeight(c) {
-    const prev = c.style.getPropertyValue('--h'); c.style.setProperty('--h', '0px');
-    const h = c.offsetHeight; if (prev) c.style.setProperty('--h', prev); else c.style.removeProperty('--h'); return h;
+    const prev = c.style.getPropertyValue('--h'), prevAlign = c.style.alignSelf; c.style.setProperty('--h', '0px'); c.style.alignSelf = 'start';   // not stretched to the row, or a card could never get shorter
+    const h = c.offsetHeight; if (prev) c.style.setProperty('--h', prev); else c.style.removeProperty('--h'); c.style.alignSelf = prevAlign; return h;
   }
   function setSize(c, edge, dx, dy, from) {
     const r = resizeBox({ edge, dx, dy, span: from.span, h: from.h, natH: naturalHeight(c), colW: pitch(), type: c.dataset.type, bp: bpNow() });
     c.style.setProperty(spanProp(), r.span); lay.span[c.dataset.card] = r.span;
-    if (r.h) { c.style.setProperty('--h', r.h + 'px'); lay.h[c.dataset.card] = r.h; }   // live: the real content reflows at every step
+    if (r.h) { c.style.setProperty('--h', r.h + 'px'); c.style.alignSelf = 'start'; lay.h[c.dataset.card] = r.h; }   // live: the real content reflows at every step
     $('.rz-key', c)?.setAttribute('aria-valuenow', r.span);
   }
   let drag = null;
@@ -275,12 +275,10 @@ const dockKey = () => 'dash.dock.' + bpNow();
 function applyDock() {
   const d = effectiveDock(store.get(dockKey()), bpNow());
   root.dataset.dock = d;
-  for (const b of $$('.dockbtn')) b.setAttribute('aria-pressed', String(b.dataset.dock === d));
   const rail = store.get('dash.navrail') === true; if (rail) root.dataset.rail = 'collapsed'; else delete root.dataset.rail;
   $('[data-nav-collapse]')?.setAttribute('aria-pressed', String(rail));
 }
 applyDock(); { let lastBp = bpNow(); addEventListener('resize', () => { if (bpNow() !== lastBp) { lastBp = bpNow(); applyDock(); } }); }
-for (const b of $$('.dockbtn')) b.addEventListener('click', () => { store.set(dockKey(), b.dataset.dock); applyDock(); });
 $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navrail', store.get('dash.navrail') !== true); applyDock(); });
 {
   const handle = $('[data-dock-handle]');
@@ -296,4 +294,16 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
     const up = () => done(true), cancel = () => done(false), esc = ev => { if (ev.key === 'Escape') done(false); };
     handle.addEventListener('pointermove', mark); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', cancel); addEventListener('keydown', esc); mark(e);
   });
+}
+
+// remembered time range, per viewer (issue #140). The server renders the default (7d) when the address has no range; the saved choice is
+// applied by reloading once with it in the address, and a click on a range saves it.
+{
+  const links = $$('.ranges a'); if (links.length) {
+    const cur = $('.ranges a[aria-current]')?.textContent.trim(), q = new URLSearchParams(location.search);
+    const want = chooseRange(store.get('dash.range'), q.get('range'));
+    if (!q.has('range') && want !== cur && links.some(a => a.textContent.trim() === want)) { q.set('range', want); location.replace(location.pathname + '?' + q + location.hash); }
+    for (const a of links) a.addEventListener('click', () => store.set('dash.range', a.textContent.trim()));
+    if (q.has('range') && cur) store.set('dash.range', cur);
+  }
 }

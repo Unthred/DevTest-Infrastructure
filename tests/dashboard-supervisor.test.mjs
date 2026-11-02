@@ -272,6 +272,7 @@ test('copy for overseer on an Action needed job item: what is wrong, job record 
   const needs = over.slice(over.indexOf('data-card="needs"'), over.indexOf('data-card="warnings"'));
   const block = copies(needs).find(c => c.startsWith('DevTest overseer note'));
   assert.ok(block, 'a copy-for-overseer button on the item'); assert.match(needs, /<span data-copy-label>Copy for overseer<\/span>/);
+  assert.match(block, /^Attention item: Action needed$/m, 'the label is not repeated (issue #140)');
   assert.match(block, /^What is wrong: Reviewer · review · PR #41 PR forty-one \(codex\) is blocked: retry_exhausted\.$/m);
   assert.match(block, /^Job b485512f78df4a50af28f7b192a30710: status blocked, kind review, provider codex, ref #41, attempts 1, last event retry_exhausted, postcondition verdict PR #41 head 4444444, updated /m);
   assert.match(block, /^PR #41 latest review: CHANGES by codex at 4444444 \(current head\), .*1 blocking finding\(s\)$/m);
@@ -385,4 +386,19 @@ test('team-alert warnings after a clean reconcile tick are warnings, not a tick 
   assert.equal(tick.warnings.length, 2);
   const [other] = parseReconcileLog('2026-10-31T18:00:00Z tick\n{"resumed":0}\nsomething else broke\n');
   assert.equal(other.status, 'error');
+});
+
+test('#140 a review verdict names the provider, model and effort of the job that made it, and the overseer note title is not doubled', async t => {
+  const root = stateRoot(t, { log: SAMPLE });
+  const id = 'b485512f78df4a50af28f7b192a30710';
+  writeJob(root, job({ id, status: 'blocked', lastEvent: 'retry_exhausted', model: 'gpt-test-model', effort: 'high' }));
+  const state = { verdicts: { [`41:${H(4)}`]: { verdict: 'CHANGES', reviewer: 'codex', job: id, at: NOW - 5 * MIN, findings: [] }, [`42:${H(5)}`]: { verdict: 'PASS', reviewer: 'claude', at: NOW - 4 * MIN, findings: [] } }, jobs: {} };
+  const s = await serve(t, { root, state, cache });
+  const rev = (await s.get('/reviews')).body;
+  assert.match(rev, /codex · gpt-test-model · high/, 'provider, model and effort on the verdict');
+  assert.match(rev, /<span class="muted">unknown<\/span>/, 'a verdict with no recorded job says unknown');
+  assert.match((await s.get('/activity')).body, /codex: CHANGES on [^<]*\(codex · gpt-test-model · high\)/);
+  const over = (await s.get('/')).body, block = copies(over).find(c => c.startsWith('DevTest overseer note'));
+  if (block) assert.doesNotMatch(block, /Action needed: Action needed/);
+  assert.ok(!copies(over).some(c => /Action needed: Action needed/.test(c)));
 });

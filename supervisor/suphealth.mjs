@@ -363,5 +363,5 @@ export function attentionOverseer(a, { ticks, jobs, state, cache, now, command }
   if (m) { const j = jobs.find(x => x.id === m[1]); job = jobSummary(j) || `Job ${m[1]}: no record`; verdict = latestVerdict(state, jobPr(j), cache); log = relevantTicks(ticks, { job: m[1], ref: j?.issue }); }
   else if (a.ref) { verdict = a.ref.kind === 'pull' ? latestVerdict(state, a.ref.n, cache) : null; log = relevantTicks(ticks, { ref: a.ref.n }); }
   else if (/^tick/.test(a.id || '')) log = ticks.slice(-3).map(tickLine);
-  return overseerText({ title: 'Action needed', severity: a.severity || 'action', problem: a.text, job, verdict, log, command, now });
+  return overseerText({ title: 'Attention item', severity: a.severity || 'action', problem: a.text, job, verdict, log, command, now });
 }

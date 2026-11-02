@@ -7,7 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { CARD_LIMITS, DOCKS, ROW_STEP, applyLayout, breakpointOf, dockFromPoint, dockOf, effectiveDock, limitsOf, resizeBox, restorableScroll, spanLimits, trail } from '../supervisor/dashui/logic.mjs';
+import { CARD_LIMITS, DOCKS, MIN_CARD_H, chooseRange, ROW_STEP, applyLayout, breakpointOf, dockFromPoint, dockOf, effectiveDock, limitsOf, resizeBox, restorableScroll, spanLimits, trail } from '../supervisor/dashui/logic.mjs';
 import { codeVersion, readVersion } from '../supervisor/dashdata.mjs';
 import { currentView, handler } from '../supervisor/dashserver.mjs';
 import { renderRoute } from '../supervisor/dashrender.mjs';
@@ -181,7 +181,7 @@ test('dock: names, per-breakpoint choice, phone always bottom, nearest-edge pick
 test('dock markup: a drag handle, a four-way setting, a rail collapse control, all hidden on a phone, and the early script in the head', async t => {
   const s = await serve(t); const body = (await s.get('/')).body;
   assert.match(body, /data-dock-handle/); assert.match(body, /data-nav-collapse/);
-  for (const d of DOCKS) assert.match(body, new RegExp(`data-dock="${d}"[^>]*aria-label="Dock navigation ${d}"`));
+  assert.doesNotMatch(body, /data-dock="|dockbtn|Navigation position/, 'the Nav position control is gone (issue #140); the menu is dragged');
   assert.match(body, /<script src="\/static\/early\.js"><\/script><\/head>/);
   assert.match(css, /@media\(max-width:639px\)\{\.dockbar,\.dock-handle,\.nav-collapse\{display:none!important\}\}/, 'a phone keeps the fixed bottom tab bar and no dock controls');
   for (const d of DOCKS.filter(x => x !== 'top')) assert.ok(css.includes(`html[data-dock=${d}]`), d);
@@ -267,4 +267,29 @@ test('the visual-evidence script propagates capture failures', () => {
   const src = fs.readFileSync(new URL('./dashboard-visual.mjs', import.meta.url), 'utf8');
   assert.match(src, /subjectExit !== 0/);
   assert.match(src, /failures\.length[\s\S]*process\.exit\(1\)/);
+});
+
+// ---- issue #140
+test('#140 resize works in both directions with a sensible minimum height', () => {
+  const box = { span: 6, h: 400, natH: 60, colW: 100, type: 'panel' };
+  assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy: 80 }).h, 480, 'taller');
+  assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy: -120 }).h, 280, 'shorter, even though the row made the card taller than its content');
+  assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy: -9999 }).h, MIN_CARD_H, 'never below the minimum');
+  assert.equal(resizeBox({ ...box, natH: 300, edge: 's', dx: 0, dy: -9999 }).h, 320, 'nor below the content');
+  assert.match(appJs, /alignSelf = 'start'/, 'a sized card is not stretched to its row, so it can shrink');
+});
+test('#140 the saved range wins only when the address names none', () => {
+  assert.equal(chooseRange('30d', null), '30d'); assert.equal(chooseRange('30d', '24h'), '24h');
+  assert.equal(chooseRange('bogus', null), '7d'); assert.equal(chooseRange(null, 'bogus'), '7d'); assert.equal(chooseRange(undefined, undefined), '7d');
+  assert.match(appJs, /dash\.range/);
+});
+test('#140 title and Back live in the app bar; one h1; no gap-less Supervisor stack; one overseer title', async t => {
+  const s = await serve(t);
+  for (const u of PAGES) {
+    const body = (await s.get(u)).body, bar = body.slice(body.indexOf('<header class="statusbar"'), body.indexOf('</header>'));
+    assert.match(bar, /<h1>/, u); assert.equal((body.match(/<h1>/g) || []).length, 1, u); assert.ok(!body.slice(body.indexOf('<main')).includes('<h1>'), u);
+    if (u !== '/') assert.match(bar, /data-back/, u);
+  }
+  assert.match(css, /main\{width:100%/, 'main keeps the same width on every page, also in the flex docks');
+  assert.match(css, /\.cards\.stacked\{margin-top/); assert.match((await s.get('/supervisor')).body, /<div class="cards stacked">/);
 });
