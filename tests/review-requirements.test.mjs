@@ -172,3 +172,27 @@ test('a failure part-way through the recheck still holds every PR that was not c
   w.team.trustedRequirements = real; await w.team.recheckRequirements({ ingested: [], skipped: [] });
   assert.equal(w.team.reqHold.has(77), false);
 });
+
+// Issue #319: requirements.json must never lose text silently (redact() alone read only 2000 characters).
+const reqFile = async w => { const { file } = await startReview(w); return JSON.parse(fs.readFileSync(file, 'utf8')).requirements; };
+test('a body below the cap is written whole, a body above the old 2000 limit too', async t => {
+  const w = reqWorld(t); w.issue.body = Array.from({ length: 150 }, (_, i) => `Requirement ${i}: keep this sentence whole.`).join('\n');
+  const text = await reqFile(w); assert.ok(w.issue.body.length > 2000);
+  assert.ok(text.includes('Requirement 149: keep this sentence whole.')); assert.match(text, /Amendment BETA/); assert.doesNotMatch(text, /\[CUT/);
+});
+test('an amendment at the end of a long body is kept', async t => {
+  const w = reqWorld(t); w.issue.body = `${'Filler requirement line.\n'.repeat(400)}Homeowner decision LAST-WORD.`;
+  assert.match(await reqFile(w), /Homeowner decision LAST-WORD\./);
+});
+test('a body above the cap is cut on a line boundary with a visible marker naming where to read the rest', async t => {
+  const { REQUIREMENTS_MAX } = await import('../supervisor/team.mjs');
+  const w = reqWorld(t); w.issue.body = Array.from({ length: 2000 }, (_, i) => `Requirement ${i} is stated in full.`).join('\n');
+  const text = await reqFile(w);
+  assert.ok(text.length < REQUIREMENTS_MAX + 400); assert.match(text, /\[CUT: .*gh issue view 72 --comments/);
+  const body = text.slice(0, text.indexOf('\n[CUT')); assert.ok(body.split("\n").slice(1).every(l => /^Requirement \d+ is stated in full\.$/.test(l)), 'no line is cut mid-sentence');
+  assert.doesNotMatch(text, /Amendment BETA/);
+});
+test('secrets past the first 2000 characters are still redacted', async t => {
+  const w = reqWorld(t); w.issue.body = `${'x '.repeat(1500)}\npassword=hunter2hunter2`;
+  const text = await reqFile(w); assert.doesNotMatch(text, /hunter2/); assert.match(text, /password=\[secret\]/);
+});

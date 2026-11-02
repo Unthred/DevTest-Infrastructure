@@ -16,6 +16,24 @@ export function redact(value, max = 200) {
     .replace(/\b(?!0{40}\b)(?![0-9a-f]{40}\b)[A-Za-z0-9_-]{40,}\b/g, '[token]')
     .replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
 }
+// Long free text (a requirements file) redacted without losing its tail: redact() reads only MAX_SCAN characters, so the text is
+// scanned in pieces of at most MAX_SCAN (split at line ends, then at spaces) and rejoined with its line ends. When the result would pass
+// `max`, it is cut on a piece boundary and `marker` is appended, so a cut is always visible and never mid-sentence.
+export function redactLong(value, max, marker = '') {
+  const pieces = [];
+  for (const line of String(value ?? '').split(/\r?\n/)) {
+    let rest = line;
+    while (rest.length > MAX_SCAN) { let at = rest.lastIndexOf(' ', MAX_SCAN); if (at < 1) at = MAX_SCAN; pieces.push(rest.slice(0, at)); rest = rest.slice(at); }
+    pieces.push(rest);
+  }
+  const out = []; let used = 0, cut = false;
+  for (const piece of pieces) {
+    const clean = redact(piece, MAX_SCAN);
+    if (used + clean.length + 1 > max) { cut = true; break; }
+    out.push(clean); used += clean.length + 1;
+  }
+  return cut ? `${out.join('\n')}\n${marker}` : out.join('\n');
+}
 // Host addresses: IPv4 with an optional port (a longer dotted number such as 1.2.3.4.5 is not an address) and IPv6.
 export const redactAddresses = s => String(s ?? '')
   .replace(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d]|\.\d)/g, '[ip]')
