@@ -1176,7 +1176,8 @@ export class Team {
     if (c.kind === 'job') { const job = await this.jobs.get(c.job); return !!job && !['blocked', 'failed', 'stopped'].includes(job.status); }
     // Fix limit: only a new head that was reviewed with PASS and is not red clears it; an unreviewed or pending head does not.
     if (c.kind === 'fixlimit') return !pr || (pr.headRefOid !== c.head && this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'PASS' && this.ciState(pr) !== 'red');
-    if (c.kind === 'secret-scan') return !pr || pr.headRefOid !== c.head || this.ciState(pr) === 'green';
+    // A head move does not clear it: the old commit stays flagged. Only a scanner that no longer fails on the current head (or a closed PR) does.
+    if (c.kind === 'secret-scan') return !pr || !failingChecks(pr.statusCheckRollup, this.retried(pr)).some(n => isSecretScanner({ name: n }));
     if (c.kind === 'cancelled-ci') return !pr || pr.headRefOid !== c.head || this.ciState(pr) === 'green';
     return false;   // limit notices and anything else wait for the homeowner
   }

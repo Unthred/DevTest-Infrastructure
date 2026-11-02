@@ -1175,6 +1175,13 @@ test('#142 a secret-scanner failure raises one homeowner item naming the inciden
   await n.team.execute({ agent: 'claude', ...(await n.team.plan()).find(x => x.agent === 'claude') });
   assert.deepEqual(n.calls.labels, []); assert.equal(n.calls.comments.filter(c => /secret-scan/.test(c[1])).length, 0);
 });
+test('#142 the secret-scan item survives a head move while the scanner still fails and clears once it passes', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  const c = { kind: 'secret-scan', head: H(3) };
+  assert.equal(await w.team.causeCleared(c, pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: gg })), false);
+  assert.equal(await w.team.causeCleared(c, pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: [gg[0]] })), true);
+  assert.equal(await w.team.causeCleared(c, undefined), true);
+});
 test('#142 the fix-limit notice names the cause: a failing CI check, not a review rejection', async t => {
   const w = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   w.team.s.fixAttempts[`38:${H(0)}`] = 2; w.team.s.unblock.escalated[38] = { head: H(1), at: 1 };
