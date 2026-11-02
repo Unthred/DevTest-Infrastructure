@@ -118,7 +118,7 @@ test('fix limit: no notice while the escalation is pending; one escalated fix ru
   const r = await w.team.tick();
   assert.equal(w.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 0, 'the homeowner is not asked before the escalated round');
   const spec = w.calls.created[0];
-  assert.equal(spec.kind, 'fix'); assert.equal(spec.modelSource, 'configured'); assert.match(spec.prompt, /escalated round/); assert.match(spec.prompt, /review-history\.json/);
+  assert.equal(spec.kind, 'fix'); assert.equal(spec.modelSource, 'configured'); assert.match(spec.prompt, /final round/); assert.match(spec.prompt, /review-history\.json/);
   const [jobId, rec] = Object.entries(w.team.s.jobs)[0];
   const history = JSON.parse(fs.readFileSync(path.join(w.team.dir, 'inbox', rec.ticket, 'review-history.json'), 'utf8'));
   assert.deepEqual(history.verdicts.map(v => v.head), [H(0), H(1)]); assert.equal(history.verdicts[0].findings[0].text, 'first head problem');
@@ -363,7 +363,7 @@ test('budget: a spent budget at the fix limit raises the limit item, and the fix
   const items = e.calls.comments.filter(c => /Foreman stopped unblocking/.test(c[1]));
   assert.equal(items.length, 1); assert.match(items[0][1], /per-PR limit of 0/);
   const notice = e.calls.comments.filter(c => /fix rounds/.test(c[1]));
-  assert.equal(notice.length, 1); assert.match(notice[0][1], /no escalated round ran: Foreman reached the per-PR limit of 0/); assert.doesNotMatch(notice[0][1], /including one escalated round/);
+  assert.equal(notice.length, 1); assert.match(notice[0][1], /no final round ran: Foreman reached the per-PR limit of 0/); assert.doesNotMatch(notice[0][1], /including one escalated round/);
   // the resume path raises the limit item too
   const j = world(t, { issues: [issue(23), issue(5, 'CLOSED')], cfg: config({ per_pr: 0 }) });
   stoppedJob(j, 'j1', 'crash'); await j.team.tick(); await j.team.tick();

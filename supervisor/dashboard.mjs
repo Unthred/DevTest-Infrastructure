@@ -180,7 +180,7 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
       if ((S.continueAttempts?.[p.number] || 0) >= L.max_fix_attempts) part(0, `waiting for homeowner: continue limit reached on draft ${names.pr(p.number).text}`, 'pull', p.number);
       else part(2, `only work is draft ${names.pr(p.number).text}`, 'pull', p.number);
     } else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) {
-      if (team.escalationPending(p.number, p)) part(1, `fix limit reached on ${names.pr(p.number).text}: one escalated round pending`, 'pull', p.number);
+      if (team.escalationPending(p.number, p)) part(1, `fix limit reached on ${names.pr(p.number).text}: final round pending`, 'pull', p.number);
       else part(0, `waiting for homeowner: fix limit reached on ${names.pr(p.number).text}`, 'pull', p.number);
     }
     else if (p.mergeable === 'CONFLICTING') part(1, `waiting to rebase ${names.pr(p.number).text}`, 'pull', p.number);
