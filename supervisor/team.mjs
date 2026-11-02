@@ -937,9 +937,17 @@ export class Team {
       if (p.mergeable !== 'CONFLICTING' && !behind) return false;
       if (busy('rebase', k) || (this.s.rebaseAttempts[k] || 0) >= L.max_fix_attempts) return false;
       if (this.limitedOf(author).out) return false;
+      if (this.writeBlock(p, 'rebase')) return false;   // choose() skips such a PR, so it must not hold the others back
       return this.admitsNow(author, 'rebase', prs).ok;
     };
-    const next = prs.filter(wants).sort((x, y) => x.number - y.number)[0];
+    // Homeowner decision (issue #326): rebase in the order of the issues in agents.<name>.issues; a PR whose issue is not in the queue
+    // comes after those; ties go by PR number.
+    const rank = p => {
+      const m = /\/issue-(\d+)(\D|$)/.exec(p.headRefName || ''), ag = agentOfBranch(this.c, p.headRefName);
+      const i = m && ag ? this.issuesOf(ag).indexOf(Number(m[1])) : -1;
+      return i < 0 ? Infinity : i;
+    };
+    const next = prs.filter(wants).sort((x, y) => (rank(x) === rank(y) ? 0 : rank(x) < rank(y) ? -1 : 1) || x.number - y.number)[0];
     if (next && next.number !== pr.number) return true;
     const last = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && Number.isFinite(j.at)).sort((x, y) => y.at - x.at)[0];
     if (last?.kind !== 'rebase') return false;

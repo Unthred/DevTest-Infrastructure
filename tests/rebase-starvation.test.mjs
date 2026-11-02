@@ -159,3 +159,28 @@ test('#326 negative: no queued work means no idle item; idle_minutes is configur
   const c = config(); c.limits.idle_minutes = 5; validateTeamConfig(c);
   c.limits.idle_minutes = 0; assert.throws(() => validateTeamConfig(c), /idle_minutes/);
 });
+
+// ---- issue #326 homeowner decision: rebase order follows the issue queue
+const qpr = (n, issueNo, extra = {}) => pr(n, H(n % 9 + 1), { headRefName: `claude/issue-${issueNo}-x`, ...extra });
+const rebased = async team => (await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr);
+test('#326 queue order beats PR number: the PR of the first queued issue is rebased', async t => {
+  const team = world(t, [qpr(301, 258), qpr(302, 259)]); team.c.agents.claude.issues = [259, 258];
+  assert.deepEqual(await rebased(team), [302]);
+});
+test('#326 queue order holds for a newest-first list', async t => {
+  const team = world(t, [qpr(302, 259), qpr(301, 258)]); team.c.agents.claude.issues = [259, 258];
+  assert.deepEqual(await rebased(team), [302]);
+});
+test('#326 a PR with no queue entry comes after queued ones, even with a lower number', async t => {
+  const team = world(t, [qpr(100, 999), qpr(321, 259)]);
+  assert.deepEqual(await rebased(team), [321]);
+});
+test('#326 only unqueued PRs: lowest PR number goes first', async t => {
+  const team = world(t, [qpr(200, 998), qpr(100, 999)]);
+  assert.deepEqual(await rebased(team), [100]);
+});
+test('#326 a PR refused by writeBlock does not hold the next rebase', async t => {
+  const team = world(t, [qpr(301, 258), qpr(302, 259)]);
+  const wb = team.writeBlock.bind(team); team.writeBlock = (p, k) => p.number === 301 ? 'refused' : wb(p, k);
+  assert.deepEqual(await rebased(team), [302]);
+});
