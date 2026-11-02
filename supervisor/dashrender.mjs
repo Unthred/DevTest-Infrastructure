@@ -2,7 +2,7 @@
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
 import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, countText, inRange, limitsOf, pillLinks, tableState, trail, versionStatus } from './dashui/logic.mjs';
-import { resultSeverity } from './suphealth.mjs';
+import { resultSeverity, tickLine } from './suphealth.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
@@ -77,6 +77,9 @@ const ext = (url, text) => `<a href="${esc(url)}">${esc(text)}</a>`;
 // Hidden until the script runs, because without script a button that does nothing is worse than none.
 export const copyBtn = (text, what, { label = '', cls = '' } = {}) => `<button type="button" class="copy ${label ? 'btn' : 'tbtn'} ${cls}" data-copy="${esc(text)}" aria-label="Copy ${esc(what)}" title="Copy ${esc(what)}" hidden>${icon('copy')}${label ? `<span data-copy-label>${esc(label)}</span>` : ''}</button>`;
 const overseerBtn = text => copyBtn(text, 'a plain-text summary for the overseer', { label: 'Copy for overseer', cls: 'overseer' });
+// One "Copy all" button for a list: the items' own copy texts, in the order shown, one blank-line-separated block each.
+export const copyAllText = items => items.map(a => a.overseer).filter(Boolean).join('\n\n---\n\n');
+const copyAllBtn = (items, what) => { const t = copyAllText(items); return t && items.length > 1 ? `<div class="acts">${copyBtn(t, `all ${what}`, { label: 'Copy all', cls: 'copyall' })}</div>` : ''; };
 const cmdBlock = command => `<div class="cmdrow"><code class="cmd mono">${esc(command)}</code>${copyBtn(command, 'command')}</div>`;
 const idCopy = (shown, full, what) => `<span class="mono">${esc(shown)}</span>${full ? copyBtn(full, what) : ''}`;
 const shaCopy = (sha, what = 'commit ID') => (sha ? idCopy(String(sha).slice(0, 7), sha, what) : '<span class="muted">–</span>');
@@ -251,13 +254,13 @@ function nextPanel(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
+  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 function warningsPanel(view) {
   const unknown = view.agents.filter(a => a.state === 'unknown');
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
-  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
+  return items.length ? `${copyAllBtn(items, 'warnings')}<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
 function statusBar(view, route, head = '') {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
@@ -350,7 +353,7 @@ function jobDetail(view, query, path, route) {
   const ref = REFS.job[j.id];
   const subject = j.ref ? (['implement', 'continue'].includes(j.kind) ? issueLink(j.ref) : prLink(j.ref)) : '–';
   const facts = card({ id: 'facts', title: j.full || j.name, span: 12, movable: false, body: `<dl class="kv"><dt>Job</dt><dd>${idCopy(j.id, j.fullId, 'job ID')}</dd><dt>Agent</dt><dd>${agentTag(j.agent, view)}</dd><dt>Type</dt><dd>${esc(j.kind)}</dd><dt>Work</dt><dd>${subject}</dd>
-<dt>Status</dt><dd>${esc(j.status)}</dd><dt>Attempts</dt><dd>${Number(j.attempts)}</dd><dt>Model</dt><dd>${esc(j.model || 'default')}</dd><dt>Started</dt><dd>${esc(utc(j.startedAt))}</dd><dt>Elapsed</dt><dd>${esc(dur(j.elapsedMs))}</dd><dt>Tokens</dt><dd>${esc(num(j.tokens))}</dd></dl>` });
+<dt>Status</dt><dd>${esc(j.status)}</dd><dt>Attempts</dt><dd>${Number(j.attempts)}</dd><dt>Model</dt><dd>${esc(j.model || 'default')}</dd><dt>Started</dt><dd>${esc(utc(j.startedAt))}</dd><dt>Elapsed</dt><dd>${esc(dur(j.elapsedMs))}</dd><dt>Tokens</dt><dd>${esc(num(j.tokens))}</dd></dl>${j.overseer ? `<div class="acts">${overseerBtn(j.overseer)}</div>` : ''}` });
   return { title: ref ? ref.text : j.name, crumbs: [['/work', 'Work'], [null, ref ? ref.text : j.name]], body: grid('job', facts, 'fit') };
 }
 function workPage(view, query, path) {
@@ -467,7 +470,7 @@ function tickDetail(t) {
 <dt>Actions</dt><dd>${list(t.actions.map(a => `<li>${esc(a.agent)} ${esc(a.type === 'cifix' ? 'fix CI' : a.type)} ${tickRef(a)}</li>`))}</dd>
 <dt>Skipped</dt><dd>${t.note ? `<span class="muted">${esc(t.note)}</span>` : list(t.skipped.map(s => `<li><b>${esc(s.what)}</b>: ${errCopy(s.reason)}</li>`))}</dd>
 <dt>Self-upgrade</dt><dd>${esc(t.selfUpgrade || '–')}</dd><dt>Leases released</dt><dd>${t.released}</dd>${t.rc !== null ? `<dt>Exit code</dt><dd>rc=${Number(t.rc)}</dd>` : ''}
-<dt>Errors</dt><dd>${list(t.errors.map(e => `<li>${errCopy(e)}</li>`), 'errs')}</dd></dl>`;
+<dt>Errors</dt><dd>${list(t.errors.map(e => `<li>${errCopy(e)}</li>`), 'errs')}</dd></dl><div class="acts">${copyBtn(tickLine(t), 'this log excerpt', { label: 'Copy log lines' })}</div>`;
 }
 const tickStatusBadge = s => badge(({ ok: 'ok', partial: 'warning', skipped: 'info', empty: 'warning', error: 'action' })[s] || 'info', ({ ok: 'OK', partial: 'Partial', skipped: 'Skipped', empty: 'No result', error: 'Error' })[s] || s);
 function healthBody(c, view) {

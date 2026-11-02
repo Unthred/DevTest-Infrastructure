@@ -170,7 +170,7 @@ main a:not([class]){display:inline-flex;align-items:center;min-height:24px}
 .copy[data-state=failed]{color:var(--action);border-color:var(--action)}
 .cmdrow{display:flex;align-items:center;gap:var(--sp1);margin-top:var(--sp1)}.cmdrow .cmd{margin-top:0;flex:1;min-width:0;overflow-x:auto;white-space:nowrap}
 .acts{display:flex;flex-wrap:wrap;gap:var(--sp2);margin-top:var(--sp2)}
-.btn.overseer{gap:6px;font-size:var(--fs-sm)}
+.btn.overseer{gap:6px;font-size:var(--fs-sm)}.btn.copyall{gap:6px;font-size:var(--fs-sm)}
 .err{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:var(--fs-xs);overflow-wrap:anywhere}
 .card.health{border-top:5px solid var(--line)}
 .card.hc-action{border-top-color:var(--action)}.card.hc-warning{border-top-color:var(--warning)}.card.hc-info{border-top-color:var(--info)}.card.hc-ok{border-top-color:var(--ok)}
@@ -180,7 +180,7 @@ ul.mini{margin:0;padding-left:1.1em}ul.mini li{margin:2px 0}ul.mini.notes{margin
 .copy-manual textarea{width:100%;min-height:40vh;font:var(--fs-sm)/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm);padding:var(--sp2)}
 @media(max-width:639px){
   .copy.tbtn{min-width:44px;min-height:44px}
-  .btn.overseer{width:100%;justify-content:center}
+  .btn.overseer{width:100%;justify-content:center}.btn.copyall{width:100%;justify-content:center}
   .card.health dl.kv{grid-template-columns:1fr}.card.health dl.kv dt{margin-top:var(--sp1)}
   td .tick-detail{text-align:left;width:100%}td dl.kv{grid-template-columns:1fr}
   .nav a{padding:0 2px;font-size:10px}

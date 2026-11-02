@@ -357,6 +357,12 @@ export function cardOverseer(c, { ticks, jobs, state, cache, now }) {
   const problem = c.severity === 'ok' ? `nothing; ${c.summary}` : [c.summary, ...c.notes].join('; ');
   return overseerText({ title: `Supervisor ${c.title}`, severity: c.severity, problem, facts: factsOf(c), job, verdict, log, command, now });
 }
+// For a job page: the job record, its latest review verdict and the reconcile ticks that mention it.
+export function jobOverseer(j, { ticks, state, cache, now }) {
+  const sev = ['blocked', 'failed', 'error'].includes(j.status) ? 'action' : ['paused_limit', 'paused', 'stalled'].includes(j.status) ? 'warning' : 'info';
+  return overseerText({ title: 'Job', severity: sev, problem: `job ${j.id} is ${j.status}: ${j.lastEvent || 'no event recorded'}`, job: jobSummary(j), verdict: latestVerdict(state, jobPr(j), cache), log: relevantTicks(ticks, { job: j.id, ref: j.issue }),
+    logFilter: `job ${j.id}${Number.isSafeInteger(j.issue) ? ` or #${j.issue}` : ''}`, command: `ai-supervisor status ${j.id}`, now });
+}
 // For an Action needed item (attention id job-<id>, homeowner-<n>, tick-failed, …).
 export function attentionOverseer(a, { ticks, jobs, state, cache, now, command }) {
   let job = null, verdict = null, log = [], logFilter = null;
