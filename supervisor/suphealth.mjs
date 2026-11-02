@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readLeases, redact } from './dashdata.mjs';
+import { redactAddresses } from './redact.mjs';
 import { worst } from './dashui/logic.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;          // the reconcile cron runs every five minutes
@@ -18,7 +19,7 @@ const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T',
 const mins = ms => (Number.isFinite(ms) ? (ms < 3600000 ? `${Math.round(ms / 60000)}m` : `${Math.floor(ms / 3600000)}h ${Math.round((ms % 3600000) / 60000)}m`) : 'unknown');
 
 // Log text can carry host addresses; the page must not. redact() handles e-mail addresses and tokens.
-export const scrub = (value, max = 300) => redact(String(value ?? '').replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b/g, '[ip]'), max);
+export const scrub = (value, max = 300) => redactAddresses(redact(value, max + 200)).slice(0, max);
 
 // ---- reconcile.log
 // Two line formats exist on Tower: the hot-fixed script writes "<ISO time> tick" followed by the reconcile JSON on its own

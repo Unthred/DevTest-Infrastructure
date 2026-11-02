@@ -69,7 +69,7 @@ export function buildCommand(options) {
     if (options.coverage === true) args.push('--collect', 'XPlat Code Coverage');
     else if (options.coverage !== undefined && options.coverage !== false) throw new DotnetCommandError('coverage must be true or false');
     if (options.filter !== undefined) {
-      if (!SAFE_VALUE(options.filter) || options.filter.length > 256 || !/^[A-Za-z0-9_.()=!~&|<>,:* -]+$/.test(options.filter)) throw new DotnetCommandError('invalid test filter');
+      if (!SAFE_VALUE(options.filter) || options.filter.length > 256 || options.filter.startsWith('-') || !/^[A-Za-z0-9_.()=!~&|<>,:* -]+$/.test(options.filter)) throw new DotnetCommandError('invalid test filter');
       args.push('--filter', options.filter);
     }
   } else if (options.coverage !== undefined || options.filter !== undefined) throw new DotnetCommandError('coverage and filter apply only to test');
