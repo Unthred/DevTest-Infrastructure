@@ -370,7 +370,7 @@ test('#141 no limit card while the final review or fix job is still running', as
 });
 // Issue #184: the hold covers every active status and every final-round kind, and it ends when the job does.
 const reviewLimitState = () => ({ reviewAttempts: { [`41:${H(1)}:codex`]: 2 }, verdicts: {}, jobs: {} });
-const fixLimitState = () => ({ fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {} });
+const fixLimitState = () => ({ fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {}, unblock: { escalated: { 41: true }, pr: {}, day: {}, log: [] } });
 for (const status of ['queued', 'running', 'paused_limit', 'paused_manual']) {
   test(`#184 no review limit card while the review job is ${status}`, async t => {
     const v = await needsOf(await serve(t, { jobs: [jb({ kind: 'review', issue: 41, status })], cache: calmCache(), state: reviewLimitState() }));
@@ -379,23 +379,23 @@ for (const status of ['queued', 'running', 'paused_limit', 'paused_manual']) {
   for (const kind of ['fix', 'cifix', 'rebase']) {
     test(`#184 no fix limit card while the ${kind} job is ${status}`, async t => {
       const v = await needsOf(await serve(t, { jobs: [jb({ kind, issue: 41, status })], cache: calmCache({ statusCheckRollup: red }), state: fixLimitState() }));
-      assert.ok(!v.panels.needsYou.some(c => /^fixlimit-/.test(c.id)));
+      assert.ok(!v.panels.needsYou.some(c => /^(fixlimit|escalating)-/.test(c.id)));
     });
   }
 }
-for (const status of ['done', 'failed']) {
+for (const status of ['completed', 'failed', 'blocked', 'stopped']) {
   test(`#184 the limit cards come back once the final job is ${status}`, async t => {
     const rv = await needsOf(await serve(t, { jobs: [jb({ kind: 'review', issue: 41, status })], cache: calmCache(), state: reviewLimitState() }));
     assert.ok(rv.panels.needsYou.some(c => c.id === 'reviewlimit-41'), 'review limit card returns');
     for (const kind of ['fix', 'cifix', 'rebase']) {
-      const fx = await needsOf(await serve(t, { jobs: [jb({ kind, issue: 41, status })], cache: calmCache({ statusCheckRollup: red }), state: { ...fixLimitState(), unblock: { escalated: { 41: true }, pr: {}, day: {}, log: [] } } }));
+      const fx = await needsOf(await serve(t, { jobs: [jb({ kind, issue: 41, status })], cache: calmCache({ statusCheckRollup: red }), state: fixLimitState() }));
       assert.ok(fx.panels.needsYou.some(c => c.id === 'fixlimit-41'), `${kind}: fix limit card returns`);
     }
   });
 }
 test('#184 a job paused by hand still shows on the agent card and the header says Paused', async t => {
   const v = await needsOf(await serve(t, { jobs: [jb({ kind: 'fix', issue: 41, status: 'paused_manual', lastEvent: 'manual_pause' })], cache: calmCache({ statusCheckRollup: red }), state: fixLimitState() }));
-  assert.ok(!v.panels.needsYou.some(c => /^fixlimit-/.test(c.id)));
+  assert.ok(!v.panels.needsYou.some(c => /^(fixlimit|escalating)-/.test(c.id)));
   const shown = Object.values(v.agents).flatMap(a => a.jobs || []).filter(j => j.paused && j.status === 'paused_manual');
   assert.equal(shown.length, 1, 'the paused job is listed on its agent card');
   assert.equal(v.health.label, 'Paused');
