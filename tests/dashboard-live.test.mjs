@@ -143,7 +143,7 @@ test('every card has a chevron (hidden until the script runs, labelled, aria-exp
   assert.match(css, /\.card\.collapsed>\*:not\(header\)\{display:none!important\}/); assert.match(css, /\.card\.collapsed\{min-height:0\}/);
 });
 test('"Reset layout" clears the collapsed cards too, and a pill that targets a collapsed card opens it', () => {
-  assert.match(appJs, /\$\('\[data-reset-layout\]'\)\?\.addEventListener\('click', \(\) => \{ store\.del\(key\(\)\)/);
+  assert.match(appJs, /initResetLayout\(\{ document, store, layoutKey: key, legendKey/);
   assert.match(appJs, /function revealTarget\(\)[\s\S]*?closest\?\.\('\.card\.collapsed'\)[\s\S]*?toggleCard\(c\)/); assert.match(appJs, /addEventListener\('hashchange', revealTarget\)/);
   assert.match(appJs, /save = \(\) => store\.set\(key\(\), \{ \.\.\.lay, collapsed: readCollapsed\(\) \}\)/, 'moving or resizing a card does not lose the collapsed state');
 });

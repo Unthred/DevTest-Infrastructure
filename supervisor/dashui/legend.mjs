@@ -24,3 +24,8 @@ export function initLegends({ document, store, legendKey }) {
     paint();
   }
 }
+
+// Reset layout (issue #190): clears the saved layout and this page's legend state, then reloads. `layoutKey` is a function (the key depends on the breakpoint).
+export function initResetLayout({ document, store, layoutKey, legendKey, reload }) {
+  document.querySelector('[data-reset-layout]')?.addEventListener('click', () => { store.del(layoutKey()); store.del(legendKey); reload(); });
+}

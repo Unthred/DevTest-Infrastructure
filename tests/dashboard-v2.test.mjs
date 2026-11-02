@@ -494,10 +494,25 @@ test('legend (issue #190): Reset layout exists on Overview and Usage, markers ar
   assert.equal((src.match(/data-reset-layout/g) || []).length, 2, 'both chart pages offer Reset layout');
   assert.match(src, /data-marker="true"/); assert.equal((src.match(/marker: true/g) || []).length, 2);
 });
+test('legend (issue #190): clicking Reset layout clears the layout and legend state on /usage and /, then reloads', async () => {
+  const { initLegends, initResetLayout } = await import('../supervisor/dashui/legend.mjs');
+  for (const [path, layout] of [['/usage', 'dash.layout.usage.desktop'], ['/', 'dash.layout.overview.desktop']]) {
+    const pg = legendPage(); const legendKey = 'dash.legend.' + path;
+    const reset = fakeEl('button', { 'data-reset-layout': '' }); pg.doc.append(reset);
+    const orig = pg.doc.querySelector; pg.doc.querySelector = s => (s === '[data-reset-layout]' ? reset : orig(s));
+    initLegends({ document: pg.doc, store: pg.store, legendKey });
+    pg.btn('claude').click(); pg.store.set(layout, { a: 1 }); pg.store.set('dash.layout.other', { b: 1 });
+    assert.ok(pg.mem.has(legendKey) && pg.mem.has(layout));
+    let reloads = 0; initResetLayout({ document: pg.doc, store: pg.store, layoutKey: () => layout, legendKey, reload: () => reloads++ });
+    reset.click();
+    assert.equal(pg.mem.has(legendKey), false, path + ': legend state cleared'); assert.equal(pg.mem.has(layout), false, path + ': layout cleared');
+    assert.ok(pg.mem.has('dash.layout.other'), 'unrelated keys untouched'); assert.equal(reloads, 1);
+  }
+});
 test('legend (issue #160): app.js uses the shared handler, never hides the legend itself, persists safely and clears on Reset layout', () => {
   const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
   assert.match(js, /initLegends\(\{ document, store, legendKey \}\)/, 'app.js delegates to the tested legend module');
-  assert.match(js, /data-reset-layout\]'\)\?\.addEventListener\('click', \(\) => \{ store\.del\(key\(\)\); store\.del\(legendKey\)/);
+  assert.match(js, /initResetLayout\(\{ document, store, layoutKey: key, legendKey, reload/, 'app.js delegates Reset layout to the tested module');
   assert.match(js, /try \{ return JSON\.parse\(localStorage/, 'storage access is wrapped in try/catch');
 });
 

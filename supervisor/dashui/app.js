@@ -2,7 +2,7 @@
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
 // scroll restoration (all saved per breakpoint, in this browser only). It reads nothing from the network and sends nothing.
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
-import { initLegends } from './legend.mjs';
+import { initLegends, initResetLayout } from './legend.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -354,7 +354,7 @@ if (grid) {
       e.preventDefault(); setSize(c, d[0], d[1] * pitch(), d[2] * ROW_STEP, { span: spanOf(c), h: c.offsetHeight }); save();
     });
   }
-  $('[data-reset-layout]')?.addEventListener('click', () => { store.del(key()); store.del(legendKey); location.reload(); });
+  initResetLayout({ document, store, layoutKey: key, legendKey, reload: () => location.reload() });
 }
 requestAnimationFrame(() => requestAnimationFrame(restoreScroll));
 
