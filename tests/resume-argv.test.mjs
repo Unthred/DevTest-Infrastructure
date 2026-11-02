@@ -13,7 +13,7 @@ const job = { role: 'devtest', sessionId: '00000000-0000-4000-8000-000000000000'
 
 test('codex resume: every exec option precedes `resume` (the resume subcommand does not accept --cd or --profile), prompt comes from stdin', () => {
   const argv = codex.command(cfg('supported'), job, true);
-  const at = argv.indexOf('resume');
+  const at = argv.lastIndexOf('resume');
   assert.ok(at > 0);
   assert.equal(argv.at(-3), 'resume');
   assert.deepEqual(argv.slice(-3), ['resume', job.sessionId, '-']);
