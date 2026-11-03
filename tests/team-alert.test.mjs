@@ -112,3 +112,25 @@ test('a missing supervisor binary leaves no command-not-found text on stderr', t
   assert.equal(r.status, 0);
   assert.ok(r.stderr.split('\n').filter(Boolean).every(l => l.startsWith('team-alert: warning: ')), r.stderr);
 });
+
+test('a missing node is reported as a team-alert warning, not silenced', t => {
+  const f = fixture(t);
+  const bin = path.join(f.dir, 'bin'); fs.mkdirSync(bin);
+  for (const c of ['bash', 'date', 'grep', 'awk', 'tail', 'tr', 'sed', 'cut', 'dirname', 'cat']) {
+    const found = spawnSync('bash', ['-c', `command -v ${c}`], { encoding: 'utf8' }).stdout.trim();
+    if (found) fs.symlinkSync(found, path.join(bin, c));
+  }
+  const r = spawnSync(path.join(bin, 'bash'), [script], { encoding: 'utf8', env: { PATH: bin, TEAM_ALERT_DIR: f.dir, TEAM_ALERT_SUPERVISOR: path.join(f.dir, 'sup'), TEAM_ALERT_NOTIFY: path.join(f.dir, 'notify') } });
+  assert.equal(r.status, 0);
+  assert.match(r.stderr, /^team-alert: warning: node not found/m);
+  assert.ok(r.stderr.split('\n').filter(Boolean).every(l => l.startsWith('team-alert: warning: ')), r.stderr);
+});
+
+test('a failing dry run is a warning', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'sup'), '#!/bin/bash\necho boom >&2\n[ "$1" = team ] && exit 1\nexit 0\n', { mode: 0o755 });
+  const r = f.run();
+  assert.equal(r.status, 0);
+  assert.match(r.stderr, /warning: supervisor team tick --dry-run failed/);
+  assert.ok(!/boom/.test(r.stderr));
+});

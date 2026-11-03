@@ -18,7 +18,13 @@ if [ -n "$(sstatus | awk '$4=="running"')" ]; then
   ( umask 077; echo "running $now 0" > "$ST" ) 2>/dev/null || warn "cannot write $ST"; exit 0
 fi
 last=$(grep -A1 ' tick$' "$LOG" 2>/dev/null | tail -1)
-planned=$({ $S team tick --dry-run 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log((JSON.parse(s).actions||[]).length)}catch{console.log(0)}})'; } 2>/dev/null)
+# A missing node or a failing dry run is a warning (#200), never silent and never a stray line; planned then counts as 0.
+planned=0
+if ! command -v node >/dev/null 2>&1; then warn "node not found: planned jobs not counted"
+else
+  dry=$({ $S team tick --dry-run; } 2>/dev/null) || warn "supervisor team tick --dry-run failed"
+  planned=$(printf '%s' "$dry" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log((JSON.parse(s).actions||[]).length)}catch{console.log(0)}})' 2>/dev/null) || { warn "node failed counting planned jobs"; planned=0; }
+fi
 paused=$(sstatus | awk '$4=="paused_limit"{print $2" #"$3}' | tr '\n' ' ')
 if echo "$last" | grep -q '"error"'; then kind=stuck; msg="Agents stuck - tick failing | $(echo "$last" | sed 's/.*"error":"\([^"]*\)".*/\1/' | cut -c1-80)"; wait=600
 elif [ "${planned:-0}" -gt 0 ]; then kind=stuck; msg="Agents stuck - $planned planned job(s) not starting | Check team-status"; wait=600
