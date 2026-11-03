@@ -42,7 +42,7 @@ export function wsFrameDecision(frame) {
 
 // ---------- page: no state-changing interaction ----------
 // Elements that can change Home Assistant state, climate and helper (input_*) entities included. Matched against every element on
-// the event's composed path, so shadow DOM (the whole HA frontend) is covered.
+// the event's composed path, so open shadow DOM (the HA frontend) is covered. A CLOSED shadow root retargets the event to its host, so a control inside one is invisible to the guard.
 export const MUTATING_SELECTOR = [
   'button', 'input', 'select', 'textarea', 'form', 'summary',
   '[role=switch]', '[role=slider]', '[role=button]', '[role=checkbox]', '[role=spinbutton]', '[role=combobox]', '[contenteditable]',
@@ -84,9 +84,12 @@ export function installInteractionGuard(options) {
 // ---------- report ----------
 export function haOutcome({ pages, blockedWrites, blockedFrames, blockedInteractions, probe }) {
   const readonlyViolations = blockedWrites.length + blockedFrames.length;
-  // Interactions blocked while the wrapper itself was NOT probing mean the page tried to act on its own: a finding.
-  const unexpected = probe && probe.mode === 'clicks' ? 0 : blockedInteractions.length;
-  const bypassed = probe && probe.mode === 'clicks' ? probe.mutated : 0;
+  // Interactions blocked that the wrapper did not cause mean the page tried to act on its own: a finding. While probing, those are
+  // the ones already blocked before the first probe click (probe.pageInitiated).
+  const probing = probe && probe.mode === 'clicks';
+  const unexpected = probing ? (probe.pageInitiated ?? 0) : blockedInteractions.length;
+  // A handler that ran despite the guard, or a navigation that made the counters unreadable, both fail the probe.
+  const bypassed = probing ? probe.mutated + (probe.navigated ?? 0) : 0;
   const layoutOk = pages.every((p) => p.ok);
   return { readonlyViolations, unexpectedInteractions: unexpected, probeBypassed: bypassed, layoutOk,
     ok: layoutOk && readonlyViolations === 0 && unexpected === 0 && bypassed === 0 };

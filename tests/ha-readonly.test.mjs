@@ -125,7 +125,14 @@ const page = { on() {},
       const ws = { url: () => f.url, connectToServer: () => { log.connected = true; return upstream; }, close: () => { log.closed.push(f.url); }, send() {}, onMessage: (h) => { handlers.m = h; } };
       await wsFn(ws); for (const b of f.bodies || []) handlers.m?.(b); }
     return { status: () => 200 }; },
-  async evaluate(fn) { return String(fn).includes('__haBlockedInteractions') ? (s.interactions || []) : (s.findings || []); },
+  // probe scenario: s.controls clickable controls; s.counters is the sequence read after the controls ({blocked, mutated}); s.pageInitiated blocked before the probe
+  reads: 0,
+  locator() { return { count: async () => s.controls || 0, nth: () => ({ click: async () => {}, press: async () => {} }) }; },
+  async evaluate(fn) {
+    const t = String(fn);
+    if (t.includes('Array.isArray')) { const seq = s.counters || []; const v = seq[Math.min(this.reads++, seq.length - 1)]; return v ?? { blocked: 0, mutated: 0 }; }
+    if (t.includes(').length')) return s.pageInitiated || 0;
+    return t.includes('__haBlockedInteractions') ? (s.interactions || []) : (s.findings || []); },
   async screenshot() { return s.noPng ? Buffer.from('x') : png(opts.viewport.width * opts.deviceScaleFactor, opts.viewport.height * opts.deviceScaleFactor); } };
 const context = { route: async (_p, f) => { routeFn = f; }, routeWebSocket: async (_p, f) => { wsFn = f; }, addInitScript: async () => { log.initScripts++; }, newPage: async () => page, close: async () => {} };
 export const chromium = { launch: async () => ({ newContext: async (o) => { opts = o; log.contexts.push(o); return context; }, close: async () => {} }) };
@@ -217,6 +224,24 @@ test('wrapper: interactions the guard blocked without a probe mean the page acte
   assert.equal(r.exit, EXIT.readonly); assert.ok(r.summary.unexpectedInteractions > 0);
 });
 
+test('wrapper: click probe counts per control, fails on a navigation or a page-initiated interaction, passes a clean probe', async (t) => {
+  const args = ['--probe', 'clicks', '--profiles', 'desktop-1280', '--pages', 'd=/d'];
+  const clean = await go(t, { controls: 2, counters: [{ blocked: 0, mutated: 0 }, { blocked: 2, mutated: 0 }, { blocked: 4, mutated: 0 }] }, args);
+  assert.equal(clean.exit, EXIT.ok); assert.equal(clean.summary.probe.attempted, 2); assert.equal(clean.summary.probe.blocked, 4); assert.equal(clean.summary.probe.navigated, 0);
+  const bypass = await go(t, { controls: 2, counters: [{ blocked: 0, mutated: 0 }, { blocked: 2, mutated: 1 }, { blocked: 4, mutated: 1 }] }, args);
+  assert.equal(bypass.exit, EXIT.readonly); assert.equal(bypass.summary.probe.mutated, 1);
+  // the second control navigated: counters reset, so the mutation counted before it must still fail the run, via navigated
+  const nav = await go(t, { controls: 3, counters: [{ blocked: 0, mutated: 0 }, { blocked: 2, mutated: 1 }, { blocked: -1, mutated: 0 }] }, args);
+  assert.equal(nav.exit, EXIT.readonly); assert.equal(nav.summary.probe.navigated, 1); assert.equal(nav.summary.probe.mutated, 1); assert.equal(nav.summary.probe.attempted, 2);
+  const navOnly = await go(t, { controls: 1, counters: [{ blocked: 0, mutated: 0 }, { blocked: 0, mutated: 0 }, { blocked: -1, mutated: 0 }] }, args);
+  assert.equal(navOnly.summary.probe.navigated, 0, 'a single control that does not navigate is fine');
+  const navFirst = await go(t, { controls: 1, counters: [{ blocked: 0, mutated: 0 }, { blocked: -1, mutated: 0 }] }, args);
+  assert.equal(navFirst.exit, EXIT.readonly); assert.equal(navFirst.summary.probe.navigated, 1);
+  // the page clicked something by itself before the probe: detected even though the probe is on
+  const own = await go(t, { controls: 1, pageInitiated: 1, counters: [{ blocked: 1, mutated: 0 }, { blocked: 3, mutated: 0 }] }, args);
+  assert.equal(own.exit, EXIT.readonly); assert.equal(own.summary.unexpectedInteractions, 1);
+});
+
 test('wrapper: a stored session is passed to the browser context and never reported', async (t) => {
   const w = world(t); await w.ready;
   const sessionFile = path.join(w.dir, 'session.json');
@@ -261,4 +286,8 @@ test('outcome: layout, write attempts, unexpected interactions and a guard bypas
   const probing = { mode: 'clicks', attempted: 3, blocked: 3, mutated: 0 };
   assert.equal(haOutcome({ ...base, blockedInteractions: ['click:button'], probe: probing }).ok, true, 'blocks are expected while probing');
   assert.equal(haOutcome({ ...base, probe: { ...probing, mutated: 1 } }).ok, false, 'a handler that ran despite the guard is a bypass');
+  assert.equal(haOutcome({ ...base, probe: { ...probing, navigated: 1 } }).probeBypassed, 1, 'a navigation during the probe fails it');
+  const own = haOutcome({ ...base, blockedInteractions: ['click:button'], probe: { ...probing, pageInitiated: 1 } });
+  assert.equal(own.ok, false, 'a page-initiated interaction fails even while probing');
+  assert.equal(own.unexpectedInteractions, 1);
 });

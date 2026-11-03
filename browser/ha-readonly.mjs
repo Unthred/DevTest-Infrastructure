@@ -62,7 +62,7 @@ export function loadSession(file) {
 export async function run(o) {
   const blocked = [], blockedWrites = [], blockedFrames = [], interactions = [];
   const pageResults = [];
-  const probe = { mode: o.probe, attempted: 0, blocked: 0, mutated: 0 };
+  const probe = { mode: o.probe, attempted: 0, blocked: 0, mutated: 0, navigated: 0, pageInitiated: 0 };
   let exit = EXIT.ok, problem = null;
   const socketPath = path.join(o.socketDir, `${o.target}.sock`);
   if (!fs.statSync(socketPath, { throwIfNoEntry: false })?.isSocket()) return { summary: null, exit: EXIT.usage, problem: 'target socket is not mounted' };
@@ -113,7 +113,11 @@ export async function run(o) {
           const entry = { name, profile, findings: [], png: null, screenshot: null, pageProblems: 0 };
           try { await tab.goto(`http://127.0.0.1:${port}${page.path}`, { waitUntil: o.wait, timeout: o.timeoutMs }); }
           catch (error) { exit = /Timeout/i.test(error.message) ? EXIT.timeout : /ERR_CERT|SSL|TLS/i.test(error.message) ? EXIT.tls : EXIT.problems; problem = clip(error.message); results.push(entry); continue; }
-          if (o.probe === 'clicks') await clickProbe(tab, probe, o.timeoutMs);
+          if (o.probe === 'clicks') {
+            // Interactions the guard already blocked before the probe's first click came from the page itself.
+            probe.pageInitiated += await tab.evaluate(() => (window.__haBlockedInteractions ?? []).length).catch(() => 0);
+            await clickProbe(tab, probe, o.timeoutMs);
+          }
           entry.findings = (await tab.evaluate(layoutCheck, { touch: profile.hasTouch })).map(({ text, ...f }) => f);
           const file = `${o.name}-${page.name}-${name}-${o.browser}.png`;
           const buffer = await tab.screenshot({ fullPage: true, type: 'png', timeout: o.timeoutMs });
@@ -144,18 +148,24 @@ export async function run(o) {
 }
 
 // Clicks every control the fixture marks as state-changing (and presses Space on it). The in-page guard must stop each one; the
-// fixture counts any handler that still ran in window.__mutations.
+// fixture counts any handler that still ran in window.__mutations. The counters are read after every control, because a control
+// that navigates resets them: a counter that is gone (or a page that cannot be read) is a navigation during the probe, which is
+// reported as a failure (probe.navigated) instead of silently losing earlier counts.
 async function clickProbe(tab, probe, timeoutMs) {
   const controls = tab.locator('[data-mutates]');
   const count = Math.min(await controls.count(), 50);
-  const before = await tab.evaluate(() => (window.__haBlockedInteractions ?? []).length);
+  const read = () => tab.evaluate(() => ({ blocked: Array.isArray(window.__haBlockedInteractions) ? window.__haBlockedInteractions.length : -1, mutated: window.__mutations ?? 0 })).catch(() => ({ blocked: -1, mutated: 0 }));
+  let last = await read();
   for (let i = 0; i < count; i++) {
     const c = controls.nth(i);
     probe.attempted++;
     try { await c.click({ timeout: Math.min(timeoutMs, 3000) }); await c.press('Space', { timeout: 1000 }); } catch { /* an unclickable control cannot have changed anything */ }
+    const now = await read();
+    if (now.blocked < 0 || now.blocked < last.blocked) { probe.navigated++; return; }
+    probe.blocked += now.blocked - last.blocked;
+    probe.mutated += now.mutated - last.mutated;
+    last = now;
   }
-  probe.blocked += (await tab.evaluate(() => (window.__haBlockedInteractions ?? []).length)) - before;
-  probe.mutated += await tab.evaluate(() => window.__mutations ?? 0);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
