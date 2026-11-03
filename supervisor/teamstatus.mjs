@@ -128,7 +128,8 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   try {
     const i = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).install;
     if (i && typeof i.result === 'string') install = { result: redact(i.result, 30), sha: typeof i.sha === 'string' ? redact(i.sha.slice(0, 7), 12) : null, at: Number.isFinite(i.at) ? i.at : null,
-      nextAttemptAt: Number.isFinite(i.nextAttemptAt) ? i.nextAttemptAt : null, reason: i.reason ? redact(String(i.reason), 200) : null };
+      nextAttemptAt: Number.isFinite(i.nextAttemptAt) ? i.nextAttemptAt : null, reason: i.reason ? redact(String(i.reason), 400) : null,
+      tests: Array.isArray(i.tests) ? i.tests.slice(0, 5).map(x => redact(String(x), 200)) : [], excerpt: typeof i.excerpt === 'string' ? redact(i.excerpt.split('\n').slice(0, 12).join('\n'), 800) : '', retried: i.retried === true };
   } catch { /* no state file: nothing installed by the loop yet */ }
   let installed = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); installed = m ? m[1].slice(0, 7) : null; } catch { /* not a versioned install */ }
@@ -152,6 +153,9 @@ export function renderStatus(s) {
   for (const x of s.slots) out.push(`  ${x.text}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity} slots)` : ''}`);
   head('What happens next');
   if (s.install || s.installed) out.push(`  installer: version ${s.installed || 'unknown'}${s.install ? `; last install ${s.install.result}${s.install.sha ? ` (${s.install.sha})` : ''}${s.install.at ? ` at ${t(s.install.at)}` : ''}${s.install.reason ? `: ${s.install.reason}` : ''}${s.install.nextAttemptAt ? `; next attempt ${t(s.install.nextAttemptAt)}` : ''}` : ''}`);
+  if (s.install?.tests?.length) out.push(`    failing test${s.install.tests.length === 1 ? '' : 's'}: ${s.install.tests.join('; ')}${s.install.retried ? ' (failed twice, each in a fresh copy)' : ''}`);
+  else if (s.install?.retried) out.push('    failed twice, each in a fresh copy');
+  if (s.install?.excerpt) for (const l of s.install.excerpt.split('\n')) out.push(`      | ${l}`);
   if (s.hold) out.push(`  ${s.hold.text.replace(/^install pending/, s.hold.since ? `install pending since ${t(s.hold.since)}` : 'install pending')}`);
   if (s.next.plan.length) for (const p of s.next.plan) out.push(`  ${p.text}${p.estimate ? ` (${p.estimate})` : ''}`);
   for (const w of s.next.waiting) out.push(`  ${w.text}`);

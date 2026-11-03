@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readLeases, redact } from './dashdata.mjs';
-import { redactAddresses } from './redact.mjs';
+import { redactAddresses, redactLong } from './redact.mjs';
 import { worst } from './dashui/logic.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;          // the reconcile cron runs every five minutes
@@ -143,7 +143,8 @@ export function readSelfUpgrade(root) {
   const latch = latchFile ? { at: Number.isFinite(latchFile.value?.at) ? latchFile.value.at : null, from: SHA.test(latchFile.value?.from || '') ? latchFile.value.from : null, to: SHA.test(latchFile.value?.to || '') ? latchFile.value.to : null, reason: scrub(latchFile.value?.reason || (latchFile.unreadable ? 'unreadable latch file' : 'no reason recorded'), 300) } : null;
   const p = st.pending, i = st.install;
   const install = i && typeof i.result === 'string' ? { result: scrub(i.result, 30), sha: SHA.test(i.sha || '') ? i.sha : null, at: Number.isFinite(i.at) ? i.at : null,
-    nextAttemptAt: Number.isFinite(i.nextAttemptAt) ? i.nextAttemptAt : null, reason: i.reason ? scrub(i.reason, 200) : null } : null;
+    nextAttemptAt: Number.isFinite(i.nextAttemptAt) ? i.nextAttemptAt : null, reason: i.reason ? scrub(i.reason, 400) : null,
+    tests: Array.isArray(i.tests) ? i.tests.slice(0, 5).map(x => scrub(x, 200)) : [], excerpt: typeof i.excerpt === 'string' ? redactLong(i.excerpt, 1500, '[excerpt cut]') : '', retried: i.retried === true } : null;
   return { install, prechecked, latch, lastUpgradeAt: Number.isFinite(st.lastUpgradeAt) ? st.lastUpgradeAt : null, waitingSince: Number.isFinite(st.waitingSince) ? st.waitingSince : null,
     pending: p && SHA.test(p.to || '') ? { from: SHA.test(p.from || '') ? p.from : null, to: p.to, at: Number.isFinite(p.at) ? p.at : null } : null };
 }

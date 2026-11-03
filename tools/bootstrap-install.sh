@@ -19,7 +19,25 @@ git -C "$src" checkout --quiet --detach "$sha" || { printf 'checkout failed: %s 
 [ -z "$(git -C "$src" status --porcelain --ignored)" ] || { printf 'payload differs from the reviewed commit (unclean copy)\n' >&2; exit 12; }
 cd "$src" || exit 10
 node tools/validate-project.mjs >"$scratch/validate.log" 2>&1 || { printf 'validator: %s\n' "$(tail -n 3 "$scratch/validate.log" | tr '\n' ' ')" >&2; exit 11; }
-node --test 'tests/**/*.test.mjs' >"$scratch/tests.log" 2>&1 || { printf 'tests: %s\n' "$(tail -n 3 "$scratch/tests.log" | tr '\n' ' ')" >&2; exit 11; }
+# Failing-test report (issue #412). The TAP reporter lists every failure as "not ok N - name" followed by a YAML block. Children print
+# before their parent, so an entry is a parent (a suite, "1 subtest failed") when the entry before it is indented deeper; only leaves
+# are reported. Output: line 1 "tests failed: a; b" (up to 5 names), then "--- excerpt ---" and a bounded excerpt (40 lines, 3000 bytes).
+report_failed_tests() {
+  awk '
+    { line[NR] = $0 }
+    /^ *not ok [0-9]+ - / { n++; at[n] = NR; match($0, /^ */); ind[n] = RLENGTH; nm = $0; sub(/^ *not ok [0-9]+ - /, "", nm); name[n] = nm }
+    END {
+      for (i = 1; i <= n; i++) if (i == 1 || ind[i - 1] <= ind[i]) leaf[++m] = i
+      names = ""
+      for (k = 1; k <= m && k <= 5; k++) names = names (k > 1 ? "; " : "") name[leaf[k]]
+      if (m > 5) names = names "; and " (m - 5) " more"
+      if (m == 0) names = "unknown (no failing test found in the output)"
+      printf "tests failed: %s\n--- excerpt ---\n", names
+      lines = 0
+      for (k = 1; k <= m && lines < 40; k++) for (j = at[leaf[k]]; j <= NR && lines < 40; j++) { print line[j]; lines++; if (line[j] ~ /^ *\.\.\.$/) break }
+    }' "$1" | head -c 3000
+}
+node --test --test-reporter=tap 'tests/**/*.test.mjs' >"$scratch/tests.log" 2>&1 || { report_failed_tests "$scratch/tests.log" >&2; printf '\n' >&2; exit 11; }
 [ "$mode" = install ] || exit 0
 # Re-verify immediately before the swap: the validator and tests must not have changed the copy.
 [ "$(git rev-parse HEAD)" = "$sha" ] && [ -z "$(git status --porcelain)" ] || { printf 'payload differs from the reviewed commit\n' >&2; exit 12; }

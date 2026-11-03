@@ -12,6 +12,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES } from './team.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
+import { redact, redactLong } from './redact.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
@@ -41,6 +42,21 @@ export const BOOTSTRAP_PATHS = ['tools/bootstrap-install.sh'];
 // Exit codes of tools/bootstrap-install.sh.
 export const BOOTSTRAP_EXIT = { transient: 10, checks: 11, payload: 12, swap: 13 };
 const short = shortCommit;
+// Issue #412: the installer prints "tests failed: a; b", then "--- excerpt ---" and a bounded excerpt (see tools/bootstrap-install.sh).
+// An older installer prints only the summary ("tests: ..."); that still counts as a test failure but carries no names.
+export function parseTestFailure(stderr) {
+  const text = String(stderr || '');
+  const m = /^tests failed: (.*)$/m.exec(text);
+  if (!m) return /^tests: /m.test(text) ? { kind: 'tests', tests: [], excerpt: '' } : null;
+  const names = redact(m[1], 600).split('; ').map(x => x.trim()).filter(Boolean).slice(0, 6);
+  const at = text.indexOf('--- excerpt ---');
+  const excerpt = at < 0 ? '' : redactLong(text.slice(at + '--- excerpt ---'.length).replace(/^\r?\n/, '').trimEnd(), 1500, '[excerpt cut]');
+  return { kind: 'tests', tests: names, excerpt };
+}
+const isTestFailure = r => !!r && r.ok === false && !r.environmental && r.kind === 'tests' && !r.retried;
+const failureFields = r => (r.kind === 'tests' ? { tests: (r.tests || []).slice(0, 5), excerpt: String(r.excerpt || '').slice(0, 1500), ...(r.retried ? { retried: true } : {}) } : {});
+const excerptNote = r => (r.kind === 'tests' && r.excerpt ? `\nFailure output (excerpt):\n${String(r.excerpt).slice(0, 600)}` : '');
+const testsOf = x => (x?.tests?.length ? x.tests.join('; ') : null);
 
 export function installedSha(root) {
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); return m ? m[1] : null; } catch { return null; }
@@ -169,6 +185,13 @@ export class SelfUpgrade {
   // The last install outcome, shown by `team status` and the dashboard (and read by #105's Install stage). result is one of: installed
   // (awaiting the live tick), verified, transient (retried at nextAttemptAt), blocked (failed validator or tests; waits for a newer
   // main), needs-homeowner, rolled_back, rollback_failed.
+  // Issue #412: the first run failed and the repeat in a fresh copy passed. Recorded with the test names; one alert per target.
+  async noteFlaky(target, first, stage) {
+    this.s.flaky = { sha: target, at: this.clock.now(), stage, tests: (first.tests || []).slice(0, 5), excerpt: String(first.excerpt || '').slice(0, 1500) };
+    this.save();
+    this.record({ to: target, result: 'flaky_test', stage, reason: first.reason, tests: this.s.flaky.tests, excerpt: this.s.flaky.excerpt });
+    await this.alert(`${target}:flaky`, `Supervisor upgrade to ${short(target)}: ${stage} tests failed once and passed on the repeat in a fresh copy (flaky: ${testsOf(first) || 'test name not reported'}). The install went ahead.`);
+  }
   noteInstall(i) { this.s.install = { at: this.clock.now(), ...i }; }
   save() { fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 }); atomicJson(this.stateFile, this.s); }
   latch() { try { return JSON.parse(fs.readFileSync(this.latchFile, 'utf8')); } catch { return fs.existsSync(this.latchFile) ? { reason: 'unreadable latch' } : null; } }
@@ -265,22 +288,36 @@ export class SelfUpgrade {
     const running = await this.d.activeJobs();
     if (running > 0 && now - this.s.waitingSince < this.drainMaxMs) { this.s.holding = { to: target, since: this.s.waitingSince, jobs: running }; this.save(); return 'busy'; }
     const checks = { eligibility: 'ok', quiet: running > 0 ? 'forced-after-wait' : 'idle' };
-    const pre = await this.d.preChecks(target);
+    let pre = await this.d.preChecks(target);
+    // Issue #412: a failed test run is repeated once in a fresh clean copy (each installer call takes its own) before the commit is
+    // latched. It runs here, in this tick, after the drain and before dispatch, so no job can be starting while it runs.
+    let flaky = null;
+    if (isTestFailure(pre)) {
+      const first = pre;
+      pre = await this.d.preChecks(target);
+      if (pre.ok) flaky = first; else if (isTestFailure(pre)) pre = { ...pre, retried: true };
+    }
     if (!pre.ok) {
       const attempts = pre.environmental ? (latched?.environmental ? (latched.attempts || 1) + 1 : 1) : 0;
       this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now; delete this.s.waitingSince; delete this.s.waitingFor;
       this.noteInstall(pre.environmental
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
-        : { result: 'blocked', sha: target, reason: pre.reason });
+        : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre) });
       this.save();
-      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).`);
-      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.reason });
+      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).${excerptNote(pre)}`);
+      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.reason, ...failureFields(pre) });
       return 'precheck-failed';
     }
-    checks.preChecks = 'ok';
+    checks.preChecks = flaky ? 'ok-after-retry' : 'ok';
+    if (flaky) await this.noteFlaky(target, flaky, 'pre-check');
     // The rate-limit stamp is written before the upgrade, so a crash mid-upgrade cannot cause an immediate second attempt.
     this.s.lastUpgradeAt = now; delete this.s.waitingSince; delete this.s.waitingFor; this.save();
-    const up = await this.d.upgrade(target);
+    let up = await this.d.upgrade(target);
+    if (isTestFailure(up)) {   // the same single repeat for a failure at install time, before anything was swapped
+      const first = up;
+      up = await this.d.upgrade(target);
+      if (up.ok) { checks.installChecks = 'ok-after-retry'; await this.noteFlaky(target, first, 'install'); } else if (isTestFailure(up)) up = { ...up, retried: true };
+    }
     if (!up.ok && up.environmental) {
       // The clean copy could not be taken at install time (GitHub unreachable): nothing was swapped, so retry, do not roll back.
       const attempts = (latched?.environmental ? (latched.attempts || 1) : 0) + 1;
@@ -293,9 +330,9 @@ export class SelfUpgrade {
       // The install-time validator, tests or payload check failed before anything was swapped: block only this commit until a newer
       // main, with one alert. No rollback and no global latch (#101).
       this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
-      this.noteInstall({ result: 'blocked', sha: target, reason: up.reason }); this.save();
-      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).`);
-      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: up.reason });
+      this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up) }); this.save();
+      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`);
+      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: up.reason, ...failureFields(up) });
       return 'precheck-failed';
     }
     if (!up.ok) {
@@ -460,11 +497,12 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
       fs.writeFileSync(script, git('show', `${from}:tools/bootstrap-install.sh`), { mode: 0o700 });
       const r = run('bash', [script, mode, remoteUrl(), sha], { timeoutMs });
       if (r.status === 0) return { ok: true };
-      const reason = tail(r);
+      const failure = r.status === BOOTSTRAP_EXIT.checks ? parseTestFailure(r.stderr) : null;
+      const reason = failure?.tests.length ? `tests failed: ${testsOf(failure)}`.slice(0, 400) : tail(r);
       if (r.status === BOOTSTRAP_EXIT.transient) return { ok: false, environmental: true, reason };
       // Exit 11 (validator/tests) and 12 (payload re-verify) happen before the swap: block the commit, never roll back.
       const blocked = r.status === BOOTSTRAP_EXIT.checks || r.status === BOOTSTRAP_EXIT.payload;
-      return { ok: false, ...(blocked ? { blocked: true } : {}), reason: r.status === BOOTSTRAP_EXIT.payload ? `refused: ${reason}` : reason };
+      return { ok: false, ...(blocked ? { blocked: true } : {}), ...(failure ? failure : {}), reason: r.status === BOOTSTRAP_EXIT.payload ? `refused: ${reason}` : reason };
     } catch (error) { return { ok: false, environmental: true, reason: String(error?.message || error).slice(0, 160) }; }
     finally { fs.rmSync(dir, { recursive: true, force: true }); }
   };

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { SelfUpgrade, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
+import { SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
 import { DRAIN_DEFAULT_MINUTES, applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -669,4 +669,93 @@ test('#380: only running or queued jobs hold an upgrade in drain, not a paused_l
   jobs.push({ id: 'b', status: 'running' }, { id: 'c', status: 'paused_manual' });
   assert.equal(await deps.activeJobs(), 2);
   assert.deepEqual(jobs.map(j => j.id), ['a', 'b', 'c']);   // nothing was touched
+});
+
+// ---- issue #412: failing tests are named, and a failed test run is repeated once in a fresh copy before the commit is latched
+const failedTests = (over = {}) => ({ ok: false, blocked: true, kind: 'tests', tests: ['alpha works', 'beta works'], excerpt: 'not ok 2 - alpha works\n  error: boom', reason: 'tests failed: alpha works; beta works', ...over });
+
+test('issue #412: pre-check tests fail then pass: the install goes ahead and the flaky test is recorded by name', async t => {
+  const w = world(t); const runs = [failedTests(), { ok: true }];
+  w.deps.preChecks = async sha => { w.log.push(['pre', sha]); return runs.shift(); };
+  assert.equal(await w.up.step(), 'upgraded');
+  assert.deepEqual(w.log.map(x => x[0]), ['pre', 'pre', 'alert', 'upgrade', 'dry', 'alert']);
+  assert.match(w.alerts()[0], /flaky: alpha works; beta works/);
+  assert.equal(w.up.s.flaky.sha, TO); assert.deepEqual(w.up.s.flaky.tests, ['alpha works', 'beta works']);
+  const rec = w.records(); assert.equal(rec[0].result, 'flaky_test'); assert.deepEqual(rec[0].tests, ['alpha works', 'beta works']);
+  assert.equal(w.records().find(r => r.result === 'upgraded').checks.preChecks, 'ok-after-retry');
+  assert.equal(w.up.s.prechecked[TO], undefined);
+});
+
+test('issue #412: pre-check tests fail twice: latched as before, names and excerpt in the record, alert and install state', async t => {
+  const w = world(t); let runs = 0;
+  w.deps.preChecks = async () => { runs++; return failedTests(); };
+  assert.equal(await w.up.step(), 'precheck-failed');
+  assert.equal(runs, 2);
+  assert.equal(w.up.s.install.result, 'blocked'); assert.equal(w.up.s.install.retried, true);
+  assert.deepEqual(w.up.s.install.tests, ['alpha works', 'beta works']); assert.match(w.up.s.install.excerpt, /error: boom/);
+  assert.match(w.alerts()[0], /tests failed: alpha works; beta works/);
+  assert.equal(w.records()[0].reason, 'tests failed: alpha works; beta works');
+  assert.deepEqual(w.records()[0].tests, ['alpha works', 'beta works']); assert.match(w.records()[0].excerpt, /error: boom/); assert.equal(w.records()[0].retried, true);
+  assert.match(w.alerts()[0], /error: boom/);
+  w.state.now += 100 * ENV_RETRY_MAX_MS;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(runs, 2); assert.equal(w.alerts().length, 1);   // latched: no third run
+});
+
+test('issue #412: tests pass the first time: one run only, nothing recorded as flaky', async t => {
+  const w = world(t); let runs = 0; w.deps.preChecks = async () => { runs++; return { ok: true }; };
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(runs, 1);
+  assert.equal(w.up.s.flaky, undefined); assert.equal(w.records().some(r => r.result === 'flaky_test'), false);
+});
+
+test('issue #412: a validator failure, a payload refusal and an environmental failure are not repeated', async t => {
+  for (const pre of [{ ok: false, blocked: true, reason: 'validator: bad' }, { ok: false, blocked: true, reason: 'refused: payload differs' }, { ok: false, environmental: true, kind: 'tests', reason: 'clone failed' }]) {
+    const w = world(t); let runs = 0; w.deps.preChecks = async () => { runs++; return pre; };
+    assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(runs, 1);
+  }
+});
+
+test('issue #412: install-time tests fail then pass: installs; fail then fail: latched with names; no swap in between', async t => {
+  let w = world(t); let runs = [failedTests(), { ok: true }];
+  w.deps.upgrade = async sha => { w.log.push(['upgrade', sha]); return runs.shift(); };
+  assert.equal(await w.up.step(), 'upgraded');
+  assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 2); assert.equal(w.up.s.flaky.stage, 'install');
+  assert.equal(w.records().find(r => r.result === 'upgraded').checks.installChecks, 'ok-after-retry');
+  w = world(t); w.deps.upgrade = async sha => { w.log.push(['upgrade', sha]); return failedTests(); };
+  assert.equal(await w.up.step(), 'precheck-failed');
+  assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 2); assert.equal(w.log.some(x => x[0] === 'rollback' || x[0] === 'dry'), false);
+  assert.equal(w.up.s.install.result, 'blocked'); assert.deepEqual(w.up.s.install.tests, ['alpha works', 'beta works']); assert.equal(w.up.s.lastUpgradeAt, undefined);
+  const rec = w.records().find(r => r.result === 'precheck_failed'); assert.deepEqual(rec.tests, ['alpha works', 'beta works']); assert.match(rec.excerpt, /error: boom/); assert.match(w.alerts()[0], /error: boom/);
+});
+
+test('issue #412: a latched blocked commit is shown as blocked and holds nothing, even with jobs running', async t => {
+  const w = world(t, { pre: failedTests() });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  w.state.active = 3; w.state.now += 60_000;
+  const r = await w.up.step();
+  assert.equal(r, 'precheck-failed'); assert.equal(holdOf(r, w.up.s), null);
+  assert.equal(w.up.s.holding, undefined); assert.equal(w.up.s.install.result, 'blocked'); assert.match(w.up.s.install.reason, /alpha works/);
+  assert.equal(w.up.s.pending, undefined);
+});
+
+test('issue #412: the failing-test report is parsed, bounded and redacted; an old installer summary still counts as a test failure', () => {
+  const secret = ['gh', 'p_'].join('') + 'a'.repeat(30);
+  const out = `tests failed: one; two\n--- excerpt ---\nnot ok 1 - one\n  error: 'token=${secret}'\n` + 'x'.repeat(5000);
+  const f = parseTestFailure(out);
+  assert.deepEqual(f.tests, ['one', 'two']); assert.ok(!f.excerpt.includes(secret)); assert.ok(f.excerpt.length <= 1600); assert.equal(f.kind, 'tests');
+  assert.deepEqual(parseTestFailure('tests: # skipped 0 # todo 0'), { kind: 'tests', tests: [], excerpt: '' });
+  assert.equal(parseTestFailure('validator: bad'), null);
+});
+
+test('issue #412: realDeps maps the installer report (exit 11) to a named, blocked, test-kind result', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-rd-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'versions', FROM), { recursive: true }); fs.symlinkSync(`versions/${FROM}`, path.join(dir, 'current'));
+  const run = (cmd, args) => {
+    if (cmd === 'git' && args.includes('show')) return { status: 0, stdout: '#!/bin/bash\n', stderr: '' };
+    if (cmd === 'git') return { status: 0, stdout: 'https://example.invalid/r.git\n', stderr: '' };
+    return { status: 11, stdout: '', stderr: 'tests failed: alpha works; beta works\n--- excerpt ---\nnot ok 2 - alpha works\n' };
+  };
+  const d = realDeps({ root: dir, config: { repo_path: dir }, gh: {}, listActive: async () => [], verdictFor: () => null, run });
+  const r = await d.preChecks(TO);
+  assert.equal(r.ok, false); assert.equal(r.blocked, true); assert.equal(r.kind, 'tests');
+  assert.deepEqual(r.tests, ['alpha works', 'beta works']); assert.equal(r.reason, 'tests failed: alpha works; beta works'); assert.match(r.excerpt, /not ok 2/);
 });
