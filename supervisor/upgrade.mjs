@@ -42,6 +42,11 @@ export const envBackoffMs = attempts => Math.min(ENV_RETRY_MS * 2 ** Math.max(0,
 // The exact command printed for a refused update (issue #446).
 export const handInstallCommand = sha => `/root/bin/ai-supervisor self-upgrade hand-install ${sha}`;
 export const BOOTSTRAP_PATHS = ['tools/bootstrap-install.sh'];
+// Issue #406: the files that do NOT need an install (they cannot change what the running service or its cron wrapper executes).
+// Everything else, `supervisor/` and `bin/` included, needs one; a path nobody classified is treated as needing one.
+export const NO_INSTALL_PREFIXES = ['tests/', 'docs/', '.github/', 'tools/ci/'];
+export const needsInstall = file => !(NO_INSTALL_PREFIXES.some(p => file.startsWith(p)) || (!file.includes('/') && /\.md$/i.test(file)));
+export const installRequired = files => files.some(needsInstall);
 // Exit codes of tools/bootstrap-install.sh.
 export const BOOTSTRAP_EXIT = { transient: 10, checks: 11, payload: 12, swap: 13 };
 const short = shortCommit;
@@ -264,7 +269,7 @@ export class SelfUpgrade {
       return 'diverged';
     }
     const files = this.d.changedFiles(from, target);
-    if (!files.some(f => f.startsWith('supervisor/'))) return 'no-supervisor-change';
+    if (!installRequired(files)) return 'no-supervisor-change';
     const touched = files.filter(f => BOOTSTRAP_PATHS.includes(f));
     if (touched.length) {
       await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${target}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically. To install it, paste on Tower: ${this.installCommand(target)} (it pauses starts, drains jobs, installs with validator and tests, checks dry-run, dashboard and the next live tick, rolls back on any failure, and always resumes).`);

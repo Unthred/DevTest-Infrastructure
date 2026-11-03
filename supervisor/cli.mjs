@@ -26,6 +26,7 @@ import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
+import { requestWake, clearPending, waitForTurn } from './wake.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -57,6 +58,20 @@ function installRunning(root) {
   if (!unlock) return true;
   unlock(); return false;
 }
+// Issue #406: ask for one extra reconcile pass now. Best effort and model-free; the scheduled tick is the fallback, so a failure
+// here only loses the speed-up. 'install' runs the freshly installed code (the old process cannot dispatch after an install).
+function wakeNextJob(root, reason) {
+  try {
+    if (!loadTeamConfig(teamConfigFile, root).enabled) return;
+    const cli = reason === 'install' ? path.join(root, 'current', 'supervisor', 'cli.mjs') : self;
+    const target = fs.existsSync(cli) ? cli : self;
+    requestWake({ root, reason, spawnWake: why => {
+      const child = spawn(process.execPath, [target, 'reconcile', '--wake', why, '--state-root', root, '--registry', path.resolve(registryOption || defaultRegistry)], { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+      child.unref(); return { pid: child.pid, start: processStart(child.pid) };
+    }, alive: p => !!p.pid && processStart(p.pid) === p.start });
+  } catch (error) { console.error(`ai-supervisor: wake not requested: ${error?.name || 'Error'}`); }
+}
+let registryOption = null;
 function reconcileOnce(root, registry, installing = false) {
   const dir = path.join(root, 'jobs');
   let resumed = 0, blocked = 0, released = 0, held = 0;
@@ -217,7 +232,7 @@ async function teamTick(root, registry, dryRun, hold = null) {
       if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config);
       const report = await team.tick({ dryRun, hold });
       if (!dryRun) {
-        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length });
+        record({ ...tickOutcome(report), team, actions: report.actions, held: report.held || null, ingested: (report.ingested || []).length });
         // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
         await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
       }
@@ -279,6 +294,7 @@ async function main() {
   const a = args(command === 'test-slot' && cut >= 0 ? rest.slice(0, cut) : rest);   // the command after `--` is not ours to parse
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
+  registryOption = registry;
   if (command === 'help') {
     console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
@@ -324,6 +340,7 @@ async function main() {
     const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null, async j => (await teamFor(root, registry, undefined, false)).resumeGate()(j));
     result.workerPid = null; result.workerStart = null; saveJob(root, result);
     } finally { release(); }
+    wakeNextJob(root, 'job-end');
     return;
   }
   if (command === 'status') {
@@ -445,6 +462,11 @@ async function main() {
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
+      if (a.wake) {
+        const turn = await waitForTurn({ reason: a.wake, sleep: realClock.sleep, tryLock: () => tickLock(root), lastTickAt: () => readCache(root)?.tick?.at });
+        clearPending(root);
+        if (!turn.ready) { console.log(JSON.stringify({ wake: a.wake, skipped: 'another tick kept the lock; the scheduled tick is the fallback' })); return; }
+      }
       // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
       const unlockRecover = tickLock(root, 'reconcile.lock');
       let result;
@@ -461,6 +483,8 @@ async function main() {
       } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
       // After the lock is released, so the new version's dry-run health check can take it. A failure here never fails the tick.
       try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
+      // Issue #406: this process ran the old code and dispatched nothing after an install; start a pass on the new code now.
+      if (before.result === 'upgraded' && !a['dry-run']) wakeNextJob(root, 'install');
       console.log(JSON.stringify(result)); return;
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.
