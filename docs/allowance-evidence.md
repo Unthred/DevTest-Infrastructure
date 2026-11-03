@@ -29,6 +29,12 @@ Captured by the homeowner's interactive session and passed on redacted; fixture 
 - The rollout's last `token_count` record had `rate_limits.primary: null`, `secondary: null`, `rate_limit_reached_type: null` (`tests/fixtures/allowance/codex-0.166.0-exec-limit-hit.token_count.json`). At the moment of the limit the CLI reports no reading; `codexAllowance` now returns status `unknown` with no windows for that shape, instead of `allowed`. The job's limit came from the structured `error`/`turn.failed` path (issue #68); the wording was not persisted.
 - The last real reading before it (14:41 UTC, another session's rollout) was weekly 100%, 5-hour 26%. The dashboard probe (`codexAllowanceProbe`) finds it without any model call.
 
+## Resume flags, help-level check (Claude Code 2.1.316, Codex CLI 0.166.0, 2026-11-02)
+No model call was made. From `--help` and an argument-parse-only run (`--help` appended):
+- Claude: `-r/--resume [value]` (session id or name), `--session-id <uuid>`, `--fork-session` (new id when resuming), usable with `--print`.
+- Codex: `codex exec resume [SESSION_ID] [PROMPT]` (`-` reads the prompt from stdin, `--last` picks the newest). The resume subcommand lists neither `--cd` nor `--profile`; exec options placed before `resume` parse correctly, which is the order the adapter uses. `tests/resume-argv.test.mjs` pins this order and that resume is never offered without a session id or while the capability is not `supported`.
+- This shows the flags exist and the argv is accepted. It does **not** show that a resumed session continues the same work after a real limit reset; `resume` stays `unverified` and `autoResume` stays refused.
+
 ## Not known (blocks enabling auto-resume)
 1. The exhausted-state values still uncaptured: Claude `status` strings other than `allowed`, Codex `rate_limit_reached_type` values, and the exit code and `exec --json` shape when a request is refused (the interactive Codex message is now captured, above).
 2. Whether `claude --resume <id>` and `codex exec resume <id>` continue the same session after a reset.
