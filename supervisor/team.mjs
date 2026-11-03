@@ -2021,14 +2021,20 @@ export class Team {
   }
   // Called only once the job lease is held, so a worktree or lease failure leaves no flag or notice for a job that never started (issue #205).
   async announceSecretScan(act, details) {
-    const scanners = details.filter(isSecretScanner);
+    // Issue #400: when the check-runs read failed, a scanner-only round still names its scanners from the rollup, so the homeowner item
+    // exists before later heads are suppressed.
+    let scanners = details.filter(isSecretScanner);
+    if (!scanners.length && act.scanOnly) scanners = act.checks.map(name => ({ name }));
+    let announced = false;
     if (scanners.length) {
       try {
         await this.flag(act.pr, { key: `secret-scan:${act.head}`, kind: 'secret-scan', head: act.head, checks: scanners.map(c => c.name), tk: 'pull' });
         const links = scanners.map(c => `\`${c.name}\`${c.url ? ` (${c.url})` : ''}`).join(', ');
         await this.postNotice(act.pr, `secret-scan pr=${act.pr} head=${act.head}`, `**Needs the homeowner.** The secret scanner ${links} flagged head \`${act.head}\`. If the flagged value is a test fixture, the fix job rewrites it so it is assembled at runtime; the old commit stays flagged, so: mark incident <id> as a test credential in GitGuardian (the incident is linked from the check). If the value is a real credential, revoke it instead; Foreman never dismisses a finding that does not look like a fixture.`);
+        announced = true;
       } catch { /* the notice is retried on the next cifix launch for this head; the job still runs */ }
     }
+    return announced;
   }
   // What a rejected PR is rejected for, named in the fix-limit notice: a review verdict, failing CI checks, or both.
   rejectionCause(pr) {
@@ -2430,14 +2436,14 @@ export class Team {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.type}-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
       // Read only here; the flag and homeowner notice follow the lease (issue #205), so a setup or lease failure posts nothing.
       const details = rebase ? [] : await this.readCheckDetails(act);
-      if (!rebase) announce = () => this.announceSecretScan(act, details);
+      if (!rebase) announce = async () => { act.announced = await this.announceSecretScan(act, details); };
       spec = { ...common, kind: act.type, worktree: wt, issue: act.pr, scope: rebase ? `Conflict-only rebase of PR #${act.pr} onto ${act.base}` : `Fix red CI on PR #${act.pr}`,
         allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch, behind: !!act.behind }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks, checkDetails: details, escalatedInbox, requirementsFile: rq?.file }),
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head, ...(rebase ? { base: act.base } : { branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) }) };
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
-      bump = () => { if (act.scanOnly) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; return; }   // issue #400: not a fix round
+      bump = () => { if (act.scanOnly && act.announced) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; return; }   // issue #400: uncounted only once the homeowner item exists; otherwise it counts, so the round stays bounded
         this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase && this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });

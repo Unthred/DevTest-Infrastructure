@@ -1506,3 +1506,13 @@ test('#400 a scanner-only cifix round is not counted and runs once per PR; a mix
   await m.team.execute({ agent: 'claude', ...ma });
   assert.equal(m.team.fixCount(38), 1);
 });
+
+test('#400 a scanner-only round with an unreadable check-runs API still raises the homeowner item before later heads are skipped', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => { throw new Error('api down'); };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.equal(w.team.s.scanOnlyRounds[38], 1);
+  assert.equal(w.team.fixCount(38), 0);
+  assert.ok(JSON.stringify(w.calls).includes('secret-scan') || JSON.stringify(w.team.s).includes('secret-scan'));
+});
