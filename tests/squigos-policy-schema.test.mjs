@@ -1,0 +1,126 @@
+// Issue #241: draft JSON Schema for the SquigOS policy file (design only). Valid and invalid policies, incl. tier-3 grants.
+// A small validator covers exactly the keywords the schema uses (the repository has no dependencies).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SCHEMA = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/design/squigos/schemas/policy.v1.schema.json'), 'utf8'));
+const ADR = fs.readFileSync(path.join(ROOT, 'docs/design/squigos/adr-policy-contract.md'), 'utf8');
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function errorsFor(v, s, where = '$') {
+  const out = [];
+  if (s.$ref) return errorsFor(v, s.$ref.split('/').reduce((n, k) => (k === '#' ? SCHEMA : n[k]), SCHEMA) , where);
+  if ('const' in s && !same(v, s.const)) out.push(`${where}: must equal ${JSON.stringify(s.const)}`);
+  if (s.enum && !s.enum.some((e) => same(e, v))) out.push(`${where}: not in enum`);
+  if (s.not && errorsFor(v, s.not, where).length === 0) out.push(`${where}: matches a forbidden form`);
+  if (s.type === 'string' || (s.pattern && typeof v === 'string')) {
+    if (typeof v !== 'string') out.push(`${where}: must be a string`);
+    else {
+      if (s.minLength && v.length < s.minLength) out.push(`${where}: too short`);
+      if (s.pattern && !new RegExp(s.pattern).test(v)) out.push(`${where}: does not match pattern`);
+    }
+  }
+  if (s.type === 'boolean' && typeof v !== 'boolean') out.push(`${where}: must be a boolean`);
+  if (s.type === 'integer') {
+    if (!Number.isInteger(v)) out.push(`${where}: must be an integer`);
+    else if (s.minimum !== undefined && v < s.minimum) out.push(`${where}: below minimum`);
+  }
+  if (s.type === 'array' || s.items || s.minItems) {
+    if (!Array.isArray(v)) { if (s.type === 'array') out.push(`${where}: must be an array`); }
+    else {
+      if (s.minItems && v.length < s.minItems) out.push(`${where}: too few items`);
+      if (s.items) v.forEach((x, i) => out.push(...errorsFor(x, s.items, `${where}[${i}]`)));
+    }
+  }
+  const isObj = v && typeof v === 'object' && !Array.isArray(v);
+  if (s.type === 'object' && !isObj) out.push(`${where}: must be an object`);
+  if (isObj) {
+    for (const k of s.required || []) if (!(k in v)) out.push(`${where}: missing "${k}"`);
+    for (const [k, x] of Object.entries(v)) {
+      if (s.properties?.[k]) out.push(...errorsFor(x, s.properties[k], `${where}.${k}`));
+      else if (s.additionalProperties === false) out.push(`${where}: unknown field "${k}"`);
+    }
+  }
+  if (s.if && errorsFor(v, s.if, where).length === 0 && s.then) out.push(...errorsFor(v, s.then, where));
+  return out;
+}
+const check = (policy) => errorsFor(policy, SCHEMA);
+
+// The valid example comes from the ADR draft itself, so the two cannot drift apart.
+const example = JSON.parse(ADR.match(/## Example policy[\s\S]*?```json\n([\s\S]*?)\n```/)[1]);
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const withEntry = (patch, base = 'release-dead-lease') => {
+  const p = clone(example);
+  const e = p.entries.find((x) => x.id === base);
+  patch(e, p);
+  return p;
+};
+
+test('schema is valid JSON with the draft 2020-12 dialect', () => {
+  assert.equal(SCHEMA.$schema, 'https://json-schema.org/draft/2020-12/schema');
+});
+
+test('the ADR example policy (tiers 0-2, five entries) is valid', () => {
+  assert.equal(example.entries.length, 5);
+  assert.deepEqual(check(example), []);
+});
+
+test('an empty policy is valid (nothing pre-authorised)', () => {
+  assert.deepEqual(check({ contract: 'policy.v1', policyVersion: 1, entries: [] }), []);
+});
+
+test('tier 0, 1 and 2 tags are accepted', () => {
+  for (const tier of [0, 1]) assert.deepEqual(check(withEntry((e) => { e.tier = tier; })), []);
+});
+
+test('a tier-3 grant is rejected', () => {
+  const errs = check(withEntry((e) => { e.tier = 3; }));
+  assert.ok(errs.some((x) => x.includes('.tier')), errs.join('\n'));
+  assert.ok(check(withEntry((e) => { e.tier = 3; e.action = 'pr.rebase'; }, 'rebase-conflicting-pr')).length > 0);
+});
+
+test('tier outside 0-2 or not an integer is rejected', () => {
+  for (const tier of [-1, 4, '1', 1.5, null]) assert.ok(check(withEntry((e) => { e.tier = tier; })).length > 0, String(tier));
+});
+
+test('hard-limit action classes are rejected', () => {
+  for (const action of ['host.reboot', 'ha.service-call', 'pr.merge', 'credential.rotate', 'credential.create', 'billing.enable-overage', 'firewall.open-port', 'exposure.publish', 'remote-access.enable', 'review.bypass']) {
+    assert.ok(check(withEntry((e) => { e.action = action; })).some((x) => x.includes('.action')), action);
+  }
+});
+
+test('a production live-system target is rejected, a non-production one is not', () => {
+  const bad = withEntry((e) => { e.scope.targets = [{ kind: 'live-system', name: 'home-assistant-production' }]; });
+  assert.ok(check(bad).some((x) => x.includes('name')));
+  const ok = withEntry((e) => { e.scope.targets = [{ kind: 'live-system', name: 'home-assistant-test' }]; });
+  assert.deepEqual(check(ok), []);
+});
+
+test('tier 2 needs maxPerDay, targets, conditions and no wildcard target', () => {
+  const id = 'rebase-conflicting-pr';
+  assert.ok(check(withEntry((e) => { delete e.bounds.maxPerDay; }, id)).length > 0);
+  assert.ok(check(withEntry((e) => { delete e.scope.targets; }, id)).length > 0);
+  assert.ok(check(withEntry((e) => { e.scope.conditions = []; }, id)).length > 0);
+  assert.ok(check(withEntry((e) => { delete e.scope.conditions; }, id)).length > 0);
+  assert.ok(check(withEntry((e) => { e.scope.targets = [{ kind: 'git', name: '*' }]; }, id)).length > 0);
+});
+
+test('structure: unknown fields, missing fields, bad contract, bad types', () => {
+  assert.ok(check({ ...clone(example), contract: 'policy.v2' }).length > 0);
+  assert.ok(check({ ...clone(example), extra: 1 }).length > 0);
+  const noEntries = clone(example); delete noEntries.entries;
+  assert.ok(check(noEntries).length > 0);
+  assert.ok(check({ ...clone(example), policyVersion: 0 }).length > 0);
+  assert.ok(check(withEntry((e) => { e.unknown = true; })).length > 0);
+  assert.ok(check(withEntry((e) => { delete e.enabled; })).length > 0);
+  assert.ok(check(withEntry((e) => { e.id = 'Not Kebab'; })).length > 0);
+  assert.ok(check(withEntry((e) => { e.bounds.maxPerHour = 0; })).length > 0);
+  assert.ok(check(withEntry((e) => { e.bounds.maxPerHour = 1.5; })).length > 0);
+  assert.ok(check(withEntry((e) => { e.scope.targets = [{ kind: 'cloud', name: 'x' }]; })).length > 0);
+  assert.ok(check(withEntry((e) => { e.scope.command = 'rm -rf /'; })).length > 0);
+  assert.ok(check(withEntry((e) => { e.action = 'rm -rf /'; })).length > 0);
+});

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Unthred/SquigOS/schemas/policy.v1.schema.json",
+  "title": "SquigOS policy file (contract policy.v1, DRAFT for issue #241, design only)",
+  "description": "Standing permissions tagged with risk tiers (ADR-0011 draft, issue #238). Tier 3 and the hard limits cannot be granted. The host re-checks both at use; this schema is early feedback at review time, not the guarantee.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "policyVersion", "entries"],
+  "properties": {
+    "contract": { "const": "policy.v1" },
+    "policyVersion": { "type": "integer", "minimum": 1 },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "action", "tier", "scope", "bounds", "enabled"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+        "description": { "type": "string", "minLength": 1 },
+        "action": { "$ref": "#/$defs/actionClass" },
+        "tier": { "description": "Tag 0 to 2 only. Tier 3 is never grantable (D5.1).", "enum": [0, 1, 2] },
+        "scope": { "$ref": "#/$defs/scope" },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "enabled": { "type": "boolean" },
+        "onReject": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "tier": { "const": 2 } }, "required": ["tier"] },
+      "then": {
+        "description": "Tier 2 needs maxPerDay, a non-wildcard targets list and at least one condition (D2).",
+        "properties": {
+          "bounds": { "required": ["maxPerDay"] },
+          "scope": {
+            "required": ["targets", "conditions"],
+            "properties": {
+              "targets": { "minItems": 1, "items": { "properties": { "name": { "not": { "const": "*" } } } } },
+              "conditions": { "minItems": 1 }
+            }
+          }
+        }
+      }
+    },
+    "actionClass": {
+      "description": "Dotted action class from the host catalogue. Classes that touch a hard limit (D5.2) are not selectable: reboot, production Home Assistant change, billing/credits, review or merge gate bypass, public exposure/firewall/remote access, credentials.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$",
+      "not": {
+        "pattern": "^(host\\.(reboot|shutdown|power-.*)|ha\\.service-call|pr\\.merge|review\\.(bypass|skip|waive)|credential\\..*|billing\\..*|credits\\..*|firewall\\..*|exposure\\..*|remote-access\\..*)$"
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targets": { "type": "array", "items": { "$ref": "#/$defs/target" } },
+        "paths": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "subjects": { "type": "array", "items": { "enum": ["lease", "job", "pr", "issue", "commit"] } },
+        "conditions": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" } }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "enum": ["git", "live-system", "host"] },
+        "name": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "kind": { "const": "live-system" } }, "required": ["kind"] },
+      "then": {
+        "description": "A production live-system target beyond read only is a hard limit (D5.2).",
+        "properties": { "name": { "not": { "pattern": "production|prod\\b" } } }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxPerHour": { "type": "integer", "minimum": 1 },
+        "maxPerDay": { "type": "integer", "minimum": 1 },
+        "maxPerSubject": { "type": "integer", "minimum": 1 },
+        "maxChangedLines": { "type": "integer", "minimum": 1 },
+        "maxFiles": { "type": "integer", "minimum": 1 },
+        "window": { "type": "object" }
+      }
+    }
+  }
+}
