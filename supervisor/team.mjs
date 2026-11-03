@@ -1213,7 +1213,7 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
-      if ((this.s.verdicts[key] && !this.staleExceptionPass(this.s.verdicts[key], pr.number)) || this.carryPending(pr) || busy('review', `${key}:${agent}`) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
+      if ((this.s.verdicts[key] && !this.staleExceptionPass(this.s.verdicts[key], pr.number)) || this.carryPending(pr) || busy('review', `${key}:${agent}`) || this.reviewInFlight(pr) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
       // Issue #318: a listed pull request takes the exception route: the whole-PR review is by the configured agent on the configured
       // model, and the D-024 refusal below does not apply to it. Any other agent leaves the PR alone.
@@ -1346,6 +1346,12 @@ export class Team {
   // Issue #266: whether a rebase of `pr` waits. The one rebase candidate is the PR next to merge (lowest number of all conflicting, or
   // behind-with-PASS, PRs with rebase attempts left); any other waits. And when the latest implementer-role job was a rebase and an
   // implement job is startable, the slot goes to that implement job (it alternates, so a rebase backlog never holds it tick after tick).
+  // Issue #433: a head with a review job in flight (running, queued or paused) for any reviewing agent is not planned for review by another
+  // agent. A paused job holds no slot (#380), so without this the freed slot would start a second review of the same head. A job on a
+  // different head does not count (a moved head is stale and the new head is planned); a job whose agent could not review this head (reviewRefusal) is no review.
+  reviewInFlight(pr) {
+    return Object.values(this.s.jobs).some(j => j.kind === 'review' && !j.ingested && j.pr === pr.number && j.head === pr.headRefOid && this.c.agents[j.agent] && !this.reviewRefusal(j.agent, pr, j.key));
+  }
   rebaseDeferred(pr, prs, issueByNo, busy) {
     const L = this.c.limits;
     // Candidates are PRs whose author could start the rebase now: same conditions as choose() (not busy or unusable, attempts left,
