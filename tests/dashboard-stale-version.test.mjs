@@ -332,3 +332,170 @@ test('issue #193: an unreadable record is named, and a stale unknown record stop
   const none = await view(root, { jobs: [] });
   assert.ok(!none.attention.some(a => a.id === 'unknown-job-records'));
 });
+
+// ---- issue #209
+const GOOD_ARGV = ['node', cli(OLD), 'dashboard', 'serve', '--host', '192.168.1.5', '--port', '8731'];
+const procKit = (t, initial) => {
+  const proc = fakeProc(t, initial);
+  const kill = (pid, sig) => { if (sig === 0) { if (!fs.existsSync(path.join(proc, String(pid)))) throw Object.assign(new Error(), { code: 'ESRCH' }); return; } fs.rmSync(path.join(proc, String(pid)), { recursive: true, force: true }); };
+  const spawn = (pid, argv) => { fs.mkdirSync(path.join(proc, String(pid)), { recursive: true }); fs.writeFileSync(path.join(proc, String(pid), 'cmdline'), argv.join('\0') + '\0'); };
+  return { proc, kill, spawn };
+};
+
+test('issue #209: a start that throws is retried once, then the last good version is started and the failure says so', async t => {
+  const k = procKit(t, { 100: GOOD_ARGV });
+  let starts = 0;
+  const r = await restartDashboardServer(NEW, { procRoot: k.proc, kill: k.kill, sleep: async () => {}, tries: 3,
+    start: () => { starts++; throw new Error('EACCES'); }, startOld: argv => k.spawn(300, argv), health: async () => findDashboards(k.proc, -1).some(d => d.version === OLD) });
+  assert.equal(starts, 2, 'one try and one retry');
+  assert.equal(r.ok, false); assert.equal(r.recovered, true);
+  assert.match(r.reason, /could not start/); assert.match(r.reason, /tried twice/);
+  assert.deepEqual(findDashboards(k.proc, -1).map(d => d.version), [OLD]);
+});
+
+test('issue #209: a server that starts but never answers is retried once, then the last good version serves again', async t => {
+  const k = procKit(t, { 100: GOOD_ARGV });
+  let starts = 0;
+  const r = await restartDashboardServer(NEW, { procRoot: k.proc, kill: k.kill, sleep: async () => {}, tries: 3,
+    start: (w, a) => { starts++; k.spawn(200 + starts, ['node', cli(NEW), ...a]); }, startOld: argv => k.spawn(300, argv),
+    health: async () => findDashboards(k.proc, -1).every(d => d.version === OLD) && findDashboards(k.proc, -1).length > 0 });
+  assert.equal(starts, 2); assert.equal(r.ok, false); assert.equal(r.recovered, true);
+  assert.match(r.reason, /did not answer/);
+  assert.deepEqual(findDashboards(k.proc, -1).map(d => d.version), [OLD], 'both new processes were stopped');
+});
+
+test('issue #209: the first try fails, the retry answers: restarted, no fallback', async t => {
+  const k = procKit(t, { 100: GOOD_ARGV });
+  let starts = 0, fallback = 0;
+  const r = await restartDashboardServer(NEW, { procRoot: k.proc, kill: k.kill, sleep: async () => {}, tries: 3,
+    start: (w, a) => { starts++; k.spawn(200 + starts, ['node', cli(NEW), ...a]); }, startOld: () => { fallback++; },
+    health: async () => starts >= 2 });
+  assert.equal(r.ok, true); assert.equal(r.restarted, true); assert.equal(starts, 2); assert.equal(fallback, 0);
+});
+
+test('issue #209: when even the last good version cannot be started the result says nothing is serving', async t => {
+  const k = procKit(t, { 100: GOOD_ARGV });
+  const r = await restartDashboardServer(NEW, { procRoot: k.proc, kill: k.kill, sleep: async () => {}, tries: 2,
+    start: () => { throw new Error('boom'); }, startOld: () => { throw new Error('boom'); }, health: async () => false });
+  assert.equal(r.ok, false); assert.equal(r.recovered, false); assert.match(r.reason, /nothing is serving now/);
+});
+
+test('issue #209: revive starts a server that is not running; without revive nothing is started', async t => {
+  const none = procKit(t, {}); let starts = 0;
+  const noRevive = await restartDashboardServer(NEW, { procRoot: none.proc, kill: none.kill, sleep: async () => {}, start: () => { starts++; } });
+  assert.equal(noRevive.restarted, false); assert.equal(starts, 0);
+  const r = await restartDashboardServer(NEW, { procRoot: none.proc, kill: none.kill, sleep: async () => {}, tries: 3, revive: { host: '192.168.1.5', port: '8731', argv: GOOD_ARGV, version: OLD },
+    start: (w, a) => { starts++; none.spawn(200, ['node', cli(NEW), ...a]); }, health: async () => true });
+  assert.equal(r.ok, true); assert.equal(r.restarted, true); assert.equal(starts, 1);
+});
+
+// The tick watchdog, driven with a fake dashboard whose state the test controls.
+const watchRig = (t, { startsOk = true } = {}) => {
+  const root = tmp(t), log = { restarts: [], alerts: [] };
+  const sim = { running: true, healthy: true, startsOk };
+  const deps = { config: { agents: {} }, installed: () => NEW, alert: async x => log.alerts.push(x),
+    dashboardStatus: async () => ({ running: sim.running, healthy: sim.running && sim.healthy, good: sim.running ? { host: '192.168.1.5', port: '8731', version: OLD, argv: GOOD_ARGV } : null }),
+    restartDashboard: async (sha, opts) => { log.restarts.push({ sha, opts }); if (sim.startsOk) { sim.running = true; sim.healthy = true; return { ok: true, restarted: true }; } return { ok: false, recovered: false, reason: 'the dashboard server did not come back' }; } };
+  let now = NOW;
+  const mkUp = () => new SelfUpgrade({ root, deps, clock: { now: () => now } });
+  return { root, log, sim, mk: mkUp, advance: ms => { now += ms; } };
+};
+
+test('issue #209: the tick watchdog revives a killed server and leaves a healthy one alone', async t => {
+  const w = watchRig(t);
+  assert.equal(await w.mk().watchdog(), 'ok'); assert.equal(w.log.restarts.length, 0, 'healthy: untouched');
+  w.sim.running = false;   // someone killed it
+  assert.equal(await w.mk().watchdog(), 'revived');
+  assert.equal(w.log.restarts.length, 1);
+  assert.equal(w.log.restarts[0].opts.force, true); assert.deepEqual(w.log.restarts[0].opts.revive.argv, GOOD_ARGV);
+  const results = fs.readFileSync(path.join(w.root, 'team', 'upgrades.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l).result);
+  assert.deepEqual(results, ['dashboard_revived']);
+  assert.equal(w.log.alerts.length, 0);
+});
+
+test('issue #209: a running server that does not answer is restarted only when seen unhealthy on two ticks', async t => {
+  const w = watchRig(t);
+  await w.mk().watchdog();
+  w.sim.healthy = false;
+  assert.equal(await w.mk().watchdog(), 'unhealthy-wait'); assert.equal(w.log.restarts.length, 0, 'it may still be starting');
+  w.advance(300000);
+  assert.equal(await w.mk().watchdog(), 'revived'); assert.equal(w.log.restarts.length, 1);
+  w.sim.healthy = false; w.advance(300000);
+  assert.equal(await w.mk().watchdog(), 'unhealthy-wait', 'a recovered server that answers again resets the wait');
+});
+
+test('issue #209: crash-loop throttling: restarts back off, cap, and reset after a quiet half hour', async t => {
+  const w = watchRig(t);
+  await w.mk().watchdog();
+  const crash = async () => { w.sim.running = false; return w.mk().watchdog(); };
+  assert.equal(await crash(), 'revived');                     // attempt 1 at t=0
+  w.advance(60000); assert.equal(await crash(), 'throttled'); // 1 min later: within the 5 minute delay
+  assert.equal(w.log.restarts.length, 1);
+  w.advance(300000); assert.equal(await crash(), 'revived');  // attempt 2 allowed after 5 min
+  w.advance(300000); assert.equal(await crash(), 'throttled'); // attempt 3 needs 10 min
+  w.advance(300000); assert.equal(await crash(), 'revived');
+  assert.equal(w.log.restarts.length, 3);
+  w.advance(11 * 60000); assert.equal(await crash(), 'throttled', 'the third failure needs 20 min');
+  // A quiet period: healthy and 30+ minutes since the last attempt resets the count.
+  w.sim.running = true; w.sim.healthy = true; w.advance(31 * 60000);
+  assert.equal(await w.mk().watchdog(), 'ok');
+  assert.equal(await crash(), 'revived', 'the next crash restarts straight away');
+  assert.equal(w.log.restarts.length, 4);
+});
+
+test('issue #209: a restart that fails is recorded, alerted once, and raised as a Needs you item once the server is back', async t => {
+  const w = watchRig(t, { startsOk: false });
+  await w.mk().watchdog();
+  w.sim.running = false;
+  assert.equal(await w.mk().watchdog(), 'revive-failed');
+  w.advance(300000); assert.equal(await w.mk().watchdog(), 'revive-failed');
+  assert.equal(w.log.alerts.length, 1, 'one alert per outage');
+  const state = JSON.parse(fs.readFileSync(path.join(w.root, 'team', 'self-upgrade.json'), 'utf8'));
+  assert.equal(state.dashboardFailure.kind, 'watchdog');
+  install(w.root, NEW);
+  let v = await view(w.root, { running: NEW });
+  const item = v.panels.needsYou.filter(a => a.id === 'dashboard-restart-failed');
+  assert.equal(item.length, 1); assert.equal(item[0].severity, 'action');
+  assert.match(item[0].text, /did not come back/);
+  // The server answers again (someone started it by hand): the watchdog clears its own item.
+  w.sim.running = true; w.sim.healthy = true;
+  assert.equal(await w.mk().watchdog(), 'ok');
+  v = await view(w.root, { running: NEW });
+  assert.ok(!v.attention.some(a => a.id === 'dashboard-restart-failed'));
+});
+
+test('issue #209: a failed restart after a recovery is a new outage and is alerted again', async t => {
+  const w = watchRig(t, { startsOk: false });
+  await w.mk().watchdog();
+  w.sim.running = false;
+  assert.equal(await w.mk().watchdog(), 'revive-failed');
+  assert.equal(w.log.alerts.length, 1);
+  w.sim.startsOk = true;
+  w.advance(300000); assert.equal(await w.mk().watchdog(), 'revived');
+  w.sim.startsOk = false; w.sim.running = false;
+  w.advance(600000); assert.equal(await w.mk().watchdog(), 'revive-failed');
+  assert.equal(w.log.alerts.length, 2, 'the second outage sends its own alert');
+});
+
+test('issue #209: a failed upgrade restart that fell back to the last good version stays a Needs you item until a restart succeeds', async t => {
+  const root = tmp(t), alerts = []; install(root, NEW);
+  let res = { ok: false, recovered: true, reason: 'the dashboard server started on bbbbbbb but did not answer its health check (tried twice)' };
+  const deps = { config: { agents: {} }, restartDashboard: async () => res, alert: async x => alerts.push(x) };
+  await new SelfUpgrade({ root, deps, clock: { now: () => NOW } }).restartDashboard({ from: OLD, to: NEW });
+  let v = await view(root, { running: OLD });
+  const item = v.panels.needsYou.find(a => a.id === 'dashboard-restart-failed');
+  assert.ok(item); assert.match(item.text, /last good version was started again/); assert.ok(item.text.includes(NEW.slice(0, 7)));
+  assert.equal(alerts.length, 1);
+  res = { ok: true, restarted: true };
+  await new SelfUpgrade({ root, deps, clock: { now: () => NOW } }).restartDashboard({ from: OLD, to: NEW });
+  v = await view(root, { running: NEW });
+  assert.ok(!v.attention.some(a => a.id === 'dashboard-restart-failed'));
+});
+
+test('issue #209: the watchdog does nothing while an upgrade awaits verification, or when no server was ever seen', async t => {
+  const w = watchRig(t);
+  w.sim.running = false;
+  assert.equal(await w.mk().watchdog(), 'unknown'); assert.equal(w.log.restarts.length, 0, 'host and port are unknown, so nothing is guessed');
+  const up = w.mk(); up.s.pending = { from: OLD, to: NEW, at: NOW }; up.save();
+  assert.equal(await w.mk().watchdog(), 'skipped');
+});
