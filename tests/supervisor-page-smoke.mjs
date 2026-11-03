@@ -5,7 +5,7 @@
 // container at every standard width. The page script runs, so the copy buttons are visible and measured. No production state is
 // read or written; screenshots stay under the evidence directory, never in Git (D-005). Run `node browser/prepare-cache.mjs` first.
 //
-// Staging: every dashui file the pages load is copied unchanged (early.js, app.js, logic.mjs, legend.mjs, style.css); a missing one is a
+// Staging: every dashui file the server routes under /static/ (STATIC in supervisor/dashserver.mjs) is copied unchanged; a missing one is a
 // 404 plus a console error on every page (issue #428). browser/static-server.mjs serves .mjs as JavaScript, like supervisor/dashserver.mjs.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,6 +17,7 @@ import { createStaticServer, listenOnSocket } from '../browser/static-server.mjs
 import { stageProject } from './stage-project.mjs';
 import { buildView } from '../supervisor/dashboard.mjs';
 import { renderRoute } from '../supervisor/dashrender.mjs';
+import { STATIC } from '../supervisor/dashserver.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sourceProject = path.resolve(here, '..');
@@ -63,7 +64,7 @@ async function fixtureSite(dir) {
       }
       const ui = path.join(sourceProject, 'supervisor', 'dashui');
       fs.mkdirSync(path.join(dir, 'static'));
-      for (const f of ['style.css', 'early.js', 'layout-early.js', 'app.js', 'logic.mjs', 'legend.mjs']) fs.copyFileSync(path.join(ui, f), path.join(dir, 'static', f));
+      for (const [file] of Object.values(STATIC)) fs.copyFileSync(path.join(ui, file), path.join(dir, 'static', file)); // built from the server's /static/ routes, so a new asset cannot be forgotten (issue #447)
       for (const d of fs.readdirSync(dir, { recursive: true })) { const f = path.join(dir, d); fs.chmodSync(f, fs.statSync(f).isDirectory() ? 0o755 : 0o644); }
       fs.chmodSync(dir, 0o755);
       return view;
