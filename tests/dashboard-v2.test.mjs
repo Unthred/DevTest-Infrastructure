@@ -104,7 +104,8 @@ test('the browser script keys the saved layout by breakpoint and never reads or 
   assert.match(js, /dash\.layout\.\$\{page\}\.\$\{bpNow\(\)\}/);
   assert.doesNotMatch(js, /XMLHttpRequest|WebSocket|sendBeacon|eval\(|new Function|innerHTML|document\.write|import\(/);
   // Issue #61: the one network use is a same-origin GET of the page's own address to update a table in place; nothing is sent.
-  assert.equal((js.match(/fetch\(/g) || []).length, 1, 'exactly one fetch');
+  assert.equal((js.match(/fetch\(/g) || []).length, 2, 'two fetches: the table update and the in-place refresh (issue #431), both same-origin GETs');
+  assert.match(js, /fetch\(location\.pathname \+ location\.search, \{ headers: \{ accept: 'text\/html' \}, credentials: 'same-origin', cache: 'no-store' \}\)/);
   assert.match(js, /url = location\.pathname \+ \(qs/); assert.match(js, /fetch\(url, \{ headers: \{ accept: 'text\/html' \}, credentials: 'same-origin' \}\)/);
   assert.doesNotMatch(js, /method:\s*['"](?!GET)|body:\s/, 'no request carries a body');
 });
@@ -208,7 +209,7 @@ test('Overview: four labelled panels, KPI tiles and charts all link to detail pa
   for (const h of ['>Now<', '>Next<', '>Needs you', '>Warnings']) assert.ok(body.includes(h), h);
   assert.match(body, /<body class="overview">/);
   for (const href of ['/agents', '/work', '/reviews', '/usage', '/system', '/activity']) assert.ok(body.includes(`href="${href}"`), href);
-  assert.match(body, /data-reset-layout/); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 2, 'the early dock script and the module');
+  assert.match(body, /data-reset-layout/); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 3, 'the early dock script, the early layout script and the module');
   assert.match(body, /data-countdown="\d+"/);
 });
 test('Needs you lists every needs-homeowner item with what, why, the decision needed, a link and the exact command; Warnings holds the rest', async t => {

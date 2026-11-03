@@ -284,3 +284,14 @@ export function activityFilters(query) {
 export function filterActivity(rows, f) {
   return rows.filter(r => (!f.agent || r.agent === f.agent) && (!f.outcome || r.outcome === f.outcome) && (!f.kind || r.jobKind === f.kind));
 }
+
+// ---- refresh in place (issue #431). The page keeps its document; each periodic refresh compares the server's markup per region
+// (a card by id, a status-bar item by position) with what the server sent last time and replaces only the regions that differ.
+// Returns { ok: false } when the set of regions changed (a card appeared or vanished): the caller then reloads once, as before.
+export function planRefresh(prev, next) {
+  const a = Object.keys(prev), b = Object.keys(next);
+  if (a.length !== b.length || a.some(k => !Object.hasOwn(next, k))) return { ok: false, changed: [] };
+  return { ok: true, changed: a.filter(k => prev[k] !== next[k]) };
+}
+// A refresh waits while the viewer is busy in a way a swap would disturb (typing in a field, a drag or resize in progress, text selected).
+export const refreshBlocked = ({ typing = false, dragging = false, selecting = false } = {}) => typing || dragging || selecting;

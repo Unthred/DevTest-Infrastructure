@@ -306,7 +306,7 @@ test('hostile log text is escaped on every Supervisor page', async t => {
   const s = await serve(t, { root: stateRoot(t, { log }), cache });
   for (const u of ['/supervisor', '/supervisor/ticks', '/supervisor/upgrades']) {
     const b = (await s.get(u)).body;
-    assert.doesNotMatch(b, /<img src=x/); assert.doesNotMatch(b, /<script>x/); assert.doesNotMatch(b, /<b>w<\/b>/); assert.doesNotMatch(b, /<i>a<\/i>/); assert.equal((b.match(/<script/g) || []).length, 2, u); assert.equal((b.match(/<script(?![^>]*\bsrc=)/g) || []).length, 0, u + ': no inline script');
+    assert.doesNotMatch(b, /<img src=x/); assert.doesNotMatch(b, /<script>x/); assert.doesNotMatch(b, /<b>w<\/b>/); assert.doesNotMatch(b, /<i>a<\/i>/); assert.equal((b.match(/<script/g) || []).length, 3, u); assert.equal((b.match(/<script(?![^>]*\bsrc=)/g) || []).length, 0, u + ': no inline script');
   }
 });
 

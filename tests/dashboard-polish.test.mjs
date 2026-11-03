@@ -193,7 +193,7 @@ test('dock markup: a drag handle, a four-way setting, a rail collapse control, a
 test('early.js: applies the saved dock for the current breakpoint; bad or missing values fall back; the phone is always bottom', () => {
   const run = (width, store) => {
     const dataset = {}, ls = { getItem: k => (k in store ? store[k] : null) };
-    vm.runInNewContext(earlyJs, { window: { innerWidth: width }, localStorage: ls, document: { documentElement: { dataset } }, JSON });
+    vm.runInNewContext(earlyJs, { window: { innerWidth: width }, localStorage: ls, document: { documentElement: { dataset, classList: { add() {}, remove() {} } } }, setTimeout() {}, JSON });
     return dataset;
   };
   assert.deepEqual(run(1400, {}), { dock: 'top' });

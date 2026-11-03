@@ -29,7 +29,7 @@ const site = fs.mkdtempSync(path.join('/mnt/cache/appdata/devtest-infrastructure
 const { matchRoute } = await import('../supervisor/dashrender.mjs');
 for (const theme of ['light', 'dark']) {
   const dir = path.join(site, theme); fs.mkdirSync(path.join(dir, 'static'), { recursive: true });
-  for (const f of ['style.css', 'app.js', 'logic.mjs', 'early.js']) fs.copyFileSync(path.join(sourceProject, 'supervisor', 'dashui', f), path.join(dir, 'static', f));
+  for (const f of ['style.css', 'app.js', 'logic.mjs', 'legend.mjs', 'early.js', 'layout-early.js']) fs.copyFileSync(path.join(sourceProject, 'supervisor', 'dashui', f), path.join(dir, 'static', f));
   for (const [name, p] of pages) fs.writeFileSync(path.join(dir, `${name}.html`), renderRoute(view, matchRoute(p), { pathname: p }).html.replace('<html lang="en">', `<html lang="en" data-theme="${theme}">`).replace(/<meta http-equiv="refresh"[^>]*>/, ''));
 }
 fs.chmodSync(site, 0o755); for (const t of ['light', 'dark']) fs.chmodSync(path.join(site, t), 0o755);

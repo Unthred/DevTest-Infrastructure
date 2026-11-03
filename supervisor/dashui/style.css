@@ -323,3 +323,6 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .chip.on { background: var(--accent, #2b6cb0); color: #fff; font-weight: 600; }
 .chips { margin: 0 0 .6rem; }
 .tznote { margin: 1rem 1.5rem; }
+
+/* issue #431: server times keep their space but are not shown until converted to local time (early.js removes this after 3 s if scripts fail) */
+html.js time[data-local]:not(.lz), html.js [data-lms]:not(.lz) { visibility: hidden; }

@@ -1,7 +1,7 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
 // scroll restoration (all saved per breakpoint, in this browser only). It reads nothing from the network and sends nothing.
-import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
+import { COPY_FEEDBACK_MS, planRefresh, refreshBlocked, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends, initResetLayout } from './legend.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -11,6 +11,17 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: the layout simply is not remembered */ } },
   del(k) { try { localStorage.removeItem(k); } catch { /* nothing to remove */ } }
 };
+
+// What the server sent, per region, taken before this script changes anything (issue #431). A card is swapped by its content; its header
+// (title, handle, buttons) and resize handles stay, as does the card element, so layout, collapsed and expanded state survive.
+const swapNodes = c => [...c.children].filter(n => !n.matches('header, .resize'));
+const regionsOf = root => {
+  const m = {};
+  $$('.card[data-card]', root).forEach(c => { m['card:' + c.dataset.card] = swapNodes(c).map(n => n.outerHTML).join(''); });
+  $$('header.statusbar .stat', root).forEach((e, k) => { m['stat:' + k] = e.outerHTML; });
+  return m;
+};
+let served = regionsOf(document), refreshing = false;
 
 // theme
 const root = document.documentElement;
@@ -182,9 +193,45 @@ function restoreScroll() {
 history.scrollRestoration = 'manual';
 // The periodic refresh is driven from here, not by a <meta refresh>: a declarative refresh keeps the address the page loaded
 // with, so it would undo an in-place table change (replaceState). Without script the <noscript> meta still refreshes.
+// Issue #431: the refresh is done in place. It fetches the same address and replaces only the cards and status-bar items whose
+// markup changed. A card element itself stays (its place, size, collapsed or expanded state and handlers, the scroll position and the
+// focus are untouched). If the set of cards changed, or anything fails, it reloads once as before.
+async function refreshInPlace() {
+  if (refreshing) return; refreshing = true;
+  try {
+    const ae = document.activeElement;
+    if (refreshBlocked({ typing: !!ae?.matches?.('input,textarea,select,[contenteditable]'), dragging: !!$('.dragging,.resizing,.dock-zones,.copy-manual'), selecting: !!getSelection()?.toString() })) return;
+    const res = await fetch(location.pathname + location.search, { headers: { accept: 'text/html' }, credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const now = regionsOf(doc), plan = planRefresh(served, now);
+    if (!plan.ok) { saveScroll(); location.reload(); return; }
+    const y = scrollY;
+    for (const key of plan.changed) {
+      const cut = key.indexOf(':'), kind = key.slice(0, cut), id = key.slice(cut + 1);
+      if (kind === 'stat') {
+        const live = $$('header.statusbar .stat')[Number(id)], fresh = $$('header.statusbar .stat', doc)[Number(id)];
+        if (live && fresh) { localize(fresh); live.replaceWith(fresh); }
+        continue;
+      }
+      const live = $$('.card[data-card]').find(c => c.dataset.card === id), fresh = $$('.card[data-card]', doc).find(c => c.dataset.card === id);
+      if (!live || !fresh) continue;
+      const openDetails = $$('details', live).map(d => d.open), openRows = $$('tr', live).map(r => r.classList.contains('open'));
+      localize(fresh);
+      const old = swapNodes(live), next = swapNodes(fresh);
+      if (old.length) { old.slice(1).forEach(n => n.remove()); old[0].replaceWith(...next); } else live.append(...next);
+      $$('details', live).forEach((d, k) => { if (openDetails[k]) d.open = true; });
+      $$('tr', live).forEach((r, k) => { if (openRows[k]) r.classList.add('open'); });
+      bindCopy(live);
+    }
+    served = now; tickClock();
+    if (scrollY !== y) scrollTo(scrollX, y);
+  } catch { saveScroll(); location.reload(); }
+  finally { refreshing = false; }
+}
 {
   const secs = Number($('meta[name=refresh-seconds]')?.content) || 60;
-  setInterval(() => { saveScroll(); location.reload(); }, secs * 1000);
+  setInterval(refreshInPlace, secs * 1000);
 }
 
 // movable and resizable cards
@@ -403,21 +450,27 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
 }
 
 // Local time (issue #76): the server renders UTC; every <time data-local> is rewritten in this browser's time zone. Data stays UTC.
-{
-  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  for (const el of $$('time[data-local]')) {
+// Converted elements carry .lz (until then style.css hides them, keeping their space, so the text never visibly changes). Also used on
+// markup fetched by the in-place refresh, before it is inserted.
+const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+function localize(scope = document) {
+  for (const el of $$('time[data-local]', scope)) {
     const ms = Date.parse(el.getAttribute('datetime'));
-    if (!Number.isFinite(ms)) continue;
-    el.title = `${el.textContent} (stored in UTC); shown in your time zone, ${zone}`;
-    el.textContent = formatLocal(ms, zone);
+    if (Number.isFinite(ms)) { el.title = `${el.textContent} (stored in UTC); shown in your time zone, ${zone}`; el.textContent = formatLocal(ms, zone); }
+    el.classList.add('lz');
   }
   // Chart axis labels and tooltips (SVG cannot hold <time>): rebuilt from their template in this zone.
-  for (const el of $$('[data-lms]')) {
+  for (const el of $$('[data-lms]', scope)) {
     const ms = Number(el.getAttribute('data-lms'));
-    if (!Number.isFinite(ms)) continue;
-    const t = el.hasAttribute('data-tonly') ? timeOnly(ms, zone) : formatLocal(ms, zone);
-    el.textContent = (el.getAttribute('data-tpl') || '{t}').replace('{t}', () => t);
+    if (Number.isFinite(ms)) {
+      const t = el.hasAttribute('data-tonly') ? timeOnly(ms, zone) : formatLocal(ms, zone);
+      el.textContent = (el.getAttribute('data-tpl') || '{t}').replace('{t}', () => t);
+    }
+    el.classList.add('lz');
   }
+}
+localize();
+{
   const note = $('#tznote');
   if (note) note.textContent = `Times are shown in your time zone (${zone}). Data is stored in UTC; hover a time to see it.`;
 }
