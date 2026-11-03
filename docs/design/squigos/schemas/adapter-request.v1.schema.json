@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Unthred/SquigOS/docs/adr/schemas/adapter-request.v1.schema.json",
+  "title": "Adapter request adapter.v1 (DRAFT, issue #240; not authoritative until the ADR is accepted)",
+  "description": "One JSON request on adapter stdin. Unknown fields are rejected (ADR-0010 D1). Carries no credentials.",
+  "oneOf": [
+    { "$ref": "#/$defs/runRequest" },
+    { "$ref": "#/$defs/reviewRequest" },
+    { "$ref": "#/$defs/usageRequest" },
+    { "$ref": "#/$defs/capabilitiesRequest" }
+  ],
+  "$defs": {
+    "contract": { "const": "adapter.v1" },
+    "requestId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "riskTier": { "type": "integer", "minimum": 0, "maximum": 3, "description": "Computed by the host; information and a limit for the adapter, never set by it." },
+    "shortText": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "absPath": { "type": "string", "pattern": "^/[^\\u0000]*$", "maxLength": 4096 },
+    "runRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "op", "requestId", "task", "target", "riskTier", "worktree", "model", "timeLimitSeconds", "outputDir"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "const": "run" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref", "brief"],
+          "properties": {
+            "ref": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "brief": { "type": "string", "minLength": 1, "maxLength": 100000 },
+            "inScope": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/shortText" } },
+            "outOfScope": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/shortText" } },
+            "allowedPaths": { "type": "array", "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+            "changeBudget": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "maxFiles": { "type": "integer", "minimum": 1 },
+                "maxChangedLines": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": { "enum": ["git", "live-system", "host"] },
+            "name": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        },
+        "riskTier": { "$ref": "#/$defs/riskTier" },
+        "worktree": { "$ref": "#/$defs/absPath" },
+        "model": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "timeLimitSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "outputDir": { "$ref": "#/$defs/absPath" },
+        "sessionRef": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 },
+        "answers": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text"],
+            "properties": { "text": { "$ref": "#/$defs/shortText" } }
+          }
+        }
+      }
+    },
+    "reviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "op", "requestId", "subject", "issue", "diff", "checkResults", "riskTier", "model", "timeLimitSeconds", "outputDir"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "const": "review" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref", "headSha"],
+          "properties": { "ref": { "type": "string", "minLength": 1, "maxLength": 200 }, "headSha": { "$ref": "#/$defs/sha" } }
+        },
+        "issue": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "body"],
+          "properties": { "title": { "type": "string", "minLength": 1, "maxLength": 500 }, "body": { "type": "string", "maxLength": 100000 } }
+        },
+        "diff": { "type": "string", "minLength": 1 },
+        "checkResults": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "headSha", "steps"],
+          "properties": {
+            "source": { "const": "host", "description": "Evidence is host-produced, never the adapter's." },
+            "headSha": { "$ref": "#/$defs/sha" },
+            "steps": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "status", "failures"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+                  "status": { "enum": ["passed", "failed", "skipped"] },
+                  "failures": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 2000 } }
+                }
+              }
+            }
+          }
+        },
+        "riskTier": { "$ref": "#/$defs/riskTier" },
+        "model": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "timeLimitSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "outputDir": { "$ref": "#/$defs/absPath" }
+      }
+    },
+    "usageRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "op", "requestId"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "const": "usage" },
+        "requestId": { "$ref": "#/$defs/requestId" }
+      }
+    },
+    "capabilitiesRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "op", "requestId"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "const": "capabilities" },
+        "requestId": { "$ref": "#/$defs/requestId" }
+      }
+    }
+  }
+}
