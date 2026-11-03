@@ -260,9 +260,13 @@ export function heldIssues({ cache, state = {}, splitting = new Set(), pauseText
     if (parked) { out.push({ number: i.number, where: 'later', waits: 'parked: held back on purpose', ends: 'the homeowner removing the parked label; Foreman then treats it as eligible unless it waits on something else' }); continue; }
     const flags = Object.entries(state.unblock?.flags?.[i.number] || {}), applied = foremanApplied(i, state);
     const q = i.question ?? homeownerQuestion(i.body);
+    if (q && !(q.yes && q.no)) {
+      out.push({ number: i.number, where: 'later', waits: `labelled needs-homeowner; the issue asks "${q.question}" but does not state what each answer does (a Yes: and a No: effect)`, ends: `someone adding the Yes: and No: effects to the question on the issue, which moves it to Needs you; removing the label ${eligible ? 'would make it eligible for Foreman to start' : 'would not start work'}` });
+      continue;
+    }
     if (q) {
       out.push({ number: i.number, where: 'needs', question: q.question, tried: applied ? 'Foreman labelled this issue needs-homeowner and starts no new job on it while the label is on.' : 'Labelled needs-homeowner; no record of who applied it.',
-        action: `Answer on the issue. ${q.yes || q.no ? `${q.yes ? `Yes: ${q.yes}. ` : ''}${q.no ? `No: ${q.no}.` : ''}` : 'The issue does not state what each answer does.'}${starts}` });
+        action: `Answer on the issue. Yes: ${q.yes} No: ${q.no}${starts}` });
       continue;
     }
     if (flags.length && i.state === 'OPEN') {

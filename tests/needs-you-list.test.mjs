@@ -43,14 +43,15 @@ test('an issue with a stated question appears with the question and the effect o
   assert.ok(card); assert.match(card.text, /Approve decision D-030\?/); assert.match(card.decision, /Yes: PRs #4 and #5 merge\./); assert.match(card.decision, /No: they stay open\./);
   assert.ok(!p.needsYou.some(a => a.id === 'homeowner-51'), 'no answerable question: not in Needs you');
   assert.ok(p.later.some(l => l.number === 51), 'it is listed as Later, quietly');
-  const noEffect = (await panels(t, { issues: [iss(52, 'Question: Should the team move to a new repository?')] })).needsYou.find(a => a.id === 'homeowner-52');
-  assert.match(noEffect.decision, /does not state what each answer does/);
+  const np = await panels(t, { issues: [iss(52, 'Question: Should the team move to a new repository?'), iss(53, 'Question: Should it move? Yes: it moves.')] });
+  for (const n of [52, 53]) assert.ok(!np.needsYou.some(a => a.id === `homeowner-${n}`), `#${n} does not state both answer effects: not in Needs you`);
+  assert.match(np.later.find(l => l.number === 52).waits, /does not state what each answer does/);
 });
 
 test('#37 appears even when it is outside the first 200 issues the list call returns', async t => {
   const calls = [];
   const all = Array.from({ length: 260 }, (_, i) => ({ number: 400 - i, title: `i${400 - i}`, state: 'OPEN', body: '', labels: [] }));
-  all.push({ number: 37, title: 'Team loop', state: 'OPEN', body: '**Decision first:** should the team loop move into its own repository, given it serves several projects? Bring a proposal.', labels: [{ name: 'needs-homeowner' }] });
+  all.push({ number: 37, title: 'Team loop', state: 'OPEN', body: '**Decision first:** should the team loop move into its own repository, given it serves several projects? Yes: a new repository is created. No: it stays here.', labels: [{ name: 'needs-homeowner' }] });
   const gh = args => { calls.push(args); const lim = Number(args[args.indexOf('--limit') + 1]), st = args[args.indexOf('--state') + 1];
     return JSON.stringify(all.filter(i => st === 'all' || i.state.toLowerCase() === st).sort((a, b) => b.number - a.number).slice(0, lim).map(i => ({ ...i, labels: i.labels.map(l => (typeof l === 'string' ? { name: l } : l)) }))); };
   const issues = await githubClient({ repository: 'o/r' }, gh).listIssues();
@@ -93,7 +94,7 @@ test('the stock "Foreman stopped work" text is used only when state records that
 });
 
 test('no item tells the homeowner to remove a label where removal would start held-back work', async t => {
-  const issues = [iss(80, 'Question: Is this wanted now? Yes: go. No: stay.'), iss(81, 'x'), iss(82, 'x', ['parked']), iss(83, 'Question: Is the epic still wanted?', ['needs-homeowner', 'epic'])];
+  const issues = [iss(80, 'Question: Is this wanted now? Yes: go. No: stay.'), iss(81, 'x'), iss(82, 'x', ['parked']), iss(83, 'Question: Is the epic still wanted? Yes: it stays. No: close it.', ['needs-homeowner', 'epic'])];
   const p = await panels(t, { issues, state: { splits: { 84: { status: 'proposed', children: [1], implementJob: 'j' } } } });
   const all = [...p.needsYou, ...p.later];
   for (const item of all) { const s = text(item); assert.doesNotMatch(s, /remove the needs-homeowner label so the team can continue/i); assert.doesNotMatch(s, /or remove the label/i); }

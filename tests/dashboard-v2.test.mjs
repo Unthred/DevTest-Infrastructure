@@ -168,7 +168,7 @@ const jb = (over = {}) => ({ id: 'a'.repeat(32), provider: 'claude', kind: 'impl
 const cache = (extra = {}) => ({ tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, delivered: [],
   pulls: [{ number: 41, title: 'PR forty-one', headRefName: 'claude/issue-30-x', headRefOid: H(1), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green }],
   issues: [{ number: 30, title: 'Thirty', state: 'OPEN', labels: [], prerequisites: [5, 2] }, { number: 5, title: 'Five', state: 'OPEN', labels: [], prerequisites: [] }, { number: 2, title: 'Two', state: 'CLOSED', labels: [], prerequisites: [] },
-    { number: 3, title: 'Three <b>x</b>', state: 'OPEN', labels: ['needs-homeowner'], prerequisites: [], question: { question: 'Should the team continue with issue three?', yes: null, no: null } }], ...extra });
+    { number: 3, title: 'Three <b>x</b>', state: 'OPEN', labels: ['needs-homeowner'], prerequisites: [], question: { question: 'Should the team continue with issue three?', yes: 'work resumes.', no: 'it stays held.' } }], ...extra });
 
 test('every page has its own URL, answers 200 with the navigation bar, and marks the current page', async t => {
   const s = await serve(t, { jobs: [jb()], cache: cache(), state: { verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'codex', at: NOW - 5000, findings: ['<b>bad</b> thing'] } }, jobs: {} } });
