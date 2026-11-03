@@ -17,7 +17,7 @@ function fixture(t, testSource) {
   git('init', '-q'); git('add', '-A'); git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'fixture');
   return { repo, sha: git('rev-parse', 'HEAD') };
 }
-const check = f => spawnSync('bash', [script, 'check', f.repo, f.sha], { encoding: 'utf8', timeout: 60000, env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT')) });
+const check = f => spawnSync('bash', [script, 'check', f.repo, f.sha], { encoding: 'utf8', timeout: 60000, env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT' && !k.startsWith('LC_') && k !== 'LANG')), LC_ALL: 'C' } });
 
 test('issue #412: a failing test is named in the installer output, with a bounded excerpt', t => {
   const secret = ['gh', 'p_'].join('') + 'b'.repeat(30);
@@ -44,4 +44,14 @@ test('issue #412: at most five names are listed and the rest are counted', t => 
 test('issue #412: passing tests exit 0 and print nothing', t => {
   const r = check(fixture(t, `import test from 'node:test';\ntest('ok', () => {});\n`));
   assert.equal(r.status, 0); assert.equal(r.stderr, '');
+});
+
+test('issue #412: team status shows the failing test names, the excerpt and "failed twice" for a latched install', async () => {
+  const { renderStatus } = await import('../supervisor/teamstatus.mjs');
+  const s = { repository: 'o/r', generatedAt: 0, timeZone: 'UTC', notes: [], agents: [], slots: [], hold: null, installed: 'abc1234',
+    install: { result: 'blocked', sha: 'def5678', at: null, nextAttemptAt: null, reason: 'tests failed: the broken one', tests: ['the broken one', 'second failure'], excerpt: 'not ok 1 - the broken one\nerror: boom', retried: true },
+    next: { plan: [], waiting: [] }, estimates: { items: [], waits: [] }, problems: [], pulls: [], mergedToday: [], allowance: [], schedule: { intervalMinutes: 5, lastTickAt: null } };
+  const out = renderStatus(s);
+  assert.match(out, /failing tests: the broken one; second failure \(failed twice, each in a fresh copy\)/);
+  assert.match(out, /\| not ok 1 - the broken one/); assert.match(out, /\| error: boom/);
 });
