@@ -110,7 +110,7 @@ export function versionStatus(v) {
   if (v.latched) return { level: 'action', label: `Upgrade latched at ${s7(v.installed)}`, href };
   if (['rolled_back', 'rollback_failed'].includes(v.result)) return { level: 'action', label: `Upgrade failed (${String(v.result).replace('_', ' ')})`, href };
   if (v.running && v.running !== v.installed) return { level: 'warning', label: `Restart needed: ${s7(v.running)} running, ${s7(v.installed)} installed`, href };
-  if (v.drift && Number.isSafeInteger(v.behind) && v.behind > 0 && Number.isFinite(v.nextTryAt)) return { level: 'warning', label: `${v.behind} commit${v.behind === 1 ? '' : 's'} behind, next try ${new Date(v.nextTryAt).toISOString().slice(11, 16)} UTC`, href };
+  if (v.drift && Number.isSafeInteger(v.behind) && v.behind > 0 && Number.isFinite(v.nextTryAt)) return { level: 'warning', label: `${v.behind} commit${v.behind === 1 ? '' : 's'} behind, next try ${tmark(v.nextTryAt)}`, href };
   if (v.drift) return { level: 'warning', label: `Deploy needed: ${s7(v.installed)} → ${s7(v.main)}`, href };
   return { level: 'ok', label: `Up to date (${s7(v.installed)})`, href };
 }
@@ -242,4 +242,45 @@ export function sanitizeHidden(stored, all, free = []) {
   const list = Array.isArray(stored) ? [...new Set(stored.filter(k => typeof k === 'string' && (all.includes(k) || free.includes(k))))] : [];
   if (all.length && all.every(k => list.includes(k))) { const last = list.findLast(k => all.includes(k)); return list.filter(k => k !== last); }
   return list;
+}
+
+// ---- local time (issue #76). Data stays in UTC; only rendering changes. The server renders every time as
+// <time datetime="…Z">… UTC</time>; the browser script rewrites it with this function in the viewer's own time zone.
+export function formatLocal(ms, tz) {
+  if (!Number.isFinite(ms)) return 'unknown';
+  let zone = tz; try { new Intl.DateTimeFormat('en-GB', { timeZone: zone }); } catch { zone = 'UTC'; }
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(new Date(ms)).map(p => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
+}
+// A time inside plain text (review of PR #217): a readable, labelled UTC stamp "YYYY-MM-DD HH:MM UTC", so any consumer of
+// the view (team status, its --json, /api/view.json, overseer notes) gets plain text. Renderers that know the viewer's zone
+// rewrite each stamp with localStamps(): the dashboard into <time data-local> (escT), team status into its own time zone.
+export const tmark = ms => (Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(0, 10)} ${new Date(ms).toISOString().slice(11, 16)} UTC` : 'unknown');
+export const localStamps = (text, fn) => String(text).replace(/\b(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC\b/g, (_, d, hm) => fn(Date.parse(`${d}T${hm}:00Z`)));
+export const timeOnly = (ms, tz) => formatLocal(ms, tz).slice(11);
+
+// ---- Activity (issue #76): idle ticks collapse, rows filter by agent, outcome and job kind.
+// A row is { at, text, link, kind: 'tick'|'job'|'review'|'merge'|…, idle?, agent?, outcome?, jobKind?, durationMs?, tokens? }.
+// A run of two or more adjacent idle rows (newest first) becomes one { kind: 'idle-run', count, from, to, ticks } row. Any row
+// that is not idle, from any source, ends a run, so a busy tick between two idle runs gives two runs.
+export function collapseIdle(rows) {
+  const out = []; let run = [];
+  const flush = () => {
+    if (run.length > 1) out.push({ at: run[0].at, kind: 'idle-run', idle: true, outcome: 'idle', agent: null, jobKind: null, count: run.length, from: run[run.length - 1].at, to: run[0].at, ticks: run, text: `${run.length} idle ticks` });
+    else out.push(...run);
+    run = [];
+  };
+  for (const r of rows) { if (r.idle) run.push(r); else { flush(); out.push(r); } }
+  flush();
+  return out;
+}
+export const ACTIVITY_FILTERS = ['agent', 'outcome', 'kind'];
+// Filters combine (all must match). A value not offered is ignored rather than hiding everything.
+export function activityFilters(query) {
+  const f = {};
+  for (const k of ACTIVITY_FILTERS) { const v = query.get(`act.${k}`); if (v) f[k] = v; }
+  return f;
+}
+export function filterActivity(rows, f) {
+  return rows.filter(r => (!f.agent || r.agent === f.agent) && (!f.outcome || r.outcome === f.outcome) && (!f.kind || r.jobKind === f.kind));
 }

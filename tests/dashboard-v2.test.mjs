@@ -267,7 +267,7 @@ test('charts: a time-range selector, expand, legend toggles per series, tooltips
   assert.match(week, /aria-current="true">7d/); assert.match(day, /aria-current="true">24h/); assert.match(month, /aria-current="true">30d/);
   const pts = b => (b.match(/<circle class="pt"/g) || []).length;
   assert.ok(pts(day) > 0 && pts(day) < pts(week) && pts(week) < pts(month), `${pts(day)} < ${pts(week)} < ${pts(month)}`);
-  assert.match(week, /<button type="button" aria-pressed="true" data-series="claude 5-hour">/); assert.match(week, /<g data-series="claude 5-hour">/); assert.match(week, /<title>claude 5-hour: 30% at /);
+  assert.match(week, /<button type="button" aria-pressed="true" data-series="claude 5-hour">/); assert.match(week, /<g data-series="claude 5-hour">/); assert.match(week, /<title[^>]*>claude 5-hour: 30% at /);
   assert.match(week, /data-expand/); assert.match(week, /stroke="var\(--claude\)"/); assert.match(week, /stroke="var\(--codex\)"/);
   assert.match(week, /<svg viewBox="0 0 900 320" role="img" aria-label="allowance used over time">/, 'larger viewBox than the 520x170 of v1');
   assert.match((await s.get('/?range=24h')).body, /Allowance used \(24h\)/);

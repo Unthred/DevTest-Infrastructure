@@ -1,14 +1,22 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
-import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, countText, inRange, limitsOf, pillLinks, tableState, trail, versionStatus } from './dashui/logic.mjs';
+import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, limitsOf, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
 import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 
+import { agentLine } from './agentline.mjs';
+
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
+// Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
+// Times inside plain text (warnings, allowance notes) travel as a marker and become <time data-local> at render time.
+export const escT = text => localStamps(esc(text), lt);
+// SVG text cannot hold <time>: the script rewrites any [data-lms] element from its template (data-tpl, "{t}" = the time).
+const lms = (ms, tpl, timeOnly) => `data-lms="${ms}" data-tpl="${esc(tpl)}"${timeOnly ? ' data-tonly' : ''}`;
+export const lt = ms => (Number.isFinite(ms) ? `<time class="lt" datetime="${new Date(ms).toISOString()}" data-local>${esc(utc(ms))}</time>` : 'unknown');
 export const dur = ms => { if (!Number.isFinite(ms) || ms < 0) return 'unknown'; const m = Math.floor(ms / 60000); return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`; };
 const ago = (ms, now) => (Number.isFinite(ms) ? `${dur(now - ms)} ago` : 'never');
 const inFuture = (ms, now) => (Number.isFinite(ms) ? (ms > now ? `in ${dur(ms - now)}` : `${dur(now - ms)} ago`) : 'unknown');
@@ -62,7 +70,7 @@ export const icon = (name, cls = '') => `<svg class="icon ${cls}" aria-hidden="t
 const sprite = `<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>${Object.entries(ICONS).map(([n, d]) => `<symbol id="i-${n}" viewBox="0 0 24 24">${d}</symbol>`).join('')}</defs></svg>`;
 
 const sev = level => SEVERITIES[level] || SEVERITIES.info;
-export const badge = (level, text, extra = '') => `<span class="badge sev-${esc(level)} ${extra}">${icon(sev(level).icon)}${esc(text ?? sev(level).label)}</span>`;
+export const badge = (level, text, extra = '', html = false) => `<span class="badge sev-${esc(level)} ${extra}">${icon(sev(level).icon)}${html ? text : esc(text ?? sev(level).label)}</span>`;
 const stateSev = { running: 'ok', idle: 'info', paused: 'warning', blocked: 'action', unknown: 'warning' };
 const stateBadge = s => badge(stateSev[s] || 'info', ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[s] || s);
 const checksBadge = c => (c === 'green' ? badge('ok', 'CI green') : c === 'red' ? badge('action', 'CI failing') : c === 'pending' ? badge('info', 'CI running') : c ? badge('info', 'No CI') : '<span class="muted">–</span>');
@@ -146,16 +154,16 @@ function lineChart({ series, resets = [], expected = [], now, range, title }) {
   const t1 = now, t0 = Number.isFinite(RANGES[range]) ? now - RANGES[range] : Math.min(...pts.map(p => p.at));
   const x = t => L + ((t - t0) / (t1 - t0)) * (W - L - R), y = v => T + (1 - Math.min(1, Math.max(0, v))) * (H - T - B);
   let g = [0, 0.25, 0.5, 0.75, 1].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="gridline"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v * 100}%</text>`).join('');
-  for (let i = 0; i <= 4; i++) { const t = t0 + ((t1 - t0) * i) / 4; g += `<text x="${x(t)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}" class="ax">${esc(fmtAxisTime(t, range))}</text>`; }
-  for (const r of resets.filter(r => r.at >= t0)) g += `<line x1="${x(r.at)}" x2="${x(r.at)}" y1="${T}" y2="${H - B}" class="reset" data-series="reset"><title>${esc(r.window)} window reset ${esc(utc(r.at))}</title></line>`;
+  for (let i = 0; i <= 4; i++) { const t = t0 + ((t1 - t0) * i) / 4; g += `<text x="${x(t)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}" class="ax" ${lms(Math.round(t), '{t}', range === '24h')}>${esc(fmtAxisTime(t, range))}</text>`; }
+  for (const r of resets.filter(r => r.at >= t0)) g += `<line x1="${x(r.at)}" x2="${x(r.at)}" y1="${T}" y2="${H - B}" class="reset" data-series="reset"><title ${lms(r.at, `${r.window} window reset {t}`)}>${esc(r.window)} window reset ${esc(utc(r.at))}</title></line>`;
   const shownExpected = expected.filter(r => r.at >= t0 && r.at <= t1);
-  for (const r of shownExpected) g += `<line x1="${x(r.at).toFixed(1)}" x2="${x(r.at).toFixed(1)}" y1="${T}" y2="${H - B}" class="reset expected" data-series="expected"><title>${esc(r.window)} window expected to reset ${esc(utc(r.at))}: the reading before it has expired</title></line>`;
+  for (const r of shownExpected) g += `<line x1="${x(r.at).toFixed(1)}" x2="${x(r.at).toFixed(1)}" y1="${T}" y2="${H - B}" class="reset expected" data-series="expected"><title ${lms(r.at, `${r.window} window expected to reset {t}: the reading before it has expired`)}>${esc(r.window)} window expected to reset ${esc(utc(r.at))}: the reading before it has expired</title></line>`;
   for (const s of series) {
     if (!s.points.length) continue;
     // a gap (reading expired, then a new one) splits the line: nothing is drawn across the time no reading was current
     const segments = s.points.reduce((acc, p) => { if (p.gap || !acc.length) acc.push([]); acc.at(-1).push(p); return acc; }, []);
     g += `<g data-series="${esc(s.key)}">${segments.map(seg => `<polyline fill="none" stroke="${s.colour}" stroke-width="2.5" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ''} points="${seg.map(p => `${x(p.at).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ')}"/>`).join('')}`
-      + s.points.filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0).map(p => `<circle class="pt" tabindex="0" cx="${x(p.at).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="5" fill="${s.colour}"><title>${esc(s.label)}: ${pct(p.v)} at ${esc(utc(p.at))}</title></circle>`).join('') + '</g>';
+      + s.points.filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0).map(p => `<circle class="pt" tabindex="0" cx="${x(p.at).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="5" fill="${s.colour}"><title ${lms(p.at, `${s.label}: ${pct(p.v)} at {t}`)}>${esc(s.label)}: ${pct(p.v)} at ${esc(utc(p.at))}</title></circle>`).join('') + '</g>';
   }
   const items = [...series.filter(s => s.points.length).map(s => ({ key: s.key, label: s.label, colour: s.colour })), ...(resets.length ? [{ key: 'reset', label: 'Window reset', colour: 'var(--action)', marker: true }] : []), ...(shownExpected.length ? [{ key: 'expected', label: 'Expected reset (reading expired)', colour: 'var(--mut)', marker: true }] : [])];
   return `<figure class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">${g}</svg>${legend(items)}</figure>`;
@@ -243,43 +251,57 @@ function budgetBlock(view, name) {
   if (!b) return '';
   const sev = { normal: 'ok', reviews_only: 'warning', waiting: 'action' }[b.mode] || 'info', now = view.generatedAt;
   const proj = b.known ? `Weekly ${pct(b.used)} used, projected <b>${pct(b.projected)}</b> at reset (${esc(inFuture(b.resetsAt, now))}; rate from the ${esc(b.rateSource)})${b.runsOutAt && b.runsOutAt < b.resetsAt ? `; runs out ${esc(inFuture(b.runsOutAt, now))}` : ''}` : 'Weekly use unknown';
-  return `<div class="budget" data-mode="${esc(b.mode)}"><p>${badge(sev, b.label)}${b.mode !== 'normal' && b.until ? ` <span class="sub">until ${esc(utc(b.until))}</span>` : ''}</p><p class="sub">${proj}</p>${b.reason ? `<p class="sub">Why: ${esc(b.reason)}</p>` : ''}${Object.entries(b.held || {}).map(([t, w]) => `<p class="sub">Held back (${esc(t)}): ${esc(w)}</p>`).join('')}</div>`;
+  return `<div class="budget" data-mode="${esc(b.mode)}"><p>${badge(sev, b.label)}${b.mode !== 'normal' && b.until ? ` <span class="sub">until ${lt(b.until)}</span>` : ''}</p><p class="sub">${proj}</p>${b.reason ? `<p class="sub">Why: ${esc(b.reason)}</p>` : ''}${Object.entries(b.held || {}).map(([t, w]) => `<p class="sub">Held back (${esc(t)}): ${esc(w)}</p>`).join('')}</div>`;
 }
 // Issue #156: the estimated finish with its basis on hover; waits Foreman knows about get their own time.
 const estFor = (view, kind, ref) => view.estimates?.items?.[`${kind}:${ref}`] || null;
-function estHtml(e) {
+function estHtml(e, tz = 'UTC') {
   if (!e) return '';
   const tip = (e.basis || []).join('\n');
-  return `<div class="sub est" data-est="${esc(e.status)}" title="${esc(tip)}">${icon('clock')} ${esc(e.text)}${(e.waits || []).map(w => ` <span class="est-wait" data-wait="${esc(w.kind)}">${esc(w.text)}</span>`).join('')}</div>`;
+  return `<div class="sub est" data-est="${esc(e.status)}" title="${esc(tip)}">${icon('clock')} ${esc(e.text)} <span class="tzl">(${esc(tz)})</span>${(e.waits || []).map(w => ` <span class="est-wait" data-wait="${esc(w.kind)}">${esc(w.text)}</span>`).join('')}</div>`;
 }
-const globalWaitsHtml = view => (view.estimates?.waits || []).map(w => `<p class="sub est-wait" data-wait="${esc(w.kind)}">${icon('clock')} ${esc(w.text)}</p>`).join('');
+const globalWaitsHtml = view => (view.estimates?.waits || []).map(w => `<p class="sub est-wait" data-wait="${esc(w.kind)}">${icon('clock')} ${esc(w.text)} <span class="tzl">(${esc(view.tz || 'UTC')})</span></p>`).join('');
+// Issue #76: when nothing is planned, say why. Counts link to the Work lists, filtered.
+function nextWhyHtml(view) {
+  const w = view.panels.nextWhy; if (!w) return '';
+  const li = [];
+  for (const b of w.busy) li.push(`<li>${agentTag(b.agent, view)} is busy: ${esc(b.job)}</li>`);
+  for (const p of w.paused) li.push(`<li>${agentTag(p.agent, view)} is paused${p.job ? `: ${esc(p.job)}` : ''}${p.resumeAt ? `, resumes about ${lt(p.resumeAt)}` : ''}</li>`);
+  if (w.blocked) li.push(`<li><a href="/work?issues.show=blocked">${w.blocked} queued item${w.blocked === 1 ? '' : 's'} blocked by dependencies</a></li>`);
+  if (w.waitingReview) li.push(`<li><a href="/work?prs.show=awaiting-review">${w.waitingReview} waiting for review</a></li>`);
+  return `<div class="why" data-why><p class="sub">Nothing is planned because:</p>${li.length ? `<ul class="panel-list">${li.join('')}</ul>` : '<p class="sub">no agent has work waiting.</p>'}</div>`;
+}
 function nextPanel(view) {
   const now = view.generatedAt, plan = view.panels.next;
   const when = view.nextTickAt ? `<p class="sub">${icon('clock')} Next tick <b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b></p>` : '<p class="sub">No tick is scheduled: the team loop is off or has never run.</p>';
-  return `${when}${globalWaitsHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref))}${p.reassignedFrom ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
+  return `${when}${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref), view.tz)}${p.reassignedFrom ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${esc(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
+  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 function warningsPanel(view) {
   const unknown = view.agents.filter(a => a.state === 'unknown');
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
-  return items.length ? `${copyAllBtn(items, 'warnings')}<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
+  return items.length ? `${copyAllBtn(items, 'warnings')}<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
+// Issue #76: each agent's own state and reason, from the same sentence `team status` prints (agentline.mjs).
+const TIME_MARK = /\u0001(\d+)\u0002/g;
+const agentStat = view => `<div class="stat agent-lines" aria-label="Agents"><ul>${view.agents.map(a => `<li data-agent="${esc(a.name)}" data-state="${esc(a.state)}">${stateBadge(a.state)} <span><b>${esc(a.name)}</b>: ${esc(agentLine(a, ms => `\u0001${ms}\u0002`)).replace(TIME_MARK, (_, ms) => lt(Number(ms)))}</span></li>`).join('')}</ul></div>`;
 function statusBar(view, route, head = '') {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
   const L = pillLinks({ health: view.health, attention: view.attention, version: v }), vs = versionStatus(v);
   const pill = (href, inner, why) => `<a class="pill" href="${esc(href)}" title="${esc(why)}">${inner}</a>`;
   return `<header class="statusbar" role="banner"><div class="brand">${icon('pulse')} DevTest team</div>${head}
-<div class="stat" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>
+${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
+${agentStat(view)}
 <div class="stat"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat"><span class="k">Next</span>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : '<span class="muted">none</span>'}</div>
 <div class="stat"><span class="k">Data</span>${pill(L.data, badge(fr.level, fr.label), 'Data freshness follows the last tick')}</div>
 <div class="stat"><span class="k">Team loop</span>${pill(L.team, view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled'), 'Open the dispatcher facts')}</div>
-<div class="stat"><span class="k">Version</span>${pill(vs.href, badge(vs.level, vs.label), 'Open the version health card')}</div>
+<div class="stat"><span class="k">Version</span>${pill(vs.href, badge(vs.level, escT(vs.label), '', true), 'Open the version health card')}</div>
 <button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>
 <nav class="nav" id="nav" aria-label="Pages"><button type="button" class="dock-handle wide-only" data-dock-handle aria-label="Dock the navigation: arrow keys move it to a screen edge, Home resets it" title="Drag to a screen edge to dock the navigation, or use the arrow keys">${icon('drag')}</button>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
 }
@@ -289,13 +311,13 @@ function sincePanel(view, query) {
   const sv = view.since, now = view.generatedAt;
   const range = Object.hasOwn(SINCE_RANGES, query.get('since')) ? query.get('since') : DEFAULT_SINCE, r = sv.ranges[range];
   const picker = `<div class="ranges" role="group" aria-label="Summary range">${Object.entries(SINCE_RANGES).map(([k, label]) => `<a href="${esc(withQuery('/', query, { since: k === DEFAULT_SINCE ? null : k }))}"${k === range ? ' aria-current="true"' : ''}>${esc(label)}</a>`).join('')}</div>`;
-  const when = sv.lastSeen === null ? 'never marked as read' : utc(sv.lastSeen);
+  const when = sv.lastSeen === null ? 'never marked as read' : lt(sv.lastSeen);
   const total = SECTIONS.slice(0, 5).reduce((n, [k]) => n + r[k].length, 0);
   const item = i => `<li>${i.url ? `<a href="${esc(i.url)}">${esc(i.text)}</a>` : esc(i.text)}${Number.isFinite(i.at) ? ` <span class="muted">${esc(ago(i.at, now))}</span>` : ''}</li>`;
   const sections = SECTIONS.map(([k, label]) => `<div class="since-sec"><h3>${esc(label)} <span class="muted">(${r[k].length})</span></h3>${r[k].length ? `<ul class="since-list">${r[k].slice(0, 30).map(item).join('')}${r[k].length > 30 ? `<li class="muted">and ${r[k].length - 30} more</li>` : ''}</ul>` : '<p class="muted">None</p>'}</div>`).join('');
-  const body = `<div class="since-head"><span>Showing ${esc(r.label.toLowerCase())}, from ${esc(utc(r.from))}${r.fallback ? ' (you have not marked anything as read yet, so this is the last 24 h)' : ''}.</span>${copyBtn(r.text, 'the summary', { label: 'Copy summary' })}<form method="post" action="/mark-read" class="since-mark"><input type="hidden" name="at" value="${esc(now)}"><button class="btn" type="submit">Mark as read</button></form></div>
+  const body = `<div class="since-head"><span>Last marked as read: ${when}. Showing ${esc(r.label.toLowerCase())}, from ${lt(r.from)}${r.fallback ? ' (you have not marked anything as read yet, so this is the last 24 h)' : ''}.</span>${copyBtn(r.text, 'the summary', { label: 'Copy summary' })}<form method="post" action="/mark-read" class="since-mark"><input type="hidden" name="at" value="${esc(now)}"><button class="btn" type="submit">Mark as read</button></form></div>
 <p class="since-tokens">Tokens used: <b>${r.tokens === null ? 'unknown' : esc(num(r.tokens))}</b> <span class="muted">across ${r.tokenJobs} job${r.tokenJobs === 1 ? '' : 's'}</span></p>${total || r.needsYou.length ? '' : '<p class="muted">Nothing has happened in this range.</p>'}<div class="since-grid">${sections}</div>`;
-  return card({ id: 'since', title: `Since you were last here (${when})`, span: 12, tools: picker, body, cls: 'panel since', type: 'panel' });
+  return card({ id: 'since', title: 'Since you were last here', span: 12, tools: picker, body, cls: 'panel since', type: 'panel' });
 }
 
 // ---- pages
@@ -346,7 +368,7 @@ function jobCols(view, { agent = true } = {}) {
     { key: 'status', label: 'Status', html: r => badge(({ completed: 'ok', running: 'ok', queued: 'info', paused_limit: 'warning', paused_manual: 'warning', blocked: 'action', failed: 'action' })[r.status] || 'info', r.status) },
     { key: 'model', label: 'Model', html: r => esc(r.model || 'default'), more: true }, { key: 'effort', label: 'Effort', html: r => esc(r.effort || 'default'), more: true },
     { key: 'reassignedFrom', label: 'Reassigned from', html: r => (r.reassignedFrom ? `<span title="${esc(r.reassignReason)}">${esc(r.reassignedFrom)}</span>` : '–'), more: true },
-    { key: 'attempts', label: 'Attempts', num: true, more: true, totals: 'avg' }, { key: 'startedAt', label: 'Started', num: true, html: r => esc(utc(r.startedAt)), more: true },
+    { key: 'attempts', label: 'Attempts', num: true, more: true, totals: 'avg' }, { key: 'startedAt', label: 'Started', num: true, html: r => lt(r.startedAt), more: true },
     { key: 'elapsedMs', label: 'Elapsed', num: true, html: r => esc(dur(r.elapsedMs)), more: true },
     { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true, total: 'sum' }
   ];
@@ -381,16 +403,17 @@ function jobDetail(view, query, path, route) {
   const ref = REFS.job[j.id];
   const subject = j.ref ? (['implement', 'continue'].includes(j.kind) ? issueLink(j.ref) : prLink(j.ref)) : '–';
   const facts = card({ id: 'facts', title: j.full || j.name, span: 12, movable: false, body: `<dl class="kv"><dt>Job</dt><dd>${idCopy(j.id, j.fullId, 'job ID')}</dd><dt>Agent</dt><dd>${agentTag(j.agent, view)}</dd><dt>Type</dt><dd>${esc(j.kind)}</dd><dt>Work</dt><dd>${subject}</dd>
-<dt>Status</dt><dd>${esc(j.status)}</dd><dt>Attempts</dt><dd>${Number(j.attempts)}</dd><dt>Model</dt><dd>${esc(j.model || 'default')}</dd><dt>Started</dt><dd>${esc(utc(j.startedAt))}</dd><dt>Elapsed</dt><dd>${esc(dur(j.elapsedMs))}</dd><dt>Tokens</dt><dd>${esc(num(j.tokens))}</dd></dl>${j.overseer ? `<div class="acts">${overseerBtn(j.overseer)}</div>` : ''}` });
+<dt>Status</dt><dd>${esc(j.status)}</dd><dt>Attempts</dt><dd>${Number(j.attempts)}</dd><dt>Model</dt><dd>${esc(j.model || 'default')}</dd><dt>Started</dt><dd>${lt(j.startedAt)}</dd><dt>Elapsed</dt><dd>${esc(dur(j.elapsedMs))}</dd><dt>Tokens</dt><dd>${esc(num(j.tokens))}</dd></dl>${j.overseer ? `<div class="acts">${overseerBtn(j.overseer)}</div>` : ''}` });
   return { title: ref ? ref.text : j.name, crumbs: [['/work', 'Work'], [null, ref ? ref.text : j.name]], body: grid('job', facts, 'fit') };
 }
+const showChip = (path, query, key, value, text) => (query.get(key) === value ? `<p class="chips"><span class="chip on">${esc(text)}</span> <a class="btn" href="${esc(withQuery(path, query, { [key]: null }))}">Show all</a></p>` : '');
 function workPage(view, query, path) {
-  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref))}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
-  const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'],
+  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
+  const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: showChip(path, query, 'issues.show', 'blocked', 'Showing only open issues blocked by dependencies') + table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.filter(i => query.get('issues.show') !== 'blocked' || (i.state === 'OPEN' && i.blockedBy.length)).map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'],
     cols: [{ key: 'number', label: 'Issue', num: true, html: r => issueLink(r.number) }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
     totals: { number: 'count', blockers: 'sum' }, emptyState: empty('No issues cached', 'The first tick fills the cache.', 'list') }) });
-  const prs = card({ id: 'prs', title: 'Pull requests', span: 12, movable: false, body: table({ id: 'prs', path, query, noun: 'pull requests', rows: view.prs, searchKeys: ['name', 'title', 'agent', 'status', 'number', 'verdict'],
+  const prs = card({ id: 'prs', title: 'Pull requests', span: 12, movable: false, body: showChip(path, query, 'prs.show', 'awaiting-review', 'Showing only pull requests waiting for review') + table({ id: 'prs', path, query, noun: 'pull requests', rows: view.prs.filter(p => query.get('prs.show') !== 'awaiting-review' || p.awaitingReview), searchKeys: ['name', 'title', 'agent', 'status', 'number', 'verdict'],
     cols: [{ key: 'number', label: 'Pull request', num: true, html: r => prLink(r.number) }, { key: 'agent', label: 'Author', html: r => agentTag(r.agent, view) }, { key: 'status', label: 'State' },
       { key: 'checks', label: 'CI', html: r => checksBadge(r.checks) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'reviewRounds', label: 'Review rounds', num: true, more: true },
       { key: 'fixRounds', label: 'Fix rounds', num: true, more: true }, { key: 'rebaseRounds', label: 'Rebase rounds', num: true, more: true }, { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true }],
@@ -404,8 +427,8 @@ function prDetail(view, query, path, route) {
   if (!p) return null;
   const facts = card({ id: 'facts', title: p.full || p.name, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(p.status)}</dd><dt>Author</dt><dd>${agentTag(p.agent, view)}</dd><dt>CI</dt><dd>${checksBadge(p.checks)}</dd><dt>Latest verdict</dt><dd>${verdictBadge(p.verdict)}</dd>${p.carry ? `<dt>Carried verdict</dt><dd>${esc(`${String(p.carry.oldHead).slice(0, 7)} → ${String(p.carry.newHead).slice(0, 7)}`)}${p.carry.valid ? '' : ' (record does not match this head)'}<br>${esc(`no conflict resolved: ${p.carry.evidence.resolvedConflicts === false ? 'yes' : 'not shown'}; patch unchanged: ${p.carry.evidence.patchUnchanged === true ? 'yes' : 'not shown'}; CI: ${p.carry.evidence.ci || 'unknown'}`)}</dd>` : ''}
 <dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd></dl>` });
-  const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${esc(utc(r.at))}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
-  const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)}${v.model ? ` <span class="sub">(${esc(v.model)})</span>` : ''} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${esc(utc(v.at))}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
+  const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${lt(r.at)}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
+  const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)}${v.model ? ` <span class="sub">(${esc(v.model)})</span>` : ''} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${lt(v.at)}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
   const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
   return { title: p.name || `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, p.name || `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs, 'fit') };
 }
@@ -441,37 +464,60 @@ function timelinePage(view, query, path) {
   const form = `<form class="tbl-bar" method="get" action="${esc(path)}" aria-label="Timeline filters"><label>Type <select name="kind">${opt('', f.kind, 'All')}${Object.entries(KIND_LABEL).map(([k, v]) => opt(k, f.kind, v)).join('')}</select></label> <label>Agent <select name="agent">${opt('', f.agent, 'All')}${agents.map(a => opt(a, f.agent, a)).join('')}</select></label> <label>Issue or PR <input name="ref" value="${esc(f.ref)}" size="6" inputmode="numeric"></label> <label>From <input type="date" name="from" value="${esc(f.from)}"></label> <label>To <input type="date" name="to" value="${esc(f.to)}"></label> <button type="submit" class="btn">Filter</button> <a class="btn" href="${esc(path)}">Clear</a></form>`;
   const first = h.timeline[0]?.at;
   const gaps = h.gaps || [];
-  const gapBody = gaps.length ? `<p class="sub">Foreman shows only what it stored; these periods have no stored tick-level data and are not filled in.</p><ul class="panel-list">${gaps.slice(-50).reverse().map(g => `<li class="sev-info"><div class="t">${esc(utc(g.from))} to ${esc(utc(g.to))}: ${esc(g.reason)}</div></li>`).join('')}</ul>${gaps.length > 50 ? `<p class="sub">${gaps.length - 50} older gaps not listed.</p>` : ''}` : empty('No known gaps', 'Every period since the first record has tick data.', 'check');
+  const gapBody = gaps.length ? `<p class="sub">Foreman shows only what it stored; these periods have no stored tick-level data and are not filled in.</p><ul class="panel-list">${gaps.slice(-50).reverse().map(g => `<li class="sev-info"><div class="t">${lt(g.from)} to ${lt(g.to)}: ${esc(g.reason)}</div></li>`).join('')}</ul>${gaps.length > 50 ? `<p class="sub">${gaps.length - 50} older gaps not listed.</p>` : ''}` : empty('No known gaps', 'Every period since the first record has tick data.', 'check');
   const tbl = table({ id: 'tl', path, query, noun: 'events', rows, searchKeys: ['text'],
-    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'kind', label: 'Type', html: r => esc(r.kind) }, { key: 'agent', label: 'Agent', html: r => esc(r.agent || '–') }, { key: 'text', label: 'What', html: r => trunc(r.text) }, { key: 'source', label: 'Source', html: r => esc(r.source) }, { key: 'link', label: 'On GitHub', sortable: false, html: r => (r.link ? ext(r.link.url, r.link.text) : '') }],
+    cols: [{ key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'kind', label: 'Type', html: r => esc(r.kind) }, { key: 'agent', label: 'Agent', html: r => esc(r.agent || '–') }, { key: 'text', label: 'What', html: r => trunc(r.text) }, { key: 'source', label: 'Source', html: r => esc(r.source) }, { key: 'link', label: 'On GitHub', sortable: false, html: r => (r.link ? ext(r.link.url, r.link.text) : '') }],
     totals: { text: 'count' }, emptyState: empty('No activity matches', 'Nothing in the retained history matches these filters.', 'pulse') });
   return { title: 'Activity timeline', crumbs, body: grid('activity', storageCard(view) + card({ id: 'tl-gaps', title: `Known gaps (${gaps.length})`, span: 12, movable: false, body: gapBody })
     + card({ id: 'tl', title: `Activity timeline${first ? ` since ${utc(first)}` : ''} (${shown.length} of ${h.timeline.length})`, span: 12, movable: false, body: form + tbl })) };
+}
+// Issue #76: idle ticks collapse into one row (expand with act.open=<time>, no script needed); filter chips by agent, outcome and job
+// kind combine and live in the URL (act.agent, act.outcome, act.kind). Collapsing happens before filtering, so a busy tick that a
+// filter hides still separates two idle runs.
+function activityChips(view, rows, query, path) {
+  const groups = [['agent', 'Agent', r => r.agent], ['outcome', 'Outcome', r => r.outcome], ['kind', 'Job kind', r => r.jobKind]];
+  return `<div class="chipbar" role="group" aria-label="Activity filters">${groups.map(([key, label, get]) => {
+    const values = [...new Set(rows.map(get).filter(Boolean))].sort(), on = query.get(`act.${key}`);
+    if (on && !values.includes(on)) values.push(on);
+    return `<div class="chipgroup"><span class="k">${label}</span> ${values.map(v => `<a class="chip${on === v ? ' on' : ''}" href="${esc(withQuery(path, query, { [`act.${key}`]: on === v ? null : v, 'act.page': null, 'act.open': null }))}" aria-pressed="${on === v}">${esc(v)}</a>`).join(' ')}</div>`;
+  }).join('')}${ACTIVITY_FILTERS.some(k => query.get(`act.${k}`)) ? `<a class="btn" href="${esc(withQuery(path, query, { 'act.agent': null, 'act.outcome': null, 'act.kind': null, 'act.page': null }))}">Clear filters</a>` : ''}</div>`;
 }
 function activityPage(view, query, path) {
   const grouped = query.get('group') === 'issue';
   const toggle = `<p class="sub"><a href="/activity/timeline">Full activity timeline since the first job</a> · View: ${grouped ? `<a href="${esc(withQuery(path, query, { group: null }))}">Timeline</a> · <b>Group by issue</b>` : `<b>Timeline</b> · <a href="${esc(withQuery(path, query, { group: 'issue' }))}">Group by issue</a>`}</p>`;
   if (grouped) {
     const tls = view.issueTimelines || [];
-    const body = tls.length ? tls.map(t => `<section class="issue-story"><h3>${named(`/work/issue/${t.number}`, { text: t.name, full: t.full }, `#${t.number}`)}</h3><ol class="tl">${t.events.map(e => `<li><b>${esc(utc(e.at))}</b><br>${trunc(e.text)}${e.link ? ` <a href="${esc(e.link.url)}">job page</a>` : ''}</li>`).join('')}</ol></section>`).join('') : empty('No activity yet', 'Issue timelines appear after the first job.', 'pulse');
+    const body = tls.length ? tls.map(t => `<section class="issue-story"><h3>${named(`/work/issue/${t.number}`, { text: t.name, full: t.full }, `#${t.number}`)}</h3><ol class="tl">${t.events.map(e => `<li><b>${lt(e.at)}</b><br>${trunc(e.text)}${e.link ? ` <a href="${esc(e.link.url)}">job page</a>` : ''}</li>`).join('')}</ol></section>`).join('') : empty('No activity yet', 'Issue timelines appear after the first job.', 'pulse');
     return { title: 'Activity by issue', crumbs: [['/activity', 'Activity'], [null, 'By issue']], body: grid('activity', card({ id: 'act', title: `Issues (${tls.length})`, span: 12, movable: false, body: toggle + body })) };
   }
-  const rows = view.activity.map(r => ({ at: r.at, text: r.text, link: r.link, transcript: r.transcript }));
-  return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (last ${rows.length})`, span: 12, movable: false, body: toggle + table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text'],
-    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'text', label: 'What', html: r => trunc(r.text) }, { key: 'link', label: 'Job page', sortable: false, html: r => (r.link ? ext(r.link.url, 'open') : '') + (r.transcript ? ` <a href="/jobs/${esc(r.transcript)}">transcript</a>` : '') }], totals: { text: 'count' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') }) })) };
+  const collapsed = collapseIdle(view.activity.map(r => ({ ...r })));
+  const open = Number(query.get('act.open'));
+  const rows = filterActivity(collapsed, activityFilters(query)).flatMap(r => (r.kind === 'idle-run' && r.at === open ? [r, ...r.ticks.map(t => ({ ...t, child: true }))] : [r]));
+  const what = r => {
+    if (r.kind !== 'idle-run') return `${r.child ? '<span class="muted">↳</span> ' : ''}${esc(r.text)}`;
+    const o = r.at === open;
+    return `${r.count} idle ticks, ${lt(r.from)} to ${lt(r.to)} <a class="btn" href="${esc(withQuery(path, query, { 'act.open': o ? null : r.at }))}" aria-expanded="${o}">${o ? 'Hide' : 'Show'}</a>`;
+  };
+  const cols = [{ key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
+    { key: 'jobKind', label: 'Job kind', html: r => esc(r.jobKind || '–') }, { key: 'outcome', label: 'Outcome', html: r => esc(r.outcome || '–') },
+    { key: 'durationMs', label: 'Duration', num: true, html: r => esc(Number.isFinite(r.durationMs) ? dur(r.durationMs) : '–') },
+    { key: 'tokens', label: 'Tokens', num: true, html: r => esc(Number.isFinite(r.tokens) ? num(r.tokens) : '–') },
+    { key: 'text', label: 'What', html: what }, { key: 'link', label: 'Link', sortable: false, html: r => (r.link ? ext(r.link.url, r.link.text) : '') + (r.transcript ? ` <a href="/jobs/${esc(r.transcript)}">transcript</a>` : '') }];
+  const body = toggle + activityChips(view, collapsed, query, path) + table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text', 'agent', 'outcome', 'jobKind'], cols, totals: { text: 'count', tokens: 'sum' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') });
+  return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (${rows.filter(r => !r.child).length} rows from ${view.activity.length} events)`, span: 12, movable: false, body })) };
 }
 // One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
 // marked and never shown as current; a limit pause says when it resets and on what basis.
 const SOURCE = { job: 'reported to a supervised job', 'session-log': 'read from the local Codex session log (no model call)' };
 function allowanceBody(u, now) {
   const l = u.limit;
-  const limit = l ? `<p class="limit">${badge('action', 'Paused on a usage limit')} ${l.limiting ? `${esc(l.limiting)}. ` : ''}${l.resetsAt ? `resets <b>${esc(utc(l.resetsAt))}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
+  const limit = l ? `<p class="limit">${badge('action', 'Paused on a usage limit')} ${l.limiting ? `${esc(l.limiting)}. ` : ''}${l.resetsAt ? `resets <b>${lt(l.resetsAt)}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
   if (!u.windows.length) return `${limit}<p>Allowance: <b>unknown</b></p>${empty('No allowance reported', 'The provider has never reported a limit window to the supervisor.', 'info')}`;
   const used = w => (Number.isFinite(w.utilization) ? `<div class="bar${w.expired ? ' expired' : ''}" role="img" aria-label="${pct(w.utilization)} used${w.expired ? ', expired' : ''}"><b style="width:${Math.min(100, w.utilization * 100)}%"></b></div> ${pct(w.utilization)}${w.expired ? ' <span class="muted">(expired)</span>' : ''}` : 'unknown');
   const resets = w => (!w.resetsAt ? 'unknown' : w.expired ? `reset ${esc(dur(now - w.resetsAt))} ago; current use unknown` : esc(inFuture(w.resetsAt, now)));
   const rows = u.windows.map(w => `<tr${w.expired ? ' class="expired"' : ''}><td>${esc(w.label)}</td><td>${used(w)}</td><td>${resets(w)}</td></tr>`).join('');
   const note = u.allExpired ? `<p class="sub">${badge('warning', 'Expired')} Every window in this reading has reset since; current use is unknown until the provider reports again.</p>` : '';
-  return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${esc(utc(u.observedAt))}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>`;
+  return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${lt(u.observedAt)}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>`;
 }
 function usagePage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
@@ -506,17 +552,17 @@ function reviewsPage(view, query, path) {
   const rows = view.verdicts.map(r => ({ ...r, findingCount: r.findings.length }));
   const t = card({ id: 'r-t', title: 'Verdict history', span: 12, movable: false, body: table({ id: 'rev', path, query, noun: 'verdicts', rows, searchKeys: ['pr', 'reviewer', 'verdict', 'head'], totals: { pr: 'count', findingCount: 'avg' },
     cols: [{ key: 'pr', label: 'PR', num: true, html: r => prLink(r.pr) }, { key: 'reviewer', label: 'Reviewer', html: r => agentTag(r.reviewer, view) }, { key: 'model', label: 'Model', html: r => (r.model ? esc(r.model) : '<span class="muted">unknown</span>') }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'head', label: 'Head', html: r => (r.fullHead ? shaCopy(r.fullHead) : `<span class="mono">${sha7(r.head)}</span>`), more: true },
-      { key: 'findingCount', label: 'Findings', num: true }, { key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)), more: true }], emptyState: empty('No reviews yet', 'Verdicts appear after the first review.', 'review') }) });
+      { key: 'findingCount', label: 'Findings', num: true }, { key: 'at', label: 'When', num: true, html: r => lt(r.at), more: true }], emptyState: empty('No reviews yet', 'Verdicts appear after the first review.', 'review') }) });
   return { title: 'Reviews', body: grid('reviews', v + m + t) };
 }
 function systemPage(view) {
   const t = view.tick, v = view.version, now = view.generatedAt;
   const facts = card({ id: 'sys', title: 'Dispatcher', span: 6, movable: false, body: `<dl class="kv"><dt>Repository</dt><dd>${esc(view.repository)}</dd><dt>Team loop</dt><dd>${view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled')}</dd>
-<dt>Health</dt><dd>${badge(view.health.severity, view.health.label)}</dd><dt>Last tick</dt><dd>${t ? `${badge(t.status === 'ok' ? 'ok' : 'action', t.status)} ${esc(utc(t.at))} (${esc(ago(t.at, now))})` : badge('action', 'none recorded')}</dd>
+<dt>Health</dt><dd>${badge(view.health.severity, view.health.label)}</dd><dt>Last tick</dt><dd>${t ? `${badge(t.status === 'ok' ? 'ok' : 'action', t.status)} ${lt(t.at)} (${esc(ago(t.at, now))})` : badge('action', 'none recorded')}</dd>
 <dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : 'none'}</dd>
-<dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${esc(utc(now))}</dd></dl>` });
-  const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${(vs => badge(vs.level, vs.label))(versionStatus(v))}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
-  const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${esc(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
+<dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${lt(now)}</dd></dl>` });
+  const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${(vs => badge(vs.level, escT(vs.label), '', true))(versionStatus(v))}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
+  const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
   return { title: 'System', body: grid('system', facts + ver + all) };
 }
 
@@ -538,24 +584,24 @@ function healthBody(c, view) {
   let dl = '';
   if (c.id === 'version') {
     const u = c.lastUpgrade;
-    dl = `<dt>Installed</dt><dd>${shaCopy(c.installed)}${c.installedAt ? ` <span class="sub">since ${esc(utc(c.installedAt))}</span>` : ''}</dd><dt>origin/main</dt><dd>${shaCopy(c.origin)}</dd>
+    dl = `<dt>Installed</dt><dd>${shaCopy(c.installed)}${c.installedAt ? ` <span class="sub">since ${lt(c.installedAt)}</span>` : ''}</dd><dt>origin/main</dt><dd>${shaCopy(c.origin)}</dd>
 <dt>Upgrade step</dt><dd>${esc(c.step || 'not reported')}</dd>
 <dt>Last install</dt><dd>${c.install ? `${badge(c.install.severity, c.install.result)}${c.install.sha ? ` ${shaCopy(c.install.sha)}` : ''}${c.install.at ? ` <span class="sub">${esc(ago(c.install.at, now))}</span>` : ''}${c.install.reason ? `<br>${errCopy(c.install.reason)}` : ''}` : '<span class="muted">no record</span>'}</dd>
-<dt>Next attempt</dt><dd>${c.install?.nextAttemptAt ? esc(utc(c.install.nextAttemptAt)) : '<span class="muted">none scheduled</span>'}</dd>
+<dt>Next attempt</dt><dd>${c.install?.nextAttemptAt ? lt(c.install.nextAttemptAt) : '<span class="muted">none scheduled</span>'}</dd>
 <dt>Last upgrade</dt><dd>${u ? `${badge(resultSeverity(u.result), u.result)} ${shaCopy(u.from)} → ${shaCopy(u.to)} <span class="sub">${esc(ago(u.at, now))}</span>${u.reason ? `<br>${errCopy(u.reason)}` : ''}` : '<span class="muted">no record</span>'}</dd>
-<dt>Pre-check latched</dt><dd>${list(c.prechecked.map(p => `<li>${shaCopy(p.sha)} since ${esc(utc(p.at))}${p.isMain ? ` ${badge('warning', 'is origin/main')}` : ''}</li>`))}</dd>
+<dt>Pre-check latched</dt><dd>${list(c.prechecked.map(p => `<li>${shaCopy(p.sha)} since ${lt(p.at)}${p.isMain ? ` ${badge('warning', 'is origin/main')}` : ''}</li>`))}</dd>
 ${c.latch ? `<dt>Rollback latch</dt><dd>${badge('action', 'Set')} ${errCopy(c.latch.reason)}</dd>` : ''}${c.pending ? `<dt>Pending</dt><dd>${shaCopy(c.pending.to)} awaiting a live tick</dd>` : ''}`;
   } else if (c.id === 'tick') {
     const t = c.tick;
-    dl = t ? `<dt>When</dt><dd>${esc(utc(t.at))} <span class="sub">(${esc(ago(t.at, now))}${c.stale ? ', more than two intervals' : ''})</span></dd><dt>Status</dt><dd>${tickStatusBadge(t.status)}</dd>
+    dl = t ? `<dt>When</dt><dd>${lt(t.at)} <span class="sub">(${esc(ago(t.at, now))}${c.stale ? ', more than two intervals' : ''})</span></dd><dt>Status</dt><dd>${tickStatusBadge(t.status)}</dd>
 <dt>Verdicts ingested</dt><dd>${t.ingested.length}</dd><dt>Actions</dt><dd>${list(t.actions.map(a => `<li>${esc(a.agent)} ${esc(a.type === 'cifix' ? 'fix CI' : a.type)} ${tickRef(a)}</li>`))}</dd>
 <dt>Skipped</dt><dd>${t.note ? esc(t.note) : list(t.skipped.map(s => `<li><b>${esc(s.what)}</b>: ${errCopy(s.reason)}</li>`))}</dd>` : '';
   } else if (c.id === 'leases') {
     const odd = c.leases.filter(l => l.state !== 'active');
     dl = `<dt>Held</dt><dd>${c.leases.length} job(s)</dd><dt>Needs recovery</dt><dd>${odd.length ? list(odd.map(l => `<li>${badge(l.state === 'stale' ? 'action' : 'warning', l.state === 'stale' ? 'Stale' : 'Held')} job ${idCopy(l.job.slice(0, 8), l.job, 'job ID')} ${esc(l.reason)}${l.command ? cmdBlock(l.command) : ''}</li>`)) : '<span class="muted">none</span>'}</dd>`;
   } else if (c.id === 'errors') {
-    dl = `<dt>Count</dt><dd>${c.count}</dd><dt>Since</dt><dd>${c.since ? esc(utc(c.since)) : 'the start of the log'}</dd>
-<dt>Latest</dt><dd>${c.latest ? `<span class="sub">${esc(utc(c.latest.at))}</span><br>${errCopy(c.latest.text)}` : '<span class="muted">none</span>'}</dd>`;
+    dl = `<dt>Count</dt><dd>${c.count}</dd><dt>Since</dt><dd>${c.since ? lt(c.since) : 'the start of the log'}</dd>
+<dt>Latest</dt><dd>${c.latest ? `<span class="sub">${lt(c.latest.at)}</span><br>${errCopy(c.latest.text)}` : '<span class="muted">none</span>'}</dd>`;
   } else if (c.id === 'drift') {
     dl = `<dt>Local main</dt><dd>${shaCopy(c.local)}</dd><dt>origin/main</dt><dd>${shaCopy(c.origin)}${c.fetchedAt ? ` <span class="sub">fetched ${esc(ago(c.fetchedAt, now))}</span>` : ''}</dd><dt>Checked out</dt><dd>${esc(c.head || 'unknown')}</dd>`;
   }
@@ -572,7 +618,7 @@ function supervisorPage(view, query, path) {
       { key: 'reason', label: 'Why', more: true, html: r => `${esc(r.reason)}${r.command ? cmdBlock(r.command) : ''}` }],
     totals: { job: 'count' }, emptyState: empty('No lease held', 'Leases appear while a supervised job owns an issue or worktree.', 'check') }) });
   const recent = s.ticks.slice(-5).reverse();
-  const ticks = card({ id: 'h-recent', title: 'Recent ticks', span: 12, movable: false, href: '/supervisor/ticks', body: recent.length ? `<ul class="panel-list">${recent.map(t => `<li class="sev-${({ ok: 'ok', partial: 'warning', error: 'action' })[t.status] || 'info'}"><div class="t">${tickStatusBadge(t.status)} ${esc(utc(t.at))} <span class="sub">${esc(ago(t.at, view.generatedAt))}</span></div><div class="sub">${t.ingested.length} verdict(s), ${t.actions.length} action(s), ${t.skipped.length} skipped${t.errors.length ? `, ${t.errors.length} error(s)` : ''}${t.selfUpgrade ? `, self-upgrade ${esc(t.selfUpgrade)}` : ''}</div></li>`).join('')}</ul><p class="sub"><a href="/supervisor/ticks">Full tick history</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>`
+  const ticks = card({ id: 'h-recent', title: 'Recent ticks', span: 12, movable: false, href: '/supervisor/ticks', body: recent.length ? `<ul class="panel-list">${recent.map(t => `<li class="sev-${({ ok: 'ok', partial: 'warning', error: 'action' })[t.status] || 'info'}"><div class="t">${tickStatusBadge(t.status)} ${lt(t.at)} <span class="sub">${esc(ago(t.at, view.generatedAt))}</span></div><div class="sub">${t.ingested.length} verdict(s), ${t.actions.length} action(s), ${t.skipped.length} skipped${t.errors.length ? `, ${t.errors.length} error(s)` : ''}${t.selfUpgrade ? `, self-upgrade ${esc(t.selfUpgrade)}` : ''}</div></li>`).join('')}</ul><p class="sub"><a href="/supervisor/ticks">Full tick history</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>`
     : empty('No tick in the reconcile log', 'The reconcile cron writes one entry every five minutes.', 'clock') });
   return { title: 'Supervisor', body: `${grid('supervisor', cards)}<div class="cards stacked">${ticks}${leases}</div>` };
 }
@@ -583,7 +629,7 @@ function ticksPage(view, query, path) {
   const rows = view.supervisor.ticks.slice().reverse().map((t, i) => ({ ...t, n: i, nIngested: t.ingested.length, nActions: t.actions.length, nSkipped: t.skipped.length, nErrors: t.errors.length, flags: t.errors.length ? 'error' : '',
     text: [...t.actions.map(a => `${a.agent} ${a.type} ${a.ref}`), ...t.skipped.map(s => `${s.what} ${s.reason}`), ...t.errors, t.note || ''].join(' ') }));
   return { title: 'Tick history', crumbs: [['/supervisor', 'Supervisor'], [null, 'Tick history']], body: grid('ticks', card({ id: 't-all', title: `Ticks in the reconcile log (${rows.length})`, span: 12, movable: false, body: table({ id: 'ticks', path, query, noun: 'ticks', rows, searchKeys: ['status', 'selfUpgrade', 'flags', 'text'],
-    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'status', label: 'Status', html: r => tickStatusBadge(r.status) }, { key: 'nIngested', label: 'Verdicts', num: true }, { key: 'nActions', label: 'Actions', num: true },
+    cols: [{ key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'status', label: 'Status', html: r => tickStatusBadge(r.status) }, { key: 'nIngested', label: 'Verdicts', num: true }, { key: 'nActions', label: 'Actions', num: true },
       { key: 'nSkipped', label: 'Skipped', num: true }, { key: 'nErrors', label: 'Errors', num: true }, { key: 'selfUpgrade', label: 'Self-upgrade', more: true },
       { key: 'detail', label: 'Detail', sortable: false, html: r => (r.at === open && Number.isFinite(r.at)
         ? `<a class="btn" href="${esc(withQuery(path, query, { 'ticks.open': null }))}" aria-expanded="true">Hide</a><div class="tick-detail" id="tick-${r.at}">${tickDetail(r)}</div>`
@@ -593,7 +639,7 @@ function ticksPage(view, query, path) {
 function upgradesPage(view, query, path) {
   const rows = view.supervisor.upgrades.slice().reverse().map(u => ({ ...u, prText: u.prs.join(' '), checkText: Object.entries(u.checks).map(([k, v]) => `${k} ${v}`).join(', ') }));
   return { title: 'Upgrade history', crumbs: [['/supervisor', 'Supervisor'], [null, 'Upgrade history']], body: grid('upgrades', card({ id: 'u-all', title: `Self-upgrade records (${rows.length})`, span: 12, movable: false, body: table({ id: 'upg', path, query, noun: 'records', rows, searchKeys: ['result', 'reason', 'from', 'to', 'prText'],
-    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'result', label: 'Result', html: r => badge(resultSeverity(r.result), r.result) }, { key: 'from', label: 'From', html: r => shaCopy(r.from) }, { key: 'to', label: 'To', html: r => shaCopy(r.to) },
+    cols: [{ key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'result', label: 'Result', html: r => badge(resultSeverity(r.result), r.result) }, { key: 'from', label: 'From', html: r => shaCopy(r.from) }, { key: 'to', label: 'To', html: r => shaCopy(r.to) },
       { key: 'prText', label: 'PRs', html: r => (r.prs.length ? r.prs.map(prLink).join(', ') : '–') }, { key: 'reason', label: 'Reason', html: r => (r.reason ? errCopy(r.reason) : '–') }, { key: 'checkText', label: 'Checks', more: true }],
     totals: { at: 'count' }, emptyState: empty('No self-upgrade record', 'Records appear in team/upgrades.jsonl when the supervisor upgrades itself.', 'info') }) })) };
 }
@@ -627,7 +673,7 @@ function renderRouteWith(view, route, { query = new URLSearchParams(), pathname 
   const steps = trail(route.page, res.crumbs || []), parent = [...steps].reverse().find(([h]) => h)?.[0];
   const crumbs = steps.length ? `<a class="btn back" href="${esc(parent || '/')}" data-back>${icon('back')}Back</a><nav class="crumbs" aria-label="Breadcrumb"><ol>${steps.map(([h, t], i) => `<li>${h ? `<a href="${esc(h)}">${esc(t)}</a>` : `<span aria-current="page">${esc(t)}</span>`}${i < steps.length - 1 ? '<span class="sep" aria-hidden="true">›</span>' : ''}</li>`).join('')}</ol></nav>` : '';
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${refreshSeconds > 0 ? `<noscript><meta http-equiv="refresh" content="${refreshSeconds}"></noscript><meta name="refresh-seconds" content="${refreshSeconds}">` : ''}<title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
-<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route, (crumbs ? `<div class="pagehead">${crumbs}<h1 id="page-title">${esc(res.title)}</h1></div>` : `<h1 id="page-title">${esc(res.title)}</h1>`))}<main id="main" aria-labelledby="page-title">${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><button type="button" id="to-top" class="to-top" aria-label="Back to top" title="Back to top" hidden>${icon('up')}</button><script type="module" src="/static/app.js"></script></body></html>`;
+<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route, (crumbs ? `<div class="pagehead">${crumbs}<h1 id="page-title">${esc(res.title)}</h1></div>` : `<h1 id="page-title">${esc(res.title)}</h1>`))}<main id="main" aria-labelledby="page-title">${res.body}</main><p id="tznote" class="sub tznote">Times are shown in UTC (your browser's time zone is applied when scripts run). Data is stored in UTC.</p><p id="copy-status" class="vh" role="status" aria-live="polite"></p><button type="button" id="to-top" class="to-top" aria-label="Back to top" title="Back to top" hidden>${icon('up')}</button><script type="module" src="/static/app.js"></script></body></html>`;
   return { status: page ? 200 : 404, html };
 }
 // Kept for callers that only want the overview.

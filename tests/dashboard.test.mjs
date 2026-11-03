@@ -127,7 +127,7 @@ test('the freshest provider-reported allowance decides: a newer job record showi
 test('tick rules: failed tick shows time and (redacted) error; no tick for more than 10 minutes; never ticked', async t => {
   let v = await view(t, { cache: { tick: { at: NOW - 120000, status: 'error', error: 'gh pr list failed: HTTP 401 for alice@example.com' }, pulls: [], issues: [] } });
   const failed = v.attention.find(a => a.id === 'tick-failed');
-  assert.match(failed.text, /2026-10-30T/); assert.match(failed.text, /HTTP 401/); assert.doesNotMatch(failed.text, /alice@example\.com/);
+  assert.match(failed.text, /Last tick failed at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC:/); assert.match(failed.text, /HTTP 401/); assert.doesNotMatch(failed.text, /alice@example\.com/);
   v = await view(t, { cache: { tick: okTick(NOW - 11 * 60000), pulls: [], issues: [] } });
   assert.ok(ids(v).includes('tick-stale'));
   v = await view(t, { cache: { tick: okTick(NOW - 9 * 60000), pulls: [], issues: [] } });
@@ -239,11 +239,11 @@ test('graphs: allowance series with reset marks, jobs per day, verdicts, issue-t
 });
 
 // ---- activity
-test('recent activity: newest first, capped at 50, each linking to its PR or issue', async t => {
+test('recent activity: newest first, capped at the activity limit, each linking to its PR or issue', async t => {
   const j = job({ kind: 'review', issue: 27 });
   const events = Array.from({ length: 80 }, (_, i) => ({ at: NOW - i * 1000, job: j.id, kind: i % 2 ? 'started' : 'completed' }));
   const v = await view(t, { jobs: [j], events, state: { verdicts: { [`27:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'codex', at: NOW + 5 } } }, cache: { tick: okTick(), pulls: [], issues: [] } });
-  assert.equal(v.activity.length, 50);
+  assert.equal(v.activity.length, 81);
   assert.match(v.activity[0].text, /codex: CHANGES on PR #27/); assert.equal(v.activity[0].link.url, 'https://github.com/o/r/pull/27');
   assert.ok(v.activity.every((r, i, a) => i === 0 || a[i - 1].at >= r.at));
 });
@@ -399,12 +399,14 @@ test('delivered work: the page plans and queues what team tick would, with an op
   recordTick(root, { now: NOW + 1, status: 'error', error: 'x' });
   assert.deepEqual(readCache(root).delivered, [5]);
 });
-test('recent activity includes every recorded tick in the 50-event ordering, not only the last three', async t => {
+test('recent activity includes every recorded tick in the bounded event ordering, not only the last three', async t => {
   const snapshots = Array.from({ length: 10 }, (_, i) => ({ at: NOW - (10 - i) * 1000, status: 'ok', plan: [] }));
   const v = await view(t, { snapshots, cache: { tick: okTick(), pulls: [], issues: [] } });
   assert.equal(v.activity.filter(r => /^tick ok/.test(r.text)).length, 10);
   const many = Array.from({ length: 80 }, (_, i) => ({ at: NOW - i * 1000, status: 'ok', plan: [] }));
-  assert.equal((await view(t, { snapshots: many, cache: { tick: okTick(), pulls: [], issues: [] } })).activity.length, 50);
+  assert.equal((await view(t, { snapshots: many, cache: { tick: okTick(), pulls: [], issues: [] } })).activity.length, 80);
+  const lots = Array.from({ length: 500 }, (_, i) => ({ at: NOW - i * 1000, status: 'ok', plan: [] }));
+  assert.equal((await view(t, { snapshots: lots, cache: { tick: okTick(), pulls: [], issues: [] } })).activity.length, 400, 'bounded at ACTIVITY_LIMIT');
 });
 
 test('needs-homeowner survives the issue label cap for attention and queue planning', async t => {

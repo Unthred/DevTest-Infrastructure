@@ -1,7 +1,7 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
 // scroll restoration (all saved per breakpoint, in this browser only). It reads nothing from the network and sends nothing.
-import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
+import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends, initResetLayout } from './legend.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -400,4 +400,24 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
     for (const a of links) a.addEventListener('click', () => store.set('dash.range', a.textContent.trim()));
     if (q.has('range') && cur) store.set('dash.range', cur);
   }
+}
+
+// Local time (issue #76): the server renders UTC; every <time data-local> is rewritten in this browser's time zone. Data stays UTC.
+{
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  for (const el of $$('time[data-local]')) {
+    const ms = Date.parse(el.getAttribute('datetime'));
+    if (!Number.isFinite(ms)) continue;
+    el.title = `${el.textContent} (stored in UTC); shown in your time zone, ${zone}`;
+    el.textContent = formatLocal(ms, zone);
+  }
+  // Chart axis labels and tooltips (SVG cannot hold <time>): rebuilt from their template in this zone.
+  for (const el of $$('[data-lms]')) {
+    const ms = Number(el.getAttribute('data-lms'));
+    if (!Number.isFinite(ms)) continue;
+    const t = el.hasAttribute('data-tonly') ? timeOnly(ms, zone) : formatLocal(ms, zone);
+    el.textContent = (el.getAttribute('data-tpl') || '{t}').replace('{t}', () => t);
+  }
+  const note = $('#tznote');
+  if (note) note.textContent = `Times are shown in your time zone (${zone}). Data is stored in UTC; hover a time to see it.`;
 }
