@@ -545,3 +545,29 @@ test('#244 failed attempts: tokens and cost are summed on the dashboard and show
   const none = JSON.parse((await (await serve(t, { jobs: [ok], cache: cache() })).get('/api/view.json')).body);
   assert.deepEqual([none.failedSpend.jobs, none.failedSpend.tokens, none.failedSpend.cost], [0, null, null]);
 });
+
+// ---- issue #186: review follow-ups to the Needs you panel
+test('#186 a failed job on a PR at the review or fix limit folds into the limit card', async t => {
+  const failed = jb({ status: 'failed', kind: 'review', issue: 41, provider: 'codex', lastEvent: 'failed', updatedAt: NOW - 1000 });
+  const rl = await needsOf(await serve(t, { jobs: [failed], cache: calmCache(), state: { reviewAttempts: { [`41:${H(1)}:codex`]: 2 }, verdicts: {}, jobs: {} } }));
+  assert.deepEqual(rl.panels.needsYou.map(c => c.id), ['reviewlimit-41']);
+  assert.equal(rl.health.label, 'Needs you (1)');
+  const fixJob = jb({ status: 'failed', kind: 'fix', issue: 41, provider: 'claude', lastEvent: 'failed', updatedAt: NOW - 1000 });
+  const fl = await needsOf(await serve(t, { jobs: [fixJob], cache: calmCache({ statusCheckRollup: red }), state: { fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {}, unblock: { escalated: { 41: true }, pr: {}, day: {}, log: [] } } }));
+  assert.deepEqual(fl.panels.needsYou.map(c => c.id), ['fixlimit-41']);
+  // negative: with no limit reached the failed job still gets its own card
+  const alone = await needsOf(await serve(t, { jobs: [failed], cache: calmCache() }));
+  assert.equal(alone.panels.needsYou.length, 1); assert.match(alone.panels.needsYou[0].id, /^job-/);
+});
+test('#186 a failed PR job is dropped when no PR is open at all; kept while its PR is open', async t => {
+  const failed = jb({ status: 'failed', kind: 'fix', issue: 41, provider: 'claude', lastEvent: 'failed', updatedAt: NOW - 1000 });
+  const none = calmCache(); none.pulls = [];
+  assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: none }))).panels.needsYou.length, 0, 'merged PR, no open PRs');
+  assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: calmCache() }))).panels.needsYou.length, 1);
+});
+test('#186 a failed issue job whose issue is older than the cached issue window is dropped; kept while the issue is cached and open', async t => {
+  const failed = jb({ status: 'failed', kind: 'implement', issue: 9999, branch: 'claude/issue-9999-x', provider: 'claude', lastEvent: 'failed', updatedAt: NOW - 1000 });
+  assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: calmCache() }))).panels.needsYou.length, 0, 'issue not in the cache');
+  const c = calmCache(); c.issues.push({ number: 9999, title: 'x', state: 'OPEN', labels: [] });
+  assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: c }))).panels.needsYou.filter(x => /^job-/.test(x.id)).length, 1);
+});
