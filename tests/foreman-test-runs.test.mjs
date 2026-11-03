@@ -165,3 +165,31 @@ test('dashboard pages reuse the built view for the TTL under load, and rebuild o
     assert.equal(first === second, same, `ttl ${ttl}`);
   }
 });
+
+test('drain while an install runs: reconcile recovers and starts no due job, and says it held it (issue #448)', t => {
+  const root = tmp(t);
+  fs.mkdirSync(path.join(root, 'jobs'), { recursive: true });
+  const job = { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', status: 'queued', autoRestart: true, autoResume: false, nextAttemptAt: Date.now() - 1000, capabilities: {}, workerPid: null };
+  const file = path.join(root, 'jobs', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json'); fs.writeFileSync(file, JSON.stringify(job));
+  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: false }));
+  const unlock = upgradeLock(root); t.after(unlock);
+  const r = spawnSync(process.execPath, [cli, 'reconcile', '--state-root', root], { encoding: 'utf8', timeout: 60000 });
+  assert.match(r.stdout, /"held":1/, r.stdout + r.stderr);
+  assert.match(r.stdout, /"resumed":0/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), job, 'the job was left untouched');
+});
+
+test('drain while an install runs: the team tick does not resume a transiently stopped job, and does when no install runs (issue #448)', async () => {
+  const { Team } = await import('../supervisor/team.mjs');
+  const run = async hold => {
+    let resumed = 0;
+    const probe = Object.create(Team.prototype);
+    Object.assign(probe, { c: { access: {} }, register: '', jobs: {}, modes: null, held: {}, loadNames: async () => {}, resumeTransient: async () => { resumed++; }, plan: async () => { throw new Error('stop'); } });
+    for (const m of ['ingest', 'retryCarries', 'scanOwnerComments', 'recheckRequirements', 'notifyBlocked', 'notifyFixLimit', 'watchCancelled', 'clearStale', 'releaseFinished', 'updateBudget']) probe[m] = async () => {};
+    probe.budgets = () => ({});
+    await probe.tickPass({ hold }).catch(e => assert.match(String(e.message), /stop/));
+    return resumed;
+  };
+  assert.equal(await run({ to: null, installRunning: true }), 0);
+  assert.equal(await run(null), 1);
+});

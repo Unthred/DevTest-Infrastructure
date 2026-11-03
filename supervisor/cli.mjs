@@ -51,10 +51,16 @@ function startWorker(root, id, registry) {
   child.unref();
   return child.pid;
 }
-function reconcileOnce(root, registry) {
+function installRunning(root) {
+  // Issue #448: true while another process holds upgrade.lock (its pre-check, install and retry). Probing takes and releases the lock.
+  const unlock = upgradeLock(root);
+  if (!unlock) return true;
+  unlock(); return false;
+}
+function reconcileOnce(root, registry, installing = false) {
   const dir = path.join(root, 'jobs');
   let resumed = 0, blocked = 0, released = 0, held = 0;
-  const handHold = handInstallHold(root) !== null;   // issue #446: a hand-install holds due restarts too (they stay recorded and restart after it)
+  const handHold = installing || handInstallHold(root) !== null;   // issue #446: a hand-install holds due restarts too (they stay recorded and restart after it)
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     if (!name.endsWith('.json')) continue;
     const current = readJob(root, name.slice(0, -5));
@@ -234,7 +240,7 @@ async function selfUpgradeBefore(root, registry) {
   // Issue #448: the install step (with its test run) has its own lock, so it never holds the tick lock or stops another tick. While
   // another process installs, this tick starts no new job (the same hold as a pending upgrade), and the reason is shown.
   const unlockUpgrade = upgradeLock(root);
-  if (!unlockUpgrade) return { result: 'install-running', hold: { to: null } };
+  if (!unlockUpgrade) return { result: 'install-running', hold: { to: null, installRunning: true } };
   try { return await selfUpgradeLocked(root, registry); } finally { unlockUpgrade(); }
 }
 async function selfUpgradeLocked(root, registry) {
@@ -443,7 +449,7 @@ async function main() {
       const unlockRecover = tickLock(root, 'reconcile.lock');
       let result;
       if (!unlockRecover) { result = { skippedRecovery: 'another reconcile run is recovering jobs' }; try { recordSkip(root, 'job recovery skipped: another reconcile run holds reconcile.lock'); } catch { /* best effort */ } }
-      else { try { result = reconcileOnce(root, registry); } finally { unlockRecover(); } }
+      else { try { result = reconcileOnce(root, registry, installRunning(root)); } finally { unlockRecover(); } }
       // The upgrade check comes first (issue #134). A failure here never fails the tick.
       let before;
       try { before = await selfUpgradeBefore(root, registry); } catch (error) { before = { error: String(error.message).slice(0, 200), hold: null }; }
