@@ -366,7 +366,7 @@ async function main() {
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
   }
   if (command === 'self-upgrade') {
-    const { upgrade } = selfUpgradeFor(root, registry);
+    const { config, upgrade } = selfUpgradeFor(root, registry);
     if (a._[0] === 'hand-install') {
       // Issue #446: the one supported route for an update the automatic upgrader refuses.
       const d = upgrade.d;
