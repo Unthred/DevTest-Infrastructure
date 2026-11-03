@@ -324,3 +324,33 @@ test("the probe lock is cross-process: a held lock refuses a second taker, a dea
   assert.deepEqual(await refreshProvider("/nonexistent", "claude", { lockDir }), { record: null, error: "busy" });
   held();
 });
+
+test("the probe lock: concurrent processes racing for one stale lock yield exactly one holder, and a live owner is never aged out", async t => {
+  const lockDir = tmp(t);
+  fs.mkdirSync(path.join(lockDir, "claude")); fs.writeFileSync(path.join(lockDir, "claude", "owner"), "2147483646");
+  const mod = new URL("../supervisor/probe.mjs", import.meta.url).href;
+  const startAt = Date.now() + 1500;
+  const code = `const { acquireProbeLock } = await import(${JSON.stringify(mod)});
+    while (Date.now() < ${startAt}) {}
+    const r = acquireProbeLock("claude", { lockDir: ${JSON.stringify(lockDir)} });
+    process.stdout.write(r ? "got" : "none");
+    if (r) await new Promise(res => setTimeout(res, 1500));
+    if (r) r();`;
+  const { spawn } = await import("node:child_process");
+  const outs = await Promise.all(Array.from({ length: 8 }, () => new Promise(res => {
+    let out = ""; const c = spawn(process.execPath, ["--input-type=module", "-e", code]);
+    c.stdout.on("data", d => { out += d; }); c.on("close", () => res(out));
+  })));
+  assert.equal(outs.filter(o => o === "got").length, 1, "exactly one process holds the lock: " + outs.join(","));
+  // a live owner is not taken over however old the lock is
+  const live = acquireProbeLock("aged", { lockDir });
+  const old = new Date(Date.now() - 3 * 3600 * 1000);
+  fs.utimesSync(path.join(lockDir, "aged"), old, old);
+  assert.equal(acquireProbeLock("aged", { lockDir }), null);
+  live();
+  // a release by a holder whose lock was replaced does not remove the new holder's lock
+  const a = acquireProbeLock("swap", { lockDir });
+  fs.writeFileSync(path.join(lockDir, "swap", "owner"), `${process.pid}:x:other`);
+  a();
+  assert.ok(fs.existsSync(path.join(lockDir, "swap")));
+});
