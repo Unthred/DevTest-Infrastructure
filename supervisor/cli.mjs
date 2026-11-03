@@ -17,8 +17,7 @@ import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome
 import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
-import { SelfUpgrade, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
-import { DRAIN_DEFAULT_MINUTES } from './team.mjs';
+import { SelfUpgrade, QUIET_MAX_WAIT_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
 function args(list) {
@@ -196,7 +195,7 @@ function selfUpgradeFor(root, registry) {
   const config = loadTeamConfig(teamConfigFile, root);
   const verdictFor = (pr, head) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')).verdicts?.[`${pr}:${head}`] || null; } catch { return null; } };
   const jobs = realJobs(root, registry);
-  return { config, upgrade: new SelfUpgrade({ root, drainMaxMs: (config.self_upgrade?.drain_max_minutes ?? DRAIN_DEFAULT_MINUTES) * 60000, deps: realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }) }) };
+  return { config, upgrade: new SelfUpgrade({ root, drainMaxMs: config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : QUIET_MAX_WAIT_MS, deps: realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }) }) };
 }
 // Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so running jobs
 // can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.
@@ -205,7 +204,7 @@ async function selfUpgradeBefore(root, registry) {
   if (!config.enabled) return { result: 'team-loop-disabled', hold: null };
   const result = await upgrade.step();
   // 'upgraded': this process still runs the old code, so it must not dispatch either; the next tick runs the new version.
-  return { result, hold: result === 'busy' || result === 'upgraded' ? { to: upgrade.s.holding?.to || upgrade.s.pending?.to || null } : null };
+  return { result, hold: holdOf(result, upgrade.s) };
 }
 // After the team step: an upgrade installed by an earlier tick is verified by this live tick.
 async function selfUpgradeAfter(root, registry, before, tick) {
