@@ -122,3 +122,15 @@ test('only the bridged loopback port and inline URLs are allowed; reports never 
   assert.equal(redactUrl(`http://198.51.100.7/beacon?${query}#frag`), 'http://198.51.100.7/beacon');
   assert.equal(redactUrl('nonsense'), 'invalid-url');
 });
+
+// issue #428: a module script served as application/octet-stream is refused by the browser, which showed up as page errors in the audit.
+test('the static server serves .mjs as JavaScript and still labels unknown types as binary', async t => {
+  const root = tmp(), sockets = tmp();
+  t.after(() => { for (const d of [root, sockets]) fs.rmSync(d, { recursive: true, force: true }); });
+  fs.writeFileSync(path.join(root, 'm.mjs'), 'export {};'); fs.writeFileSync(path.join(root, 'x.bin'), 'x');
+  const socket = path.join(sockets, 's', 'a.sock');
+  const handle = await listenOnSocket(createStaticServer(root), socket, { uid: process.getuid(), gid: process.getgid() });
+  t.after(() => handle.close());
+  assert.match((await get(socket, '/m.mjs')).type, /^text\/javascript/);
+  assert.equal((await get(socket, '/x.bin')).type, 'application/octet-stream');
+});
