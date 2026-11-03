@@ -3,7 +3,8 @@
 import fs from 'node:fs';
 import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
-import { Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { homeownerQuestion } from './homeowner-question.mjs';
+import { CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs, readHeadRegister } from './planning.mjs';
@@ -246,7 +247,43 @@ export function pendingProposals(config, pulls, mainRegister, read = readHeadReg
   }
   return out;
 }
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [], fixCount, excluded = [] }) {
+// Issue #414: where a held issue is listed. 'needs': a question the homeowner can answer today. 'later': parked or staged work, with what it waits
+// for and who or what ends the wait. Foreman applied the label only when state or the issue's own marker says so (stock text only then).
+const foremanApplied = (i, state) => Object.keys(state.unblock?.flags?.[i.number] || {}).length > 0 || !!state.splits?.[i.number] || i.foremanFiled === true;
+export function heldIssues({ cache, state = {}, splitting = new Set(), pauseText = null, config = {} }) {
+  const byNo = new Map((cache?.issues || []).map(i => [i.number, i])), out = [];
+  for (const i of (cache?.issues || []).slice().sort((x, y) => x.number - y.number)) {
+    const labels = i.labels || [], parked = labels.includes('parked'), held = labels.includes('needs-homeowner');
+    if (i.state !== 'OPEN' || (!parked && !held) || splitting.has(i.number)) continue;
+    const eligible = !['epic', 'tracking', 'parked'].some(l => labels.includes(l));
+    const starts = held && !parked ? ` Removing the needs-homeowner label ${eligible ? 'makes the issue eligible for Foreman to start, so remove it only when you want work to begin.' : 'does not start work: another label keeps it out of the plan.'}` : '';
+    if (parked) { out.push({ number: i.number, where: 'later', waits: 'parked: held back on purpose', ends: 'the homeowner removing the parked label; Foreman then treats it as eligible unless it waits on something else' }); continue; }
+    const flags = Object.entries(state.unblock?.flags?.[i.number] || {}), applied = foremanApplied(i, state);
+    const q = i.question ?? homeownerQuestion(i.body);
+    if (q) {
+      out.push({ number: i.number, where: 'needs', question: q.question, tried: applied ? 'Foreman labelled this issue needs-homeowner and starts no new job on it while the label is on.' : 'Labelled needs-homeowner; no record of who applied it.',
+        action: `Answer on the issue. ${q.yes || q.no ? `${q.yes ? `Yes: ${q.yes}. ` : ''}${q.no ? `No: ${q.no}.` : ''}` : 'The issue does not state what each answer does.'}${starts}` });
+      continue;
+    }
+    if (flags.length && i.state === 'OPEN') {
+      const why = flags.map(([k, c]) => c.kind || k).filter((v, n, a2) => a2.indexOf(v) === n), clears = why.map(k => CAUSE_TEXT[k] || k).join('; ');
+      out.push({ number: i.number, where: 'needs', question: `Foreman stopped work (${why.join(', ')}): fix the cause or close the issue?`, tried: 'Foreman applied the needs-homeowner label and starts no new job on this issue while it is on.',
+        action: `Fix the cause: Foreman removes the label itself once ${clears}. Close the issue instead: no further work.` });
+      continue;
+    }
+    if (i.foremanFiled) {
+      out.push({ number: i.number, where: 'needs', question: 'Do the blocking findings listed on this issue need a fix?', tried: 'Foreman filed this issue from a review of a merged PR and labelled it needs-homeowner.',
+        action: `Yes: ask for a fix PR. No: close the issue.${starts}` });
+      continue;
+    }
+    const open = (i.prerequisites || []).filter(d => byNo.get(d)?.state !== 'CLOSED');
+    if (open.length) out.push({ number: i.number, where: 'later', waits: `waits for ${open.map(d => '#' + d).join(', ')} to close`, ends: `#${open.join(', #')} closing (a merged PR closes it); no decision is needed from you before then` });
+    else if (pauseText) out.push({ number: i.number, where: 'later', waits: `waits for the open PR backlog to clear (${pauseText})`, ends: 'PRs merging until open PRs fall below the cap; Foreman ends the wait, no decision is needed from you before then' });
+    else out.push({ number: i.number, where: 'later', waits: 'labelled needs-homeowner; no question is stated on the issue and no record shows who applied the label', ends: 'someone stating the question on the issue (a line "Question: ...?"), or the label being removed (which would make it eligible for Foreman to start)' });
+  }
+  return out;
+}
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [], fixCount, excluded = [], pauseText = null }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
@@ -266,10 +303,11 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   for (const [n, sp] of Object.entries(state.splits || {})) if (sp.status === 'proposed' && (cache?.issues || []).some(i => i.number === Number(n) && i.state === 'OPEN')) {
     const spent = sp.wasted?.tokens ? `${sp.wasted.tokens.toLocaleString('en-GB')} tokens${Number.isFinite(sp.wasted.cost) ? ` (about $${sp.wasted.cost.toFixed(2)})` : ''} spent on the failed attempt` : 'the failed attempt used an unknown number of tokens';
     add(`split-${n}`, `${names.issue(Number(n)).text} was too large for one session; a split into ${sp.children?.length || 0} issues is proposed`, { kind: 'issue', n: Number(n) },
-      { tried: `The implement job ran out of context (${spent}). Foreman did not restart it with the same scope; a cheap session drafted the split and posted it on the issue.`, action: `Accept split: run ai-agent --supervisor team accept-split ${n} to file the children and queue them, or reshape the issue by hand and remove the needs-homeowner label.`, links: [{ text: names.issue(Number(n)).text, url: web('issue', n) }] });
+      { tried: `The implement job ran out of context (${spent}). Foreman did not restart it with the same scope; a cheap session drafted the split and posted it on the issue.`, action: `Accept split: run ai-agent --supervisor team accept-split ${n} to file the children and queue them, or reshape the issue by hand (removing the needs-homeowner label then makes the issue eligible for Foreman to start).`, links: [{ text: names.issue(Number(n)).text, url: web('issue', n) }] });
   }
-  for (const i of cache?.issues || []) if (i.state === 'OPEN' && i.labels?.includes('needs-homeowner') && !splitting.has(i.number)) add(`homeowner-${i.number}`, `${names.issue(i.number).text} needs the homeowner`, { kind: 'issue', n: i.number },
-    { tried: 'Foreman stopped work on this issue and labelled it needs-homeowner; it starts no new job until the label is removed.', links: [{ text: names.issue(i.number).text, url: web('issue', i.number) }] });
+  // Issue #414: Needs you holds only labelled issues with a question the homeowner can answer today; the rest are in Later (laterOf).
+  for (const h of heldIssues({ cache, state, splitting, pauseText, config })) if (h.where === 'needs') add(`homeowner-${h.number}`, `${names.issue(h.number).text}: ${h.question}`, { kind: 'issue', n: h.number },
+    { tried: h.tried, action: h.action, links: [{ text: names.issue(h.number).text, url: web('issue', h.number) }] });
   // One card per open PR that is labelled needs-homeowner or has hit the fix or review limit (the label and the notice are the same event).
   for (const pr of cache?.pulls || []) {
     const verdict = state.verdicts?.[`${pr.number}:${pr.headRefOid}`]?.verdict;
@@ -608,7 +646,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       if (j) base.job = { id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
-    const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const pauseText = team.pauseText(c.pulls || [], c.issues || []);
+    const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: deploy needed.`, ref: null, severity: 'warning' });
@@ -644,7 +683,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       else if (w.length) attention.push({ id: 'alert-warning', text: redact(w[0].replace(/^team-alert: warning: /, 'Alerting: '), 200), ref: null, severity: 'warning' }); }
     // Issue #358: the pinned status issue could not be updated; the tick itself is unaffected.
     { const e = readStatusIssueState(root).error; if (e) attention.push({ id: 'status-issue-failed', text: redact(e, 300), ref: null, severity: 'warning' }); }
-    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded });
+    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
     if (latch) upgrade = { ...(upgrade || {}), latch: true };
@@ -671,7 +710,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
 // ---- issue #54: what the v2 pages need on top of the v1 model. Still pure: only data already stored by the tick.
 export const TICK_INTERVAL_MS = 5 * 60000;
 const NEXT_STEP = {
-  homeowner: 'Open the issue and either answer it or remove the needs-homeowner label so the team can continue.',
+  homeowner: 'Open the issue and answer the question it states.',
   'tick-failed': 'Read the tick error; nothing is dispatched until a tick succeeds.',
   job: 'Read the job record, then retry it or close the issue.',
   'alert-failed': 'Check the Unraid notification settings, then run team-alert --test on Tower; the alert is retried every tick until it is delivered.',
@@ -710,6 +749,12 @@ export function issueTimelinesOf({ jobs, state, names, jobRows, cache }) {
     .filter(t => t.events.length).sort((a, b) => b.last - a.last).slice(0, 60);
 }
 
+// Issue #414: the quieter Later list: parked or staged work, what each waits for and who or what ends the wait.
+export function laterOf({ cache, state = {}, pauseText = null, names, config }) {
+  const splitting = new Set(Object.entries(state.splits || {}).filter(([, sp]) => ['drafting', 'proposed'].includes(sp.status)).map(([n]) => Number(n)));
+  return heldIssues({ cache, state, splitting, pauseText, config }).filter(h => h.where === 'later').map(h => ({ number: h.number, name: redact(names.issue(h.number).text, 300), waits: redact(h.waits, 300), ends: redact(h.ends, 300), url: `https://github.com/${config.repository}/issues/${h.number}` }));
+}
+
 // Issue #76: why nothing is planned. Busy and paused agents with their job and resume time, and the items that cannot start:
 // open issues behind an unfinished prerequisite, and open pull requests waiting for a review.
 export function nextWhy({ states, issues, prs, names }) {
@@ -722,7 +767,7 @@ export function nextWhy({ states, issues, prs, names }) {
   return { busy, paused, blocked: blocked.length, waitingReview: waiting.length };
 }
 
-function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded }) {
+function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText = null }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
@@ -776,7 +821,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, later: laterOf({ cache, state, pauseText, names, config }), warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };

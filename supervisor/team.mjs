@@ -367,7 +367,7 @@ export const EXCLUDING_LABELS = ['epic', 'tracking', 'parked', 'needs-homeowner'
 const RESUME_WINDOW_MS = 7 * 86400000;
 const TRANSIENT_STOPS = new Set(['crash', 'network_error', 'incomplete', 'transient_rate_limit']);   // never usage_limit or retry_exhausted: D-019 bounds those launches, then the homeowner decides
 const redactEvent = e => String(e || 'an unknown event').replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40);
-const CAUSE_TEXT = { split: 'the proposed split was accepted', 'secret-scan': 'the secret scanner no longer fails', job: 'the job was resumed or completed', fixlimit: 'a new head was reviewed with PASS and its CI is not red', 'cancelled-ci': 'the check is green again' };
+export const CAUSE_TEXT = { split: 'the proposed split was accepted', 'secret-scan': 'the secret scanner no longer fails', job: 'the job was resumed or completed', fixlimit: 'a new head was reviewed with PASS and its CI is not red', 'cancelled-ci': 'the check is green again' };
 // True when a finding repeats the homeowner-required text: any five consecutive words of it appear in the required text, or a
 // bullet or line of the required text (four words or more) appears whole inside the finding. Conservative: unsure means required.
 export function overlapsRequired(finding, required) {
