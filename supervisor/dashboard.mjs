@@ -482,7 +482,7 @@ export function describeFor(j, { names, state }) {
 }
 
 // Which model made a decision (issue #140): provider, model and effort of the job that produced it, as recorded on the job.
-const modelOf = j => (j ? [j.provider, j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
+const modelOf = j => (j ? [j.provider || 'unknown provider', j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
 function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names, root }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
@@ -689,13 +689,14 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const jobRows = sortedJobs.slice(0, 300).map(rowOf);
   // Older jobs keep a page (not a table row) so a job link from old Activity, a verdict or a lease still resolves (issue #182).
   const olderJobs = sortedJobs.slice(300, 2300).map(rowOf);
-  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobs.find(j => j.id === v.job)), verdict: v.verdict || null, at: v.at ?? null,
+  const jobById = new Map(jobs.map(j => [j.id, j]));
+  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobById.get(v.job)), verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
   const prs = [...prNumbers].sort((a, b) => b - a).map(n => {
     const p = (cache.pulls || []).find(x => x.number === n), vs = verdictRows.filter(v => v.pr === n), m = merged.get(n);
-    const rel = Object.entries(state.jobs || {}).filter(([, tj]) => tj.pr === n).map(([id]) => jobs.find(j => j.id === id)).filter(Boolean);
+    const rel = Object.entries(state.jobs || {}).filter(([, tj]) => tj.pr === n).map(([id]) => jobById.get(id)).filter(Boolean);
     const relIds = new Set(rel.map(j => j.id));
     const prJobs = jobRows.filter(j => relIds.has(j.fullId));
     const key = p ? `${n}:${p.headRefOid}` : null;

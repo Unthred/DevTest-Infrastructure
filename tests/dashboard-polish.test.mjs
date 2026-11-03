@@ -287,9 +287,29 @@ test('#140 title and Back live in the app bar; one h1; no gap-less Supervisor st
   const s = await serve(t);
   for (const u of PAGES) {
     const body = (await s.get(u)).body, bar = body.slice(body.indexOf('<header class="statusbar"'), body.indexOf('</header>'));
-    assert.match(bar, /<h1>/, u); assert.equal((body.match(/<h1>/g) || []).length, 1, u); assert.ok(!body.slice(body.indexOf('<main')).includes('<h1>'), u);
+    assert.match(bar, /<h1 id="page-title">/, u); assert.equal((body.match(/<h1 id="page-title">/g) || []).length, 1, u); assert.ok(!body.slice(body.indexOf('<main')).includes('<h1 id="page-title">'), u);
     if (u !== '/') assert.match(bar, /data-back/, u);
   }
   assert.match(css, /main\{width:100%/, 'main keeps the same width on every page, also in the flex docks');
   assert.match(css, /\.cards\.stacked\{margin-top/); assert.match((await s.get('/supervisor')).body, /<div class="cards stacked">/);
+});
+
+test('issue #263: inherited names are not time ranges', async () => {
+  const { chooseRange, rangeMs, DEFAULT_RANGE } = await import('../supervisor/dashui/logic.mjs');
+  for (const bad of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+    assert.equal(chooseRange(null, bad), DEFAULT_RANGE);
+    assert.equal(chooseRange(bad, null), DEFAULT_RANGE);
+    assert.equal(rangeMs(bad), rangeMs(DEFAULT_RANGE));
+  }
+  assert.equal(chooseRange(null, '24h'), '24h'); assert.equal(chooseRange('30d', null), '30d');
+});
+
+test('issue #263: dock handle is a keyboard control, main is named by the title, and app.js handles arrow keys', () => {
+  const render = fs.readFileSync(new URL('../supervisor/dashrender.mjs', import.meta.url), 'utf8');
+  const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  assert.match(render, /<button type="button" class="dock-handle wide-only" data-dock-handle aria-label=/);
+  assert.doesNotMatch(render, /data-dock-handle[^>]*aria-hidden/);
+  assert.match(render, /<main id="main" aria-labelledby="page-title">/);
+  assert.match(render, /<h1 id="page-title">/);
+  assert.match(app, /ArrowLeft: 'left'/);
 });

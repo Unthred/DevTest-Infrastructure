@@ -370,6 +370,12 @@ applyDock(); { let lastBp = bpNow(); addEventListener('resize', () => { if (bpNo
 $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navrail', store.get('dash.navrail') !== true); applyDock(); });
 {
   const handle = $('[data-dock-handle]');
+  // Keyboard docking: arrow keys pick an edge, Home resets (issue #263).
+  handle?.addEventListener('keydown', e => {
+    const to = { ArrowUp: 'top', ArrowDown: 'bottom', ArrowLeft: 'left', ArrowRight: 'right', Home: 'top' }[e.key];
+    if (!to) return;
+    e.preventDefault(); store.set(dockKey(), to); applyDock(); handle.focus();
+  });
   handle?.addEventListener('pointerdown', e => {
     if (bpNow() === 'phone') return;
     e.preventDefault(); handle.setPointerCapture(e.pointerId);

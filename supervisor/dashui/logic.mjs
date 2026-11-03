@@ -131,8 +131,8 @@ export function pillLinks({ health, attention = [], version } = {}) {
 export const RANGES = { '24h': 24 * 3600000, '7d': 7 * 86400000, '30d': 30 * 86400000 };
 export const DEFAULT_RANGE = '7d';
 // The range to show (issue #140): an explicit address wins; otherwise the viewer's saved choice if it is a known range.
-export const chooseRange = (saved, inUrl) => (inUrl in RANGES ? inUrl : saved in RANGES ? saved : DEFAULT_RANGE);
-export const rangeMs = r => RANGES[r] ?? RANGES[DEFAULT_RANGE];
+export const chooseRange = (saved, inUrl) => (Object.hasOwn(RANGES, inUrl) ? inUrl : Object.hasOwn(RANGES, saved) ? saved : DEFAULT_RANGE);
+export const rangeMs = r => (Object.hasOwn(RANGES, r) ? RANGES[r] : RANGES[DEFAULT_RANGE]);
 export const inRange = (at, now, range) => Number.isFinite(at) && now - at <= rangeMs(range) && at <= now + 60000;
 
 // ---- layout: saved per breakpoint, never shared between them
