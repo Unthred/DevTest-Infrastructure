@@ -61,6 +61,11 @@ try {
     check(`${engine}: a page that POSTs and sends call_service fails with exit 16; both are recorded without payload`, writer.result.subjectExit === 16 && writer.summary.readOnly.blockedWrites.some(w => /^POST /.test(w)) && writer.summary.readOnly.blockedFrames.some(f => f.startsWith('call_service')) && !JSON.stringify(writer.summary).includes('30'), { readOnly: writer.summary.readOnly });
   }
 
+  for (const engine of ['chromium', 'firefox', 'webkit']) {
+    const nav = await run(`navigating-control-${engine}`, { phase: 'test', command: ha('--name', 'n', '--pages', 'nav=/nav-probe.html', '--profiles', 'desktop-1280', '--probe', 'clicks', '--browser', engine) }, { inspect: plan => ({ summary: read(plan, 'n.summary.json'), report: fs.readFileSync(path.join(plan.out, 'n.report.md'), 'utf8') }) });
+    check(`${engine}: a control that navigates during the probe is reported (navigated >= 1, ok false, exit 16)`, nav.result.subjectExit === 16 && nav.summary.ok === false && nav.summary.probe.navigated >= 1 && nav.report.includes('Navigation during probe'), { probe: nav.summary.probe });
+  }
+
   const broken = await run('broken-layout', { phase: 'test', command: ha('--name', 'b', '--pages', 'heating-settings=/broken-settings.html') }, { inspect: plan => ({ summary: read(plan, 'b.summary.json') }) });
   const kinds = new Set(broken.summary.pages[0].failures.map(f => `${f.profile}:${f.check}`));
   check('an overflowing page fails (exit 15) on the phone, not on the desktop', broken.result.subjectExit === 15 && kinds.has('phone-390:document-overflow') && ![...kinds].some(k => k.startsWith('desktop-1280:document-overflow')), { found: [...kinds] });
