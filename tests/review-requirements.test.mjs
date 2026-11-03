@@ -266,7 +266,7 @@ test('#419: a false material claim gives CHANGES and cannot PASS', async t => {
   assert.match(r2.report.ingested.at(-1).error, /material/);
 });
 test('#419: an immaterial mark on a behaviour, safety or verification claim is refused', async t => {
-  for (const c of [{ ...lock, materiality: 'immaterial' }, { claim: 'all gates passed', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'wording' }]) {
+  for (const c of [{ ...lock, materiality: 'immaterial' }, { claim: 'all gates passed', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'wording' }, { claim: 'adds per-provider run throttling', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'minor' }]) {
     const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [c] });
     assert.match(r.report.ingested.at(-1).error, /cannot be immaterial/);
   }
