@@ -392,10 +392,10 @@ test('issue #209: revive starts a server that is not running; without revive not
 // The tick watchdog, driven with a fake dashboard whose state the test controls.
 const watchRig = (t, { startsOk = true } = {}) => {
   const root = tmp(t), log = { restarts: [], alerts: [] };
-  const sim = { running: true, healthy: true };
+  const sim = { running: true, healthy: true, startsOk };
   const deps = { config: { agents: {} }, installed: () => NEW, alert: async x => log.alerts.push(x),
     dashboardStatus: async () => ({ running: sim.running, healthy: sim.running && sim.healthy, good: sim.running ? { host: '192.168.1.5', port: '8731', version: OLD, argv: GOOD_ARGV } : null }),
-    restartDashboard: async (sha, opts) => { log.restarts.push({ sha, opts }); if (startsOk) { sim.running = true; sim.healthy = true; return { ok: true, restarted: true }; } return { ok: false, recovered: false, reason: 'the dashboard server did not come back' }; } };
+    restartDashboard: async (sha, opts) => { log.restarts.push({ sha, opts }); if (sim.startsOk) { sim.running = true; sim.healthy = true; return { ok: true, restarted: true }; } return { ok: false, recovered: false, reason: 'the dashboard server did not come back' }; } };
   let now = NOW;
   const mkUp = () => new SelfUpgrade({ root, deps, clock: { now: () => now } });
   return { root, log, sim, mk: mkUp, advance: ms => { now += ms; } };
@@ -462,6 +462,19 @@ test('issue #209: a restart that fails is recorded, alerted once, and raised as 
   assert.equal(await w.mk().watchdog(), 'ok');
   v = await view(w.root, { running: NEW });
   assert.ok(!v.attention.some(a => a.id === 'dashboard-restart-failed'));
+});
+
+test('issue #209: a failed restart after a recovery is a new outage and is alerted again', async t => {
+  const w = watchRig(t, { startsOk: false });
+  await w.mk().watchdog();
+  w.sim.running = false;
+  assert.equal(await w.mk().watchdog(), 'revive-failed');
+  assert.equal(w.log.alerts.length, 1);
+  w.sim.startsOk = true;
+  w.advance(300000); assert.equal(await w.mk().watchdog(), 'revived');
+  w.sim.startsOk = false; w.sim.running = false;
+  w.advance(600000); assert.equal(await w.mk().watchdog(), 'revive-failed');
+  assert.equal(w.log.alerts.length, 2, 'the second outage sends its own alert');
 });
 
 test('issue #209: a failed upgrade restart that fell back to the last good version stays a Needs you item until a restart succeeds', async t => {

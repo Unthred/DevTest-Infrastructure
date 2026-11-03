@@ -364,7 +364,7 @@ export class SelfUpgrade {
       const g = st.good, o = this.s.dashboardGood;
       if (g && (!o || o.version !== g.version || o.host !== g.host || o.port !== g.port || (o.argv || []).join('\0') !== g.argv.join('\0'))) { this.s.dashboardGood = { host: g.host, port: g.port, version: g.version, argv: g.argv, at: now }; changed = true; }
       if (this.s.dashboardWatch && (!w.lastAt || now - w.lastAt >= WATCHDOG_RESET_MS)) { delete this.s.dashboardWatch; changed = true; }
-      else if (w.unhealthySince) { this.s.dashboardWatch = { ...w, unhealthySince: undefined }; changed = true; }
+      else if (w.unhealthySince || w.episodeAt) { this.s.dashboardWatch = { ...w, unhealthySince: undefined, episodeAt: undefined }; changed = true; } // an answering server ends the outage episode
       if (this.s.dashboardFailure?.kind === 'watchdog') { delete this.s.dashboardFailure; changed = true; }
       if (changed) this.save();
       return 'ok';
@@ -383,6 +383,8 @@ export class SelfUpgrade {
     let r;
     try { r = await this.d.restartDashboard(sha, { revive, force: true }); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
     this.record({ from: sha, to: sha, result: r.ok ? 'dashboard_revived' : 'dashboard_revive_failed', reason: r.ok ? null : r.reason, attempt: attempts + 1 });
+    // A successful revive ends the outage episode: the next failure is a new outage with its own alert key (throttle counters stay).
+    if (r.ok) this.s.dashboardWatch = { ...this.s.dashboardWatch, episodeAt: undefined };
     if (r.ok && r.restarted) { if (this.s.dashboardFailure?.kind === 'watchdog') delete this.s.dashboardFailure; this.save(); return 'revived'; }
     if (r.ok) { this.save(); return 'ok'; }
     this.s.dashboardFailure = { at: now, kind: 'watchdog', target: sha, reason: String(r.reason || 'unknown').slice(0, 300), recovered: r.recovered === true };
