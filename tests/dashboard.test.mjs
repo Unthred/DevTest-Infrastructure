@@ -46,7 +46,49 @@ test('the real 13:15 case: paused_limit while the provider reports 34% session a
   assert.equal(v.agents.find(a => a.name === 'claude').state, 'paused');
   const j = v.agents.find(a => a.name === 'claude').job;
   assert.equal(j.lastEvent, 'usage_limit'); assert.equal(j.resetAt, null); assert.equal(j.nextAttemptAt, fx.nextAttemptAt);
-  assert.match(renderPage(v), /provider reports capacity left/);
+  assert.match(renderPage(v), /no window is near its limit: 5-hour 34%, weekly 18% used/);
+});
+// ---- issue #367: a nearly full window is never described as "capacity left"
+const withWindows = (...ws) => ({ provider: 'claude', status: 'allowed', observedAt: fx.updatedAt + 30000, windows: ws.map(([type, utilization, hours]) => ({ type, utilization, status: 'allowed', resetsAt: NOW + hours * 3600000 })) });
+test('nearly full 5-hour window: names the limiting window, its percentage and reset, and never says capacity left', () => {
+  const f = pauseDisagreement(fx, withWindows(['five_hour', 0.98, 1], ['seven_day', 0.4, 100]), NOW);
+  assert.equal(f.kind, 'nearly_full');
+  assert.match(f.text, /5-hour window 98% used, resets \d\d:\d\d UTC \(in 1h 0m\)/);
+  assert.doesNotMatch(f.text, /capacity left/);
+});
+test('nearly full weekly window is the limiting one even when the 5-hour window is low', () => {
+  const f = pauseDisagreement(fx, withWindows(['five_hour', 0.2, 1], ['seven_day', 0.96, 30]), NOW);
+  assert.equal(f.kind, 'nearly_full'); assert.match(f.text, /weekly window 96% used/);
+});
+test('a window just under the exhausted threshold is nearly full; a window at it confirms the pause with no finding', () => {
+  assert.equal(pauseDisagreement(fx, withWindows(['five_hour', 0.99, 1]), NOW).kind, 'nearly_full');
+  assert.equal(pauseDisagreement(fx, withWindows(['five_hour', 0.995, 1]), NOW), null);
+});
+test('Foreman thresholds are honoured: a lowered exhausted_at confirms, a raised high_water turns nearly full back into a disagreement', () => {
+  const a = withWindows(['five_hour', 0.96, 1]);
+  assert.equal(pauseDisagreement(fx, a, NOW, { exhaustedAt: 0.95 }), null);
+  const f = pauseDisagreement(fx, a, NOW, { nearlyFull: 0.99 });
+  assert.equal(f.kind, 'disagrees'); assert.doesNotMatch(f.text, /capacity left/); assert.match(f.text, /no window is near its limit/);
+});
+test('unknown readings are never called nearly full or capacity left', () => {
+  for (const a of [null, { provider: 'claude', windows: [] }, withWindows(['five_hour', null, 1])]) {
+    const f = pauseDisagreement(fx, a, NOW);
+    assert.equal(f.kind, 'unverifiable'); assert.doesNotMatch(f.text, /capacity left|nearly full/);
+  }
+});
+test('a paused provider at 98%: the Usage card shows the limiting window and no Warnings item is raised', async t => {
+  const j = { ...fx, allowance: withWindows(['five_hour', 0.98, 1], ['seven_day', 0.4, 100]) };
+  const v = await view(t, { jobs: [j], cache: { tick: okTick(), pulls: [], issues: [issue(30)] } });
+  assert.ok(!ids(v).includes('pause-claude'));
+  assert.match(v.usage.claude.limit.limiting, /5-hour window 98% used, resets/);
+  const html = renderPage(v, { route: { page: 'usage' } });
+  assert.match(html, /Paused on a usage limit/); assert.match(html, /5-hour window 98% used, resets/);
+  assert.doesNotMatch(html, /capacity left/);
+});
+test('a paused provider with a clearly low reading is still flagged, in the new wording', async t => {
+  const v = await view(t, { jobs: [fx], cache: { tick: okTick(), pulls: [], issues: [issue(30)] } });
+  assert.ok(ids(v).includes('pause-claude'));
+  assert.doesNotMatch(JSON.stringify(v.attention), /capacity left/);
 });
 test('a pause is consistent with a top-level rejected, blocked or exhausted allowance status (PR #36 review)', () => {
   for (const status of ['rejected', 'blocked', 'exhausted', 'limit_reached']) {

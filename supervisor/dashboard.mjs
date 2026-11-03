@@ -13,7 +13,7 @@ import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth } from './suphealth.mjs';
-import { MODE_LABEL } from './budget.mjs';
+import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { sinceView } from './since.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
@@ -30,7 +30,10 @@ export const windowLabel = (w, provider) => {
 };
 
 const DEAD = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
-const fullWindow = w => (Number.isFinite(w.utilization) && w.utilization >= EXHAUSTED) || DEAD.includes(w.status);
+const fullWindow = (w, exhaustedAt = EXHAUSTED) => (Number.isFinite(w.utilization) && w.utilization >= exhaustedAt) || DEAD.includes(w.status);
+const utcTime = ms => new Date(ms).toISOString().slice(11, 16) + ' UTC';
+// "5-hour window 98% used, resets 14:30 UTC (in 1h 5m)": one window in plain words.
+const windowPhrase = (w, provider, now) => `${windowLabel(w, provider)} window ${Math.round(w.utilization * 100)}% used${Number.isFinite(w.resetsAt) && w.resetsAt > 0 ? `, resets ${utcTime(w.resetsAt)} (in ${age(w.resetsAt - now)})` : ', reset time not reported'}`;
 export const age = ms => { const m = Math.max(0, Math.floor(ms / 60000)); return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`; };
 const PREDATES_MS = 2 * 60000;        // a reading this much older than the pause was taken before it
 // When the job went into its pause: its own allowance record is written at that moment (even an empty one), else its update.
@@ -52,11 +55,16 @@ export function readingText(allowance, now) {
 // provider reported. Expired windows (reset time passed) are evidence of nothing (issue #75). A live full window or an
 // exhausted status confirms the pause; a live window below the threshold is evidence of capacity, but only in a reading
 // taken at or after the pause: an older reading cannot contradict a limit hit later.
-export function pauseDisagreement(job, allowance, now) {
+//
+// `limits` carries the thresholds Foreman itself uses (budget `exhausted_at` and `high_water`), so the page and the scheduler agree
+// on what counts as used up. A live window at or above `high_water` that is not used up is "nearly full": the provider's own pause
+// is plausible, so it is described by its limiting window and never called "capacity left" (issue #367).
+export function pauseDisagreement(job, allowance, now, limits = {}) {
+  const exhaustedAt = limits.exhaustedAt ?? EXHAUSTED, nearlyFull = limits.nearlyFull ?? DEFAULT_BUDGET.high_water;
   if (!job || job.status !== 'paused_limit' || job.lastEvent !== 'usage_limit') return null;
   if (!hasReading(allowance)) return { kind: 'unverifiable', text: 'paused on a usage limit but the provider has reported no allowance data to confirm it' };
   const last = `last reading: ${readingText(allowance, now)}`;
-  const full = allowance.windows.filter(fullWindow);
+  const full = allowance.windows.filter(w => fullWindow(w, exhaustedAt));
   if (full.some(w => !windowExpired(w, now))) return null;
   if (full.length) {
     const reset = Math.max(...full.map(w => w.resetsAt));
@@ -70,17 +78,21 @@ export function pauseDisagreement(job, allowance, now) {
   const known = live.filter(w => Number.isFinite(w.utilization));
   if (!known.length) return { kind: 'unverifiable', text: `paused on a usage limit but the reported allowance has no utilisation figures to confirm it (${last})` };
   if ((allowance.observedAt || 0) < pausedAt(job) - PREDATES_MS) return { kind: 'unverifiable', text: `paused on a usage limit; the newest provider reading is older than the pause, so it cannot confirm it (${last})` };
+  const limiting = [...known].sort((a, b) => b.utilization - a.utilization)[0];
+  if (limiting.utilization >= nearlyFull) return { kind: 'nearly_full', window: limiting, text: `paused on a usage limit; the limiting window is nearly full: ${windowPhrase(limiting, allowance.provider, now)}, so the pause is plausible` };
   const used = known.map(w => `${windowLabel(w, allowance.provider)} ${Math.round(w.utilization * 100)}%`).join(', ');
-  const at = allowance.observedAt ? ` (reported ${new Date(allowance.observedAt).toISOString().slice(11, 16)} UTC)` : '';
-  return { kind: 'disagrees', text: `paused on a usage limit but the provider reports capacity left: ${used} used${at}` };
+  const at = allowance.observedAt ? ` (reported ${utcTime(allowance.observedAt)})` : '';
+  return { kind: 'disagrees', text: `paused on a usage limit but no window is near its limit: ${used} used; highest is ${windowPhrase(limiting, allowance.provider, now)}${at}` };
 }
 
 // What the Usage card says about a limit pause: when the limit resets and on what basis. Never an invented time.
 function limitView(job, allowance, now) {
-  if (job.resetAt) return { since: pausedAt(job), resetsAt: job.resetAt, basis: 'reported with the limit', retryAt: job.nextAttemptAt || null };
+  const top = (allowance?.windows || []).filter(w => !windowExpired(w, now) && Number.isFinite(w.utilization)).sort((a, b) => b.utilization - a.utilization)[0];
+  const limiting = top ? windowPhrase(top, allowance.provider, now) : null;   // the window nearest its limit, in words (issue #367)
+  if (job.resetAt) return { limiting, since: pausedAt(job), resetsAt: job.resetAt, basis: 'reported with the limit', retryAt: job.nextAttemptAt || null };
   const full = (allowance?.windows || []).filter(w => fullWindow(w) && !windowExpired(w, now) && Number.isFinite(w.resetsAt));
   const w = full.sort((a, b) => b.resetsAt - a.resetsAt)[0];
-  return { since: Number.isFinite(pausedAt(job)) ? pausedAt(job) : null, resetsAt: w ? w.resetsAt : null, basis: w ? `${windowLabel(w, allowance.provider)} window in the last reading` : null, retryAt: job.nextAttemptAt || null };
+  return { limiting, since: Number.isFinite(pausedAt(job)) ? pausedAt(job) : null, resetsAt: w ? w.resetsAt : null, basis: w ? `${windowLabel(w, allowance.provider)} window in the last reading` : null, retryAt: job.nextAttemptAt || null };
 }
 
 function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '', tz = undefined) {
@@ -340,8 +352,9 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     if (s.state !== 'paused') continue;
     const a = config.agents[agent];
     const own = hasReading(s.job?.allowance) ? s.job.allowance : null, fresh = allowance[a.provider] || null;   // judge by the newest reading the provider reported
-    const finding = pauseDisagreement(s.job, own && (!fresh || (own.observedAt || 0) >= (fresh.observedAt || 0)) ? own : fresh, now);
-    if (finding) add(`pause-${agent}`, `${agent}: ${finding.text}.${finding.kind === 'disagrees' ? ' Check the provider yourself; the pause may be wrong.' : ''}`, { kind: 'issue', n: s.job.issue });
+    const bs = budgetSettings(config);
+    const finding = pauseDisagreement(s.job, own && (!fresh || (own.observedAt || 0) >= (fresh.observedAt || 0)) ? own : fresh, now, { exhaustedAt: bs.exhausted_at, nearlyFull: bs.high_water });
+    if (finding && finding.kind !== 'nearly_full') add(`pause-${agent}`, `${agent}: ${finding.text}.${finding.kind === 'disagrees' ? ' Check the provider yourself; the pause may be wrong.' : ''}`, { kind: 'issue', n: s.job.issue });
   }
   stallItems({ items, state, cache, gated, names, now, web, limits });
   return items;
