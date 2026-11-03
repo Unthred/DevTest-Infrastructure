@@ -304,6 +304,17 @@ test('issue #193: a restart lost between the verified record and its outcome is 
   assert.deepEqual(calls, [NEW], 'not retried again once recorded');
 });
 
+test('issue #193: the restart intent is cleared only after the outcome record is written', async t => {
+  const root = tmp(t), order = [];
+  const deps = { config: { agents: {} }, restartDashboard: async () => ({ ok: true, restarted: true }), alert: async () => {}, installed: () => null };
+  const u = new SelfUpgrade({ root, deps, clock: { now: () => NOW } });
+  const rec = u.record.bind(u);
+  u.record = e => { order.push(['record', !!u.s.dashboardPending]); rec(e); };
+  await u.restartDashboard({ from: OLD, to: NEW });
+  assert.deepEqual(order, [['record', true]], 'pending still saved when the outcome is written');
+  assert.equal(u.s.dashboardPending, undefined);
+});
+
 test('issue #193: an unreadable record is named, and a stale unknown record stops making agents Unknown', async t => {
   const root = tmp(t); fs.mkdirSync(path.join(root, 'jobs'));
   const bad = path.join(root, 'jobs', `${'d'.repeat(32)}.json`);

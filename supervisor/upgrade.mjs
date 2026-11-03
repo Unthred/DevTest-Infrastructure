@@ -314,8 +314,9 @@ export class SelfUpgrade {
     this.s.dashboardPending = { from: p.from, to: p.to, rollingBack }; this.save();
     let r;
     try { r = await this.d.restartDashboard(target); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
-    delete this.s.dashboardPending; this.save();
+    // The outcome is recorded first and the intent cleared after it, so a loss between the two re-runs the restart (a duplicate record at worst) instead of leaving nothing.
     this.record({ from: p.from, to: p.to, result: r.ok ? 'dashboard_restarted' : 'dashboard_restart_failed', reason: r.ok ? (r.restarted ? null : r.reason) : r.reason, ...(r.ok && r.restarted ? { restarted: true } : {}) });
+    delete this.s.dashboardPending; this.save();
     if (!r.ok) await this.alert(`${p.to}:dashboard${rollingBack ? ':rollback' : ''}`, `Dashboard server was not restarted on ${short(target)} after the ${rollingBack ? 'rollback' : 'upgrade'}: ${r.reason}. Check the dashboard and restart it by hand if needed (the page shows "restart pending" until then).`);
   }
 
