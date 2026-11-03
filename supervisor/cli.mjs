@@ -188,10 +188,14 @@ async function teamTick(root, registry, dryRun, hold = null) {
     }
     const config = loadTeamConfig(teamConfigFile, root);
     // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
-    const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: probeAllowances(config), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
+    const found = {};
+    const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: mergeProbes(probeAllowances(config), found), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
     if (!config.enabled && !dryRun) { record({ status: 'disabled' }); return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' }; }
     try {
-      const team = await teamFor(root, registry, config);
+      let team = await teamFor(root, registry, config);
+      // Issue #110: refresh the allowance of a held agent whose reading is stale (or whose reset time has just passed) before
+      // planning, so a fresh reading can release the reviews-only latch in this very tick. A dry run or a hold never spends a run.
+      if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config);
       const report = await team.tick({ dryRun, hold });
       if (!dryRun) {
         record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length });
