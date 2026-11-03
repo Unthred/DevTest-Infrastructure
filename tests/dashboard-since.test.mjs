@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { writeToken } from '../supervisor/dashwrite.mjs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -74,14 +75,15 @@ async function serve(t) {
   for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
   fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ mergeLog: [{ pr: 100, issue: 10, mergedAt: H(4) }, { pr: 101, issue: 11, mergedAt: H(26) }] }));
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, pulls: [], issues: [{ number: 10, title: 'Ten', state: 'OPEN', labels: [] }] }));
+  const clock = { now: NOW };
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
-  const port = server.address().port; server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => NOW }));
+  const port = server.address().port; server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => clock.now }));
   const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
     const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject);
     r.end(body);
   });
-  const post = (at, headers = {}) => req('POST', '/mark-read', { headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: `at=${at}` });
-  return { root, port, get: p => req('GET', p), req, post };
+  const post = (at, headers = {}, proof) => req('POST', '/mark-read', { headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: `at=${at}&proof=${proof === undefined ? writeToken(root) : proof}` });
+  return { clock, root, port, get: p => req('GET', p), req, post };
 }
 
 test('page shows the panel with a copy button, a picker and Mark as read; page load does not move the marker', async t => {
@@ -108,16 +110,20 @@ test('Mark as read moves the marker to the page time and the next view uses it',
   const body = (await s.get('/')).body;
   assert.match(body, /Last marked as read: <time[^>]*data-local>2026-11-02 13:00 UTC<\/time>/);
   assert.match(body, /PRs merged <span class="muted">\(0\)/);          // the merge 4 h ago is now before the marker
+  assert.equal((await s.post(H(9))).status, 429, 'second mark inside the cooldown is refused');
+  s.clock.now += 6000;
   assert.equal((await s.post(H(9))).status, 303); assert.equal(readLastSeen(s.root), H(2), 'never moves backwards');
 });
 
 test('Mark as read refuses a cross-origin or missing Origin, a future or malformed time, and other methods stay refused', async t => {
   const s = await serve(t);
   assert.equal((await s.post(H(1), { origin: 'http://evil.example' })).status, 403);
-  assert.equal((await s.req('POST', '/mark-read', { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `at=${H(1)}` })).status, 403);
+  assert.equal((await s.req('POST', '/mark-read', { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `at=${H(1)}&proof=${writeToken(s.root)}` })).status, 403);
   assert.equal((await s.post(NOW + 60000)).status, 400);
   assert.equal((await s.post('abc')).status, 400);
   assert.equal((await s.post(H(1), { host: 'evil.example' })).status, 421);
+  assert.equal((await s.post(H(1), {}, '')).status, 403, 'no proof');
+  assert.equal((await s.post(H(1), {}, 'f'.repeat(64))).status, 403, 'wrong proof, correct Origin');
   assert.equal((await s.req('POST', '/')).status, 405);
   assert.equal((await s.req('PUT', '/mark-read')).status, 405);
   assert.equal((await s.get('/mark-read')).status, 404);
@@ -129,4 +135,13 @@ test('responses keep the origin on same-origin POSTs so Mark as read works in a 
   const r = await s.get('/');
   const policy = r.headers['referrer-policy'];
   assert.equal(policy, 'same-origin', 'no-referrer makes browsers send Origin: null on form POSTs, which markRead refuses');
+});
+
+test('Mark as read has a cooldown that survives restart and a refused proof takes no slot', async t => {
+  const s = await serve(t);
+  assert.equal((await s.post(H(2), {}, 'f'.repeat(64))).status, 403);
+  assert.equal((await s.post(H(2))).status, 303, 'refused proof took no slot');
+  const r = await s.post(H(3)); assert.equal(r.status, 429); assert.match(r.body, /too soon, try again at/);
+  assert.equal(readLastSeen(s.root), H(2), 'nothing moved');
+  assert.ok(fs.existsSync(path.join(s.root, 'dashboard', 'write-cooldown.json')), 'kept in the state root');
 });

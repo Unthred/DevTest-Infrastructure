@@ -262,6 +262,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Docker in hosted CI; a self-hosted Tower runner; bot-opened dependency pull requests now.
 - Superseded-by: none
 
+## D-029 — Dashboard writes need a secret proof and a cooldown
+- Status: agent-proposal
+- Date: 2026-11-03
+- Source: issue #434
+- Decision: Every dashboard write (POST /mark-read, POST /probe/<agent>) must carry a random secret kept in the state root (dashboard/write-token, mode 0600) as a hidden form field, compared in constant time; Host and Origin checks stay but are no longer sufficient. "Refresh allowance" also has a 5-minute per-agent cooldown kept in the state root (dashboard/write-cooldown.json), so it survives a restart; an overage-risk refusal gives the slot back. Limit: the secret is in the served page, so this stops forged and replayed requests and blind scripts, not a client that can read the page; a login or a read-only default would be a separate decision.
+- Rationale: Origin is a header a non-browser client sets freely, and each accepted probe spends allowance.
+- Rejected: Trusting Origin alone; a short-lived token (more state for the same page-reader limit).
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.
