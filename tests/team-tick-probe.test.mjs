@@ -1,6 +1,8 @@
 // Issue #110, through the real `team tick` command (teamTick in supervisor/cli.mjs): a held agent with a stale reading gets one
 // allowance probe before planning; a dry run gets none. The provider and GitHub are fake executables on PATH; no model is called.
 // This fails if the runDueProbes call in teamTick is removed (as happened in PR #222's rebase).
+// Hermetic: the shipped config names a checkout path that exists only on the host, so `git` is faked too. It answers the one question
+// the tick asks before probing (the decision register, read from origin/main) with this repository's own file; CI has no such path.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,7 +11,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'supervisor', 'cli.mjs');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const cli = path.join(here, '..', 'supervisor', 'cli.mjs'), register = path.join(here, '..', 'docs', 'DECISIONS.md');
 
 function world(t, { held = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tick-probe-'));
@@ -19,6 +22,7 @@ function world(t, { held = true } = {}) {
   fs.mkdirSync(bin);
   const exe = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   exe('gh', 'echo "[]"');
+  exe('git', `case "$*" in *"show origin/main:docs/DECISIONS.md"*) cat '${register}';; esac\nexit 0`);
   exe('claude', `echo probe >> '${marker}'`);   // records the call and prints nothing: the probe finds no reading
   fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
   // Claude was held until a reset time that has now passed and has no newer reading: a probe is owed ("reset").
