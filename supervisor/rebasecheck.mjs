@@ -53,7 +53,90 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
     const m = now.find(n => !used.has(n.sha) && n.ident === c.ident && n.subject === c.subject);
     if (m) used.add(m.sha); else missing.push({ sha: c.sha, subject: c.subject });
   }
-  return { oldHead, newHead, commits: now.map(c => ({ sha: c.sha, subject: c.subject })), missing, resolvedConflicts: resolvedConflicts(run, base, oldHead, newHead) };
+  return { oldHead, newHead, commits: now.map(c => ({ sha: c.sha, subject: c.subject })), missing, lostChanges: lostChanges(run, base, oldHead, newHead), resolvedConflicts: resolvedConflicts(run, base, oldHead, newHead) };
+}
+
+// Issue #415: a conflict resolution can lose a change INSIDE a commit while the commit list still looks complete (PR #222 kept
+// `runDueProbes` and dropped its only call). Compares what the PR added (relative to its merge base with the base, at the old head
+// and at the new head), by text only, no model. Lost = [{ file, kind: 'line'|'unreferenced', text }]:
+//  - line: added at the old head, absent from the same file at the new head (so a line the base now also has is not lost), and not
+//    added anywhere else by the new head (a moved line is not lost). Lines without a letter or digit (braces) are ignored.
+//  - unreferenced: a function the new head adds that nothing else in the tree mentions; an exported one only when the old head
+//    did reference it (a new public helper nobody calls yet is normal, a vanished call site is not).
+// Reports file and the added line / identifier only. Known limit: it judges text, so a line rewritten beyond containing the original counts as lost (fails safe).
+const MAX_LOST = 50;
+const MAX_DIFF_LINES = 20000;
+const DEFINITION = [
+  /^\s*(export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/,
+  /^\s*(export\s+)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/,
+  /^\s*()(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/
+];
+
+// { file -> [added line text] } of `from..to` (no context, no renames, so a rename shows as delete plus add and fails safe).
+function addedLines(run, from, to) {
+  const out = new Map();
+  const diff = run(['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, to]).split('\n');
+  if (diff.length > MAX_DIFF_LINES) throw new SupervisorError('rebase check: diff too large to compare');
+  let file = null; let header = false;
+  for (const line of diff) {
+    if (line.startsWith('diff --git ')) { header = true; file = null; continue; }
+    if (header) {
+      if (line.startsWith('+++ ')) file = line === '+++ /dev/null' ? null : line.slice(6).replace(/\t.*$/, '');
+      else if (line.startsWith('@@')) header = false;
+      continue;
+    }
+    if (file && line.startsWith('+')) { if (!out.has(file)) out.set(file, []); out.get(file).push(line.slice(1)); }
+  }
+  return out;
+}
+const meaningful = t => /[A-Za-z0-9]/.test(t);
+function fileLines(run, rev, file) {
+  try { return run(['show', `${rev}:${file}`]).split('\n').map(l => l.trim()); } catch { return []; }
+}
+const countOf = (lines, t) => lines.reduce((n, l) => n + (l === t ? 1 : 0), 0);
+// Mentions of `name` (whole word) in the tree at `rev`, not counting the definition line itself.
+function mentions(run, rev, name, defText) {
+  let out = '';
+  try { out = run(['grep', '-n', '-w', '-F', '-I', '-e', name, rev]); } catch { return 0; }   // exit 1 = no match
+  let n = 0;
+  for (const l of out.split('\n').filter(Boolean)) {
+    const text = l.replace(/^[^:]*:[^:]*:\d+:/, '').trim();   // rev:file:line:text (file names with ':' are not expected here)
+    if (text !== defText) n++;
+  }
+  return n;
+}
+
+function lostChanges(run, base, oldHead, newHead) {
+  const oldMb = run(['merge-base', base, oldHead]).trim();
+  const newMb = run(['merge-base', base, newHead]).trim();
+  if (!SHA.test(oldMb) || !SHA.test(newMb)) throw new SupervisorError('rebase check: no merge base');
+  const before = addedLines(run, oldMb, oldHead);
+  const after = addedLines(run, newMb, newHead);
+  const lost = [];
+  const addedAfter = new Set([...after.values()].flat().map(t => t.trim()));
+  for (const [file, lines] of before) {
+    const oldFile = fileLines(run, oldHead, file);
+    const newFile = fileLines(run, newHead, file);
+    const seen = new Set();
+    for (const raw of lines) {
+      const t = raw.trim();
+      if (!meaningful(t) || seen.has(t)) continue;
+      seen.add(t);
+      if (countOf(newFile, t) >= countOf(oldFile, t) || addedAfter.has(t)) continue;
+      if (t.length >= 4 && newFile.some(l => l.includes(t))) continue;   // a resolution that merged the line into a longer one keeps the change
+      lost.push({ file, kind: 'line', text: t.slice(0, 200) });
+    }
+  }
+  for (const [file, lines] of after) {
+    const defs = new Map();   // name -> { exported, text }
+    for (const raw of lines) for (const re of DEFINITION) { const m = re.exec(raw); if (m) { defs.set(m[2], { exported: !!m[1], text: raw.trim() }); break; } }
+    for (const [name, d] of defs) {
+      if (mentions(run, newHead, name, d.text) > 0) continue;
+      if (d.exported && mentions(run, oldHead, name, d.text) === 0) continue;
+      lost.push({ file, kind: 'unreferenced', text: name });
+    }
+  }
+  return lost.slice(0, MAX_LOST);
 }
 
 // Issue #258: did the rebase resolve a conflict? A trial three-way merge of the old head onto the point the new head was rebased onto
@@ -93,6 +176,7 @@ export function pushRebase({ worktree, branch, base, oldHead }) {
   const newHead = run(['rev-parse', 'HEAD']).trim();
   const check = checkRebase({ repoPath: worktree, base: `origin/${base}`, oldHead, newHead });
   if (check.missing.length) return { pushed: false, reason: 'missing', ...check };
+  if (check.lostChanges.length) return { pushed: false, reason: 'lost-changes', ...check };   // issue #415: nothing is pushed as a clean rebase
   const r = spawnSync('git', ['-C', worktree, 'push', '--quiet', `--force-with-lease=refs/heads/${branch}:${oldHead}`, 'origin', `HEAD:refs/heads/${branch}`], { encoding: 'utf8', timeout: 120000 });
   if (r.status !== 0) return { pushed: false, reason: 'lease', ...check };
   return { pushed: true, ...check };
