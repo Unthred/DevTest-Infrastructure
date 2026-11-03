@@ -21,8 +21,13 @@ const stage = stageProject(sourceProject, uid, gid), project = stage.project;
 const cfg = { allowedProjects: [project], storageRoot, uid, gid, lock, limits: { cpus: 2, memoryMb: 2048, pids: 256, shmMb: 256, timeoutMs: 240000, diskMb: 256, cacheMb: 64 } };
 const page = fs.readFileSync(path.join(sourceProject, 'supervisor', 'dashui', 'unreachable.html'), 'utf8');
 const site = fs.mkdtempSync('/mnt/cache/appdata/devtest-infrastructure/vis432-');
-fs.writeFileSync(path.join(site, 'first.html'), page.replace('EVERY_MS = 4000', 'EVERY_MS = 3600000'));
-fs.writeFileSync(path.join(site, 'long.html'), page.replace('EVERY_MS = 4000', 'EVERY_MS = 3600000').replace('LONG_MS = 5 * 60 * 1000', 'LONG_MS = 0').replace('setInterval(tick, 1000)', 'tick()'));
+// Each literal swap must change the text; otherwise a renamed constant would leave the capture showing the first message unnoticed.
+const swap = (text, from, to) => { if (!text.includes(from)) throw new Error(`unreachable.html no longer contains ${JSON.stringify(from)}; update this script`); return text.replace(from, to); };
+const firstPage = swap(page, 'EVERY_MS = 4000', 'EVERY_MS = 3600000');
+const longPage = swap(swap(firstPage, 'LONG_MS = 5 * 60 * 1000', 'LONG_MS = 0'), 'setInterval(tick, 1000)', 'tick()');
+if (firstPage === page || longPage === firstPage) throw new Error('page rewrite changed nothing');
+fs.writeFileSync(path.join(site, 'first.html'), firstPage);
+fs.writeFileSync(path.join(site, 'long.html'), longPage);
 fs.chmodSync(site, 0o755); for (const f of fs.readdirSync(site)) fs.chmodSync(path.join(site, f), 0o644);
 const failures = [];
 const run = async (name, spec, dir) => {

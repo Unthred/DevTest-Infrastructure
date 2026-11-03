@@ -48,11 +48,23 @@ p{margin:0;color:var(--mut)}
       return r.ok && /json/i.test(r.headers.get('content-type') || '');
     }, function () { return false; });
   }
+  // Loop guard: if a proxy serves this page for some paths while view.json is healthy, reloading would repeat forever. Remember recent
+  // reloads for this tab; after 3 within a minute, back off to one check a minute instead of reloading every few seconds.
+  var KEY = 'unreachable-reloads', WINDOW_MS = 60000, MAX = 3, BACKOFF_MS = 60000;
+  function recent() {
+    try { return JSON.parse(sessionStorage.getItem(KEY) || '[]').filter(function (t) { return Date.now() - t < WINDOW_MS; }); } catch (e) { return []; }
+  }
+  function remember(list) { try { list.push(Date.now()); sessionStorage.setItem(KEY, JSON.stringify(list)); } catch (e) {} }
   function poll() {
     tick();
-    back().then(function (ok) { if (ok) location.reload(); else setTimeout(poll, EVERY_MS); });
+    back().then(function (ok) {
+      if (!ok) { setTimeout(poll, EVERY_MS); return; }
+      var list = recent();
+      if (list.length >= MAX) { setTimeout(poll, BACKOFF_MS); return; }
+      remember(list); location.reload();
+    });
   }
-  setTimeout(poll, EVERY_MS);
+  setTimeout(poll, recent().length >= MAX ? BACKOFF_MS : EVERY_MS);
   setInterval(tick, 1000);
 })();
 </script>

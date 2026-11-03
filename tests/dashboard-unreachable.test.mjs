@@ -27,13 +27,14 @@ test('page is self-contained: no external script, style, font, image or link', (
   assert.match(html, /<svg[\s\S]*aria-label="A donkey"/);
 });
 
-function run({ responses }) {
+function run({ responses, storage }) {
   const timers = []; let now = 1000, reloads = 0, calls = [];
   const els = { msg: { textContent: 'first' }, sub: { textContent: '' } };
   const ctx = {
     Date: { now: () => now }, document: { getElementById: id => els[id] }, location: { reload: () => { reloads++; } },
     fetch: async (url, opts) => { calls.push([url, opts]); const r = responses.shift() ?? { throws: true }; if (r.throws) throw new Error('down'); return { ok: r.ok, headers: { get: () => r.type } }; },
     setTimeout: (f, ms) => { timers.push({ f, at: now + ms }); }, setInterval: (f, ms) => { timers.push({ f, at: now + ms, every: ms }); },
+    ...(storage ? { sessionStorage: { getItem: k => storage[k] ?? null, setItem: (k, v) => { storage[k] = v; } } } : {}),
   };
   vm.runInNewContext(script, ctx);
   const advance = async ms => {
@@ -70,4 +71,22 @@ test('after about five minutes the text changes; before that it does not', async
   await p.advance(15000);
   assert.equal(p.els.msg.textContent, 'This is taking longer than an install should.');
   assert.equal(p.reloads(), 0);
+});
+
+test('visual script guards every literal it rewrites, and the page still has them', () => {
+  const v = fs.readFileSync(new URL('./unreachable-visual.mjs', import.meta.url), 'utf8');
+  for (const lit of ['EVERY_MS = 4000', 'LONG_MS = 5 * 60 * 1000', 'setInterval(tick, 1000)']) assert.ok(html.includes(lit), `page lost ${lit}`);
+  assert.match(v, /const swap = /);
+  assert.doesNotMatch(v, /page\.replace\(/);
+});
+
+test('reload loop guard: after 3 reloads in a minute it stops reloading and backs off', async () => {
+  const storage = {}; let reloads = 0, last;
+  for (let i = 0; i < 5; i++) {   // each page load is a fresh script run sharing the tab's sessionStorage, as a real reload would be
+    last = run({ responses: Array(5).fill({ ok: true, type: 'application/json' }), storage });
+    await last.advance(10000);
+    reloads += last.reloads();
+  }
+  assert.equal(reloads, 3);
+  assert.equal(last.calls.length, 0);   // backed off: no check within 10 s
 });
