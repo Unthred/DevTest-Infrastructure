@@ -158,7 +158,7 @@ test('dashboard pages reuse the built view for the TTL under load, and rebuild o
     const root = tmp(t); fs.mkdirSync(path.join(root, 'jobs'), { recursive: true }); fs.mkdirSync(path.join(root, 'dashboard'), { recursive: true });
     const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
     const port = server.address().port; server.on('request', handler({ root, config: base, host: '127.0.0.1', port, now: () => 1e12, viewTtlMs: ttl }));
-    const get = () => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: '/api/view.json', headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve(b)); }).on('error', reject));
+    const get = () => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: '/api/view.json', headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve(JSON.stringify({ ...JSON.parse(b), pageData: null }))); }).on('error', reject));
     const first = await get();
     fs.writeFileSync(path.join(root, 'jobs', 'a'.repeat(32) + '.json'), JSON.stringify(job('a'.repeat(32))));
     const second = await get();

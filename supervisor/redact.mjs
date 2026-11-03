@@ -4,7 +4,21 @@ export const MAX_SCAN = 2000;
 export const KEY = '(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|credential)s?';
 // Auth scheme words that may precede a credential; the key rule consumes the scheme and the credential together.
 const SCHEME = '(?:bearer|basic|token|digest)';
+// Issue #467: redact is pure, and a dashboard build calls it for the same job texts on every build. A bounded memo (cleared when full, keys
+// capped at MAX_SCAN characters) skips the ten regular expressions for text already seen.
+const MEMO_MAX = 5000, MEMO_TEXT = 600;   // at most ~6 MB
+let memo = new Map();
 export function redact(value, max = 200) {
+  const text = String(value ?? '');
+  if (text.length > MEMO_TEXT) return redactUncached(text, max);
+  const key = `${max}\u0000${text}`, hit = memo.get(key);
+  if (hit !== undefined) return hit;
+  const out = redactUncached(text, max);
+  if (memo.size >= MEMO_MAX) memo = new Map();
+  memo.set(key, out);
+  return out;
+}
+function redactUncached(value, max) {
   return String(value ?? '').slice(0, MAX_SCAN)
     .replace(new RegExp(`("${KEY}"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"`, 'gi'), '$1"[secret]"')
     .replace(new RegExp(`\\b(${KEY})(\\s*[=:]\\s*)(?!\\[)(?:${SCHEME}\\s+)?[^\\s,;&"']+`, 'gi'), '$1$2[secret]')
