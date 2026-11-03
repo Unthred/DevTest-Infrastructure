@@ -441,3 +441,15 @@ test('#252 Copy all on Needs you and Warnings joins the item texts in order; job
   const quiet = (await (await serve(t, { root: stateRoot(t), cache })).get('/')).body;
   assert.doesNotMatch(quiet.slice(quiet.indexOf('data-card="needs"'), quiet.indexOf('data-card="warnings"')), /Copy all/, 'no Copy all on an empty list');
 });
+
+test('a failed status-issue update is a dashboard warning, not a Needs you item (issue #358)', async t => {
+  const tickAt = new Date(NOW - MIN).toISOString().replace(/\.\d+Z$/, 'Z');
+  const root = stateRoot(t, { log: `${tickAt} tick\n{"resumed":0,"blocked":0,"team":{"actions":[]}}\n` });
+  const view = async () => JSON.parse((await (await serve(t, { root, state: { jobs: {} }, cache })).get('/api/view.json')).body);
+  assert.ok(!(await view()).panels.warnings.some(a => a.id === 'status-issue-failed'), 'no state file, no warning');
+  fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'team', 'status-issue.json'), JSON.stringify({ number: 9, error: 'status issue not updated: gh issue edit failed: HTTP 502' }));
+  const bad = await view();
+  assert.ok(bad.panels.warnings.some(a => a.id === 'status-issue-failed'), 'warning panel');
+  assert.ok(!bad.panels.needsYou.some(a => a.id === 'status-issue-failed'));
+});

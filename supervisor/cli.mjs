@@ -10,6 +10,8 @@ import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { Team, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
+import { publishStatusIssue } from './statusissue.mjs';
+import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome } from './dashdata.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
@@ -153,6 +155,7 @@ async function gatePreflight(registry, config) {
   } finally { process.chdir(here); }
   return { ok: Object.values(checks).every(v => v === 'ok'), checks };
 }
+const currentStatusFor = (root, config) => currentStatus({ root, config, register: readRegister(config) });
 const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 async function teamTick(root, registry, dryRun, hold = null) {
   // Issue #153: pending config migrations run once, before the first tick of a new version; a failing one stops the tick.
@@ -178,7 +181,11 @@ async function teamTick(root, registry, dryRun, hold = null) {
   try {
     const team = await teamFor(root, registry, config);
     const report = await team.tick({ dryRun, hold });
-    if (!dryRun) record({ ...tickOutcome(report), team, actions: report.actions });
+    if (!dryRun) {
+      record({ ...tickOutcome(report), team, actions: report.actions });
+      // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
+      await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
+    }
     return report;
   } catch (error) {
     if (!dryRun) record({ status: 'error', error: error?.message });

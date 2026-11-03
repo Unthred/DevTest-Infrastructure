@@ -1,6 +1,7 @@
 // GitHub access for the dispatcher: the gh CLI with argument arrays (no shell), GitHub API only, no model call.
 import { spawnSync } from 'node:child_process';
 import { SupervisorError } from './core.mjs';
+import { isStatusIssue } from './statusissue.mjs';
 
 const TRANSIENT = /error connecting to|connection (reset|refused|timed out)|timeout|timed out|temporarily unavailable|\bEOF\b|TLS handshake|HTTP 5\d\d|could not resolve host/i;
 export const isTransient = text => TRANSIENT.test(String(text || ''));
@@ -36,8 +37,9 @@ export function githubClient(config, gh = ghRunner()) {
     listCheckRuns: async sha => { if (!/^[0-9a-f]{40}$/.test(String(sha))) throw new SupervisorError('invalid commit sha'); return json(['api', '--method', 'GET', `repos/${repo}/commits/${sha}/check-runs`, '-f', 'per_page=100'])?.check_runs || []; },
     listPullFiles: async n => (json(['pr', 'view', String(n), '--repo', repo, '--json', 'files'])?.files || []).map(f => String(f.path)),
     getPull: async n => { const p = json(['pr', 'view', String(n), '--repo', repo, '--json', PR_FIELDS]); return p ? withLabels([p])[0] : p; },
+    // The pinned status issue (#358) is Foreman's own output, never work: it is dropped here so no planner or view sees it.
     listIssues: async () => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '200', '--json', 'number,title,state,body,labels'])
-      .map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) })),
+      .filter(i => !isStatusIssue(i)).map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) })),
     // One issue by number, for when it is not in the capped list.
     getIssue: async n => { const i = json(['issue', 'view', String(n), '--repo', repo, '--json', 'number,title,state,body,labels']); return i ? { ...i, labels: (i.labels || []).map(l => l.name) } : null; },
     // The association of the issue's author with the repository (OWNER = the homeowner); the issue body counts as homeowner text only when OWNER (issue #299).
@@ -55,6 +57,8 @@ export function githubClient(config, gh = ghRunner()) {
       if (!match) throw new SupervisorError('created follow-up issue number was not returned');
       return Number(match[1]);
     },
+    updateIssueBody: async (n, body) => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'edit', String(n), '--repo', repo, '--body-file', '-'], body); },
+    pinIssue: async n => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'pin', String(n), '--repo', repo]); },
     addLabel: async (n, label) => {
       gh(['label', 'create', label, '--repo', repo, '--force', '--color', 'B60205', '--description', 'Needs a homeowner decision']);
       gh(['issue', 'edit', String(n), '--repo', repo, '--add-label', label]);
