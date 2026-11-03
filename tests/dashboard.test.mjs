@@ -312,7 +312,7 @@ test('server: loading the page makes no GitHub or model call (gh and provider CL
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   const ran = path.join(bin, 'git-show-ran');
   // exact argv, not a suffix match
-  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\ncase "\$*" in "-C /p/r show origin/main:docs/DECISIONS.md") echo ran >> ${ran}; exec ${realGit} "\$@";; esac\necho "git \$*" >> ${marker}\nexit 1\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\ncase "\$*" in "-C ${config().repo_path} show origin/main:docs/DECISIONS.md") echo ran >> ${ran}; exec ${realGit} "\$@";; esac\necho "git \$*" >> ${marker}\nexit 1\n`, { mode: 0o755 });
   for (const name of ['gh', 'claude', 'codex', 'curl']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho ${name} >> ${marker}\nexit 1\n`, { mode: 0o755 });
   const oldPath = process.env.PATH; process.env.PATH = `${bin}:${oldPath}`; t.after(() => { process.env.PATH = oldPath; });
   const s = await withServer(t, { jobs: [fx], cache: { tick: okTick(), pulls: [], issues: [issue(30)] } });
