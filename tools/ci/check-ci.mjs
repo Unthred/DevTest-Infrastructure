@@ -28,13 +28,29 @@ export function checkShell(root, add) {
   for (const file of walk(root)) {
     const name = path.relative(root, file).split(path.sep).join('/');
     const head = fs.readFileSync(file, 'utf8').slice(0, 200);
-    const isSh = file.endsWith('.sh') || /^#!\s*\/(?:usr\/)?bin\/(?:env\s+)?(?:ba)?sh\b/.test(head);
+    const isSh = /\.(?:sh|bash)$/.test(file) || /^#!\s*\/(?:usr\/)?bin\/(?:env\s+(?:-\S+\s+)*)?(?:ba)?sh\b/.test(head);
     if (!isSh) continue;
     const r = spawnSync('bash', ['-n', file], { encoding: 'utf8' });
     if (r.error) add('shell', `${name}: bash unavailable (${r.error.code})`);
     else if (r.status !== 0) add('shell', `${name}: syntax error: ${(r.stderr || '').trim().split('\n')[0].slice(0, 160)}`);
     if (!/^#!/.test(head)) add('shell', `${name}: missing shebang`);
   }
+}
+
+// One block per job id under the top-level "jobs:" key.
+function jobBlocks(lines) {
+  const start = lines.findIndex((l) => /^jobs:\s*(?:#.*)?$/.test(l));
+  if (start < 0) return [];
+  const blocks = []; let indent = null, cur = null;
+  for (let i = start + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\S/.test(l)) break;
+    if (!l.trim() || /^\s*#/.test(l)) continue;
+    const m = l.match(/^(\s+)([\w-]+):\s*(?:#.*)?$/);
+    if (indent === null && m) indent = m[1].length;
+    if (m && m[1].length === indent) { cur = { id: m[2], body: '' }; blocks.push(cur); } else if (cur) cur.body += l + '\n';
+  }
+  return blocks;
 }
 
 export function checkWorkflows(root, add) {
@@ -47,10 +63,10 @@ export function checkWorkflows(root, add) {
     const lines = text.split('\n');
     const at = (i) => `.github/workflows/${f}:${i + 1}`;
     if (!/^permissions:/m.test(text)) add('workflows', `${f}: no top-level "permissions:" (default token scope is too wide)`);
-    if (/^\s*permissions:\s*write-all\b/m.test(text) || /^\s+(?:contents|packages|id-token):\s*write\b/m.test(text)) add('workflows', `${f}: write permission in a CI workflow`);
+    if (/^\s*permissions:\s*write-all\b/m.test(text) || /^\s+[\w-]+:\s*write\b/m.test(text)) add('workflows', `${f}: write permission in a CI workflow`);
     if (/\bpull_request_target\b/.test(text)) add('workflows', `${f}: pull_request_target runs untrusted code with secrets`);
     if (/\bruns-on:\s*\[?\s*self-hosted\b/.test(text)) add('workflows', `${f}: self-hosted runner (Tower stays out of hosted CI; D-007)`);
-    if (!/^\s*timeout-minutes:/m.test(text)) add('workflows', `${f}: jobs need timeout-minutes`);
+    for (const j of jobBlocks(lines)) if (!/^\s+timeout-minutes:/m.test(j.body)) add('workflows', `${f}: job "${j.id}" needs timeout-minutes`);
     lines.forEach((line, i) => {
       const code = line.replace(/#.*$/, '');
       const use = code.match(/^\s*-?\s*uses:\s*["']?([^\s"']+)/);
@@ -58,8 +74,10 @@ export function checkWorkflows(root, add) {
         const ref = use[1];
         if (!ref.startsWith('./') && !ACTION_SHA.test(ref) && !ACTION_OFFICIAL_MAJOR.test(ref)) add('workflows', `${at(i)}: action "${ref}" is not pinned to a commit SHA (only official actions/* major tags are allowed)`);
       }
-      if (/\bdocker\s+(?:run|compose|build)\b/.test(code)) add('workflows', `${at(i)}: Docker in hosted CI; Docker-dependent smokes run on Tower only (OQ-3)`);
+      if (/(?:^|[\s;&|(`])(?:docker|podman|nerdctl)(?:-compose)?(?=\s|$)/.test(code.replace(/^\s*-?\s*(?:name|uses):.*$/, ''))) add('workflows', `${at(i)}: Docker/Podman invocation in hosted CI (best-effort match on any docker/podman/nerdctl command); Docker-dependent smokes run on Tower only (OQ-3)`);
       if (/\$\{\{\s*secrets\./.test(code)) add('workflows', `${at(i)}: secret referenced in a CI workflow`);
+      // The read-only job token is allowed only as an env value (GH_TOKEN/GITHUB_TOKEN), never inline in a command or action input.
+      if (/\$\{\{\s*github\.token\b/.test(code) && !/^\s*(?:GH_TOKEN|GITHUB_TOKEN):\s*\$\{\{\s*github\.token\s*\}\}\s*$/.test(code)) add('workflows', `${at(i)}: github.token used outside a GH_TOKEN/GITHUB_TOKEN env value`);
     });
   }
 }

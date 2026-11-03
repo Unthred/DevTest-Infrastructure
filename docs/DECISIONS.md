@@ -253,8 +253,17 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: A per-PR switch that skips review; a path-based `second_opinion` (it cannot name PRs or relax D-024); Opus writing fixes.
 - Superseded-by: none
 
+## D-028 — Docker smokes run on Tower only; hosted CI is static; no dependency bots
+- Status: agent-proposal
+- Date: 2026-11-03
+- Source: issue #298 (review follow-up to PR #294); answers OQ-3; see docs/ci-and-images.md
+- Decision: GitHub-hosted CI runs only Docker-free checks (project validators, fixtures and fakes, `check-ci`) with `contents: read`, no secrets and no self-hosted runner. Docker-dependent smokes run on Tower only, and a Docker claim needs Tower evidence. Image digest freshness is a weekly scheduled check (45 days), not a merge gate. Dependabot and Renovate stay off until a later dated decision approves a scope.
+- Rationale: Keeps Tower out of GitHub-triggered execution (D-007) and keeps PR gates reproducible (D-004).
+- Rejected: Docker in hosted CI; a self-hosted Tower runner; bot-opened dependency pull requests now.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.
-- OQ-3: Whether Docker-dependent tests run in GitHub-hosted CI or only on Tower's runner (issue #12).
+- OQ-3: Whether Docker-dependent tests run in GitHub-hosted CI or only on Tower's runner (issue #12). Proposed answer: D-028, awaiting homeowner approval.
 - OQ-4: Evidence retention period (issue #12/#13).
