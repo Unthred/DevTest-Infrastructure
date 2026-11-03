@@ -89,6 +89,10 @@ const jobPath = id => `/work/job/${encodeURIComponent(String(id).slice(0, 8))}`;
 const jobLink = id => named(jobPath(id), REFS.job[String(id).slice(0, 8)], `job ${String(id).slice(0, 8)}`);
 // A running job's card shows its description once, as the link; the name is the fallback when the reference table has none.
 const jobLinkNamed = j => named(jobPath(j.id), REFS.job[String(j.id).slice(0, 8)], j.name || `job ${String(j.id).slice(0, 8)}`);
+// Issue #430: Watch / Stop watching. One small same-origin form post; `back` returns to the page the button was on.
+const watchedBy = (view, kind, n) => (view.watching || []).find(w => (kind === 'pr' ? w.pr === Number(n) : w.issue === Number(n)));
+const watchForm = (kind, n, action, label, back, cls = '') => `<form method="post" action="/watch" class="watch-form"><input type="hidden" name="kind" value="${esc(kind)}"><input type="hidden" name="number" value="${Number(n)}"><input type="hidden" name="action" value="${esc(action)}"><input type="hidden" name="back" value="${esc(back)}"><button class="btn ${cls}" type="submit">${esc(label)}</button></form>`;
+const watchBtn = (view, kind, n, back = '/') => (watchedBy(view, kind, n) ? watchForm(kind, n, 'unwatch', 'Stop watching', back, 'watch-on') : watchForm(kind, n, 'watch', 'Watch', back));
 const jobIdCell = (full, what = 'job ID') => `${jobLink(full)}${full ? copyBtn(full, what) : ''}`;
 const refOf = r => (r ? (r.kind === 'pull' ? prLink(r.n) : issueLink(r.n)) : '');
 const ext = (url, text) => `<a href="${esc(url)}">${esc(text)}</a>`;
@@ -285,7 +289,7 @@ function nextWhyHtml(view) {
 }
 function nextPanel(view) {
   const now = view.generatedAt, plan = view.panels.next;
-  return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref), view.tz, now)}${p.reassignedFrom || p.why ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
+  return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)} ${watchBtn(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref, '/')}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref), view.tz, now)}${p.reassignedFrom || p.why ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
@@ -358,6 +362,19 @@ function sincePanel(view, query) {
 
 // ---- pages
 const agentCols = view => ({ agent: { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) } });
+const STEP_WORD = { done: 'done', active: 'in progress', blocked: 'stuck', pending: 'not yet', skipped: 'not needed' };
+function watchingCard(view) {
+  const now = view.generatedAt, list = view.watching || [];
+  const item = w => {
+    const ref = w.pr !== null ? prLink(w.pr) : issueLink(w.issue), back = '/';
+    const steps = w.steps.map(st => { const h = w.history[st.key] || []; return `<li class="wstep st-${esc(st.status)}${w.current === st.key ? ' cur' : ''}" data-step="${esc(st.key)}" data-status="${esc(st.status)}"><details><summary><span class="wlabel">${esc(st.label)}</span><span class="wstate">${esc(STEP_WORD[st.status] || st.status)}</span></summary>${h.length ? `<ul class="whist">${h.map(r => `<li><b>${lt(r.at)}</b> ${esc(r.text)}</li>`).join('')}</ul>` : '<p class="sub">Nothing recorded yet.</p>'}</details></li>`; }).join('');
+    const issueTag = w.pr !== null && w.issue !== null ? ` <span class="sub">for ${issueLink(w.issue)}</span>` : '';
+    const est = w.done ? '' : estHtml(estFor(view, w.pr !== null ? 'pr' : 'issue', w.pr !== null ? w.pr : w.issue), view.tz, now);
+    return `<li class="watch-item${w.needs ? ' needs' : ''}" data-watch="${esc(w.id)}"><div class="watch-head"><b>${ref}</b>${issueTag}${w.pinned ? ' <span class="badge sev-info">Pinned</span>' : ''}<span class="watch-acts">${watchForm(w.kind, w.number, w.pinned ? 'unpin' : 'pin', w.pinned ? 'Unpin' : 'Pin', back)}${watchForm(w.kind, w.number, 'unwatch', 'Stop watching', back, 'watch-on')}</span></div><ol class="wsteps" aria-label="Steps from implement to verified">${steps}</ol><p class="watch-sentence">${esc(w.sentence)}</p>${est}</li>`;
+  };
+  const body = list.length ? `<ul class="watch-list">${list.map(item).join('')}</ul>` : empty('Nothing watched', 'Press Watch on any issue or pull request to follow it from start to installed.', 'info');
+  return card({ id: 'watching', title: `Watching${list.length ? ` (${list.length})` : ''}`, span: 12, movable: false, body, cls: 'panel watching', type: 'panel' });
+}
 function overview(view, query) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
   const now = view.generatedAt;
@@ -386,7 +403,7 @@ function overview(view, query) {
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
-  return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
+  return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
 }
 
 function agentsPage(view, query, path) {
@@ -445,13 +462,13 @@ function jobDetail(view, query, path, route) {
 }
 const showChip = (path, query, key, value, text) => (query.get(key) === value ? `<p class="chips"><span class="chip on">${esc(text)}</span> <a class="btn" href="${esc(withQuery(path, query, { [key]: null }))}">Show all</a></p>` : '');
 function workPage(view, query, path) {
-  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz, view.generatedAt)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
+  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)} ${watchBtn(view, i.type === 'issue' ? 'issue' : 'pr', i.ref, '/work')}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz, view.generatedAt)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
   const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: showChip(path, query, 'issues.show', 'blocked', 'Showing only open issues blocked by dependencies') + table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.filter(i => query.get('issues.show') !== 'blocked' || (i.state === 'OPEN' && i.blockedBy.length)).map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'],
-    cols: [{ key: 'number', label: 'Issue', num: true, html: r => issueLink(r.number) }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
+    cols: [{ key: 'number', label: 'Issue', num: true, html: r => `${issueLink(r.number)} ${watchBtn(view, 'issue', r.number, path)}` }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
     totals: { number: 'count', blockers: 'sum' }, emptyState: empty('No issues cached', 'The first tick fills the cache.', 'list') }) });
   const prs = card({ id: 'prs', title: 'Pull requests', span: 12, movable: false, body: showChip(path, query, 'prs.show', 'awaiting-review', 'Showing only pull requests waiting for review') + table({ id: 'prs', path, query, noun: 'pull requests', rows: view.prs.filter(p => query.get('prs.show') !== 'awaiting-review' || p.awaitingReview), searchKeys: ['name', 'title', 'agent', 'status', 'number', 'verdict'],
-    cols: [{ key: 'number', label: 'Pull request', num: true, html: r => prLink(r.number) }, { key: 'agent', label: 'Author', html: r => agentTag(r.agent, view) }, { key: 'status', label: 'State' },
+    cols: [{ key: 'number', label: 'Pull request', num: true, html: r => `${prLink(r.number)} ${watchBtn(view, 'pr', r.number, path)}` }, { key: 'agent', label: 'Author', html: r => agentTag(r.agent, view) }, { key: 'status', label: 'State' },
       { key: 'checks', label: 'CI', html: r => checksBadge(r.checks) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'reviewRounds', label: 'Review rounds', num: true, more: true },
       { key: 'fixRounds', label: 'Fix rounds', num: true, more: true }, { key: 'rebaseRounds', label: 'Rebase rounds', num: true, more: true }, { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true }],
     totals: { number: 'count', reviewRounds: 'avg', fixRounds: 'avg', tokens: 'sum' }, emptyState: empty('No pull requests yet', 'Pull requests appear once an agent opens one.', 'list') }) });
@@ -463,7 +480,7 @@ function prDetail(view, query, path, route) {
   const p = view.prs.find(x => x.number === route.id);
   if (!p) return null;
   const facts = card({ id: 'facts', title: p.full || p.name, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(p.status)}</dd><dt>Author</dt><dd>${agentTag(p.agent, view)}</dd><dt>CI</dt><dd>${checksBadge(p.checks)}</dd><dt>Latest verdict</dt><dd>${verdictBadge(p.verdict)}</dd>${p.carry ? `<dt>Carried verdict</dt><dd>${esc(`${String(p.carry.oldHead).slice(0, 7)} → ${String(p.carry.newHead).slice(0, 7)}`)}${p.carry.valid ? '' : ' (record does not match this head)'}<br>${esc(`no conflict resolved: ${p.carry.evidence.resolvedConflicts === false ? 'yes' : 'not shown'}; patch unchanged: ${p.carry.evidence.patchUnchanged === true ? 'yes' : 'not shown'}; CI: ${p.carry.evidence.ci || 'unknown'}`)}</dd>` : ''}
-<dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd></dl>` });
+<dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd><dt>Watch</dt><dd>${watchBtn(view, 'pr', p.number, path)}</dd></dl>` });
   const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${lt(r.at)}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
   const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)}${v.model ? ` <span class="sub">(${esc(v.model)})</span>` : ''} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${lt(v.at)}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'The opposite agent has not reviewed this pull request.', 'review') });
   const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
@@ -475,7 +492,7 @@ function issueDetail(view, query, path, route) {
   const dependents = view.issues.filter(o => o.dependsOn.includes(i.number));
   const deps = i.dependsOn.length ? `<ul class="panel-list">${i.dependsOn.map(d => { const di = view.issues.find(x => x.number === d); const blocked = i.blockedBy.includes(d); return `<li class="sev-${blocked ? 'warning' : 'ok'}"><div class="t">${blocked ? badge('warning', 'Blocking') : badge('ok', 'Done')} ${issueLink(d)}</div></li>`; }).join('')}</ul>` : empty('No prerequisites', 'This issue does not wait on another one.', 'check');
   const facts = card({ id: 'facts', title: i.name || `#${i.number}`, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(i.state)}</dd><dt>Assigned to</dt><dd>${agentTag(i.agent, view)}</dd><dt>Status</dt><dd>${esc(i.reason || '–')}</dd>
-<dt>Needs homeowner</dt><dd>${i.needsHomeowner ? badge('action', 'Yes') : 'No'}</dd><dt>On GitHub</dt><dd>${ext(i.url, i.name || `#${i.number}`)}</dd></dl>` });
+<dt>Needs homeowner</dt><dd>${i.needsHomeowner ? badge('action', 'Yes') : 'No'}</dd><dt>On GitHub</dt><dd>${ext(i.url, i.name || `#${i.number}`)}</dd><dt>Watch</dt><dd>${watchBtn(view, 'issue', i.number, path)}</dd></dl>` });
   return { title: i.name || `#${i.number}`, crumbs: [['/work', 'Work'], [null, i.name || `#${i.number}`]], body: grid('issue', facts + card({ id: 'deps', title: 'Dependencies and blockers', span: 6, movable: false, body: deps })
     + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? `<ul class="panel-list">${dependents.map(d => `<li class="sev-info"><div class="t">${issueLink(d.number)}</div></li>`).join('')}</ul>` : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') }), 'fit') };
 }

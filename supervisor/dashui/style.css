@@ -333,3 +333,12 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .ev-h{margin:var(--sp3) 0 var(--sp2);font-size:var(--fs-sm);text-transform:capitalize}
 .ev-report{white-space:pre-wrap;overflow-wrap:anywhere;max-height:32rem;overflow:auto;margin:0;font:var(--fs-sm) ui-monospace,SFMono-Regular,Menlo,monospace}
 @media(max-width:639px){.ev-sides{grid-template-columns:1fr}}
+/* Issue #430: Watch buttons and the Watching card. */
+.watch-form{display:inline;margin:0}.watch-form .btn{min-height:24px;padding:0 var(--sp2);font-size:.8em}.btn.watch-on{border-color:var(--accent,currentColor)}
+.watch-list{list-style:none;margin:0;padding:0;display:grid;gap:var(--sp3)}.watch-item{border:1px solid var(--line,#8884);border-radius:6px;padding:var(--sp2) var(--sp3)}.watch-item.needs{border-color:var(--bad,#c33)}
+.watch-head{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:center}.watch-acts{margin-left:auto;display:flex;gap:var(--sp2)}.wtitle{flex:1 1 20ch;min-width:0;overflow-wrap:anywhere}
+.wsteps{list-style:none;margin:var(--sp2) 0;padding:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--sp1)}
+.wstep{border-top:4px solid var(--line,#8886);padding-top:2px;min-width:0}.wstep summary{cursor:pointer;display:flex;flex-direction:column;min-height:24px}.wlabel{font-weight:600}.wstate{font-size:.78em;opacity:.8}
+.wstep.st-done{border-top-color:var(--ok,#2a7)}.wstep.st-active{border-top-color:var(--info,#27c)}.wstep.st-blocked{border-top-color:var(--bad,#c33)}.wstep.st-skipped{opacity:.6}.wstep.cur .wlabel{text-decoration:underline}
+.whist{margin:var(--sp1) 0;padding-left:1.1em;font-size:.85em}.watch-sentence{margin:var(--sp1) 0}
+@media (max-width:700px){.wsteps{grid-template-columns:repeat(2,minmax(0,1fr))}}

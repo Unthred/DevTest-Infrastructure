@@ -1,10 +1,14 @@
 // Team dashboard server (issue #32). Node built-ins only. It reads the supervisor state and the cache/history the tick wrote; it makes
 // no GitHub call and no model call. GET/HEAD only, except two form posts, each needing an access proof (issue #434; the probe has a 5-minute per-agent cooldown and Mark as read a 5-second shared cooldown, both kept in the state root): POST /mark-read moves the Mark as read marker (issue #253), and
 // POST /probe/<agent> runs one minimal allowance probe (issue #110).
+// no GitHub call and no model call. GET/HEAD only, except three form posts: POST /mark-read moves the Mark as read marker (issue #253),
+// POST /probe/<agent> runs one minimal allowance probe (issue #110), and POST /watch changes which changes are followed (issue #430).
+// Each post needs an access proof (issue #434); the probe also has a per-agent cooldown.
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
 import { readTimeline, computeGaps, allSnapshots, storageReport } from './history.mjs';
 import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
+import { applyAction, readWatchlist } from './watchlist.mjs';
 import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
@@ -63,7 +67,7 @@ export async function currentView({ root, config, now = Date.now(), tz = default
   const register = registerCached(config);
   const hot = readSnapshots(root), tl = readTimeline(root);
   const history = { timeline: timeline ? tl : [], gaps: timeline ? computeGaps(tl, allSnapshots(root, hot), now) : [], storage: storageReport(root, { now, timeline: tl }), ...(allTime ? { chartSnapshots: allSnapshots(root, hot) } : {}) };
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), register, registerUnreadable: !register });
+  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request.
@@ -139,10 +143,30 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     writeLastSeen(root, Math.max(at, prev ?? 0));
     return send(303, 'text/plain; charset=utf-8', 'marked', { location: '/' });
   };
+  // Watch (issue #430): the third write. It changes only which changes the dashboard follows; it starts, stops and alters no work.
+  // Same host, same origin, one small form post. The target must be an issue or PR the tick has seen.
+  const watch = async (req, res, send) => {
+    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+    if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    const kind = form.get('kind'), action = form.get('action'), raw = form.get('number') || '', number = /^\d{1,7}$/.test(raw) ? Number(raw) : NaN;
+    const back = /^\/[A-Za-z0-9/_-]{0,80}$/.test(form.get('back') || '') ? form.get('back') : '/';
+    if (!['issue', 'pr'].includes(kind) || !Number.isSafeInteger(number) || number < 1 || !['watch', 'unwatch', 'pin', 'unpin'].includes(action)) return send(400, 'text/plain; charset=utf-8', 'bad request');
+    if (action === 'watch') {
+      const cache = readCache(root) || {}, known = kind === 'issue' ? (cache.issues || []).some(i => i.number === number) : [...(cache.pulls || []), ...(cache.merged || [])].some(p => p.number === number) || (readTeamState(root).mergeLog || []).some(m => m.pr === number);
+      if (!known) return send(404, 'text/plain; charset=utf-8', 'unknown issue or pull request');
+    }
+    const r = applyAction(root, { kind, number, action, now: now() });
+    if (!r.ok) return send(409, 'text/plain; charset=utf-8', r.reason);
+    return send(303, 'text/plain; charset=utf-8', 'ok', { location: back });
+  };
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
     if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
+    if (req.method === 'POST' && reqPath === '/watch') return watch(req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.
     const probePath = req.method === 'POST' ? /^\/probe\/([A-Za-z0-9_-]{1,40})$/.exec(reqPath) : null;
