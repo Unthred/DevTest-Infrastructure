@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
-import { withTestConcurrency, testEnv, sweepTestTemp, TEST_PREFIXES, DEFAULT_TEST_CONCURRENCY } from '../supervisor/testenv.mjs';
+import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, TEST_PREFIXES, DEFAULT_TEST_CONCURRENCY } from '../supervisor/testenv.mjs';
 import { validateTeamConfig } from '../supervisor/team.mjs';
 
 const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'foreman-469-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
@@ -124,4 +124,37 @@ test('test-slot sweep needs a root and works from the CLI', t => {
   assert.notEqual(spawnSync(process.execPath, [cli, 'test-slot', 'sweep', '--state-root', state], { encoding: 'utf8' }).status, 0);
   const r = spawnSync(process.execPath, [cli, 'test-slot', 'sweep', '--dir', root, '--state-root', state], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr); assert.equal(JSON.parse(r.stdout).removed, 1); assert.equal(fs.existsSync(d), false);
+});
+
+// Issue #469: a repeat full suite is skipped only for the exact same clean tree that already passed it.
+test('repeat suite: the same clean tree is not run again, a changed tree is, a failed run is never recorded', t => {
+  const state = tmp(t), repo = tmp(t), marker = path.join(state, 'runs');
+  const git = (...a) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...a], { encoding: 'utf8' });
+  git('init', '-q'); fs.writeFileSync(path.join(repo, 'f.txt'), '1'); git('add', '.'); git('commit', '-qm', 'one');
+  const fake = path.join(state, 'bin', 'node'); fs.mkdirSync(path.dirname(fake));   // stands in for node: counts runs, fails when FAIL is set
+  fs.writeFileSync(fake, `#!/bin/sh\necho x >> ${marker}\n[ -n "$FAIL" ] && exit 1\nexit 0\n`, { mode: 0o755 });
+  const run = (extra = [], env = {}) => spawnSync(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, ...extra, '--', fake, '--test', 'x'], { cwd: repo, encoding: 'utf8', timeout: 60000, env: { ...process.env, ...env } });
+  const runs = () => (fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8').trim().split('\n').length : 0);
+  assert.equal(run([], { FAIL: '1' }).status, 1); assert.equal(runs(), 1);
+  assert.equal(run().status, 0); assert.equal(runs(), 2, 'a failed run was not recorded, so this one runs');
+  const again = run(); assert.equal(again.status, 0); assert.equal(runs(), 2, 'same tree: not run again'); assert.match(again.stderr, /already passed/);
+  assert.equal(run(['--no-reuse']).status, 0); assert.equal(runs(), 3, '--no-reuse forces a run');
+  fs.writeFileSync(path.join(repo, 'f.txt'), '2');
+  assert.equal(run().status, 0); assert.equal(runs(), 4, 'a dirty tree always runs');
+  git('commit', '-qam', 'two'); assert.equal(run().status, 0); assert.equal(runs(), 5, 'a changed tree runs');
+  assert.equal(run().status, 0); assert.equal(runs(), 5, 'and is then recorded');
+});
+
+test('repeat suite: findPass honours the age limit and a zero setting; test_reuse_hours is validated', t => {
+  const file = path.join(tmp(t), 'p.jsonl'), key = { key: 'k', tree: 'a'.repeat(40) }, now = Date.now();
+  recordPass(file, key, { now: now - 3 * 3600000 });
+  assert.ok(findPass(file, key, { now, maxAgeHours: 4 }));
+  assert.equal(findPass(file, key, { now, maxAgeHours: 2 }), null);
+  assert.equal(findPass(file, key, { now, maxAgeHours: 0 }), null);
+  assert.equal(findPass(file, { key: 'other' }, { now, maxAgeHours: 4 }), null);
+  assert.equal(suiteKey(tmp(t), ['node', '--test']), null, 'no git: never reused');
+  assert.equal(suiteKey(process.cwd(), ['git', 'status']), null, 'not a node --test suite: never reused');
+  const b = base();
+  for (const bad of [-1, 721, 1.5]) assert.throws(() => validateTeamConfig({ ...b, limits: { ...b.limits, test_reuse_hours: bad } }), /test_reuse_hours/);
+  validateTeamConfig({ ...b, limits: { ...b.limits, test_reuse_hours: 0 } });
 });

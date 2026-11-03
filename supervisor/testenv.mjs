@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const DEFAULT_TEST_CONCURRENCY = 4;   // provisional: set from measurements on Tower and in CI (see docs/team-loop.md)
+export const DEFAULT_TEST_CONCURRENCY = 8;   // set from the measurements in docs/team-loop.md (3 Nov 2026, Tower)
 export const TEST_PREFIXES = ['supervisor-regress-', 'supervisor-test-', 'supervisor-cron-', 'supervisor-cron35-', 'devtest-broker-', 'nm-', 'gatelog-', 'hr-src-', 'hr-clone-', 'foreman-448-', 'foreman-469-'];
 export const DEFAULT_SWEEP_AGE_HOURS = 24;
 
@@ -56,4 +56,37 @@ export function sweepTestTemp({ tmpRoot, prefixes = TEST_PREFIXES, ageHours = DE
     fs.appendFileSync(logFile, JSON.stringify({ at: new Date(now).toISOString(), tmpRoot, ageHours, removed: out.removed }) + '\n');
   }
   return out;
+}
+
+// Issue #469: skip a repeat full suite only when the exact same tree already passed it. The key is the git tree hash of a clean
+// checkout (a dirty tree, or no git, is never reused), the command and the node version. A pass is recorded only after a real run
+// exits 0, so every tree that merges or installs has passed the full suite somewhere; a record older than `maxAgeHours` is ignored.
+import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
+export const DEFAULT_REUSE_HOURS = 24;
+export function suiteKey(cwd, cmd) {
+  const isNodeTest = /(^|\/)node$/.test(cmd[0] || '') && cmd.includes('--test');
+  if (!isNodeTest) return null;
+  try {
+    const git = args => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (git(['status', '--porcelain', '--untracked-files=all', '--ignored=no']) !== '') return null;
+    const tree = git(['rev-parse', 'HEAD^{tree}']);
+    if (!/^[0-9a-f]{40,64}$/.test(tree)) return null;
+    const key = crypto.createHash('sha256').update(JSON.stringify([tree, cmd, process.version])).digest('hex');
+    return { key, tree };
+  } catch { return null; }
+}
+export function findPass(file, key, { now = Date.now(), maxAgeHours = DEFAULT_REUSE_HOURS } = {}) {
+  if (!key || !(maxAgeHours > 0)) return null;
+  let text; try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  for (const line of text.trim().split('\n').reverse()) {
+    let r; try { r = JSON.parse(line); } catch { continue; }
+    if (r.key === key.key && now - Date.parse(r.at) <= maxAgeHours * 3600000 && now >= Date.parse(r.at)) return r;
+  }
+  return null;
+}
+export function recordPass(file, key, { now = Date.now(), label } = {}) {
+  if (!key) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, JSON.stringify({ at: new Date(now).toISOString(), key: key.key, tree: key.tree, label: label ?? null }) + '\n');
 }

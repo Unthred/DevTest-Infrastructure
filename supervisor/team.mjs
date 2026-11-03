@@ -40,6 +40,7 @@ export function validateTeamConfig(input) {
   if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
   if ('chain_seconds' in L && !(typeof L.chain_seconds === 'number' && L.chain_seconds >= 0 && L.chain_seconds <= 3600)) throw new SupervisorError('invalid team limit: chain_seconds');
   if ('test_slots' in L && !(Number.isSafeInteger(L.test_slots) && L.test_slots >= 1 && L.test_slots <= 8)) throw new SupervisorError('invalid team limit: test_slots');
+  if ('test_reuse_hours' in L && !(Number.isSafeInteger(L.test_reuse_hours) && L.test_reuse_hours >= 0 && L.test_reuse_hours <= 720)) throw new SupervisorError('invalid team limit: test_reuse_hours');
   if ('test_concurrency' in L && !(Number.isSafeInteger(L.test_concurrency) && L.test_concurrency >= 1 && L.test_concurrency <= 32)) throw new SupervisorError('invalid team limit: test_concurrency');
   if ('test_tmp_root' in c && !(typeof c.test_tmp_root === 'string' && path.isAbsolute(c.test_tmp_root))) throw new SupervisorError('invalid team config: test_tmp_root must be an absolute path');
   if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');

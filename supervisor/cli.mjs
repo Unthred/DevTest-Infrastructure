@@ -9,7 +9,7 @@ import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, Wo
 import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
-import { withTestConcurrency, testEnv, sweepTestTemp, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
+import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, DEFAULT_REUSE_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
 import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { Team, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, upgradeLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
@@ -36,7 +36,7 @@ function args(list) {
     const arg = list[i];
     if (!arg.startsWith('--')) { out._.push(arg); continue; }
     const key = arg.slice(2);
-    if (['auto-resume', 'foreground', 'force', 'dry-run', 'json', 'no-github'].includes(key)) out[key] = true;
+    if (['auto-resume', 'foreground', 'force', 'dry-run', 'json', 'no-github', 'no-reuse'].includes(key)) out[key] = true;
     else if (key === 'no-auto-resume') out[key] = false;
     else out[key] = list[++i];
   }
@@ -356,13 +356,19 @@ async function main() {
     if (a._[0] === 'status') { const st = testSlotStatus(root, limit); console.log(JSON.stringify(st, null, 2)); console.error(testSlotLine(st)); return; }
     const dash = process.argv.indexOf('--');
     if (a._[0] !== 'run' || dash < 0 || dash === process.argv.length - 1) throw new SupervisorError('usage: test-slot status | test-slot sweep | test-slot run [--label TEXT] -- COMMAND [ARGS]');
-    const cmd = withTestConcurrency(process.argv.slice(dash + 1), cfg.limits?.test_concurrency ?? DEFAULT_TEST_CONCURRENCY);
+    const rawCmd = process.argv.slice(dash + 1);
+    const passFile = path.join(root, 'team', 'test-passes.jsonl');
+    const reuseHours = a['no-reuse'] ? 0 : (cfg.limits?.test_reuse_hours ?? DEFAULT_REUSE_HOURS);
+    const key = reuseHours > 0 ? suiteKey(process.cwd(), rawCmd) : null;   // Issue #469: the same clean tree that already passed is not run again
+    const prior = findPass(passFile, key, { maxAgeHours: reuseHours });
+    if (prior) { console.error(`test-slot: tree ${prior.tree} already passed this suite at ${prior.at}; not run again (use --no-reuse to force)`); process.exitCode = 0; return; }
+    const cmd = withTestConcurrency(rawCmd, cfg.limits?.test_concurrency ?? DEFAULT_TEST_CONCURRENCY);
     const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
     if (!release) { console.error('waited too long for a free test slot'); process.exitCode = 3; return; }
     const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', env: testEnv(process.env, cfg.test_tmp_root) });
     for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
     const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, s) => resolve(c ?? (s ? 128 : 1))); });
-    release(); process.exitCode = code; return;
+    release(); if (code === 0) recordPass(passFile, suiteKey(process.cwd(), rawCmd), { label: a.label }); process.exitCode = code; return;
   }
   if (command === 'dashboard') {
     if (a._[0] !== 'serve') throw new SupervisorError('usage: dashboard serve --host LAN_IPV4 [--port N]');
