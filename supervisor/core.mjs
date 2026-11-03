@@ -211,7 +211,8 @@ export function acquireLeases(root, job, clock = realClock) {
 }
 // One writer per worktree: a lease is kept while the job's worker (other than this process) or provider child still exists.
 // Issue #132: the child counts as alive only when its start time matches the one recorded at spawn (PID reuse) and it is
-// not a zombie. A job without a recorded childStart (written by an older worker) falls back to existence, minus zombies.
+// not a zombie. A job without a recorded childStart (written by an older worker) falls back to existence, minus zombies. That fallback fails closed but can let PID reuse keep a legacy job's leases;
+// `release` stays the manual remedy for such jobs (issue #195).
 export function processInfo(pid) {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
@@ -238,6 +239,7 @@ export function releaseLeases(root, job) {
     if (fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).job === job.id) { fs.unlinkSync(file); released++; }
   }
   if (released) event(root, job, 'leases_released');
+  return released;
 }
 export function checkpoint(root, job, clock = realClock) {
   const head = git(job.worktree, 'rev-parse', 'HEAD');
@@ -384,7 +386,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
   }
 }
 export function processStart(pid) {
-  try { return fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[21]; } catch { return null; }
+  return processInfo(pid)?.start ?? null;   // issue #195: same exact parse as processInfo (comm may contain spaces)
 }
 export function claimWorker(root, id) {
   const dir = path.join(root, 'workers'); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

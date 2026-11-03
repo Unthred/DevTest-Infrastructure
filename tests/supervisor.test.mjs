@@ -478,3 +478,42 @@ test('issue #302: a lease conflict is a typed LeaseHeld error naming the holder,
   assert.throws(() => acquireLeases(root, job('b'.repeat(32))), e => e instanceof LeaseHeld && e.holder === 'a'.repeat(32) && /already leased; stale lease requires explicit recovery/.test(e.message));
   assert.equal(fs.readdirSync(path.join(root, 'leases')).length, 2, 'the conflicting job took nothing');
 });
+
+test('issue #195: reconcile does not report a terminal job as released when a later job holds the same leases', async t => {
+  const f = fixture(t), clock = fakeClock();
+  const a = await createJob(f.root, f.spec, f.registry, clock);
+  const { transition, acquireLeases } = await import('../supervisor/core.mjs');
+  transition(f.root, a, 'stopped', 'manual', clock);
+  assert.deepEqual(leaseFiles(f.root), [], 'stopped job released its leases');
+  const b = { ...a, id: 'b'.repeat(32) };
+  acquireLeases(f.root, b);
+  assert.equal(leaseFiles(f.root).length, 2);
+  const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+  const reconcile = () => JSON.parse(execFileSync(process.execPath, [cli, 'reconcile', '--state-root', f.root, '--registry', f.registry], { encoding: 'utf8' }));
+  assert.equal(reconcile().released, 0);
+  assert.equal(reconcile().released, 0);
+  assert.equal(leaseFiles(f.root).length, 2, "B's leases intact");
+});
+
+test('issue #195: processStart parses a comm containing spaces exactly like processInfo', async () => {
+  const { processStart, processInfo } = await import('../supervisor/core.mjs');
+  assert.equal(processStart(process.pid), processInfo(process.pid).start);
+  assert.equal(processStart(999999999), null);
+});
+
+test('issue #195: processStart is exact for a live process whose comm contains spaces', async () => {
+  const { processStart, processInfo } = await import('../supervisor/core.mjs');
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, ['-e', "process.title='a b c';setTimeout(()=>{},20000)"], { stdio: 'ignore' });
+  try {
+    let info = null;
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      info = processInfo(child.pid);
+      if (fs.readFileSync(`/proc/${child.pid}/stat`, 'utf8').includes('(a b c)')) break;
+    }
+    assert.ok(fs.readFileSync(`/proc/${child.pid}/stat`, 'utf8').includes('(a b c)'));
+    assert.ok(info && info.start);
+    assert.equal(processStart(child.pid), processInfo(child.pid).start);
+  } finally { child.kill('SIGKILL'); }
+});
