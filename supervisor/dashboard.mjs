@@ -174,7 +174,12 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? names.issue(ahead.issue).text : names.pr(ahead.pr).text}` : 'ready; waits for a free slot'; }
     queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason, next: planned.has(`${agent}:implement:${n}`) });
   }
-  for (const q of Object.values(queues)) q.sort((x, y) => (y.next - x.next) || (x.ref - y.ref));
+  // Issue #405: reviews are listed in the order the planner takes them (closest to merge, then age), with the reason.
+  for (const [reviewer, q] of Object.entries(queues)) {
+    const order = new Map(team.reviewQueue(reviewer, prs).map(r => [r.pr.number, r]));
+    for (const e of q) { const o = e.type === 'review' ? order.get(e.ref) : null; if (o) { e.order = o.position; e.reason += ` [review order ${o.position} of ${o.of}: ${o.reason}]`; } }
+  }
+  for (const q of Object.values(queues)) q.sort((x, y) => (y.next - x.next) || (x.type === 'review' && y.type === 'review' && x.order && y.order ? x.order - y.order : x.ref - y.ref));
   return queues;
 }
 
@@ -268,13 +273,16 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   // One card per open PR that is labelled needs-homeowner or has hit the fix or review limit (the label and the notice are the same event).
   for (const pr of cache?.pulls || []) {
     const verdict = state.verdicts?.[`${pr.number}:${pr.headRefOid}`]?.verdict;
-    const rejected = verdict === 'CHANGES' || checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) === 'red';
     const fixes = fixCount(pr.number);
     // Attempts are counted when a job is created, so the limit cards wait until the last such job has finished.
     const activeKinds = new Set([...jobs].filter(j => j.issue === pr.number && ACTIVE.includes(j.status)).map(j => j.kind));
+    const rejected = verdict === 'CHANGES' || checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) === 'red';
     const fixLimit = !pr.isDraft && Number.isFinite(maxFix) && fixes >= maxFix && rejected && !['fix', 'cifix', 'rebase'].some(k => activeKinds.has(k));
     const reviewLimit = !pr.isDraft && Number.isFinite(maxReview) && !verdict && !activeKinds.has('review') && Object.entries(state.reviewAttempts || {}).some(([k, v]) => k.startsWith(`${pr.number}:${pr.headRefOid}:`) && v >= maxReview);
-    const labelled = pr.labels?.includes('needs-homeowner');
+    // Issue #405: the label alone is not a decision. A PR that reached the fix limit earlier but now has a new head with no verdict, passing or
+    // pending CI and no CHANGES is only awaiting review: it is queued (see the review order), not Needs you.
+    const awaiting = !pr.isDraft && Number.isFinite(maxFix) && fixes >= maxFix && !verdict && !fixLimit && !reviewLimit && checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) !== 'red';
+    const labelled = pr.labels?.includes('needs-homeowner') && !awaiting;
     if (!fixLimit && !reviewLimit && !labelled) continue;
     if (fixLimit) fixLimited.add(pr.number);
     // Issue #211: the dispatcher already has a next step (one final fix round), so nothing is asked of the homeowner yet.

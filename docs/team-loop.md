@@ -131,3 +131,15 @@ Reviews belong to one head and the fix limit stops new commits, so a PR stuck on
 
 ## Jobs paused on a usage limit (issue #380)
 A `paused_limit` job runs no process, so it holds neither a role slot nor a place under the overall cap, and an upgrade drain does not wait for it. Its job record keeps its place. The worker resumes it only through a gate that (1) for a review, compares the pull request's current head with the review target and, if the head moved, stops the job (`head_moved`) without a verdict so the planner reviews the new head; and (2) checks, under one lock held until the job is marked running, that every other running or queued job leaves a free slot in the job's role and under the overall cap. When it must wait, the reason names the jobs in the way and is shown on the job (`resumeWait`) and on the dashboard card. `paused_manual` is unchanged: it still holds its slot. When eligible work finds its role (or the overall cap) full, the planner records a held reason naming the running jobs.
+
+## Review order (issue #405)
+With one review slot per reviewer, the order in which waiting pull requests are reviewed decides how long each waits. GitHub lists open PRs newest first, so the planner no longer takes that order. For each reviewer, eligible PRs (green CI, not conflicting, no verdict on the current head, not draft) are taken in this order:
+
+1. **Starved first.** A PR that has waited for a review longer than `limits.review_starvation_hours` (default 24) goes first, the longest wait first. The wait starts when Foreman first sees the PR without a verdict on its head, survives new heads and CI runs, and ends when a verdict is recorded on the current head. No PR can wait indefinitely behind closer or scarcer ones.
+2. **Scarce reviewer first.** A PR that no other agent may review (D-024 independence, judged from configured review models and head writers) goes to that reviewer before a PR either agent could review. This spends the scarce allowance where it is needed.
+3. **Closer to merge.** Mergeable now, then more earlier review rounds (verdicts recorded on earlier heads), then not behind its base.
+4. **Older first.** Lower PR number. A newly opened PR therefore never jumps ahead of an older PR in the same state.
+
+The order only ranks; it never makes a PR eligible, and which agent reviews (issue #402) is unchanged. The dashboard queue and the status issue (#384) show each reviewer's order and the reason ("review order 1 of 3: only codex can review it, mergeable, older first").
+
+**Needs you.** A fix-limit item appears only when the homeowner must act: a real CHANGES verdict on the current head (or red CI) after the fix limit, with or without the `needs-homeowner` label. A PR that reached the limit earlier but now has a new head with no verdict and no red CI is only awaiting review; it is queued, not Needs you.

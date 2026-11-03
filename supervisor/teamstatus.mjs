@@ -100,6 +100,9 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   // 4. pull requests
   const pulls = (cache?.pulls || []).map(p => ({ number: p.number, name: redact(names.pr(p.number).text, 300), title: redact(names.titleOf(names.issueOfPr(p.number)?.number) ?? p.title, 80), status: prState(p), ci: ciState(p, state, now), verdict: verdictOf(state, p), url: p.url || null }));
 
+  // Issue #405: the order in which each reviewer will take the PRs waiting for a review, with the reason.
+  const reviewOrder = (view.agents || []).flatMap(a => (view.queues[a.name] || []).filter(q => q.type === 'review' && q.order).sort((x, y) => x.order - y.order).map(q => ({ agent: a.name, pr: q.ref, order: q.order, text: redact(`${a.name} ${q.order}: ${ref('pr', q.ref)} ${(/\[review order [^:]*: ([^\]]*)\]/.exec(q.reason) || [])[1] || ''}`.trim(), 300) })));
+
   // 5. merged today (local day); the tick caches the merged list, the dispatcher's own log fills any gap
   const today = dayOf(now, tz);
   const seen = new Set(), mergedToday = [];
@@ -129,7 +132,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   } catch { /* no state file: nothing installed by the loop yet */ }
   let installed = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); installed = m ? m[1].slice(0, 7) : null; } catch { /* not a versioned install */ }
-  return { needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), hold, install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, problems, pulls, mergedToday, schedule, allowance };
+  return { needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), hold, install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {

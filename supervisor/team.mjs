@@ -35,6 +35,7 @@ export function validateTeamConfig(input) {
   for (const k of ['max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
   // Issue #344: no fixed ceiling on concurrency. `overall` is optional; absent, it follows the role counts (see overallCap).
   if ('overall' in L && !(Number.isSafeInteger(L.overall) && L.overall >= 1)) throw new SupervisorError('invalid team limit: overall');
+  if ('review_starvation_hours' in L && !(typeof L.review_starvation_hours === 'number' && L.review_starvation_hours > 0 && L.review_starvation_hours <= 720)) throw new SupervisorError('invalid team limit: review_starvation_hours');
   if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
   if ('chain_seconds' in L && !(typeof L.chain_seconds === 'number' && L.chain_seconds >= 0 && L.chain_seconds <= 3600)) throw new SupervisorError('invalid team limit: chain_seconds');
   if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');
@@ -498,7 +499,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -861,6 +862,7 @@ export class Team {
     this.modes = this.budgets(); this.held = {}; this.heldPr = {};
     await this.loadFiles(prs);
     this.recordHeadWriters(prs);
+    this.recordReviewWaits(prs);
     const active = await this.jobs.listActive();
     this.activeIds = new Set(active.map(j => j.id));
     // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
@@ -1112,7 +1114,7 @@ export class Team {
     // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
     const wtBusy = false;   // issue #344: every review has its own worktree and lease, so no review waits for another
     // review: any agent's PR whose head was written by another model, green CI, mergeable, no verdict yet on this exact head
-    for (const pr of rev && !wtBusy ? prs : []) {
+    for (const pr of rev && !wtBusy ? this.reviewQueue(agent, prs).map(q => q.pr) : []) {   // issue #405: closest to merge first, not GitHub's newest-first order
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
@@ -1207,6 +1209,43 @@ export class Team {
       }
     }
     return null;
+  }
+
+  // Issue #405: review order. Rules, in this precedence (docs/team-loop.md, "Review order"):
+  //  1. starved: a PR that has waited for a review longer than limits.review_starvation_hours (default 24) goes first, longest wait
+  //     first, so a stream of closer PRs can never hold it back indefinitely;
+  //  2. scarce: a PR that no other agent can review (independence, D-024) goes to that agent before a PR either could review;
+  //  3. closer to merge: mergeable now, then more earlier review rounds (verdicts on earlier heads), then not BEHIND its base;
+  //  4. older first (lower PR number).
+  // Pure ordering: it never makes a PR eligible. Eligibility stays with the checks in choose().
+  recordReviewWaits(prs) {
+    const now = this.clock.now(), open = new Set();
+    for (const pr of prs || []) {
+      if (!agentOfBranch(this.c, pr.headRefName) || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
+      open.add(String(pr.number));
+      if (this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]) delete this.s.reviewSince[pr.number];
+      else this.s.reviewSince[pr.number] ??= now;
+    }
+    for (const k of Object.keys(this.s.reviewSince)) if (!open.has(k)) delete this.s.reviewSince[k];
+  }
+  reviewRounds(pr) { return Object.keys(this.s.verdicts).filter(k => k.startsWith(`${pr.number}:`)).length; }
+  reviewQueue(agent, prs) {
+    const now = this.clock.now(), limitMs = (this.c.limits.review_starvation_hours ?? 24) * 3600000;
+    const rows = (prs || []).filter(pr => SHA.test(pr.headRefOid) && agentOfBranch(this.c, pr.headRefName) && !pr.isDraft && pr.mergeable !== 'CONFLICTING' && this.ciState(pr) === 'green' && !this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]).map(pr => {
+      const waited = this.s.reviewSince[pr.number] != null ? now - this.s.reviewSince[pr.number] : 0, starved = waited >= limitMs, key = verdictKey(pr.number, pr.headRefOid);
+      const scarce = !this.agents().some(([n]) => n !== agent && !this.reviewRefusal(n, pr, `${key}:${n}`));
+      const mergeable = pr.mergeable === 'MERGEABLE', rounds = this.reviewRounds(pr), behind = pr.mergeStateStatus === 'BEHIND';
+      const why = [];
+      if (starved) why.push(`waited ${Math.floor(waited / 3600000)}h for a review (limit ${limitMs / 3600000}h)`);
+      if (scarce) why.push(`only ${agent} can review it`);
+      if (mergeable) why.push('mergeable');
+      if (rounds) why.push(`${rounds} earlier review round${rounds === 1 ? '' : 's'}`);
+      if (behind) why.push('behind its base');
+      why.push('older first');
+      return { pr, starved, scarce, mergeable, rounds, behind, waited, reason: why.join(', ') };
+    });
+    rows.sort((a, b) => (b.starved - a.starved) || (a.starved && b.starved ? (b.waited - a.waited) : 0) || (b.scarce - a.scarce) || (b.mergeable - a.mergeable) || (b.rounds - a.rounds) || (a.behind - b.behind) || (a.pr.number - b.pr.number));
+    return rows.map((r, i) => ({ ...r, position: i + 1, of: rows.length }));
   }
 
   // Issue #266: whether a rebase of `pr` waits. The one rebase candidate is the PR next to merge (lowest number of all conflicting, or
