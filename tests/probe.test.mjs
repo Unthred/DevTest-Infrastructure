@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot, provider, validateManifest, defaultRegistry } from '../supervisor/core.mjs';
 import { assessAgent, DEFAULT_BUDGET, HOUR, validateBudgetConfig } from '../supervisor/budget.mjs';
-import { probeDue, runProbeCommand, hasProbe, refreshProvider, cleanProbeRecord, MINUTE } from '../supervisor/probe.mjs';
+import { probeDue, overageRisk, runProbeCommand, hasProbe, refreshProvider, cleanProbeRecord, MINUTE } from '../supervisor/probe.mjs';
 import { probeNow } from '../supervisor/probenow.mjs';
 import { mergeProbes, readCache, storeProbes, latestAllowance } from '../supervisor/dashdata.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
@@ -290,4 +290,17 @@ test('probeNow refuses a model-run probe on overage risk and never calls the pro
   storeProbes(root, { claude: { ...usedUp('rejected'), observedAt: NOW + 1000, source: 'probe' } });
   assert.equal((await probeNow({ root, registry: 'unused', config: cfg, agent: 'claude', now: NOW, refresh })).ok, true);
   assert.equal(calls, 1);
+});
+
+test('overageRisk: a used-up top-level status with no window reset time is a risk unless overage is refused; no reading is not', () => {
+  const noTime = (status, overageStatus) => ({ provider: 'claude', status, observedAt: NOW, windows: [{ type: 'seven_day', status: 'allowed' }], billing: { overageStatus, usingOverage: false } });
+  for (const st of ['rejected', 'blocked', 'exhausted', 'limit_reached']) {
+    assert.equal(overageRisk(noTime(st, 'allowed'), NOW), true, st);
+    assert.equal(overageRisk({ ...noTime(st, 'unknown'), windows: [] }, NOW), true, st + ' without windows');
+    assert.equal(overageRisk(noTime(st, 'rejected'), NOW), false, st + ' with overage refused');
+  }
+  assert.equal(overageRisk(noTime('allowed', 'allowed'), NOW), false);
+  assert.equal(overageRisk(null, NOW), false);
+  assert.equal(probeDue({ mode: 'waiting', allowance: noTime('rejected', 'allowed'), settings: S, now: NOW }), null);
+  assert.equal(probeDue({ mode: 'waiting', allowance: { ...noTime('rejected', 'rejected'), observedAt: NOW - 3 * HOUR }, settings: S, now: NOW }).reason, 'stale');
 });

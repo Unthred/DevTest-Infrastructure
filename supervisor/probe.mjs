@@ -19,7 +19,8 @@ export const RESET_GRACE_MS = MINUTE;          // "just after a reported reset t
 const MAX_LINE = 65536, MAX_OUTPUT = 4 * 1024 * 1024;
 
 // Could a model run now draw on paid overage? True while the newest reading shows overage in use for a window that has not
-// reset, or a window that has not reset is used up and overage is not explicitly refused. Pure.
+// reset, or a window that has not reset is used up, or a used-up top-level status has no window reset time, and overage is not explicitly refused.
+// No reading at all is not a risk: the probe is how a first reading arrives. Pure.
 const USED_UP = ['rejected', 'blocked', 'exhausted', 'limit_reached'], REFUSED = ['rejected', 'disabled'];
 const liveWindows = (allowance, now) => (allowance?.windows || []).filter(w => Number.isFinite(w?.resetsAt) && w.resetsAt > now);
 // Is a window that has not reset yet used up (utilization at exhausted_at, or a rejected/blocked status)? Pure.
@@ -29,6 +30,9 @@ export function usedUpWindow(allowance, now, exhaustedAt = 0.995) {
 export function overageRisk(allowance, now, exhaustedAt = 0.995) {
   if (allowance?.billing?.usingOverage === true && liveWindows(allowance, now).length) return true;
   if (REFUSED.includes(allowance?.billing?.overageStatus)) return false;
+  // A top-level used-up status with no window reset time cannot be shown to have reset: treat it as live while overage is not refused.
+  const timed = (allowance?.windows || []).some(w => Number.isFinite(w?.resetsAt));
+  if (!timed && USED_UP.includes(allowance?.status)) return true;
   return usedUpWindow(allowance, now, exhaustedAt);
 }
 
