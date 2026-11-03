@@ -515,7 +515,11 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     finally { fs.rmSync(dir, { recursive: true, force: true }); }
   };
   const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'self-upgrade-'));
-  const slotted = (label, fn) => withTestSlot(root, { limit: config.limits?.test_slots ?? DEFAULT_TEST_SLOTS, label, ...slotOptions }, fn);
+  // A slot directory that cannot be made (unwritable state root) is an environmental failure, never a thrown error or a bypass of the limit.
+  const slotted = async (label, fn) => {
+    try { return await withTestSlot(root, { limit: config.limits?.test_slots ?? DEFAULT_TEST_SLOTS, label, ...slotOptions }, fn); }
+    catch (error) { return { ok: false, environmental: true, reason: `test slot unavailable: ${String(error?.message || error).slice(0, 160)}` }; }
+  };
   return {
     config,
     installed: () => installedSha(root),

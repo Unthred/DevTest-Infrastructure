@@ -414,7 +414,7 @@ test('issue #101: realDeps runs the bootstrap installer taken from the installed
   const d2 = realDeps({ root: path.join(bad.dir, 'state'), config: { repo_path: badClone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
   const res = await d2.preChecks(bad.sha); assert.equal(res.ok, false); assert.equal(res.environmental, undefined); assert.match(res.reason, /^validator:/);
   // no installed version: nothing to take the bootstrap from, so it refuses rather than guess
-  const none = realDeps({ root: '/nonexistent', config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
+  const none = realDeps({ root: path.join(r.dir, 'no-state'), config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
   assert.equal((await none.preChecks(r.sha)).ok, false);
 });
 test('dry-run health check: only a real plan counts, not a lock skip, bad JSON or a non-zero exit', async t => {
@@ -758,4 +758,11 @@ test('issue #412: realDeps maps the installer report (exit 11) to a named, block
   const r = await d.preChecks(TO);
   assert.equal(r.ok, false); assert.equal(r.blocked, true); assert.equal(r.kind, 'tests');
   assert.deepEqual(r.tests, ['alpha works', 'beta works']); assert.equal(r.reason, 'tests failed: alpha works; beta works'); assert.match(r.excerpt, /not ok 2/);
+});
+
+test('issue #448: an unwritable state root makes the install check an environmental failure, not a thrown error', async () => {
+  const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'slot-blocked-')), 'file'); fs.writeFileSync(blocker, ''); // a root under a plain file cannot hold a slot directory, as any user
+  const none = realDeps({ root: blocker, config: { repo_path: '/x', agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
+  const res = await none.preChecks('a'.repeat(40));
+  assert.equal(res.ok, false); assert.equal(res.environmental, true); assert.match(res.reason, /test slot unavailable/);
 });
