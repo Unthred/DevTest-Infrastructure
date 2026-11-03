@@ -119,3 +119,12 @@ The Usage page has a **Failed attempts** card (`view.failedSpend`): jobs that en
 - Not verified against live GitHub: `gh run rerun` and `authorAssociation` on issue comments. That stays part of "verified working".
 
 **Parallel jobs (issue #344).** Every review and split-draft job has its own worktree (`DevTest-Infrastructure-<agent>-review-<pr>`, `-split-<issue>`), so reviews no longer queue behind one shared review worktree. A new implement job is refused while its expected files overlap those of a running or already planned implement job. Expected files come from `expectedFiles(issue)` in `supervisor/team.mjs` (paths named in the issue title and body; no model call; replaceable through one function). A wrong prediction is safe: jobs never share a worktree or branch, and a real overlap shows up as a merge conflict that the existing rebase job resolves in queue order. The allowance is checked when a job is planned (planned cost counts) and again right before each start, so a limit reached mid-tick stops the remaining starts. Still open for #344: concurrent rebase/merge ordering, dashboard rate/projection and cap-reason display.
+
+## Re-review after a homeowner decision (issue #366)
+
+Reviews belong to one head and the fix limit stops new commits, so a PR stuck on a CHANGES verdict can still have a blocker the homeowner has since resolved. The homeowner records that with `ai-agent --supervisor team request-review <pr> <decision-link>`, where the link is an issue or pull request comment of this repository.
+
+- It requests exactly one new review of the **same head**. The old CHANGES verdict is set aside only so a fresh independent review runs; it is never turned into a pass, and no review is removed. The reviewer is given the decision link as task data, and the new verdict decides: PASS goes through the usual merge gates, CHANGES stays a rejection.
+- It is accepted only for an open, non-draft Foreman PR with a CHANGES verdict at its current head and the fix limit reached. A decision link can be used once per PR, and a second request while one is pending is refused, so a repeat needs a new decision.
+- Foreman does not add `needs-homeowner` again for the same fix-limit stop, whatever the re-review says. The request is recorded in the state file (it survives a restart) and announced once on the PR.
+- The dashboard shows the PR as waiting for the requested re-review, and afterwards as still rejected and waiting for the homeowner.

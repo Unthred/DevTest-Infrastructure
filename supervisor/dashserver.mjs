@@ -42,15 +42,18 @@ export const clearRegisterMemo = () => registerMemo.clear();
 export function configSource(config) {
   if (typeof config !== 'function') return () => config;
   let good = null;
-  return () => { try { good = config(); } catch (error) { if (!good) throw error; } return good; };
+  // `invalid` names why the file was refused while the last good one is served (issue #191), so the page can say so.
+  const read = () => { try { good = config(); read.invalid = null; } catch (error) { if (!good) throw error; read.invalid = String(error?.message || error); } return good; };
+  read.invalid = null;
+  return read;
 }
 
 // `tz` is the zone for clock times on the page (issue #185); it defaults to the host zone, as 'team status' does.
-export async function currentView({ root, config, now = Date.now(), tz = defaultZone() }) {
+export async function currentView({ root, config, now = Date.now(), tz = defaultZone(), configError = null }) {
   if (typeof config === 'function') config = config();
   const jobs = readJobs(root);
   const register = registerCached(config);
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, tz, lastSeen: readLastSeen(root), register, registerUnreadable: !register });
+  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, tz, configError, lastSeen: readLastSeen(root), register, registerUnreadable: !register });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request.
@@ -128,7 +131,7 @@ export function handler({ root, config, host, port, now = () => Date.now() }) {
       }
       const route = path === '/api/view.json' ? null : matchRoute(path);
       if (path !== '/api/view.json' && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
-      const view = await currentView({ root, config: source(), now: now() });
+      const view = await currentView({ root, config: source(), now: now(), configError: source.invalid });
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(view));
       const watch = route.page === 'watch';
       const out = renderRoute(view, watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() } : route, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });

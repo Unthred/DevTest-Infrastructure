@@ -180,3 +180,34 @@ test('activity: a failed migration error with a secret-shaped value is redacted'
   const row = v.activity.find(r => /002-x failed/.test(r.text));
   assert.ok(row); assert.ok(!row.text.includes(secret));
 });
+
+// ---- issue #191: invalid override and the drain clock
+const viewCfg = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
+  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [1] } } };
+test('issue #191: an invalid team.local.json is a Needs you item while the last good configuration is served; none when valid', async t => {
+  const { buildView } = await import('../supervisor/dashboard.mjs');
+  const { configSource } = await import('../supervisor/dashserver.mjs');
+  const NOW = Date.now(), root = tmp(t);
+  const cache = { pulls: [], issues: [], tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 } };
+  const build = configError => buildView({ config: viewCfg, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW, configError });
+  assert.equal((await build(null)).attention.some(a => a.id === 'config-invalid'), false);
+  const item = (await build('self_upgrade.drain_max_minutes must be 1-720')).panels.needsYou.find(a => a.id === 'config-invalid');
+  assert.ok(item && item.severity === 'action' && /drain_max_minutes/.test(item.text));
+  let bad = false; const src = configSource(() => { if (bad) throw new Error('bad override'); return viewCfg; });
+  assert.equal(src(), viewCfg); assert.equal(src.invalid, null);
+  bad = true; assert.equal(src(), viewCfg); assert.equal(src.invalid, 'bad override');
+  bad = false; src(); assert.equal(src.invalid, null);
+  const first = configSource(() => { throw new Error('x'); }); assert.throws(() => first(), /x/);
+});
+
+test('issue #191: the dashboard drain text uses the configured time zone, as team status does', async t => {
+  const { buildView } = await import('../supervisor/dashboard.mjs');
+  const NOW = Date.UTC(2026, 10, 3, 12, 0), root = tmp(t);
+  fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({ holding: { to: 'b'.repeat(40), since: Date.UTC(2026, 10, 3, 11, 50), jobs: 2 } }));
+  const cache = { pulls: [], issues: [], tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 } };
+  const text = async tz => (await buildView({ config: viewCfg, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW, tz })).attention.find(a => a.id === 'upgrade-hold').text;
+  assert.match(await text('UTC'), /since 11:50 \(/);
+  assert.match(await text('Asia/Tokyo'), /since 20:50 \(/);
+  assert.doesNotMatch(await text('Asia/Tokyo'), /UTC/);
+});

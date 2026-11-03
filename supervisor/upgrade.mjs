@@ -10,11 +10,11 @@ import os from 'node:os';
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
-import { checksState, agentOfBranch } from './team.mjs';
+import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES } from './team.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
-export const QUIET_MAX_WAIT_MS = 30 * 60 * 1000;
+export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
 // A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
 export const MIN_UPGRADE_INTERVAL_MS = 2 * 60 * 1000;
@@ -126,6 +126,10 @@ const dashboardSpawn = (cmd, args) => {
 };
 const defaultStartArgv = argv => dashboardSpawn(argv[0], argv.slice(1));
 const defaultStart = (wrapper, args) => dashboardSpawn(wrapper, args);
+
+// What the team step receives from the upgrade step (issues #134, #191): a hold only while an install is pending (busy) or was just
+// made by this old process (upgraded); every other outcome, rolled-back and failures included, lets dispatch go ahead.
+export const holdOf = (result, s) => (result === 'busy' || result === 'upgraded' ? { to: s?.holding?.to || s?.pending?.to || null } : null);
 
 export class SelfUpgrade {
   constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS }) {
@@ -239,7 +243,7 @@ export class SelfUpgrade {
     // Drain (issue #136): while jobs run and the bound is not reached, no new job starts; the install happens at the first job
     // boundary. At the bound the install goes ahead without waiting further; it replaces files only and never kills a running job.
     const running = await this.d.activeJobs();
-    if (running > 0 && now - this.s.waitingSince < this.drainMaxMs) { this.s.holding = { to: target, since: this.s.holding?.to === target ? this.s.holding.since : now, jobs: running }; this.save(); return 'busy'; }
+    if (running > 0 && now - this.s.waitingSince < this.drainMaxMs) { this.s.holding = { to: target, since: this.s.waitingSince, jobs: running }; this.save(); return 'busy'; }
     const checks = { eligibility: 'ok', quiet: running > 0 ? 'forced-after-wait' : 'idle' };
     const pre = await this.d.preChecks(target);
     if (!pre.ok) {

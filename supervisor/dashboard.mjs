@@ -123,6 +123,8 @@ function reasons(team, cache, jobs, plan, states, names) {
     else if (checks === 'pending') reason = waitingOnText(pr.statusCheckRollup);
     else if (checks === 'red') reason = 'CI failing';
     else if (checks === 'none') reason = 'no CI checks reported';
+    else if (!v && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'pending') reason = `re-review requested by the homeowner (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}); waiting for a reviewer on a different model for ${sha7(pr.headRefOid)}`;
+    else if (v?.verdict === 'CHANGES' && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'done') reason = `the requested re-review (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}) also gave CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; waiting for the homeowner`;
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
     else if (v?.verdict === 'PASS' && v.carriedFrom && !team.carryOk(v, pr)) reason = `PASS carried from ${sha7(v.carriedFrom)} but its record does not match this head; not merged`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}${v.carry ? ` (${carryText(v.carry)})` : ''}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
@@ -184,7 +186,8 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
     if (p.isDraft) {
       if ((S.continueAttempts?.[p.number] || 0) >= L.max_fix_attempts) part(0, `waiting for homeowner: continue limit reached on draft ${names.pr(p.number).text}`, 'pull', p.number);
       else part(2, `only work is draft ${names.pr(p.number).text}`, 'pull', p.number);
-    } else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) {
+    } else if (!v && team.reReviewOf?.(p.number, p.headRefOid)?.status === 'pending') part(1, `waiting for the re-review the homeowner requested of ${names.pr(p.number).text}`, 'pull', p.number);
+    else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) {
       if (team.escalationPending(p.number, p)) part(1, `fix limit reached on ${names.pr(p.number).text}: final round pending`, 'pull', p.number);
       else part(0, `waiting for homeowner: fix limit reached on ${names.pr(p.number).text}`, 'pull', p.number);
     }
@@ -551,7 +554,7 @@ export function refsOf({ names, cache, jobs, state }) {
   return out;
 }
 
-export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null }) {
+export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null, configError = null }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
@@ -586,8 +589,10 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const latch = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.latch'), 'utf8')); } catch (error) { return error.code === 'ENOENT' ? null : { reason: 'unreadable latch file' }; } })();
     if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
-    try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${new Date(h.since).toISOString().slice(11, 16)} UTC` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
+    try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(h.since))}` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
     // Issue #153: a failed config migration stops the ticks until the homeowner fixes team.local.json
+    // Issue #191: an invalid team.local.json stops every tick (upgrade and team steps); the page keeps the last good configuration.
+    if (configError) attention.push({ id: 'config-invalid', text: redact(`team.local.json is invalid, so every Foreman tick fails until it is fixed (this page shows the last good configuration): ${configError}`, 300), ref: null, severity: 'action', action: 'Fix or remove the invalid setting in team.local.json.' });
     { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and this tick was skipped: ${f.error}. team.local.json was not changed. After a self-upgrade the previous version may be back in place and still ticking.`, 300), ref: null, severity: 'action' }); }
     // Issue #250: new implement jobs are paused while open PRs are at or above limits.max_open_prs; the item clears when they fall below.
     { const text = team.pauseText(c.pulls || [], c.issues || []); if (text) attention.push({ id: 'paused-new-work', text, ref: null, severity: 'info' });

@@ -1035,6 +1035,16 @@ test('hold (issue #134): a pending upgrade starts no job, reports the hold, and 
   assert.equal(r2.held, undefined); assert.ok(free.calls.created.length > 0);
 });
 
+test('issue #191: after a rolled-back upgrade the hold handed to the team step is null and dispatch proceeds', async t => {
+  const { holdOf } = await import('../supervisor/upgrade.mjs');
+  const free = world(t, { issues: [issue(23), issue(2)], pulls: [] });
+  const r = await free.team.tick({ hold: holdOf('rolled-back', { holding: { to: H(7) } }) });
+  assert.equal(r.held, undefined); assert.ok(free.calls.created.length > 0);
+  const held = world(t, { issues: [issue(23), issue(2)], pulls: [] });
+  const r2 = await held.team.tick({ hold: holdOf('busy', { holding: { to: H(7) } }) });
+  assert.match(r2.held.reason, /upgrade to 7777777 pending/); assert.equal(held.calls.created.length, 0);
+});
+
 test('issue #149 CI workflow: a description edit cannot share a concurrency group with push runs', () => {
   const y = fs.readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
   assert.match(y, /group:.*github\.event\.action == 'edited' && 'edit' \|\| 'code'/);
