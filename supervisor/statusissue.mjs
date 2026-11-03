@@ -34,6 +34,8 @@ export function renderContent(s) {
   out.push(...bullets((s.agents || []).filter(a => a.state === 'running' && a.job).map(a => line(a.name + ':', a.job.name)), 'none'));
   out.push('', '## Queue');
   out.push(...bullets([...(s.next?.plan || []).map(p => line('next:', p.text)), ...(s.next?.waiting || []).map(w => line(w.text))], 'empty'));
+  out.push('', '## Review order');
+  out.push(...bullets((s.reviewOrder || []).map(r => line(r.text)), 'no pull request is waiting for a review'));
   out.push('', '## Open pull requests');
   out.push(...bullets((s.pulls || []).map(p => line(p.name, '-', p.status + ',', 'CI', p.ci + ',', p.verdict ? `${p.verdict.verdict}${p.verdict.current ? '' : ' (older commit)'}` : 'no verdict yet')), 'none open'));
   out.push('', '## Allowance by provider');

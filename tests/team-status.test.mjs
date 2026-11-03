@@ -255,3 +255,11 @@ test('issue #101: team status shows the installed version, the last install resu
     assert.doesNotMatch(text(await status({ root })), /next attempt/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('#405 review order: the status lists each reviewer\'s order with the reason, oldest and closest first', async () => {
+  const pulls = [pr(403, 'claude/issue-30-a', H(3)), pr(222, 'claude/issue-5-b', H(2))];
+  const s = await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, pulls, issues: [issue(30), issue(5), issue(2), issue(3)], merged: [] } });
+  assert.deepEqual(s.reviewOrder.map(r => [r.agent, r.pr, r.order]), [['codex', 222, 1], ['codex', 403, 2]]);
+  assert.match(s.reviewOrder[0].text, /older first/);
+  assert.match(text(s) + JSON.stringify(s.reviewOrder), /PR #222/);
+});

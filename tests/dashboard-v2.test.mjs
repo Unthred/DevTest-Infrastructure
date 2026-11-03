@@ -583,3 +583,22 @@ test('#186 a failed issue job whose issue is older than the cached issue window 
   const c = calmCache(); c.issues.push({ number: 9999, title: 'x', state: 'OPEN', labels: [] });
   assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: c }))).panels.needsYou.filter(x => /^job-/.test(x.id)).length, 1);
 });
+
+// Issue #405: Needs you shows a fix-limit item only when the homeowner must act.
+test('#405 fix limit: a real CHANGES on the current head is Needs you, with or without the label', async t => {
+  const state = { ...fixLimitState(), verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'codex', at: 1 } } };
+  const v = await needsOf(await serve(t, { jobs: [], cache: calmCache(), state }));
+  assert.ok(v.panels.needsYou.some(c => c.id === 'fixlimit-41'), 'listed although the PR carries no needs-homeowner label');
+});
+test('#405 fix limit: a PR only awaiting review is queued, not Needs you, even with a stale needs-homeowner label', async t => {
+  const state = fixLimitState();   // fix limit reached earlier, no verdict on the current head
+  for (const pull of [{}, { labels: ['needs-homeowner'] }]) {
+    const v = await needsOf(await serve(t, { jobs: [], cache: calmCache(pull), state }));
+    assert.ok(!v.panels.needsYou.some(c => /^(fixlimit|homeowner-pr)-41$/.test(c.id)), JSON.stringify(v.panels.needsYou.map(c => c.id)));
+  }
+});
+test('#405 fix limit: a CHANGES verdict recorded on an older head does not make the current head Needs you', async t => {
+  const state = { ...fixLimitState(), verdicts: { [`41:${H(7)}`]: { verdict: 'CHANGES', reviewer: 'codex', at: 1 } } };
+  const v = await needsOf(await serve(t, { jobs: [], cache: calmCache(), state }));
+  assert.ok(!v.panels.needsYou.some(c => c.id === 'fixlimit-41'));
+});
