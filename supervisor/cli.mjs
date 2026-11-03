@@ -180,7 +180,9 @@ const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'm
 async function teamTick(root, registry, dryRun, hold = null) {
   // One tick lock covers the whole tick, migrations included, so two concurrent ticks can neither run the same migration nor interleave.
   if (!dryRun && handInstallHold(root)) return { skipped: [{ what: 'team tick', reason: 'held for a hand-install', expected: true }] };
-  const unlock = tickLock(root);
+  // A dry run plans only and writes nothing, so it does not take the tick lock: the install's dry-run health check must run while a
+  // concurrent live tick holds it, or the install would be rolled back for no real reason (issue #448).
+  const unlock = dryRun ? (() => {}) : tickLock(root);
   if (!unlock) {
     // Issue #448: a tick that does not run says why, in the dashboard record. It was silent.
     const reason = 'another tick is running and holds the tick lock';
@@ -248,6 +250,13 @@ async function selfUpgradeLocked(root, registry) {
 // After the team step: an upgrade installed by an earlier tick is verified by this live tick.
 async function selfUpgradeAfter(root, registry, before, tick) {
   if (before.result !== 'awaiting-verification') return before.result;
+  // Verification, rollback and the dashboard restart are serialised with the install step by the same lock (issue #448): two overlapping
+  // reconcile runs must not both verify, roll back or save the upgrade state. The run that cannot take it leaves it to the holder.
+  const unlockUpgrade = upgradeLock(root);
+  if (!unlockUpgrade) return before.result;
+  try { return await selfUpgradeVerify(root, registry, before, tick); } finally { unlockUpgrade(); }
+}
+async function selfUpgradeVerify(root, registry, before, tick) {
   const { upgrade } = selfUpgradeFor(root, registry);
   // A tick skipped because another one holds the lock is not a live tick and verifies nothing.
   const live = !tick?.skipped || Array.isArray(tick.skipped);
@@ -430,7 +439,11 @@ async function main() {
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
-      const result = reconcileOnce(root, registry);
+      // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
+      const unlockRecover = tickLock(root, 'reconcile.lock');
+      let result;
+      if (!unlockRecover) { result = { skippedRecovery: 'another reconcile run is recovering jobs' }; try { recordSkip(root, 'job recovery skipped: another reconcile run holds reconcile.lock'); } catch { /* best effort */ } }
+      else { try { result = reconcileOnce(root, registry); } finally { unlockRecover(); } }
       // The upgrade check comes first (issue #134). A failure here never fails the tick.
       let before;
       try { before = await selfUpgradeBefore(root, registry); } catch (error) { before = { error: String(error.message).slice(0, 200), hold: null }; }

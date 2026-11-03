@@ -123,3 +123,45 @@ test('a test never starts the real dashboard server or writes the live log (issu
   const after = (() => { try { const s = fs.statSync(live); return `${s.size}:${s.mtimeMs}`; } catch { return 'absent'; } })();
   assert.equal(after, before, 'the live dashboard log did not change');
 });
+
+test('a dry-run tick (the install health check) still runs while a live tick holds the tick lock, and records no skip', t => {
+  const root = tmp(t), unlock = tickLock(root); t.after(unlock);
+  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: false }));
+  const r = spawnSync(process.execPath, [cli, 'team', 'tick', '--dry-run', '--state-root', root], { encoding: 'utf8', timeout: 60000 });
+  assert.doesNotMatch(r.stdout, /another tick is running/, r.stdout + r.stderr);
+  assert.equal(readSkips(root).length, 0, 'a dry run is not a scheduled tick');
+});
+
+test('overlapping reconcile runs: a second run does not recover jobs while the first does, and says so', t => {
+  const root = tmp(t), unlock = tickLock(root, 'reconcile.lock'); t.after(unlock);
+  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: false }));
+  const r = spawnSync(process.execPath, [cli, 'reconcile', '--state-root', root], { encoding: 'utf8', timeout: 60000 });
+  assert.match(r.stdout, /another reconcile run is recovering jobs/, r.stdout + r.stderr);
+  assert.match(readSkips(root).at(-1).reason, /reconcile\.lock/);
+});
+
+test('verification is serialised with the install: a run that cannot take the install lock leaves verification to the holder', t => {
+  const src = fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8');
+  const after = src.slice(src.indexOf('async function selfUpgradeAfter'), src.indexOf('async function selfUpgradeVerify'));
+  assert.match(after, /upgradeLock\(root\)/); assert.match(after, /if \(!unlockUpgrade\) return before\.result/);
+  const root = tmp(t), held = upgradeLock(root); t.after(held);
+  assert.equal(upgradeLock(root), null);
+});
+
+test('dashboard pages reuse the built view for the TTL under load, and rebuild on every request when the TTL is 0', async t => {
+  const { default: http } = await import('node:http');
+  const { handler, DASHBOARD_VIEW_TTL_MS } = await import('../supervisor/dashserver.mjs');
+  assert.ok(DASHBOARD_VIEW_TTL_MS > 0 && DASHBOARD_VIEW_TTL_MS <= 10000);
+  const base = JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
+  const job = id => ({ id, status: 'running', createdAt: 1, updatedAt: 1, agent: 'x', provider: 'claude', mode: 'implement' });
+  for (const [ttl, same] of [[60000, true], [0, false]]) {
+    const root = tmp(t); fs.mkdirSync(path.join(root, 'jobs'), { recursive: true }); fs.mkdirSync(path.join(root, 'dashboard'), { recursive: true });
+    const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+    const port = server.address().port; server.on('request', handler({ root, config: base, host: '127.0.0.1', port, now: () => 1e12, viewTtlMs: ttl }));
+    const get = () => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: '/api/view.json', headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve(b)); }).on('error', reject));
+    const first = await get();
+    fs.writeFileSync(path.join(root, 'jobs', 'a'.repeat(32) + '.json'), JSON.stringify(job('a'.repeat(32))));
+    const second = await get();
+    assert.equal(first === second, same, `ttl ${ttl}`);
+  }
+});
