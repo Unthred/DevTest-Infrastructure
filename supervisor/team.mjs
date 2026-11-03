@@ -1896,6 +1896,7 @@ export class Team {
   ownerLogin() { return (this.c.owner_comment_review?.owner || this.c.repository.split('/')[0]).toLowerCase(); }
   isOwnerComment(c) {
     const login = String(c?.login || '').toLowerCase();
+    if (/<!-- devtest-notice v1 /.test(String(c?.body || ''))) return false;   // Foreman's own notice, posted from the owner account before #377
     return !!login && login === this.ownerLogin() && !(this.c.owner_comment_review?.agent_logins || []).some(a => a.toLowerCase() === login);
   }
   // Why a comment cannot request the re-review of a head whose verdict is v, or null. Existence is checked here too.
@@ -1913,12 +1914,13 @@ export class Team {
     if (!agentOfBranch(this.c, pr.headRefName)) throw new SupervisorError(`PR #${n} is not on a Foreman branch`);
     if (pr.isDraft || !SHA.test(pr.headRefOid)) throw new SupervisorError(`PR #${n} is a draft or has no readable head`);
     const head = pr.headRefOid, key = verdictKey(n, head), v = this.s.verdicts[key];
-    const entry = this.s.reReviews[n] ||= { requests: [] };
+    const entry = this.s.reReviews[n] ?? { requests: [] };   // not stored here: a refusal must leave no state behind
+    const refuse = (code, text) => Object.assign(new SupervisorError(text), { code });
     if (entry.requests.some(r => r.decision === link)) throw new SupervisorError(`the decision ${link} was already used to request a re-review of PR #${n}; a new decision is needed`);
     if (entry.requests.some(r => r.head === head && r.status === 'pending')) throw new SupervisorError(`a re-review of PR #${n} at ${shortCommit(head)} is already requested and not finished`);
-    if (v?.verdict !== 'CHANGES') throw new SupervisorError(`PR #${n} has no CHANGES verdict at ${shortCommit(head)} to re-review${v ? ` (it is ${v.verdict})` : ''}`);
-    if (this.fixCount(n) < this.c.limits.max_fix_attempts) throw new SupervisorError(`PR #${n} still has fix rounds left (${this.fixCount(n)} of ${this.c.limits.max_fix_attempts}); the fix loop runs first`);
-    return { head, key, v, entry };
+    if (v?.verdict !== 'CHANGES') throw refuse('no-verdict', `PR #${n} has no CHANGES verdict at ${shortCommit(head)} to re-review${v ? ` (it is ${v.verdict})` : ''}`);
+    if (this.fixCount(n) < this.c.limits.max_fix_attempts) throw refuse('rounds-left', `PR #${n} still has fix rounds left (${this.fixCount(n)} of ${this.c.limits.max_fix_attempts}); the fix loop runs first`);
+    return { head, key, v, entry: this.s.reReviews[n] ||= entry };
   }
   // `comment` is given by the tick, which has already read it from the PR; the command reads the cited comment through GitHub.
   async requestReReview(prNumber, decision, comment = null) {
@@ -1941,9 +1943,11 @@ export class Team {
     await this.postNotice(n, `re-review-requested pr=${n} head=${head} n=${entry.requests.length}`, `**Re-review requested by the homeowner.** One new review of the same head \`${head}\` was requested after the decision at ${link}. This is not a pass: the earlier CHANGES verdict is set aside only so an independent reviewer can judge this head again with that decision, and the new verdict decides. No further re-review is accepted without a new decision.`);
     return { pr: n, head, decision: link };
   }
-  // Issue #418: on a tick, a comment by the owner account after the head's CHANGES verdict is the request. Only PRs that could
-  // accept one are read (one comment-list call each), so an ordinary PR costs nothing. A comment that does not qualify is ignored
-  // and not recorded; the first qualifying unused one is used and recorded by its URL, so a later tick never repeats it.
+  // Issue #418: on a tick, a comment by the owner account after the head's CHANGES verdict is the request. Each open Foreman PR
+  // without a pending request has its comments read once (one comment-list call), so the homeowner always gets an answer: the
+  // first qualifying unused comment is used and recorded by its URL (a later tick never repeats it); the newest owner comment
+  // that cannot be used yet is answered with its reason (a PR notice once per head and reason when a CHANGES verdict exists,
+  // otherwise only a report.skipped entry, so approval comments on a PASS PR cause no noise) and is not used up.
   async scanOwnerComments(report, guard = (_, fn) => fn()) {
     if (!this.c.owner_comment_review?.enabled || !this.gh.prComments) return;
     for (const pr of await this.gh.listPulls()) {
@@ -1952,8 +1956,6 @@ export class Team {
       const entry = this.s.reReviews[pr.number];
       if (entry?.requests.some(r => r.head === pr.headRefOid && r.status === 'pending')) continue;
       const ready = v?.verdict === 'CHANGES' && this.fixCount(pr.number) >= this.c.limits.max_fix_attempts;
-      // Without a CHANGES verdict and with rounds left there is nothing a comment could answer, so such a PR is not read.
-      if (!ready && v?.verdict !== 'CHANGES' && this.fixCount(pr.number) < this.c.limits.max_fix_attempts) continue;
       await guard(`owner comment ${pr.number}`, async () => {
         const used = new Set((entry?.requests || []).map(r => r.decision));
         const comments = (await this.gh.prComments(pr.number)).filter(x => /#issuecomment-\d+$/.test(x.url) && !used.has(x.url));
@@ -1964,13 +1966,13 @@ export class Team {
           (report.notified ||= []).push({ pr: pr.number, reReview: c.url });
           return;
         }
-        // Not possible yet: say why once per comment and leave it unused, so it counts once the conditions hold.
         const c = comments.filter(x => this.isOwnerComment(x) && Date.parse(x.createdAt) > (v?.at ?? 0)).pop();
         if (!c) return;
-        let why; try { this.reReviewEligibility(pr.number, c.url, pr); } catch (error) { why = error.message; }
+        let why, code; try { this.reReviewEligibility(pr.number, c.url, pr); } catch (error) { why = error.message; code = error.code; }
         if (!why) return;
-        await this.postNotice(pr.number, `re-review-refused pr=${pr.number} head=${pr.headRefOid} ${c.url} ${why.includes("fix rounds") ? "rounds" : "verdict"}`, `**Re-review not requested.** The owner comment at ${c.url} cannot request a re-review yet: ${why}. The comment is not used up; it counts once those conditions hold.`);
-        (report.skipped ||= []).push({ pr: pr.number, reReview: why });
+        (report.skipped ||= []).push({ pr: pr.number, reReview: `owner comment ${c.url} cannot request a re-review yet: ${why}` });
+        if (v?.verdict !== 'CHANGES') return;
+        await this.postNotice(pr.number, `re-review-refused pr=${pr.number} head=${pr.headRefOid} ${code || 'other'}`, `**Re-review not requested.** The owner comment at ${c.url} cannot request a re-review yet: ${why}. The comment is not used up; it counts once those conditions hold.`);
       });
     }
   }

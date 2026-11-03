@@ -181,13 +181,18 @@ test('off by default; a PR with a verdict or the fix limit reached is refused wi
   assert.equal(refusals(left).length, 1, 'one notice, not one per tick'); assert.match(refusals(left)[0][1], /still has fix rounds left/);
   assert.equal(left.team.s.reReviews[38]?.requests.length ?? 0, 0, 'nothing was requested');
   // no CHANGES verdict at all, fix limit reached: refused with the reason too
-  const none = ownerWorld(t); add(none, cmt(8, 'o', 10_000)); delete none.team.s.verdicts[`38:${H(1)}`]; await none.team.tick();
-  assert.equal(refusals(none).length, 1); assert.match(refusals(none)[0][1], /no CHANGES verdict/); assert.equal(none.team.s.reReviews[38]?.requests.length ?? 0, 0);
+  const none = ownerWorld(t); add(none, cmt(8, 'o', 10_000)); delete none.team.s.verdicts[`38:${H(1)}`]; const nr = { skipped: [] }; await none.team.scanOwnerComments(nr);
+  assert.equal(refusals(none).length, 0, 'no notice without a verdict'); assert.match(nr.skipped[0].reReview, /no CHANGES verdict/); assert.equal(none.team.s.reReviews[38]?.requests.length ?? 0, 0);
   // not used up: once the conditions hold, the same comment works
   left.team.s.fixAttempts[`38:${H(0)}`] = 2; await left.team.tick(); assert.equal(left.team.reReviewOf(38, H(1)).decision, U(7));
-  // a PR with a PASS verdict and rounds left is not read at all
-  const pass = ownerWorld(t); const r2 = []; pass.gh.prComments = async n => { r2.push(n); return []; };
-  pass.team.s.fixAttempts = {}; pass.team.s.verdicts[`38:${H(1)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'j0', findings: [], at: 5 }; await pass.team.tick(); assert.deepEqual(r2, []);
+  // a PR with a PASS verdict and rounds left: a stated reason in the tick report, no PR notice, nothing used up or stored
+  const pass = ownerWorld(t); add(pass, cmt(9, 'o', 10_000));
+  pass.team.s.fixAttempts = {}; pass.team.s.verdicts[`38:${H(1)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'j0', findings: [], at: 5 };
+  const rep = { skipped: [] }; await pass.team.scanOwnerComments(rep);
+  assert.ok(rep.skipped.some(x => x.pr === 38 && /no CHANGES verdict/.test(x.reReview)), 'a reason is stated'); assert.equal(refusals(pass).length, 0);
+  assert.equal(pass.team.s.reReviews[38], undefined, 'a refusal stores no state');
+  // Foreman's own notice, posted from the owner account, is never a request
+  const own = ownerWorld(t); own.gh.cmts[10] = { ...cmt(10, 'o', 10_000), body: '<!-- devtest-notice v1 x -->\nnotice' }; await own.team.tick(); assert.equal(own.team.s.reReviews[38], undefined);
 });
 
 test('command: a link naming no comment, a non-owner comment and an older comment are refused with a reason; a valid one once', async t => {
