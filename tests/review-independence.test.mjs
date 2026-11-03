@@ -130,10 +130,12 @@ test('same model: the review is refused at planning and at ingest, and a stored 
   // a same-author PASS that was not recorded as independent never merges
   const y = world(t); y.team.s.verdicts['77:' + H(5)] = { verdict: 'PASS', reviewer: 'claude', job: 'j' };
   assert.equal((await y.team.plan()).some(a => a.type === 'merge'), false);
-  // a different provider is independent even when models are unknown, and is preferred over the author's provider
+  // a different provider is independent even when models are unknown; since issue #402 the author's provider is not ranked last any
+  // more: with no allowance readings both are eligible and the tie keeps the team.json order (spare allowance decides otherwise)
   const z = world(t, { out: {} }); writer(z);
   const r = (await z.team.plan()).filter(a => a.type === 'review');
-  assert.deepEqual(r.map(a => a.agent), ['codex']);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r.map(a => a.agent), ['claude']);
 });
 
 test('one-agent roster: validates, plans implement and review, and zero agents is refused', async t => {

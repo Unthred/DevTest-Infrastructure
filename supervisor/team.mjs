@@ -119,6 +119,17 @@ function normalizeRoleLimits(c) {
   }
   const R = L.roles;
   if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]))) throw new SupervisorError('invalid team limit: roles');
+  // Issue #402: optional limits.provider_roles { <provider>: { implementer?, reviewer? } }. A provider's count caps its own jobs in that
+  // role, so one provider's reviews cannot fill the slot meant for the other. A role it omits is limited only by limits.roles.
+  const P = L.provider_roles;
+  if (P !== undefined) {
+    const providers = new Set(Object.values(c.agents || {}).map(a => a?.provider));
+    if (!P || typeof P !== 'object' || Array.isArray(P)) throw new SupervisorError('invalid team limit: provider_roles');
+    for (const [prov, r] of Object.entries(P)) {
+      if (!providers.has(prov) || !r || typeof r !== 'object' || Array.isArray(r) || !Object.keys(r).length || Object.keys(r).some(k => !ROLES.includes(k)) || !Object.values(r).every(ok))
+        throw new SupervisorError(`invalid team limit: provider_roles.${String(prov).slice(0, 32)}`);
+    }
+  }
 }
 
 // Review independence (issue #152, amends D-021): a review is independent when the reviewer's model differs from the model that wrote the
@@ -890,6 +901,10 @@ export class Team {
     // provider with allowance can use them. It keeps its place (the job record) and resumes only inside the limits (resumeDecision).
     const occupying = active.filter(j => j.status !== 'paused_limit');
     for (const j of occupying) used[roleOfType(this.s.jobs[j.id]?.kind)]++;
+    // Issue #402: running jobs per provider and role, for limits.provider_roles (a provider's own cap inside the shared role slots).
+    const usedBy = {};
+    for (const j of occupying) { const k = `${j.provider}:${roleOfType(this.s.jobs[j.id]?.kind)}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    this.usedBy0 = { ...usedBy };
     let total = occupying.length;
     const L = this.c.limits;
     const usedAtStart = { ...used }, totalAtStart = total;   // slots filled by jobs already running, before this tick plans any
@@ -911,18 +926,21 @@ export class Team {
       }
     }
     // 2. dispatch per role slot: any agent may fill a free slot, and one agent may fill both. Where several agents could, a review goes
-    // to an agent on another provider than the PR author before one on the author's provider, then second opinions, and an implement job to the issue's owner before
+    // to the reviewer with the most spare allowance (issue #402), after any review only that agent can do, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
       while (used[role] < L.roles[role] && total < overallCap(L)) {
         const cands = [];
         for (const [agent, a] of this.agents()) {
+          if (this.providerSlotFull(a.provider, role, usedBy)) continue;
           const act = this.choose(agent, a, prs, issueByNo, role);
           if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) + 0.1 * actions.filter(x => x.agent === agent).length });   // tie-break: spread load to an agent without a slot this tick
         }
         if (!cands.length) break;
         const best = cands.sort((x, y) => x.rank - y.rank)[0];   // stable: ties keep the team.json agent order
-        actions.push({ agent: best.agent, ...best.act }); used[role]++; total++;
+        const why = best.act.type === 'review' ? this.reviewWhy(best.agent, best.act, prs) : null;
+        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}) }); used[role]++; total++;
+        { const k = `${this.c.agents[best.agent].provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
         this.taken.add(`${best.act.type}:${best.act.key}`);
@@ -949,6 +967,12 @@ export class Team {
       const text = `${role} slot full${byRole ? '' : ' (overall cap reached)'}: ${holders.slice(0, 5).join('; ') || 'running jobs'}`;
       for (const [agent, a] of this.agents()) { const act = this.choose(agent, a, prs, issueByNo, role); if (act) this.hold(agent, act.type, text); }
     }
+    // Issue #402: a provider at its own limits.provider_roles count holds only that provider's work; the other provider's slot is free.
+    for (const role of ROLES) for (const [agent, a] of this.agents()) {
+      if (!this.providerSlotFull(a.provider, role, this.usedBy0 || {})) continue;
+      const act = this.choose(agent, a, prs, issueByNo, role);
+      if (act) this.hold(agent, act.type, `${a.provider} ${role} slot full (limits.provider_roles ${this.c.limits.provider_roles[a.provider][role]})`);
+    }
   }
   predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
   // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
@@ -964,9 +988,62 @@ export class Team {
     const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
     return !!issue && this.overlapHold(agent, n, issue, type);
   }
+  // Issue #402: spare allowance of an agent, from the projection the budget already holds: projected_limit minus the projected weekly use
+  // at the reset, unclamped so that any difference in projection counts. An unknown reading (no usage data, a stale or reset window) scores 0: behind any reviewer that
+  // is known to have spare, ahead of one projected to run out.
+  spareScore(agent) {
+    const m = this.modes?.[agent];
+    if (!m?.known || !Number.isFinite(m.projected)) return 0;
+    return budgetSettings(this.c).projected_limit - m.projected;
+  }
+  // True when `provider` already runs its limits.provider_roles count in `role` (no such limit: never).
+  providerSlotFull(provider, role, usedBy) {
+    const cap = this.c.limits.provider_roles?.[provider]?.[role];
+    return Number.isSafeInteger(cap) && (usedBy[`${provider}:${role}`] || 0) >= cap;
+  }
+  // The same check against the jobs running or queued right now, for a route outside the planner (the one resume of a transiently stopped job).
+  async providerRoleFull(provider, role) {
+    if (!Number.isSafeInteger(this.c.limits.provider_roles?.[provider]?.[role])) return false;
+    const usedBy = {};
+    for (const a of await this.jobs.listActive()) if (['queued', 'running'].includes(a.status)) { const k = `${a.provider}:${roleOfType(this.s.jobs[a.id]?.kind)}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    return this.providerSlotFull(provider, role, usedBy);
+  }
+  // Agents other than `agent` that could review this pull request now: independent of its writers, with allowance and attempts left.
+  otherReviewers(agent, pr) {
+    const key = verdictKey(pr.number, pr.headRefOid);
+    return this.agents().map(([n]) => n).filter(n => n !== agent && !this.reviewRefusal(n, pr, `${key}:${n}`) && !this.limitedOf(n).out && this.modes?.[n]?.mode !== 'waiting'
+      && this.s.verdicts[key]?.reviewer !== n && (this.s.reviewAttempts[`${key}:${n}`] || 0) < this.c.limits.max_review_attempts);
+  }
+  // Issue #402: pull requests only `agent` can review come first, so a scarce provider spends its reviews where nobody else can.
+  reviewOrder(agent, prs) {
+    if (this.agents().length < 2) return prs;
+    const sole = new Map(prs.map(p => [p.number, SHA.test(p.headRefOid) && agentOfBranch(this.c, p.headRefName) && !p.isDraft && this.otherReviewers(agent, p).length === 0]));
+    return prs.map((p, i) => [p, i]).sort(([p, i], [q, j]) => (sole.get(p.number) ? 0 : 1) - (sole.get(q.number) ? 0 : 1) || i - j).map(([p]) => p);
+  }
+  // Issue #402: why this reviewer was chosen, for the dashboard. Null for second opinions, post-merge reviews and exception stages.
+  reviewWhy(agent, act, prs) {
+    if (act.secondOpinion || act.postMerge || act.exceptionStage) return null;
+    const pr = prs.find(p => p.number === act.pr); if (!pr) return null;
+    const fig = n => { const m = this.modes?.[n]; return m?.known && Number.isFinite(m.projected) ? `${n} projected ${Math.round(m.projected * 100)}% at its reset` : `${n} reading unknown`; };
+    const others = this.otherReviewers(agent, pr);
+    if (!others.length) {
+      const rest = this.agents().map(([n]) => n).filter(n => n !== agent).map(n => `${n}: ${this.reviewRefusal(n, pr, `${verdictKey(pr.number, pr.headRefOid)}:${n}`) ? 'it wrote this head' : this.limitedOf(n).out ? 'out of allowance' : 'cannot review now'}`);
+      return `${agent} is the only reviewer that can review PR #${pr.number}${rest.length ? ` (${rest.join('; ')})` : ''}`.slice(0, 300);
+    }
+    const mine = this.spareScore(agent), worse = others.filter(n => this.spareScore(n) < mine), tie = others.filter(n => this.spareScore(n) === mine);
+    return `${agent} has ${worse.length === others.length ? 'the most' : tie.length ? 'as much (ties keep config order)' : 'enough'} spare allowance of the eligible reviewers (${[agent, ...others].map(fig).join('; ')})`.slice(0, 300);
+  }
   // Lower is preferred when several agents could fill the same slot.
   slotRank(agent, act, prs) {
-    if (act.type === 'review') return act.secondOpinion || act.postMerge ? 2 : this.c.agents[agentOfBranch(this.c, prs.find(p => p.number === act.pr)?.headRefName)]?.provider === this.c.agents[agent].provider ? 1 : 0;   // another provider first
+    // Issue #402: a review goes to the eligible reviewer with the most spare allowance (cross-provider review is not required: a fresh
+    // session on a different model is independent). Rank 0..1.5, so it stays ahead of second opinions (2) and implement work (10).
+    // A review only this agent can do ranks ahead of every shared review, whatever the spare allowance.
+    if (act.type === 'review') {
+      if (act.secondOpinion || act.postMerge) return 2;
+      const pr = prs.find(p => p.number === act.pr);
+      const sole = !!pr && this.agents().length > 1 && SHA.test(pr.headRefOid) && !!agentOfBranch(this.c, pr.headRefName) && !pr.isDraft && this.otherReviewers(agent, pr).length === 0;
+      return (sole ? -10 : 0) + 0.75 * (1 - Math.tanh(this.spareScore(agent)));   // tanh keeps the rank in (0, 1.5), strictly ordered by spare
+    }
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
     // An owner at a usage limit ranks last, so another agent can take its ready issue (#104).
@@ -1132,7 +1209,7 @@ export class Team {
     // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
     const wtBusy = false;   // issue #344: every review has its own worktree and lease, so no review waits for another
     // review: any agent's PR whose head was written by another model, green CI, mergeable, no verdict yet on this exact head
-    for (const pr of rev && !wtBusy ? this.reviewQueue(agent, prs).map(q => q.pr) : []) {   // issue #405: closest to merge first, not GitHub's newest-first order
+    for (const pr of rev && !wtBusy ? this.reviewOrder(agent, this.reviewQueue(agent, prs).map(q => q.pr)) : []) {   // issue #405: closest to merge first; issue #402: then PRs only this agent can review first
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
@@ -2063,6 +2140,7 @@ export class Team {
         const stale = await this.staleResume(id, j, open);
         if (stale) { this.s.unblock.noResume[id] = { at: this.clock.now(), why: stale }; this.save(); return; }   // notifyOne handles it as before
         if (this.limitedOf(j.agent)?.out) return;   // out of allowance: wait for the reset rather than burn the one resume
+        if (await this.providerRoleFull(job.provider ?? this.c.agents[j.agent]?.provider, roleOfType(j.kind))) return;   // issue #402: the provider's own role count is full; wait, keeping the one resume
         if (this.clock.now() - (job.updatedAt || 0) < this.unblockLimits().cooldown_ms) return;
         const target = j.issue ?? j.pr, tk = j.issue != null ? 'issue' : 'pull';
         const room = this.unblockRoom(target);
@@ -2388,7 +2466,7 @@ export class Team {
       if (!release) return { go: false, reason: 'waiting: another paused job is being resumed', retryMs: 5000 };
       try {
         const others = [];
-        for (const a of await this.jobs.listActive()) if (a.id !== job.id && ['queued', 'running'].includes(a.status)) others.push({ id: a.id, kind: (await this.jobs.get(a.id))?.kind ?? this.s.jobs[a.id]?.kind });
+        for (const a of await this.jobs.listActive()) if (a.id !== job.id && ['queued', 'running'].includes(a.status)) { const rec = await this.jobs.get(a.id); others.push({ id: a.id, kind: rec?.kind ?? this.s.jobs[a.id]?.kind, provider: a.provider ?? rec?.provider ?? this.c.agents[this.s.jobs[a.id]?.agent]?.provider }); }
         const d = resumeDecision({ job, others, limits: this.c.limits, nameOf: o => { const r = this.s.jobs[o.id] || {}; return `${r.agent || 'a'} ${o.kind || 'job'} on ${r.pr != null ? 'PR #' + r.pr : r.issue != null ? 'issue #' + r.issue : o.id.slice(0, 8)}`; } });
         if (!d.go) { release(); return d; }
         return { go: true, release };
@@ -2425,6 +2503,13 @@ export class Team {
 export function resumeDecision({ job, others, limits, nameOf = o => o.id }) {
   const role = roleOfType(job.kind), inRole = others.filter(o => roleOfType(o.kind) === role);
   if (inRole.length >= limits.roles[role]) return { go: false, reason: `waiting for the ${role} slot: ${inRole.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
+  // Issue #402: limits.provider_roles caps the job's own provider in this role. Only that provider's running or queued jobs count, so a
+  // full Claude cap never holds a Codex job. Without provider_roles (or for a role it omits) nothing changes.
+  const cap = limits.provider_roles?.[job.provider]?.[role];
+  if (Number.isSafeInteger(cap)) {
+    const mine = inRole.filter(o => o.provider === job.provider);
+    if (mine.length >= cap) return { go: false, reason: `waiting for the ${job.provider} ${role} slot (limits.provider_roles ${cap}): ${mine.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
+  }
   if (others.length >= overallCap(limits)) return { go: false, reason: `waiting for the overall cap (${overallCap(limits)}): ${others.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
   return { go: true };
 }
