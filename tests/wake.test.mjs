@@ -92,3 +92,52 @@ test('install list: runtime files install, docs and tests do not, unknown paths 
   assert.equal(installRequired(['tests/a.test.mjs', 'bin/x']), true);   // one runtime file in the range installs everything
   assert.equal(installRequired([]), false);
 });
+
+// ---- review round 1: dashboard hold naming, idle causes view, read reuse, idle report
+import { cachedReads, READ_TTL_MS } from '../supervisor/readcache.mjs';
+import { idleReport } from '../supervisor/idlecause.mjs';
+import { idleReason, idleCauseView } from '../supervisor/dashboard.mjs';
+
+const fakeGh = () => { const calls = []; return { calls, listPulls: async () => { calls.push('listPulls'); return [{ number: 1 }]; }, listIssues: async () => { calls.push('listIssues'); return [{ number: 2 }]; }, comment: async () => { calls.push('comment'); }, getPull: async () => { calls.push('getPull'); return {}; } }; };
+
+test('a wake pass reuses fresh list reads recorded by a tick, and makes no list call', async t => {
+  const root = tmp(t), g = fakeGh(); let clock = 1000;
+  const tick = cachedReads(g, { root, now: () => clock }); await tick.listPulls(); await tick.listIssues();
+  clock += 60000;
+  const wake = cachedReads(g, { root, reuse: true, now: () => clock });
+  assert.deepEqual(await wake.listPulls(), [{ number: 1 }]); await wake.listIssues();
+  assert.deepEqual(g.calls, ['listPulls', 'listIssues']); assert.equal(wake.readStats.reused, 2); assert.equal(wake.readStats.fetched, 0);
+});
+
+test('stale reads, a normal tick, and reads after a write are fetched again', async t => {
+  const root = tmp(t), g = fakeGh(); let clock = 1000;
+  await cachedReads(g, { root, now: () => clock }).listPulls();
+  clock += READ_TTL_MS + 1;
+  await cachedReads(g, { root, reuse: true, now: () => clock }).listPulls();
+  assert.equal(g.calls.length, 2, 'stale record is not reused');
+  await cachedReads(g, { root, now: () => clock }).listPulls();
+  assert.equal(g.calls.length, 3, 'a normal tick always reads');
+  const w = cachedReads(g, { root, now: () => clock }); await w.comment(1, 'x');
+  await cachedReads(g, { root, reuse: true, now: () => clock }).listPulls();
+  assert.equal(g.calls.filter(c => c === 'listPulls').length, 4, 'a write drops the recorded view');
+  await w.getPull(1); assert.equal(g.calls.at(-1), 'getPull');
+});
+
+const cfg = { repository: 'o/r', enabled: true, agents: { claude: { issues: [], provider: 'claude' } }, limits: { max_fix_attempts: 3 } };
+const planned = { agent: 'claude', type: 'implement', issue: 5 };
+const names = { issue: n => ({ text: `#${n}` }), pr: n => ({ text: `PR #${n}` }) };
+test('the dashboard names the hold for a planned job instead of "on the next tick"', () => {
+  const base = { agent: 'claude', config: cfg, team: { c: cfg }, cache: { issues: [], pulls: [] }, plan: [planned], state: 'idle', names };
+  const held = idleReason({ ...base, hold: 'upgrade to abc1234 pending' });
+  assert.match(held.text, /about to start implement #5; held: upgrade to abc1234 pending/); assert.doesNotMatch(held.text, /on the next tick/);
+  assert.match(idleReason(base).text, /no hold applies/);
+});
+
+test('idle causes by agent over the last day, and the idle report against the before figures', () => {
+  const now = 10 * 3600000, min = 60000;
+  const snaps = [{ at: now - 30 * min, idle: { claude: 'no-eligible-work', codex: 'upgrade' }, plan: [] }, { at: now - 20 * min, plan: [{ agent: 'claude' }] }, { at: now - 10 * min, idle: {}, plan: [] }];
+  const v = idleCauseView(snaps, now, ['claude', 'codex']);
+  assert.equal(v.agents.claude['waiting-for-tick'], 10); assert.equal(v.agents.codex.upgrade, 10);
+  const r = idleReport(snaps, { now, hours: 1 });
+  assert.equal(r.agents.claude.idleWithWorkPercent, 16.7); assert.equal(r.agents.claude.beforePercent, 35.5); assert.equal(r.agents.codex.beforePercent, 24.8);
+});

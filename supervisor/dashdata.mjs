@@ -186,6 +186,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   const snap = { at: now, status, ingested: Number.isSafeInteger(ingested) && ingested > 0 ? ingested : 0,
     plan: actions.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.secondOpinion ? { secondOpinion: true } : {}), ...(a.postMerge ? { postMerge: true } : {}) })),
     agents: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])),
+    ...(held?.reason ? { hold: redact(String(held.reason), 200) } : {}),
     idle: classifyIdle({ states: Object.fromEntries(Object.entries(states).map(([n, x]) => [n, x.state])), held, idle: team.s?.idle || null, plan: actions }),
     allowance: Object.fromEntries(Object.entries(team.c.agents).map(([n, a]) => [n, allowance[a.provider] ? { observedAt: allowance[a.provider].observedAt, windows: allowance[a.provider].windows.map(w => ({ type: w.type, windowMinutes: w.windowMinutes ?? null, utilization: w.utilization, resetsAt: w.resetsAt })) } : null])),
     redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };

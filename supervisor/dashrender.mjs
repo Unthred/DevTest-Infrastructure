@@ -242,7 +242,9 @@ function nowPanel(view, { describe = true } = {}) {
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
     return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
   };
-  return `${slots}<ul class="panel-list">${view.agents.map(a => {
+  // Issue #406: minutes idle in the last day by cause, so the effect of waking on job end can be measured.
+  const ic = view.idleCauses, idleLine = ic ? `<div class="sub" data-idle-causes>Idle, last ${esc(ic.windowHours)} h (minutes): ${Object.entries(ic.agents).map(([n, r]) => `${esc(n)}: ${ic.causes.map(k => `${esc(k)} ${Number(r[k]) || 0}`).join(', ')}`).join(' · ')}</div>` : '';
+  return `${slots}${idleLine}<ul class="panel-list">${view.agents.map(a => {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j)).join('');
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${jobRef(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`

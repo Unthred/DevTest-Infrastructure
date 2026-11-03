@@ -11,6 +11,8 @@ import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
 import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { Team, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, upgradeLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
+import { idleReport } from './idlecause.mjs';
+import { cachedReads } from './readcache.mjs';
 import { githubClient } from './github.mjs';
 import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
@@ -144,6 +146,7 @@ function realGit(repoPath) {
     }
   };
 }
+let wakeReads = false;   // issue #406: set by a wake pass so it reuses the last tick's fresh list reads
 async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true) {
   // The decision register that counts is the one merged into main, not a working copy.
   // A dry run needs it too: the enable gate (issue #40) must fail exactly where a live tick would.
@@ -155,7 +158,7 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   // The allowance inputs are shared with `team status` and the dashboard (issue #121), so all of them plan alike.
   const jobsNow = readJobs(root);
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs: jobsNow, probes: readCache(root)?.probes, snapshots: readSnapshots(root), hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') });
-  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
+  return new Team({ config, root, gh: cachedReads(githubClient(config), { root, reuse: wakeReads }), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
 }
 // Model-free allowance probes, one per provider that has one (issue #75), so a paused agent's reading still refreshes.
 // Only a local file read: never a model call. A probe failure only loses this tick's refresh.
@@ -429,6 +432,7 @@ async function main() {
       try { console.log(JSON.stringify(await (await teamFor(root, registry)).requestReReview(a._[1], a._[2]))); } finally { release(); }
       return;
     }
+    if (a._[0] === 'idle-report') { console.log(JSON.stringify(idleReport(readSnapshots(root), { now: Date.now(), hours: Number(a.hours) > 0 ? Number(a.hours) : 24, agents: Object.keys(loadTeamConfig(teamConfigFile, root).agents) }), null, 2)); return; }   // issue #406
     if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json] | team accept-split ISSUE | team request-review PR DECISION_LINK');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
   }
@@ -465,6 +469,7 @@ async function main() {
       if (a.wake) {
         const turn = await waitForTurn({ reason: a.wake, sleep: realClock.sleep, tryLock: () => tickLock(root), lastTickAt: () => readCache(root)?.tick?.at });
         clearPending(root);
+        wakeReads = true;
         if (!turn.ready) { console.log(JSON.stringify({ wake: a.wake, skipped: 'another tick kept the lock; the scheduled tick is the fallback' })); return; }
       }
       // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.

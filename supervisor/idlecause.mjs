@@ -33,3 +33,18 @@ export function summarizeIdle(snapshots, { agents = null } = {}) {
   }
   return out;
 }
+
+// Issue #406 acceptance: idle with work available (every cause except no-eligible-work) as a percent of the window, per agent,
+// next to the issue's measured "before" figures. Same method as the issue: snapshot intervals, causes as above. Out-of-allowance time
+// is not excluded here (no snapshot records it as idle work), so compare like with like over a window without a long pause.
+export const IDLE_BEFORE_PERCENT = { claude: 35.5, codex: 24.8 };
+export function idleReport(snapshots, { now, hours = 24, agents = Object.keys(IDLE_BEFORE_PERCENT) } = {}) {
+  const windowMs = hours * 3600000, recent = snapshots.filter(s => Number.isFinite(s.at) && now - s.at <= windowMs);
+  const sum = summarizeIdle(recent, { agents });
+  const out = {};
+  for (const n of agents) {
+    const row = sum[n] || Object.fromEntries(IDLE_CAUSES.map(k => [k, 0])), withWork = IDLE_CAUSES.filter(k => k !== 'no-eligible-work').reduce((t, k) => t + (row[k] || 0), 0);
+    out[n] = { minutes: Object.fromEntries(IDLE_CAUSES.map(k => [k, Math.round(row[k] || 0)])), idleWithWorkPercent: Math.round(withWork / (hours * 60) * 1000) / 10, beforePercent: IDLE_BEFORE_PERCENT[n] ?? null };
+  }
+  return { windowHours: hours, snapshots: recent.length, agents: out };
+}
