@@ -18,7 +18,7 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
   const fake = path.join(root, 'fakenode'), fakeCli = path.join(root, 'cli.mjs');
   fs.writeFileSync(fake, '#!/bin/sh\necho \'{"ok":true,"actions":[]}\'\n', { mode: 0o755 }); fs.writeFileSync(fakeCli, '');
   const env = { ...process.env, AI_SUPERVISOR_USER_SCRIPTS_ROOT: root, AI_SUPERVISOR_RECONCILE_TEST: '1', AI_SUPERVISOR_NODE: fake, AI_SUPERVISOR_CLI: fakeCli };
-  execFileSync('bash', [install], { env, stdio: 'ignore' });
+  execFileSync('bash', [install], { env, stdio: ['ignore', 'ignore', 'inherit'] }); // stderr kept so a CI failure names its cause
   const installed = JSON.parse(fs.readFileSync(path.join(root, 'schedule.json'), 'utf8'));
   assert.deepEqual(installed['/existing/script'], existing['/existing/script']);
   assert.equal(Object.keys(installed).length, 2);
