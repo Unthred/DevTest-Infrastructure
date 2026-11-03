@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Unthred/SquigOS/docs/adr/schemas/adapter-result.v1.schema.json",
+  "title": "Adapter result adapter.v1 (DRAFT, issue #240; not authoritative until the ADR is accepted)",
+  "description": "One JSON result on adapter stdout, or an error object for exit codes 2-7. Unknown fields are permitted here: the host ignores and logs them (ADR-0010 D1). A risk tier in a result is never honoured (D5). Checks that JSON Schema cannot express (requestId and headSha echo the request) are the host's, see the test file.",
+  "oneOf": [
+    { "$ref": "#/$defs/runResult" },
+    { "$ref": "#/$defs/reviewResult" },
+    { "$ref": "#/$defs/usageResult" },
+    { "$ref": "#/$defs/capabilitiesResult" },
+    { "$ref": "#/$defs/errorResult" }
+  ],
+  "$defs": {
+    "contract": { "const": "adapter.v1" },
+    "requestId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "shortText": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "timestamp": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "tokens": { "type": "integer", "minimum": 0 },
+    "usage": {
+      "type": "object",
+      "required": ["inputTokens", "outputTokens"],
+      "properties": {
+        "inputTokens": { "$ref": "#/$defs/tokens" },
+        "outputTokens": { "$ref": "#/$defs/tokens" },
+        "cachedTokens": { "$ref": "#/$defs/tokens" },
+        "costEquivalentUsd": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "runResult": {
+      "type": "object",
+      "required": ["contract", "op", "requestId", "status", "summary"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "const": "run" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "summary": { "$ref": "#/$defs/shortText" },
+        "changes": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "required": ["path", "why"],
+            "properties": { "path": { "type": "string", "minLength": 1, "maxLength": 1000 }, "why": { "$ref": "#/$defs/shortText" } }
+          }
+        },
+        "claims": { "type": "array", "maxItems": 200, "items": { "type": "object", "required": ["text"], "properties": { "text": { "$ref": "#/$defs/shortText" } } } },
+        "transcriptRef": { "type": ["string", "null"], "minLength": 1, "maxLength": 1000 },
+        "sessionRef": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 },
+        "usage": { "$ref": "#/$defs/usage" }
+      },
+      "oneOf": [
+        {
+          "properties": { "status": { "const": "finished" } },
+          "required": ["changes"]
+        },
+        {
+          "properties": { "status": { "const": "failed" }, "reason": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "required": ["reason"]
+        },
+        {
+          "properties": {
+            "status": { "const": "needs-input" },
+            "question": {
+              "type": "object",
+              "required": ["text"],
+              "properties": {
+                "text": { "$ref": "#/$defs/shortText" },
+                "choices": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/$defs/shortText" } }
+              }
+            }
+          },
+          "required": ["question"]
+        }
+      ]
+    },
+    "reviewResult": {
+      "type": "object",
+      "required": ["contract", "op", "requestId", "headSha", "verdict", "findings"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "const": "review" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "headSha": { "$ref": "#/$defs/sha" },
+        "findings": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": ["kind", "text"],
+            "properties": { "kind": { "enum": ["blocking", "follow-up"] }, "text": { "$ref": "#/$defs/shortText" } }
+          }
+        },
+        "usage": { "$ref": "#/$defs/usage" }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "verdict": { "const": "approve" },
+            "findings": { "items": { "properties": { "kind": { "const": "follow-up" } } } }
+          }
+        },
+        {
+          "properties": {
+            "verdict": { "const": "reject" },
+            "findings": { "contains": { "properties": { "kind": { "const": "blocking" } } } }
+          }
+        }
+      ]
+    },
+    "usageResult": {
+      "type": "object",
+      "required": ["contract", "op", "requestId", "metered", "limits", "observedAt"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "const": "usage" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "metered": { "type": "boolean" },
+        "limits": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": ["name", "used", "unit", "resetsAt"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "used": { "type": "number", "minimum": 0 },
+              "unit": { "enum": ["fraction", "tokens", "requests", "usd"] },
+              "resetsAt": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] }
+            }
+          }
+        },
+        "observedAt": { "$ref": "#/$defs/timestamp" }
+      },
+      "oneOf": [
+        { "properties": { "metered": { "const": true } } },
+        { "properties": { "metered": { "const": false }, "limits": { "maxItems": 0 } } }
+      ]
+    },
+    "capabilitiesResult": {
+      "type": "object",
+      "required": ["contract", "op", "requestId", "adapter", "operations", "models", "shell", "resumable", "trustedForHighRisk"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "const": "capabilities" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "adapter": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 100 }, "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+" } }
+        },
+        "operations": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "enum": ["run", "review", "usage", "capabilities"] } },
+        "models": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": ["id", "contextTokens", "costTier", "roles"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "contextTokens": { "type": "integer", "minimum": 1 },
+              "costTier": { "enum": ["low", "medium", "high", "unmetered"] },
+              "roles": { "type": "array", "minItems": 1, "items": { "enum": ["implement", "review"] } }
+            }
+          }
+        },
+        "shell": { "type": "boolean" },
+        "resumable": { "type": "boolean" },
+        "trustedForHighRisk": { "type": "boolean", "description": "A declaration, not authority (ADR-0010 D2, D5)." }
+      }
+    },
+    "errorResult": {
+      "type": "object",
+      "required": ["contract", "op", "requestId", "error"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "op": { "enum": ["run", "review", "usage", "capabilities"] },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "enum": ["bad-request", "unsupported", "refused", "bad-result", "unavailable", "timeout", "internal"] },
+            "message": { "type": "string", "minLength": 1, "maxLength": 1000 }
+          }
+        }
+      }
+    }
+  }
+}
