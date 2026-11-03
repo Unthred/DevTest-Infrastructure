@@ -323,6 +323,7 @@ const CHECK_LIMITS = { checks: 8, title: 200, summary: 800, text: 1500 };
 export const REQUIREMENTS_MAX = 30000;
 const cleanText = (value, max) => redact(value, max).replace(/\s+/g, ' ').trim();
 export const isSecretScanner = check => SECRET_SCANNER.test(`${check?.name || ''} ${check?.app || ''}`);
+export const scannerOnly = names => names.length > 0 && names.every(name => isSecretScanner({ name }));
 export function checkDetails(runs, names) {
   const want = new Set(names), out = [];
   // After a rerun the API lists several runs of one name: describe one that did not succeed before a passing one (issue #205).
@@ -511,7 +512,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -1190,10 +1191,16 @@ export class Team {
     for (const pr of repair ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
-      const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
+      const checks = failingChecks(pr.statusCheckRollup, this.retried(pr));
+      // Issue #400: a round whose only failing checks are secret scanners cannot be cleared by the fix job (the old commit stays flagged
+      // until the homeowner resolves the incident). It is not counted toward max_fix_attempts and never escalates. To stay bounded, one
+      // such round runs per PR; later heads wait for the homeowner (the secret-scan item is already raised).
+      const scanOnly = scannerOnly(checks);
+      if (scanOnly && (this.s.scanOnlyRounds[pr.number] || 0) >= 1) continue;
+      const escalated = !scanOnly && this.fixCount(pr.number) >= L.max_fix_attempts;
       if (busy('cifix', key) || (escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
-      return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks: failingChecks(pr.statusCheckRollup, this.retried(pr)), key, ...(escalated ? { escalated: true } : {}) };
+      return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks, key, ...(scanOnly ? { scanOnly: true } : {}), ...(escalated ? { escalated: true } : {}) };
     }
     // fix: my PR with a CHANGES verdict on its current head
     for (const pr of repair ? prs : []) {
@@ -2430,7 +2437,8 @@ export class Team {
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head, ...(rebase ? { base: act.base } : { branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) }) };
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
-      bump = () => { this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase && this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
+      bump = () => { if (act.scanOnly) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; return; }   // issue #400: not a fix round
+        this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase && this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: 'continue', worktree: wt, issue: act.issue, scope: `Continue draft PR #${act.pr} for issue #${act.issue} on ${act.branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
