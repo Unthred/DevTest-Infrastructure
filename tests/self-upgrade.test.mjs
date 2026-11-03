@@ -695,6 +695,8 @@ test('issue #412: pre-check tests fail twice: latched as before, names and excer
   assert.deepEqual(w.up.s.install.tests, ['alpha works', 'beta works']); assert.match(w.up.s.install.excerpt, /error: boom/);
   assert.match(w.alerts()[0], /tests failed: alpha works; beta works/);
   assert.equal(w.records()[0].reason, 'tests failed: alpha works; beta works');
+  assert.deepEqual(w.records()[0].tests, ['alpha works', 'beta works']); assert.match(w.records()[0].excerpt, /error: boom/); assert.equal(w.records()[0].retried, true);
+  assert.match(w.alerts()[0], /error: boom/);
   w.state.now += 100 * ENV_RETRY_MAX_MS;
   assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(runs, 2); assert.equal(w.alerts().length, 1);   // latched: no third run
 });
@@ -722,6 +724,7 @@ test('issue #412: install-time tests fail then pass: installs; fail then fail: l
   assert.equal(await w.up.step(), 'precheck-failed');
   assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 2); assert.equal(w.log.some(x => x[0] === 'rollback' || x[0] === 'dry'), false);
   assert.equal(w.up.s.install.result, 'blocked'); assert.deepEqual(w.up.s.install.tests, ['alpha works', 'beta works']); assert.equal(w.up.s.lastUpgradeAt, undefined);
+  const rec = w.records().find(r => r.result === 'precheck_failed'); assert.deepEqual(rec.tests, ['alpha works', 'beta works']); assert.match(rec.excerpt, /error: boom/); assert.match(w.alerts()[0], /error: boom/);
 });
 
 test('issue #412: a latched blocked commit is shown as blocked and holds nothing, even with jobs running', async t => {

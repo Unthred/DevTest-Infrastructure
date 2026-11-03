@@ -55,6 +55,7 @@ export function parseTestFailure(stderr) {
 }
 const isTestFailure = r => !!r && r.ok === false && !r.environmental && r.kind === 'tests' && !r.retried;
 const failureFields = r => (r.kind === 'tests' ? { tests: (r.tests || []).slice(0, 5), excerpt: String(r.excerpt || '').slice(0, 1500), ...(r.retried ? { retried: true } : {}) } : {});
+const excerptNote = r => (r.kind === 'tests' && r.excerpt ? `\nFailure output (excerpt):\n${String(r.excerpt).slice(0, 600)}` : '');
 const testsOf = x => (x?.tests?.length ? x.tests.join('; ') : null);
 
 export function installedSha(root) {
@@ -303,8 +304,8 @@ export class SelfUpgrade {
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
         : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre) });
       this.save();
-      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).`);
-      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.reason });
+      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).${excerptNote(pre)}`);
+      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.reason, ...failureFields(pre) });
       return 'precheck-failed';
     }
     checks.preChecks = flaky ? 'ok-after-retry' : 'ok';
@@ -330,8 +331,8 @@ export class SelfUpgrade {
       // main, with one alert. No rollback and no global latch (#101).
       this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
       this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up) }); this.save();
-      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).`);
-      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: up.reason });
+      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`);
+      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: up.reason, ...failureFields(up) });
       return 'precheck-failed';
     }
     if (!up.ok) {
