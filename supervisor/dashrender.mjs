@@ -435,7 +435,7 @@ function activityPage(view, query, path) {
 const SOURCE = { job: 'reported to a supervised job', 'session-log': 'read from the local Codex session log (no model call)' };
 function allowanceBody(u, now) {
   const l = u.limit;
-  const limit = l ? `<p class="limit">${badge('action', 'Limit reached')} ${l.resetsAt ? `resets <b>${esc(utc(l.resetsAt))}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
+  const limit = l ? `<p class="limit">${badge('action', 'Paused on a usage limit')} ${l.limiting ? `${esc(l.limiting)}. ` : ''}${l.resetsAt ? `resets <b>${esc(utc(l.resetsAt))}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
   if (!u.windows.length) return `${limit}<p>Allowance: <b>unknown</b></p>${empty('No allowance reported', 'The provider has never reported a limit window to the supervisor.', 'info')}`;
   const used = w => (Number.isFinite(w.utilization) ? `<div class="bar${w.expired ? ' expired' : ''}" role="img" aria-label="${pct(w.utilization)} used${w.expired ? ', expired' : ''}"><b style="width:${Math.min(100, w.utilization * 100)}%"></b></div> ${pct(w.utilization)}${w.expired ? ' <span class="muted">(expired)</span>' : ''}` : 'unknown');
   const resets = w => (!w.resetsAt ? 'unknown' : w.expired ? `reset ${esc(dur(now - w.resetsAt))} ago; current use unknown` : esc(inFuture(w.resetsAt, now)));

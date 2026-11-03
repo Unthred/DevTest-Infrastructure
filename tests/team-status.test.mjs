@@ -75,7 +75,7 @@ test('3. problems: paused job is listed, and a pause that disagrees with the rep
   const s = await status({ jobs: [job({ status: 'paused_limit', lastEvent: 'usage_limit', nextAttemptAt: NOW + 30 * MIN, allowance: al })] });
   const t = s.problems.map(p => p.text).join('\n');
   assert.match(t, /claude is paused on a usage limit; restart planned about 12:30/);
-  assert.match(t, /provider reports capacity left: 5-hour 34% used/);
+  assert.match(t, /no window is near its limit: 5-hour 34% used/);
 });
 test('3. problems: a healthy state has none, and a live lease is not stale', async () => {
   const s = await status({ jobs: [job()], leases: [{ job: 'a'.repeat(32), at: NOW }] });
