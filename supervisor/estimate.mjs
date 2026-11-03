@@ -18,6 +18,14 @@ import { REVIEWS_ONLY_TYPES } from './budget.mjs';
 
 export const MIN_SAMPLES = 5;
 export const TICK_MS = 5 * 60000;
+// Issue #413: a range is shown only when it is no wider than this share of the time from now to its midpoint.
+export const MAX_RANGE_SHARE = 0.5;
+export function meaningfulRange(e, now) {
+  const a = e?.finish?.p50, b = e?.finish?.p90;
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return true;
+  const ahead = (a + b) / 2 - now;
+  return ahead > 0 && b - a <= MAX_RANGE_SHARE * ahead;
+}
 export const FIX_P50_AT = 0.5, FIX_P90_AT = 0.1;
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
 const PRODUCERS = ['implement', 'continue', 'fix', 'cifix', 'rebase'];

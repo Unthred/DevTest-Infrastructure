@@ -8,6 +8,7 @@ import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 
 import { agentLine } from './agentline.mjs';
+import { meaningfulRange } from './estimate.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
@@ -83,6 +84,8 @@ const prLink = n => named(`/work/pr/${Number(n)}`, REFS.pr[Number(n)], `PR #${Nu
 const issueLink = n => named(`/work/issue/${Number(n)}`, REFS.issue[Number(n)], `#${Number(n)}`);
 const jobPath = id => `/work/job/${encodeURIComponent(String(id).slice(0, 8))}`;
 const jobLink = id => named(jobPath(id), REFS.job[String(id).slice(0, 8)], `job ${String(id).slice(0, 8)}`);
+// A running job's card shows its description once, as the link; the name is the fallback when the reference table has none.
+const jobLinkNamed = j => named(jobPath(j.id), REFS.job[String(j.id).slice(0, 8)], j.name || `job ${String(j.id).slice(0, 8)}`);
 const jobIdCell = (full, what = 'job ID') => `${jobLink(full)}${full ? copyBtn(full, what) : ''}`;
 const refOf = r => (r ? (r.kind === 'pull' ? prLink(r.n) : issueLink(r.n)) : '');
 const ext = (url, text) => `<a href="${esc(url)}">${esc(text)}</a>`;
@@ -235,7 +238,7 @@ function nowPanel(view) {
   const jobItem = (a, j) => {
     const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : 'Implementer';
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
-    return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${j.name ? `${esc(j.name)} · ` : ''}${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
+    return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobLinkNamed(j)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
   };
   return `${slots}<ul class="panel-list">${view.agents.map(a => {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j)).join('');
@@ -255,10 +258,13 @@ function budgetBlock(view, name) {
 }
 // Issue #156: the estimated finish with its basis on hover; waits Foreman knows about get their own time.
 const estFor = (view, kind, ref) => view.estimates?.items?.[`${kind}:${ref}`] || null;
-function estHtml(e, tz = 'UTC') {
+function estHtml(e, tz = 'UTC', now = null) {
   if (!e) return '';
   const tip = (e.basis || []).join('\n');
-  return `<div class="sub est" data-est="${esc(e.status)}" title="${esc(tip)}">${icon('clock')} ${esc(e.text)} <span class="tzl">(${esc(tz)})</span>${(e.waits || []).map(w => ` <span class="est-wait" data-wait="${esc(w.kind)}">${esc(w.text)}</span>`).join('')}</div>`;
+  // A range too wide to mean anything is left out (issue #413); waits stay.
+  const wide = e.status === 'estimated' && now !== null && !meaningfulRange(e, now);
+  if (wide && !(e.waits || []).length) return '';
+  return `<div class="sub est" data-est="${esc(e.status)}" title="${esc(tip)}">${icon('clock')} ${wide ? '' : `${esc(e.text)} <span class="tzl">(${esc(tz)})</span>`}${(e.waits || []).map(w => ` <span class="est-wait" data-wait="${esc(w.kind)}">${esc(w.text)}</span>`).join('')}</div>`;
 }
 const globalWaitsHtml = view => (view.estimates?.waits || []).map(w => `<p class="sub est-wait" data-wait="${esc(w.kind)}">${icon('clock')} ${esc(w.text)} <span class="tzl">(${esc(view.tz || 'UTC')})</span></p>`).join('');
 // Issue #76: when nothing is planned, say why. Counts link to the Work lists, filtered.
@@ -273,8 +279,7 @@ function nextWhyHtml(view) {
 }
 function nextPanel(view) {
   const now = view.generatedAt, plan = view.panels.next;
-  const when = view.nextTickAt ? `<p class="sub">${icon('clock')} Next tick <b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b></p>` : '<p class="sub">No tick is scheduled: the team loop is off or has never run.</p>';
-  return `${when}${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref), view.tz)}${p.reassignedFrom ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
+  return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref), view.tz, now)}${p.reassignedFrom ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
@@ -387,7 +392,7 @@ function agentDetail(view, query, path, route) {
   const queueRows = q.map(i => ({ ...i, next: i.next ? 'next' : '' }));
   const cur = a.job ? card({ id: 'cur', title: 'Current job', span: 12, movable: false, body: nowPanel({ ...view, agents: [a] }) }) : card({ id: 'cur', title: 'Current job', span: 12, movable: false, body: nowPanel({ ...view, agents: [a] }) });
   const queue = card({ id: 'queue', title: `Queue (${q.length})`, span: 12, movable: false, body: table({ id: 'q', path, query, noun: 'queue items', rows: queueRows, searchKeys: ['title', 'reason', 'type'],
-    cols: [{ key: 'next', label: 'Next', html: r => (r.next ? badge('info', 'Next') : '') }, { key: 'type', label: 'Type' }, { key: 'ref', label: 'Item', num: true, html: r => (r.type === 'issue' ? issueLink(r.ref) : prLink(r.ref)) }, { key: 'est', label: 'Est. finish', html: r => { const e = r.type === 'review' ? null : estFor(view, r.type === 'issue' ? 'issue' : 'pr', r.ref); return e ? `<span title="${esc((e.basis || []).join('\n'))}" data-est="${esc(e.status)}">${esc(e.text)}</span>` : ''; } }, { key: 'reason', label: 'Reason', more: true }],
+    cols: [{ key: 'next', label: 'Next', html: r => (r.next ? badge('info', 'Next') : '') }, { key: 'type', label: 'Type' }, { key: 'ref', label: 'Item', num: true, html: r => (r.type === 'issue' ? issueLink(r.ref) : prLink(r.ref)) }, { key: 'est', label: 'Est. finish', html: r => { const e = r.type === 'review' ? null : estFor(view, r.type === 'issue' ? 'issue' : 'pr', r.ref); return e && !(e.status === 'estimated' && !meaningfulRange(e, view.generatedAt)) ? `<span title="${esc((e.basis || []).join('\n'))}" data-est="${esc(e.status)}">${esc(e.text)}</span>` : ''; } }, { key: 'reason', label: 'Reason', more: true }],
     totals: { next: 'count' }, emptyState: empty('Queue is empty', 'No work is waiting for this agent.', 'check') }) });
   const hist = card({ id: 'hist', title: `Job history (${jobs.length})`, span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: jobs, searchKeys: ['id', 'kind', 'status', 'branch', 'desc'], cols: jobCols(view, { agent: false }).map(c => ({ ...c, total: undefined })), totals: jobTotals,
     emptyState: empty('No jobs yet', 'This agent has not run a job.', 'list') }) });
@@ -414,7 +419,7 @@ function jobDetail(view, query, path, route) {
 }
 const showChip = (path, query, key, value, text) => (query.get(key) === value ? `<p class="chips"><span class="chip on">${esc(text)}</span> <a class="btn" href="${esc(withQuery(path, query, { [key]: null }))}">Show all</a></p>` : '');
 function workPage(view, query, path) {
-  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
+  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz, view.generatedAt)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
   const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: showChip(path, query, 'issues.show', 'blocked', 'Showing only open issues blocked by dependencies') + table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.filter(i => query.get('issues.show') !== 'blocked' || (i.state === 'OPEN' && i.blockedBy.length)).map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'],
     cols: [{ key: 'number', label: 'Issue', num: true, html: r => issueLink(r.number) }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
