@@ -9,6 +9,7 @@ import { atomicJson } from './core.mjs';
 import { dashDir } from './dashdata.mjs';
 
 export const PROBE_COOLDOWN_MS = 5 * 60000;
+export const MARK_READ_COOLDOWN_MS = 5000;   // Mark as read is cheap, so its cooldown is short
 const tokenFile = root => path.join(dashDir(root), 'write-token');
 const cooldownFile = root => path.join(dashDir(root), 'write-cooldown.json');
 

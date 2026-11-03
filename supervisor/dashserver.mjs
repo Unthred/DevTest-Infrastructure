@@ -14,7 +14,7 @@ import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
-import { proofValid, withProof, reserveCooldown, releaseCooldown } from './dashwrite.mjs';
+import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS } from './dashwrite.mjs';
 
 export const DEFAULT_PORT = 8731;
 
@@ -118,6 +118,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
     const at = Number(form.get('at')), t = now(), prev = readLastSeen(root);
     if (!/^\d{10,15}$/.test(form.get('at') || '') || at > t) return send(400, 'text/plain; charset=utf-8', 'bad time');
+    const slot = reserveCooldown(root, 'mark-read', t, MARK_READ_COOLDOWN_MS);
+    if (!slot.ok) return send(429, 'text/plain; charset=utf-8', `too soon, try again at ${new Date(slot.retryAt).toISOString()}`, { 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
     writeLastSeen(root, Math.max(at, prev ?? 0));
     return send(303, 'text/plain; charset=utf-8', 'marked', { location: '/' });
   };
