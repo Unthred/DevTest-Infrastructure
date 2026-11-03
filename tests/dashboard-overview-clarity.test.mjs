@@ -27,30 +27,49 @@ const tmp = t => { const r = fs.mkdtempSync(path.join(os.tmpdir(), 'ovc-')); t.a
 const build = (t, { jobs = [], cache = {}, snapshots = [], state = {}, events = [] } = {}) =>
   buildView({ config: config(), root: tmp(t), jobs, events, state, cache: { tick, fetchedAt: NOW - MIN, pulls: [], ...cache, issues: compactIssues(cache.issues || [issue(30), issue(5), issue(2), issue(3)]) }, snapshots, now: NOW, tz: 'UTC' });
 const page = (v, route = { page: 'overview' }, qs = '') => renderRoute(v, route, { query: new URLSearchParams(qs), pathname: route.page === 'activity' ? '/activity' : route.page === 'work' ? '/work' : '/' }).html;
+const esc = x => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const header = html => /<header class="statusbar"[\s\S]*?<\/header>/.exec(html)[0];
-const lines = html => [...header(html).matchAll(/<li data-agent="(\w+)" data-state="(\w+)">[\s\S]*?<\/li>/g)].map(m => ({ agent: m[1], state: m[2], html: m[0], text: m[0].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() }));
+const lines = html => [...header(html).matchAll(/<li><a class="agent-badge[^"]*" href="([^"]+)" data-agent="(\w+)" data-state="(\w+)"[^>]*>[\s\S]*?<\/li>/g)].map(m => ({ href: m[1], agent: m[2], state: m[3], html: m[0], text: m[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() }));
 
-// ---- 1. header per agent, from the same sentence as `team status`
-test('header: both running shows two running lines and no single Running badge', async t => {
+// ---- 1. header per agent: a compact badge (name, role, state), linking to the agent's page (issue #421)
+test('header: both running shows two compact running badges that link to the agent pages', async t => {
   const v = await build(t, { jobs: [job(), job({ id: 'c'.repeat(32), provider: 'codex', kind: 'rebase', issue: 41, branch: 'codex/issue-3-x' })] });
   const l = lines(page(v));
-  assert.deepEqual(l.map(x => x.state), ['running', 'running']);
-  assert.match(l[0].text, /Running claude: running: Implementer · implement/); assert.match(l[1].text, /codex: running: .*rebase/);
+  assert.deepEqual(l.map(x => [x.agent, x.state, x.href]), [['claude', 'running', '/agents/claude'], ['codex', 'running', '/agents/codex']]);
+  assert.equal(l[0].text, 'claude Implementer Running'); assert.equal(l[1].text, 'codex Implementer Running');
+  assert.match(l[0].html, /aria-label="claude · Implementer · Running"/);
   assert.doesNotMatch(header(page(v)), /title="Overall health"/);
 });
-test('header: one paused, one running: each agent has its own state, the paused one has its restart time', async t => {
+test('header: a reviewer job shows the Reviewer role; a paused agent shows Paused and no restart text', async t => {
   const v = await build(t, { jobs: [job(), paused()] });
   const html = page(v), l = lines(html);
-  assert.deepEqual(l.map(x => [x.agent, x.state]), [['claude', 'running'], ['codex', 'paused']]);
-  assert.match(l[1].text, /codex: paused: Reviewer · review · PR #36.*, restarts about 2026-11-02 21:30 UTC/);
-  assert.match(l[1].html, /<time class="lt" datetime="2026-11-02T21:30:00.000Z" data-local>/);
-  assert.equal((header(html).match(/>Paused</g) || []).length, 1, 'only the paused agent carries a Paused badge');
+  assert.deepEqual(l.map(x => [x.agent, x.state, x.text]), [['claude', 'running', 'claude Implementer Running'], ['codex', 'paused', 'codex Reviewer Paused']]);
+  assert.doesNotMatch(header(html), /restarts about|<time/);
 });
-test('header: both paused', async t => {
-  const v = await build(t, { jobs: [paused(), paused({ id: 'd'.repeat(32), provider: 'claude', nextAttemptAt: NOW + 30 * MIN, branch: 'claude/issue-30-x' })] });
-  const l = lines(page(v));
-  assert.deepEqual(l.map(x => x.state), ['paused', 'paused']);
-  assert.match(l[0].text, /restarts about 2026-11-02 20:30 UTC/); assert.match(l[1].text, /restarts about 2026-11-02 21:30 UTC/);
+test('header: an idle agent shows name and state only', async t => {
+  const l = lines(page(await build(t, { jobs: [] })));
+  assert.deepEqual(l.map(x => x.text), ['claude Idle', 'codex Idle']);
+});
+test('header: several jobs on one agent show a count, not a role or any description', async t => {
+  const v = await build(t, { jobs: [job(), job({ id: 'e'.repeat(32), kind: 'review', issue: 36, branch: 'claude/issue-5-x' })] });
+  const a = v.agents.find(x => x.name === 'claude');
+  if ((a.jobs || []).length < 2) a.jobs = [a.job, { ...a.job, id: 'e'.repeat(32), role: 'reviewer' }]; // fixture limits may allow one job: force two
+  const l = lines(page(v)).find(x => x.agent === 'claude');
+  assert.equal(l.text, 'claude 2 jobs Running');
+  assert.doesNotMatch(l.html, /Implementer|Reviewer/);
+});
+// The job description appears once, on the Now card: not in the bar, the agent's card or the Next card (issue #421).
+test('description: a job description renders on the Now card only, not in the bar, the agent card or the Next card', async t => {
+  const v = await build(t, { jobs: [job(), paused()] });
+  const a = v.agents.find(x => x.name === 'claude'), desc = a.job.name;
+  assert.ok(desc && desc.length > 5, 'fixture job has a description: ' + desc);
+  const html = page(v), count = h => h.split(esc(desc)).length - 1;
+  assert.equal(count(header(html)), 0, 'not in the app bar');
+  const cardOf = id => new RegExp('data-card="' + id + '"[\\s\\S]*?(?=data-card=")').exec(html)[0];
+  assert.equal(count(cardOf('now')), 1, 'exactly once, on the Now card');
+  assert.equal(count(cardOf('next')), 0, 'not in the Next card');
+  const agentsHtml = page(v, { page: 'agents' }, '');
+  assert.equal(count(/data-card="a-claude"[\s\S]*?(?=data-card="a-codex")/.exec(agentsHtml)[0]), 0, 'not in the agent card');
 });
 test('header: the sentence is the one `team status` prints (same function, same words)', async t => {
   const jobs = [job(), paused()];
@@ -75,7 +94,7 @@ test('next: nothing planned lists busy agents, paused agents with resume time, a
   assert.equal(v.panels.nextWhy.blocked, 2); assert.ok(v.panels.nextWhy.waitingReview >= 1);
   const html = page(v), next = /data-card="next"[\s\S]*?(?=data-card="needs")/.exec(html)[0];
   assert.match(next, /Nothing is planned because/);
-  assert.match(next, /claude<\/a> is busy: Implementer · implement/); assert.match(next, /codex<\/a> is paused: Reviewer · review .*resumes about <time[^>]*datetime="2026-11-02T21:30:00.000Z"/);
+  assert.match(next, /claude<\/a> is busy with a running job \(see Now\)/); assert.match(next, /codex<\/a> is paused, resumes about <time[^>]*datetime="2026-11-02T21:30:00.000Z"/);
   assert.match(next, /<a href="\/work\?issues\.show=blocked">2 queued items blocked by dependencies<\/a>/);
   assert.match(next, new RegExp(`<a href="/work\\?prs\\.show=awaiting-review">${v.panels.nextWhy.waitingReview} waiting for review</a>`));
 });
@@ -269,4 +288,13 @@ test('time: the version badge next-try time is a local <time> and no page shows 
 test('time: the plain-time guard itself catches a bare UTC clock time', () => {
   assert.deepEqual(plainTimes('<p>next try 12:34 UTC</p>'), ['12:34 UTC']);
   assert.deepEqual(plainTimes('<p>next try <time data-local>2026-07-01 12:34 UTC</time></p>'), []);
+});
+
+// Review of PR #422 (head 13bb894): the project browser at 1280px found the bar wider than the viewport (1379px) and a card header
+// wider than a 390px phone. CSS guards: the 1100-1439px tier sheds stat labels, and phone card headers wrap their range buttons.
+test('css: the one-row bar sheds labels between 1100 and 1439px and phone card headers wrap (browser overflow findings)', () => {
+  const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
+  assert.match(css, /@media\(min-width:1100px\) and \(max-width:1439px\)\{[\s\S]*?\.statusbar \.stat \.k\{display:none\}/);
+  assert.match(css, /@media\(min-width:1100px\) and \(max-width:1279px\)\{[\s\S]*?\.agent-badge \.ab-role\{display:none\}/);
+  assert.match(css, /\.card>header \.ranges\{flex-wrap:wrap\}/);
 });
