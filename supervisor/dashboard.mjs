@@ -434,7 +434,7 @@ export function modelUsage(rows) {
 }
 
 const DAY = 86400000;
-function graphs({ config, jobs, state, snapshots, now }) {
+function graphs({ config, jobs, state, snapshots, now, windowMs = 30 * DAY }) {
   const agents = Object.keys(config.agents);
   // Allowance % over time per agent. A sample is drawn only while its reading is current: once the reported reset time has
   // passed, the line ends and an "expected reset" marker is placed at that time (issue #75), instead of holding a stale value
@@ -443,7 +443,7 @@ function graphs({ config, jobs, state, snapshots, now }) {
   const allowance = {};
   for (const agent of agents) {
     const samples = {};
-    for (const s of snapshots.filter(x => now - x.at <= 30 * DAY).sort((a, b) => a.at - b.at)) {
+    for (const s of snapshots.filter(x => now - x.at <= windowMs).sort((a, b) => a.at - b.at)) {
       const al = s.allowance?.[agent]; if (!al) continue;
       for (const w of al.windows || []) if (Number.isFinite(w.utilization)) (samples[windowLabel(w, agent)] ||= []).push({ at: s.at, v: w.utilization, resetsAt: Number.isFinite(w.resetsAt) ? w.resetsAt : null });
     }
@@ -466,7 +466,7 @@ function graphs({ config, jobs, state, snapshots, now }) {
   }
   const days = {};
   for (const j of jobs) {
-    if (!j.createdAt || now - j.createdAt > 30 * DAY) continue;
+    if (!j.createdAt || now - j.createdAt > windowMs) continue;
     const day = new Date(j.createdAt).toISOString().slice(0, 10);
     const k = `${j.kind || 'job'}/${ACTIVE.includes(j.status) ? 'active' : j.status}`;
     ((days[day] ||= {})[k] = (days[day][k] || 0) + 1);
@@ -570,7 +570,7 @@ export function refsOf({ names, cache, jobs, state }) {
 // First-seen times of inconsistent checks, per PR head (see stuckChecks). In memory: a restart restarts the clock.
 const stuckSeen = new Map();
 export const stuckSeenFor = pr => { const k = `${pr.number}:${pr.headRefOid}`; if (!stuckSeen.has(k)) { for (const o of [...stuckSeen.keys()]) if (o.startsWith(`${pr.number}:`)) stuckSeen.delete(o); stuckSeen.set(k, new Map()); } return stuckSeen.get(k); };
-export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null, configError = null }) {
+export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null, configError = null, history = null }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
@@ -608,6 +608,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(h.since))}` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
+    // Issue #362: a storage warning is a Needs you item; nothing is ever deleted automatically.
+    if (history?.storage?.warnings?.length) attention.push({ id: 'history-storage', text: redact(`History storage: ${history.storage.warnings.join(' ')}`, 400), ref: null, severity: 'warn', action: 'Free space on the volume or move the history archive; Foreman never deletes history by itself.' });
     // Issue #153: a failed config migration skips each tick (and is retried) until the homeowner fixes team.local.json
     // Issue #191: an invalid team.local.json stops every tick (upgrade and team steps); the page keeps the last good configuration.
     if (configError) attention.push({ id: 'config-invalid', text: redact(`team.local.json is invalid, so every Foreman tick fails until it is fixed (this page shows the last good configuration): ${configError}`, 300), ref: null, severity: 'action', action: 'Fix or remove the invalid setting in team.local.json.' });
@@ -646,7 +648,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       budget,
       attention,
       usage: usageView(config, jobs, states, allowance, now),
-      graphs: graphs({ config, jobs, state, snapshots, now }),
+      graphs: graphs({ config, jobs, state, snapshots: history?.chartSnapshots || snapshots, now, windowMs: history?.chartSnapshots ? Infinity : 30 * DAY }),
+      history: history ? { timeline: history.timeline, gaps: history.gaps, storage: history.storage, allTime: !!history.chartSnapshots } : null,
       activity: activity({ config, jobs, events, state, cache, snapshots, now, root, incidents: readIncidents(root), names })
     };
   });

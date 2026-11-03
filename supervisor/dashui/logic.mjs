@@ -12,7 +12,7 @@ export const SEVERITIES = {
 export function severityOf(id) {
   const s = String(id || '');
   if (/^(homeowner|fixlimit|reviewlimit|prclosed|tick-failed|job|rebase-lost|migration|split|decision|noreviewer|stalled|stall)(-|$)/.test(s)) return 'action';
-  if (/^(ci|tick-stale|no-tick|idle|pause|drift|lease|register)(-|$)/.test(s)) return 'warning';
+  if (/^(ci|tick-stale|no-tick|idle|pause|drift|lease|register|history)(-|$)/.test(s)) return 'warning';
   return 'info';
 }
 export const worst = levels => levels.reduce((w, l) => ((SEVERITIES[l]?.rank ?? 0) > (SEVERITIES[w]?.rank ?? 0) ? l : w), 'ok');
@@ -128,7 +128,7 @@ export function pillLinks({ health, attention = [], version } = {}) {
 }
 
 // ---- time range for charts
-export const RANGES = { '24h': 24 * 3600000, '7d': 7 * 86400000, '30d': 30 * 86400000 };
+export const RANGES = { '24h': 24 * 3600000, '7d': 7 * 86400000, '30d': 30 * 86400000, all: Infinity };   // 'all' (issue #362): back to the first retained record
 export const DEFAULT_RANGE = '7d';
 // The range to show (issue #140): an explicit address wins; otherwise the viewer's saved choice if it is a known range.
 export const chooseRange = (saved, inUrl) => (Object.hasOwn(RANGES, inUrl) ? inUrl : Object.hasOwn(RANGES, saved) ? saved : DEFAULT_RANGE);

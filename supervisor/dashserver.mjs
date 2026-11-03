@@ -2,6 +2,7 @@
 // tick wrote; it makes no GitHub call and no model call, and changes nothing except the Mark as read marker (POST /mark-read; every other request is GET/HEAD only).
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
+import { readTimeline, computeGaps, allSnapshots, storageReport } from './history.mjs';
 import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
@@ -49,11 +50,15 @@ export function configSource(config) {
 }
 
 // `tz` is the zone for clock times on the page (issue #185); it defaults to the host zone, as 'team status' does.
-export async function currentView({ root, config, now = Date.now(), tz = defaultZone(), configError = null }) {
+// Issue #362: `timeline` loads the retained timeline; `allTime` also loads the archived tick snapshots for the all-time chart range. Both read
+// local files only. Storage figures are always included (a few directory sizes) so the Needs you warning shows on every page.
+export async function currentView({ root, config, now = Date.now(), tz = defaultZone(), configError = null, timeline = false, allTime = false }) {
   if (typeof config === 'function') config = config();
   const jobs = readJobs(root);
   const register = registerCached(config);
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: readSnapshots(root), now, tz, configError, lastSeen: readLastSeen(root), register, registerUnreadable: !register });
+  const hot = readSnapshots(root), tl = readTimeline(root);
+  const history = { timeline: timeline ? tl : [], gaps: timeline ? computeGaps(tl, allSnapshots(root, hot), now) : [], storage: storageReport(root, { now, timeline: tl }), ...(allTime ? { chartSnapshots: allSnapshots(root, hot) } : {}) };
+  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), register, registerUnreadable: !register });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request.
@@ -131,7 +136,8 @@ export function handler({ root, config, host, port, now = () => Date.now() }) {
       }
       const route = path === '/api/view.json' ? null : matchRoute(path);
       if (path !== '/api/view.json' && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
-      const view = await currentView({ root, config: source(), now: now(), configError: source.invalid });
+      const q0 = new URLSearchParams(search);
+      const view = await currentView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(view));
       const watch = route.page === 'watch';
       const out = renderRoute(view, watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() } : route, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
