@@ -362,13 +362,14 @@ async function main() {
     const key = reuseHours > 0 ? suiteKey(process.cwd(), rawCmd) : null;   // Issue #469: the same clean tree that already passed is not run again
     const prior = findPass(passFile, key, { maxAgeHours: reuseHours });
     if (prior) { console.error(`test-slot: tree ${prior.tree} already passed this suite at ${prior.at}; not run again (use --no-reuse to force)`); process.exitCode = 0; return; }
+    const keyBefore = key;   // the tree that is tested, computed before the run
     const cmd = withTestConcurrency(rawCmd, cfg.limits?.test_concurrency ?? DEFAULT_TEST_CONCURRENCY);
     const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
     if (!release) { console.error('waited too long for a free test slot'); process.exitCode = 3; return; }
     const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', env: testEnv(process.env, cfg.test_tmp_root) });
     for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
     const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, s) => resolve(c ?? (s ? 128 : 1))); });
-    release(); if (code === 0) recordPass(passFile, suiteKey(process.cwd(), rawCmd), { label: a.label }); process.exitCode = code; return;
+    release(); if (code === 0) recordPass(passFile, keyBefore ?? suiteKey(process.cwd(), rawCmd), { label: a.label }); process.exitCode = code; return;
   }
   if (command === 'dashboard') {
     if (a._[0] !== 'serve') throw new SupervisorError('usage: dashboard serve --host LAN_IPV4 [--port N]');

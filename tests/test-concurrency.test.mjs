@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
 import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, TEST_PREFIXES, DEFAULT_TEST_CONCURRENCY } from '../supervisor/testenv.mjs';
-import { validateTeamConfig } from '../supervisor/team.mjs';
+import { validateTeamConfig, reviewPrompt, fixPrompt } from '../supervisor/team.mjs';
 
 const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'foreman-469-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
@@ -157,4 +157,10 @@ test('repeat suite: findPass honours the age limit and a zero setting; test_reus
   const b = base();
   for (const bad of [-1, 721, 1.5]) assert.throws(() => validateTeamConfig({ ...b, limits: { ...b.limits, test_reuse_hours: bad } }), /test_reuse_hours/);
   validateTeamConfig({ ...b, limits: { ...b.limits, test_reuse_hours: 0 } });
+});
+
+test('a review prompt never reuses an earlier pass (D-024); fix prompts may', () => {
+  const j = { pr: 7, head: 'a'.repeat(40), branch: 'b', repository: 'o/r', inbox: '/x' };
+  assert.match(reviewPrompt(j), /test-slot run --no-reuse --/);
+  assert.doesNotMatch(fixPrompt(j), /--no-reuse/);
 });
