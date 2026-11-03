@@ -10,7 +10,7 @@ import { judgeRefresh, MAX_SHIFT_PX } from '../browser/refresh-shift.mjs';
 const read = f => fs.readFileSync(new URL(`../supervisor/dashui/${f}`, import.meta.url), 'utf8');
 const appJs = read('app.js'), layoutJs = read('layout-early.js'), earlyJs = read('early.js'), css = read('style.css');
 
-test('planRefresh: only regions whose markup differs are replaced; a changed set of regions asks for a reload', () => {
+test('planRefresh: only regions whose markup differs are replaced; a changed set of regions is reported not ok, so the page re-lays out in place', () => {
   assert.deepEqual(planRefresh({ 'card:a': '1', 'card:b': '2' }, { 'card:a': '1', 'card:b': '2' }), { ok: true, changed: [] });
   assert.deepEqual(planRefresh({ 'card:a': '1', 'card:b': '2' }, { 'card:a': '1', 'card:b': '3' }), { ok: true, changed: ['card:b'] });
   assert.equal(planRefresh({ 'card:a': '1' }, { 'card:a': '1', 'card:b': '2' }).ok, false, 'a card appeared');
