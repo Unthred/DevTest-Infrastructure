@@ -243,7 +243,13 @@ export function unfinishedChecks(rollup, now = Date.now()) {
     return { name: checkLabel(c), ageMs: t !== null ? Math.max(0, now - t) : null, inconsistent: inconsistent(c) };
   });
 }
-export const stuckChecks = (rollup, now = Date.now()) => unfinishedChecks(rollup, now).filter(c => c.inconsistent && c.ageMs !== null && c.ageMs > STUCK_CHECK_MS);
+// Stuck age runs from when the dispatcher FIRST saw the check inconsistent, not from startedAt (a long job that finished late is not stuck).
+// `seen` is a caller-owned Map (check name -> first-seen ms) for one PR head; without one nothing can be aged, so nothing is stuck.
+export function stuckChecks(rollup, now = Date.now(), seen = new Map()) {
+  const bad = unfinishedChecks(rollup, now).filter(c => c.inconsistent), names = new Set(bad.map(c => c.name));
+  for (const k of [...seen.keys()]) if (!names.has(k)) seen.delete(k);
+  return bad.map(c => { if (!seen.has(c.name)) seen.set(c.name, now); return { ...c, ageMs: Math.max(0, now - seen.get(c.name)) }; }).filter(c => c.ageMs > STUCK_CHECK_MS);
+}
 export function waitingOnText(rollup, now = Date.now()) {
   const u = unfinishedChecks(rollup, now); if (!u.length || u.every(c => c.name === 'a check' && c.ageMs === null)) return 'waiting on CI';
   const age = ms => (ms === null ? 'unknown time' : ms < 90000 ? 'under 2 minutes' : `${Math.round(ms / 60000)} min`);

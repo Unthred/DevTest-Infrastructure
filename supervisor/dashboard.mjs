@@ -323,7 +323,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   }
   for (const pr of cache?.pulls || []) if (!pr.isDraft && !fixLimited.has(pr.number) && checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // Issue #331: a check run whose state contradicts itself for too long. One item per head and check; it clears when the check finishes or the head moves.
-  for (const pr of cache?.pulls || []) if (!pr.isDraft) for (const c of stuckChecks(pr.statusCheckRollup, now)) add(`ci-stuck-${pr.number}-${String(pr.headRefOid).slice(0, 7)}-${c.name.replace(/[^A-Za-z0-9]+/g, '-')}`, `Check stuck: "${c.name}" on ${names.pr(pr.number).text} has been inconsistent for ${Math.round(c.ageMs / 60000)} min; re-run that job.`, { kind: 'pull', n: pr.number });
+  for (const pr of cache?.pulls || []) if (!pr.isDraft) for (const c of stuckChecks(pr.statusCheckRollup, now, stuckSeenFor(pr))) add(`ci-stuck-${pr.number}-${String(pr.headRefOid).slice(0, 7)}-${c.name.replace(/[^A-Za-z0-9]+/g, '-')}`, `Check stuck: "${c.name}" on ${names.pr(pr.number).text} has been inconsistent for ${Math.round(c.ageMs / 60000)} min; re-run that job.`, { kind: 'pull', n: pr.number });
   // issue #149: a cancelled check that was rerun once and is still cancelled
   for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
@@ -554,6 +554,9 @@ export function refsOf({ names, cache, jobs, state }) {
   return out;
 }
 
+// First-seen times of inconsistent checks, per PR head (see stuckChecks). In memory: a restart restarts the clock.
+const stuckSeen = new Map();
+export const stuckSeenFor = pr => { const k = `${pr.number}:${pr.headRefOid}`; if (!stuckSeen.has(k)) { for (const o of [...stuckSeen.keys()]) if (o.startsWith(`${pr.number}:`)) stuckSeen.delete(o); stuckSeen.set(k, new Map()); } return stuckSeen.get(k); };
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null, configError = null }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
