@@ -121,6 +121,8 @@ function reasons(team, cache, jobs, plan, states, names) {
     else if (checks === 'pending') reason = waitingOnText(pr.statusCheckRollup);
     else if (checks === 'red') reason = 'CI failing';
     else if (checks === 'none') reason = 'no CI checks reported';
+    else if (!v && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'pending') reason = `re-review requested by the homeowner (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}); waiting for a reviewer on a different model for ${sha7(pr.headRefOid)}`;
+    else if (v?.verdict === 'CHANGES' && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'done') reason = `the requested re-review (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}) also gave CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; waiting for the homeowner`;
     else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
     else if (v?.verdict === 'PASS' && v.carriedFrom && !team.carryOk(v, pr)) reason = `PASS carried from ${sha7(v.carriedFrom)} but its record does not match this head; not merged`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}${v.carry ? ` (${carryText(v.carry)})` : ''}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
@@ -182,7 +184,8 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
     if (p.isDraft) {
       if ((S.continueAttempts?.[p.number] || 0) >= L.max_fix_attempts) part(0, `waiting for homeowner: continue limit reached on draft ${names.pr(p.number).text}`, 'pull', p.number);
       else part(2, `only work is draft ${names.pr(p.number).text}`, 'pull', p.number);
-    } else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) {
+    } else if (!v && team.reReviewOf?.(p.number, p.headRefOid)?.status === 'pending') part(1, `waiting for the re-review the homeowner requested of ${names.pr(p.number).text}`, 'pull', p.number);
+    else if ((v?.verdict === 'CHANGES' || checks === 'red') && team.fixCount(p.number) >= L.max_fix_attempts) {
       if (team.escalationPending(p.number, p)) part(1, `fix limit reached on ${names.pr(p.number).text}: final round pending`, 'pull', p.number);
       else part(0, `waiting for homeowner: fix limit reached on ${names.pr(p.number).text}`, 'pull', p.number);
     }

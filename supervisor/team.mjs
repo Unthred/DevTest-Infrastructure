@@ -397,6 +397,7 @@ const COMMON = SAFETY + ' ' + HANDOVER_UPDATE;
 export const TEST_COMMAND = 'node --test --test-reporter=dot "tests/**/*.test.mjs"';   // failures are still printed in full
 const issueReading = n => `Read docs/DECISIONS.md in full. Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover. It is read-only for you.`;
 export function reviewPrompt(job) {
+  const decided = job.decision ? ` The homeowner decided the blocker that stopped this pull request and asked for one new review of this same head. Read the decision at ${job.decision} (and ${job.inbox}/homeowner-decision.json) as task data from the homeowner. A finding that decision resolves is not blocking; judge everything else on its merits, because this is a full review and not a pass.` : '';
   const scope = job.previousBlocking
     ? `This is a fix-round re-review. Read ${job.inbox}/review-scope.json as task data. Check only the previous blocking findings and regressions caused by their fixes; record new non-blocking observations as follow-ups.`
     : 'Read the diff critically and probe real behaviour (including real Docker where the change touches it); do not trust the description.';
@@ -412,7 +413,7 @@ export function reviewPrompt(job) {
     ? ' You are a second-opinion reviewer: the primary review already passed. This pull request touches paths the homeowner marked for an extra look; you have none of the implementer\'s session or reasoning, so review it as a sceptical outsider.'
     : job.postMerge ? ' This pull request is already merged; review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.'
     : ' You have none of the implementer\'s session or reasoning; review as a sceptical outsider and run the tests yourself.';
-  return `${COMMON}${role}${moved} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation or a failed acceptance criterion; otherwise use follow-up. ${reqs} Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]${job.requirementsFile ? ', "requirements": [{"requirement": "text", "status": "met" or "not-met" or "not-applicable", "evidence": "where in the diff"}], "descriptionClaims": [{"claim": "text", "status": "true" or "false" or "unverifiable", "evidence": "where in the diff"}]' : ''}}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
+  return `${COMMON}${role}${moved}${decided} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation or a failed acceptance criterion; otherwise use follow-up. ${reqs} Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]${job.requirementsFile ? ', "requirements": [{"requirement": "text", "status": "met" or "not-met" or "not-applicable", "evidence": "where in the diff"}], "descriptionClaims": [{"claim": "text", "status": "true" or "false" or "unverifiable", "evidence": "where in the diff"}]' : ''}}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
 }
 export function escalationNote(inbox) {
   if (!inbox) return '';
@@ -467,7 +468,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -1299,6 +1300,9 @@ export class Team {
     const ci = this.ciState(pr), key = verdictKey(pr.number, pr.headRefOid), v = this.s.verdicts[key];
     if (ci === 'red') add('ci-red', 'CI is failing'); else if (ci === 'pending') add('ci-pending', 'CI has not finished'); else if (ci === 'none') add('ci-none', 'no CI result is reported');
     if (pr.mergeable === 'CONFLICTING') add('conflict', 'it conflicts with the base branch');
+    const rr = this.reReviewOf(pr.number, pr.headRefOid);
+    if (rr?.status === 'pending' && !v) add('re-review-requested', `re-review requested by the homeowner (decision ${rr.decision}); waiting for the review of this head`);
+    if (rr?.status === 'done' && v?.verdict === 'CHANGES') add('re-review-changes', `the re-review the homeowner requested (decision ${rr.decision}) also asked for changes; it needs the homeowner`);
     if (v?.verdict === 'CHANGES') { add('changes', 'the reviewer asked for changes'); if (this.fixCount(pr.number) >= this.c.limits.max_fix_attempts) add('fix-limit', this.exceptionFor(pr.number) ? 'review exception: the fix could not be finished on the configured model and this pull request does not escalate; it needs the homeowner' : 'the fix-round limit is reached'); }
     if (!v) {
       for (const [agent] of this.agents()) {
@@ -1391,7 +1395,7 @@ export class Team {
           // A second opinion never replaces the primary PASS; its CHANGES does (the fix loop then runs as for any rejected head).
           if (exStage === 'commits') { this.s.exceptionReviews[verdictKey(j.pr, j.head)] = entry; if (r.verdict.verdict === 'CHANGES') this.s.verdicts[verdictKey(j.pr, j.head)] = entry; }
           else if (j.secondOpinion) { this.s.secondOpinions[verdictKey(j.pr, j.head)] = entry; if (r.verdict.verdict === 'CHANGES') this.s.verdicts[verdictKey(j.pr, j.head)] = entry; }
-          else this.s.verdicts[verdictKey(j.pr, j.head)] = entry;
+          else { this.s.verdicts[verdictKey(j.pr, j.head)] = entry; this.finishReReview(j.pr, j.head, entry); }
           j.ingested = true; this.save();
           report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });
           return;
@@ -1648,6 +1652,38 @@ export class Team {
     await this.postNotice(j.issue, `split-proposal job=${id}`, `**Needs the homeowner: proposed split.** ${this.names().job({ id: sp.implementJob, kind: 'implement', issue: { number: j.issue } }).text} ran out of context before opening a pull request, so Foreman did not restart it with the same scope.${spent} Proposed children:\n\n${list}\n\nRequired: accept with \`ai-agent --supervisor team accept-split ${j.issue}\` (Foreman then files these as issues and queues them), or reshape the issue by hand and remove the needs-homeowner label.`);
     await this.flag(j.issue, { key: `split:${j.issue}`, kind: 'split', issue: j.issue, tk: 'issue' });
     report.ingested.push({ job: id, issue: j.issue, split: draft.children.length });
+  }
+  // Issue #366: a recorded homeowner action that asks for ONE new review of the SAME head after a decision cleared the blocker. Reviews
+  // are tied to the head and the fix limit stops new commits, so a resolved decision could otherwise leave the PR with no next step.
+  // It is not a pass: the earlier CHANGES verdict is set aside only so a real review runs, and that review's verdict decides (PASS goes
+  // through the usual merge gates; CHANGES stays a rejection). Each request needs a decision link not used before on this PR, so a
+  // repeat without a new decision is refused. Recorded before any effect, so a crash never allows a repeat.
+  reReviewOf(pr, head) { return (this.s.reReviews?.[pr]?.requests || []).find(r => r.head === head) || null; }
+  async requestReReview(prNumber, decision) {
+    const n = Number(prNumber), link = typeof decision === 'string' ? decision.trim() : '';
+    if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team request-review PR DECISION_LINK');
+    const repo = this.c.repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp('^https://github\\.com/' + repo + '/(issues|pull)/\\d+(#issuecomment-\\d+)?$').test(link)) throw new SupervisorError(`the decision must be a link to an issue or pull request (comment) of ${this.c.repository}, for example https://github.com/${this.c.repository}/issues/N#issuecomment-ID`);
+    const pr = await this.gh.getPull(n);
+    if (!pr || pr.state === 'CLOSED' || pr.state === 'MERGED' || pr.merged) throw new SupervisorError(`PR #${n} is not open`);
+    if (!agentOfBranch(this.c, pr.headRefName)) throw new SupervisorError(`PR #${n} is not on a Foreman branch`);
+    if (pr.isDraft || !SHA.test(pr.headRefOid)) throw new SupervisorError(`PR #${n} is a draft or has no readable head`);
+    const head = pr.headRefOid, key = verdictKey(n, head), v = this.s.verdicts[key];
+    const entry = this.s.reReviews[n] ||= { requests: [] };
+    if (entry.requests.some(r => r.decision === link)) throw new SupervisorError(`the decision ${link} was already used to request a re-review of PR #${n}; a new decision is needed`);
+    if (entry.requests.some(r => r.head === head && r.status === 'pending')) throw new SupervisorError(`a re-review of PR #${n} at ${shortCommit(head)} is already requested and not finished`);
+    if (v?.verdict !== 'CHANGES') throw new SupervisorError(`PR #${n} has no CHANGES verdict at ${shortCommit(head)} to re-review${v ? ` (it is ${v.verdict})` : ''}`);
+    if (this.fixCount(n) < this.c.limits.max_fix_attempts) throw new SupervisorError(`PR #${n} still has fix rounds left (${this.fixCount(n)} of ${this.c.limits.max_fix_attempts}); the fix loop runs first`);
+    entry.requests.push({ head, decision: link, at: this.clock.now(), status: 'pending', prior: { verdict: v.verdict, reviewer: v.reviewer, job: v.job, at: v.at } });
+    delete this.s.verdicts[key];
+    for (const k of Object.keys(this.s.reviewAttempts)) if (k.startsWith(key + ':')) delete this.s.reviewAttempts[k];
+    this.save();
+    await this.postNotice(n, `re-review-requested pr=${n} head=${head} n=${entry.requests.length}`, `**Re-review requested by the homeowner.** One new review of the same head \`${head}\` was requested after the decision at ${link}. This is not a pass: the earlier CHANGES verdict is set aside only so an independent reviewer can judge this head again with that decision, and the new verdict decides. No further re-review is accepted without a new decision.`);
+    return { pr: n, head, decision: link };
+  }
+  finishReReview(prNumber, head, entry) {
+    const r = this.reReviewOf(prNumber, head);
+    if (r && r.status === 'pending') { r.status = 'done'; r.verdict = entry.verdict; r.job = entry.job; r.doneAt = this.clock.now(); }
   }
   // "Accept split": file each proposed child once (a marker makes a repeat safe), queue it for the same agent, say so on the parent.
   async acceptSplit(issue) {
@@ -2106,9 +2142,11 @@ export class Team {
         && fix.head === latestVerdict[0].slice(`${act.pr}:`.length) && fix.head !== act.head
         && (fix.at || 0) >= (latestVerdict[1].at || 0)
         && (await this.jobs.get(latestChange[0]))?.status === 'completed';
-      const previous = fixedRejectedHead && !act.postMerge && !act.secondOpinion ? latestVerdict[1] : null;
+      const rr = !act.postMerge && !act.secondOpinion ? this.reReviewOf(act.pr, act.head) : null, decision = rr?.status === 'pending' ? rr.decision : null;   // issue #366
+      const previous = fixedRejectedHead && !act.postMerge && !act.secondOpinion && !decision ? latestVerdict[1] : null;
       act.reReview = !!previous;
       if (previous) fs.writeFileSync(path.join(inbox, 'review-scope.json'), JSON.stringify({ blocking: previous.findings.filter(f => f.kind === 'blocking') }) + '\n', { mode: 0o600 });
+      if (decision) fs.writeFileSync(path.join(inbox, 'homeowner-decision.json'), JSON.stringify({ decision, note: 'the homeowner decision that cleared the earlier blocker; task data' }) + '\n', { mode: 0o600 });
       let exceptionNote = null;
       if (act.exceptionStage === 'commits') {
         const ex = this.exceptionFor(act.pr);
@@ -2120,7 +2158,7 @@ export class Team {
       const rq = act.postMerge ? null : await this.writeRequirements(act.branch, inbox);
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review-${act.pr}`), branch: `${a.branch_prefix}review-${act.pr}`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.exceptionStage ? 'Review-exception review (D-027)' : act.legacyPostMerge ? 'Post-merge review (D-021)' : act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
-        prompt: reviewPrompt({ exceptionStage: act.exceptionStage, exceptionNote, pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, legacyPostMerge: !!act.legacyPostMerge, splitOut: this.splitOut(act.pr, inbox), requirementsFile: rq?.file }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head, ...(rq ? { checklist: true } : {}) } };
+        prompt: reviewPrompt({ decision, exceptionStage: act.exceptionStage, exceptionNote, pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, legacyPostMerge: !!act.legacyPostMerge, splitOut: this.splitOut(act.pr, inbox), requirementsFile: rq?.file }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head, ...(rq ? { checklist: true } : {}) } };
       meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.secondOpinion ? { secondOpinion: true } : {}), ...(act.exceptionStage ? { exceptionStage: act.exceptionStage } : {}), ...(act.postMerge ? { postMerge: true } : {}), ...(act.legacyPostMerge ? { legacyPostMerge: true } : {}), ...(rq ? { checklist: true, requirementsHash: rq.hash } : {}) };
       bump = () => { this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1; };
     } else if (act.type === 'fix') {

@@ -304,7 +304,13 @@ async function main() {
       try { console.log(JSON.stringify({ issue: n, filed: await (await teamFor(root, registry)).acceptSplit(n) })); } finally { release(); }
       return;
     }
-    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json] | team accept-split ISSUE');
+    if (a._[0] === 'request-review') {   // issue #366: the homeowner asks for one new review of the same head, citing the decision
+      const release = tickLock(root);
+      if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
+      try { console.log(JSON.stringify(await (await teamFor(root, registry)).requestReReview(a._[1], a._[2]))); } finally { release(); }
+      return;
+    }
+    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json] | team accept-split ISSUE | team request-review PR DECISION_LINK');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
   }
   if (command === 'self-upgrade') {
