@@ -168,7 +168,7 @@ const jb = (over = {}) => ({ id: 'a'.repeat(32), provider: 'claude', kind: 'impl
 const cache = (extra = {}) => ({ tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, delivered: [],
   pulls: [{ number: 41, title: 'PR forty-one', headRefName: 'claude/issue-30-x', headRefOid: H(1), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green }],
   issues: [{ number: 30, title: 'Thirty', state: 'OPEN', labels: [], prerequisites: [5, 2] }, { number: 5, title: 'Five', state: 'OPEN', labels: [], prerequisites: [] }, { number: 2, title: 'Two', state: 'CLOSED', labels: [], prerequisites: [] },
-    { number: 3, title: 'Three <b>x</b>', state: 'OPEN', labels: ['needs-homeowner'], prerequisites: [] }], ...extra });
+    { number: 3, title: 'Three <b>x</b>', state: 'OPEN', labels: ['needs-homeowner'], prerequisites: [], question: { question: 'Should the team continue with issue three?', yes: 'work resumes.', no: 'it stays held.' } }], ...extra });
 
 test('every page has its own URL, answers 200 with the navigation bar, and marks the current page', async t => {
   const s = await serve(t, { jobs: [jb()], cache: cache(), state: { verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'codex', at: NOW - 5000, findings: ['<b>bad</b> thing'] } }, jobs: {} } });
@@ -215,7 +215,7 @@ test('Needs you lists every needs-homeowner item with what, why, the decision ne
   const s = await serve(t, { cache: { ...cache(), tick: { at: NOW - 20 * 60000, status: 'error', error: 'gh failed', lastOkAt: NOW - 3 * 3600000 } } });
   const body = (await s.get('/')).body;
   const needs = body.slice(body.indexOf('data-card="needs"'), body.indexOf('data-card="warnings"'));
-  assert.match(needs, /#3 [^<]* needs the homeowner/); assert.match(needs, /href="\/work\/issue\/3"/); assert.match(needs, /Decision: Open the issue/); assert.match(needs, /Action needed/);
+  assert.match(needs, /#3 [^<]*: Should the team continue with issue three\?/); assert.match(needs, /href="\/work\/issue\/3"/); assert.match(needs, /Decision: Answer on the issue/); assert.match(needs, /Action needed/);
   assert.match(needs, /Last tick failed[\s\S]*Decision: Read the tick error/); assert.match(needs, /<code class="cmd mono">ai-supervisor team tick --dry-run<\/code>/);
   const warn = body.slice(body.indexOf('data-card="warnings"'));
   assert.match(warn, /No tick for 20 minutes/); assert.match(warn, /sev-warning/); assert.doesNotMatch(needs, /No tick for/);

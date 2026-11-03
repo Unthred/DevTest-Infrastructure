@@ -281,6 +281,11 @@ function needsPanel(view) {
   return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
+// Issue #414: parked or staged work, quieter than Needs you: what it waits for and who or what ends the wait.
+function laterPanel(view) {
+  const items = view.panels.later || [];
+  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-info" id="later-${esc(a.number)}"><div class="t">${ext(a.url, a.name)}</div><div class="sub">Waits: ${esc(a.waits)}</div><div class="sub">Ends: ${esc(a.ends)}</div></li>`).join('')}</ul>` : empty('Nothing later', 'No parked or staged work is waiting.', 'check');
+}
 function warningsPanel(view) {
   const unknown = view.agents.filter(a => a.state === 'unknown');
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
@@ -334,6 +339,7 @@ function overview(view, query) {
     card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
+    card({ id: 'later', title: `Later${(view.panels.later || []).length ? ` (${view.panels.later.length})` : ''}`, span: 3, body: laterPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'warnings', title: `Warnings${warnCount ? ` (${warnCount})` : ''}`, span: 3, body: warningsPanel(view), href: '/system', cls: 'panel', type: 'panel' })
   ].join('');
   const kpis = [

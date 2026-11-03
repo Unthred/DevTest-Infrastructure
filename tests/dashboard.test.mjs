@@ -137,7 +137,7 @@ test('tick rules: failed tick shows time and (redacted) error; no tick for more 
 });
 test('needs-homeowner issues, blocked jobs, and red CI are pinned; a superseded blocked job is not', async t => {
   const blocked = job({ id: 'c'.repeat(32), status: 'blocked', lastEvent: 'incomplete', issue: 5, updatedAt: NOW - 3600000 });
-  const cache = { tick: okTick(), issues: [issue(5, 'OPEN', '', ['needs-homeowner'])], pulls: [pr(9, 'codex/issue-2-a', H(1), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] })] };
+  const cache = { tick: okTick(), issues: [issue(5, 'OPEN', 'Question: Should the team continue with issue five? Yes: work resumes. No: it stays held.', ['needs-homeowner'])], pulls: [pr(9, 'codex/issue-2-a', H(1), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] })] };
   const v = await view(t, { jobs: [blocked], cache });
   assert.ok(ids(v).includes('homeowner-5')); assert.ok(ids(v).includes(`job-${blocked.id}`)); assert.ok(ids(v).includes('ci-9'));
   assert.equal(v.agents.find(a => a.name === 'claude').state, 'blocked');
@@ -411,7 +411,7 @@ test('recent activity includes every recorded tick in the bounded event ordering
 
 test('needs-homeowner survives the issue label cap for attention and queue planning', async t => {
   const labels = [...Array.from({ length: 10 }, (_, i) => `label-${i}`), 'needs-homeowner'];
-  const cached = compactIssues([issue(32, 'OPEN', '', labels)]);
+  const cached = compactIssues([issue(32, 'OPEN', 'Question: Should the team continue with issue 32? Yes: work resumes. No: it stays held.', labels)]);
   assert.equal(cached[0].labels.length, 10);
   assert.ok(cached[0].labels.includes('needs-homeowner'));
   const v = await view(t, { cache: { tick: okTick(), pulls: [], issues: cached } });

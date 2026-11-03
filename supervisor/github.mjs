@@ -39,8 +39,14 @@ export function githubClient(config, gh = ghRunner()) {
     listPullFiles: async n => (json(['pr', 'view', String(n), '--repo', repo, '--json', 'files'])?.files || []).map(f => String(f.path)),
     getPull: async n => { const p = json(['pr', 'view', String(n), '--repo', repo, '--json', PR_FIELDS]); return p ? withLabels([p])[0] : p; },
     // The pinned status issue (#358) is Foreman's own output, never work: it is dropped here so no planner or view sees it.
-    listIssues: async () => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '200', '--json', 'number,title,state,body,labels'])
-      .filter(i => !isStatusIssue(i)).map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) })),
+    // Issue #414: every OPEN issue is fetched (up to 1000, its own call), plus the newest 200 of any state for recently closed
+    // prerequisites, so a labelled open issue cannot fall out of a 200 cap when newer issues crowd it out.
+    listIssues: async () => {
+      const list = state => json(['issue', 'list', '--repo', repo, '--state', state, '--limit', state === 'open' ? '1000' : '200', '--json', 'number,title,state,body,labels']) || [];
+      const byNo = new Map();
+      for (const i of [...list('open'), ...list('all')]) byNo.set(i.number, i);
+      return [...byNo.values()].filter(i => !isStatusIssue(i)).map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) }));
+    },
     // One issue by number, for when it is not in the capped list.
     getIssue: async n => { const i = json(['issue', 'view', String(n), '--repo', repo, '--json', 'number,title,state,body,labels']); return i ? { ...i, labels: (i.labels || []).map(l => l.name) } : null; },
     // The association of the issue's author with the repository (OWNER = the homeowner); the issue body counts as homeowner text only when OWNER (issue #299).
