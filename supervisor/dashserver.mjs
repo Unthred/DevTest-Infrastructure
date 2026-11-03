@@ -10,6 +10,7 @@ import { readTimeline, computeGaps, allSnapshots, storageReport } from './histor
 import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { applyAction, readWatchlist } from './watchlist.mjs';
 import { createViewStore, VIEW_STALE_MS } from './viewstore.mjs';
+import { createWorkerBuild } from './viewworker.mjs';
 import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
@@ -112,10 +113,11 @@ function stream({ root, req, res, id, after, now, active }) {
 // Target (issue #448): a page answers within 1 second at the median while a full test suite runs; the view is reused for this long.
 export const DASHBOARD_VIEW_TTL_MS = 3000;
 const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, refreshing: p.refreshing, failed: p.failed });
-export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, evidenceRoot = DEFAULT_EVIDENCE_ROOT }) {
+export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false }) {
   // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
   // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
-  const store = createViewStore({ build: currentView, ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now() });
+  const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
+  const store = createViewStore({ build: worker ? worker.build : currentView, ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now() });
   const cachedView = opts => store.get(`${opts.timeline}:${opts.allTime}`, opts);
   const source = configSource(config);
   const activeStreams = new Set();
@@ -230,6 +232,6 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
 
 export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot }) {
   validateBind(host, port);
-  const server = http.createServer(handler({ root, config, host, port, viewTtlMs: DASHBOARD_VIEW_TTL_MS, ...(evidenceRoot ? { evidenceRoot } : {}) }));
+  const server = http.createServer(handler({ root, config, host, port, viewTtlMs: DASHBOARD_VIEW_TTL_MS, offload: true, ...(evidenceRoot ? { evidenceRoot } : {}) }));
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
 }

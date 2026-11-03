@@ -73,3 +73,41 @@ test('redact gives the same answer cached and uncached, and never leaks across i
   assert.equal(a, b); assert.ok(!a.includes('hunter2') && !a.includes('user@example.com')); assert.equal(c, a.slice(0, 10));
   assert.equal(redact('word '.repeat(1000), 30).length, 30);
 });
+
+// Review round 1 (issue #467): the build must not hold up the server's event loop.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createWorkerBuild } from '../supervisor/viewworker.mjs';
+import { latestVerdict } from '../supervisor/suphealth.mjs';
+import { describeFor } from '../supervisor/dashboard.mjs';
+
+test('a view built on the worker thread leaves the event loop free', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'viewworker-'));
+  const file = path.join(dir, 'slow.mjs');
+  fs.writeFileSync(file, `import { parentPort } from 'node:worker_threads';
+parentPort.on('message', ({ id }) => { const end = Date.now() + 300; while (Date.now() < end); parentPort.postMessage({ id, json: JSON.stringify({ ok: true }) }); });\n`);
+  const w = createWorkerBuild({ url: new URL(`file://${file}`).href });
+  try {
+    const started = Date.now(), building = w.build({});
+    await new Promise(r => setTimeout(r, 20));
+    const lag = Date.now() - started - 20;   // a timer scheduled during the build fires on time only if the loop is free
+    assert.ok(lag < 150, `event loop was blocked for ${lag} ms`);
+    assert.deepEqual(await building, { ok: true });
+  } finally { await w.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('verdict lookups use one index per verdict set and keep the newest-first result', () => {
+  const state = { verdicts: { '7:aaaaaaa1': { verdict: 'CHANGES', reviewer: 'codex', at: 10 }, '7:bbbbbbb2': { verdict: 'APPROVE', reviewer: 'codex', at: 20 }, '8:ccccccc3': { verdict: 'CHANGES', at: 5 } } };
+  const cache = { pulls: [{ number: 7, headRefOid: 'bbbbbbb2' }] };
+  assert.match(latestVerdict(state, 7, cache), /APPROVE by codex at bbbbbbb \(current head\)/);
+  assert.match(latestVerdict(state, 9, cache), /none recorded/);
+  assert.equal(latestVerdict(state, null, cache), null);
+  const names = { prOfIssue: () => null, job: () => ({ text: 'j' }), pr: n => ({ text: `PR #${n}` }), issue: n => ({ text: `#${n}` }) };
+  assert.equal(typeof describeFor({ id: 'x', kind: 'review', issue: 7, createdAt: 1 }, { names, state }), 'string');
+});
+
+test('the real build worker loads the dashboard and reports a build error instead of hanging', async () => {
+  const w = createWorkerBuild();
+  try { await assert.rejects(w.build({ root: '/nonexistent-root-467', config: {} }), /./); } finally { await w.close(); }
+});

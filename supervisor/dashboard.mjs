@@ -16,7 +16,7 @@ import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
-import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth } from './suphealth.mjs';
+import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { hasProbe } from './probe.mjs';
 import { defaultRegistry, processStart } from './core.mjs';
@@ -558,7 +558,7 @@ export function describeFor(j, { names, state }) {
   let verdict = null, opened = null;
   if (kind === 'review') {
     const pr = rec?.pr ?? j.issue, start = j.createdAt || 0;
-    verdict = Object.entries(state.verdicts || {}).filter(([k, v]) => k.split(':')[0] === String(pr) && (!v.at || v.at >= start)).map(([, v]) => v).sort((a, b) => (a.at || 0) - (b.at || 0))[0] || null;
+    verdict = (verdictIndex(state.verdicts).get(String(pr)) || []).map(([, v]) => v).filter(v => !v.at || v.at >= start).reduce((best, v) => (!best || (v.at || 0) < (best.at || 0) ? v : best), null);
   } else if (['implement', 'continue'].includes(kind)) opened = rec?.pr ?? names.prOfIssue(rec?.issue ?? j.issue);
   return redact(describeJob({ ...j, kind }, { names, rec, verdict, opened }), 400);
 }
