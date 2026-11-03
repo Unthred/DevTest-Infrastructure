@@ -231,19 +231,21 @@ const grid = (layout, cards, cls = '') => `<div class="cards ${cls}" data-layout
 const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div><div class="spark-slot">${spark}</div></a>`;
 
 // ---- the four panels (Overview top) and the status bar
-function nowPanel(view) {
+function nowPanel(view, { describe = true } = {}) {
   const now = view.generatedAt;
   const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${esc(x.text)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}${(view.capNotes || []).map(n => `<div class="cap-note">Held down: ${esc(n)}</div>`).join('')}${Object.entries(view.budget || {}).filter(([, b]) => b.known).map(([n, b]) => `<div class="rate-note">${esc(n)}: ${Number.isFinite(b.ratePerHour) ? `${(b.ratePerHour * 100).toFixed(2)}% of the week per hour, ` : ''}projected ${Number.isFinite(b.projected) ? `${Math.round(b.projected * 100)}%` : 'unknown'} at reset</div>`).join('')}</div>`;
   // Issue #213: one card per running or paused job (role, model, item, elapsed); an agent with none gets one idle/blocked/unknown card.
+  // The description is the link text, once; the agent card passes describe:false and gets a plain id link (issue #421).
+  const jobRef = (id, name) => (describe ? named(jobPath(id), REFS.job[String(id).slice(0, 8)], name || `job ${String(id).slice(0, 8)}`) : named(jobPath(id), null, `job ${String(id).slice(0, 8)}`));
   const jobItem = (a, j) => {
     const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : 'Implementer';
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
-    return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobLinkNamed(j)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
+    return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
   };
   return `${slots}<ul class="panel-list">${view.agents.map(a => {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j)).join('');
     const j = a.job, level = stateSev[a.state] || 'info';
-    const what = j ? `${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
+    const what = j ? `${jobRef(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
       : `<span>Idle: ${a.idleReason ? esc(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
     return `<li class="sev-${level}"><div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div></li>`;
   }).join('')}</ul>`;
@@ -271,8 +273,8 @@ const globalWaitsHtml = view => (view.estimates?.waits || []).map(w => `<p class
 function nextWhyHtml(view) {
   const w = view.panels.nextWhy; if (!w) return '';
   const li = [];
-  for (const b of w.busy) li.push(`<li>${agentTag(b.agent, view)} is busy: ${esc(b.job)}</li>`);
-  for (const p of w.paused) li.push(`<li>${agentTag(p.agent, view)} is paused${p.job ? `: ${esc(p.job)}` : ''}${p.resumeAt ? `, resumes about ${lt(p.resumeAt)}` : ''}</li>`);
+  for (const b of w.busy) li.push(`<li>${agentTag(b.agent, view)} is busy with a running job (see Now)</li>`);
+  for (const p of w.paused) li.push(`<li>${agentTag(p.agent, view)} is paused${p.resumeAt ? `, resumes about ${lt(p.resumeAt)}` : ''}</li>`);
   if (w.blocked) li.push(`<li><a href="/work?issues.show=blocked">${w.blocked} queued item${w.blocked === 1 ? '' : 's'} blocked by dependencies</a></li>`);
   if (w.waitingReview) li.push(`<li><a href="/work?prs.show=awaiting-review">${w.waitingReview} waiting for review</a></li>`);
   return `<div class="why" data-why><p class="sub">Nothing is planned because:</p>${li.length ? `<ul class="panel-list">${li.join('')}</ul>` : '<p class="sub">no agent has work waiting.</p>'}</div>`;
@@ -296,9 +298,16 @@ function warningsPanel(view) {
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
   return items.length ? `${copyAllBtn(items, 'warnings')}<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
-// Issue #76: each agent's own state and reason, from the same sentence `team status` prints (agentline.mjs).
-const TIME_MARK = /\u0001(\d+)\u0002/g;
-const agentStat = view => `<div class="stat agent-lines" aria-label="Agents"><ul>${view.agents.map(a => `<li data-agent="${esc(a.name)}" data-state="${esc(a.state)}">${stateBadge(a.state)} <span><b>${esc(a.name)}</b>: ${esc(agentLine(a, ms => `\u0001${ms}\u0002`)).replace(TIME_MARK, (_, ms) => lt(Number(ms)))}</span></li>`).join('')}</ul></div>`;
+// Issues #76, #421: one compact badge per agent: name, role, state, linking to the agent's page. The job description is NOT here
+// (it lives once, on the Now card); several jobs show a count instead of a role.
+const agentBadge = a => {
+  const jobs = a.jobs?.length ? a.jobs : a.job ? [a.job] : [];
+  const mid = jobs.length > 1 ? `${jobs.length} jobs` : jobs.length === 1 ? (jobs[0].role === 'reviewer' ? 'Reviewer' : 'Implementer') : '';
+  const st = ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[a.state] || a.state;
+  const label = [a.name, mid, st].filter(Boolean).join(' · ');
+  return `<li><a class="agent-badge sev-${esc(stateSev[a.state] || 'info')}" href="/agents/${esc(encodeURIComponent(a.name))}" data-agent="${esc(a.name)}" data-state="${esc(a.state)}" aria-label="${esc(label)}" title="${esc(label)}"><b class="ab-name">${esc(a.name)}</b>${mid ? `<span class="ab-role">${esc(mid)}</span>` : ''}<span class="ab-state">${esc(st)}</span></a></li>`;
+};
+const agentStat = view => `<div class="stat agent-lines" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
 function statusBar(view, route, head = '') {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
@@ -366,7 +375,7 @@ function overview(view, query) {
 function agentsPage(view, query, path) {
   const cards = view.agents.map(a => {
     const q = view.queues[a.name] || [];
-    return card({ id: `a-${a.name}`, title: a.name, span: 6, href: `/agents/${encodeURIComponent(a.name)}`, movable: true, body: `<p>${stateBadge(a.state)} <span class="sub">${esc(a.provider)} · last activity ${esc(ago(a.lastActivityAt, view.generatedAt))}</span></p>${nowPanel({ ...view, agents: [a] })}${budgetBlock(view, a.name)}<p class="sub">${q.length} queued · <a href="/agents/${encodeURIComponent(a.name)}">Job history and queue</a></p>` });
+    return card({ id: `a-${a.name}`, title: a.name, span: 6, href: `/agents/${encodeURIComponent(a.name)}`, movable: true, body: `<p>${stateBadge(a.state)} <span class="sub">${esc(a.provider)} · last activity ${esc(ago(a.lastActivityAt, view.generatedAt))}</span></p>${nowPanel({ ...view, agents: [a] }, { describe: false })}${budgetBlock(view, a.name)}<p class="sub">${q.length} queued · <a href="/agents/${encodeURIComponent(a.name)}">Job history and queue</a></p>` });
   }).join('');
   return { title: 'Agents', body: grid('agents', cards) };
 }
