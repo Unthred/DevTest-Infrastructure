@@ -96,6 +96,7 @@ test('a pin failure is a warning only, and is retried on the next tick', async t
   gh.pinIssue = async () => { gh.calls.push('pin'); };
   await publishStatusIssue({ root, gh, status: status(), now: 2 });
   assert.equal(readStatusIssueState(root).pinned, true); assert.equal(readStatusIssueState(root).error, null);
+  assert.deepEqual(gh.calls, ['create', 'pin', 'pin']);   // the retry pins only; the unchanged body is not rewritten
 });
 
 test('the dispatcher never sees the status issue: listIssues drops it', async () => {

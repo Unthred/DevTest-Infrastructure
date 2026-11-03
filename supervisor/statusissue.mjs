@@ -61,9 +61,10 @@ export async function publishStatusIssue({ root, gh, status, now = Date.now() })
     if (!number) {
       number = await gh.createIssue(STATUS_TITLE, body); result = 'created';
       save({ number, hash, at: now, pinned: false, error: null });
-    } else if (prev.number === number && prev.hash === hash && !prev.error) return 'unchanged';
-    else { await gh.updateIssueBody(number, body); result = result || 'updated'; }
+    } else if (prev.number === number && prev.hash === hash) result = 'unchanged';   // hash is saved only after a successful body write, so an earlier error never forces a rewrite
+    else { await gh.updateIssueBody(number, body); result = 'updated'; }
     let pinned = prev.number === number && prev.pinned === true, pinError = null;
+    if (result === 'unchanged' && pinned && !prev.error) return result;
     if (!pinned) { try { await gh.pinIssue(number); pinned = true; } catch (e) { pinError = e?.message || 'pin failed'; } }
     save({ number, hash, at: now, pinned, error: pinError ? scrub(`could not pin the status issue: ${pinError}`) : null });
     return result;
