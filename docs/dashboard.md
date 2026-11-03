@@ -76,6 +76,10 @@ A fix-limit or review-limit card is held back while a final job for that PR is s
 
 A verified supervisor self-upgrade also restarts the dashboard server: the upgrade step finds the `cli.mjs dashboard serve` process (never a worker, tick or job), stops it, starts the same `--host` and `--port` from the new version, and records `dashboard_restarted` (or `dashboard_restart_failed`, with an alert) in `team/upgrades.jsonl`. If no dashboard server is running it does nothing. This code lives in `supervisor/upgrade.mjs`, an upgrader path, so the first deployment is by hand.
 
+Restart details (issue #193): the new server must still be running (and, where a health check applies, still answering) after a short grace period, otherwise it is stopped, the old version is started again and `dashboard_restart_failed` is recorded. The intent to restart is saved before it runs, so a tick that dies between the `verified` record and the outcome record is retried on the next step. The production dashboard (AI Dashboard user script) runs `node /mnt/cache/ai-supervisor/current/supervisor/cli.mjs ...`, so its version reads as unknown and the first verified upgrade always restarts it; that is harmless. The restarted server gets only `PATH`, `HOME` (and `DASHBOARD_PORT` if set) and appends its output to `/mnt/cache/ai-supervisor/dashboard.log` (override: `DASHBOARD_LOG`), like the user script.
+
+An agent is shown as Unknown while a job record it cannot read or understand is less than 7 days old; the warning names the file. An unreadable record has no id, so it is not counted against a role slot (only unknown-status records whose id is in team state are). Case 3 of issue #155 (the "Upgrade waiting" badge) is not implemented; #155 stays open.
+
 Until the server is on the installed version, the Warnings panel shows "Dashboard is running <old>, Foreman is on <new>; what you see may be out of date." The server re-reads `team.local.json` on every request (a bad edit keeps the last good configuration). A job record whose status this version does not know, or that cannot be parsed, shows the agent as **Unknown**, never Idle.
 
 ## Polish part 2 (issue #61)
