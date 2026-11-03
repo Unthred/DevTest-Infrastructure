@@ -95,3 +95,25 @@ test('times are hidden, keeping their space, until converted; early.js lifts tha
   assert.match(earlyJs, /classList\.add\('js'\)/); assert.match(earlyJs, /classList\.remove\('js'\), ?3000|remove\('js'\);? ?\}, 3000/);
   assert.match(appJs, /el\.classList\.add\('lz'\)/);
 });
+
+// ---- a swapped card body gets its handlers again, and the refresh never reloads
+test('initLegends wires only the given scope, so a card body swapped by a refresh gets working legend buttons again', async () => {
+  const { initLegends } = await import('../supervisor/dashui/legend.mjs');
+  const mk = tag => ({ tag, attrs: {}, kids: [], listeners: {}, classes: new Set(), hidden: false,
+    setAttribute(k, v) { this.attrs[k] = String(v); }, append(...n) { this.kids.push(...n); }, addEventListener(t, f) { this.listeners[t] = f; },
+    classList: { toggle() {}, contains: () => false }, contains() { return false; }, closest() { return null; }, dataset: {}, querySelector() { return null; }, querySelectorAll() { return []; } });
+  const button = mk('button'); button.dataset = { series: 'a' };
+  const legend = mk('div'), fig = mk('div');
+  legend.querySelectorAll = () => [button]; fig.querySelector = sel => (sel === '.legend' ? legend : null); fig.querySelectorAll = sel => (sel === '[data-series]' ? [button] : []);
+  const scope = mk('div'); scope.querySelectorAll = sel => (sel === 'figure.chart' ? [fig] : []);
+  const elsewhere = mk('div'); elsewhere.querySelectorAll = () => { throw new Error('the whole document must not be scanned'); }; elsewhere.createElement = mk;
+  initLegends({ document: elsewhere, store: { get: () => null, set() {}, del() {} }, legendKey: 'k', scope });
+  assert.equal(typeof button.listeners.click, 'function', 'the legend button in the new card body has its click handler');
+});
+test('refreshInPlace never reloads the document: a changed card set is handled in place and the swapped controls are wired again', () => {
+  const fn = appJs.slice(appJs.indexOf('function rewire('), appJs.indexOf("const secs = Number($('meta[name=refresh-seconds]')"));
+  assert.doesNotMatch(fn, /location\.(reload|assign|replace)/, 'no reload on a changed card set or on an error');
+  assert.match(fn, /initLegends\(\{[^}]*scope\b/); assert.match(fn, /bindTable\(region\)/); assert.match(fn, /bindCopy\(scope\)/);
+  assert.match(fn, /bindAddedCard\(fresh\)/, 'a card that appeared is wired like the initial ones');
+  assert.match(appJs, /function bindTable\(region\)/);
+});

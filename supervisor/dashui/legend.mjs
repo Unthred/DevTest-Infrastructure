@@ -3,10 +3,10 @@ import { sanitizeHidden, toggleSeries } from './logic.mjs';
 
 // `store` is { get, set, del }; `legendKey` the per-page storage key. Marker-only items (data-marker, e.g. "Window reset") toggle
 // freely and are not counted when guarding the last visible series.
-export function initLegends({ document, store, legendKey }) {
+export function initLegends({ document, store, legendKey, scope = document }) {
   const $ = (s, r) => r.querySelector(s), $$ = (s, r) => [...r.querySelectorAll(s)];
   const legendState = () => { const v = store.get(legendKey); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; };
-  for (const fig of $$('figure.chart', document)) {
+  for (const fig of $$('figure.chart', scope)) {
     const legend = $('.legend', fig); if (!legend) continue;
     const id = fig.closest('.card')?.dataset.card || $('svg', fig)?.getAttribute('aria-label') || 'chart';
     const buttons = $$('button[data-series]', legend), isMarker = b => b.dataset.marker === 'true';
