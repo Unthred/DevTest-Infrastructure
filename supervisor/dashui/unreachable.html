@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Back shortly · DevTest team</title>
+<link rel="icon" href="data:,">
+<!-- Issue #432. Self-contained: no external script, style, font or image. Served in place of a browser error page while the dashboard is
+     down. It makes no claim about why: it cannot know. It polls /api/view.json on its own origin and reloads the same URL when that
+     answers 200 with JSON. -->
+<style>
+:root{color-scheme:light dark;--bg:#f3f5f8;--surface:#fff;--fg:#17202e;--mut:#566273;--line:#d6dce5}
+@media(prefers-color-scheme:dark){:root{--bg:#0f141b;--surface:#18202a;--fg:#e6eaf0;--mut:#9aa7b8;--line:#2d3846}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--bg);color:var(--fg);font:16px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+main{width:100%;max-width:440px;text-align:center;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:32px 24px;box-shadow:0 2px 12px rgba(16,24,40,.08)}
+svg{width:120px;height:120px;max-width:40vw;height:auto}
+h1{margin:16px 0 8px;font-size:22px;font-weight:600;letter-spacing:-.02em;background:linear-gradient(0deg,#EE3A4C 0%,#80CEFF 26%,#B624EB 66%,#71B7F4 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+p{margin:0;color:var(--mut)}
+@media(forced-colors:active){h1{color:CanvasText;background:none}}
+@media(max-width:420px){main{padding:24px 16px}h1{font-size:19px}}
+</style>
+</head>
+<body>
+<main role="status" aria-live="polite">
+<svg viewBox="0 0 120 120" role="img" aria-label="A donkey">
+<defs><linearGradient id="g" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#EE3A4C"/><stop offset=".26" stop-color="#80CEFF"/><stop offset=".66" stop-color="#B624EB"/><stop offset="1" stop-color="#71B7F4"/></linearGradient></defs>
+<g fill="none" stroke="url(#g)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+<path d="M38 52 L30 8 L52 34"/><path d="M82 52 L90 8 L68 34"/>
+<path d="M34 54 C34 36 86 36 86 54 L86 78 C86 100 76 112 60 112 C44 112 34 100 34 78 Z"/>
+<path d="M44 86 C44 100 76 100 76 86"/>
+</g>
+<g fill="currentColor"><circle cx="49" cy="62" r="4"/><circle cx="71" cy="62" r="4"/><circle cx="53" cy="94" r="2.5"/><circle cx="67" cy="94" r="2.5"/></g>
+</svg>
+<h1 id="msg">The donkey's being reshod. Back shortly.</h1>
+<p id="sub">This page checks every few seconds and will bring you back.</p>
+</main>
+<script>
+(function () {
+  var started = Date.now(), LONG_MS = 5 * 60 * 1000, EVERY_MS = 4000, long = false;
+  var msg = document.getElementById('msg'), sub = document.getElementById('sub');
+  function tick() {
+    if (!long && Date.now() - started >= LONG_MS) { long = true; msg.textContent = 'This is taking longer than an install should.'; sub.textContent = 'Still checking. This page will bring you back when the dashboard answers.'; }
+  }
+  function back() {
+    return fetch('/api/view.json', { cache: 'no-store', credentials: 'same-origin' }).then(function (r) {
+      return r.ok && /json/i.test(r.headers.get('content-type') || '');
+    }, function () { return false; });
+  }
+  function poll() {
+    tick();
+    back().then(function (ok) { if (ok) location.reload(); else setTimeout(poll, EVERY_MS); });
+  }
+  setTimeout(poll, EVERY_MS);
+  setInterval(tick, 1000);
+})();
+</script>
+</body>
+</html>
