@@ -147,7 +147,7 @@ test('the "N commits behind, next try" header comes through versionStatus from a
   const v = readVersion(dir, { running: H(1), now: last + 1000 });
   const vs = versionStatus(v);
   assert.equal(vs.level, 'warning');
-  assert.equal(vs.label, `3 commits behind, next try ${new Date(last + MIN_UPGRADE_INTERVAL_MS).toISOString().slice(11, 16)} UTC`);
+  assert.equal(vs.label, `3 commits behind, next try ${new Date(last + MIN_UPGRADE_INTERVAL_MS).toISOString().slice(0, 16).replace("T", " ")} UTC`);
   assert.equal(versionStatus({ ...v, behind: 1 }).label.startsWith('1 commit behind'), true);
 });
 
