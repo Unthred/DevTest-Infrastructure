@@ -24,13 +24,20 @@ export function readJobs(root) {
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     if (!name.endsWith('.json')) continue;
     // A record that cannot be parsed is kept as an `unreadable` marker, never dropped: dropping it would make a running job look idle.
-    try { const j = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); out.push(j && typeof j === 'object' && !Array.isArray(j) ? j : { unreadable: true, status: 'unreadable' }); }
-    catch (error) { if (error instanceof SyntaxError) out.push({ unreadable: true, status: 'unreadable' }); else if (error.code !== 'ENOENT') throw error; }
+    // Issue #193: the marker names the file and carries its age (modification time) so the dashboard can point at it and age it out.
+    const marker = () => { let at = 0; try { at = fs.statSync(path.join(dir, name)).mtimeMs; } catch { at = 0; } return { unreadable: true, status: 'unreadable', file: name, at }; };
+    try { const j = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); out.push(j && typeof j === 'object' && !Array.isArray(j) ? j : marker()); }
+    catch (error) { if (error instanceof SyntaxError) out.push(marker()); else if (error.code !== 'ENOENT') throw error; }
   }
   return out;
 }
 // The job statuses this version understands. A record with any other status was probably written by a newer version.
 export const KNOWN_STATUSES = ['queued', 'running', 'paused_limit', 'paused_manual', 'blocked', 'failed', 'completed', 'stopped'];
+// Issue #193: an unknown or unreadable record stops making an agent "Unknown" once it is this old, so one stale or legacy file in jobs/
+// cannot hold the header at "Unknown" for ever. A record with no timestamp at all never ages out (fail safe).
+export const UNKNOWN_RECORD_MAX_AGE_MS = 7 * 24 * 3600000;
+export const unknownRecordName = j => j?.file ? String(j.file).slice(0, 80) : (typeof j?.id === 'string' ? j.id.slice(0, 32) : 'a record with no id');
+const recordTime = j => [j?.updatedAt, j?.createdAt, j?.at].find(v => Number.isFinite(v) && v > 0) ?? null;
 export const isUnknownJob = j => j?.unreadable === true || !KNOWN_STATUSES.includes(j?.status);
 export function readEvents(root, jobIds) {
   const out = [];
@@ -94,7 +101,9 @@ export function agentStates(config, jobs, now) {
   const out = {};
   for (const [name, a] of Object.entries(config.agents)) {
     // Records this version cannot read (or whose provider it cannot tell) might be that agent's work: say "unknown", never "idle".
-    const unknown = jobs.some(j => isUnknownJob(j) && (j.unreadable || j.provider === a.provider || typeof j.provider !== 'string'));
+    const unknownJobs = jobs.filter(j => isUnknownJob(j) && (j.unreadable || j.provider === a.provider || typeof j.provider !== 'string')
+      && (recordTime(j) === null || now - recordTime(j) < UNKNOWN_RECORD_MAX_AGE_MS));
+    const unknown = unknownJobs.length > 0;
     const mine = jobs.filter(j => j.provider === a.provider && !isUnknownJob(j)).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0));
     const active = mine.filter(j => ['queued', 'running', 'paused_limit', 'paused_manual'].includes(j.status));
     const live = active.find(j => ['running', 'queued'].includes(j.status));
@@ -106,7 +115,7 @@ export function agentStates(config, jobs, now) {
     else if (unknown) { state = 'unknown'; job = null; }
     else if (latest && ['blocked', 'failed'].includes(latest.status) && now - (latest.updatedAt || 0) < 48 * 3600000) { state = 'blocked'; job = latest; }
     // Issue #213: every live or paused job of this agent (a role can run beside another on one agent), not just the newest.
-    out[name] = { state, job, jobs: active, last: latest || null };
+    out[name] = { state, job, jobs: active, last: latest || null, ...(unknown ? { unknownRecords: unknownJobs.slice(0, 5).map(unknownRecordName) } : {}) };
   }
   return out;
 }

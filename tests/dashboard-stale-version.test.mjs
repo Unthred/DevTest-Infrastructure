@@ -270,3 +270,54 @@ test('issue #302: a rollback latch raises a Needs you item with the clear comman
   assert.ok(!v.estimates.waits.some(w => /next try/.test(w.text)), 'no next try is promised while latched');
   assert.ok(v.estimates.waits.some(w => w.kind === 'upgrade-latched' && /clear-latch/.test(w.text)));
 });
+
+// ---- issue #193
+test('issue #193: a new server that exits after the first sighting is not recorded as restarted; one that stays up is', async t => {
+  const oldArgv = ['node', cli(OLD), 'dashboard', 'serve', '--host', '192.168.1.5', '--port', '8731'];
+  for (const [dies, withHealth] of [[true, false], [true, true], [false, false], [false, true]]) {
+    const proc = fakeProc(t, { 100: oldArgv });
+    const kill = (pid, sig) => { if (sig === 0) { if (!fs.existsSync(path.join(proc, String(pid)))) throw Object.assign(new Error(), { code: 'ESRCH' }); return; } fs.rmSync(path.join(proc, String(pid)), { recursive: true, force: true }); };
+    const spawn = (pid, argv) => { fs.mkdirSync(path.join(proc, String(pid))); fs.writeFileSync(path.join(proc, String(pid), 'cmdline'), argv.join('\0') + '\0'); };
+    // The grace-period sleep is where the new process dies (EADDRINUSE-style): it is gone when the check looks again.
+    let slept = 0;
+    const sleep = async () => { slept++; if (dies && fs.existsSync(path.join(proc, '200'))) fs.rmSync(path.join(proc, '200'), { recursive: true }); };
+    const r = await restartDashboardServer(NEW, { procRoot: proc, kill, sleep, tries: 3, start: (w, a) => spawn(200, ['node', cli(NEW), ...a]), startOld: argv => spawn(300, argv),
+      ...(withHealth ? { health: async () => true } : {}) });
+    assert.equal(r.ok, !dies, `dies=${dies} health=${withHealth}`);
+    if (dies) { assert.match(r.reason, /stay|did not come back|did not answer/); }
+    else assert.equal(r.restarted, true);
+    assert.ok(slept > 0);
+  }
+});
+
+test('issue #193: a restart lost between the verified record and its outcome is retried on the next step, once', async t => {
+  const root = tmp(t), calls = [];
+  const deps = { config: { agents: {} }, restartDashboard: async sha => { calls.push(sha); return { ok: true, restarted: true }; }, alert: async () => {}, installed: () => null };
+  const first = new SelfUpgrade({ root, deps, clock: { now: () => NOW } });
+  first.s.dashboardPending = { from: OLD, to: NEW, rollingBack: false }; first.save();   // the tick died here
+  const second = new SelfUpgrade({ root, deps, clock: { now: () => NOW } });
+  await second.step();
+  assert.deepEqual(calls, [NEW]);
+  const results = fs.readFileSync(path.join(root, 'team', 'upgrades.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l).result);
+  assert.deepEqual(results, ['dashboard_restarted']);
+  await new SelfUpgrade({ root, deps, clock: { now: () => NOW } }).step();
+  assert.deepEqual(calls, [NEW], 'not retried again once recorded');
+});
+
+test('issue #193: an unreadable record is named, and a stale unknown record stops making agents Unknown', async t => {
+  const root = tmp(t); fs.mkdirSync(path.join(root, 'jobs'));
+  const bad = path.join(root, 'jobs', `${'d'.repeat(32)}.json`);
+  fs.writeFileSync(bad, '{"id": "trunc');
+  const jobs = readJobs(root);
+  assert.equal(jobs[0].file, `${'d'.repeat(32)}.json`);
+  const v = await view(root, { jobs: [{ ...jobs[0], at: NOW - 60000 }] });
+  const item = v.attention.find(a => a.id === 'unknown-job-records');
+  assert.ok(item); assert.ok(item.text.includes('d'.repeat(32) + '.json'));
+  const old = NOW - 8 * 24 * 3600000;
+  assert.equal(agentStates(config(), [{ ...jobs[0], at: old }], NOW).claude.state, 'idle', 'an old unreadable file ages out');
+  assert.equal(agentStates(config(), [job({ status: 'awaiting_quantum', updatedAt: old, createdAt: old })], NOW).claude.state, 'idle');
+  assert.equal(agentStates(config(), [job({ status: 'awaiting_quantum' })], NOW).claude.state, 'unknown', 'a recent unknown record still counts');
+  assert.deepEqual(agentStates(config(), [{ ...jobs[0], at: NOW }], NOW).claude.unknownRecords, [`${'d'.repeat(32)}.json`]);
+  const none = await view(root, { jobs: [] });
+  assert.ok(!none.attention.some(a => a.id === 'unknown-job-records'));
+});
