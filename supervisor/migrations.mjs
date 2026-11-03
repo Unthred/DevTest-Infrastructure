@@ -2,10 +2,11 @@
 // `description` (one line) and `migrate(oldLocalConfig) -> newLocalConfig`, a pure function reviewed like any code. No shell hooks.
 // Before a tick, pending migrations (number above the applied one) run in order against <root>/team.local.json: timestamped
 // backup (mode 600), apply, validate, write, record the number, append to <root>/team/incidents.jsonl. A failing migration leaves
-// the file untouched and is recorded as `failed`; the caller stops the tick and the dashboard shows a Needs you item.
+// the file untouched and is recorded as `failed`; the caller skips the tick and the dashboard shows a Needs you item.
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { redact } from './redact.mjs';
 
 export const LOCAL_FILE = 'team.local.json';
 const NAME = /^(\d{3})-([a-z0-9][a-z0-9-]*)\.mjs$/;
@@ -49,7 +50,7 @@ export function listMigrations(dir) {
 export async function runMigrations({ root, dir, validate = () => {}, now = Date.now() }) {
   const state = readMigrationState(root);
   let all;
-  try { all = listMigrations(dir); } catch (error) { return { applied: [], failed: { number: 0, name: 'migrations', error: String(error.message).slice(0, 200) } }; }
+  try { all = listMigrations(dir); } catch (error) { return { applied: [], failed: { number: 0, name: 'migrations', error: redact(error.message, 200) } }; }
   const pending = all.filter(m => m.number > state.applied);
   // A recorded failure whose migration is no longer pending (dropped by a hotfix or a rollback to an older version) is stale.
   if (state.failed && !pending.some(m => m.number === state.failed.number)) { state.failed = null; saveState(root, { applied: state.applied, failed: null }); }
@@ -57,7 +58,7 @@ export async function runMigrations({ root, dir, validate = () => {}, now = Date
   const localFile = path.join(root, LOCAL_FILE);
   for (const mig of pending) {
     const fail = error => {
-      const failed = { number: mig.number, name: mig.name, error: String(error?.message || error).slice(0, 200), at: now };
+      const failed = { number: mig.number, name: mig.name, error: redact(error?.message || error, 200), at: now };
       if (!(state.failed && state.failed.number === failed.number && state.failed.error === failed.error)) incident(root, now, { result: 'failed', number: mig.number, name: mig.name, error: failed.error });
       saveState(root, { applied: state.applied, failed });
       return { applied, failed, pending: pending.length - applied.length };
