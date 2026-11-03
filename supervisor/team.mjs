@@ -926,7 +926,7 @@ export class Team {
       }
     }
     // 2. dispatch per role slot: any agent may fill a free slot, and one agent may fill both. Where several agents could, a review goes
-    // to an agent on another provider than the PR author before one on the author's provider, then second opinions, and an implement job to the issue's owner before
+    // to the reviewer with the most spare allowance (issue #402), after any review only that agent can do, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
       while (used[role] < L.roles[role] && total < overallCap(L)) {
@@ -1030,7 +1030,13 @@ export class Team {
   slotRank(agent, act, prs) {
     // Issue #402: a review goes to the eligible reviewer with the most spare allowance (cross-provider review is not required: a fresh
     // session on a different model is independent). Rank 0..1.5, so it stays ahead of second opinions (2) and implement work (10).
-    if (act.type === 'review') return act.secondOpinion || act.postMerge ? 2 : 0.75 * (1 - this.spareScore(agent));
+    // A review only this agent can do ranks ahead of every shared review, whatever the spare allowance.
+    if (act.type === 'review') {
+      if (act.secondOpinion || act.postMerge) return 2;
+      const pr = prs.find(p => p.number === act.pr);
+      const sole = !!pr && this.agents().length > 1 && SHA.test(pr.headRefOid) && !!agentOfBranch(this.c, pr.headRefName) && !pr.isDraft && this.otherReviewers(agent, pr).length === 0;
+      return (sole ? -1 : 0) + 0.75 * (1 - this.spareScore(agent));
+    }
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
     // An owner at a usage limit ranks last, so another agent can take its ready issue (#104).
