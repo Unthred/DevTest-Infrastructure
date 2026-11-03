@@ -207,7 +207,7 @@ test('issue #191: the dashboard drain text uses the configured time zone, as tea
   fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({ holding: { to: 'b'.repeat(40), since: Date.UTC(2026, 10, 3, 11, 50), jobs: 2 } }));
   const cache = { pulls: [], issues: [], tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 } };
   const text = async tz => (await buildView({ config: viewCfg, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW, tz })).attention.find(a => a.id === 'upgrade-hold').text;
-  assert.match(await text('UTC'), /since 11:50 \(/);
+  assert.match(await text('UTC'), /since 2026-11-03 11:50 UTC \(/);
   assert.match(await text('Asia/Tokyo'), /since 20:50 \(/);
   assert.doesNotMatch(await text('Asia/Tokyo'), /UTC/);
 });
