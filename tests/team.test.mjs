@@ -1466,3 +1466,20 @@ test('#380: eligible work with every slot taken records a held reason naming the
   const idle = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], cfg });
   await idle.team.plan(); assert.equal(idle.team.held.claude?.review, undefined);   // a free slot records nothing
 });
+
+// Issue #433: a head with a review in flight (including a paused one) is not planned for review by another agent.
+test('#433: a paused review blocks a second review of the same head; a stopped one or a moved head does not', async t => {
+  const mk = (head, extra = {}) => {
+    const cfg = oneSlot(); cfg.models = { allowance_threshold: 0.8, agents: { claude: { review: { model: 'haiku', effort: 'low' } }, codex: { review: { model: 'reviewer-model', effort: 'low' } } } };
+    const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', head)], cfg });
+    w.team.s.jobs.w1 = { kind: 'implement', agent: 'codex', pr: 10, head, model: 'writer-model', ingested: true };   // known writer: the paused codex review is a real one
+    w.jobs.active.push({ id: 'p1', provider: 'codex', status: 'paused_limit' });
+    w.team.s.jobs.p1 = { kind: 'review', agent: 'codex', pr: 10, head: H(1), key: `10:${H(1)}:codex`, ...extra };
+    return w;
+  };
+  const reviews = async w => (await w.team.plan()).filter(a => a.type === 'review').map(a => [a.agent, a.pr]);
+  assert.deepEqual(await reviews(mk(H(1))), []);                              // paused codex review in flight: claude starts no second one
+  assert.deepEqual(await reviews(mk(H(1), { ingested: true })), [['claude', 10]]);   // stopped: a review is planned
+  const moved = mk(H(2)); moved.team.s.jobs.w1.head = H(2);
+  assert.deepEqual(await reviews(moved), [['claude', 10]]);                     // paused review is on an old head: the new head is planned
+});
