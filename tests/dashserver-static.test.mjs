@@ -18,3 +18,12 @@ test('a static asset that is not routed is detected (negative case)', () => {
   const linked = [...html.matchAll(/\/static\/[\w.-]+/g)].map(m => m[0]);
   assert.deepEqual(linked.filter(r => !STATIC[r]), ['/static/new-asset.js']);
 });
+
+test('every /static/ asset referenced by the dashboard source or dashui files is routed', () => {
+  const dir = new URL('../supervisor/dashui/', import.meta.url);
+  const sources = [fs.readFileSync(new URL('../supervisor/dashserver.mjs', import.meta.url), 'utf8')];
+  for (const f of fs.readdirSync(dir)) if (/\.(html|js|mjs|css)$/.test(f)) sources.push(fs.readFileSync(new URL(f, dir), 'utf8'));
+  const linked = new Set(sources.flatMap(s => [...s.matchAll(/\/static\/[\w.-]+\.(?:js|mjs|css)/g)].map(m => m[0])));
+  assert.ok(linked.size > 0);
+  assert.deepEqual([...linked].filter(r => !STATIC[r]), []);
+});
