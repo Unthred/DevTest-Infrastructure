@@ -297,7 +297,7 @@ export function transition(root, job, status, kind, clock = realClock) {
     else releaseLeases(root, job);
   }
 }
-export async function drive(root, job, registry = defaultRegistry, clock = realClock, runOnce, maxAttempts = 4, checkPostcondition = null) {
+export async function drive(root, job, registry = defaultRegistry, clock = realClock, runOnce, maxAttempts = 4, checkPostcondition = null, resumeGate = null) {
   const restartable = () => job.autoResume || job.autoRestart;
   const { config, adapter } = await provider(registry, job.provider);
   while (true) {
@@ -310,7 +310,23 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       if (done) { transition(root, job, 'completed', 'completed_before_resume', clock); return job; }
     }
     if (job.attempts > 0 && job.checkpoint.handoverStale) { transition(root, job, 'blocked', 'stale_handover', clock); return job; }
-    transition(root, job, 'running', 'started', clock);
+    // Issue #380: a job paused on a usage limit resumes only when its work is still wanted (a review whose pull request head has moved
+    // posts no verdict and stops, so the planner plans a new review) and when running it stays inside the role and overall limits;
+    // otherwise it keeps waiting, with the reason on the job record. The gate may hold a lock until the job is marked running.
+    let gate = null;
+    if (job.status === 'paused_limit' && typeof resumeGate === 'function') {
+      try { gate = await resumeGate(job); } catch (error) { gate = { go: false, reason: 'resume check failed: ' + String(error?.name || 'Error').slice(0, 48) }; }
+      if (gate?.stale) { job.resumeWait = null; try { transition(root, job, 'stopped', 'head_moved', clock); } finally { gate.release?.(); } return job; }
+      if (!gate?.go) {
+        const since = job.resumeWait?.since ?? clock.now();
+        if (job.resumeWait?.reason !== gate?.reason) event(root, job, 'resume_waiting', clock);
+        job.resumeWait = { reason: String(gate?.reason || 'waiting for a free slot').slice(0, 300), since }; saveJob(root, job, clock);
+        gate?.release?.();
+        await clock.sleep(gate?.retryMs ?? 60000); continue;
+      }
+    }
+    try { transition(root, job, 'running', 'started', clock); } finally { gate?.release?.(); }
+    if (job.resumeWait) { job.resumeWait = null; }
     job.attempts++; job.currentAttemptId = crypto.randomUUID(); saveJob(root, job, clock);
     let result;
     try { result = await runOnce(config, adapter, job, clock); }
