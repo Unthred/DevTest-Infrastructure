@@ -172,15 +172,22 @@ test('an agent identity, another account, an unknown author or an owner comment 
   await listed.team.tick(); assert.equal(listed.team.s.reReviews[38], undefined, 'an agent login is never the owner');
 });
 
-test('off by default; and no comment is read for a PR without a CHANGES verdict or with fix rounds left', async t => {
+test('off by default; a PR with a verdict or the fix limit reached is refused with a stated reason once, and the comment is not used up', async t => {
   const off = ownerWorld(t, { enabled: false }); add(off, cmt(6, 'o', 10_000)); await off.team.tick(); assert.equal(off.team.s.reReviews[38], undefined);
-  const read = []; const left = ownerWorld(t); add(left, cmt(7, 'o', 10_000)); left.gh.prComments = async n => { read.push(n); return Object.values(left.gh.cmts); };
-  left.team.s.fixAttempts[`38:${H(0)}`] = 1; await left.team.tick();
-  delete left.team.s.verdicts[`38:${H(1)}`]; left.team.s.fixAttempts[`38:${H(0)}`] = 2; await left.team.tick();
-  assert.equal(read.length, 0); assert.equal(left.team.s.reReviews[38], undefined);
+  assert.equal(off.calls.comments.length, 0);
+  const refusals = w => w.calls.comments.filter(c => c[1].includes('Re-review not requested'));
+  const left = ownerWorld(t); add(left, cmt(7, 'o', 10_000)); left.team.s.fixAttempts[`38:${H(0)}`] = 1;
+  await left.team.tick(); delete left.team.s.fixAttempts[`38:${H(1)}`]; await left.team.tick();   // the first tick may start a fix job; undo it so rounds stay left
+  assert.equal(refusals(left).length, 1, 'one notice, not one per tick'); assert.match(refusals(left)[0][1], /still has fix rounds left/);
+  assert.equal(left.team.s.reReviews[38]?.requests.length ?? 0, 0, 'nothing was requested');
+  // no CHANGES verdict at all, fix limit reached: refused with the reason too
+  const none = ownerWorld(t); add(none, cmt(8, 'o', 10_000)); delete none.team.s.verdicts[`38:${H(1)}`]; await none.team.tick();
+  assert.equal(refusals(none).length, 1); assert.match(refusals(none)[0][1], /no CHANGES verdict/); assert.equal(none.team.s.reReviews[38]?.requests.length ?? 0, 0);
   // not used up: once the conditions hold, the same comment works
-  left.team.s.verdicts[`38:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex', job: 'j0', findings: [], at: 5 };
-  await left.team.tick(); assert.equal(left.team.reReviewOf(38, H(1)).decision, U(7)); assert.deepEqual(read, [38]);
+  left.team.s.fixAttempts[`38:${H(0)}`] = 2; await left.team.tick(); assert.equal(left.team.reReviewOf(38, H(1)).decision, U(7));
+  // a PR with a PASS verdict and rounds left is not read at all
+  const pass = ownerWorld(t); const r2 = []; pass.gh.prComments = async n => { r2.push(n); return []; };
+  pass.team.s.fixAttempts = {}; pass.team.s.verdicts[`38:${H(1)}`] = { verdict: 'PASS', reviewer: 'codex', job: 'j0', findings: [], at: 5 }; await pass.team.tick(); assert.deepEqual(r2, []);
 });
 
 test('command: a link naming no comment, a non-owner comment and an older comment are refused with a reason; a valid one once', async t => {

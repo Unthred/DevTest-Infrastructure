@@ -53,13 +53,6 @@ export function validateTeamConfig(input) {
     if (!o || typeof o !== 'object' || typeof o.enabled !== 'boolean' || ('owner' in o && !login(o.owner)) || ('agent_logins' in o && !(Array.isArray(o.agent_logins) && o.agent_logins.every(login))))
       throw new SupervisorError('invalid owner_comment_review: { enabled: boolean, owner?: login, agent_logins?: [login] }');
   }
-  // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled, and enabling it is only safe once agents
-  // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
-  if (c.owner_comment_review !== undefined) {
-    const o = c.owner_comment_review, login = x => typeof x === 'string' && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(x);
-    if (!o || typeof o !== 'object' || typeof o.enabled !== 'boolean' || ('owner' in o && !login(o.owner)) || ('agent_logins' in o && !(Array.isArray(o.agent_logins) && o.agent_logins.every(login))))
-      throw new SupervisorError('invalid owner_comment_review: { enabled: boolean, owner?: login, agent_logins?: [login] }');
-  }
   const agents = Object.entries(c.agents || {});
   if (agents.length < 1) throw new SupervisorError('team needs at least one agent');
   const seen = new Set();
@@ -1956,15 +1949,28 @@ export class Team {
     for (const pr of await this.gh.listPulls()) {
       if (!agentOfBranch(this.c, pr.headRefName) || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
-      if (v?.verdict !== 'CHANGES' || this.fixCount(pr.number) < this.c.limits.max_fix_attempts) continue;
       const entry = this.s.reReviews[pr.number];
       if (entry?.requests.some(r => r.head === pr.headRefOid && r.status === 'pending')) continue;
+      const ready = v?.verdict === 'CHANGES' && this.fixCount(pr.number) >= this.c.limits.max_fix_attempts;
+      // Without a CHANGES verdict and with rounds left there is nothing a comment could answer, so such a PR is not read.
+      if (!ready && v?.verdict !== 'CHANGES' && this.fixCount(pr.number) < this.c.limits.max_fix_attempts) continue;
       await guard(`owner comment ${pr.number}`, async () => {
         const used = new Set((entry?.requests || []).map(r => r.decision));
-        const c = (await this.gh.prComments(pr.number)).find(x => /#issuecomment-\d+$/.test(x.url) && !used.has(x.url) && !this.commentRefusal(x, v, x.url));
+        const comments = (await this.gh.prComments(pr.number)).filter(x => /#issuecomment-\d+$/.test(x.url) && !used.has(x.url));
+        if (ready) {
+          const c = comments.find(x => !this.commentRefusal(x, v, x.url));
+          if (!c) return;
+          await this.requestReReview(pr.number, c.url, c);
+          (report.notified ||= []).push({ pr: pr.number, reReview: c.url });
+          return;
+        }
+        // Not possible yet: say why once per comment and leave it unused, so it counts once the conditions hold.
+        const c = comments.filter(x => this.isOwnerComment(x) && Date.parse(x.createdAt) > (v?.at ?? 0)).pop();
         if (!c) return;
-        await this.requestReReview(pr.number, c.url, c);
-        (report.notified ||= []).push({ pr: pr.number, reReview: c.url });
+        let why; try { this.reReviewEligibility(pr.number, c.url, pr); } catch (error) { why = error.message; }
+        if (!why) return;
+        await this.postNotice(pr.number, `re-review-refused pr=${pr.number} head=${pr.headRefOid} ${c.url} ${why.includes("fix rounds") ? "rounds" : "verdict"}`, `**Re-review not requested.** The owner comment at ${c.url} cannot request a re-review yet: ${why}. The comment is not used up; it counts once those conditions hold.`);
+        (report.skipped ||= []).push({ pr: pr.number, reReview: why });
       });
     }
   }
