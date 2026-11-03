@@ -23,6 +23,7 @@ import { probeNow } from './probenow.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
+import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -50,7 +51,8 @@ function startWorker(root, id, registry) {
 }
 function reconcileOnce(root, registry) {
   const dir = path.join(root, 'jobs');
-  let resumed = 0, blocked = 0, released = 0;
+  let resumed = 0, blocked = 0, released = 0, held = 0;
+  const handHold = handInstallHold(root) !== null;   // issue #446: a hand-install holds due restarts too (they stay recorded and restart after it)
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     if (!name.endsWith('.json')) continue;
     const current = readJob(root, name.slice(0, -5));
@@ -64,10 +66,11 @@ function reconcileOnce(root, registry) {
     const eligible = ['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].every(key => current.capabilities?.[key] === 'supported');
     const due = current.nextAttemptAt != null && current.nextAttemptAt <= Date.now();
     if (['paused_limit', 'queued'].includes(current.status) && ((current.autoResume && eligible) || current.autoRestart) && due) {
+      if (handHold) { held++; continue; }
       recover(root, current.id, false); startWorker(root, current.id, registry); resumed++;
     } else if (current.status === 'running') { transition(root, current, 'blocked', 'orphaned_worker'); blocked++; }
   }
-  return { resumed, blocked, released };
+  return { resumed, blocked, released, ...(held ? { held } : {}) };
 }
 const teamConfigFile = new URL('./team.json', import.meta.url).pathname;
 function realJobs(root, registry) {
@@ -174,6 +177,7 @@ const currentStatusFor = (root, config) => currentStatus({ root, config, registe
 const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 async function teamTick(root, registry, dryRun, hold = null) {
   // One tick lock covers the whole tick, migrations included, so two concurrent ticks can neither run the same migration nor interleave.
+  if (!dryRun && handInstallHold(root)) return { skipped: [{ what: 'team tick', reason: 'held for a hand-install', expected: true }] };
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };
   try {
@@ -222,6 +226,7 @@ async function selfUpgradeBefore(root, registry) {
   // Issue #209: the dashboard check runs on every tick, even with the team loop off, and never fails the tick.
   try { await upgrade.watchdog(); } catch { /* the next tick checks again */ }
   if (!config.enabled) return { result: 'team-loop-disabled', hold: null };
+  if (handInstallHold(root)) return { result: 'hand-install-hold', hold: null };
   const result = await upgrade.step();
   // 'upgraded': this process still runs the old code, so it must not dispatch either; the next tick runs the new version.
   return { result, hold: holdOf(result, upgrade.s) };
@@ -245,7 +250,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -362,8 +367,30 @@ async function main() {
   }
   if (command === 'self-upgrade') {
     const { upgrade } = selfUpgradeFor(root, registry);
+    if (a._[0] === 'hand-install') {
+      // Issue #446: the one supported route for an update the automatic upgrader refuses.
+      const d = upgrade.d;
+      const publicUrl = config.self_upgrade?.public_dashboard_url || null;
+      const deps = {
+        installed: d.installed, now: () => Date.now(), sleep: ms => new Promise(r => setTimeout(r, ms)),
+        activeJobs: d.runningJobs, dueHeld: d.dueHeld, install: d.handInstall, dryRunTick: d.dryRunTick, rollback: d.rollback,
+        restartDashboard: sha => d.restartDashboard(sha),
+        dashboardAnswers: async () => {
+          const st = await d.dashboardStatus();
+          const local = Boolean(st.running && st.healthy);
+          let pub = null;
+          if (publicUrl) { try { const r = await fetch(new URL('/api/view.json', publicUrl), { signal: AbortSignal.timeout(8000) }); pub = r.status === 200; } catch { pub = false; } }
+          return { local, public: pub };
+        },
+        liveTick: d.liveTick,
+        record: e => upgrade.record(e)
+      };
+      const drain = config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : undefined;
+      const out = await handInstall({ root, sha: a._[1], deps, say: line => console.log(line), ...(drain ? { drainMaxMs: drain } : {}) });
+      process.exitCode = out.ok ? 0 : 1; return;
+    }
     if (a._[0] === 'clear-latch') { upgrade.clearLatch(); console.log('latch cleared'); return; }
-    if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|clear-latch');
+    if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|clear-latch|hand-install SHA');
     console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, install: upgrade.s.install || null, installed: upgrade.d.installed() }, null, 2)); return;
   }
   if (command === 'reconcile' || command === 'daemon') {

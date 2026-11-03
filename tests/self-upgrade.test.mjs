@@ -152,7 +152,7 @@ test('issue #265: the bootstrap refusal is recorded once per target, raises one 
   w.deps.remoteUrl = () => 'https://example.invalid/r.git'; w.deps.commitsBehind = () => 4;
   for (let i = 0; i < 5; i++) assert.equal(await w.up.step(), 'upgrader-changed');
   assert.equal(w.records().filter(r => r.result === 'refused').length, 1, 'one record, not one per tick');
-  assert.deepEqual(w.up.s.handDeploy, { from: FROM, to: TO, files: ['tools/bootstrap-install.sh'], command: `bash tools/bootstrap-install.sh install https://example.invalid/r.git ${TO}`, at: w.up.s.handDeploy.at });
+  assert.deepEqual(w.up.s.handDeploy, { from: FROM, to: TO, files: ['tools/bootstrap-install.sh'], command: `/root/bin/ai-supervisor self-upgrade hand-install ${TO}`, at: w.up.s.handDeploy.at });
   assert.equal(w.up.s.main.sha, TO); assert.equal(w.up.s.main.behind, 4);
   // survives a restart of the process
   const again = w.make(); assert.equal(await again.step(), 'upgrader-changed'); assert.equal(w.records().length, 1);
