@@ -175,7 +175,7 @@ test('every page has its own URL, answers 200 with the navigation bar, and marks
   const urls = ['/', '/agents', '/agents/claude', '/work', '/work/pr/41', '/work/issue/30', '/activity', '/usage', '/reviews', '/system'];
   for (const u of urls) {
     const r = await s.get(u); assert.equal(r.status, 200, u); assert.match(r.headers['content-type'], /text\/html/);
-    assert.match(r.body, /<nav class="nav" id="nav" aria-label="Pages">/); assert.match(r.body, /aria-current="page"/); assert.match(r.body, /<main id="main">/); assert.match(r.body, /class="skip"/);
+    assert.match(r.body, /<nav class="nav" id="nav" aria-label="Pages">/); assert.match(r.body, /aria-current="page"/); assert.match(r.body, /<main id="main" aria-labelledby="page-title">/); assert.match(r.body, /class="skip"/);
     for (const label of ['Overview', 'Agents', 'Work', 'Activity', 'Usage &amp; cost', 'Reviews', 'System']) assert.match(r.body, new RegExp(`<span>${label}</span>`), `${u} ${label}`);
   }
   assert.match((await s.get('/work/pr/41')).body, /<a href="\/work"[^>]*>Work<\/a><span class="sep" aria-hidden="true">›<\/span><\/li><li><span aria-current="page">PR #41 PR forty-one \(for #30 Thirty\)<\/span>/);
