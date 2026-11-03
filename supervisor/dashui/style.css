@@ -301,6 +301,9 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
   .statusbar .pagehead h1{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .brand{margin-right:0}
 }
+/* 1100-1439px: the full bar is wider than the viewport, so the stat labels go first (values keep their badges and titles), then the role below 1280px */
+@media(min-width:1100px) and (max-width:1439px){.statusbar{gap:var(--sp2)}.statusbar .stat .k{display:none}}
+@media(min-width:1100px) and (max-width:1279px){.agent-badge .ab-role{display:none}.agent-badge .ab-state::before{content:none}}
 @media(max-width:1099px){.agent-lines ul{flex-wrap:wrap}}
 @media(max-width:639px){
   .statusbar{display:grid;grid-template-columns:1fr auto;align-items:center}
@@ -311,6 +314,7 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
   .agent-badge{justify-content:space-between;min-height:44px;padding:0 var(--sp3)}
   .agent-badge .ab-role{display:none}.agent-badge .ab-state::before{content:none}
   .statusbar>.stat{min-width:0}
+  .card>header>*{max-width:100%}.card>header .ranges{flex-wrap:wrap}
 }
 .chipbar { display: flex; flex-wrap: wrap; gap: .5rem 1.2rem; margin-bottom: .6rem; align-items: center; }
 .chipgroup { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
