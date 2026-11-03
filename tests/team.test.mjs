@@ -1483,3 +1483,51 @@ test('#433: a paused review blocks a second review of the same head; a stopped o
   const moved = mk(H(2)); moved.team.s.jobs.w1.head = H(2);
   assert.deepEqual(await reviews(moved), [['claude', 10]]);                     // paused review is on an old head: the new head is planned
 });
+
+// ---- issue #400: secret-scanner-only cifix rounds do not count toward max_fix_attempts
+test('#400 a scanner-only cifix round is not counted and runs once per PR; a mixed failure still counts', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [ggRun()];
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  assert.equal(a.type, 'cifix'); assert.equal(a.scanOnly, true);
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.equal(w.calls.created.length, 1);
+  assert.equal(w.team.fixCount(38), 0); assert.equal(w.team.s.scanOnlyRounds[38], 1);
+  // a new head that is still flagged starts no further round
+  w.team.s.jobs = {};
+  w.gh.pulls = [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: gg })];
+  const again = (await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix');
+  assert.equal(again, undefined);
+  // negative: scanner plus an ordinary failing check counts as a fix round
+  const m = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: [...gg, { status: 'COMPLETED', conclusion: 'FAILURE', name: 'project-contract' }] })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  m.gh.listCheckRuns = async () => [ggRun()];
+  const ma = (await m.team.plan()).find(x => x.agent === 'claude');
+  assert.equal(ma.scanOnly, undefined);
+  await m.team.execute({ agent: 'claude', ...ma });
+  assert.equal(m.team.fixCount(38), 1);
+});
+
+test('#400 a scanner-only round with an unreadable check-runs API still raises the homeowner item before later heads are skipped', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => { throw new Error('api down'); };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.equal(w.team.s.scanOnlyRounds[38], 1);
+  assert.equal(w.team.fixCount(38), 0);
+  assert.ok(JSON.stringify(w.calls).includes('secret-scan') || JSON.stringify(w.team.s).includes('secret-scan'));
+});
+
+test('#400 a scanner-only round whose homeowner notice cannot be posted is still not counted, retries, and stays bounded', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [ggRun()];
+  w.team.flag = async () => { throw new Error('post failed'); };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.equal(w.team.fixCount(38), 0); assert.equal(w.team.s.scanOnlyRounds[38], 1); assert.ok(!w.team.s.scanOnlyAnnounced[38]);
+  w.team.s.jobs = {};
+  w.gh.pulls = [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: gg })];
+  const again = (await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix');
+  assert.equal(again?.scanOnly, true);
+  w.team.s.scanOnlyRounds[38] = 3;
+  assert.equal((await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix'), undefined);
+});

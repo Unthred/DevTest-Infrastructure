@@ -323,6 +323,7 @@ const CHECK_LIMITS = { checks: 8, title: 200, summary: 800, text: 1500 };
 export const REQUIREMENTS_MAX = 30000;
 const cleanText = (value, max) => redact(value, max).replace(/\s+/g, ' ').trim();
 export const isSecretScanner = check => SECRET_SCANNER.test(`${check?.name || ''} ${check?.app || ''}`);
+export const scannerOnly = names => names.length > 0 && names.every(name => isSecretScanner({ name }));
 export function checkDetails(runs, names) {
   const want = new Set(names), out = [];
   // After a rerun the API lists several runs of one name: describe one that did not succeed before a passing one (issue #205).
@@ -527,7 +528,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -1206,10 +1207,17 @@ export class Team {
     for (const pr of repair ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
-      const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
+      const checks = failingChecks(pr.statusCheckRollup, this.retried(pr));
+      // Issue #400: a round whose only failing checks are secret scanners cannot be cleared by the fix job (the old commit stays flagged
+      // until the homeowner resolves the incident). It is not counted toward max_fix_attempts and never escalates. To stay bounded, one
+      // such round never counts. Once the homeowner item exists, later heads wait for the homeowner; until it does (the flag or notice
+      // post failed), the round repeats to retry the notice, at most 3 times so it stays bounded.
+      const scanOnly = scannerOnly(checks);
+      if (scanOnly && (this.s.scanOnlyAnnounced[pr.number] || (this.s.scanOnlyRounds[pr.number] || 0) >= 3)) continue;
+      const escalated = !scanOnly && this.fixCount(pr.number) >= L.max_fix_attempts;
       if (busy('cifix', key) || (escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
-      return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks: failingChecks(pr.statusCheckRollup, this.retried(pr)), key, ...(escalated ? { escalated: true } : {}) };
+      return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks, key, ...(scanOnly ? { scanOnly: true } : {}), ...(escalated ? { escalated: true } : {}) };
     }
     // fix: my PR with a CHANGES verdict on its current head
     for (const pr of repair ? prs : []) {
@@ -2031,14 +2039,20 @@ export class Team {
   }
   // Called only once the job lease is held, so a worktree or lease failure leaves no flag or notice for a job that never started (issue #205).
   async announceSecretScan(act, details) {
-    const scanners = details.filter(isSecretScanner);
+    // Issue #400: when the check-runs read failed, a scanner-only round still names its scanners from the rollup, so the homeowner item
+    // exists before later heads are suppressed.
+    let scanners = details.filter(isSecretScanner);
+    if (!scanners.length && act.scanOnly) scanners = act.checks.map(name => ({ name }));
+    let announced = false;
     if (scanners.length) {
       try {
         await this.flag(act.pr, { key: `secret-scan:${act.head}`, kind: 'secret-scan', head: act.head, checks: scanners.map(c => c.name), tk: 'pull' });
         const links = scanners.map(c => `\`${c.name}\`${c.url ? ` (${c.url})` : ''}`).join(', ');
         await this.postNotice(act.pr, `secret-scan pr=${act.pr} head=${act.head}`, `**Needs the homeowner.** The secret scanner ${links} flagged head \`${act.head}\`. If the flagged value is a test fixture, the fix job rewrites it so it is assembled at runtime; the old commit stays flagged, so: mark incident <id> as a test credential in GitGuardian (the incident is linked from the check). If the value is a real credential, revoke it instead; Foreman never dismisses a finding that does not look like a fixture.`);
+        announced = true;
       } catch { /* the notice is retried on the next cifix launch for this head; the job still runs */ }
     }
+    return announced;
   }
   // What a rejected PR is rejected for, named in the fix-limit notice: a review verdict, failing CI checks, or both.
   rejectionCause(pr) {
@@ -2440,14 +2454,15 @@ export class Team {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.type}-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
       // Read only here; the flag and homeowner notice follow the lease (issue #205), so a setup or lease failure posts nothing.
       const details = rebase ? [] : await this.readCheckDetails(act);
-      if (!rebase) announce = () => this.announceSecretScan(act, details);
+      if (!rebase) announce = async () => { act.announced = await this.announceSecretScan(act, details); };
       spec = { ...common, kind: act.type, worktree: wt, issue: act.pr, scope: rebase ? `Conflict-only rebase of PR #${act.pr} onto ${act.base}` : `Fix red CI on PR #${act.pr}`,
         allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch, behind: !!act.behind }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks, checkDetails: details, escalatedInbox, requirementsFile: rq?.file }),
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head, ...(rebase ? { base: act.base } : { branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) }) };
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
-      bump = () => { this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase && this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
+      bump = () => { if (act.scanOnly) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; if (act.announced) this.s.scanOnlyAnnounced[act.pr] = true; return; }   // issue #400: never counted; later heads are skipped only once the homeowner item exists
+        this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase && this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: 'continue', worktree: wt, issue: act.issue, scope: `Continue draft PR #${act.pr} for issue #${act.issue} on ${act.branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
