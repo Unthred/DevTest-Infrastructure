@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { writeToken, PROBE_COOLDOWN_MS } from '../supervisor/dashwrite.mjs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -216,26 +217,27 @@ test('refreshProvider through a real registry: a custom manifest probe command i
   const [a, b] = await Promise.all([refreshProvider(reg, 'claude', { now: NOW }), refreshProvider(reg, 'claude', { now: NOW })]);
   assert.deepEqual([a.error, b.error].sort(), ['busy', undefined].sort(), 'a second concurrent probe of one provider is refused');
 });
-async function serve(t, probe) {
+async function serve(t, probe, nowFn = () => NOW) {
   const root = cacheRoot(t), server = http.createServer();
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
-  server.on('request', handler({ root, config: cfg, host: '127.0.0.1', port, now: () => NOW, probe }));
+  server.on('request', handler({ root, config: cfg, host: '127.0.0.1', port, now: nowFn, probe }));
   t.after(() => server.close());
-  const call = (p, { method = 'POST', headers = {} } = {}) => new Promise((resolve, reject) => { const req = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { res.resume(); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers })); }); req.on('error', reject); req.end(); });
-  return { call, origin: `http://127.0.0.1:${port}` };
+  const call = (p, { method = 'POST', headers = {}, body } = {}) => new Promise((resolve, reject) => { const req = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { res.resume(); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers })); }); req.on('error', reject); req.end(body); });
+  return { root, call, origin: `http://127.0.0.1:${port}` };
 }
 test('dashboard: POST /probe/<agent> from its own origin runs one probe; other origins, hosts, agents and paths are refused', async t => {
   const calls = []; const s = await serve(t, async o => { calls.push(o.agent); if (o.agent === 'nobody') throw Object.assign(new Error('x'), { name: 'SupervisorError' }); return { ok: true }; });
-  const ok = await s.call('/probe/claude', { headers: { origin: s.origin } });
+  const P = { origin: s.origin }, B = `proof=${writeToken(s.root)}`;
+  const ok = await s.call('/probe/claude', { headers: P, body: B });
   assert.equal(ok.status, 303); assert.match(ok.headers.location, /^\/usage/); assert.deepEqual(calls, ['claude']);
-  assert.equal((await s.call('/probe/claude', { headers: { origin: 'http://evil.example' } })).status, 403);
-  assert.equal((await s.call('/probe/claude')).status, 403, 'no Origin header is refused');
-  assert.equal((await s.call('/probe/claude', { headers: { origin: s.origin, host: 'evil.example' } })).status, 421);
+  assert.equal((await s.call('/probe/claude', { headers: { origin: 'http://evil.example' }, body: B })).status, 403);
+  assert.equal((await s.call('/probe/claude', { body: B })).status, 403, 'no Origin header is refused');
+  assert.equal((await s.call('/probe/claude', { headers: { origin: s.origin, host: 'evil.example' }, body: B })).status, 421);
   assert.equal((await s.call('/probe/claude', { method: 'GET', headers: { origin: s.origin } })).status, 404);
   assert.equal((await s.call('/probe/../x', { headers: { origin: s.origin } })).status, 405);
   assert.equal((await s.call('/', { headers: { origin: s.origin } })).status, 405);
-  assert.deepEqual(calls, ['claude'], 'only the one valid request probed');
+  assert.deepEqual(calls,  ['claude'], 'only the one valid request probed');
 });
 test('dashboard page: the Refresh allowance button and the reading age appear for a probe-capable provider', async t => {
   const root = tmp(t); fs.mkdirSync(path.join(root, 'dashboard'), { recursive: true });
@@ -353,4 +355,49 @@ test("the probe lock: concurrent processes racing for one stale lock yield exact
   fs.writeFileSync(path.join(lockDir, "swap", "owner"), `${process.pid}:x:other`);
   a();
   assert.ok(fs.existsSync(path.join(lockDir, "swap")));
+});
+
+test('dashboard write access (issue #434): a forged Origin without the proof is refused and runs nothing', async t => {
+  const calls = []; const s = await serve(t, async o => { calls.push(o.agent); return { ok: true }; });
+  for (const body of [undefined, 'proof=', 'proof=' + 'a'.repeat(64), 'other=' + writeToken(s.root)]) {
+    const r = await s.call('/probe/claude', { headers: { origin: s.origin }, body });
+    assert.equal(r.status, 403, String(body));
+  }
+  assert.deepEqual(calls, []);
+  assert.ok(!fs.readFileSync(path.join(s.root, 'dashboard', 'write-cooldown.json'), { flag: 'a+' }).length, 'a refused request takes no cooldown slot');
+  assert.equal(fs.statSync(path.join(s.root, 'dashboard', 'write-token')).mode & 0o077, 0, 'secret file is private');
+});
+test('dashboard write access (issue #434): the pages carry the proof in every write form', async t => {
+  const s = await serve(t, async () => ({ ok: true }));
+  const page = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: Number(new URL(s.origin).port), path: '/usage', headers: { host: new URL(s.origin).host } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve(b)); }).on('error', reject));
+  const forms = page.match(/<form method="post"[^>]*>/g) || [];
+  assert.ok(forms.length > 0);
+  assert.equal((page.match(new RegExp('name="proof" value="' + writeToken(s.root) + '"', 'g')) || []).length, forms.length);
+});
+test('dashboard probe cooldown (issue #434): a second request inside it runs nothing; it holds across a restart; it ends on time', async t => {
+  let clock = NOW; const calls = [];
+  const probe = async o => { calls.push(o.agent); return { ok: true }; };
+  const s = await serve(t, probe, () => clock), B = () => `proof=${writeToken(s.root)}`;
+  assert.equal((await s.call('/probe/claude', { headers: { origin: s.origin }, body: B() })).status, 303);
+  clock = NOW + 60000;
+  const again = await s.call('/probe/claude', { headers: { origin: s.origin }, body: B() });
+  assert.equal(again.status, 429); assert.ok(Number(again.headers['retry-after']) > 0); assert.deepEqual(calls, ['claude']);
+  // restart: a new server over the same state root
+  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const port = server.address().port; server.on('request', handler({ root: s.root, config: cfg, host: '127.0.0.1', port, now: () => clock, probe }));
+  const r2 = await new Promise((resolve, reject) => { const q = http.request({ host: '127.0.0.1', port, path: '/probe/claude', method: 'POST', headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }).on('error', reject); q.end(B()); });
+  assert.equal(r2, 429, 'the cooldown survives a restart'); assert.deepEqual(calls, ['claude']);
+  clock = NOW + PROBE_COOLDOWN_MS + 1;
+  assert.equal((await s.call('/probe/claude', { headers: { origin: s.origin }, body: B() })).status, 303); assert.equal(calls.length, 2);
+});
+test('dashboard probe (issue #434): the overage-risk refusal still applies, spends nothing and frees the cooldown slot', async t => {
+  const root = cacheRoot(t); fs.mkdirSync(path.join(root, 'dashboard'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ schema: 1, tick: { at: NOW, status: 'ok', lastOkAt: NOW }, probes: { claude: cleanProbeRecord(claudeAl(0.5, { overage: true, resetsAt: NOW + HOUR }), NOW - HOUR) }, pulls: [], issues: [], delivered: [], merged: [], fetchedAt: NOW }));
+  let refreshed = 0;
+  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const port = server.address().port;
+  server.on('request', handler({ root, config: cfg, host: '127.0.0.1', port, now: () => NOW, probe: o => probeNow({ ...o, refresh: async () => { refreshed++; return { record: null, error: 'x' }; } }) }));
+  const post = () => new Promise((resolve, reject) => { const q = http.request({ host: '127.0.0.1', port, path: '/probe/claude', method: 'POST', headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }).on('error', reject); q.end(`proof=${writeToken(root)}`); });
+  assert.equal(await post(), 303); assert.equal(await post(), 303, 'refused again, not "too soon": nothing was spent');
+  assert.equal(refreshed, 0);
 });

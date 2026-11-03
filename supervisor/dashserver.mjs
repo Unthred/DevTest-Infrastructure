@@ -1,5 +1,5 @@
 // Team dashboard server (issue #32). Node built-ins only. It reads the supervisor state and the cache/history the tick wrote; it makes
-// no GitHub call and no model call. GET/HEAD only, except two form posts: POST /mark-read moves the Mark as read marker (issue #253), and
+// no GitHub call and no model call. GET/HEAD only, except two form posts, each needing an access proof (issue #434; the probe also has a per-agent cooldown): POST /mark-read moves the Mark as read marker (issue #253), and
 // POST /probe/<agent> runs one minimal allowance probe (issue #110).
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
@@ -14,6 +14,7 @@ import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
+import { proofValid, withProof, reserveCooldown, releaseCooldown } from './dashwrite.mjs';
 
 export const DEFAULT_PORT = 8731;
 
@@ -114,6 +115,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
     const at = Number(form.get('at')), t = now(), prev = readLastSeen(root);
     if (!/^\d{10,15}$/.test(form.get('at') || '') || at > t) return send(400, 'text/plain; charset=utf-8', 'bad time');
     writeLastSeen(root, Math.max(at, prev ?? 0));
@@ -129,11 +131,20 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     if (probePath) {
       if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
       if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
-      req.resume();
+      const chunks = []; let size = 0;
+      for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+      if (!proofValid(root, new URLSearchParams(Buffer.concat(chunks).toString('utf8')).get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+      // Cooldown per agent, kept in the state root. An unknown agent is refused before it takes a slot.
+      const agent = probePath[1], at = now();
+      if (!source().agents?.[agent]) return send(404, 'text/plain; charset=utf-8', 'unknown agent');
+      const slot = reserveCooldown(root, `probe:${agent}`, at);
+      if (!slot.ok) return send(429, 'text/plain; charset=utf-8', `too soon, try again at ${new Date(slot.retryAt).toISOString()}\n`, { 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - at) / 1000))) });
       try {
-        const out = await probe({ root, registry, config: source(), agent: probePath[1], now: now() });
+        const out = await probe({ root, registry, config: source(), agent, now: at });
+        if (out.error === 'overage-risk' || out.error === 'busy') releaseCooldown(root, `probe:${agent}`, at);   // nothing was spent
         return send(303, 'text/plain; charset=utf-8', out.ok ? 'refreshed\n' : 'no reading\n', { location: `/usage?probe=${out.ok ? 'ok' : 'failed'}` });
       } catch (error) {
+        releaseCooldown(root, `probe:${agent}`, at);
         return send(error instanceof SupervisorError ? 404 : 500, 'text/plain; charset=utf-8', error instanceof SupervisorError ? 'unknown agent' : 'probe failed');
       }
     }
@@ -158,7 +169,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(view));
       const watch = route.page === 'watch';
       const out = renderRoute(view, watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() } : route, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
-      return send(out.status, 'text/html; charset=utf-8', out.html);
+      return send(out.status, 'text/html; charset=utf-8', withProof(out.html, root));
     } catch (error) {
       console.error(`dashboard: ${error?.name || 'Error'}: ${redact(error?.message, 160)}`);
       return send(500, 'text/plain; charset=utf-8', 'dashboard could not read the supervisor state');

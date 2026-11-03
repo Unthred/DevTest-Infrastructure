@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { writeToken } from '../supervisor/dashwrite.mjs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -80,7 +81,7 @@ async function serve(t) {
     const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject);
     r.end(body);
   });
-  const post = (at, headers = {}) => req('POST', '/mark-read', { headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: `at=${at}` });
+  const post = (at, headers = {}, proof) => req('POST', '/mark-read', { headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: `at=${at}&proof=${proof === undefined ? writeToken(root) : proof}` });
   return { root, port, get: p => req('GET', p), req, post };
 }
 
@@ -114,10 +115,12 @@ test('Mark as read moves the marker to the page time and the next view uses it',
 test('Mark as read refuses a cross-origin or missing Origin, a future or malformed time, and other methods stay refused', async t => {
   const s = await serve(t);
   assert.equal((await s.post(H(1), { origin: 'http://evil.example' })).status, 403);
-  assert.equal((await s.req('POST', '/mark-read', { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `at=${H(1)}` })).status, 403);
+  assert.equal((await s.req('POST', '/mark-read', { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `at=${H(1)}&proof=${writeToken(s.root)}` })).status, 403);
   assert.equal((await s.post(NOW + 60000)).status, 400);
   assert.equal((await s.post('abc')).status, 400);
   assert.equal((await s.post(H(1), { host: 'evil.example' })).status, 421);
+  assert.equal((await s.post(H(1), {}, '')).status, 403, 'no proof');
+  assert.equal((await s.post(H(1), {}, 'f'.repeat(64))).status, 403, 'wrong proof, correct Origin');
   assert.equal((await s.req('POST', '/')).status, 405);
   assert.equal((await s.req('PUT', '/mark-read')).status, 405);
   assert.equal((await s.get('/mark-read')).status, 404);
