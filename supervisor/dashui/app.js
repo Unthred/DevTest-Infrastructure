@@ -229,6 +229,8 @@ function syncCards(doc, plan) {
       return;
     }
     if (!plan.changed.includes('card:' + fresh.dataset.card)) return;
+    const focusAt = live.contains(document.activeElement) ? Array.from(live.querySelectorAll('*')).indexOf(document.activeElement) : -1;
+    const focusTag = focusAt >= 0 ? document.activeElement.tagName : '';
     const openDetails = $$('details', live).map(d => d.open), openRows = $$('tr', live).map(r => r.classList.contains('open'));
     localize(fresh);
     const old = swapNodes(live), next = swapNodes(fresh);
@@ -236,6 +238,8 @@ function syncCards(doc, plan) {
     $$('details', live).forEach((d, j) => { if (openDetails[j]) d.open = true; });
     $$('tr', live).forEach((r, j) => { if (openRows[j]) r.classList.add('open'); });
     rewire(live);
+    // keyboard focus survives the body swap: the same element position is focused again
+    if (focusAt >= 0) { const el = Array.from(live.querySelectorAll('*'))[focusAt]; if (el && el.tagName === focusTag) el.focus({ preventScroll: true }); }
   });
 }
 async function refreshInPlace() {
@@ -486,12 +490,14 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 function localize(scope = document) {
   for (const el of $$('time[data-local]', scope)) {
+    if (el.classList.contains('lz')) continue;   // already converted by layout-early.js before the first paint
     const ms = Date.parse(el.getAttribute('datetime'));
     if (Number.isFinite(ms)) { el.title = `${el.textContent} (stored in UTC); shown in your time zone, ${zone}`; el.textContent = formatLocal(ms, zone); }
     el.classList.add('lz');
   }
   // Chart axis labels and tooltips (SVG cannot hold <time>): rebuilt from their template in this zone.
   for (const el of $$('[data-lms]', scope)) {
+    if (el.classList.contains('lz')) continue;
     const ms = Number(el.getAttribute('data-lms'));
     if (Number.isFinite(ms)) {
       const t = el.hasAttribute('data-tonly') ? timeOnly(ms, zone) : formatLocal(ms, zone);

@@ -33,7 +33,7 @@ function runEarly({ ids, saved, width, page = 'overview', grid = true }) {
   for (const c of cards) c.classList.contains = x => c.classes.has(x) || x === 'card';
   const ls = { getItem: k => (saved && k === `dash.layout.${page}.${width >= 1100 ? 'desktop' : width >= 640 ? 'tablet' : 'phone'}` ? JSON.stringify(saved) : null) };
   vm.runInNewContext(layoutJs, { window: { innerWidth: width }, localStorage: ls, location: { pathname: '/x' }, JSON, Array, Number,
-    document: { querySelector: () => (grid ? g : null), querySelectorAll: () => cards } });
+    document: { querySelector: () => (grid ? g : null), querySelectorAll: sel => (sel === '.card[data-card]' ? cards : []) } });
   return { order: g.children.map(c => c.id), cards };
 }
 test('layout-early.js applies the saved order, sizes and collapsed cards the way applyLayout does, before app.js runs', () => {
@@ -53,8 +53,8 @@ test('layout-early.js applies the saved order, sizes and collapsed cards the way
 test('layout-early.js: no saved layout, corrupt storage or a failing store leaves the server order and never throws', () => {
   assert.deepEqual(runEarly({ ids: ['a', 'b'], saved: null, width: 1440 }).order, ['a', 'b']);
   const cards = ['a', 'b'].map(fakeCard);
-  assert.doesNotThrow(() => vm.runInNewContext(layoutJs, { window: { innerWidth: 1440 }, localStorage: { getItem: () => '{not json' }, location: { pathname: '/' }, JSON, document: { querySelector: () => null, querySelectorAll: () => cards } }));
-  assert.doesNotThrow(() => vm.runInNewContext(layoutJs, { window: { innerWidth: 1440 }, localStorage: { getItem() { throw new Error('denied'); } }, location: { pathname: '/' }, JSON, document: { querySelector: () => null, querySelectorAll: () => cards } }));
+  assert.doesNotThrow(() => vm.runInNewContext(layoutJs, { window: { innerWidth: 1440 }, localStorage: { getItem: () => '{not json' }, location: { pathname: '/' }, JSON, document: { querySelector: () => null, querySelectorAll: sel => (sel === '.card[data-card]' ? cards : []) } }));
+  assert.doesNotThrow(() => vm.runInNewContext(layoutJs, { window: { innerWidth: 1440 }, localStorage: { getItem() { throw new Error('denied'); } }, location: { pathname: '/' }, JSON, document: { querySelector: () => null, querySelectorAll: sel => (sel === '.card[data-card]' ? cards : []) } }));
   assert.ok(cards.every(c => !c.classes.size));
   assert.doesNotMatch(layoutJs, /fetch|XMLHttpRequest|sendBeacon|innerHTML|eval\(/);
 });
@@ -116,4 +116,23 @@ test('refreshInPlace never reloads the document: a changed card set is handled i
   assert.match(fn, /initLegends\(\{[^}]*scope\b/); assert.match(fn, /bindTable\(region\)/); assert.match(fn, /bindCopy\(scope\)/);
   assert.match(fn, /bindAddedCard\(fresh\)/, 'a card that appeared is wired like the initial ones');
   assert.match(appJs, /function bindTable\(region\)/);
+});
+
+// ---- local time before first paint, and focus across a card swap (review of PR #436)
+test('layout-early.js puts times in local time before first paint, the way formatLocal does; app.js skips converted nodes', async () => {
+  const { formatLocal } = await import('../supervisor/dashui/logic.mjs');
+  const mk = (attrs, text) => { const cls = new Set(), a = { ...attrs }; return { textContent: text, classList: { add: c => cls.add(c), contains: c => cls.has(c) }, getAttribute: k => a[k] ?? null, hasAttribute: k => k in a, setAttribute: (k, v) => { a[k] = v; }, cls }; };
+  const t = mk({ datetime: '2026-11-03T12:30:00.000Z' }, '2026-11-03 12:30 UTC');
+  const s = mk({ 'data-lms': String(Date.parse('2026-11-03T12:30:00.000Z')), 'data-tpl': 'at {t}', 'data-tonly': '' }, 'x');
+  const doc = { querySelectorAll: sel => sel.startsWith('time') ? [t] : sel === '[data-lms]' ? [s] : [], documentElement: {} };
+  vm.runInNewContext(layoutJs, { document: doc, window: { innerWidth: 1200 }, localStorage: { getItem: () => null }, location: { pathname: '/' }, Intl, Date, Number, isFinite, Array, JSON });
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const ms = Date.parse('2026-11-03T12:30:00.000Z');
+  assert.equal(t.textContent, formatLocal(ms, zone)); assert.ok(t.cls.has('lz'));
+  assert.equal(s.textContent, 'at ' + formatLocal(ms, zone).slice(11)); assert.ok(s.cls.has('lz'));
+  assert.match(appJs, /classList\.contains\('lz'\)\) continue/);
+});
+test('a refreshed card body gets keyboard focus back on the same element', () => {
+  assert.match(appJs, /document\.activeElement/); assert.match(appJs, /\.focus\(\{ preventScroll: true \}\)/);
+  assert.ok(appJs.indexOf('focusAt') < appJs.indexOf('old[0].replaceWith') && appJs.indexOf('.focus({ preventScroll: true })') > appJs.indexOf('rewire(live);'));
 });
