@@ -1364,6 +1364,21 @@ test('#205 no secret-scan notice is posted when the worktree setup fails before 
   assert.deepEqual(w.calls.labels, []); assert.equal(w.calls.comments.filter(c => /secret-scan/.test(c[1])).length, 0);
   w.git.ensureWorktree = orig;
 });
+test('#205 no secret-scan flag or notice is posted when the job lease fails', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [ggRun()];
+  w.jobs.create = async () => { throw new Error('issue or worktree already leased; stale lease requires explicit recovery'); };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await assert.rejects(() => w.team.execute({ agent: 'claude', ...a }), /already leased/);
+  assert.deepEqual(w.calls.labels, []); assert.equal(w.calls.comments.filter(c => /secret-scan/.test(c[1])).length, 0);
+});
+test('#205 the secret-scan notice is posted once the lease is held', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [ggRun()];
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.equal(w.calls.comments.filter(c => /secret-scan/.test(c[1])).length, 1);
+});
 test('#205 rejectionCause with no matching PR falls back to the generic text', async t => {
   const w = world(t, { pulls: [], issues: [] });
   assert.equal(w.team.rejectionCause({ number: 9, headRefOid: H(1) }), 'the rejection');

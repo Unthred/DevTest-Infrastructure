@@ -1826,11 +1826,14 @@ export class Team {
   // Issue #142: read the failing checks of the head from the check-runs API (any app). A failure to read is not fatal: the job runs
   // without the details. A failing secret scanner raises a needs-homeowner item once per head (the old commit stays flagged until the
   // homeowner marks the incident), whatever the job later decides about the value.
-  async thirdPartyChecks(act) {
+  async readCheckDetails(act) {
     if (!act.checks?.length || !this.gh.listCheckRuns) return [];
     let runs;
     try { runs = await this.gh.listCheckRuns(act.head); } catch { return []; }
-    const details = checkDetails(runs, act.checks);
+    return checkDetails(runs, act.checks);
+  }
+  // Called only once the job lease is held, so a worktree or lease failure leaves no flag or notice for a job that never started (issue #205).
+  async announceSecretScan(act, details) {
     const scanners = details.filter(isSecretScanner);
     if (scanners.length) {
       try {
@@ -1839,7 +1842,6 @@ export class Team {
         await this.postNotice(act.pr, `secret-scan pr=${act.pr} head=${act.head}`, `**Needs the homeowner.** The secret scanner ${links} flagged head \`${act.head}\`. If the flagged value is a test fixture, the fix job rewrites it so it is assembled at runtime; the old commit stays flagged, so: mark incident <id> as a test credential in GitGuardian (the incident is linked from the check). If the value is a real credential, revoke it instead; Foreman never dismisses a finding that does not look like a fixture.`);
       } catch { /* the notice is retried on the next cifix launch for this head; the job still runs */ }
     }
-    return details;
   }
   // What a rejected PR is rejected for, named in the fix-limit notice: a review verdict, failing CI checks, or both.
   rejectionCause(pr) {
@@ -2181,7 +2183,7 @@ export class Team {
     }
     const a = this.c.agents[act.agent], base = this.c.worktree_base, ticket = crypto.randomBytes(16).toString('hex');
     const common = { role: 'devtest', provider: a.provider, repository: this.c.repo_path, access: this.c.access?.mode === 'full' ? 'full' : 'standard', autoRestart: true };
-    let spec, meta, bump = () => {}, escalatedInbox = null;
+    let spec, meta, bump = () => {}, announce = null, escalatedInbox = null;
     if (act.escalated) {   // issue #163: the one final round gets the full review history as task data and may propose a scope split
       escalatedInbox = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(escalatedInbox, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(escalatedInbox, 'review-history.json'), JSON.stringify({ pr: act.pr, verdicts: this.reviewHistory(act.pr) }) + '\n', { mode: 0o600 });
@@ -2233,8 +2235,9 @@ export class Team {
       let rq = null;
       if (!rebase) { const dir = escalatedInbox || path.join(this.dir, 'inbox', ticket); fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); rq = await this.writeRequirements(act.branch, dir); }
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.type}-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
-      // After the worktree exists, so a setup failure posts no homeowner notice for a job that never started (issue #205).
-      const details = rebase ? [] : await this.thirdPartyChecks(act);
+      // Read only here; the flag and homeowner notice follow the lease (issue #205), so a setup or lease failure posts nothing.
+      const details = rebase ? [] : await this.readCheckDetails(act);
+      if (!rebase) announce = () => this.announceSecretScan(act, details);
       spec = { ...common, kind: act.type, worktree: wt, issue: act.pr, scope: rebase ? `Conflict-only rebase of PR #${act.pr} onto ${act.base}` : `Fix red CI on PR #${act.pr}`,
         allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch, behind: !!act.behind }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks, checkDetails: details, escalatedInbox, requirementsFile: rq?.file }),
@@ -2260,6 +2263,7 @@ export class Team {
     if (spec.writeRefusal) { (report.warnings ||= []).push({ agent: act.agent, kind: spec.kind, warning: `job not started: ${spec.writeRefusal}` }); return; }
     const create = async () => {
       const job = await this.jobs.create(spec);   // a lease conflict throws here, before any attempt is counted
+      if (announce) await announce();
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
       Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job
       this.save();
