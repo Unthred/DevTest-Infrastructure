@@ -130,7 +130,7 @@ const page = { on() {},
   locator() { return { count: async () => s.controls || 0, nth: () => ({ click: async () => {}, press: async () => {} }) }; },
   async evaluate(fn) {
     const t = String(fn);
-    if (t.includes('Array.isArray')) { const seq = s.counters || []; const v = seq[Math.min(this.reads++, seq.length - 1)]; return v ?? { blocked: 0, mutated: 0 }; }
+    if (t.includes('Array.isArray')) { const seq = s.counters || []; const v = seq[Math.min(this.reads++, seq.length - 1)]; return { sameDocument: true, ...(v ?? { blocked: 0, mutated: 0 }) }; }
     if (t.includes(').length')) return s.pageInitiated || 0;
     return t.includes('__haBlockedInteractions') ? (s.interactions || []) : (s.findings || []); },
   async screenshot() { return s.noPng ? Buffer.from('x') : png(opts.viewport.width * opts.deviceScaleFactor, opts.viewport.height * opts.deviceScaleFactor); } };
@@ -237,6 +237,9 @@ test('wrapper: click probe counts per control, fails on a navigation or a page-i
   assert.equal(navOnly.summary.probe.navigated, 0, 'a single control that does not navigate is fine');
   const navFirst = await go(t, { controls: 1, counters: [{ blocked: 0, mutated: 0 }, { blocked: -1, mutated: 0 }] }, args);
   assert.equal(navFirst.exit, EXIT.readonly); assert.equal(navFirst.summary.probe.navigated, 1);
+  // the first control navigated and the guard re-created its counters at 0 on the new document: only the document marker shows it
+  const navReset = await go(t, { controls: 2, counters: [{ blocked: 0, mutated: 0 }, { blocked: 0, mutated: 0, sameDocument: false }] }, args);
+  assert.equal(navReset.exit, EXIT.readonly); assert.equal(navReset.summary.probe.navigated, 1); assert.equal(navReset.summary.probe.attempted, 1);
   // the page clicked something by itself before the probe: detected even though the probe is on
   const own = await go(t, { controls: 1, pageInitiated: 1, counters: [{ blocked: 1, mutated: 0 }, { blocked: 3, mutated: 0 }] }, args);
   assert.equal(own.exit, EXIT.readonly); assert.equal(own.summary.unexpectedInteractions, 1);

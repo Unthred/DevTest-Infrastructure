@@ -149,19 +149,21 @@ export async function run(o) {
 
 // Clicks every control the fixture marks as state-changing (and presses Space on it). The in-page guard must stop each one; the
 // fixture counts any handler that still ran in window.__mutations. The counters are read after every control, because a control
-// that navigates resets them: a counter that is gone (or a page that cannot be read) is a navigation during the probe, which is
+// that navigates resets them: a marker set on the document before the probe that is gone (or a page that cannot be read) is a navigation during the probe, which is
 // reported as a failure (probe.navigated) instead of silently losing earlier counts.
 async function clickProbe(tab, probe, timeoutMs) {
   const controls = tab.locator('[data-mutates]');
   const count = Math.min(await controls.count(), 50);
-  const read = () => tab.evaluate(() => ({ blocked: Array.isArray(window.__haBlockedInteractions) ? window.__haBlockedInteractions.length : -1, mutated: window.__mutations ?? 0 })).catch(() => ({ blocked: -1, mutated: 0 }));
+  const read = () => tab.evaluate(() => ({ blocked: Array.isArray(window.__haBlockedInteractions) ? window.__haBlockedInteractions.length : -1, mutated: window.__mutations ?? 0, sameDocument: window.__haProbeDocument === true })).catch(() => ({ blocked: -1, mutated: 0, sameDocument: false }));
+  // A window property does not survive a navigation, so its absence identifies a new document even when the guard's counters were re-created at 0.
+  await tab.evaluate(() => { window.__haProbeDocument = true; }).catch(() => {});
   let last = await read();
   for (let i = 0; i < count; i++) {
     const c = controls.nth(i);
     probe.attempted++;
     try { await c.click({ timeout: Math.min(timeoutMs, 3000) }); await c.press('Space', { timeout: 1000 }); } catch { /* an unclickable control cannot have changed anything */ }
     const now = await read();
-    if (now.blocked < 0 || now.blocked < last.blocked) { probe.navigated++; return; }
+    if (now.blocked < 0 || !now.sameDocument || now.blocked < last.blocked) { probe.navigated++; return; }
     probe.blocked += now.blocked - last.blocked;
     probe.mutated += now.mutated - last.mutated;
     last = now;
