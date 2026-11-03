@@ -102,7 +102,8 @@ test('issue #35 reconcile exits nonzero when the tick skips an item, so a failed
 
 test('issue #35 an unreadable CLI or non-executable node leaves a failing log line instead of a silent exit', t => {
   const w = cronWorld(t);
-  execFileSync('bash', [install], { env: w.env, stdio: 'ignore' });
+  const inst = spawnSync('bash', [install], { env: w.env, encoding: 'utf8' });
+  assert.equal(inst.status, 0, `installer failed: ${inst.stderr}`);   // show the installer's own message, not a bare "Command failed"
   const text = fs.readFileSync(w.script, 'utf8');
   const cli = text.match(/^CLI=(.*)$/m)[1].replace(/\\/g, '');
   fs.renameSync(cli, cli + '.hidden');
