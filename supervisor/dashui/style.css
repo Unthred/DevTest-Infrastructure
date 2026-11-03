@@ -57,7 +57,7 @@ main{width:100%;max-width:1500px;margin:0 auto;padding:var(--sp4)}   /* width:10
 .card>header{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2);margin-bottom:var(--sp3);min-height:32px}
 .card>header h2{flex:1;min-width:8ch}
 .card>header{flex:none}
-.tools{display:flex;gap:var(--sp1)}
+.tools{display:flex;flex-wrap:wrap;gap:var(--sp1)}
 .tbtn{background:none;border:1px solid transparent;color:var(--mut);border-radius:var(--r-sm);min-width:32px;min-height:32px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .tbtn:hover{border-color:var(--line);color:var(--fg)}
 .card.dragging{opacity:.5}.card.dropping{outline:2px dashed var(--link)}
@@ -252,7 +252,8 @@ a[title]{cursor:help}
 .card.collapsed>*:not(header){display:none!important}
 [data-collapse] .icon{transition:transform .15s}.card.collapsed [data-collapse] .icon{transform:rotate(-90deg)}
 .card>header{cursor:default}
-a.pill{text-decoration:none;color:inherit;border-radius:999px;display:inline-flex}
+a.pill{text-decoration:none;color:inherit;border-radius:999px;display:inline-flex;align-items:center;min-height:24px;min-width:24px}
+.crumbs a{display:inline-flex;align-items:center;min-height:24px}
 a.pill:hover .badge{filter:brightness(.95);box-shadow:0 0 0 2px var(--line)}
 a.pill:focus-visible{outline-offset:3px}
 :target{scroll-margin-top:calc(var(--bar-h) + var(--sp4))}

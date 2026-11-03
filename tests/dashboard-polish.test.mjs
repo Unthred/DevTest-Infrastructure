@@ -313,3 +313,10 @@ test('issue #263: dock handle is a keyboard control, main is named by the title,
   assert.match(render, /<h1 id="page-title">/);
   assert.match(app, /ArrowLeft: 'left'/);
 });
+
+// ---- issue #398: real-browser responsive audit findings (WCAG 2.5.8 24px targets; card tools wrap instead of overflowing on phones)
+test('status pills and breadcrumb links keep a 24px target; card tools wrap', () => {
+  assert.match(css, /a\.pill\{[^}]*min-height:24px/);
+  assert.match(css, /\.crumbs a\{[^}]*min-height:24px/);
+  assert.match(css, /\.tools\{[^}]*flex-wrap:wrap/);
+});
