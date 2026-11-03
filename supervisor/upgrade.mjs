@@ -10,6 +10,7 @@ import os from 'node:os';
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
+import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES } from './team.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { redact, redactLong } from './redact.mjs';
@@ -158,6 +159,9 @@ export const httpHealth = (host, port) => new Promise(resolve => {
 // dashboard.log (if that file cannot be opened it falls back to no output rather than failing the restart).
 const DASHBOARD_LOG = '/mnt/cache/ai-supervisor/dashboard.log';
 const dashboardSpawn = (cmd, args) => {
+  // Issue #448: a test run must never start the real server or append to the live log. Under the node test runner the caller has to
+  // inject its own start, or set DASHBOARD_LOG to a file of its own; reaching this default without either is a bug in the test.
+  if (process.env.NODE_TEST_CONTEXT && !process.env.DASHBOARD_LOG) throw new Error('refusing to start the real dashboard server from a test run');
   let fd = null; try { fd = fs.openSync(process.env.DASHBOARD_LOG || DASHBOARD_LOG, 'a', 0o600); } catch { fd = null; }
   const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: process.env.HOME || '/root', ...(process.env.DASHBOARD_PORT ? { DASHBOARD_PORT: process.env.DASHBOARD_PORT } : {}) };
   try { spawn(cmd, args, { detached: true, stdio: fd === null ? 'ignore' : ['ignore', fd, fd], env }).unref(); } finally { if (fd !== null) fs.closeSync(fd); }
@@ -485,7 +489,7 @@ function checkDryRun(r) {
   } catch { return { ok: false, reason: 'dry-run output is not JSON' }; }
   return { ok: true };
 }
-export function realDeps({ root, config, gh, listActive, verdictFor, independenceApproved = () => false, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert, sleep = ms => new Promise(r => setTimeout(r, ms)) }) {
+export function realDeps({ root, config, gh, listActive, verdictFor, independenceApproved = () => false, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert, sleep = ms => new Promise(r => setTimeout(r, ms)), slotOptions = {} }) {
   const repo = config.repo_path;
   const git = (...a) => { const r = run('git', ['-C', repo, ...a]); if (r.status !== 0) throw new Error(`git ${a[0]} failed`); return r.stdout.trim(); };
   const remoteUrl = () => git('remote', 'get-url', 'origin');
@@ -511,6 +515,11 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     finally { fs.rmSync(dir, { recursive: true, force: true }); }
   };
   const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'self-upgrade-'));
+  // A slot directory that cannot be made (unwritable state root) is an environmental failure, never a thrown error or a bypass of the limit.
+  const slotted = async (label, fn) => {
+    try { return await withTestSlot(root, { limit: config.limits?.test_slots ?? DEFAULT_TEST_SLOTS, label, ...slotOptions }, fn); }
+    catch (error) { return { ok: false, environmental: true, reason: `test slot unavailable: ${String(error?.message || error).slice(0, 160)}` }; }
+  };
   return {
     config,
     installed: () => installedSha(root),
@@ -530,12 +539,13 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     independenceApproved,
     // Issue #380: a job paused on a usage limit runs no process, so it does not hold an upgrade in drain; its record survives and its worker (or reconcile) resumes it.
     activeJobs: async () => (await listActive()).filter(j => j.status !== 'paused_limit').length,
-    handInstall: async sha => bootstrap('install', sha, 3000000, sha),
+    handInstall: async sha => slotted(`install ${short(sha)}`, () => bootstrap('install', sha, 3000000, sha)),
     dueHeld: async () => (await listActive()).filter(j => ['paused_limit', 'queued'].includes(j.status) && j.nextAttemptAt != null && j.nextAttemptAt <= Date.now()).length,
     runningJobs: async () => (await listActive()).filter(j => j.status === 'running').length,
     liveTick: async () => { const r = run(wrapper, ['team', 'tick'], { timeoutMs: 600000 }); if (r.status !== 0) return { error: tail(r) }; try { return JSON.parse(r.stdout); } catch { return { error: 'live tick output is not JSON' }; } },
-    preChecks: async sha => bootstrap('check', sha, 2400000),
-    upgrade: async sha => bootstrap('install', sha, 3000000),
+    // Issue #448: install-time tests take a test slot like every other full suite, so they queue behind the limit instead of piling on.
+    preChecks: async sha => slotted(`install check ${short(sha)}`, () => bootstrap('check', sha, 2400000)),
+    upgrade: async sha => slotted(`install ${short(sha)}`, () => bootstrap('install', sha, 3000000)),
     // A register read that fails right after an upgrade is usually transient, so it is retried (three tries, backoff) before it can roll back.
     dryRunTick: async () => {
       let result;

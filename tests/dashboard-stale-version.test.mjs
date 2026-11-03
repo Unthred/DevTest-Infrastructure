@@ -169,7 +169,7 @@ test('restart health check: a new process that answers passes; one that never an
   const ok = await restartDashboardServer(NEW, { procRoot: a.proc, kill: a.kill, start: a.start, sleep: async () => {}, health: async (h, p) => { seen.push([h, p]); return seen.length > 1; } });
   assert.equal(ok.ok, true); assert.deepEqual(seen[0], ['192.168.1.5', '8731']);
   const b = mk();
-  const bad = await restartDashboardServer(NEW, { procRoot: b.proc, kill: b.kill, start: b.start, sleep: async () => {}, tries: 3, health: async () => false });
+  const bad = await restartDashboardServer(NEW, { procRoot: b.proc, kill: b.kill, start: b.start, startOld: () => {}, sleep: async () => {}, tries: 3, health: async () => false });
   assert.equal(bad.ok, false); assert.match(bad.reason, /health check/);
 });
 

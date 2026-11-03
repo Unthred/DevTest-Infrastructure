@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
-import { Team, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
+import { recordSkip } from './skips.mjs';
+import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS } from './testslots.mjs';
+import { Team, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, upgradeLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
@@ -49,10 +51,16 @@ function startWorker(root, id, registry) {
   child.unref();
   return child.pid;
 }
-function reconcileOnce(root, registry) {
+function installRunning(root) {
+  // Issue #448: true while another process holds upgrade.lock (its pre-check, install and retry). Probing takes and releases the lock.
+  const unlock = upgradeLock(root);
+  if (!unlock) return true;
+  unlock(); return false;
+}
+function reconcileOnce(root, registry, installing = false) {
   const dir = path.join(root, 'jobs');
   let resumed = 0, blocked = 0, released = 0, held = 0;
-  const handHold = handInstallHold(root) !== null;   // issue #446: a hand-install holds due restarts too (they stay recorded and restart after it)
+  const handHold = installing || handInstallHold(root) !== null;   // issue #446: a hand-install holds due restarts too (they stay recorded and restart after it)
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     if (!name.endsWith('.json')) continue;
     const current = readJob(root, name.slice(0, -5));
@@ -178,8 +186,15 @@ const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'm
 async function teamTick(root, registry, dryRun, hold = null) {
   // One tick lock covers the whole tick, migrations included, so two concurrent ticks can neither run the same migration nor interleave.
   if (!dryRun && handInstallHold(root)) return { skipped: [{ what: 'team tick', reason: 'held for a hand-install', expected: true }] };
-  const unlock = tickLock(root);
-  if (!unlock) return { skipped: 'another tick is running' };
+  // A dry run plans only and writes nothing, so it does not take the tick lock: the install's dry-run health check must run while a
+  // concurrent live tick holds it, or the install would be rolled back for no real reason (issue #448).
+  const unlock = dryRun ? (() => {}) : tickLock(root);
+  if (!unlock) {
+    // Issue #448: a tick that does not run says why, in the dashboard record. It was silent.
+    const reason = 'another tick is running and holds the tick lock';
+    try { recordSkip(root, reason); } catch { /* best effort */ }
+    return { skipped: 'another tick is running' };
+  }
   try {
     // Issue #153: pending config migrations run once, before the first tick of a new version; a failing one skips this tick (it is retried on the next).
     if (!dryRun) {
@@ -222,6 +237,13 @@ function selfUpgradeFor(root, registry) {
 // Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so running jobs
 // can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.
 async function selfUpgradeBefore(root, registry) {
+  // Issue #448: the install step (with its test run) has its own lock, so it never holds the tick lock or stops another tick. While
+  // another process installs, this tick starts no new job (the same hold as a pending upgrade), and the reason is shown.
+  const unlockUpgrade = upgradeLock(root);
+  if (!unlockUpgrade) return { result: 'install-running', hold: { to: null, installRunning: true } };
+  try { return await selfUpgradeLocked(root, registry); } finally { unlockUpgrade(); }
+}
+async function selfUpgradeLocked(root, registry) {
   const { config, upgrade } = selfUpgradeFor(root, registry);
   // Issue #209: the dashboard check runs on every tick, even with the team loop off, and never fails the tick.
   try { await upgrade.watchdog(); } catch { /* the next tick checks again */ }
@@ -234,6 +256,13 @@ async function selfUpgradeBefore(root, registry) {
 // After the team step: an upgrade installed by an earlier tick is verified by this live tick.
 async function selfUpgradeAfter(root, registry, before, tick) {
   if (before.result !== 'awaiting-verification') return before.result;
+  // Verification, rollback and the dashboard restart are serialised with the install step by the same lock (issue #448): two overlapping
+  // reconcile runs must not both verify, roll back or save the upgrade state. The run that cannot take it leaves it to the holder.
+  const unlockUpgrade = upgradeLock(root);
+  if (!unlockUpgrade) return before.result;
+  try { return await selfUpgradeVerify(root, registry, before, tick); } finally { unlockUpgrade(); }
+}
+async function selfUpgradeVerify(root, registry, before, tick) {
   const { upgrade } = selfUpgradeFor(root, registry);
   // A tick skipped because another one holds the lock is not a live tick and verifies nothing.
   const live = !tick?.skipped || Array.isArray(tick.skipped);
@@ -246,7 +275,8 @@ async function selfUpgradeAfter(root, registry, before, tick) {
 }
 async function main() {
   const command = process.argv[2] || 'help';
-  const a = args(process.argv.slice(3));
+  const rest = process.argv.slice(3), cut = rest.indexOf('--');
+  const a = args(command === 'test-slot' && cut >= 0 ? rest.slice(0, cut) : rest);   // the command after `--` is not ours to parse
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
@@ -306,6 +336,26 @@ async function main() {
       }
     }
     return;
+  }
+  // Issue #448: the cron script calls this when it cannot start a run, so a skipped tick always leaves a record with its reason.
+  if (command === 'record-skip') {
+    if (!a.reason) throw new SupervisorError('usage: record-skip --reason TEXT');
+    recordSkip(root, a.reason); console.log(JSON.stringify({ recorded: true })); return;
+  }
+  // Issue #448: `test-slot status` shows what runs and waits; `test-slot run [--label L] -- CMD ARGS` runs a full test suite once a
+  // slot is free (reviews and jobs use it for their suite), so suites queue behind limits.test_slots instead of piling on.
+  if (command === 'test-slot') {
+    const limit = (() => { try { return loadTeamConfig(teamConfigFile, root).limits?.test_slots ?? DEFAULT_TEST_SLOTS; } catch { return DEFAULT_TEST_SLOTS; } })();
+    if (a._[0] === 'status') { const st = testSlotStatus(root, limit); console.log(JSON.stringify(st, null, 2)); console.error(testSlotLine(st)); return; }
+    const dash = process.argv.indexOf('--');
+    if (a._[0] !== 'run' || dash < 0 || dash === process.argv.length - 1) throw new SupervisorError('usage: test-slot status | test-slot run [--label TEXT] -- COMMAND [ARGS]');
+    const cmd = process.argv.slice(dash + 1);
+    const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
+    if (!release) { console.error('waited too long for a free test slot'); process.exitCode = 3; return; }
+    const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit' });
+    for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
+    const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, s) => resolve(c ?? (s ? 128 : 1))); });
+    release(); process.exitCode = code; return;
   }
   if (command === 'dashboard') {
     if (a._[0] !== 'serve') throw new SupervisorError('usage: dashboard serve --host LAN_IPV4 [--port N]');
@@ -395,7 +445,11 @@ async function main() {
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
-      const result = reconcileOnce(root, registry);
+      // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
+      const unlockRecover = tickLock(root, 'reconcile.lock');
+      let result;
+      if (!unlockRecover) { result = { skippedRecovery: 'another reconcile run is recovering jobs' }; try { recordSkip(root, 'job recovery skipped: another reconcile run holds reconcile.lock'); } catch { /* best effort */ } }
+      else { try { result = reconcileOnce(root, registry, installRunning(root)); } finally { unlockRecover(); } }
       // The upgrade check comes first (issue #134). A failure here never fails the tick.
       let before;
       try { before = await selfUpgradeBefore(root, registry); } catch (error) { before = { error: String(error.message).slice(0, 200), hold: null }; }

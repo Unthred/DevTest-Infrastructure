@@ -60,7 +60,7 @@ test('issue #35 the generated script runs under env -i, finds gh and node throug
   assert.match(fs.readFileSync(w.log, 'utf8').trim().split('\n').at(-1), /rc=[1-9]/);
 });
 
-test('issue #35 the log is trimmed only above the threshold, under the lock; an overlapping run skips instead of racing', t => {
+test('issue #35 the log is trimmed only above the threshold, under the lock; an overlapping run still runs and its log write waits for the lock (issue #448)', t => {
   const w = cronWorld(t);
   execFileSync('bash', [install], { env: w.env, stdio: 'ignore' });
   w.cron(); const small = fs.readFileSync(w.log, 'utf8'); w.cron();
@@ -69,12 +69,15 @@ test('issue #35 the log is trimmed only above the threshold, under the lock; an 
   w.cron();
   const trimmed = fs.readFileSync(w.log, 'utf8');
   assert.ok(trimmed.length < 400000); assert.match(trimmed.trim().split('\n').at(-1), /rc=0/);
-  // hold the lock: the script must not touch the log
+  // hold the lock briefly: the run is NOT skipped; its log line is written once the lock is free (never lost, never racing)
   const before = fs.readFileSync(w.log, 'utf8');
-  const holder = spawn('flock', [`${w.log}.lock`, 'sleep', '3']);
+  const holder = spawn('flock', [`${w.log}.lock`, 'sleep', '1']);
   t.after(() => holder.kill());
   const deadline = Date.now() + 2000; while (Date.now() < deadline) { const probe = spawnSync('flock', ['-n', `${w.log}.lock`, 'true']); if (probe.status !== 0) break; }
-  assert.equal(w.cron().status, 0); assert.equal(fs.readFileSync(w.log, 'utf8'), before);
+  assert.equal(w.cron().status, 0);
+  const after = fs.readFileSync(w.log, 'utf8');
+  assert.ok(after.length > before.length, 'the line of the overlapping run was written after the lock was released');
+  assert.match(after.trim().split('\n').at(-1), /rc=0 \{"team"/);
 });
 
 test('issue #35 installing refuses when a required binary cannot be found for the cron PATH', t => {

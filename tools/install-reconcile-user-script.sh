@@ -41,9 +41,9 @@ printf 'Bounded recovery check for opt-in AI supervisor jobs; no model call unle
   cat <<'SCRIPT'
 export PATH HOME
 mkdir -p "$(dirname "$LOG")"
-# One run at a time; an overlapping run skips instead of racing the log trim.
+# Issue #448: this lock guards only the log append and trim, never the run. The tick and the install step take their own locks inside
+# the CLI, so a slow install-time test run cannot make this script skip a tick. A tick that cannot run is recorded with its reason.
 exec 9>"$LOG.lock"
-flock -n 9 || exit 0
 # A missing CLI or node must leave a failing log line, never a silent skip.
 if [ ! -r "$CLI" ]; then rc=127; out="supervisor cli unreadable: $CLI"
 elif [ ! -x "$NODE" ]; then rc=127; out="node not executable: $NODE"
@@ -51,7 +51,13 @@ else
   out=$("$NODE" "$CLI" reconcile 2>&1 | tail --bytes=2000 | tr '\n' ' '; exit "${PIPESTATUS[0]}")
   rc=$?
 fi
+# The log write waits for the lock briefly; if it cannot get it the line goes to the CLI skip record instead of vanishing.
+if flock -w 30 9; then
 printf '%s rc=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$out" >> "$LOG"
+else
+  [ -x "$NODE" ] && [ -r "$CLI" ] && "$NODE" "$CLI" record-skip --reason "reconcile log was locked for 30 seconds; this run's result line was not written (rc=$rc)" >/dev/null 2>&1
+  exit 0
+fi
 # Rotate only above the threshold, under the lock held above (issue #362): the older lines are appended to a compressed archive, never dropped.
 # Concatenated gzip members are one valid gzip file. The archive is written before the log is cut, so a failure keeps every line.
 if [ "$(stat -c %s "$LOG")" -gt 1048576 ]; then

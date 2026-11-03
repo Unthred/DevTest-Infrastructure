@@ -12,6 +12,8 @@ import { validateTeamConfig } from './team.mjs';
 import { modeLine } from './budget.mjs';
 import { makeNamer } from './naming.mjs';
 import { agentLine } from './agentline.mjs';
+import { testSlotStatus, DEFAULT_TEST_SLOTS } from './testslots.mjs';
+import { readSkips, SKIP_WINDOW_MS } from './skips.mjs';
 import { formatLocal, localStamps } from './dashui/logic.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;     // the reconcile cron runs `*/5 * * * *` (tools/install-reconcile-user-script.sh)
@@ -112,6 +114,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
 
   // 6. schedule
   const last = lastTick?.at ?? null, next = last == null ? null : last + TICK_INTERVAL_MS;
+  const testRuns = { ...testSlotStatus(root, config.limits?.test_slots ?? DEFAULT_TEST_SLOTS, now), skippedLastHour: readSkips(root, now - SKIP_WINDOW_MS).slice(-5).map(x => ({ at: x.at, reason: redact(x.reason, 200) })) };
   const schedule = { intervalMinutes: TICK_INTERVAL_MS / 60000, lastTickAt: last, lastTickStatus: lastTick?.status ?? null, nextTickAt: next, minutesUntilNext: next == null ? null : mins(next - now) };
 
   // 7. allowance (issue #56): mode, reason and weekly projection per agent, as the planner sees it
@@ -133,7 +136,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   } catch { /* no state file: nothing installed by the loop yet */ }
   let installed = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); installed = m ? m[1].slice(0, 7) : null; } catch { /* not a versioned install */ }
-  return { needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), hold, install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
+  return { testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), hold, install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {
@@ -182,6 +185,11 @@ export function renderStatus(s) {
   else {
     out.push(`  last tick: ${t(sc.lastTickAt)} (${sc.lastTickStatus})`);
     out.push(sc.minutesUntilNext >= 0 ? `  next tick: ${t(sc.nextTickAt)} (in ${sc.minutesUntilNext} minute${sc.minutesUntilNext === 1 ? '' : 's'})` : `  next tick: was due at ${t(sc.nextTickAt)} (${-sc.minutesUntilNext} minute${sc.minutesUntilNext === -1 ? '' : 's'} overdue)`);
+  }
+  const tr = s.testRuns;
+  if (tr) {
+    out.push(`  test runs: ${tr.running.length} of ${tr.limit} running, ${tr.waiting.length} waiting${tr.waiting.length ? `: ${tr.waiting.slice(0, 5).map(w => w.label).join('; ')}` : ''}`);
+    for (const x of tr.skippedLastHour) out.push(`  skipped tick ${t(x.at)}: ${x.reason}`);
   }
   return out.join('\n') + '\n';
 }

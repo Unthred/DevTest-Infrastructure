@@ -7,6 +7,8 @@ import path from 'node:path';
 import { readLeases, redact } from './dashdata.mjs';
 import { redactAddresses, redactLong } from './redact.mjs';
 import { worst } from './dashui/logic.mjs';
+import { testSlotStatus, DEFAULT_TEST_SLOTS } from './testslots.mjs';
+import { readSkips, SKIP_WINDOW_MS } from './skips.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;          // the reconcile cron runs every five minutes
 export const TICK_RED_MS = 2 * TICK_INTERVAL_MS;     // "red if more than 2 intervals old"
@@ -235,6 +237,19 @@ function lastTickCard({ ticks, now }) {
   return { id: 'tick', title: 'Last tick', severity: sev, summary: `${t.status} ${mins(ageMs)} ago`, tick: t, ageMs, stale, notes };
 }
 
+// Issue #448: how many full test suites run and wait, and which ticks did not run (and why). A skipped tick is never silent.
+export function testRunsCard({ root, config, now }) {
+  const limit = config?.limits?.test_slots ?? DEFAULT_TEST_SLOTS;
+  const slots = testSlotStatus(root, limit, now);
+  const skips = readSkips(root, now - SKIP_WINDOW_MS).slice(-10).map(s => ({ at: s.at, reason: scrub(s.reason, 200) }));
+  const notes = [];
+  if (skips.length) notes.push(`${skips.length} tick${skips.length === 1 ? '' : 's'} did not run in the last hour; the latest reason: ${skips.at(-1).reason}`);
+  if (slots.waiting.length) notes.push(`${slots.waiting.length} test run${slots.waiting.length === 1 ? ' is' : 's are'} waiting for a free slot`);
+  return { id: 'testruns', title: 'Test runs and skipped ticks', severity: skips.length ? 'warning' : 'ok',
+    summary: `${slots.running.length} of ${limit} test slots busy, ${slots.waiting.length} waiting, ${skips.length} skipped tick${skips.length === 1 ? '' : 's'} in the last hour`,
+    limit, running: slots.running.map(r => ({ label: scrub(r.label, 80), since: r.since })), waiting: slots.waiting.map(w => ({ label: scrub(w.label, 80), since: w.since })), skips, notes };
+}
+
 function leasesCard({ leases, jobs, config, now }) {
   const byId = new Map(jobs.map(j => [j.id, j]));
   const agentOf = j => Object.entries(config.agents || {}).find(([, a]) => a.provider === j?.provider)?.[0] || j?.provider || null;
@@ -289,6 +304,7 @@ export function supervisorHealth({ root, config, jobs, now }) {
   const cards = [
     versionCard({ installed, origin, upgrades, su, lastTick: tick.tick, now }),
     tick,
+    testRunsCard({ root, config, now }),
     leasesCard({ leases: readLeases(root), jobs, config, now }),
     errorsCard({ ticks, upgrades, installed, now }),
     driftCard({ repo: config.repo_path, now })

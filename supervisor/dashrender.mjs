@@ -617,6 +617,9 @@ ${c.latch ? `<dt>Rollback latch</dt><dd>${badge('action', 'Set')} ${errCopy(c.la
     dl = t ? `<dt>When</dt><dd>${lt(t.at)} <span class="sub">(${esc(ago(t.at, now))}${c.stale ? ', more than two intervals' : ''})</span></dd><dt>Status</dt><dd>${tickStatusBadge(t.status)}</dd>
 <dt>Verdicts ingested</dt><dd>${t.ingested.length}</dd><dt>Actions</dt><dd>${list(t.actions.map(a => `<li>${esc(a.agent)} ${esc(a.type === 'cifix' ? 'fix CI' : a.type)} ${tickRef(a)}</li>`))}</dd>
 <dt>Skipped</dt><dd>${t.note ? esc(t.note) : list(t.skipped.map(s => `<li><b>${esc(s.what)}</b>: ${errCopy(s.reason)}</li>`))}</dd>` : '';
+  } else if (c.id === 'testruns') {
+    dl = `<dt>Running (limit ${c.limit})</dt><dd>${list(c.running.map(r => `<li>${esc(r.label)} <span class="sub">since ${lt(r.since)}</span></li>`))}</dd><dt>Waiting</dt><dd>${list(c.waiting.map(w => `<li>${esc(w.label)} <span class="sub">since ${lt(w.since)}</span></li>`))}</dd>
+<dt>Skipped ticks (last hour)</dt><dd>${list(c.skips.map(s => `<li>${lt(s.at)}: ${errCopy(s.reason)}</li>`))}</dd>`;
   } else if (c.id === 'leases') {
     const odd = c.leases.filter(l => l.state !== 'active');
     dl = `<dt>Held</dt><dd>${c.leases.length} job(s)</dd><dt>Needs recovery</dt><dd>${odd.length ? list(odd.map(l => `<li>${badge(l.state === 'stale' ? 'action' : 'warning', l.state === 'stale' ? 'Stale' : 'Held')} job ${idCopy(l.job.slice(0, 8), l.job, 'job ID')} ${esc(l.reason)}${l.command ? cmdBlock(l.command) : ''}</li>`)) : '<span class="muted">none</span>'}</dd>`;

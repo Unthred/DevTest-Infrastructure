@@ -103,7 +103,19 @@ function stream({ root, req, res, id, after, now, active }) {
   res.write('retry: 2000\n\n'); pump();
 }
 
-export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry }) {
+// Target (issue #448): a page answers within 1 second at the median while a full test suite runs; the view is reused for this long.
+export const DASHBOARD_VIEW_TTL_MS = 3000;
+export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0 }) {
+  // Issue #448: under load every page rebuilt the whole view from disk. With a TTL the same view is reused for a few seconds (the view
+  // is already stale by its refresh interval); 0 (the default for tests) rebuilds on every request.
+  const viewCache = new Map();
+  const cachedView = async opts => {
+    const key = `${opts.timeline}:${opts.allTime}`, hit = viewCache.get(key), at = Date.now();
+    if (viewTtlMs > 0 && hit && at - hit.at < viewTtlMs) return hit.view;
+    const view = await currentView(opts);
+    if (viewTtlMs > 0) viewCache.set(key, { at, view });
+    return view;
+  };
   const source = configSource(config);
   const activeStreams = new Set();
   const allowedHost = `${host}:${port}`;
@@ -167,7 +179,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
       const route = path === '/api/view.json' ? null : matchRoute(path);
       if (path !== '/api/view.json' && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
       const q0 = new URLSearchParams(search);
-      const view = await currentView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
+      const view = await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(view));
       const watch = route.page === 'watch';
       const out = renderRoute(view, watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() } : route, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
@@ -181,6 +193,6 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
 
 export function serve({ root, config, host, port = DEFAULT_PORT }) {
   validateBind(host, port);
-  const server = http.createServer(handler({ root, config, host, port }));
+  const server = http.createServer(handler({ root, config, host, port, viewTtlMs: DASHBOARD_VIEW_TTL_MS }));
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
 }
