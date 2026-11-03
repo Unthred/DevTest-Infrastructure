@@ -78,6 +78,13 @@ test('an Opus-written PR can only be reviewed by Codex, and it goes there first 
   assert.deepEqual(codexOnly.acts.map(a => [a.agent, a.pr]), [['codex', 12]]);
 });
 
+test('both far over the limit: the one projected less over still wins, not config order', async t => {
+  const a = await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 4.75, codex: 2.25 } });
+  assert.deepEqual(a.acts.map(x => x.agent), ['codex']);
+  const b = await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 2.25, codex: 4.75 } });
+  assert.deepEqual(b.acts.map(x => x.agent), ['claude']);
+});
+
 test('unknown readings: known spare beats unknown, unknown beats a reviewer projected to run out, two unknowns keep config order', async t => {
   assert.deepEqual((await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: null, codex: 0.5 } })).acts.map(a => a.agent), ['codex']);
   assert.deepEqual((await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 1.3, codex: null } })).acts.map(a => a.agent), ['codex']);

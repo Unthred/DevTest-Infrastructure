@@ -989,12 +989,12 @@ export class Team {
     return !!issue && this.overlapHold(agent, n, issue, type);
   }
   // Issue #402: spare allowance of an agent, from the projection the budget already holds: projected_limit minus the projected weekly use
-  // at the reset, clamped to [-1, 1]. An unknown reading (no usage data, a stale or reset window) scores 0: behind any reviewer that
+  // at the reset, unclamped so that any difference in projection counts. An unknown reading (no usage data, a stale or reset window) scores 0: behind any reviewer that
   // is known to have spare, ahead of one projected to run out.
   spareScore(agent) {
     const m = this.modes?.[agent];
     if (!m?.known || !Number.isFinite(m.projected)) return 0;
-    return Math.max(-1, Math.min(1, budgetSettings(this.c).projected_limit - m.projected));
+    return budgetSettings(this.c).projected_limit - m.projected;
   }
   // True when `provider` already runs its limits.provider_roles count in `role` (no such limit: never).
   providerSlotFull(provider, role, usedBy) {
@@ -1035,7 +1035,7 @@ export class Team {
       if (act.secondOpinion || act.postMerge) return 2;
       const pr = prs.find(p => p.number === act.pr);
       const sole = !!pr && this.agents().length > 1 && SHA.test(pr.headRefOid) && !!agentOfBranch(this.c, pr.headRefName) && !pr.isDraft && this.otherReviewers(agent, pr).length === 0;
-      return (sole ? -10 : 0) + 0.75 * (1 - this.spareScore(agent));
+      return (sole ? -10 : 0) + 0.75 * (1 - Math.tanh(this.spareScore(agent)));   // tanh keeps the rank in (0, 1.5), strictly ordered by spare
     }
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
