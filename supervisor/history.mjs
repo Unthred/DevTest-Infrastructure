@@ -112,6 +112,7 @@ export function collectEntries({ config, root, jobs, events, state, incidents = 
   // A job whose events file is missing is still known from its record: never invented beyond the record's own creation time.
   for (const j of byId.values()) if (!withEvent.has(j.id) && Number.isFinite(j.createdAt)) out.push({ id: `rec:${j.id}:created`, at: j.createdAt, kind: 'job', event: 'created', agent: agentOf(j), jobKind: kindOf(j), job: j.id, source: 'job-record', ...refs(j) });
   for (const [key, v] of Object.entries(state?.verdicts || {})) { const e = verdictEntry(key, v); if (e) out.push(e); }
+  for (const [stage, store] of [['secondOpinion', state?.secondOpinions], ['exception', state?.exceptionReviews]]) for (const [key, v] of Object.entries(store || {})) { const e = verdictEntry(key, v, stage); if (e) out.push(e); }
   const merges = [...(state?.mergeLog || []), ...(root ? parseLines(readText(mergeArchiveFile(root))) : [])];
   for (const m of merges) out.push(mergeEntry(m));
   for (const [id, tj] of Object.entries(state?.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at)) out.push({ id: `rebase:${id}`, at: tj.at, kind: 'rebase', job: id, pr: tj.pr, head: tj.rebase.newHead, detail: `${tj.rebase.commits?.length ?? 0} commit(s)${tj.rebase.lost?.length ? `, ${tj.rebase.lost.length} lost` : ''}` });
@@ -120,16 +121,17 @@ export function collectEntries({ config, root, jobs, events, state, incidents = 
   for (const i of incidents) if (i?.kind === 'migration' && Number.isFinite(i.at)) out.push({ id: `migration:${i.number}:${i.at}`, at: i.at, kind: 'migration', event: i.result, detail: `${String(i.number).padStart(3, '0')}-${i.name}` });
   return out;
 }
-export function verdictEntry(key, v) {
+export const VERDICT_STAGES = { secondOpinion: 'second opinion', exception: 'review exception' };
+export function verdictEntry(key, v, stage) {
   const [pr, head] = String(key).split(':');
-  return v && Number.isFinite(v.at) ? { id: `verdict:${key}`, at: v.at, kind: 'verdict', pr: Number(pr), head, verdict: v.verdict, reviewer: v.reviewer, job: v.job } : null;
+  return v && Number.isFinite(v.at) ? { id: stage ? `verdict:${stage}:${key}` : `verdict:${key}`, ...(stage ? { detail: VERDICT_STAGES[stage] } : {}), at: v.at, kind: 'verdict', pr: Number(pr), head, verdict: v.verdict, reviewer: v.reviewer, job: v.job } : null;
 }
 export const mergeEntry = m => ({ id: `merge:${m.pr}`, at: m.mergedAt, kind: 'merge', pr: m.pr, issue: m.issue ?? undefined, agent: m.agent ?? undefined, reviewer: m.reviewer ?? undefined });
 
 // Called from the tick. Best effort for the caller; returns the number of new entries.
 export const recordTimeline = (root, inputs) => appendTimeline(root, collectEntries({ ...inputs, root }));
 // Called where a verdict is about to be deleted, so the review outcome stays in the timeline.
-export function archiveVerdict(root, key, v) { const e = verdictEntry(key, v); return e ? appendTimeline(root, [e]) : 0; }
+export function archiveVerdict(root, key, v, stage) { const e = verdictEntry(key, v, stage); return e ? appendTimeline(root, [e]) : 0; }
 
 // Backfill from GitHub: merged pull requests only. Never overwrites an entry that is already there (same id), and ids match the live
 // merge entries, so the same merge is never listed twice.

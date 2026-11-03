@@ -58,6 +58,19 @@ test('a verdict about to be deleted is kept in the timeline', t => {
   assert.equal(e.length, 1); assert.deepEqual([e[0].kind, e[0].pr, e[0].head, e[0].verdict, e[0].reviewer], ['verdict', 12, 'aaaaaaa', 'CHANGES', 'codex']);
 });
 
+test('second-opinion and review-exception verdicts are collected and archived, distinct from the primary verdict', t => {
+  const root = dir(t); const key = `14:${'c'.repeat(40)}`;
+  const mk = (reviewer, at) => ({ verdict: 'PASS', reviewer, at, job: ID(3) });
+  const state = { verdicts: { [key]: mk('codex', T0) }, secondOpinions: { [key]: mk('claude', T0 + 1) }, exceptionReviews: { [key]: mk('codex', T0 + 2) } };
+  assert.equal(appendTimeline(root, collectEntries({ config, root, jobs: [], events: [], state })), 3);
+  assert.equal(appendTimeline(root, collectEntries({ config, root, jobs: [], events: [], state })), 0);
+  const tl = readTimeline(root);
+  assert.deepEqual(tl.map(e => e.detail || 'primary').sort(), ['primary', 'review exception', 'second opinion']);
+  const root2 = dir(t);
+  assert.equal(archiveVerdict(root2, key, mk('claude', T0), 'secondOpinion'), 1);
+  assert.equal(readTimeline(root2)[0].detail, 'second opinion');
+});
+
 test('backfill from job records, events, verdicts and merges; running it again adds nothing', t => {
   const root = dir(t);
   const jobs = [{ id: ID(1), provider: 'claude', kind: 'implement', issue: 5, createdAt: T0 }, { id: ID(2), provider: 'codex', kind: 'review', issue: 9, createdAt: T0 + 1000 }];

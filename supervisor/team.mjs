@@ -2047,7 +2047,7 @@ export class Team {
       const cur = await this.trustedRequirements(pr.headRefName);
       if (!cur) { this.reqHold.add(pr.number); (report.skipped ||= []).push({ what: `requirements of PR #${pr.number}`, reason: 'could not be read; merge held' }); continue; }
       if (cur.hash === v.requirementsHash) { this.reqHold.delete(pr.number); continue; }
-      this.archiveVerdict(key, this.s.verdicts[key]); delete this.s.verdicts[key]; delete this.s.secondOpinions[key]; delete this.s.exceptionReviews[key];
+      this.archiveVerdict(key, this.s.verdicts[key]); this.archiveVerdict(key, this.s.secondOpinions[key], 'secondOpinion'); this.archiveVerdict(key, this.s.exceptionReviews[key], 'exception'); delete this.s.verdicts[key]; delete this.s.secondOpinions[key]; delete this.s.exceptionReviews[key];
       for (const k of Object.keys(this.s.reviewAttempts)) if (k.startsWith(key + ':')) delete this.s.reviewAttempts[k];
       this.save(); this.reqHold.delete(pr.number);
       const marker = `<!-- devtest-requirements-changed v1 pr=${pr.number} head=${pr.headRefOid} from=${v.requirementsHash.slice(0, 12)} to=${cur.hash.slice(0, 12)} -->`;
@@ -2158,7 +2158,7 @@ export class Team {
 
   // Issue #362: history is kept before a capped or replaced record goes. Best effort: archiving must never stop the tick.
   archiveOverflow(which, entries) { try { archiveOverflow(this.root, which, entries); } catch (error) { console.error(`ai-supervisor: ${which} archive failed: ${error?.name || 'Error'}`); } }
-  archiveVerdict(key, v) { try { archiveVerdict(this.root, key, v); } catch (error) { console.error(`ai-supervisor: verdict archive failed: ${error?.name || 'Error'}`); } }
+  archiveVerdict(key, v, stage) { try { archiveVerdict(this.root, key, v, stage); } catch (error) { console.error(`ai-supervisor: verdict archive failed: ${error?.name || 'Error'}`); } }
 
   async execute(act, report = {}) {
     if (act.type === 'merge') {
