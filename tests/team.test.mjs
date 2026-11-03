@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, failingChecks, checkDetails, loneCancelled, latestChecks, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
+import { resumeDecision, Team, ciFixPrompt, rebasePrompt, reviewPrompt, fixPrompt, continuePrompt, implementPrompt, applyLocalOverride, loadTeamConfig, checksState, failingChecks, checkDetails, loneCancelled, latestChecks, decisionApproved, prerequisites, readInboxVerdict, tickLock, validateTeamConfig, validateVerdict, agentOfBranch } from '../supervisor/team.mjs';
 import { createJob, drive, readJob, stateRoot, validateSpec, WorktreeUnusable, gitCommonDir, LeaseHeld } from '../supervisor/core.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
@@ -308,7 +308,7 @@ test('priority per agent: rebase > CI fix > review fix > review > implement', as
 test('concurrency: slots per role, two overall; an unrecorded job holds the implementer slot', async t => {
   const issues = [issue(23), issue(2)];
   const one = world(t, { issues, active: [{ id: 'a', provider: 'claude', status: 'paused_limit' }] });
-  assert.deepEqual((await one.team.plan()).map(a => a.agent), ['claude']);   // issue #148: a job the dispatcher has no record of holds the implementer slot, the other slot is free
+  assert.deepEqual((await one.team.plan()).map(a => a.agent), ['claude', 'codex']);   // issue #380: a job paused on a usage limit holds no slot, so both agents start
   const both = world(t, { issues, active: [{ id: 'a', provider: 'claude', status: 'running' }, { id: 'b', provider: 'codex', status: 'queued' }] });
   assert.deepEqual(await both.team.plan(), []);
   const cap = world(t, { issues, cfg: config({ limits: { roles: { implementer: 2, reviewer: 2 }, overall: 1, max_review_attempts: 2, max_fix_attempts: 2 } }) });
@@ -1383,4 +1383,86 @@ test('#205 rejectionCause with no matching PR falls back to the generic text', a
   const w = world(t, { pulls: [], issues: [] });
   assert.equal(w.team.rejectionCause({ number: 9, headRefOid: H(1) }), 'the rejection');
   assert.match(w.team.rejectionCause({ number: 9, headRefOid: H(1), statusCheckRollup: gg }), /`GitGuardian Security Checks`/);
+});
+
+// Issue #380: a job paused on a usage limit does not hold a role slot or the overall cap.
+const oneSlot = () => config({ limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } });
+const pausedReview = (w, id = 'p1') => { w.jobs.active.push({ id, provider: 'codex', status: 'paused_limit' }); w.jobs.states[id] = { id, status: 'paused_limit', provider: 'codex', kind: 'review' }; w.team.s.jobs[id] = { kind: 'review', agent: 'codex', pr: 10, head: H(1), key: `10:${H(1)}:codex` }; };
+
+test('#380: a paused job leaves its slot free and another provider reviews during the pause', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], cfg: oneSlot() });
+  pausedReview(w);
+  const plan = await w.team.plan();
+  assert.deepEqual(plan.filter(a => a.type === 'review').map(a => [a.agent, a.pr]), [['claude', 10]]);
+  assert.equal(w.team.s.jobs.p1.ingested, undefined);   // the paused job keeps its place
+});
+
+test('#380: a paused implement job does not count towards the overall cap', async t => {
+  const cfg = config({ limits: { roles: { implementer: 2, reviewer: 1 }, overall: 1, max_review_attempts: 2, max_fix_attempts: 2 } });
+  const w = world(t, { issues: [issue(23), issue(2)], cfg });
+  w.jobs.active.push({ id: 'p1', provider: 'codex', status: 'paused_limit' }); w.team.s.jobs.p1 = { kind: 'implement', agent: 'codex', issue: 99 };
+  assert.equal((await w.team.plan()).length, 1);
+  const running = world(t, { issues: [issue(23), issue(2)], cfg, active: [{ id: 'r1', provider: 'codex', status: 'running' }] });
+  running.team.s.jobs.r1 = { kind: 'implement', agent: 'codex', issue: 99 };
+  assert.equal((await running.team.plan()).length, 0);   // a running job still counts
+});
+
+test('#380: resume cannot exceed the role or the overall limit, and says why', () => {
+  const limits = { roles: { implementer: 1, reviewer: 1 }, overall: 2 };
+  const job = { kind: 'review' };
+  assert.deepEqual(resumeDecision({ job, others: [], limits }), { go: true });
+  const role = resumeDecision({ job, others: [{ id: 'a', kind: 'review' }], limits, nameOf: o => `job ${o.id}` });
+  assert.equal(role.go, false); assert.match(role.reason, /reviewer slot: job a/);
+  const cap = resumeDecision({ job, others: [{ id: 'a', kind: 'implement' }, { id: 'b', kind: 'implement' }], limits, nameOf: o => `job ${o.id}` });
+  assert.equal(cap.go, false); assert.match(cap.reason, /overall cap \(2\): job a; job b/);
+  assert.equal(resumeDecision({ job, others: [{ id: 'a', kind: 'implement' }], limits }).go, true);
+});
+
+test('#380: the resume gate waits when the slot is taken, resumes when free, and holds one lock', async t => {
+  const w = world(t, { cfg: oneSlot() });
+  const job = { id: 'p1', kind: 'review' };
+  w.jobs.active.push({ id: 'r1', provider: 'claude', status: 'running' }); w.jobs.states.r1 = { id: 'r1', kind: 'review' }; w.team.s.jobs.r1 = { kind: 'review', agent: 'claude', pr: 11 };
+  const gate = w.team.resumeGate();
+  const wait = await gate(job); assert.equal(wait.go, false); assert.match(wait.reason, /reviewer slot: claude review on PR #11/);
+  w.jobs.active.length = 0;
+  const go = await gate(job); assert.equal(go.go, true);
+  const second = await gate({ id: 'p2', kind: 'review' }); assert.equal(second.go, false); assert.match(second.reason, /another paused job is being resumed/);   // lock held
+  go.release();
+  assert.equal((await gate({ id: 'p2', kind: 'review' })).go, true);
+});
+
+test('#380: a paused review resumes only on the review target; a moved head posts no verdict', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(2))], cfg: oneSlot() });
+  const job = { id: 'p1', kind: 'review', postcondition: { kind: 'verdict', pr: 10, head: H(1), ticket: 'x' } };
+  const stale = await w.team.resumeGate()(job);
+  assert.equal(stale.stale, true); assert.match(stale.reason, /moved from 1111111 to 2222222/);
+  w.gh.pulls[0].headRefOid = H(1);
+  const ok = await w.team.resumeGate()(job); assert.equal(ok.go, true); ok.release();
+  w.gh.pulls = [];
+  const unreadable = await w.team.resumeGate()(job); assert.equal(unreadable.go, false);   // fail closed
+  // and the planner then plans a review of the new head
+  w.gh.pulls = [pr(10, 'codex/issue-2-x', H(2))];
+  assert.deepEqual((await w.team.plan()).filter(a => a.type === 'review').map(a => a.head), [H(2)]);
+});
+
+test('#380: a tick restart keeps the paused job and its record', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], cfg: oneSlot() });
+  pausedReview(w); w.team.save();
+  const again = new Team({ config: oneSlot(), root: w.team.root, gh: w.gh, jobs: w.jobs, git: w.git, register: REGISTER, clock: { now: () => 2000 } });
+  assert.equal(again.s.jobs.p1.kind, 'review');
+  const report = { ingested: [], notified: [], actions: [], skipped: [] };
+  await again.ingest(report);
+  assert.equal(again.s.jobs.p1.ingested, undefined);   // not terminal, so not ingested or dropped
+  assert.equal((await again.plan()).filter(a => a.type === 'review').length, 1);
+});
+
+test('#380: eligible work with every slot taken records a held reason naming the jobs', async t => {
+  const cfg = config({ limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } });
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], cfg, active: [{ id: 'r1', provider: 'claude', status: 'running' }] });
+  w.team.s.jobs.r1 = { kind: 'review', agent: 'claude', pr: 11 };
+  const plan = await w.team.plan();
+  assert.equal(plan.filter(a => a.type === 'review').length, 0);
+  assert.match(w.team.held.claude.review, /reviewer slot full: claude review on .*11/);
+  const idle = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], cfg });
+  await idle.team.plan(); assert.equal(idle.team.held.claude?.review, undefined);   // a free slot records nothing
 });

@@ -544,7 +544,7 @@ const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer' };
 const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
 export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.repository, stateJobs: state.jobs, titles: state.titles })) {
   return ROLES.map(role => {
-    const held = jobs.filter(j => (ACTIVE.includes(j.status) || isUnknownJob(j)) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {
+    const held = jobs.filter(j => ((ACTIVE.includes(j.status) && j.status !== 'paused_limit') || isUnknownJob(j)) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {
       const r = state.jobs?.[j.id] || {}, agent = r.agent || Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
       const ref = r.pr ?? r.issue ?? j.issue ?? null, refType = r.pr != null ? 'PR' : 'issue';
       return { agent: redact(agent, 20), model: r.model ? redact(r.model, 40) : null, kind: r.kind || null, ref, refType, name: ref == null ? null : redact((refType === 'PR' ? names.pr(ref) : names.issue(ref)).text, 200) };
@@ -591,7 +591,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
       base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state, now, names });
       // Issue #213: one entry per running or paused job, with its role, model and item, so concurrent jobs on one agent each get a card.
-      base.jobs = (s.jobs || []).map(x => { const r = state.jobs?.[x.id] || {}; return { id: shortJob(x.id), fullId: x.id, name: redact(names.job(x).text, 300), kind: x.kind || r.kind || 'job', role: roleOfType(r.kind || x.kind), model: redact(r.model || x.model || '', 40) || null, status: x.status, lastEvent: redact(x.lastEvent || '', 48), nextAttemptAt: x.nextAttemptAt || null, startedAt: x.createdAt, elapsedMs: now - x.createdAt, attempts: x.attempts || 0, paused: ['paused_limit', 'paused_manual'].includes(x.status) }; });
+      base.jobs = (s.jobs || []).map(x => { const r = state.jobs?.[x.id] || {}; return { id: shortJob(x.id), fullId: x.id, name: redact(names.job(x).text, 300), kind: x.kind || r.kind || 'job', role: roleOfType(r.kind || x.kind), model: redact(r.model || x.model || '', 40) || null, status: x.status, lastEvent: redact(x.lastEvent || '', 48), nextAttemptAt: x.nextAttemptAt || null, startedAt: x.createdAt, elapsedMs: now - x.createdAt, attempts: x.attempts || 0, paused: ['paused_limit', 'paused_manual'].includes(x.status), resumeWait: x.resumeWait?.reason ? redact(x.resumeWait.reason, 300) : null }; });
       if (j) base.job = { id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });

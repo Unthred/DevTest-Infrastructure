@@ -224,7 +224,7 @@ function nowPanel(view) {
   // Issue #213: one card per running or paused job (role, model, item, elapsed); an agent with none gets one idle/blocked/unknown card.
   const jobItem = (a, j) => {
     const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : 'Implementer';
-    const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`;
+    const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
     return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${j.name ? `${esc(j.name)} · ` : ''}${jobLink(j.id)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
   };
   return `${slots}<ul class="panel-list">${view.agents.map(a => {

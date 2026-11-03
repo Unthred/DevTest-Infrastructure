@@ -517,3 +517,27 @@ test('issue #195: processStart is exact for a live process whose comm contains s
     assert.equal(processStart(child.pid), processInfo(child.pid).start);
   } finally { child.kill('SIGKILL'); }
 });
+
+// Issue #380: a job paused on a usage limit resumes only through the gate, and waits with a visible reason.
+test('paused job waits on the resume gate with a reason, then resumes (issue #380)', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+  let calls = 0, checks = 0, waitSeen = null, released = 0;
+  const gate = async j => {
+    if (++checks === 1) { return { go: false, reason: 'waiting for the reviewer slot: codex review on PR #5' }; }
+    waitSeen = readJob(f.root, j.id).resumeWait?.reason;
+    return { go: true, release: () => { released++; } };
+  };
+  const result = await drive(f.root, job, f.registry, clock, async () => ++calls === 1 ? { code: 1, event: 'usage_limit', resetAt: clock.now() + 900000, resetSource: 'provider_reported', verified: true } : { code: 0 }, 4, null, gate);
+  assert.equal(result.status, 'completed'); assert.equal(calls, 2); assert.equal(released, 1);
+  assert.equal(waitSeen, 'waiting for the reviewer slot: codex review on PR #5');   // visible on the record while waiting
+  assert.equal(readJob(f.root, job.id).resumeWait ?? null, null);                   // cleared once running
+  assert.equal(clock.sleeps.length, 2);                                              // reset wait, then one gate poll
+  releaseLeases(f.root, result);
+});
+
+test('paused review whose pull request head moved stops with no second run (issue #380)', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, f.spec, f.registry, clock);
+  let calls = 0, released = 0;
+  const result = await drive(f.root, job, f.registry, clock, async () => { calls++; return { code: 1, event: 'usage_limit', resetAt: clock.now() + 900000, resetSource: 'provider_reported', verified: true }; }, 4, null, async () => ({ stale: true, reason: 'moved', release: () => { released++; } }));
+  assert.equal(calls, 1); assert.equal(result.status, 'stopped'); assert.equal(result.lastEvent, 'head_moved'); assert.equal(released, 1);
+});

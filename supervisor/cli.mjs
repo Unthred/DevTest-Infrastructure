@@ -254,7 +254,7 @@ async function main() {
     const job = await createJob(root, spec, registry);
     if (a.foreground) {
       job.workerPid = process.pid; job.workerStart = processStart(process.pid); saveJob(root, job);
-      const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null);
+      const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null, async j => (await teamFor(root, registry, undefined, false)).resumeGate()(j));
       result.workerPid = null; result.workerStart = null; saveJob(root, result); print(result);
     }
     else { startWorker(root, job.id, registry); print(readJob(root, job.id)); }
@@ -267,7 +267,7 @@ async function main() {
     if (job.status !== 'queued' && job.status !== 'paused_limit') throw new SupervisorError('job is not runnable');
     if (job.workerPid && processStart(job.workerPid) === job.workerStart) throw new SupervisorError('another worker owns job');
     job.workerPid = process.pid; job.workerStart = processStart(process.pid); saveJob(root, job);
-    const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null);
+    const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null, async j => (await teamFor(root, registry, undefined, false)).resumeGate()(j));
     result.workerPid = null; result.workerStart = null; saveJob(root, result);
     } finally { release(); }
     return;

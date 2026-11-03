@@ -486,7 +486,8 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     names: async () => makeNamer({ repo: config.repository, issues: await gh.listIssues(), merged: await gh.listMergedPulls() }),
     verdict: verdictFor,
     independenceApproved,
-    activeJobs: async () => (await listActive()).length,
+    // Issue #380: a job paused on a usage limit runs no process, so it does not hold an upgrade in drain; its record survives and its worker (or reconcile) resumes it.
+    activeJobs: async () => (await listActive()).filter(j => j.status !== 'paused_limit').length,
     preChecks: async sha => bootstrap('check', sha, 2400000),
     upgrade: async sha => bootstrap('install', sha, 3000000),
     // A register read that fails right after an upgrade is usually transient, so it is retried (three tries, backoff) before it can roll back.

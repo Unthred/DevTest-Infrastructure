@@ -865,9 +865,13 @@ export class Team {
     // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
     // record of (started by hand) is counted against the implementer slot, the conservative reading.
     const used = Object.fromEntries(ROLES.map(r => [r, 0]));
-    for (const j of active) used[roleOfType(this.s.jobs[j.id]?.kind)]++;
-    let total = active.length;
+    // Issue #380: a job paused on a usage limit runs no process, so it holds neither a role slot nor a place under the overall cap; the
+    // provider with allowance can use them. It keeps its place (the job record) and resumes only inside the limits (resumeDecision).
+    const occupying = active.filter(j => j.status !== 'paused_limit');
+    for (const j of occupying) used[roleOfType(this.s.jobs[j.id]?.kind)]++;
+    let total = occupying.length;
     const L = this.c.limits;
+    const usedAtStart = { ...used }, totalAtStart = total;   // slots filled by jobs already running, before this tick plans any
     this.taken = new Set(); this.plannedUse = {};
     // Expected files of every running or planned implement job (issue #344): a new implement job whose expected files overlap one is refused.
     this.claimed = new Map();
@@ -907,9 +911,23 @@ export class Team {
         if (claimN != null && issueByNo.get(claimN)) for (const f of this.predictFiles(issueByNo.get(claimN))) this.claimed.set(f, claimN);
       }
     }
+    this.holdFullSlots(occupying, usedAtStart, totalAtStart, prs, issueByNo);
     // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
     const order = n => this.agents().findIndex(([x]) => x === n);
     return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -1 : order(x.agent)) - (y.type === 'merge' ? -1 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
+  }
+  // Issue #380: eligible work that found its slot taken says so, naming the jobs that fill the slots (otherwise the plan and the held
+  // list are both empty). Runs after dispatch, so work already planned this tick is not offered again by choose().
+  holdFullSlots(occupying, used, total, prs, issueByNo) {
+    const L = this.c.limits, names = this.names();
+    const nameOf = j => { const r = this.s.jobs[j.id] || {}; const ref = r.pr != null ? names.pr(r.pr).text : r.issue != null ? names.issue(r.issue).text : j.id.slice(0, 8); return `${r.agent || j.provider} ${r.kind || 'job'} on ${ref}`.slice(0, 120); };
+    for (const role of ROLES) {
+      const byRole = used[role] >= L.roles[role], byTotal = total >= overallCap(L);
+      if (!byRole && !byTotal) continue;
+      const holders = (byRole ? occupying.filter(j => roleOfType(this.s.jobs[j.id]?.kind) === role) : occupying).map(nameOf);
+      const text = `${role} slot full${byRole ? '' : ' (overall cap reached)'}: ${holders.slice(0, 5).join('; ') || 'running jobs'}`;
+      for (const [agent, a] of this.agents()) { const act = this.choose(agent, a, prs, issueByNo, role); if (act) this.hold(agent, act.type, text); }
+    }
   }
   predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
   // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
@@ -1314,7 +1332,7 @@ export class Team {
   // waiting; any planned action or running job clears it. The dashboard shows a Needs you item once it lasts idle_minutes (default 30).
   async trackIdle(actions) {
     const prs = this.view?.prs || [], issues = this.view?.issues || [], issueByNo = new Map(issues.map(i => [i.number, i]));
-    const running = (await this.jobs.listActive()).length;
+    const running = (await this.jobs.listActive()).filter(j => j.status !== 'paused_limit').length;   // issue #380: a paused job runs nothing
     const work = [];
     for (const p of prs) {
       const k = verdictKey(p.number, p.headRefOid);
@@ -2291,6 +2309,30 @@ export class Team {
     catch (error) { delete this.s.unblock.escalated[act.pr]; this.save(); throw error; }
   }
 
+  // Issue #380: the check a worker runs before a job paused on a usage limit resumes (passed to drive()). A review whose pull request head
+  // moved since the review target is stale: it stops and posts no verdict, and the planner reviews the new head. Otherwise the job
+  // resumes only while every other running or queued job leaves a free slot in its role and under the overall cap; the decision is
+  // taken under a lock that the worker holds until the job is marked running, so two paused jobs cannot both take the last slot.
+  resumeGate() {
+    return async job => {
+      const p = job.postcondition;
+      if (job.kind === 'review' && p?.kind === 'verdict' && SHA.test(p.head || '')) {
+        const pr = await this.gh.getPull(p.pr);
+        if (!pr || !SHA.test(pr.headRefOid)) return { go: false, reason: `waiting: the current head of PR #${p.pr} could not be read to compare it with the review target` };
+        if (pr.headRefOid !== p.head) return { stale: true, reason: `PR #${p.pr} moved from ${p.head.slice(0, 7)} to ${pr.headRefOid.slice(0, 7)}` };
+      }
+      const release = takeResumeLock(this.root);
+      if (!release) return { go: false, reason: 'waiting: another paused job is being resumed', retryMs: 5000 };
+      try {
+        const others = [];
+        for (const a of await this.jobs.listActive()) if (a.id !== job.id && ['queued', 'running'].includes(a.status)) others.push({ id: a.id, kind: (await this.jobs.get(a.id))?.kind ?? this.s.jobs[a.id]?.kind });
+        const d = resumeDecision({ job, others, limits: this.c.limits, nameOf: o => { const r = this.s.jobs[o.id] || {}; return `${r.agent || 'a'} ${o.kind || 'job'} on ${r.pr != null ? 'PR #' + r.pr : r.issue != null ? 'issue #' + r.issue : o.id.slice(0, 8)}`; } });
+        if (!d.go) { release(); return d; }
+        return { go: true, release };
+      } catch (error) { release(); throw error; }
+    };
+  }
+
   // Post-conditions are evaluated by the supervisor worker through drive(); none of them reads comment text.
   postconditions() {
     return async job => {
@@ -2315,6 +2357,27 @@ export class Team {
   }
 }
 
+// Issue #380: whether a job paused on a usage limit may resume now. `others` are the other running or queued jobs. It resumes only when its
+// role has a free slot and the overall cap leaves room; otherwise the reason names the jobs filling them.
+export function resumeDecision({ job, others, limits, nameOf = o => o.id }) {
+  const role = roleOfType(job.kind), inRole = others.filter(o => roleOfType(o.kind) === role);
+  if (inRole.length >= limits.roles[role]) return { go: false, reason: `waiting for the ${role} slot: ${inRole.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
+  if (others.length >= overallCap(limits)) return { go: false, reason: `waiting for the overall cap (${overallCap(limits)}): ${others.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
+  return { go: true };
+}
+export function takeResumeLock(root) {
+  const dir = path.join(root, 'team', 'resume.lock');
+  fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
+  try { fs.mkdirSync(dir, { mode: 0o700 }); }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    let owner; try { owner = JSON.parse(fs.readFileSync(path.join(dir, 'owner.json'), 'utf8')); } catch { owner = null; }
+    if (owner && processStart(owner.pid) === owner.start) return null;
+    fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { mode: 0o700 });
+  }
+  fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }), { mode: 0o600 });
+  return () => fs.rmSync(dir, { recursive: true, force: true });
+}
 export function tickLock(root) {
   const dir = path.join(root, 'team', 'tick.lock');
   fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });

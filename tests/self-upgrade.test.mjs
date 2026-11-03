@@ -660,3 +660,13 @@ test('issue #191: only busy and upgraded hold dispatch; rolled-back and every fa
   for (const r of ['rolled-back', 'precheck-failed', 'not-eligible', 'current', 'awaiting-verification', 'team-loop-disabled', 'rollback-failed', undefined]) assert.equal(holdOf(r, w.up.s), null, String(r));
   assert.deepEqual(holdOf('upgraded', { pending: { to: TO } }), { to: TO });
 });
+
+// Issue #380: a job paused on a usage limit runs no process, so it does not hold an upgrade in drain; its record is untouched.
+test('#380: only running or queued jobs hold an upgrade in drain, not a paused_limit job', async () => {
+  const jobs = [{ id: 'a', status: 'paused_limit' }];
+  const deps = realDeps({ root: '/nonexistent', config, gh: {}, listActive: async () => jobs });
+  assert.equal(await deps.activeJobs(), 0);
+  jobs.push({ id: 'b', status: 'running' }, { id: 'c', status: 'paused_manual' });
+  assert.equal(await deps.activeJobs(), 2);
+  assert.deepEqual(jobs.map(j => j.id), ['a', 'b', 'c']);   // nothing was touched
+});
