@@ -512,7 +512,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -1194,9 +1194,10 @@ export class Team {
       const checks = failingChecks(pr.statusCheckRollup, this.retried(pr));
       // Issue #400: a round whose only failing checks are secret scanners cannot be cleared by the fix job (the old commit stays flagged
       // until the homeowner resolves the incident). It is not counted toward max_fix_attempts and never escalates. To stay bounded, one
-      // such round runs per PR; later heads wait for the homeowner (the secret-scan item is already raised).
+      // such round never counts. Once the homeowner item exists, later heads wait for the homeowner; until it does (the flag or notice
+      // post failed), the round repeats to retry the notice, at most 3 times so it stays bounded.
       const scanOnly = scannerOnly(checks);
-      if (scanOnly && (this.s.scanOnlyRounds[pr.number] || 0) >= 1) continue;
+      if (scanOnly && (this.s.scanOnlyAnnounced[pr.number] || (this.s.scanOnlyRounds[pr.number] || 0) >= 3)) continue;
       const escalated = !scanOnly && this.fixCount(pr.number) >= L.max_fix_attempts;
       if (busy('cifix', key) || (escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
@@ -2443,7 +2444,7 @@ export class Team {
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head, ...(rebase ? { base: act.base } : { branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) }) };
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
-      bump = () => { if (act.scanOnly && act.announced) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; return; }   // issue #400: uncounted only once the homeowner item exists; otherwise it counts, so the round stays bounded
+      bump = () => { if (act.scanOnly) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; if (act.announced) this.s.scanOnlyAnnounced[act.pr] = true; return; }   // issue #400: never counted; later heads are skipped only once the homeowner item exists
         this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase && this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });
