@@ -53,6 +53,13 @@ export function githubClient(config, gh = ghRunner()) {
     issueAuthorAssociation: async n => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); return json(['api', '--method', 'GET', `repos/${repo}/issues/${n}`])?.author_association ?? null; },
     // Comments with the author's association to the repository (OWNER = the homeowner), to tell homeowner-required text apart.
     issueComments: async n => (json(['issue', 'view', String(n), '--repo', repo, '--json', 'comments'])?.comments || []).map(c => ({ association: c.authorAssociation, body: String(c.body || '') })),
+    // Issue #418: the comments of one PR with author login, time and URL (one call), and one comment by id (to verify a cited link).
+    prComments: async n => (json(['pr', 'view', String(n), '--repo', repo, '--json', 'comments'])?.comments || []).map(c => ({ login: c.author?.login ?? null, createdAt: c.createdAt, url: String(c.url || ''), body: String(c.body || '') })),
+    getComment: async id => {
+      if (!/^\d+$/.test(String(id))) throw new SupervisorError('invalid comment id');
+      const c = json(['api', '--method', 'GET', `repos/${repo}/issues/comments/${id}`]);
+      return c ? { login: c.user?.login ?? null, createdAt: c.created_at, url: String(c.html_url || ''), body: String(c.body || '') } : null;
+    },
     comment: async (n, body) => { gh(['issue', 'comment', String(n), '--repo', repo, '--body-file', '-'], body, { retry: false }); },
     // True when a comment on the issue or PR already contains the text (idempotency check before a non-retried write).
     hasComment: async (n, text) => (json(['issue', 'view', String(n), '--repo', repo, '--json', 'comments'])?.comments || []).some(c => String(c.body || '').includes(text)),

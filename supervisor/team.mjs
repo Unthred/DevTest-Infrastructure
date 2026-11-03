@@ -46,6 +46,13 @@ export function validateTeamConfig(input) {
   if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
   validateUnblockLimits(L.unblock);
   validateSelfUpgrade(c.self_upgrade);
+  // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
+  // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
+  if (c.owner_comment_review !== undefined) {
+    const o = c.owner_comment_review, login = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(x);
+    if (!o || typeof o !== 'object' || typeof o.enabled !== 'boolean' || ('owner' in o && !login(o.owner)) || ('agent_logins' in o && !(Array.isArray(o.agent_logins) && o.agent_logins.every(login))))
+      throw new SupervisorError('invalid owner_comment_review: { enabled: boolean, owner?: login, agent_logins?: [login] }');
+  }
   const agents = Object.entries(c.agents || {});
   if (agents.length < 1) throw new SupervisorError('team needs at least one agent');
   const seen = new Set();
@@ -1466,7 +1473,7 @@ export class Team {
     const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
     if (!dryRun) {
       await this.loadNames();
-      await this.ingest(report, guard); await this.retryCarries(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
+      await this.ingest(report, guard); await this.retryCarries(report, guard); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
@@ -1915,27 +1922,90 @@ export class Team {
   // through the usual merge gates; CHANGES stays a rejection). Each request needs a decision link not used before on this PR, so a
   // repeat without a new decision is refused. Recorded before any effect, so a crash never allows a repeat.
   reReviewOf(pr, head) { return (this.s.reReviews?.[pr]?.requests || []).filter(r => r.head === head).pop() || null; }   // the latest request for the head, so a second decision never reads the first
-  async requestReReview(prNumber, decision) {
-    const n = Number(prNumber), link = typeof decision === 'string' ? decision.trim() : '';
-    if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team request-review PR DECISION_LINK');
-    const repo = this.c.repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!new RegExp('^https://github\\.com/' + repo + '/(issues|pull)/\\d+#issuecomment-\\d+$').test(link)) throw new SupervisorError(`the decision must be a link to a comment on an issue or pull request of ${this.c.repository}, for example https://github.com/${this.c.repository}/issues/N#issuecomment-ID`);
-    const pr = await this.gh.getPull(n);
+  // The account whose comment counts as the homeowner's (issue #418): the configured owner login, else the repository owner. Agent
+  // logins never count, even if listed as the owner.
+  ownerLogin() { return (this.c.owner_comment_review?.owner || this.c.repository.split('/')[0]).toLowerCase(); }
+  isOwnerComment(c) {
+    const login = String(c?.login || '').toLowerCase();
+    if (/<!-- devtest-notice v1 /.test(String(c?.body || ''))) return false;   // Foreman's own notice, posted from the owner account before #377
+    return !!login && login === this.ownerLogin() && !(this.c.owner_comment_review?.agent_logins || []).some(a => a.toLowerCase() === login);
+  }
+  // Why a comment cannot request the re-review of a head whose verdict is v, or null. Existence is checked here too.
+  commentRefusal(c, v, link) {
+    if (!c) return `${link} names no comment on this repository`;
+    if (c.url && c.url !== link) return `${link} is not the address of the comment it names`;
+    if (!this.isOwnerComment(c)) return `the comment at ${link} was not written by the repository owner (${this.ownerLogin()}), so it is not a homeowner decision`;
+    const at = Date.parse(c.createdAt);
+    if (!Number.isFinite(at) || !(at > v.at)) return `the comment at ${link} was written before the CHANGES verdict it would answer, so it cannot be a decision on it`;
+    return null;
+  }
+  // The checks both routes share, before anything is recorded.
+  reReviewEligibility(n, link, pr) {
     if (!pr || pr.state === 'CLOSED' || pr.state === 'MERGED' || pr.merged) throw new SupervisorError(`PR #${n} is not open`);
     if (!agentOfBranch(this.c, pr.headRefName)) throw new SupervisorError(`PR #${n} is not on a Foreman branch`);
     if (pr.isDraft || !SHA.test(pr.headRefOid)) throw new SupervisorError(`PR #${n} is a draft or has no readable head`);
     const head = pr.headRefOid, key = verdictKey(n, head), v = this.s.verdicts[key];
-    const entry = this.s.reReviews[n] ||= { requests: [] };
+    const entry = this.s.reReviews[n] ?? { requests: [] };   // not stored here: a refusal must leave no state behind
+    const refuse = (code, text) => Object.assign(new SupervisorError(text), { code });
     if (entry.requests.some(r => r.decision === link)) throw new SupervisorError(`the decision ${link} was already used to request a re-review of PR #${n}; a new decision is needed`);
     if (entry.requests.some(r => r.head === head && r.status === 'pending')) throw new SupervisorError(`a re-review of PR #${n} at ${shortCommit(head)} is already requested and not finished`);
-    if (v?.verdict !== 'CHANGES') throw new SupervisorError(`PR #${n} has no CHANGES verdict at ${shortCommit(head)} to re-review${v ? ` (it is ${v.verdict})` : ''}`);
-    if (this.fixCount(n) < this.c.limits.max_fix_attempts) throw new SupervisorError(`PR #${n} still has fix rounds left (${this.fixCount(n)} of ${this.c.limits.max_fix_attempts}); the fix loop runs first`);
+    if (v?.verdict !== 'CHANGES') throw refuse('no-verdict', `PR #${n} has no CHANGES verdict at ${shortCommit(head)} to re-review${v ? ` (it is ${v.verdict})` : ''}`);
+    if (this.fixCount(n) < this.c.limits.max_fix_attempts) throw refuse('rounds-left', `PR #${n} still has fix rounds left (${this.fixCount(n)} of ${this.c.limits.max_fix_attempts}); the fix loop runs first`);
+    return { head, key, v, entry: this.s.reReviews[n] ||= entry };
+  }
+  // `comment` is given by the tick, which has already read it from the PR; the command reads the cited comment through GitHub.
+  async requestReReview(prNumber, decision, comment = null) {
+    const n = Number(prNumber), link = typeof decision === 'string' ? decision.trim() : '';
+    if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team request-review PR DECISION_LINK');
+    const repo = this.c.repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = new RegExp('^https://github\\.com/' + repo + '/(issues|pull)/\\d+#issuecomment-(\\d+)$').exec(link);
+    if (!m) throw new SupervisorError(`the decision must be a link to a comment on an issue or pull request of ${this.c.repository}, for example https://github.com/${this.c.repository}/issues/N#issuecomment-ID`);
+    const { head, key, v, entry } = this.reReviewEligibility(n, link, await this.gh.getPull(n));
+    if (!comment) {
+      if (!this.gh.getComment) throw new SupervisorError('this GitHub client cannot read comments, so the decision cannot be verified');
+      try { comment = await this.gh.getComment(m[2]); } catch (error) { throw new SupervisorError(`the comment at ${link} could not be read (${String(error?.message || error).slice(0, 120)}), so the request is refused`); }
+    }
+    const why = this.commentRefusal(comment, v, link);
+    if (why) throw new SupervisorError(why);
     entry.requests.push({ head, decision: link, at: this.clock.now(), status: 'pending', prior: { verdict: v.verdict, reviewer: v.reviewer, job: v.job, at: v.at } });
     this.archiveVerdict(key, v); delete this.s.verdicts[key];
     for (const k of Object.keys(this.s.reviewAttempts)) if (k.startsWith(key + ':')) delete this.s.reviewAttempts[k];
     this.save();
     await this.postNotice(n, `re-review-requested pr=${n} head=${head} n=${entry.requests.length}`, `**Re-review requested by the homeowner.** One new review of the same head \`${head}\` was requested after the decision at ${link}. This is not a pass: the earlier CHANGES verdict is set aside only so an independent reviewer can judge this head again with that decision, and the new verdict decides. No further re-review is accepted without a new decision.`);
     return { pr: n, head, decision: link };
+  }
+  // Issue #418: on a tick, a comment by the owner account after the head's CHANGES verdict is the request. Each open Foreman PR
+  // without a pending request has its comments read once (one comment-list call), so the homeowner always gets an answer: the
+  // first qualifying unused comment is used and recorded by its URL (a later tick never repeats it); the newest owner comment
+  // that cannot be used yet is answered with its reason (a PR notice once per head and reason when a CHANGES verdict exists,
+  // otherwise only a report.skipped entry, so approval comments on a PASS PR cause no noise) and is not used up.
+  async scanOwnerComments(report, guard = (_, fn) => fn()) {
+    if (!this.c.owner_comment_review?.enabled || !this.gh.prComments) return;
+    for (const pr of await this.gh.listPulls()) {
+      if (!agentOfBranch(this.c, pr.headRefName) || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
+      const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
+      const entry = this.s.reReviews[pr.number];
+      if (entry?.requests.some(r => r.head === pr.headRefOid && r.status === 'pending')) continue;
+      const ready = v?.verdict === 'CHANGES' && this.fixCount(pr.number) >= this.c.limits.max_fix_attempts;
+      await guard(`owner comment ${pr.number}`, async () => {
+        const used = new Set((entry?.requests || []).map(r => r.decision));
+        const comments = (await this.gh.prComments(pr.number)).filter(x => /#issuecomment-\d+$/.test(x.url) && !used.has(x.url));
+        if (ready) {
+          const c = comments.find(x => !this.commentRefusal(x, v, x.url));
+          if (!c) return;
+          await this.requestReReview(pr.number, c.url, c);
+          (report.notified ||= []).push({ pr: pr.number, reReview: c.url });
+          return;
+        }
+        const c = comments.filter(x => this.isOwnerComment(x) && Date.parse(x.createdAt) > (v?.at ?? 0)).pop();
+        if (!c) return;
+        let why, code; try { this.reReviewEligibility(pr.number, c.url, pr); } catch (error) { why = error.message; code = error.code; }
+        if (!why) return;
+        (report.skipped ||= []).push({ pr: pr.number, reReview: `owner comment ${c.url} cannot request a re-review yet: ${why}` });
+        if (v?.verdict !== 'CHANGES') return;
+        await this.postNotice(pr.number, `re-review-refused pr=${pr.number} head=${pr.headRefOid} ${code || 'other'}`, `**Re-review not requested.** The owner comment at ${c.url} cannot request a re-review yet: ${why}. The comment is not used up; it counts once those conditions hold.`);
+      });
+    }
   }
   finishReReview(prNumber, head, entry) {
     const r = this.reReviewOf(prNumber, head);
