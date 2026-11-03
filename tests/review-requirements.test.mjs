@@ -106,7 +106,7 @@ test('a false claim in the PR description cannot PASS', async t => {
   const w = reqWorld(t); await startReview(w);
   const bad = { claim: 'shows each carry on the dashboard', status: 'false', evidence: 'no dashboard change in the diff' };
   let r = await finish(w, { verdict: 'PASS', requirements: [ok], descriptionClaims: [claim, bad] });
-  assert.match(r.report.ingested.at(-1).error, /false description claim/);
+  assert.match(r.report.ingested.at(-1).error, /false material description claim/);
   const w2 = reqWorld(t); await startReview(w2);
   r = await finish(w2, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'description claim is false' }], requirements: [ok], descriptionClaims: [bad] });
   assert.equal(w2.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES');
@@ -236,4 +236,53 @@ test('a cut inside one over-long line falls at a word boundary and the marker fo
   assert.ok(out.endsWith('\n[CUT]')); assert.ok(out.startsWith('Head\n')); assert.ok(!out.includes('Tail'));
   assert.match(out.slice(0, -'\n[CUT]'.length), /word$/);
   assert.ok(out.length <= 30000 + 6);
+});
+
+// Issue #419: only a false claim that matters blocks; one complete pass; far-fetched cases are follow-ups.
+const count = { claim: 'tests/probe.test.mjs has 21 cases', status: 'false', evidence: 'the suite reports 26 tests', materiality: 'immaterial', reason: 'a test count, no effect on behaviour' };
+const lock = { claim: 'only one run per provider at a time', status: 'false', evidence: 'not true across processes', materiality: 'material', reason: 'concurrency behaviour' };
+const err = async (t, verdict) => { const w = reqWorld(t); await startReview(w); return { w, r: await finish(w, { requirements: [ok], ...verdict }) }; };
+
+test('#419: a PASS may carry an immaterial false claim, and it becomes a follow-up', async t => {
+  const { w, r } = await err(t, { verdict: 'PASS', descriptionClaims: [count] });
+  assert.equal(r.report.ingested.at(-1).error, undefined);
+  assert.equal(w.team.s.verdicts['77:' + H(5)].verdict, 'PASS');
+  assert.match(w.calls.issues.at(-1)[2], /21 cases/);
+});
+test('#419: CHANGES resting only on a false immaterial claim is refused', async t => {
+  const { r } = await err(t, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'The PR description claims tests/probe.test.mjs has 21 cases but it has 26' }], descriptionClaims: [count] });
+  assert.match(r.report.ingested.at(-1).error, /immaterial/);
+});
+test('#419: a CHANGES with a real blocking finding beside an immaterial claim is accepted', async t => {
+  const { w } = await err(t, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'the lock file is never released on a crash' }], descriptionClaims: [count] });
+  assert.equal(w.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES');
+});
+test('#419: a false material claim gives CHANGES and cannot PASS', async t => {
+  const { w } = await err(t, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'one run per provider at a time is false across processes' }], descriptionClaims: [lock] });
+  assert.equal(w.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES');
+  const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [lock] });
+  assert.match(r.report.ingested.at(-1).error, /material/);
+  const { r: r2 } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...lock, materiality: undefined, reason: undefined }] });   // default is material
+  assert.match(r2.report.ingested.at(-1).error, /material/);
+});
+test('#419: an immaterial mark on a behaviour, safety or verification claim is refused', async t => {
+  for (const c of [{ ...lock, materiality: 'immaterial' }, { claim: 'all gates passed', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'wording' }]) {
+    const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [c] });
+    assert.match(r.report.ingested.at(-1).error, /cannot be immaterial/);
+  }
+  const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, reason: undefined }] });
+  assert.match(r.report.ingested.at(-1).error, /needs a reason/);
+});
+test('#419: the review prompt asks for one complete pass and sends far-fetched cases to follow-ups', async t => {
+  const w = reqWorld(t); const { spec } = await startReview(w);
+  assert.match(spec.prompt, /every blocking finding you can find in a single pass/);
+  assert.match(spec.prompt, /impossible or far-fetched input.*follow-up, not blocking/);
+  assert.match(spec.prompt, /"materiality": "immaterial"/);
+  assert.doesNotMatch(spec.prompt, /or a false description claim, is a blocking finding/);   // mutation: "every false claim blocks"
+});
+test('#419: a far-fetched finding recorded as a follow-up PASSes; a realistic one still gives CHANGES', async t => {
+  const a = await err(t, { verdict: 'PASS', findings: [{ kind: 'follow-up', text: 'Two projections of 10000% and 2500% would tie' }], descriptionClaims: [] });
+  assert.equal(a.w.team.s.verdicts['77:' + H(5)].verdict, 'PASS');
+  const b = await err(t, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'a normal run with two equal projections loses a job' }], descriptionClaims: [] });
+  assert.equal(b.w.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES');
 });
