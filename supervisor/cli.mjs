@@ -52,7 +52,7 @@ function reconcileOnce(root, registry) {
     // Issue #132 backstop: a terminal job whose leases were kept because a process was alive (manual stop, orphaned child)
     // never reaches transition() again. Once nothing of it runs, release them here.
     if (terminal.has(current.status)) {
-      if (!jobProcessesAlive(current) && leaseKeys(current).some(key => fs.existsSync(path.join(root, 'leases', key)))) { releaseLeases(root, current); released++; }
+      if (!jobProcessesAlive(current)) released += releaseLeases(root, current) ? 1 : 0;   // issue #195: count only leases this job owned
       continue;
     }
     const eligible = ['resume', 'usage_limit_detection', 'reset_time_parsing', 'non_interactive'].every(key => current.capabilities?.[key] === 'supported');
