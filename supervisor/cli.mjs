@@ -201,6 +201,8 @@ function selfUpgradeFor(root, registry) {
 // can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.
 async function selfUpgradeBefore(root, registry) {
   const { config, upgrade } = selfUpgradeFor(root, registry);
+  // Issue #209: the dashboard check runs on every tick, even with the team loop off, and never fails the tick.
+  try { await upgrade.watchdog(); } catch { /* the next tick checks again */ }
   if (!config.enabled) return { result: 'team-loop-disabled', hold: null };
   const result = await upgrade.step();
   // 'upgraded': this process still runs the old code, so it must not dispatch either; the next tick runs the new version.
