@@ -108,8 +108,18 @@ test('image lock: freshness is checked only when asked, and is deterministic wit
   const day = 86400000;
   assert.deepEqual(run(undefined, { now: new Date(newest + 1000 * day) }), []);
   expect(undefined, 'image-lock', 'update cadence', { maxAgeDays: 45, now: new Date(oldest + 46 * day) });
-  assert.deepEqual(run(undefined, { maxAgeDays: 45, now: new Date(newest + 44 * day) }), []);
+  assert.deepEqual(run(undefined, { maxAgeDays: 45, now: new Date(oldest + 44 * day) }), []);
   expect(undefined, 'image-lock', 'in the future', { maxAgeDays: 45, now: new Date(oldest - 10 * day) });
+});
+
+test('image lock: a partial re-pin (mixed dates) keeps the fresh case valid', () => {
+  const day = 86400000;
+  const lock = JSON.parse(fs.readFileSync(path.join(repo, LOCK), 'utf8'));
+  const names = Object.keys(lock.images);
+  const oldest = Math.min(...names.map((n) => Date.parse(lock.images[n].resolved_on || lock.observed_on)));
+  const newer = new Date(oldest + 30 * day).toISOString().slice(0, 10);
+  const mutate = (l) => { l.images[names[0]].resolved_on = newer; };
+  assert.deepEqual(run((a) => a.lock(mutate), { maxAgeDays: 45, now: new Date(oldest + 44 * day) }), []);
 });
 
 test('CLI: exit codes 0, 1 and 2', () => {
