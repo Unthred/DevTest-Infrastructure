@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot, provider, validateManifest, defaultRegistry } from '../supervisor/core.mjs';
 import { assessAgent, DEFAULT_BUDGET, HOUR, validateBudgetConfig } from '../supervisor/budget.mjs';
-import { probeDue, overageRisk, runProbeCommand, hasProbe, refreshProvider, cleanProbeRecord, MINUTE } from '../supervisor/probe.mjs';
+import { probeDue, overageRisk, runProbeCommand, hasProbe, refreshProvider, acquireProbeLock, cleanProbeRecord, MINUTE } from '../supervisor/probe.mjs';
 import { probeNow } from '../supervisor/probenow.mjs';
 import { mergeProbes, readCache, storeProbes, latestAllowance } from '../supervisor/dashdata.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
@@ -303,4 +303,24 @@ test('overageRisk: a used-up top-level status with no window reset time is a ris
   assert.equal(overageRisk(null, NOW), false);
   assert.equal(probeDue({ mode: 'waiting', allowance: noTime('rejected', 'allowed'), settings: S, now: NOW }), null);
   assert.equal(probeDue({ mode: 'waiting', allowance: { ...noTime('rejected', 'rejected'), observedAt: NOW - 3 * HOUR }, settings: S, now: NOW }).reason, 'stale');
+});
+
+test("the probe lock is cross-process: a held lock refuses a second taker, a dead owner or release frees it", async t => {
+  const lockDir = tmp(t);
+  const rel = acquireProbeLock("claude", { lockDir });
+  assert.equal(typeof rel, "function");
+  assert.equal(acquireProbeLock("claude", { lockDir }), null, "a live holder blocks another taker");
+  assert.equal(typeof acquireProbeLock("other", { lockDir }), "function", "other providers are independent");
+  rel();
+  const again = acquireProbeLock("claude", { lockDir });
+  assert.equal(typeof again, "function", "released lock can be taken");
+  again();
+  fs.mkdirSync(path.join(lockDir, "claude")); fs.writeFileSync(path.join(lockDir, "claude", "owner"), "2147483646");
+  const taken = acquireProbeLock("claude", { lockDir });
+  assert.equal(typeof taken, "function", "a lock owned by a dead process is taken over");
+  taken();
+  // a held lock makes refreshProvider report busy without running the probe
+  const held = acquireProbeLock("claude", { lockDir });
+  assert.deepEqual(await refreshProvider("/nonexistent", "claude", { lockDir }), { record: null, error: "busy" });
+  held();
 });

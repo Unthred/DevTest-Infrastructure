@@ -130,10 +130,42 @@ export function hasProbe(registry, providerId) {
   } catch { return false; }
 }
 
-// Probes that are running right now, so a double click or a tick plus a click never starts two runs for one provider.
+// Probes that are running right now. The in-process set stops a double click inside one process; the lock directory
+// stops the tick, the CLI and the dashboard (separate processes) from starting two runs for one provider.
 const running = new Set();
+const LOCK_MAX_AGE_MS = 30 * MINUTE;
+function lockRoot(opts) { return opts.lockDir || path.join(os.tmpdir(), `devtest-probe-locks-${process.getuid ? process.getuid() : 'user'}`); }
+function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
+function mtimeOf(dir) { try { return fs.statSync(dir).mtimeMs; } catch { return 0; } }
+// Take the cross-process lock for a provider; returns a release function, or null when another live process holds it.
+export function acquireProbeLock(providerId, opts = {}) {
+  const dir = path.join(lockRoot(opts), String(providerId).replace(/[^A-Za-z0-9_.-]/g, '_'));
+  fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.mkdirSync(dir, { mode: 0o700 });
+      fs.writeFileSync(path.join(dir, 'owner'), String(process.pid));
+      return () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } };
+    } catch (e) {
+      if (e.code !== 'EEXIST') return null;
+      let stale;
+      try {
+        const pid = Number(fs.readFileSync(path.join(dir, 'owner'), 'utf8'));
+        stale = !(pid > 0 && pidAlive(pid)) || Date.now() - mtimeOf(dir) > LOCK_MAX_AGE_MS;
+      } catch { stale = Date.now() - mtimeOf(dir) > 60000; } // owner file not written yet: give the taker a minute
+      if (!stale) return null;
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { return null; }
+    }
+  }
+  return null;
+}
 export async function refreshProvider(registry, providerId, opts = {}) {
   if (running.has(providerId)) return { record: null, error: 'busy' };
   running.add(providerId);
-  try { return await probeProvider(registry, providerId, opts); } finally { running.delete(providerId); }
+  let release = null;
+  try {
+    release = acquireProbeLock(providerId, opts);
+    if (!release) return { record: null, error: 'busy' };
+    return await probeProvider(registry, providerId, opts);
+  } finally { if (release) release(); running.delete(providerId); }
 }
