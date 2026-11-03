@@ -44,14 +44,14 @@ Every event is one JSON object with these fields. All are required unless marked
 | `subject` | object | What the event is about (below). |
 | `actor` | object | Who or what caused it (below). |
 | `type` | string | One of the event types in D4. |
-| `payload` | object | Type-specific data. Its keys are fixed per type (D4). |
+| `payload` | object | Type-specific data. Its keys are fixed per type (D4), plus the one optional common key `dedupeKey` (D5.5). |
 | `causedBy` | string, optional | The `id` of the event that led to this one, to link a chain. |
 
 `subject` is `{ "kind", "id" }`. Kinds: `task`, `run`, `pr`, `commit`, `card`, `install`, `policy`. `id` is the stable id the host uses for it, for example `task:239`, `run:r-0192`, `pr:458`, `commit:b5dd647`. Events about a pull request or run that belong to a task also carry `payload.task`.
 
 `actor` is `{ "kind", "id" }`. Kinds: `human`, `host` (SquigOS or Foreman; `id` names the component), `agent` (an adapter and model, `id` such as `claude/sonnet-5-5`), `ci`. The actor is set by the host from what authenticated the action, never from a field an agent supplied.
 
-Unknown keys in the envelope make the event invalid. Unknown keys in a payload are rejected for a known `type`; a reader meeting an unknown `type` skips it and keeps going (D3).
+Unknown keys in the envelope make the event invalid. Unknown keys in a payload (any key not fixed for the type in D4 and not the common optional `dedupeKey`) are rejected for a known `type`; a reader meeting an unknown `type` skips it and keeps going (D3).
 
 ### D3 — Append-only and versioning
 
@@ -95,7 +95,7 @@ Notes:
 2. **Time is informational.** `time` is monotonic non-decreasing in `seq` order because the writer assigns both under one lock; if the host clock steps backwards the writer clamps to the previous event's time. Clock skew cannot reorder events.
 3. **Causality.** An event that reports the outcome of something cites the event that started it with `causedBy`, and its `seq` is higher. Required pairs: `RunFinished` after `RunStarted`; `ActionResolved` after `ActionRequired`; `RolledBack` after `Installed`; `Merged` after at least one `ReviewSubmitted` with `verdict: pass` and a `ChecksCompleted` with `result: pass`, for the same `head`.
 4. **Intent before effect.** The event announcing an effect (`RunStarted`, `Merged`, `Installed`) is written before the effect is reported, so a crash leaves an event without a result, never a result without an event. A reader treats a `RunStarted` with no `RunFinished` and a dead owner as an interrupted run and the host appends a `RunFinished` with `outcome: failed` and a `FailureClassified`.
-5. **At least once, idempotent.** A producer that retries after a crash sends a stable `dedupeKey` inside the payload where one applies (for example `run` plus `operation`); the writer drops a second event with the same type and key. Projections must also tolerate a duplicate without double counting.
+5. **At least once, idempotent.** A producer that retries after a crash sends a stable `dedupeKey` inside the payload where one applies. `dedupeKey` is an optional string allowed in the payload of every event type, in addition to that type's fixed keys in D4; it is the only payload key common to all types (for example `run` plus `operation`); the writer drops a second event with the same type and key. Projections must also tolerate a duplicate without double counting.
 6. **Per-subject order.** For one subject the order of its events is the order of their `seq`. Nothing relies on order between unrelated subjects.
 
 ### D6 — No secrets and no raw logs
