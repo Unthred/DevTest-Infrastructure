@@ -101,6 +101,7 @@ export function tickLine(t) {
   if (t.actions.length) parts.push(`actions ${t.actions.map(a => `${a.agent} ${a.type} #${a.ref}`).join(', ')}`);
   if (t.released) parts.push(`released ${t.released} lease(s)`);
   if (t.selfUpgrade) parts.push(`self-upgrade ${t.selfUpgrade}`);
+  if (t.warnings?.length) parts.push(`warnings (${t.warnings.length}): ${t.warnings.join(' | ')}`);
   if (t.errors.length) parts.push(`errors: ${t.errors.join(' | ')}`);
   return scrub(parts.join('; '), 600);
 }

@@ -6,18 +6,20 @@ NOTIFY=${TEAM_ALERT_NOTIFY:-/usr/local/emhttp/plugins/dynamix/scripts/notify}; n
 # Alerting is best effort (#143): a failure here is a warning and never makes the scheduled tick fail.
 warn(){ echo "team-alert: warning: $*" >&2; }
 trap 'exit 0' EXIT
+# Child stderr never reaches the log as a stray line (#200): a failing supervisor call is one warning, and the script goes on.
+sstatus(){ $S status 2>/dev/null || warn "supervisor status failed"; return 0; }
 # The state file is created (mode 600) when it is missing; a missing file is the normal first run.
 [ -e "$ST" ] || ( umask 077; : > "$ST" ) 2>/dev/null || warn "cannot create $ST"
 # A failed notify is a warning that the dashboard raises as "Needs you" (#215); it is never swallowed.
 send(){ $NOTIFY -e "AI agent team" -s "Tower | $1" -d "$2" -i "$3" >/dev/null 2>&1 || { warn "notify failed: alert not delivered"; return 1; }; }
 [ "$1" = "--test" ] && { send "Agents TEST - alert route works" "TEST message from team-alert. No action." normal; exit; }
-if [ -n "$($S status | awk '$4=="running"')" ]; then
+if [ -n "$(sstatus | awk '$4=="running"')" ]; then
   # A running job keeps the state file (#215): the kind changes, so the "since" timer restarts when work stops.
   ( umask 077; echo "running $now 0" > "$ST" ) 2>/dev/null || warn "cannot write $ST"; exit 0
 fi
 last=$(grep -A1 ' tick$' "$LOG" 2>/dev/null | tail -1)
-planned=$($S team tick --dry-run 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log((JSON.parse(s).actions||[]).length)}catch{console.log(0)}})')
-paused=$($S status | awk '$4=="paused_limit"{print $2" #"$3}' | tr '\n' ' ')
+planned=$({ $S team tick --dry-run 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log((JSON.parse(s).actions||[]).length)}catch{console.log(0)}})'; } 2>/dev/null)
+paused=$(sstatus | awk '$4=="paused_limit"{print $2" #"$3}' | tr '\n' ' ')
 if echo "$last" | grep -q '"error"'; then kind=stuck; msg="Agents stuck - tick failing | $(echo "$last" | sed 's/.*"error":"\([^"]*\)".*/\1/' | cut -c1-80)"; wait=600
 elif [ "${planned:-0}" -gt 0 ]; then kind=stuck; msg="Agents stuck - $planned planned job(s) not starting | Check team-status"; wait=600
 elif [ -n "$paused" ]; then kind=paused; msg="Agents paused - usage limit: $paused| Auto-restart after reset"; wait=0

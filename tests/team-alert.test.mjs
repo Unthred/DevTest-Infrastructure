@@ -92,3 +92,23 @@ test('the installer and the upgrader deploy the reviewed team-alert and never to
   assert.equal(spawnSync('bash', ['-n', 'tools/install-supervisor.sh']).status, 0);
   assert.equal(spawnSync('bash', ['-n', 'tools/upgrade-supervisor.sh']).status, 0);
 });
+
+// Issue #200: child stderr must not leak into the log as stray lines that would make a tick an error.
+test('a supervisor that writes to stderr and fails gives one warning and no stray stderr', t => {
+  const f = fixture(t);
+  const sup = path.join(f.dir, 'sup');
+  fs.writeFileSync(sup, '#!/bin/bash\necho "ai-supervisor: status failed" >&2\n[ "$1" = status ] && exit 1\necho \'{"actions":[]}\'\n', { mode: 0o755 });
+  const r = f.run();
+  assert.equal(r.status, 0);
+  const lines = r.stderr.split('\n').filter(Boolean);
+  assert.ok(lines.length > 0 && lines.every(l => l.startsWith('team-alert: warning: ')), r.stderr);
+  assert.ok(!/ai-supervisor/.test(r.stderr));
+});
+
+test('a missing supervisor binary leaves no command-not-found text on stderr', t => {
+  const f = fixture(t);
+  fs.rmSync(path.join(f.dir, 'sup'));
+  const r = f.run();
+  assert.equal(r.status, 0);
+  assert.ok(r.stderr.split('\n').filter(Boolean).every(l => l.startsWith('team-alert: warning: ')), r.stderr);
+});

@@ -453,3 +453,10 @@ test('a failed status-issue update is a dashboard warning, not a Needs you item 
   assert.ok(bad.panels.warnings.some(a => a.id === 'status-issue-failed'), 'warning panel');
   assert.ok(!bad.panels.needsYou.some(a => a.id === 'status-issue-failed'));
 });
+
+test('tickLine shows the warning count and text; a tick without warnings is unchanged (issue #200)', () => {
+  const [w] = parseReconcileLog('2026-10-31T18:00:00Z tick\n{"resumed":0}\nteam-alert: warning: notify failed\n');
+  assert.match(tickLine(w), /tick ok; warnings \(1\): team-alert: warning: notify failed/);
+  const [clean] = parseReconcileLog('2026-10-31T18:00:00Z tick\n{"resumed":0}\n');
+  assert.doesNotMatch(tickLine(clean), /warnings/);
+});
