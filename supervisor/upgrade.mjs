@@ -38,6 +38,8 @@ export function liveTickOutcome(tick) {
 export const envBackoffMs = attempts => Math.min(ENV_RETRY_MS * 2 ** Math.max(0, (attempts || 1) - 1), ENV_RETRY_MAX_MS);
 // Only the bootstrap installer cannot install itself: a change to it is a needs-homeowner card (issue #101). The main upgrader
 // (supervisor/upgrade.mjs, tools/upgrade-supervisor.sh, tools/rollback-supervisor.sh) installs like any other reviewed change.
+// The exact command printed for a refused update (issue #446).
+export const handInstallCommand = sha => `/root/bin/ai-supervisor self-upgrade hand-install ${sha}`;
 export const BOOTSTRAP_PATHS = ['tools/bootstrap-install.sh'];
 // Exit codes of tools/bootstrap-install.sh.
 export const BOOTSTRAP_EXIT = { transient: 10, checks: 11, payload: 12, swap: 13 };
@@ -198,7 +200,7 @@ export class SelfUpgrade {
   clearLatch() { fs.rmSync(this.latchFile, { force: true }); }
   installCommand(target) {
     let url = null; try { url = this.d.remoteUrl?.(); } catch { url = null; }
-    return `bash tools/bootstrap-install.sh install ${url || '<REPO_URL>'} ${target}`;
+    return handInstallCommand(target);
   }
   noteMain(from, target) {
     if (!SHA.test(target || '')) return;
@@ -261,7 +263,7 @@ export class SelfUpgrade {
     if (!files.some(f => f.startsWith('supervisor/'))) return 'no-supervisor-change';
     const touched = files.filter(f => BOOTSTRAP_PATHS.includes(f));
     if (touched.length) {
-      await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${short(target)}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically.`);
+      await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${target}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically. To install it, paste on Tower: ${this.installCommand(target)} (it pauses starts, drains jobs, installs with validator and tests, checks dry-run, dashboard and the next live tick, rolls back on any failure, and always resumes).`);
       // Issue #265: one record per target (the alert above is already once per target), and one Needs you item until the install moves.
       if (this.s.handDeploy?.to !== target) {
         this.record({ from, to: target, result: 'refused', reason: 'changes the bootstrap installer', files: touched });
@@ -488,13 +490,15 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
   const git = (...a) => { const r = run('git', ['-C', repo, ...a]); if (r.status !== 0) throw new Error(`git ${a[0]} failed`); return r.stdout.trim(); };
   const remoteUrl = () => git('remote', 'get-url', 'origin');
   // The bootstrap installer is taken from the installed commit, not the target: it is the one file a range may not change.
-  const bootstrap = (mode, sha, timeoutMs) => {
+  const bootstrap = (mode, sha, timeoutMs, scriptFrom = null) => {
     const dir = scratch();
     try {
       const from = installedSha(root);
       if (!from) return { ok: false, reason: 'no installed version to take the bootstrap installer from' };
       const script = path.join(dir, 'bootstrap-install.sh');
-      fs.writeFileSync(script, git('show', `${from}:tools/bootstrap-install.sh`), { mode: 0o700 });
+      // Issue #446: the hand route takes the installer from the target itself (the reviewed commit that changed it).
+      if (scriptFrom) git('fetch', '--quiet', 'origin');
+      fs.writeFileSync(script, git('show', `${scriptFrom || from}:tools/bootstrap-install.sh`), { mode: 0o700 });
       const r = run('bash', [script, mode, remoteUrl(), sha], { timeoutMs });
       if (r.status === 0) return { ok: true };
       const failure = r.status === BOOTSTRAP_EXIT.checks ? parseTestFailure(r.stderr) : null;
@@ -526,6 +530,10 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     independenceApproved,
     // Issue #380: a job paused on a usage limit runs no process, so it does not hold an upgrade in drain; its record survives and its worker (or reconcile) resumes it.
     activeJobs: async () => (await listActive()).filter(j => j.status !== 'paused_limit').length,
+    handInstall: async sha => bootstrap('install', sha, 3000000, sha),
+    dueHeld: async () => (await listActive()).filter(j => ['paused_limit', 'queued'].includes(j.status) && j.nextAttemptAt != null && j.nextAttemptAt <= Date.now()).length,
+    runningJobs: async () => (await listActive()).filter(j => j.status === 'running').length,
+    liveTick: async () => { const r = run(wrapper, ['team', 'tick'], { timeoutMs: 600000 }); if (r.status !== 0) return { error: tail(r) }; try { return JSON.parse(r.stdout); } catch { return { error: 'live tick output is not JSON' }; } },
     preChecks: async sha => bootstrap('check', sha, 2400000),
     upgrade: async sha => bootstrap('install', sha, 3000000),
     // A register read that fails right after an upgrade is usually transient, so it is retried (three tries, backoff) before it can roll back.

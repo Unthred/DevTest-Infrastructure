@@ -74,7 +74,8 @@ export function validateTeamConfig(input) {
 export const DRAIN_DEFAULT_MINUTES = 30;
 function validateSelfUpgrade(u) {
   if (u === undefined) return;
-  if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => k !== 'drain_max_minutes')) throw new SupervisorError('invalid team config: self_upgrade');
+  if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => !['drain_max_minutes', 'public_dashboard_url'].includes(k))) throw new SupervisorError('invalid team config: self_upgrade');
+  if ('public_dashboard_url' in u && !(typeof u.public_dashboard_url === 'string' && /^https?:\/\/[^\s]+$/.test(u.public_dashboard_url))) throw new SupervisorError('invalid team config: self_upgrade.public_dashboard_url');
   if ('drain_max_minutes' in u && !(Number.isSafeInteger(u.drain_max_minutes) && u.drain_max_minutes >= 1 && u.drain_max_minutes <= 720)) throw new SupervisorError('invalid team config: self_upgrade.drain_max_minutes');
 }
 
