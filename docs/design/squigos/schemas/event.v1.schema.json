@@ -1,0 +1,1564 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Unthred/SquigOS/docs/adr/schemas/event.v1.schema.json",
+  "title": "Event envelope event.v1 (DRAFT, issue #242; not authoritative until the ADR is accepted)",
+  "description": "One append-only log event (ADR-0012). Envelope and payload keys are closed per known type. A payload never carries a secret-shaped value or a raw-log field (D6). A reader meeting an unknown type skips it (D3); this schema only describes the known types, so an unknown type fails validation here. Ordering and causality rules (D5) need the whole log and are not expressible in this per-event schema.",
+  "oneOf": [
+    {
+      "$comment": "TaskQueued",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "task"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^task:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "TaskQueued"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "task",
+            "title",
+            "source",
+            "reference",
+            "priority"
+          ],
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/taskRef"
+            },
+            "title": {
+              "$ref": "#/$defs/text"
+            },
+            "source": {
+              "$ref": "#/$defs/ident"
+            },
+            "reference": {
+              "$ref": "#/$defs/ref"
+            },
+            "priority": {
+              "enum": [
+                "low",
+                "normal",
+                "high"
+              ]
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "AgentAssigned",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "run"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^run:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "AgentAssigned"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "task",
+            "role",
+            "adapter",
+            "model",
+            "tier"
+          ],
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/taskRef"
+            },
+            "role": {
+              "$ref": "#/$defs/ident"
+            },
+            "adapter": {
+              "$ref": "#/$defs/ident"
+            },
+            "model": {
+              "$ref": "#/$defs/ident"
+            },
+            "tier": {
+              "$ref": "#/$defs/tier"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "RunStarted",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "run"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^run:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "RunStarted"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "task",
+            "operation",
+            "adapter",
+            "model",
+            "tier",
+            "worktree"
+          ],
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/taskRef"
+            },
+            "operation": {
+              "enum": [
+                "run",
+                "review"
+              ]
+            },
+            "adapter": {
+              "$ref": "#/$defs/ident"
+            },
+            "model": {
+              "$ref": "#/$defs/ident"
+            },
+            "tier": {
+              "$ref": "#/$defs/tier"
+            },
+            "worktree": {
+              "$ref": "#/$defs/relPath"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "RunFinished",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "run"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^run:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "RunFinished"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "task",
+            "outcome",
+            "exitCode",
+            "durationMs",
+            "usage"
+          ],
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/taskRef"
+            },
+            "outcome": {
+              "enum": [
+                "ok",
+                "failed",
+                "blocked",
+                "timeout",
+                "unavailable"
+              ]
+            },
+            "exitCode": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "usage": {
+              "$ref": "#/$defs/usage"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "ChecksCompleted",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pr"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^pr:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "ChecksCompleted"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "task",
+            "head",
+            "result",
+            "checks",
+            "evidence"
+          ],
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/taskRef"
+            },
+            "head": {
+              "$ref": "#/$defs/sha"
+            },
+            "result": {
+              "enum": [
+                "pass",
+                "fail"
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "result"
+                ],
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/ident"
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "fail",
+                      "skipped"
+                    ]
+                  }
+                }
+              }
+            },
+            "evidence": {
+              "$ref": "#/$defs/evidenceList"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "ReviewSubmitted",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pr"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^pr:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "ReviewSubmitted"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "task",
+            "head",
+            "verdict",
+            "reviewer",
+            "findings"
+          ],
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/taskRef"
+            },
+            "head": {
+              "$ref": "#/$defs/sha"
+            },
+            "verdict": {
+              "enum": [
+                "pass",
+                "changes-requested",
+                "blocked"
+              ]
+            },
+            "reviewer": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapter",
+                "model"
+              ],
+              "properties": {
+                "adapter": {
+                  "$ref": "#/$defs/ident"
+                },
+                "model": {
+                  "$ref": "#/$defs/ident"
+                }
+              }
+            },
+            "findings": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "summary"
+                ],
+                "properties": {
+                  "ref": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "summary": {
+                    "$ref": "#/$defs/text"
+                  }
+                }
+              }
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "FailureClassified",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "run"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^run:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "FailureClassified"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "task",
+            "class",
+            "retryable",
+            "summary"
+          ],
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/taskRef"
+            },
+            "class": {
+              "$ref": "#/$defs/ident"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "summary": {
+              "$ref": "#/$defs/text"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "ActionRequired",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "card"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^card:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "ActionRequired"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action",
+            "onSubject",
+            "tier",
+            "reason",
+            "onReject"
+          ],
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ident"
+            },
+            "onSubject": {
+              "$ref": "#/$defs/ref"
+            },
+            "tier": {
+              "$ref": "#/$defs/tier"
+            },
+            "reason": {
+              "$ref": "#/$defs/text"
+            },
+            "onReject": {
+              "$ref": "#/$defs/text"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "ActionResolved",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "card"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^card:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "ActionResolved"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "decision",
+            "action",
+            "onSubject",
+            "tier"
+          ],
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "action": {
+              "$ref": "#/$defs/ident"
+            },
+            "onSubject": {
+              "$ref": "#/$defs/ref"
+            },
+            "tier": {
+              "$ref": "#/$defs/tier"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "Merged",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pr"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^pr:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "Merged"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "task",
+            "head",
+            "mergeCommit",
+            "gates"
+          ],
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/taskRef"
+            },
+            "head": {
+              "$ref": "#/$defs/sha"
+            },
+            "mergeCommit": {
+              "$ref": "#/$defs/sha"
+            },
+            "gates": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "checks",
+                "review",
+                "mergeable"
+              ],
+              "properties": {
+                "checks": {
+                  "const": "pass"
+                },
+                "review": {
+                  "const": "pass"
+                },
+                "mergeable": {
+                  "const": true
+                }
+              }
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "Installed",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "install"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^install:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "Installed"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit",
+            "target",
+            "previous",
+            "result"
+          ],
+          "properties": {
+            "commit": {
+              "$ref": "#/$defs/sha"
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            },
+            "previous": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/sha"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {
+              "enum": [
+                "ok",
+                "failed"
+              ]
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "RolledBack",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "install"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^install:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "RolledBack"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit",
+            "target",
+            "restored",
+            "reason"
+          ],
+          "properties": {
+            "commit": {
+              "$ref": "#/$defs/sha"
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            },
+            "restored": {
+              "$ref": "#/$defs/sha"
+            },
+            "reason": {
+              "$ref": "#/$defs/text"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "PolicyActionTaken",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "policy"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^policy:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "PolicyActionTaken"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entry",
+            "policyVersion",
+            "action",
+            "onSubject",
+            "tier"
+          ],
+          "properties": {
+            "entry": {
+              "$ref": "#/$defs/ident"
+            },
+            "policyVersion": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "action": {
+              "$ref": "#/$defs/ident"
+            },
+            "onSubject": {
+              "$ref": "#/$defs/ref"
+            },
+            "tier": {
+              "$ref": "#/$defs/tier"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "PolicyRejected",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "id",
+        "seq",
+        "time",
+        "subject",
+        "actor",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "policy"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^policy:[A-Za-z0-9._-]{1,100}$",
+              "maxLength": 120
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "type": {
+          "const": "PolicyRejected"
+        },
+        "causedBy": {
+          "$ref": "#/$defs/eventId"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policyVersion",
+            "source",
+            "rule",
+            "entry"
+          ],
+          "properties": {
+            "policyVersion": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "source": {
+              "$ref": "#/$defs/ident"
+            },
+            "rule": {
+              "$ref": "#/$defs/ident"
+            },
+            "entry": {
+              "$ref": "#/$defs/ident"
+            },
+            "dedupeKey": {
+              "$ref": "#/$defs/ref"
+            }
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
+              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "contract": {
+      "const": "event.v1"
+    },
+    "eventId": {
+      "type": "string",
+      "pattern": "^(?:[0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
+      "description": "ULID or UUIDv7."
+    },
+    "time": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "description": "RFC 3339 UTC to the millisecond."
+    },
+    "noSecret": {
+      "not": {
+        "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----|\\b(?:ghp|gho|ghu|ghs|ghr|github_pat|sk|pk|xox[abprs])[-_][A-Za-z0-9_-]{16,}|\\bAKIA[0-9A-Z]{16}\\b|\\b[Bb]earer\\s+[A-Za-z0-9._~+/=-]{16,}|\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{5,}"
+      },
+      "description": "Rejects secret-shaped values (private key header, common token prefixes, cloud key ids, bearer values, JWTs). The writer also runs the full secret scanner (D6)."
+    },
+    "ident": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$"
+        },
+        {
+          "$ref": "#/$defs/noSecret"
+        }
+      ]
+    },
+    "ref": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$"
+        },
+        {
+          "$ref": "#/$defs/noSecret"
+        }
+      ]
+    },
+    "taskRef": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^task:[A-Za-z0-9._-]{1,100}$"
+        },
+        {
+          "$ref": "#/$defs/noSecret"
+        }
+      ]
+    },
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "tier": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "Computed by the host (ADR-0009), never taken from an agent."
+    },
+    "relPath": {
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^(?![/\\\\])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+        },
+        {
+          "$ref": "#/$defs/noSecret"
+        }
+      ],
+      "description": "Relative to a named root; no absolute paths, no parent segments."
+    },
+    "evidenceList": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/relPath"
+      },
+      "description": "References into the evidence store, never content."
+    },
+    "text": {
+      "allOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "description": "One plain sentence written by the host: 300 characters or fewer, no control characters or newlines."
+        },
+        {
+          "$ref": "#/$defs/noSecret"
+        }
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "maxProperties": 20,
+      "propertyNames": {
+        "pattern": "^[A-Za-z][A-Za-z0-9]{0,39}$"
+      },
+      "additionalProperties": {
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "description": "Counters reported by the adapter, numbers only."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "git",
+            "live-system",
+            "host"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/ident"
+        }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "human",
+            "host",
+            "agent",
+            "ci"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ident"
+        }
+      }
+    }
+  }
+}
