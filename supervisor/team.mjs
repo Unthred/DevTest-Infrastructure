@@ -299,7 +299,10 @@ const cleanText = (value, max) => redact(value, max).replace(/\s+/g, ' ').trim()
 export const isSecretScanner = check => SECRET_SCANNER.test(`${check?.name || ''} ${check?.app || ''}`);
 export function checkDetails(runs, names) {
   const want = new Set(names), out = [];
-  for (const r of Array.isArray(runs) ? runs : []) {
+  // After a rerun the API lists several runs of one name: describe one that did not succeed before a passing one (issue #205).
+  const failed = r => !CHECK_OK.includes(String(r?.conclusion || '').toUpperCase());
+  const list = (Array.isArray(runs) ? runs : []).map((r, i) => [r, i]).sort((a, b) => (failed(b[0]) - failed(a[0])) || a[1] - b[1]).map(x => x[0]);
+  for (const r of list) {
     const name = typeof r?.name === 'string' ? r.name : '';
     if (!want.has(name) || out.some(o => o.name === name)) continue;
     const o = r.output || {};
@@ -1831,7 +1834,7 @@ export class Team {
     const scanners = details.filter(isSecretScanner);
     if (scanners.length) {
       try {
-        await this.flag(act.pr, { key: `secret-scan:${act.head}`, kind: 'secret-scan', head: act.head, tk: 'pull' });
+        await this.flag(act.pr, { key: `secret-scan:${act.head}`, kind: 'secret-scan', head: act.head, checks: scanners.map(c => c.name), tk: 'pull' });
         const links = scanners.map(c => `\`${c.name}\`${c.url ? ` (${c.url})` : ''}`).join(', ');
         await this.postNotice(act.pr, `secret-scan pr=${act.pr} head=${act.head}`, `**Needs the homeowner.** The secret scanner ${links} flagged head \`${act.head}\`. If the flagged value is a test fixture, the fix job rewrites it so it is assembled at runtime; the old commit stays flagged, so: mark incident <id> as a test credential in GitGuardian (the incident is linked from the check). If the value is a real credential, revoke it instead; Foreman never dismisses a finding that does not look like a fixture.`);
       } catch { /* the notice is retried on the next cifix launch for this head; the job still runs */ }
@@ -2124,7 +2127,15 @@ export class Team {
     // Fix limit: only a new head that was reviewed with PASS and is not red clears it; an unreviewed or pending head does not.
     if (c.kind === 'fixlimit') return !pr || (pr.headRefOid !== c.head && this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'PASS' && this.ciState(pr) !== 'red');
     // A head move does not clear it: the old commit stays flagged. Only a scanner that no longer fails on the current head (or a closed PR) does.
-    if (c.kind === 'secret-scan') return !pr || !failingChecks(pr.statusCheckRollup, this.retried(pr)).some(n => isSecretScanner({ name: n }));
+    // The flag records the scanner check names it was raised for (issue #205); it clears only once each of them has completed
+    // successfully on the current head. A re-running, missing or failing scanner holds the label, so it does not flap after a push.
+    // A flag from before names were recorded falls back to the name test.
+    if (c.kind === 'secret-scan') {
+      if (!pr) return true;
+      if (!Array.isArray(c.checks) || !c.checks.length) return !failingChecks(pr.statusCheckRollup, this.retried(pr)).some(n => isSecretScanner({ name: n }));
+      const latest = latestChecks(pr.statusCheckRollup);
+      return c.checks.every(n => { const r = latest.find(x => (x.name || x.context) === n); return !!r && checkDone(r) && CHECK_OK.includes(r.conclusion || r.state); });
+    }
     if (c.kind === 'cancelled-ci') return !pr || pr.headRefOid !== c.head || this.ciState(pr) === 'green';
     // A per-day limit has cleared once the day has rolled over (the notice says so); a per-PR limit does not reset by itself.
     if (c.kind === 'limit') { const m = /^limit:day:(\d{4}-\d{2}-\d{2})$/.exec(c.key || ''); return !!m && m[1] < this.dayKey(); }
@@ -2219,10 +2230,11 @@ export class Team {
       bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; if (this.exceptionFor(act.pr)) this.s.exceptionFixes[act.pr] = (this.s.exceptionFixes[act.pr] || 0) + 1; };
     } else if (act.type === 'rebase' || act.type === 'cifix') {
       const rebase = act.type === 'rebase';
-      const details = rebase ? [] : await this.thirdPartyChecks(act);
       let rq = null;
       if (!rebase) { const dir = escalatedInbox || path.join(this.dir, 'inbox', ticket); fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); rq = await this.writeRequirements(act.branch, dir); }
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.type}-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
+      // After the worktree exists, so a setup failure posts no homeowner notice for a job that never started (issue #205).
+      const details = rebase ? [] : await this.thirdPartyChecks(act);
       spec = { ...common, kind: act.type, worktree: wt, issue: act.pr, scope: rebase ? `Conflict-only rebase of PR #${act.pr} onto ${act.base}` : `Fix red CI on PR #${act.pr}`,
         allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch, behind: !!act.behind }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks, checkDetails: details, escalatedInbox, requirementsFile: rq?.file }),
