@@ -87,3 +87,47 @@ test('a failed fetch while rate-limited changes nothing and the normal up-to-dat
   assert.equal(await up.step(), 'rate-limited');
   assert.equal(versionStatus({ installed: H(1), main: H(1), drift: false, behind: 0, nextTryAt: null, running: null, result: 'verified' }).label, 'Up to date (1111111)');
 });
+
+const ZERO = '0001-01-01T00:00:00Z';   // how gh serialises a missing time
+
+test('the Go zero time is unknown: a conclusion with a zero completedAt is stuck, not done; a zero startedAt has no age', () => {
+  const c = run({ status: 'IN_PROGRESS', completedAt: ZERO });
+  assert.equal(checksState([c]), 'pending');
+  assert.equal(stuckChecks([c], NOW).length, 1);
+  assert.equal(stuckChecks([run({ status: 'IN_PROGRESS', completedAt: ZERO, startedAt: ZERO })], NOW).length, 0, 'unknown start cannot be aged');
+  const queued = run({ status: 'QUEUED', conclusion: '', completedAt: ZERO, startedAt: ZERO });
+  assert.equal(unfinishedChecks([queued], NOW)[0].ageMs, null);
+  assert.equal(waitingOnText([queued], NOW), 'waiting on CI: ci-lint unfinished for unknown time');
+  assert.equal(checksState([run({ status: 'COMPLETED', completedAt: ZERO })]), 'green', 'COMPLETED status alone is still done');
+});
+
+test('buildView gives the per-PR waiting text from its own now (reasons and idle reason)', async t => {
+  const queued = [run({ status: 'QUEUED', conclusion: '', completedAt: ZERO, startedAt: iso(NOW - 12 * 60000) })];
+  const v = await viewWith(queued, t);
+  const text = JSON.stringify(v);
+  assert.match(text, /waiting on CI: ci-lint unfinished for 12 min/, 'queue reason uses the view now');
+  assert.match(text, /waiting on CI for [^"]*329[^"]*: ci-lint unfinished for 12 min/, 'idle reason uses the view now and names the PR');
+  assert.doesNotMatch(text, /unfinished for \d{5,} min/);
+});
+
+test('readVersion takes now, and uses the interval constant and one read of the state', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rv-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'team')); fs.mkdirSync(path.join(dir, 'versions', H(1)), { recursive: true }); fs.symlinkSync(`versions/${H(1)}`, path.join(dir, 'current'));
+  const last = 1_000_000_000_000;
+  fs.writeFileSync(path.join(dir, 'team', 'self-upgrade.json'), JSON.stringify({ lastUpgradeAt: last, main: { sha: H(2), from: H(1), behind: 3 } }));
+  const at = readVersion(dir, { running: null, now: last + 1000 });
+  assert.equal(at.nextTryAt, last + MIN_UPGRADE_INTERVAL_MS);
+  assert.equal(at.behind, 3);
+  assert.equal(readVersion(dir, { running: null, now: last + MIN_UPGRADE_INTERVAL_MS + 1 }).nextTryAt, null);
+});
+
+test('while rate-limited, a failing fetch backs off instead of retrying every tick', async t => {
+  const state = { now: Date.now(), installed: H(1), main: H(1), behind: 0 };
+  const { up } = upgrader(t, state);
+  up.s.lastUpgradeAt = state.now - 10000; up.save();
+  let calls = 0; up.d.fetchMain = () => { calls++; throw new Error('offline'); };
+  assert.equal(await up.step(), 'rate-limited'); assert.equal(calls, 1);
+  state.now += 1000;
+  assert.equal(await up.step(), 'rate-limited'); assert.equal(calls, 1, 'second tick inside the backoff does not fetch');
+  assert.ok(up.s.fetchRetryAt > state.now);
+});

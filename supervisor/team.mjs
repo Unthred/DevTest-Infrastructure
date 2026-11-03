@@ -227,17 +227,20 @@ export const CARRY_DECISION = 'D-025';
 const CHECK_OK = ['SUCCESS', 'NEUTRAL', 'SKIPPED'];
 // Issue #331: GitHub can leave a check run at status IN_PROGRESS after it has a conclusion and a completed time (seen on PR #329).
 // A conclusion plus a completed time is done whatever the status says.
-const hasResult = c => !!c.conclusion && Number.isFinite(Date.parse(c.completedAt || ''));
+// gh serialises a missing time as the Go zero time 0001-01-01T00:00:00Z, which Date.parse accepts: any year before 2000 is "unknown".
+const realTime = s => { const t = Date.parse(s || ''); return Number.isFinite(t) && new Date(t).getUTCFullYear() >= 2000 ? t : null; };
+const hasResult = c => !!c.conclusion && realTime(c.completedAt) !== null;
 const checkDone = c => (c.status ? c.status === 'COMPLETED' || hasResult(c) : !!c.state && c.state !== 'PENDING' && c.state !== 'EXPECTED');
-// A check whose state contradicts itself (a conclusion but no completed time, or COMPLETED without a conclusion) for longer than this is "stuck".
+// A check whose state contradicts itself (a conclusion but no real completed time) for longer than this is "stuck".
 export const STUCK_CHECK_MS = 10 * 60000;
-const inconsistent = c => (!checkDone(c) ? !!c.conclusion : c.status === 'COMPLETED' && !c.conclusion);
+// A done check is never listed as unfinished, so only an unfinished check holding a conclusion (but no real completed time) can be inconsistent.
+const inconsistent = c => !checkDone(c) && !!c.conclusion;
 const checkLabel = c => { const n = c.name || c.context; return typeof n === 'string' && /^[A-Za-z0-9 ._:()\/-]{1,80}$/.test(n) ? n : 'a check'; };
 // Checks not finished on this rollup, with age from their start (null when unknown) and whether their state is inconsistent.
 export function unfinishedChecks(rollup, now = Date.now()) {
   return latestChecks(rollup).filter(c => !checkDone(c)).map(c => {
-    const t = Date.parse(c.startedAt || '');
-    return { name: checkLabel(c), ageMs: Number.isFinite(t) ? Math.max(0, now - t) : null, inconsistent: inconsistent(c) };
+    const t = realTime(c.startedAt);
+    return { name: checkLabel(c), ageMs: t !== null ? Math.max(0, now - t) : null, inconsistent: inconsistent(c) };
   });
 }
 export const stuckChecks = (rollup, now = Date.now()) => unfinishedChecks(rollup, now).filter(c => c.inconsistent && c.ageMs !== null && c.ageMs > STUCK_CHECK_MS);
