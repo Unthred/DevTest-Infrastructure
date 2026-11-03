@@ -211,3 +211,35 @@ test('issue #191: the dashboard drain text uses the configured time zone, as tea
   assert.match(await text('Asia/Tokyo'), /since 20:50 \(/);
   assert.doesNotMatch(await text('Asia/Tokyo'), /UTC/);
 });
+
+// ---- issue #315: tick lock around migrations, write-time redaction
+test('issue #315: a failed migration error is redacted in migrations.json and incidents.jsonl, not only on display', async t => {
+  const root = tmp(t), dir = path.join(root, 'm');
+  const secret = ['gh', 'p_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('');
+  mkMig(dir, '001-a.mjs', `export const description = 'x'; export function migrate() { throw new Error('token ${secret} rejected'); }`);
+  put(root, { enabled: true });
+  const r = await runMigrations({ root, dir, validate });
+  assert.ok(r.failed);
+  for (const f of [path.join(root, 'team', 'migrations.json'), path.join(root, 'team', 'incidents.jsonl')]) {
+    const text = fs.readFileSync(f, 'utf8');
+    assert.ok(!text.includes(secret), f); assert.match(text, /rejected/);
+  }
+});
+
+test('issue #315: a live tick held by another process skips: no migration runs, no state written, team.local.json unchanged', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { processStart } = await import('../supervisor/core.mjs');
+  const root = tmp(t);
+  const cli = path.join(path.dirname(shippedFile), 'cli.mjs');
+  put(root, { enabled: true });
+  const before = fs.readFileSync(path.join(root, LOCAL_FILE), 'utf8');
+  const lock = path.join(root, 'team', 'tick.lock');
+  fs.mkdirSync(lock, { recursive: true });
+  // the owner is a live process: this test's own pid and start time
+  fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }));
+  const r = spawnSync(process.execPath, [cli, 'team', 'tick', '--state-root', root], { encoding: 'utf8', timeout: 60000 });
+  assert.match(r.stdout, /another tick is running/);
+  assert.equal(fs.existsSync(path.join(root, 'team', 'migrations.json')), false);
+  assert.equal(fs.readFileSync(path.join(root, LOCAL_FILE), 'utf8'), before);
+  assert.ok(fs.existsSync(lock), 'the other tick\'s lock is not removed');
+});

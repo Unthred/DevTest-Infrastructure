@@ -279,13 +279,13 @@ function statusBar(view, route, head = '') {
 <div class="stat"><span class="k">Team loop</span>${pill(L.team, view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled'), 'Open the dispatcher facts')}</div>
 <div class="stat"><span class="k">Version</span>${pill(vs.href, badge(vs.level, vs.label), 'Open the version health card')}</div>
 <button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>
-<nav class="nav" id="nav" aria-label="Pages"><span class="dock-handle wide-only" data-dock-handle title="Drag to a screen edge to dock the navigation" aria-hidden="true">${icon('drag')}</span>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
+<nav class="nav" id="nav" aria-label="Pages"><button type="button" class="dock-handle wide-only" data-dock-handle aria-label="Dock the navigation: arrow keys move it to a screen edge, Home resets it" title="Drag to a screen edge to dock the navigation, or use the arrow keys">${icon('drag')}</button>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
 }
 
 // ---- "Since you were last here" (issue #253): the range lives in the URL (?since=), Mark as read is a same-origin form POST.
 function sincePanel(view, query) {
   const sv = view.since, now = view.generatedAt;
-  const range = query.get('since') in SINCE_RANGES ? query.get('since') : DEFAULT_SINCE, r = sv.ranges[range];
+  const range = Object.hasOwn(SINCE_RANGES, query.get('since')) ? query.get('since') : DEFAULT_SINCE, r = sv.ranges[range];
   const picker = `<div class="ranges" role="group" aria-label="Summary range">${Object.entries(SINCE_RANGES).map(([k, label]) => `<a href="${esc(withQuery('/', query, { since: k === DEFAULT_SINCE ? null : k }))}"${k === range ? ' aria-current="true"' : ''}>${esc(label)}</a>`).join('')}</div>`;
   const when = sv.lastSeen === null ? 'never marked as read' : utc(sv.lastSeen);
   const total = SECTIONS.slice(0, 5).reduce((n, [k]) => n + r[k].length, 0);
@@ -299,7 +299,7 @@ function sincePanel(view, query) {
 // ---- pages
 const agentCols = view => ({ agent: { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) } });
 function overview(view, query) {
-  const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE;
+  const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
   const now = view.generatedAt;
   const open = view.prs.filter(p => ['open', 'draft'].includes(p.status)), active = view.agents.reduce((n, a) => n + (a.jobs || []).filter(j => !j.paused).length, 0), available = view.agents.filter(a => a.state === 'idle').length;
   const tokens = Object.values(view.usage).reduce((s, u) => s + u.totalTokens, 0);
@@ -444,7 +444,7 @@ function allowanceBody(u, now) {
   return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${esc(utc(u.observedAt))}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>`;
 }
 function usagePage(view, query, path) {
-  const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
+  const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
   const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now) })).join('');
   const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }) });
   const toks = view.graphs.tokensPerPr.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.tokens, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
@@ -468,7 +468,7 @@ function usagePage(view, query, path) {
   return { title: 'Usage & cost', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
 }
 function reviewsPage(view, query, path) {
-  const range = query.get('range') in RANGES ? query.get('range') : DEFAULT_RANGE;
+  const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
   const verdictRows = Object.entries(view.graphs.verdicts).flatMap(([a, v]) => [{ label: `${a} PASS`, value: v.PASS, series: `${a} PASS`, colour: 'var(--s3)' }, { label: `${a} CHANGES`, value: v.CHANGES, series: `${a} CHANGES`, colour: 'var(--claude)' }]);
   const merges = view.graphs.merges.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.hours, text: Number.isFinite(m.hours) ? `${dec1(m.hours)} h` : null, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
   const v = card({ id: 'r-v', title: 'Verdicts per agent', span: 6, expandable: true, body: barChart({ rows: verdictRows, title: 'review verdicts', emptyTitle: 'No verdicts recorded' }) });
@@ -596,7 +596,7 @@ function renderRouteWith(view, route, { query = new URLSearchParams(), pathname 
   const steps = trail(route.page, res.crumbs || []), parent = [...steps].reverse().find(([h]) => h)?.[0];
   const crumbs = steps.length ? `<a class="btn back" href="${esc(parent || '/')}" data-back>${icon('back')}Back</a><nav class="crumbs" aria-label="Breadcrumb"><ol>${steps.map(([h, t], i) => `<li>${h ? `<a href="${esc(h)}">${esc(t)}</a>` : `<span aria-current="page">${esc(t)}</span>`}${i < steps.length - 1 ? '<span class="sep" aria-hidden="true">›</span>' : ''}</li>`).join('')}</ol></nav>` : '';
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${refreshSeconds > 0 ? `<noscript><meta http-equiv="refresh" content="${refreshSeconds}"></noscript><meta name="refresh-seconds" content="${refreshSeconds}">` : ''}<title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
-<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route, (crumbs ? `<div class="pagehead">${crumbs}<h1>${esc(res.title)}</h1></div>` : `<h1>${esc(res.title)}</h1>`))}<main id="main">${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><button type="button" id="to-top" class="to-top" aria-label="Back to top" title="Back to top" hidden>${icon('up')}</button><script type="module" src="/static/app.js"></script></body></html>`;
+<body class="${res.bodyClass || ''}">${sprite}<a class="skip" href="#main">Skip to content</a>${statusBar(view, route, (crumbs ? `<div class="pagehead">${crumbs}<h1 id="page-title">${esc(res.title)}</h1></div>` : `<h1 id="page-title">${esc(res.title)}</h1>`))}<main id="main" aria-labelledby="page-title">${res.body}</main><p id="copy-status" class="vh" role="status" aria-live="polite"></p><button type="button" id="to-top" class="to-top" aria-label="Back to top" title="Back to top" hidden>${icon('up')}</button><script type="module" src="/static/app.js"></script></body></html>`;
   return { status: page ? 200 : 404, html };
 }
 // Kept for callers that only want the overview.

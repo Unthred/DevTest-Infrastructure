@@ -52,12 +52,14 @@ try {
     const s = good.summary;
     check(`${engine}: fixture passes (exit 0) on 3 pages x phone-390 and desktop-1280`, good.result.subjectExit === 0 && s.ok && s.pages.length === 3 && s.pages.every(p => p.profiles.length === 2 && p.profiles.every(x => x.ok && x.rendered)), { failures: s.pages.flatMap(p => p.failures) });
     check(`${engine}: six screenshots saved, exactly viewport x DPR wide`, Object.keys(good.sizes).length === 6 && good.sizes[`ha-dashboard-phone-390-${engine}.png`]?.width === 780 && good.sizes[`ha-heating-season-desktop-1280-${engine}.png`]?.width === 1280, { sizes: good.sizes });
-    check(`${engine}: every state-changing control was clicked, every click was blocked, no handler ran`, s.probe.attempted >= 20 && s.probe.blocked >= s.probe.attempted && s.probe.mutated === 0 && s.readOnly.blockedInteractions.length > 0, { probe: s.probe });
+    check(`${engine}: every state-changing control was clicked, every click was blocked, no handler ran`, s.probe.attempted >= 20 && s.probe.blocked >= s.probe.attempted && s.probe.mutated === 0 && s.probe.navigated === 0 && s.probe.pageInitiated === 0 && s.readOnly.blockedInteractions.length > 0, { probe: s.probe });
     check(`${engine}: report says fixture, not live`, good.report.includes('not the live Home Assistant') && good.report.includes('Result: **PASS**'));
   }
 
-  const writer = await run('write-attempt', { phase: 'test', command: ha('--name', 'w', '--pages', 'attempt=/attempts-write.html', '--profiles', 'desktop-1280') }, { inspect: plan => ({ summary: read(plan, 'w.summary.json') }) });
-  check('a page that POSTs and sends call_service fails with exit 16; both are recorded without payload', writer.result.subjectExit === 16 && writer.summary.readOnly.blockedWrites.some(w => /^POST /.test(w)) && writer.summary.readOnly.blockedFrames.some(f => f.startsWith('call_service')) && !JSON.stringify(writer.summary).includes('30'), { readOnly: writer.summary.readOnly });
+  for (const engine of ['chromium', 'firefox', 'webkit']) {
+    const writer = await run(`write-attempt-${engine}`, { phase: 'test', command: ha('--name', 'w', '--pages', 'attempt=/attempts-write.html', '--profiles', 'desktop-1280', '--browser', engine) }, { inspect: plan => ({ summary: read(plan, 'w.summary.json') }) });
+    check(`${engine}: a page that POSTs and sends call_service fails with exit 16; both are recorded without payload`, writer.result.subjectExit === 16 && writer.summary.readOnly.blockedWrites.some(w => /^POST /.test(w)) && writer.summary.readOnly.blockedFrames.some(f => f.startsWith('call_service')) && !JSON.stringify(writer.summary).includes('30'), { readOnly: writer.summary.readOnly });
+  }
 
   const broken = await run('broken-layout', { phase: 'test', command: ha('--name', 'b', '--pages', 'heating-settings=/broken-settings.html') }, { inspect: plan => ({ summary: read(plan, 'b.summary.json') }) });
   const kinds = new Set(broken.summary.pages[0].failures.map(f => `${f.profile}:${f.check}`));

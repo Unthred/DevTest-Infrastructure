@@ -482,7 +482,7 @@ export function describeFor(j, { names, state }) {
 }
 
 // Which model made a decision (issue #140): provider, model and effort of the job that produced it, as recorded on the job.
-const modelOf = j => (j ? [j.provider, j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
+const modelOf = j => (j ? [j.provider || 'unknown provider', j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
 function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names, root }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
@@ -592,7 +592,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') attention.push({ id: 'upgrade-hold', text: `Install pending${Number.isFinite(h.since) ? ` since ${new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(h.since))}` : ''} (upgrade to ${sha7(h.to)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}.`, ref: null, severity: 'info' }); } catch { /* no state file: nothing is held */ }
-    // Issue #153: a failed config migration stops the ticks until the homeowner fixes team.local.json
+    // Issue #153: a failed config migration skips each tick (and is retried) until the homeowner fixes team.local.json
     // Issue #191: an invalid team.local.json stops every tick (upgrade and team steps); the page keeps the last good configuration.
     if (configError) attention.push({ id: 'config-invalid', text: redact(`team.local.json is invalid, so every Foreman tick fails until it is fixed (this page shows the last good configuration): ${configError}`, 300), ref: null, severity: 'action', action: 'Fix or remove the invalid setting in team.local.json.' });
     { const f = readMigrationState(root).failed; if (f) attention.push({ id: 'migration-failed', text: redact(`Config migration ${String(f.number).padStart(3, '0')}-${f.name} failed and this tick was skipped: ${f.error}. team.local.json was not changed. After a self-upgrade the previous version may be back in place and still ticking.`, 300), ref: null, severity: 'action' }); }
@@ -691,13 +691,14 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const jobRows = sortedJobs.slice(0, 300).map(rowOf);
   // Older jobs keep a page (not a table row) so a job link from old Activity, a verdict or a lease still resolves (issue #182).
   const olderJobs = sortedJobs.slice(300, 2300).map(rowOf);
-  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobs.find(j => j.id === v.job)), verdict: v.verdict || null, at: v.at ?? null,
+  const jobById = new Map(jobs.map(j => [j.id, j]));
+  const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobById.get(v.job)), verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
   const prs = [...prNumbers].sort((a, b) => b - a).map(n => {
     const p = (cache.pulls || []).find(x => x.number === n), vs = verdictRows.filter(v => v.pr === n), m = merged.get(n);
-    const rel = Object.entries(state.jobs || {}).filter(([, tj]) => tj.pr === n).map(([id]) => jobs.find(j => j.id === id)).filter(Boolean);
+    const rel = Object.entries(state.jobs || {}).filter(([, tj]) => tj.pr === n).map(([id]) => jobById.get(id)).filter(Boolean);
     const relIds = new Set(rel.map(j => j.id));
     const prJobs = jobRows.filter(j => relIds.has(j.fullId));
     const key = p ? `${n}:${p.headRefOid}` : null;

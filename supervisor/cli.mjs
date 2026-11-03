@@ -14,6 +14,7 @@ import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome } from './dashdata.mjs';
+import { redact } from './redact.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
@@ -157,38 +158,36 @@ async function gatePreflight(registry, config) {
 const currentStatusFor = (root, config) => currentStatus({ root, config, register: readRegister(config) });
 const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 async function teamTick(root, registry, dryRun, hold = null) {
-  // Issue #153: pending config migrations run once, before the first tick of a new version; a failing one stops the tick.
-  if (!dryRun) {
-    // The tick lock is held while migrations run, so two concurrent live ticks cannot run the same migration.
-    const migrationLock = tickLock(root);
-    if (!migrationLock) return { skipped: 'another tick is running' };
-    let migrated;
-    try { migrated = await runMigrations({ root, dir: migrationsDir, validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), next)) }); }
-    finally { migrationLock(); }
-    if (migrated.failed) {
-      const error = `config migration ${String(migrated.failed.number).padStart(3, '0')}-${migrated.failed.name} failed: ${migrated.failed.error}`;
-      try { recordTick(root, { now: Date.now(), status: 'error', error, jobs: readJobs(root) }); } catch { /* the dashboard record is best effort */ }
-      return { skipped: [{ what: 'config migration', reason: error }] };
-    }
-  }
-  const config = loadTeamConfig(teamConfigFile, root);
-  // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
-  const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: probeAllowances(config), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
-  if (!config.enabled && !dryRun) { record({ status: 'disabled' }); return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' }; }
+  // One tick lock covers the whole tick, migrations included, so two concurrent ticks can neither run the same migration nor interleave.
   const unlock = tickLock(root);
   if (!unlock) return { skipped: 'another tick is running' };
   try {
-    const team = await teamFor(root, registry, config);
-    const report = await team.tick({ dryRun, hold });
+    // Issue #153: pending config migrations run once, before the first tick of a new version; a failing one skips this tick (it is retried on the next).
     if (!dryRun) {
-      record({ ...tickOutcome(report), team, actions: report.actions });
-      // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
-      await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
+      const migrated = await runMigrations({ root, dir: migrationsDir, validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), next)) });
+      if (migrated.failed) {
+        const error = redact(`config migration ${String(migrated.failed.number).padStart(3, '0')}-${migrated.failed.name} failed: ${migrated.failed.error}`, 300);
+        try { recordTick(root, { now: Date.now(), status: 'error', error, jobs: readJobs(root) }); } catch { /* the dashboard record is best effort */ }
+        return { skipped: [{ what: 'config migration', reason: error }] };
+      }
     }
-    return report;
-  } catch (error) {
-    if (!dryRun) record({ status: 'error', error: error?.message });
-    throw error;
+    const config = loadTeamConfig(teamConfigFile, root);
+    // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
+    const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: probeAllowances(config), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
+    if (!config.enabled && !dryRun) { record({ status: 'disabled' }); return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' }; }
+    try {
+      const team = await teamFor(root, registry, config);
+      const report = await team.tick({ dryRun, hold });
+      if (!dryRun) {
+        record({ ...tickOutcome(report), team, actions: report.actions });
+        // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
+        await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
+      }
+      return report;
+    } catch (error) {
+      if (!dryRun) record({ status: 'error', error: error?.message });
+      throw error;
+    }
   } finally { unlock(); }
 }
 function selfUpgradeFor(root, registry) {
