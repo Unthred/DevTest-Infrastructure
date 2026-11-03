@@ -1035,7 +1035,7 @@ export class Team {
       if (act.secondOpinion || act.postMerge) return 2;
       const pr = prs.find(p => p.number === act.pr);
       const sole = !!pr && this.agents().length > 1 && SHA.test(pr.headRefOid) && !!agentOfBranch(this.c, pr.headRefName) && !pr.isDraft && this.otherReviewers(agent, pr).length === 0;
-      return (sole ? -1 : 0) + 0.75 * (1 - this.spareScore(agent));
+      return (sole ? -10 : 0) + 0.75 * (1 - this.spareScore(agent));
     }
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
