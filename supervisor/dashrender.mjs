@@ -314,6 +314,7 @@ function nextTickHtml(view, now) {
   if (!n) return '';
   if (n.state === 'running') return `<b data-tick-state="running">tick running since ${lt(n.since)}</b>`;
   const last = `, last tick ${lt(n.lastAt)}`;
+  if (n.state === 'starting') return `<b data-tick-state="starting"><span data-overdue="${n.at}">tick due, starting</span></b>`;
   if (n.state === 'overdue') return `<b data-tick-state="overdue"><span data-overdue="${n.at}">overdue by ${esc(clock(now - n.at))}</span>${last}</b>`;
   // scheduled: the script counts down, then turns the count into "overdue by" and reveals the last tick time
   return `<b data-tick-state="scheduled"><span data-countdown="${n.at}">in ${esc(clock(n.at - now))}</span><span data-after hidden>${last}</span></b>`;

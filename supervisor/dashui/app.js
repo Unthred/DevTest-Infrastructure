@@ -23,13 +23,31 @@ $('#theme')?.addEventListener('click', () => {
 
 // countdown to the next tick and relative ages
 const fmt = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+const TICK_GRACE_MS = 90 * 1000;
+// A page that stays open cannot know that the cron fired and a tick took the lock, so once the slot passes it re-reads its own
+// Next stat from the server (every 10 s) instead of guessing. Until then it says "starting", never "overdue", for a grace period.
+let nextFetch = 0;
+async function refreshNext() {
+  if (Date.now() - nextFetch < 10000) return; nextFetch = Date.now();
+  try {
+    const r = await fetch(location.href, { headers: { accept: 'text/html' }, credentials: 'same-origin', cache: 'no-store' }); if (!r.ok) return;
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const fresh = doc.querySelector('.statusbar [data-tick-state]'), cur = document.querySelector('.statusbar [data-tick-state]');
+    if (fresh && cur) { cur.replaceWith(document.importNode(fresh, true)); tickClock(); }
+  } catch { /* offline: keep the text */ }
+}
 function tickClock() {
-  for (const el of $$('[data-countdown]')) {   // scheduled: counts down, then reads "overdue" and shows the last tick time
+  for (const el of $$('[data-countdown]')) {   // scheduled: counts down, then "starting" for a grace period, then "overdue"
     const left = Number(el.dataset.countdown) - Date.now();
-    el.textContent = left > 0 ? `in ${fmt(left)}` : `overdue by ${fmt(-left)}`;
-    const after = el.parentElement && el.parentElement.querySelector('[data-after]'); if (after) after.hidden = left > 0;
+    el.textContent = left > 0 ? `in ${fmt(left)}` : -left < TICK_GRACE_MS ? 'tick due, starting' : `overdue by ${fmt(-left)}`;
+    const after = el.parentElement && el.parentElement.querySelector('[data-after]'); if (after) after.hidden = left > -TICK_GRACE_MS;
+    if (left <= 0) refreshNext();
   }
-  for (const el of $$('[data-overdue]')) el.textContent = `overdue by ${fmt(Date.now() - Number(el.dataset.overdue))}`;
+  for (const el of $$('[data-overdue]')) {
+    const late = Date.now() - Number(el.dataset.overdue);
+    if (late >= TICK_GRACE_MS) el.textContent = `overdue by ${fmt(late)}`;
+    refreshNext();
+  }
 }
 tickClock(); setInterval(tickClock, 1000);
 

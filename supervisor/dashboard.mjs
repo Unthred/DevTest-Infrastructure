@@ -729,11 +729,13 @@ export function runningTickSince(root, alive = processStart) {
     return Number.isFinite(owner.at) ? owner.at : fs.statSync(dir).mtimeMs;
   } catch { return null; }
 }
+export const TICK_GRACE_MS = 90 * 1000;
 export function tickCountdown({ lastAt, runningSince = null, now, intervalMs = TICK_INTERVAL_MS }) {
   if (Number.isFinite(runningSince)) return { state: 'running', since: runningSince, lastAt: lastAt ?? null };
   if (!Number.isFinite(lastAt)) return null;
   const slot = (Math.floor(lastAt / intervalMs) + 1) * intervalMs;
-  return { state: slot > now ? 'scheduled' : 'overdue', at: slot, lastAt };
+  // A cron slot that has just passed is not late yet: the tick needs a moment to start and take the lock.
+  return { state: slot > now ? 'scheduled' : now - slot < TICK_GRACE_MS ? 'starting' : 'overdue', at: slot, lastAt };
 }
 const NEXT_STEP = {
   homeowner: 'Open the issue and answer the question it states.',

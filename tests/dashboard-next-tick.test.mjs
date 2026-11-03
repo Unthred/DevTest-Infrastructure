@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildView, tickCountdown, runningTickSince } from '../supervisor/dashboard.mjs';
+import { buildView, TICK_GRACE_MS, tickCountdown, runningTickSince } from '../supervisor/dashboard.mjs';
 import { renderPage } from '../supervisor/dashrender.mjs';
 import { tickLock } from '../supervisor/team.mjs';
 
@@ -19,10 +19,16 @@ test('scheduled: counts down to the next 5 minute slot after the last tick', () 
   const c = tickCountdown({ lastAt: T0 + 11 * 1000, now: T0 + 2 * MIN });
   assert.deepEqual(c, { state: 'scheduled', at: T0 + 5 * MIN, lastAt: T0 + 11 * 1000 });
 });
-test('overrun: a tick that ran past the slot leaves the next slot, not last tick + 5 minutes', () => {
-  // tick recorded at 22:01, slot 22:05 was skipped because it ran long; at 22:08 the next slot is 22:10 and nothing is overdue
-  assert.equal(tickCountdown({ lastAt: T0 + MIN, now: T0 + 8 * MIN }).state, 'overdue');
-  assert.equal(tickCountdown({ lastAt: T0 + MIN, now: T0 + 8 * MIN }).at, T0 + 5 * MIN);
+test('overrun: a tick recorded after the skipped slot leaves the next slot, not last tick + 5 minutes', () => {
+  // slot 22:05 was skipped while a tick ran long and recorded at 22:06; at 22:08 the next slot is 22:10 and nothing is overdue
+  assert.deepEqual(tickCountdown({ lastAt: T0 + 6 * MIN, now: T0 + 8 * MIN }), { state: 'scheduled', at: T0 + 10 * MIN, lastAt: T0 + 6 * MIN });
+});
+test('crossing zero: just after the slot the state is starting, overdue only after the grace period', () => {
+  const last = T0 + 11000;
+  assert.equal(tickCountdown({ lastAt: last, now: T0 + 5 * MIN + 1000 }).state, 'starting');
+  assert.equal(tickCountdown({ lastAt: last, now: T0 + 5 * MIN + TICK_GRACE_MS - 1 }).state, 'starting');
+  assert.equal(tickCountdown({ lastAt: last, now: T0 + 5 * MIN + TICK_GRACE_MS }).state, 'overdue');
+  assert.equal(tickCountdown({ lastAt: last, runningSince: T0 + 5 * MIN + 2000, now: T0 + 5 * MIN + 3000 }).state, 'running');
 });
 test('skipped tick: overdue measured from the missed slot', () => {
   const c = tickCountdown({ lastAt: T0 + 11 * 1000, now: T0 + 9 * MIN });
@@ -60,4 +66,6 @@ test('a stale lock (owner process gone) is not a running tick', async t => {
 test('the client script never writes "due now"', () => {
   const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
   assert.doesNotMatch(js, /due now/); assert.match(js, /overdue by/);
+  // the client must not claim overdue the moment the slot passes: grace first, and it re-reads the server's Next stat
+  assert.match(js, /TICK_GRACE_MS/); assert.match(js, /refreshNext\(\)/); assert.match(js, /tick due, starting/);
 });
