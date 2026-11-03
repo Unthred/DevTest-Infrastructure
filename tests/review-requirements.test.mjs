@@ -266,12 +266,22 @@ test('#419: a false material claim gives CHANGES and cannot PASS', async t => {
   assert.match(r2.report.ingested.at(-1).error, /material/);
 });
 test('#419: an immaterial mark on a behaviour, safety or verification claim is refused', async t => {
-  for (const c of [{ ...lock, materiality: 'immaterial' }, { claim: 'all gates passed', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'wording' }, { claim: 'adds per-provider run throttling', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'minor' }]) {
+  for (const c of [{ ...lock, materiality: 'immaterial' }, { claim: 'all gates passed', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'wording' }, { claim: 'adds per-provider run throttling', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'minor' },
+    // Issue #449: a behaviour claim that also carries an incidental count or wording term stays material.
+    { claim: 'adds per-provider run throttling in 2 files', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
+    { claim: 'changes the prompt wording so every claim blocks', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'wording' },
+    { claim: 'removes the retry loop (3 files)', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'count' }]) {
     const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [c] });
     assert.match(r.report.ingested.at(-1).error, /cannot be immaterial/);
   }
   const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, reason: undefined }] });
   assert.match(r.report.ingested.at(-1).error, /needs a reason/);
+});
+test('#449: pure count and wording slips are still accepted as immaterial', async t => {
+  for (const claim of ['the PR touches 3 files', 'the description has a typo in the title', 'tests/probe.test.mjs has 21 cases']) {
+    const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, claim }] });
+    assert.equal(r.report.ingested.at(-1).error, undefined, claim);
+  }
 });
 test('#419: the review prompt asks for one complete pass and sends far-fetched cases to follow-ups', async t => {
   const w = reqWorld(t); const { spec } = await startReview(w);
