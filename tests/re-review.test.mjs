@@ -108,7 +108,7 @@ test('refusals: not CHANGES, rounds left, unreadable link, another repository, u
   stuck(w); w.team.s.fixAttempts[`38:${H(0)}`] = 1; w.team.save();
   await assert.rejects(() => w.team.requestReReview(38, D1), /fix rounds left/);
   w.team.s.fixAttempts[`38:${H(0)}`] = 2;
-  for (const bad of ['', 'trust me', 'https://github.com/other/repo/issues/1#issuecomment-1', 'https://evil.example/o/r/issues/1', `${D1} && rm -rf`]) await assert.rejects(() => w.team.requestReReview(38, bad), /decision must be a link/);
+  for (const bad of ['', 'https://github.com/o/r/issues/1', 'https://github.com/o/r/pull/38', 'trust me', 'https://github.com/other/repo/issues/1#issuecomment-1', 'https://evil.example/o/r/issues/1', `${D1} && rm -rf`]) await assert.rejects(() => w.team.requestReReview(38, bad), /decision must be a link/);
   await assert.rejects(() => w.team.requestReReview(99, D1), /not open/);
   w.gh.pulls[0].isDraft = true; await assert.rejects(() => w.team.requestReReview(38, D1), /draft/);
   assert.ok(w.team.s.verdicts[`38:${H(1)}`], 'a refused request changes nothing');

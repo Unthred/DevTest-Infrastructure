@@ -1663,7 +1663,7 @@ export class Team {
     const n = Number(prNumber), link = typeof decision === 'string' ? decision.trim() : '';
     if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team request-review PR DECISION_LINK');
     const repo = this.c.repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!new RegExp('^https://github\\.com/' + repo + '/(issues|pull)/\\d+(#issuecomment-\\d+)?$').test(link)) throw new SupervisorError(`the decision must be a link to an issue or pull request (comment) of ${this.c.repository}, for example https://github.com/${this.c.repository}/issues/N#issuecomment-ID`);
+    if (!new RegExp('^https://github\\.com/' + repo + '/(issues|pull)/\\d+#issuecomment-\\d+$').test(link)) throw new SupervisorError(`the decision must be a link to a comment on an issue or pull request of ${this.c.repository}, for example https://github.com/${this.c.repository}/issues/N#issuecomment-ID`);
     const pr = await this.gh.getPull(n);
     if (!pr || pr.state === 'CLOSED' || pr.state === 'MERGED' || pr.merged) throw new SupervisorError(`PR #${n} is not open`);
     if (!agentOfBranch(this.c, pr.headRefName)) throw new SupervisorError(`PR #${n} is not on a Foreman branch`);
