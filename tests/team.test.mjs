@@ -1329,3 +1329,58 @@ test('issue #302: an uncertain holder raises one Needs you item naming the holde
     assert.equal(w.alerts.length, 1, name); assert.equal(w.calls.labels.length, 1, name);
   }
 });
+// ---- issue #205: review follow-ups for PR #198
+test('#205 the secret-scan flag records the scanner check names and clears against them, not the name regex', async t => {
+  const odd = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'Security checks' }];
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: odd })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [{ name: 'Security checks', conclusion: 'failure', app: { slug: 'gitguardian' } }];
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  const cause = w.team.s.unblock.flags[38][`secret-scan:${H(3)}`];
+  assert.deepEqual(cause.checks, ['Security checks']);
+  assert.equal(await w.team.causeCleared(cause, pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: odd })), false);
+  const ok = [{ status: 'COMPLETED', conclusion: 'SUCCESS', name: 'Security checks' }];
+  assert.equal(await w.team.causeCleared(cause, pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: ok })), true);
+});
+test('#205 a pending or missing scanner holds the secret-scan flag; only a completed success clears it', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  const c = { kind: 'secret-scan', head: H(3), checks: ['GitGuardian Security Checks'] };
+  const at = r => w.team.causeCleared(c, pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: r }));
+  assert.equal(await at([gg[0], { status: 'IN_PROGRESS', name: 'GitGuardian Security Checks' }]), false);
+  assert.equal(await at([gg[0]]), false);
+  assert.equal(await at([gg[0], { status: 'COMPLETED', conclusion: 'SUCCESS', name: 'GitGuardian Security Checks' }]), true);
+});
+test('#205 checkDetails describes a non-success run of a name before a passing one', () => {
+  const d = checkDetails([{ name: 'c', conclusion: 'success', output: { title: 'new-pass' } }, { name: 'c', conclusion: 'failure', output: { title: 'old-fail' } }], ['c']);
+  assert.equal(d.length, 1); assert.equal(d[0].title, 'old-fail');
+  assert.equal(checkDetails([{ name: 'c', conclusion: 'failure', output: { title: 'first' } }, { name: 'c', conclusion: 'timed_out', output: { title: 'second' } }], ['c'])[0].title, 'first');
+});
+test('#205 no secret-scan notice is posted when the worktree setup fails before the job starts', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [ggRun()];
+  const orig = w.git.ensureWorktree; w.git.ensureWorktree = async () => { throw new Error('no worktree'); };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await assert.rejects(() => w.team.execute({ agent: 'claude', ...a }));
+  assert.deepEqual(w.calls.labels, []); assert.equal(w.calls.comments.filter(c => /secret-scan/.test(c[1])).length, 0);
+  w.git.ensureWorktree = orig;
+});
+test('#205 no secret-scan flag or notice is posted when the job lease fails', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [ggRun()];
+  w.jobs.create = async () => { throw new Error('issue or worktree already leased; stale lease requires explicit recovery'); };
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await assert.rejects(() => w.team.execute({ agent: 'claude', ...a }), /already leased/);
+  assert.deepEqual(w.calls.labels, []); assert.equal(w.calls.comments.filter(c => /secret-scan/.test(c[1])).length, 0);
+});
+test('#205 the secret-scan notice is posted once the lease is held', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.gh.listCheckRuns = async () => [ggRun()];
+  const a = (await w.team.plan()).find(x => x.agent === 'claude');
+  await w.team.execute({ agent: 'claude', ...a });
+  assert.equal(w.calls.comments.filter(c => /secret-scan/.test(c[1])).length, 1);
+});
+test('#205 rejectionCause with no matching PR falls back to the generic text', async t => {
+  const w = world(t, { pulls: [], issues: [] });
+  assert.equal(w.team.rejectionCause({ number: 9, headRefOid: H(1) }), 'the rejection');
+  assert.match(w.team.rejectionCause({ number: 9, headRefOid: H(1), statusCheckRollup: gg }), /`GitGuardian Security Checks`/);
+});
