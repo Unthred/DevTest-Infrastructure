@@ -73,9 +73,9 @@ test('an Opus-written PR can only be reviewed by Codex, and it goes there first 
   // Extreme spread (Codex projected far over, Claude far under): the sole-reviewer priority is still absolute.
   const extreme = await plan(t, { pulls, written, projected: { claude: 0.0, codex: 5 } });
   assert.deepEqual(extreme.acts.map(a => [a.agent, a.pr]), [['codex', 12]]);
-  // Claude out of allowance: Codex is the only reviewer for both PRs, and with one slot it takes them in list order.
+  // Claude out of allowance: Codex is the only reviewer for both PRs, and with one slot it takes them in the review queue order (issue #405: PR 12, which only Codex may review, ahead of PR 10).
   const codexOnly = await plan(t, { pulls, written, projected: { claude: 1.4, codex: 0.2 }, out: ['claude'] });
-  assert.deepEqual(codexOnly.acts.map(a => [a.agent, a.pr]), [['codex', 10]]);
+  assert.deepEqual(codexOnly.acts.map(a => [a.agent, a.pr]), [['codex', 12]]);
 });
 
 test('unknown readings: known spare beats unknown, unknown beats a reviewer projected to run out, two unknowns keep config order', async t => {
