@@ -276,7 +276,7 @@ test('issue #120: a verdict or post-condition already in place when the job paus
 });
 
 // Issue #127 follow-ups for PR #122.
-test('issue #127: a limit with a pr_opened, new_head or continued post-condition already true is NOT completed; rebased and verdict are', async t => {
+test('issue #127: a limit with a pr_opened, new_head or continued post-condition already true is NOT completed; rebased is', async t => {
   const kinds = { pr_opened: { kind: 'pr_opened', branch: 'x/issue-1-a' }, new_head: { kind: 'new_head', pr: 4, baseHead: 'c'.repeat(40) }, continued: { kind: 'continued', pr: 4 } };
   for (const [name, pc] of Object.entries(kinds)) {
     const s = sandbox(t, `${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, { ...s.spec, postcondition: pc }, s.registry);
@@ -284,6 +284,12 @@ test('issue #127: a limit with a pr_opened, new_head or continued post-condition
     assert.notEqual(r.status, 'completed', name); assert.doesNotMatch(logOf(s, job), /completed_before_limit/, name);
   }
   const s = sandbox(t, `${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, { ...s.spec, postcondition: { kind: 'rebased', pr: 4, baseHead: 'c'.repeat(40) } }, s.registry);
+  const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job), 4, async () => true);
+  assert.equal(r.status, 'completed'); assert.equal(r.attempts, 1);
+});
+
+test('issue #197: a limit with a verdict post-condition already true is completed', async t => {
+  const s = sandbox(t, `${emit(exhausted)} process.exit(1);`, { observe: claude.observe }), job = await createJob(s.root, { ...s.spec, postcondition: { kind: 'verdict', ticket: 'a'.repeat(32), pr: 41, head: 'b'.repeat(40) } }, s.registry);
   const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job), 4, async () => true);
   assert.equal(r.status, 'completed'); assert.equal(r.attempts, 1);
 });
@@ -308,8 +314,20 @@ test('issue #127: an oversize stderr line and an oversize unterminated tail are 
   assert.equal(r.status, 'completed'); assert.match(logOf(s, job), /oversize_line:stderr/); assert.match(logOf(s, job), /oversize_line:stdout/); assert.doesNotMatch(logOf(s, job), /classified:usage_limit/);
 });
 
-test('issue #127: a multibyte character split across chunks is decoded intact', async t => {
-  const s = sandbox(t, `const b = Buffer.from(JSON.stringify({type:'result',result:'é'}) + '\\n'); const i = b.indexOf(0xc3) + 1; process.stdout.write(b.subarray(0, i)); setTimeout(() => process.stdout.write(b.subarray(i)), 50);`), job = await createJob(s.root, s.spec, s.registry);
+test('issue #127: a multibyte character split across chunks reaches the adapter intact', async t => {
+  const seen = [];
+  const observe = (line, now) => { seen.push(line); return claude.observe(line, now); };
+  const s = sandbox(t, `const b = Buffer.from(JSON.stringify({type:'result',result:'é'}) + '\\n'); const i = b.indexOf(0xc3) + 1; process.stdout.write(b.subarray(0, i)); setTimeout(() => process.stdout.write(b.subarray(i)), 50);`, { observe }), job = await createJob(s.root, s.spec, s.registry);
   const r = await drive(s.root, job, s.registry, clk, s.run(s.root, job));
-  assert.equal(r.status, 'completed'); assert.doesNotMatch(logOf(s, job), /�/);
+  assert.equal(r.status, 'completed');
+  const line = seen.find(l => l.includes('"result"'));
+  assert.ok(line, 'the adapter saw the result line'); assert.ok(line.includes('é')); assert.ok(!line.includes('\uFFFD'));
+});
+
+test('issue #197: a truncated multibyte sequence at EOF is flushed into the final tail', async t => {
+  const seen = [];
+  const observe = (line, now) => { seen.push(line); return claude.observe(line, now); };
+  const s = sandbox(t, `process.stdout.write(Buffer.concat([Buffer.from('tail'), Buffer.from([0xc3])]));`, { observe }), job = await createJob(s.root, s.spec, s.registry);
+  await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.ok(seen.includes('tail\uFFFD'), JSON.stringify(seen));
 });
