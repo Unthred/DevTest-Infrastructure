@@ -307,6 +307,17 @@ const agentBadge = a => {
   const label = [a.name, mid, st].filter(Boolean).join(' · ');
   return `<li><a class="agent-badge sev-${esc(stateSev[a.state] || 'info')}" href="/agents/${esc(encodeURIComponent(a.name))}" data-agent="${esc(a.name)}" data-state="${esc(a.state)}" aria-label="${esc(label)}" title="${esc(label)}"><b class="ab-name">${esc(a.name)}</b>${mid ? `<span class="ab-role">${esc(mid)}</span>` : ''}<span class="ab-state">${esc(st)}</span></a></li>`;
 };
+// Issue #473: one of three states, never "due now". The tick's real schedule (or its live lock) is the source.
+const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+function nextTickHtml(view, now) {
+  const n = view.nextTick || (view.nextTickAt ? { state: 'scheduled', at: view.nextTickAt, lastAt: view.tick?.at } : null);
+  if (!n) return '';
+  if (n.state === 'running') return `<b data-tick-state="running">tick running since ${lt(n.since)}</b>`;
+  const last = `, last tick ${lt(n.lastAt)}`;
+  if (n.state === 'overdue') return `<b data-tick-state="overdue"><span data-overdue="${n.at}">overdue by ${esc(clock(now - n.at))}</span>${last}</b>`;
+  // scheduled: the script counts down, then turns the count into "overdue by" and reveals the last tick time
+  return `<b data-tick-state="scheduled"><span data-countdown="${n.at}">in ${esc(clock(n.at - now))}</span><span data-after hidden>${last}</span></b>`;
+}
 const agentStat = view => `<div class="stat agent-lines" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
 function statusBar(view, route, head = '') {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
@@ -317,7 +328,7 @@ function statusBar(view, route, head = '') {
 ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
 ${agentStat(view)}
 <div class="stat"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
-<div class="stat"><span class="k">Next</span>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : '<span class="muted">none</span>'}</div>
+<div class="stat"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
 <div class="stat"><span class="k">Data</span>${pill(L.data, badge(fr.level, fr.label), 'Data freshness follows the last tick')}</div>
 <div class="stat"><span class="k">Team loop</span>${pill(L.team, view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled'), 'Open the dispatcher facts')}</div>
 <div class="stat"><span class="k">Version</span>${pill(vs.href, badge(vs.level, escT(vs.label), '', true), 'Open the version health card')}</div>
@@ -580,7 +591,7 @@ function systemPage(view) {
   const t = view.tick, v = view.version, now = view.generatedAt;
   const facts = card({ id: 'sys', title: 'Dispatcher', span: 6, movable: false, body: `<dl class="kv"><dt>Repository</dt><dd>${esc(view.repository)}</dd><dt>Team loop</dt><dd>${view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled')}</dd>
 <dt>Health</dt><dd>${badge(view.health.severity, view.health.label)}</dd><dt>Last tick</dt><dd>${t ? `${badge(t.status === 'ok' ? 'ok' : 'action', t.status)} ${lt(t.at)} (${esc(ago(t.at, now))})` : badge('action', 'none recorded')}</dd>
-<dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${view.nextTickAt ? `<b data-countdown="${view.nextTickAt}">${esc(inFuture(view.nextTickAt, now))}</b>` : 'none'}</dd>
+<dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${nextTickHtml(view, now) || 'none'}</dd>
 <dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${lt(now)}</dd></dl>` });
   const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${(vs => badge(vs.level, escT(vs.label), '', true))(versionStatus(v))}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
   const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });

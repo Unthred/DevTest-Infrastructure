@@ -2658,6 +2658,7 @@ export function tickLock(root, name = 'tick.lock') {
     if (owner && processStart(owner.pid) === owner.start) return null;     // another tick is running
     fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { mode: 0o700 });
   }
-  fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }), { mode: 0o600 });
+  // `at` (issue #473) lets the dashboard say "tick running since hh:mm".
+  fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid), at: Date.now() }), { mode: 0o600 });
   return () => fs.rmSync(dir, { recursive: true, force: true });
 }

@@ -24,10 +24,12 @@ $('#theme')?.addEventListener('click', () => {
 // countdown to the next tick and relative ages
 const fmt = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 function tickClock() {
-  for (const el of $$('[data-countdown]')) {
+  for (const el of $$('[data-countdown]')) {   // scheduled: counts down, then reads "overdue" and shows the last tick time
     const left = Number(el.dataset.countdown) - Date.now();
-    el.textContent = left > 0 ? `in ${fmt(left)}` : 'due now';
+    el.textContent = left > 0 ? `in ${fmt(left)}` : `overdue by ${fmt(-left)}`;
+    const after = el.parentElement && el.parentElement.querySelector('[data-after]'); if (after) after.hidden = left > 0;
   }
+  for (const el of $$('[data-overdue]')) el.textContent = `overdue by ${fmt(Date.now() - Number(el.dataset.overdue))}`;
 }
 tickClock(); setInterval(tickClock, 1000);
 

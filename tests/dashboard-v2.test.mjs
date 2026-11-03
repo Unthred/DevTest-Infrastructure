@@ -209,7 +209,7 @@ test('Overview: four labelled panels, KPI tiles and charts all link to detail pa
   assert.match(body, /<body class="overview">/);
   for (const href of ['/agents', '/work', '/reviews', '/usage', '/system', '/activity']) assert.ok(body.includes(`href="${href}"`), href);
   assert.match(body, /data-reset-layout/); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 2, 'the early dock script and the module');
-  assert.match(body, /data-countdown="\d+"/);
+  assert.match(body, /data-tick-state="(scheduled|overdue)"/);
 });
 test('Needs you lists every needs-homeowner item with what, why, the decision needed, a link and the exact command; Warnings holds the rest', async t => {
   const s = await serve(t, { cache: { ...cache(), tick: { at: NOW - 20 * 60000, status: 'error', error: 'gh failed', lastOkAt: NOW - 3 * 3600000 } } });
@@ -243,7 +243,8 @@ test('idle-reason text is plain English and names the blocker (issue #50 wording
 test('Next panel shows the dispatcher plan and a live countdown to the next tick; status bar has health, tick, freshness, loop and version', async t => {
   const s = await serve(t, { cache: cache(), upgrades: [{ at: NOW - 1000, from: H(1), to: H(2), result: 'refused', reason: 'x' }] });
   const body = (await s.get('/')).body;
-  assert.match(body, new RegExp(`data-countdown="${NOW - 60000 + 300000}"`)); assert.match(body, /in 4m/);
+  // NOW is exactly on a cron slot, so the slot after the last tick (12:59) is due: overdue by 0:00 (the countdown states are tested in dashboard-next-tick.test.mjs)
+  assert.match(body, new RegExp(`data-overdue="${Math.floor((NOW - 60000) / 300000) * 300000 + 300000}"`)); assert.match(body, /overdue by 0:00<\/span>, last tick <time class="lt" datetime="2026-10-30T12:59:00.000Z"/);
   const bar = body.slice(body.indexOf('class="statusbar"'), body.indexOf('<nav class="nav"'));
   for (const w of ['Overall health', 'Last tick', 'Tick ok', 'Next', 'Data', 'Fresh', 'Team loop', 'Enabled', 'Version', 'Deploy needed']) assert.ok(bar.includes(w), w);
   assert.match(bar, /1m ago/); assert.match(bar, /badge sev-warning[^>]*>[\s\S]*1111111 → 2222222/);
