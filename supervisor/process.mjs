@@ -112,6 +112,8 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
       child.on('error', () => resolve({ code: 1, event: 'crash' }));
       child.on('close', code => resolve({ code: code ?? 1 }));
     });
+    // Flush a truncated multibyte sequence at EOF into the tail (as U+FFFD) instead of dropping it silently.
+    for (const stream of ['stdout', 'stderr']) { const rest = decoders[stream].end(); if (rest && !discarding[stream]) buffers[stream] += rest; }
     for (const stream of ['stdout', 'stderr']) if (buffers[stream] && !discarding[stream]) { const rest = buffers[stream].slice(0, 16384); const late = adapter.observe(rest, clock.now()); record(stream, rest, late); observeEvent(late, stream, rest); }
     if (typeof adapter.postRun === 'function') { const late = adapter.postRun(job); if (late) allowance = late; }
     touch(job, clock);
