@@ -65,6 +65,8 @@ Each queued issue and open PR shows `est. HH:MM–HH:MM` (p50–p90) on the Next
   A forecast stands for running out completely, so it holds every step, reviews included, to the reset. An agent in `reviews_only` mode keeps its review, fix, CI fix and rebase steps and only its implement and continue steps move.
 - Known waits are listed with their own time: CI running, the allowance reset, and the self-upgrade rate limit ("upgrade waiting, next try 22:30").
 - A step type with fewer than 5 recorded jobs shows "no estimate yet" rather than a guess.
+- **Wide ranges are left out (issue #413).** The dashboard shows a range only when its width (p90 − p50) is no more than 50% of the time from now to its midpoint (`MAX_RANGE_SHARE` in `supervisor/estimate.mjs`). A wider range, such as 08:58–16:10 for a job starting this tick with no history, is omitted from the Next panel, the queues and the agent table without replacement text; known waits still show. `team status` prints the stored text unchanged.
+- The Next card no longer repeats the next-tick countdown; the app bar shows it, and its "none" stands when no tick is scheduled.
 
 ## Needs you panel (issue #141)
 
