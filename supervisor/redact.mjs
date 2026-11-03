@@ -2,10 +2,12 @@
 // Input is capped before any pattern runs: the e-mail rule is quadratic on long unbroken strings (issue #159).
 export const MAX_SCAN = 2000;
 export const KEY = '(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|credential)s?';
+// Auth scheme words that may precede a credential; the key rule consumes the scheme and the credential together.
+const SCHEME = '(?:bearer|basic|token|digest)';
 export function redact(value, max = 200) {
   return String(value ?? '').slice(0, MAX_SCAN)
     .replace(new RegExp(`("${KEY}"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"`, 'gi'), '$1"[secret]"')
-    .replace(new RegExp(`\\b(${KEY})(\\s*[=:]\\s*)(?!\\[)(?:bearer\\s+)?[^\\s,;&"']+`, 'gi'), '$1$2[secret]')
+    .replace(new RegExp(`\\b(${KEY})(\\s*[=:]\\s*)(?!\\[)(?:${SCHEME}\\s+)?[^\\s,;&"']+`, 'gi'), '$1$2[secret]')
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[userinfo]@')
     .replace(/\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]*/g, '[jwt]')
     .replace(/\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/g, '[aws-key]')
@@ -22,7 +24,7 @@ export function redact(value, max = 200) {
 export function redactLong(value, max, marker = '') {
   // Each piece is {text, glue}: glue is true when the piece continues the previous one on the same line (rejoined without a newline).
   // A piece must not end inside a secret: a bare or quoted key (with or without its separator), an unfinished bearer, or an open quoted value.
-  const tail = new RegExp(`(?:["']?\\b${KEY}["']?\\s*[=:]?\\s*(?:bearer\\s*)?|\\bbearer\\s*|"${KEY}"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*)$`, 'i');
+  const tail = new RegExp(`(?:["']?\\b${KEY}["']?\\s*[=:]?\\s*(?:${SCHEME}\\s*)?|\\b${SCHEME}\\s*|"${KEY}"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*)$`, 'i');
   const pieces = [];
   for (const line of String(value ?? '').split(/\r?\n/)) {
     let rest = line, glue = false;

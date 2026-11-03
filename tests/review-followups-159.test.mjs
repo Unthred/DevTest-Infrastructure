@@ -88,3 +88,19 @@ test('redact hides a short bearer token after an Authorization key', () => {
     assert.ok(!out.includes('Bearer abc'), input.slice(0, 14));
   }
 });
+
+test('redact hides a short Basic, Token or Digest credential after an Authorization key', () => {
+  const tok = ['dXNl', 'cjpw', 'YXNz'].join('');
+  for (const scheme of ['Basic', 'basic', 'Token', 'Digest', 'BASIC']) {
+    for (const input of [`Authorization: ${scheme} ${tok}`, `authorization=${scheme} ${tok}`, `Proxy-Authorization: ${scheme} ${tok}`]) {
+      const out = redact(input, 500);
+      assert.ok(!out.includes(tok), input);
+    }
+  }
+  assert.equal(redact(`{"authorization": "Basic ${tok}"}`, 500).includes(tok), false);
+});
+
+test('redact leaves ordinary text near scheme words alone', () => {
+  assert.equal(redact('basic usage of the tool', 100), 'basic usage of the tool');
+  assert.equal(redact('Authorization: [secret]', 100), 'Authorization: [secret]');
+});
