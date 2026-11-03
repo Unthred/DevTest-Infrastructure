@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { SelfUpgrade, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
-import { applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
+import { SelfUpgrade, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
+import { DRAIN_DEFAULT_MINUTES, applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
@@ -628,4 +628,26 @@ test('issue #302: an upgrade during a running job holds, installs once the job e
   const before = w.log.length; w.state.now += 3 * MIN_UPGRADE_INTERVAL_MS;
   assert.equal(await w.up.step(), 'latched');
   assert.equal(w.log.length, before, 'no upgrade, no second rollback and no new alert while latched');
+});
+
+test('issue #191: the default drain bound has one source (the team default) and the CLI derives from it', () => {
+  assert.equal(QUIET_MAX_WAIT_MS, DRAIN_DEFAULT_MINUTES * 60000);
+  assert.match(fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8'), /: QUIET_MAX_WAIT_MS/);
+  assert.doesNotMatch(fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8'), /DRAIN_DEFAULT_MINUTES/);
+});
+
+test('issue #191: holding.since is the drain start the bound is measured from, and survives a newer target only as a new drain', async t => {
+  const w = world(t, { active: 1 });
+  assert.equal(await w.up.step(), 'busy'); const start = w.up.s.waitingSince;
+  assert.equal(w.up.s.holding.since, start);
+  w.state.now += 60000; assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.since, start);
+  w.state.target = H('e'); w.state.now += 60000; assert.equal(await w.up.step(), 'busy');
+  assert.equal(w.up.s.holding.since, w.up.s.waitingSince); assert.equal(w.up.s.holding.since, w.state.now);
+});
+
+test('issue #191: only busy and upgraded hold dispatch; rolled-back and every failure hand the team step hold=null', async t => {
+  const w = world(t, { active: 1 });
+  assert.equal(await w.up.step(), 'busy'); assert.deepEqual(holdOf('busy', w.up.s), { to: TO });
+  for (const r of ['rolled-back', 'precheck-failed', 'not-eligible', 'current', 'awaiting-verification', 'team-loop-disabled', 'rollback-failed', undefined]) assert.equal(holdOf(r, w.up.s), null, String(r));
+  assert.deepEqual(holdOf('upgraded', { pending: { to: TO } }), { to: TO });
 });
