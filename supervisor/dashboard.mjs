@@ -1,6 +1,7 @@
 // View model of the team dashboard (issue #32). Pure functions over data the tick already stored: supervisor job records,
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
+import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
 import { Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
@@ -589,6 +590,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const w = sup.ticks.filter(t => Number.isFinite(t.at)).at(-1)?.warnings || [];
       if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told the team needs you.', ref: null, severity: 'action' });
       else if (w.length) attention.push({ id: 'alert-warning', text: redact(w[0].replace(/^team-alert: warning: /, 'Alerting: '), 200), ref: null, severity: 'warning' }); }
+    // Issue #358: the pinned status issue could not be updated; the tick itself is unaffected.
+    { const e = readStatusIssueState(root).error; if (e) attention.push({ id: 'status-issue-failed', text: redact(e, 300), ref: null, severity: 'warning' }); }
     const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
