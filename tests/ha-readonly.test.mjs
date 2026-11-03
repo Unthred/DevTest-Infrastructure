@@ -240,6 +240,9 @@ test('wrapper: click probe counts per control, fails on a navigation or a page-i
   // the first control navigated and the guard re-created its counters at 0 on the new document: only the document marker shows it
   const navReset = await go(t, { controls: 2, counters: [{ blocked: 0, mutated: 0 }, { blocked: 0, mutated: 0, sameDocument: false }] }, args);
   assert.equal(navReset.exit, EXIT.readonly); assert.equal(navReset.summary.probe.navigated, 1); assert.equal(navReset.summary.probe.attempted, 1);
+  assert.match(renderHaReport(navReset.summary), /Navigation during probe.*mutations on the old page are unknown/);
+  const noNav = await go(t, { controls: 1, counters: [{ blocked: 0, mutated: 0 }, { blocked: 1, mutated: 0 }] }, args);
+  assert.doesNotMatch(renderHaReport(noNav.summary), /Navigation during probe/);
   // the page clicked something by itself before the probe: detected even though the probe is on
   const own = await go(t, { controls: 1, pageInitiated: 1, counters: [{ blocked: 1, mutated: 0 }, { blocked: 3, mutated: 0 }] }, args);
   assert.equal(own.exit, EXIT.readonly); assert.equal(own.summary.unexpectedInteractions, 1);

@@ -85,7 +85,8 @@ export function installInteractionGuard(options) {
 export function haOutcome({ pages, blockedWrites, blockedFrames, blockedInteractions, probe }) {
   const readonlyViolations = blockedWrites.length + blockedFrames.length;
   // Interactions blocked that the wrapper did not cause mean the page tried to act on its own: a finding. While probing, those are
-  // the ones already blocked before the first probe click (probe.pageInitiated).
+  // the ones already blocked before the first probe click (probe.pageInitiated). A page-initiated interaction that happens while the
+  // probe runs cannot be told apart from a probe-caused one and is counted in probe.blocked, not reported here.
   const probing = probe && probe.mode === 'clicks';
   const unexpected = probing ? (probe.pageInitiated ?? 0) : blockedInteractions.length;
   // A handler that ran despite the guard, or a navigation that made the counters unreadable, both fail the probe.
@@ -109,6 +110,7 @@ export function renderHaReport(summary) {
     `- WebSocket frames blocked (not on the read allow-list): ${summary.readOnly.blockedFrames.length}`,
     `- State-changing interactions blocked in the page: ${summary.readOnly.blockedInteractions.length}`);
   if (summary.probe && summary.probe.mode === 'clicks') lines.push(`- Click probe: ${summary.probe.attempted} control(s) clicked, ${summary.probe.blocked} blocked, **${summary.probe.mutated} changed state**`);
+  if (summary.probe && summary.probe.mode === 'clicks' && summary.probe.navigated > 0) lines.push('- **Navigation during probe**: a control navigated away, so mutations on the old page are unknown (the changed-state count above only covers controls before it).');
   lines.push('', `Screenshots: ${summary.pages.reduce((n, p) => n + p.profiles.filter((x) => x.screenshot).length, 0)} saved next to this report.`);
   return `${lines.join('\n')}\n`;
 }
