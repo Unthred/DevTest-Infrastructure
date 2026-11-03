@@ -1231,7 +1231,7 @@ export class Team {
   reviewRounds(pr) { return Object.keys(this.s.verdicts).filter(k => k.startsWith(`${pr.number}:`)).length; }
   reviewQueue(agent, prs) {
     const now = this.clock.now(), limitMs = (this.c.limits.review_starvation_hours ?? 24) * 3600000;
-    const rows = (prs || []).filter(pr => SHA.test(pr.headRefOid) && agentOfBranch(this.c, pr.headRefName) && !pr.isDraft && !this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]).map(pr => {
+    const rows = (prs || []).filter(pr => SHA.test(pr.headRefOid) && agentOfBranch(this.c, pr.headRefName) && !pr.isDraft && pr.mergeable !== 'CONFLICTING' && this.ciState(pr) === 'green' && !this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]).map(pr => {
       const waited = this.s.reviewSince[pr.number] != null ? now - this.s.reviewSince[pr.number] : 0, starved = waited >= limitMs, key = verdictKey(pr.number, pr.headRefOid);
       const scarce = !this.agents().some(([n]) => n !== agent && !this.reviewRefusal(n, pr, `${key}:${n}`));
       const mergeable = pr.mergeable === 'MERGEABLE', rounds = this.reviewRounds(pr), behind = pr.mergeStateStatus === 'BEHIND';

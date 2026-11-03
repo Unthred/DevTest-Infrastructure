@@ -83,3 +83,12 @@ test('#405 a new PR cannot jump ahead of an older equal PR however often it appe
 test('#405 the limit is validated', () => {
   for (const bad of [0, -1, 'x', 1000]) assert.throws(() => new Team({ config: cfg({ review_starvation_hours: bad }), root: '/x', gh: {}, jobs: {}, git: {}, clock: { now: () => 0 } }), /review_starvation_hours/);
 });
+
+test('#405 the shown review order is the executable order: conflicting and not-green PRs are not queued', async t => {
+  const red = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
+  const pulls = [pr(10, 'codex/issue-2-a', H(1), { mergeable: 'CONFLICTING' }), pr(11, 'codex/issue-3-b', H(2), { statusCheckRollup: red }), pr(20, 'codex/issue-4-c', H(3), { mergeable: 'UNKNOWN' })];
+  const w = world(t, pulls, { setup: team => { for (let i = 0; i < 10; i++) team.s.verdicts[`10:${H(i + 4)}`] = { verdict: 'CHANGES', reviewer: 'claude', at: 1 }; } });
+  const q = w.team.reviewQueue('claude', pulls);
+  assert.deepEqual(q.map(r => [r.pr.number, r.position, r.of]), [[20, 1, 1]]);
+  assert.equal((await reviewOf(w.team, 'claude')).pr, 20);
+});
