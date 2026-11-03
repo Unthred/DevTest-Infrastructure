@@ -500,3 +500,20 @@ test('issue #195: processStart parses a comm containing spaces exactly like proc
   assert.equal(processStart(process.pid), processInfo(process.pid).start);
   assert.equal(processStart(999999999), null);
 });
+
+test('issue #195: processStart is exact for a live process whose comm contains spaces', async () => {
+  const { processStart, processInfo } = await import('../supervisor/core.mjs');
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, ['-e', "process.title='a b c';setTimeout(()=>{},20000)"], { stdio: 'ignore' });
+  try {
+    let info = null;
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      info = processInfo(child.pid);
+      if (fs.readFileSync(`/proc/${child.pid}/stat`, 'utf8').includes('(a b c)')) break;
+    }
+    assert.ok(fs.readFileSync(`/proc/${child.pid}/stat`, 'utf8').includes('(a b c)'));
+    assert.ok(info && info.start);
+    assert.equal(processStart(child.pid), processInfo(child.pid).start);
+  } finally { child.kill('SIGKILL'); }
+});
