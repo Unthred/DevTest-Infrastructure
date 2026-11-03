@@ -5,9 +5,8 @@
 // container at every standard width. The page script runs, so the copy buttons are visible and measured. No production state is
 // read or written; screenshots stay under the evidence directory, never in Git (D-005). Run `node browser/prepare-cache.mjs` first.
 //
-// Staging note: browser/static-server.mjs has no MIME type for `.mjs`, and browsers refuse a module script served as
-// application/octet-stream. The staged copy therefore serves dashui/logic.mjs as /static/logic.js and rewrites the one import in
-// app.js. The real dashboard server (supervisor/dashserver.mjs) serves logic.mjs with a JavaScript type.
+// Staging: every dashui file the pages load is copied unchanged (early.js, app.js, logic.mjs, legend.mjs, style.css); a missing one is a
+// 404 plus a console error on every page (issue #428). browser/static-server.mjs serves .mjs as JavaScript, like supervisor/dashserver.mjs.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,9 +63,7 @@ async function fixtureSite(dir) {
       }
       const ui = path.join(sourceProject, 'supervisor', 'dashui');
       fs.mkdirSync(path.join(dir, 'static'));
-      fs.copyFileSync(path.join(ui, 'style.css'), path.join(dir, 'static', 'style.css'));
-      fs.copyFileSync(path.join(ui, 'logic.mjs'), path.join(dir, 'static', 'logic.js'));
-      fs.writeFileSync(path.join(dir, 'static', 'app.js'), fs.readFileSync(path.join(ui, 'app.js'), 'utf8').replace("from './logic.mjs'", "from './logic.js'"));
+      for (const f of ['style.css', 'early.js', 'app.js', 'logic.mjs', 'legend.mjs']) fs.copyFileSync(path.join(ui, f), path.join(dir, 'static', f));
       for (const d of fs.readdirSync(dir, { recursive: true })) { const f = path.join(dir, d); fs.chmodSync(f, fs.statSync(f).isDirectory() ? 0o755 : 0o644); }
       fs.chmodSync(dir, 0o755);
       return view;

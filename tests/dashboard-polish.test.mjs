@@ -320,3 +320,8 @@ test('status pills and breadcrumb links keep a 24px target; card tools wrap', ()
   assert.match(css, /\.crumbs a\{[^}]*min-height:24px/);
   assert.match(css, /\.tools\{[^}]*flex-wrap:wrap/);
 });
+
+// ---- issue #428: a short plain link (for example "#3") must still be a 24px target (WCAG 2.5.8)
+test('plain links in main keep a 24px minimum width as well as height', () => {
+  assert.match(css, /main a:not\(\[class\]\)\{[^}]*min-height:24px[^}]*min-width:24px/);
+});
