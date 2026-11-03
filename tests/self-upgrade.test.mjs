@@ -425,6 +425,15 @@ test('dry-run health check: only a real plan counts, not a lock skip, bad JSON o
   assert.equal((await mk({ status: 2, stdout: '', stderr: 'boom' }).dryRunTick()).ok, false);
 });
 
+test('dry-run health check retries a failed register read, but not other failures', async () => {
+  const seq = outs => { const calls = []; const sleeps = []; const deps = realDeps({ root: '/x', config: { repo_path: '/x' }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, wrapper: '/w', sleep: async ms => sleeps.push(ms), run: () => { calls.push(1); return outs[Math.min(calls.length - 1, outs.length - 1)]; } }); return { deps, calls, sleeps }; };
+  const regFail = { status: 1, stdout: '', stderr: 'cannot read docs/DECISIONS.md from origin/main' };
+  const plan = { status: 0, stdout: JSON.stringify({ actions: [] }), stderr: '' };
+  let w = seq([regFail, plan]); assert.equal((await w.deps.dryRunTick()).ok, true); assert.equal(w.calls.length, 2); assert.equal(w.sleeps.length, 1);
+  w = seq([regFail]); const bad = await w.deps.dryRunTick(); assert.equal(bad.ok, false); assert.equal(w.calls.length, 3); assert.match(bad.reason, /cannot read docs/);
+  w = seq([{ status: 1, stdout: '', stderr: 'boom' }, plan]); assert.equal((await w.deps.dryRunTick()).ok, false); assert.equal(w.calls.length, 1);
+});
+
 // ---- the real rollback script against temporary directories
 function install(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-rb-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
