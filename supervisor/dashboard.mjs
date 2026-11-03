@@ -101,7 +101,7 @@ function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now =
   return team;
 }
 
-function reasons(team, cache, jobs, plan, states, names) {
+function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
   const c = team.c, S = team.s, prs = cache.pulls || [], issues = cache.issues || [];
   const byNo = new Map(issues.map(i => [i.number, i]));
   const planned = new Set(plan.map(a => `${a.agent}:${a.type}:${a.issue ?? a.pr}`));
@@ -120,7 +120,7 @@ function reasons(team, cache, jobs, plan, states, names) {
     let reason;
     if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
     else if (team.carryPending(pr)) reason = 'the rebase carry is waiting for CI; no review starts for this head until it is recorded or refused';
-    else if (checks === 'pending') reason = waitingOnText(pr.statusCheckRollup);
+    else if (checks === 'pending') reason = waitingOnText(pr.statusCheckRollup, now);
     else if (checks === 'red') reason = 'CI failing';
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (!v && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'pending') reason = `re-review requested by the homeowner (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}); waiting for a reviewer on a different model for ${sha7(pr.headRefOid)}`;
@@ -168,7 +168,7 @@ function reasons(team, cache, jobs, plan, states, names) {
 
 // Why an idle agent is idle, in plain words (issue #50). Homeowner waits first, then what is in flight, then drafts, then blocked issues.
 // Returns { text, links } where links are { text, url } for the PRs and issues named; null when the agent is not idle or has a planned job.
-export function idleReason({ agent, config, team, cache, plan, state, names = makeNamer({ repo: config.repository, issues: cache.issues, pulls: cache.pulls, merged: cache.merged }) }) {
+export function idleReason({ agent, config, team, cache, plan, state, now = Date.now(), names = makeNamer({ repo: config.repository, issues: cache.issues, pulls: cache.pulls, merged: cache.merged }) }) {
   if (state !== 'idle') return null;
   if (config.enabled === false) return { text: 'the team loop is switched off', links: [] };
   const next = plan.find(a => a.agent === agent);
@@ -192,7 +192,7 @@ export function idleReason({ agent, config, team, cache, plan, state, names = ma
       else part(0, `waiting for homeowner: fix limit reached on ${names.pr(p.number).text}`, 'pull', p.number);
     }
     else if (p.mergeable === 'CONFLICTING') part(1, `waiting to rebase ${names.pr(p.number).text}`, 'pull', p.number);
-    else if (checks === 'pending') part(1, `${waitingOnText(p.statusCheckRollup).replace('waiting on CI', 'waiting on CI for ' + names.pr(p.number).text)}`, 'pull', p.number);
+    else if (checks === 'pending') part(1, waitingOnText(p.statusCheckRollup, now).replace('waiting on CI', () => 'waiting on CI for ' + names.pr(p.number).text), 'pull', p.number);
     else if (v?.verdict === 'PASS') part(1, `${names.pr(p.number).text} has a PASS and merges on the next tick`, 'pull', p.number);
     else part(1, `waiting for review of ${names.pr(p.number).text}`, 'pull', p.number);
   }
@@ -323,7 +323,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   }
   for (const pr of cache?.pulls || []) if (!pr.isDraft && !fixLimited.has(pr.number) && checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // Issue #331: a check run whose state contradicts itself for too long. One item per head and check; it clears when the check finishes or the head moves.
-  for (const pr of cache?.pulls || []) if (!pr.isDraft) for (const c of stuckChecks(pr.statusCheckRollup, now)) add(`ci-stuck-${pr.number}-${String(pr.headRefOid).slice(0, 7)}-${c.name.replace(/[^A-Za-z0-9]+/g, '-')}`, `Check stuck: "${c.name}" on ${names.pr(pr.number).text} has been inconsistent for ${Math.round(c.ageMs / 60000)} min; re-run that job.`, { kind: 'pull', n: pr.number });
+  for (const pr of cache?.pulls || []) if (!pr.isDraft) for (const c of stuckChecks(pr.statusCheckRollup, now, stuckSeenFor(pr))) add(`ci-stuck-${pr.number}-${String(pr.headRefOid).slice(0, 7)}-${c.name.replace(/[^A-Za-z0-9]+/g, '-')}`, `Check stuck: "${c.name}" on ${names.pr(pr.number).text} has been inconsistent for ${Math.round(c.ageMs / 60000)} min; re-run that job.`, { kind: 'pull', n: pr.number });
   // issue #149: a cancelled check that was rerun once and is still cancelled
   for (const pr of cache?.pulls || []) if (!pr.isDraft && state.cancelWatch?.[`${pr.number}:${pr.headRefOid}`]?.noticed && loneCancelled(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)).length) add(`ci-cancelled-${pr.number}`, `CI was cancelled and, after one rerun, is still not green on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // idle while there is work: the same plan was present, with the agent idle, in every snapshot of the last 9+ minutes
@@ -554,6 +554,9 @@ export function refsOf({ names, cache, jobs, state }) {
   return out;
 }
 
+// First-seen times of inconsistent checks, per PR head (see stuckChecks). In memory: a restart restarts the clock.
+const stuckSeen = new Map();
+export const stuckSeenFor = pr => { const k = `${pr.number}:${pr.headRefOid}`; if (!stuckSeen.has(k)) { for (const o of [...stuckSeen.keys()]) if (o.startsWith(`${pr.number}:`)) stuckSeen.delete(o); stuckSeen.set(k, new Map()); } return stuckSeen.get(k); };
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null, configError = null }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
@@ -561,7 +564,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
   const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now, events || [], register, tz);
   return team.plan().then(async plan => {
     const names = makeNamer({ repo: config.repository, issues: c.issues, pulls: c.pulls, merged: c.merged, mergeLog: state.mergeLog, stateJobs: state.jobs, titles: state.titles });
-    const queues = reasons(team, c, jobs, plan, states, names);
+    const queues = reasons(team, c, jobs, plan, states, names, now);
     const byNoAll = new Map((c.issues || []).map(i => [i.number, i]));
     team.view = { prs: c.pulls || [], issues: c.issues || [] }; team.merged = await team.gh.listMergedPulls();
     const excluded = (c.issues || []).filter(i => i.state === 'OPEN' && !team.delivered?.has(i.number)).sort((x, y) => x.number - y.number).flatMap(i => {
@@ -573,14 +576,14 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const agents = Object.entries(config.agents).map(([name, a]) => {
       const s = states[name], j = s.job;
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
-      base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state, names });
+      base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state, now, names });
       // Issue #213: one entry per running or paused job, with its role, model and item, so concurrent jobs on one agent each get a card.
       base.jobs = (s.jobs || []).map(x => { const r = state.jobs?.[x.id] || {}; return { id: shortJob(x.id), fullId: x.id, name: redact(names.job(x).text, 300), kind: x.kind || r.kind || 'job', role: roleOfType(r.kind || x.kind), model: redact(r.model || x.model || '', 40) || null, status: x.status, lastEvent: redact(x.lastEvent || '', 48), nextAttemptAt: x.nextAttemptAt || null, startedAt: x.createdAt, elapsedMs: now - x.createdAt, attempts: x.attempts || 0, paused: ['paused_limit', 'paused_manual'].includes(x.status) }; });
       if (j) base.job = { id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
       return base;
     });
     const attention = attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
-    const ver = readVersion(root, running === undefined ? {} : { running });
+    const ver = readVersion(root, running === undefined ? { now } : { running, now });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: deploy needed.`, ref: null, severity: 'warning' });
     // Issue #265: one Needs you item while main needs a hand-deployed bootstrap installer change; it ends when the installed commit moves.

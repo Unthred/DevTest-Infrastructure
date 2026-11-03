@@ -196,7 +196,7 @@ export function appendSnapshot(root, snap, now) {
 // running: the commit this very process was loaded from; when it differs from installed the server needs a restart.
 const SHA40 = /^[0-9a-f]{40}$/;
 export function codeVersion(url = import.meta.url) { const m = /\/versions\/([0-9a-f]{40})\//.exec(fileURLToPath(url)); return m ? m[1] : null; }
-export function readVersion(root, { running = codeVersion() } = {}) {
+export function readVersion(root, { running = codeVersion(), now = Date.now() } = {}) {
   let last = null;
   try {
     for (const line of fs.readFileSync(path.join(root, 'team', 'upgrades.jsonl'), 'utf8').split('\n')) { try { const r = JSON.parse(line); if (r && typeof r.to === 'string') last = r; } catch (error) { if (!(error instanceof SyntaxError)) throw error; } }
@@ -211,12 +211,12 @@ export function readVersion(root, { running = codeVersion() } = {}) {
   const stale = last && linked && linked !== last.to && Number.isFinite(last.at) && linkedAt > last.at;
   // Issue #265: live origin/main as the upgrader last fetched it (self-upgrade.json), not the last attempted target. It is only
   // trusted while it was fetched for the installed commit, so a manual swap does not claim stale drift.
-  let seen = null;
-  try { const m = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).main; if (m && SHA40.test(m.sha || '') && m.from === installed) seen = m; } catch { /* no state: fall back to the records */ }
+  let seen = null, upgradeState = null;
+  try { upgradeState = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); const m = upgradeState?.main; if (m && SHA40.test(m.sha || '') && m.from === installed) seen = m; } catch { /* no state: fall back to the records */ }
   const main = seen ? seen.sha : (!last || stale ? installed : last.to);
   const behind = seen && Number.isSafeInteger(seen.behind) ? seen.behind : null;
   const run = SHA40.test(running || '') ? running : null;
   // Issue #331: when the upgrade is rate-limited the header says when the next try is.
-  let nextTryAt = null; try { const l = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).lastUpgradeAt; if (Number.isFinite(l) && l + MIN_UPGRADE_INTERVAL_MS > Date.now()) nextTryAt = l + MIN_UPGRADE_INTERVAL_MS; } catch { /* none */ }
+  let nextTryAt = null; const l = upgradeState?.lastUpgradeAt; if (Number.isFinite(l) && l + MIN_UPGRADE_INTERVAL_MS > now) nextTryAt = l + MIN_UPGRADE_INTERVAL_MS;
   return { installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, nextTryAt: installed === main ? null : nextTryAt, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
 }

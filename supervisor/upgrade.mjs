@@ -211,7 +211,7 @@ export class SelfUpgrade {
     if (!from) return 'not-versioned';
     if (this.s.lastUpgradeAt && this.clock.now() - this.s.lastUpgradeAt < MIN_UPGRADE_INTERVAL_MS) {
       // Issue #331: the rate limit holds back the upgrade, not the display. Refresh main every tick so the header never claims "Up to date" on a stale ref.
-      if (!(this.s.fetchRetryAt && this.clock.now() < this.s.fetchRetryAt)) { try { this.noteMain(from, this.d.fetchMain()); } catch { /* display only: the next tick tries again */ } }
+      if (!(this.s.fetchRetryAt && this.clock.now() < this.s.fetchRetryAt)) { try { this.noteMain(from, this.d.fetchMain()); } catch { const n = (this.s.fetchFailures || 0) + 1; this.s.fetchFailures = n; this.s.fetchRetryAt = this.clock.now() + envBackoffMs(n); this.save(); /* display only: back off like the upgrade path */ } }
       return 'rate-limited';
     }
     let target;
