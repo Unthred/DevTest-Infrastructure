@@ -66,7 +66,7 @@ export function findDashboards(procRoot = '/proc', self = process.pid) {
   }
   return out;
 }
-export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50 } = {}) {
+export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500 } = {}) {
   const found = findDashboards(procRoot);
   if (!found.length) return { ok: true, restarted: false, reason: 'no dashboard server was running' };
   if (found.every(d => d.version === sha)) return { ok: true, restarted: false, reason: 'already on the new version' };
@@ -92,11 +92,19 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
     }
     return { ok: false, recovered: back, reason: `${why}; the new process was stopped and ${back ? `the old version${old.version ? ` ${short(old.version)}` : ''} is serving again` : 'the old version could NOT be started again, so nothing is serving now'}` };
   };
+  // Issue #193: a process that exists (or answered once) may still exit straight away, e.g. EADDRINUSE or a bad --host. After it
+  // looks up, wait a short grace period and require it to still be running (and, with a health check, still answering).
+  const settled = async () => {
+    await sleep(settleMs);
+    if (!findDashboards(procRoot).some(d => d.version === sha)) return false;
+    return health ? Boolean(await health(old.host, healthPort)) : true;
+  };
+  const up = { ok: true, restarted: true, host: old.host, port: old.port };
   for (let i = 0; i < tries; i++) {
     if (findDashboards(procRoot).some(d => d.version === sha)) {
       // Health check (issue #135): the new process must answer, not merely exist. Retried while it binds its port.
-      if (!health) return { ok: true, restarted: true, host: old.host, port: old.port };
-      for (let j = 0; j < tries; j++) { if (await health(old.host, healthPort)) return { ok: true, restarted: true, host: old.host, port: old.port }; await sleep(200); }
+      if (!health) return (await settled()) ? up : recover(`the dashboard server on ${short(sha)} did not stay running`);
+      for (let j = 0; j < tries; j++) { if (await health(old.host, healthPort)) return (await settled()) ? up : recover(`the dashboard server on ${short(sha)} answered but did not stay up`); await sleep(200); }
       return recover(`the dashboard server started on ${short(sha)} but did not answer its health check`);
     }
     await sleep(200);
@@ -108,8 +116,16 @@ export const httpHealth = (host, port) => new Promise(resolve => {
   const req = http.get({ host, port: Number(port) || Number(process.env.DASHBOARD_PORT) || 8731, path: '/api/view.json', headers: { host: `${host}:${port}` }, timeout: 5000 }, res => { res.resume(); resolve(res.statusCode === 200); });
   req.on('timeout', () => { req.destroy(); resolve(false); }); req.on('error', () => resolve(false));
 });
-const defaultStartArgv = argv => { spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore', env: process.env }).unref(); };
-const defaultStart = (wrapper, args) => { spawn(wrapper, args, { detached: true, stdio: 'ignore', env: process.env }).unref(); };
+// Issue #193: like the AI Dashboard user script, the restarted server gets only PATH and HOME and appends its output to
+// dashboard.log (if that file cannot be opened it falls back to no output rather than failing the restart).
+const DASHBOARD_LOG = '/mnt/cache/ai-supervisor/dashboard.log';
+const dashboardSpawn = (cmd, args) => {
+  let fd = null; try { fd = fs.openSync(process.env.DASHBOARD_LOG || DASHBOARD_LOG, 'a', 0o600); } catch { fd = null; }
+  const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: process.env.HOME || '/root', ...(process.env.DASHBOARD_PORT ? { DASHBOARD_PORT: process.env.DASHBOARD_PORT } : {}) };
+  try { spawn(cmd, args, { detached: true, stdio: fd === null ? 'ignore' : ['ignore', fd, fd], env }).unref(); } finally { if (fd !== null) fs.closeSync(fd); }
+};
+const defaultStartArgv = argv => dashboardSpawn(argv[0], argv.slice(1));
+const defaultStart = (wrapper, args) => dashboardSpawn(wrapper, args);
 
 // What the team step receives from the upgrade step (issues #134, #191): a hold only while an install is pending (busy) or was just
 // made by this old process (upgraded); every other outcome, rolled-back and failures included, lets dispatch go ahead.
@@ -162,6 +178,8 @@ export class SelfUpgrade {
   // Returns a short result string for the tick report. `holding` (read by `team status` and the dashboard) is set only while the
   // result is 'busy': an upgrade is pending and eligible, and new jobs are held back (issue #134).
   async step() {
+    const dp = this.s.dashboardPending;
+    if (dp && !this.s.pending) await this.restartDashboard({ from: dp.from, to: dp.to }, dp.rollingBack === true);
     const result = await this.stepInner();
     if (result !== 'busy' && this.s.holding) { delete this.s.holding; this.save(); }
     return result;
@@ -296,9 +314,13 @@ export class SelfUpgrade {
   async restartDashboard(p, rollingBack = false) {
     const target = p.to;
     if (typeof this.d.restartDashboard !== 'function') return;
+    // Issue #193: remembered before the restart so a tick that dies between the 'verified' record and the outcome record is retried.
+    this.s.dashboardPending = { from: p.from, to: p.to, rollingBack }; this.save();
     let r;
     try { r = await this.d.restartDashboard(target); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
+    // The outcome is recorded first and the intent cleared after it, so a loss between the two re-runs the restart (a duplicate record at worst) instead of leaving nothing.
     this.record({ from: p.from, to: p.to, result: r.ok ? 'dashboard_restarted' : 'dashboard_restart_failed', reason: r.ok ? (r.restarted ? null : r.reason) : r.reason, ...(r.ok && r.restarted ? { restarted: true } : {}) });
+    delete this.s.dashboardPending; this.save();
     if (!r.ok) await this.alert(`${p.to}:dashboard${rollingBack ? ':rollback' : ''}`, `Dashboard server was not restarted on ${short(target)} after the ${rollingBack ? 'rollback' : 'upgrade'}: ${r.reason}. Check the dashboard and restart it by hand if needed (the page shows "restart pending" until then).`);
   }
 
