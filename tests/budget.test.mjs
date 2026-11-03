@@ -33,7 +33,7 @@ const pr = (n, branch, head, extra = {}) => ({ number: n, title: `t${n}`, headRe
 const issue = (n, state = 'OPEN', body = '', labels = []) => ({ number: n, title: `Issue ${n} title here`, state, body, labels });
 const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n';
 
-function world(t, { pulls = [], issues = [], cfg = config(), allowance = {}, jobRecords = [], snapshots = [], alert = null, now = NOW } = {}) {
+function world(t, { pulls = [], issues = [], cfg = config(), allowance = {}, jobRecords = [], snapshots = [], alert = null, now = NOW, out = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = { created: [], alerts: [] };
   const gh = { pulls, issues, listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues,
@@ -43,9 +43,10 @@ function world(t, { pulls = [], issues = [], cfg = config(), allowance = {}, job
   const git = { ensureWorktree: async o => o.path, worktreeFor: async () => null };
   const clock = { t: now, now: () => clock.t };
   const usage = { allowance, jobs: jobRecords, snapshots };
-  const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: REGISTER, clock, usage, timeZone: 'Europe/London',
+  const limitedOf = a => (out[a] ? { out: true, reason: out[a].reason ?? `${a} out`, until: out[a].until } : { out: false });
+  const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: REGISTER, clock, usage, limitedOf, timeZone: 'Europe/London',
     alert: alert || (async text => { calls.alerts.push(text); }) });
-  return { dir, gh, jobs, team, calls, clock, usage };
+  return { dir, gh, jobs, team, calls, clock, usage, out };
 }
 
 test('31 Oct numbers: codex at 92% with 3.5 days left is reviews only until Wed 07:18; claude at 40% keeps normal mode', () => {
@@ -453,7 +454,7 @@ test('issue #187: the cost of jobs already planned this tick is charged to the n
 test('issue #187: an agent at a usage limit (mode still normal) does not take another agent\'s issue over either', async t => {
   const w = world(t, { issues: [issue(2), issue(23, 'CLOSED'), issue(5, 'CLOSED')], allowance: { codex: codexAl(0.92), claude: claudeAl(0.4, { resetsAt: RESET }) } });
   assert.equal((await w.team.plan()).find(a => a.agent === 'claude')?.reassignedFrom, 'codex', 'control: claude in allowance takes it');
-  w.team.limitedOf = agent => (agent === 'claude' ? { out: true, reason: 'claude 5-hour limit' } : { out: false });
+  w.out.claude = { reason: 'claude 5-hour limit' };
   assert.ok(!(await w.team.plan()).some(a => a.agent === 'claude' && a.type === 'implement'));
 });
 

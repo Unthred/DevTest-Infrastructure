@@ -25,7 +25,9 @@ const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped']);
 export const MARKER = 'devtest-verdict';
 
-export function validateTeamConfig(c) {
+// Issue #379: validation does not mutate its input; it normalizes a copy (limits.roles, deprecations) and returns it.
+export function validateTeamConfig(input) {
+  const c = structuredClone(input);
   if (c?.schema_version !== 1 || !/^[\w.-]+\/[\w.-]+$/.test(c.repository || '') || !path.isAbsolute(c.repo_path || '') || !path.isAbsolute(c.worktree_base || ''))
     throw new SupervisorError('invalid team config: schema, repository or paths');
   const L = c.limits || {};
@@ -102,13 +104,14 @@ export function capNotes(L, pauseText = null) {
 export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0));
 function normalizeRoleLimits(c) {
   const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1;   // no upper bound: the count per role is the homeowner's choice (#344)
+  // Idempotent on its own output, also after a structuredClone (issue #379): the per_agent text already on a validated config is kept, so
+  // a derived roles block is never mistaken for an explicit one. On a raw config, any roles block next to per_agent (even one equal
+  // to it) is explicit: roles wins and the text says 'remove it'.
+  const prior = Array.isArray(c.deprecations) ? c.deprecations.find(d => typeof d === 'string' && d.startsWith('limits.per_agent')) : undefined;
   c.deprecations = [];
-  // Idempotent by value, so it survives a copy of the config: a roles block equal to the per_agent mapping is the mapping (explicit or
-  // derived on an earlier pass, which cannot be told apart and does not need to be), and any other roles block wins over per_agent.
   if ('per_agent' in L) {
     if (!ok(L.per_agent)) throw new SupervisorError('invalid team limit: per_agent');
-    const mapped = L.roles === undefined || (L.roles && typeof L.roles === 'object' && L.roles.implementer === L.per_agent && L.roles.reviewer === L.per_agent && Object.keys(L.roles).length === 2);
-    c.deprecations.push(mapped ? 'limits.per_agent is deprecated: it is mapped to limits.roles { implementer, reviewer }; replace it with limits.roles' : 'limits.per_agent is deprecated and ignored because limits.roles is set; remove it');
+    c.deprecations.push(prior ?? (L.roles === undefined ? 'limits.per_agent is deprecated: it is mapped to limits.roles { implementer, reviewer }; replace it with limits.roles' : 'limits.per_agent is deprecated and ignored because limits.roles is set; remove it'));
     if (L.roles === undefined) L.roles = { implementer: L.per_agent, reviewer: L.per_agent };
   }
   const R = L.roles;
