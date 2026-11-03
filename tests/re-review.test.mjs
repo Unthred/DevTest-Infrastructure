@@ -90,7 +90,15 @@ test('repeats: refused without a new decision, allowed once with one, never whil
   await assert.rejects(() => w.team.requestReReview(38, D1), /already used/, 'same decision');
   await w.team.requestReReview(38, D2);   // a new decision
   assert.equal(w.team.s.reReviews[38].requests.length, 2);
-  await w.team.tick(); await finish(w, 'CHANGES', [{ kind: 'blocking', text: 'again' }]);
+  const before = w.calls.created.filter(s => s.kind === 'review').length;
+  await w.team.tick();
+  const specs = w.calls.created.filter(s => s.kind === 'review');
+  assert.equal(specs.length, before + 1, 'the second request starts its own review');
+  assert.ok(specs.at(-1).prompt.includes(D2), 'the new reviewer is given the second decision');
+  const [, rec] = Object.entries(w.team.s.jobs).at(-1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(w.team.dir, 'inbox', rec.ticket, 'homeowner-decision.json'), 'utf8')).decision, D2);
+  await finish(w, 'CHANGES', [{ kind: 'blocking', text: 'again' }]);
+  assert.deepEqual(w.team.s.reReviews[38].requests.map(r => r.status), ['done', 'done'], 'the second request is completed');
   await assert.rejects(() => w.team.requestReReview(38, D2), /already used/);
 });
 

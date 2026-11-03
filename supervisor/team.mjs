@@ -1658,7 +1658,7 @@ export class Team {
   // It is not a pass: the earlier CHANGES verdict is set aside only so a real review runs, and that review's verdict decides (PASS goes
   // through the usual merge gates; CHANGES stays a rejection). Each request needs a decision link not used before on this PR, so a
   // repeat without a new decision is refused. Recorded before any effect, so a crash never allows a repeat.
-  reReviewOf(pr, head) { return (this.s.reReviews?.[pr]?.requests || []).find(r => r.head === head) || null; }
+  reReviewOf(pr, head) { return (this.s.reReviews?.[pr]?.requests || []).filter(r => r.head === head).pop() || null; }   // the latest request for the head, so a second decision never reads the first
   async requestReReview(prNumber, decision) {
     const n = Number(prNumber), link = typeof decision === 'string' ? decision.trim() : '';
     if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team request-review PR DECISION_LINK');
