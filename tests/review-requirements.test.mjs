@@ -270,6 +270,9 @@ test('#419: an immaterial mark on a behaviour, safety or verification claim is r
     // Issue #449: a behaviour claim that also carries an incidental count or wording term stays material.
     { claim: 'adds per-provider run throttling in 2 files', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
     { claim: 'changes the prompt wording so every claim blocks', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'wording' },
+    { claim: 'improves 2 tests', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
+    { claim: 'the suite fails 2 tests', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
+    { claim: 'reduces retries in 2 files', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
     { claim: 'removes the retry loop (3 files)', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'count' }]) {
     const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [c] });
     assert.match(r.report.ingested.at(-1).error, /cannot be immaterial/);
