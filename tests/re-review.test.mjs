@@ -26,6 +26,8 @@ function world(t) {
     listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => [{ number: 23, title: 'Issue 23', state: 'CLOSED', body: '', labels: [] }],
     comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]), removeLabel: async (n, l) => calls.removed.push([n, l]),
     hasComment: async (n, text) => calls.comments.some(c => c[0] === n && c[1].includes(text)), findIssueByMarker: async () => null, createIssue: async () => 1,
+    cmts: { 111: { login: 'o', createdAt: new Date(1000).toISOString(), url: D1 }, 222: { login: 'o', createdAt: new Date(2_000_000).toISOString(), url: D2 } },
+    getComment: async id => gh.cmts[id] || null, prComments: async () => Object.values(gh.cmts),
     merge: async (n, head) => { calls.merges.push([n, head]); }, board: async () => {}, listMergedPulls: async () => []
   };
   const jobs = { states: {}, seq: 0, listActive: async () => [], get: async id => jobs.states[id] || null,
@@ -137,4 +139,57 @@ test('stall reasons (the dashboard waiting text): pending, then still rejected a
   await w.team.tick(); await finish(w, 'CHANGES', [{ kind: 'blocking', text: 'x' }]);
   assert.ok(codes().includes('re-review-changes')); assert.ok(!codes().includes('re-review-requested'));
   assert.match(w.team.stallReasons(w.gh.pulls[0]).find(r => r.code === 're-review-changes').text, /needs the homeowner/);
+});
+
+// ---- Issue #418: an owner comment alone requests the re-review; the command verifies its comment.
+const U = n => `https://github.com/o/r/pull/38#issuecomment-${n}`;
+const cmt = (n, login, ms) => ({ login, createdAt: new Date(ms).toISOString(), url: U(n) });
+const ownerWorld = (t, extra = {}) => {
+  const w = world(t); w.team.c.owner_comment_review = { enabled: true, owner: 'o', agent_logins: ['claude-bot', 'codex-bot'], ...extra };
+  w.gh.cmts = {}; stuck(w); return w;
+};
+const add = (w, c) => { w.gh.cmts[c.url.split('-').pop()] = c; };
+const reviews = w => w.calls.created.filter(s => s.kind === 'review').length;
+
+test('owner comment after the CHANGES verdict requests one re-review on the next tick; the same comment later does nothing', async t => {
+  const w = ownerWorld(t); add(w, cmt(501, 'o', 10_000));
+  await w.team.tick();
+  assert.equal(w.team.reReviewOf(38, H(1)).decision, U(501)); assert.equal(reviews(w), 1);
+  assert.match(w.calls.comments.at(-1)[1], /Re-review requested by the homeowner/);
+  const notices = w.calls.comments.length;
+  await finish(w, 'CHANGES', [{ kind: 'blocking', text: 'still' }]);
+  await w.team.tick(); await w.team.tick();
+  assert.equal(w.team.s.reReviews[38].requests.length, 1, 'the used comment is not repeated');
+  assert.equal(reviews(w), 1); assert.equal(w.calls.comments.filter(c => /Re-review requested/.test(c[1])).length, 1); assert.ok(w.calls.comments.length >= notices);
+});
+
+test('an agent identity, another account, an unknown author or an owner comment older than the verdict does nothing', async t => {
+  const w = ownerWorld(t);
+  for (const c of [cmt(1, 'claude-bot', 10_000), cmt(2, 'stranger', 10_000), cmt(3, null, 10_000), cmt(4, 'o', 3)]) add(w, c);   // verdict at 5
+  await w.team.tick(); await w.team.tick();
+  assert.equal(w.team.s.reReviews[38], undefined); assert.equal(reviews(w), 0);
+  const listed = ownerWorld(t, { owner: 'o', agent_logins: ['o'] }); add(listed, cmt(5, 'o', 10_000));
+  await listed.team.tick(); assert.equal(listed.team.s.reReviews[38], undefined, 'an agent login is never the owner');
+});
+
+test('off by default; and no comment is read for a PR without a CHANGES verdict or with fix rounds left', async t => {
+  const off = ownerWorld(t, { enabled: false }); add(off, cmt(6, 'o', 10_000)); await off.team.tick(); assert.equal(off.team.s.reReviews[38], undefined);
+  const read = []; const left = ownerWorld(t); add(left, cmt(7, 'o', 10_000)); left.gh.prComments = async n => { read.push(n); return Object.values(left.gh.cmts); };
+  left.team.s.fixAttempts[`38:${H(0)}`] = 1; await left.team.tick();
+  delete left.team.s.verdicts[`38:${H(1)}`]; left.team.s.fixAttempts[`38:${H(0)}`] = 2; await left.team.tick();
+  assert.equal(read.length, 0); assert.equal(left.team.s.reReviews[38], undefined);
+  // not used up: once the conditions hold, the same comment works
+  left.team.s.verdicts[`38:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'codex', job: 'j0', findings: [], at: 5 };
+  await left.team.tick(); assert.equal(left.team.reReviewOf(38, H(1)).decision, U(7)); assert.deepEqual(read, [38]);
+});
+
+test('command: a link naming no comment, a non-owner comment and an older comment are refused with a reason; a valid one once', async t => {
+  const w = ownerWorld(t);
+  await assert.rejects(() => w.team.requestReReview(38, U(900)), /names no comment/);
+  add(w, cmt(901, 'stranger', 10_000)); await assert.rejects(() => w.team.requestReReview(38, U(901)), /not written by the repository owner/);
+  add(w, cmt(902, 'o', 3)); await assert.rejects(() => w.team.requestReReview(38, U(902)), /before the CHANGES verdict/);
+  w.gh.cmts[903] = { ...cmt(903, 'o', 10_000), url: U(904) }; await assert.rejects(() => w.team.requestReReview(38, U(903)), /not the address/);
+  assert.ok(w.team.s.verdicts[`38:${H(1)}`], 'refusals change nothing'); assert.equal(w.team.s.reReviews[38].requests.length, 0);
+  add(w, cmt(905, 'o', 10_000)); await w.team.requestReReview(38, U(905));
+  await assert.rejects(() => w.team.requestReReview(38, U(905)), /already (used|requested)/);
 });
