@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { applyAction, readWatchlist, advanceWatchlist, describeWatch, factsFromCache, resolve, CLEAR_AFTER_INSTALL_MS } from '../supervisor/watchlist.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
+import { githubClient } from '../supervisor/github.mjs';
 
 const NOW = Date.UTC(2026, 10, 3, 12, 0, 0);
 const H1 = 'a'.repeat(40), H2 = 'b'.repeat(40), MERGE = 'c'.repeat(40), OLD = 'd'.repeat(40);
@@ -145,4 +146,14 @@ test('POST /watch refuses another origin, a wrong host, bad input, unknown targe
   assert.equal((await s.post(form + '&back=//evil.example')).headers.location, '/', 'an off-site back target is ignored');
   assert.equal((await s.req('PUT', '/watch')).status, 405); assert.equal((await s.get('/watch')).status, 404);
   assert.equal(readWatchlist(s.root).items.length, 1, 'only the one valid request wrote');
+});
+
+test('an issue is followed to an open PR whose branch name has no issue number, via closingIssuesReferences', async () => {
+  const odd = pull({ number: 40, headRefName: 'feature/watch-thing', closingIssuesReferences: [{ number: 10 }] });
+  assert.deepEqual(resolve({ kind: 'issue', number: 10, pr: null }, { pulls: [odd] }), { pr: 40, issue: 10 });
+  let fields = '';
+  const gh = args => { fields = args[args.indexOf('--json') + 1]; return JSON.stringify([odd]); };
+  const pulls = await githubClient({ repository: 'o/r' }, gh).listPulls();
+  assert.ok(fields.split(',').includes('closingIssuesReferences'), 'listPulls asks GitHub for the closing issues');
+  assert.deepEqual(resolve({ kind: 'issue', number: 10, pr: null }, { pulls }), { pr: 40, issue: 10 });
 });
