@@ -262,6 +262,11 @@ test('redact removes emails, tokens, bearer values and long opaque strings but k
   const c = compactIssues([{ number: 2, title: 't', state: 'OPEN', labels: [], body: `Prerequisites: ${many.map(n => '#' + n).join(', ')} mail me@home.org` }])[0];
   assert.deepEqual(c.prerequisites, many); assert.doesNotMatch(JSON.stringify(c), /me@home/);
 });
+test('#212 compactIssues keeps the PR references parsed from the title and body, never the body itself', () => {
+  const [c] = compactIssues([{ number: 9, title: 'Follow-up from PR #206: x', state: 'OPEN', labels: [], body: 'Split out of PR #207.\nPrerequisites: #1, PR #208' }]);
+  assert.deepEqual(c.pullPrerequisites, [206, 207, 208]); assert.deepEqual(c.prerequisites, [1]); assert.ok(!('body' in c));
+  assert.deepEqual(compactIssues([{ number: 2, title: 't', state: 'OPEN', labels: [] }])[0].pullPrerequisites, []);
+});
 
 // ---- server
 test('bind validation: only a private LAN IPv4 on a documented port', () => {
@@ -398,8 +403,8 @@ test('dashboard serve applies team.local.json: the page reports the effective en
   }).on('error', reject));
   assert.equal(view.teamEnabled, true);
 });
-test('#104 an issue no agent owns is not planned and raises no attention item', async t => {
+test('#212 an issue no agent lists raises no attention item (it is eligible, not orphaned)', async t => {
   const v = await view(t, { cache: { tick: okTick(), pulls: [], issues: [issue(77)] } });
   assert.ok(!ids(v).includes('unowned'));
-  assert.ok(!v.plan.some(a => a.issue === 77));
+  assert.ok(!ids(v).includes('unqueued'));
 });

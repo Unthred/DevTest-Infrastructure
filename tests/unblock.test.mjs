@@ -167,7 +167,7 @@ test('split: out-of-scope findings become one queued follow-up issue; homeowner-
   assert.deepEqual(w.team.s.unblock.queued.claude, [num]); assert.deepEqual(w.team.issuesOf('claude').slice(-1), [num]);
   assert.match(w.calls.comments.map(c => c[1]).join('\n'), /2 proposed split\(s\) refused/);
   // the queued issue is implementable at the end of the list, and the re-review is told it is out of scope
-  assert.ok(w.calls.created.some(c => c.kind === 'implement' && c.issue === num), 'the queued issue is picked up by the implementer (the owned list is empty)');
+  assert.ok(!w.calls.created.some(c => c.kind === 'implement' && c.issue === num), 'the follow-up waits while PR #38 is open (issue #212)');
   const inbox = path.join(w.dir, 'i'); fs.mkdirSync(inbox);
   assert.match(reviewPrompt({ pr: 38, head: H(3), branch: 'b', repository: 'o/r', inbox, splitOut: [num] }), new RegExp(`#${num}.*original issue`));
   assert.equal(w.team.splitOut(38, inbox)[0], num);

@@ -327,10 +327,24 @@ export function agentOfBranch(config, branch) {
   for (const [name, a] of Object.entries(config.agents)) if (typeof branch === 'string' && branch.startsWith(a.branch_prefix)) return name;
   return null;
 }
+// `Prerequisites: #1`, `**Prerequisites:** #1` and `**Prerequisites (do not start before these are closed):** #1`.
+const PREREQ_LINE = /Prerequisites(?:\s*\([^)\n]*\))?\s*:\*{0,2}\s*([^\n]*)/i;
 export function prerequisites(body) {
-  const m = /Prerequisites:\*{0,2}\s*([^\n]*)/i.exec(body || '');
-  return m ? [...m[1].matchAll(/#(\d+)/g)].map(x => Number(x[1])) : [];
+  const m = PREREQ_LINE.exec(body || '');
+  return m ? [...m[1].matchAll(/(?<!(?:PR|pull request)\s*)#(\d+)/gi)].map(x => Number(x[1])) : [];
 }
+// Issue #212: a follow-up issue for an open pull request waits for that PR. Recognised: "Follow-up to/of/from PR #N", "Split out of PR #N",
+// "Blocked by/Waits for PR #N", "PR #N" on the Prerequisites line, and the dispatcher's own split marker.
+export function pullPrerequisites(title, body) {
+  const out = new Set(), text = `${title || ''}\n${body || ''}`;
+  for (const m of text.matchAll(/(?:follow-?up\s+(?:to|of|from|for)|split out of|blocked by|waits? (?:for|on))\s+(?:PR|pull request)\s*#(\d+)/gi)) out.add(Number(m[1]));
+  for (const m of text.matchAll(/devtest-split v1 pr=(\d+)/g)) out.add(Number(m[1]));
+  const line = PREREQ_LINE.exec(body || '');
+  if (line) for (const m of line[1].matchAll(/(?:PR|pull request)\s*#(\d+)/gi)) out.add(Number(m[1]));
+  return [...out];
+}
+// Labels that keep an open issue out of the queue (issue #212).
+export const EXCLUDING_LABELS = ['epic', 'tracking', 'parked', 'needs-homeowner'];
 // Stops that Foreman resumes once (issue #163): provider/network faults, a crash, an incomplete run, a used-up allowance window.
 // Issue #188: resumeTransient looks only at jobs started within this window and stops reading a job once it finished normally.
 const RESUME_WINDOW_MS = 7 * 86400000;
@@ -527,6 +541,28 @@ export class Team {
   agents() { return Object.entries(this.c.agents); }
   // An agent's issue list, plus follow-up issues the dispatcher queued at its end (issue #163).
   issuesOf(agent) { return [...(this.c.agents[agent]?.issues || []), ...(this.s.unblock.queued[agent] || []).filter(n => !this.c.agents[agent].issues.includes(n))]; }
+  // Issue #212: every open issue is eligible unless excluded. Returns null when eligible, else { kind, text, refs } where kind is
+  // label | prerequisite | pr-wait | pr-closed. A PR in neither the open nor the merged list was closed unmerged.
+  exclusion(n, issueByNo, prs = this.view?.prs || []) {
+    const issue = issueByNo.get(n);
+    if (!issue) return null;
+    const label = EXCLUDING_LABELS.find(l => (issue.labels || []).includes(l));
+    if (label) return { kind: 'label', label, text: label === 'needs-homeowner' ? 'needs the homeowner' : `labelled ${label}` };
+    const open = (this.c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => issueByNo.get(d)?.state !== 'CLOSED');
+    if (open.length) return { kind: 'prerequisite', refs: open, text: `blocked by ${open.map(d => `#${d}`).join(', ')}` };
+    for (const p of issue.pullPrerequisites ?? pullPrerequisites(issue.title, issue.body)) {   // a cached issue has no body, only the parsed list
+      const live = prs.find(x => x.number === p);
+      if (live) return { kind: 'pr-wait', refs: [p], text: `waiting for PR #${p}${live.title ? ` ${live.title}` : ''} to merge` };
+      if (!(this.merged || []).some(m => m.number === p)) return { kind: 'pr-closed', refs: [p], text: `PR #${p} was closed without merging` };
+    }
+    return null;
+  }
+  // Open issues in no agent's list, in number order: eligible for whichever agent has a free slot (issue #212). Config only orders and assigns.
+  unlisted() {
+    const listed = new Set(this.agents().flatMap(([a]) => this.issuesOf(a)));
+    return (this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)).map(i => i.number).sort((a, b) => a - b);
+  }
+  candidates(agent) { return [...this.issuesOf(agent), ...this.unlisted()]; }
   // Review independence (issue #152). The models that wrote a pull request head are the models of every implementer job the dispatcher
   // recorded for it (implement, continue, fix, cifix, rebase), by provider and model. Without a record (a PR written by hand) only the
   // branch author's provider is known, so only a reviewer on another provider counts as independent.
@@ -785,6 +821,21 @@ export class Team {
     this.delivered = new Set();
     this.merged = await (this.gh.listMergedPulls?.() ?? []);
     this.refreshTitles(prs, issues, this.merged);
+    // A PR referenced by a follow-up that is in neither list may have merged outside the bounded merged window: ask GitHub for its
+    // state (cached per Team) and only call it closed-unmerged when GitHub says so (issue #212 review).
+    this.knownMerged ??= new Set();
+    const openNos = new Set(prs.map(p => p.number)), seen = new Set(this.merged.map(m => m.number));
+    for (const i of issues) {
+      if (i.state !== 'OPEN') continue;
+      for (const p of i.pullPrerequisites ?? pullPrerequisites(i.title, i.body)) {
+        if (openNos.has(p) || seen.has(p)) continue;
+        if (!this.knownMerged.has(p)) {
+          let st = null; try { st = String((await this.gh.getMergedPull?.(p))?.state || '').toUpperCase(); } catch { st = null; }
+          if (st === 'MERGED') this.knownMerged.add(p); else if (st !== 'CLOSED') { seen.add(p); continue; }   // no lookup available: keep the listed-window inference
+        }
+        if (this.knownMerged.has(p)) { this.merged.push({ number: p, headRefName: '', closingIssuesReferences: [] }); seen.add(p); }
+      }
+    }
     for (const m of this.merged) {
       for (const r of m.closingIssuesReferences || []) if (Number.isSafeInteger(r.number)) this.delivered.add(r.number);
       const b = /\/issue-(\d+)(\D|$)/.exec(m.headRefName || '');
@@ -874,20 +925,17 @@ export class Team {
     const m = /\/issue-(\d+)(\D|$)/.exec(pr.headRefName);
     const n = m ? Number(m[1]) : null;
     // Its own issue, or one the dispatcher reassigned to it for allowance (recorded on its implement job).
-    const mine = n && (this.issuesOf(agent).includes(n) || Object.values(this.s.jobs).some(j => j.kind === 'implement' && j.agent === agent && j.issue === n && j.reassignedFrom));
+    const mine = n && (this.candidates(agent).includes(n) || Object.values(this.s.jobs).some(j => j.kind === 'implement' && j.agent === agent && j.issue === n && j.reassignedFrom));
     const issue = mine ? issueByNo.get(n) : null;
-    if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || issue.labels.includes('needs-homeowner')) return null;
-    const deps = this.c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
-    return deps.every(d => issueByNo.get(d)?.state === 'CLOSED') ? n : null;
+    if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || this.exclusion(n, issueByNo, this.view?.prs)) return null;
+    return n;
   }
 
   // An owned issue that is ready to implement: open, not delivered, not waiting on the homeowner, prerequisites closed,
   // never started, no PR for it from any configured agent (a reassigned issue has its PR on the other agent's branch).
   implementable(n, prs, issueByNo, busy) {
     const issue = issueByNo.get(n);
-    if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || issue.labels.includes('needs-homeowner')) return null;
-    const deps = this.c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
-    if (!deps.every(d => issueByNo.get(d)?.state === 'CLOSED')) return null;
+    if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || this.exclusion(n, issueByNo, prs)) return null;
     if (this.s.implemented[n] || prs.some(p => agentOfBranch(this.c, p.headRefName) && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName))) return null;
     return busy('implement', String(n)) ? null : issue;
   }
@@ -1100,7 +1148,7 @@ export class Team {
     if (paused) { this.hold(agent, 'implement', this.pauseText(prs)); return null; }
     const implModel = this.modelFor({ agent, key: 'wb:implement' }, 'implement', {}, true);   // issue #368: an Opus implementer is held, not started
     if (implModel.writeRefusal?.startsWith('no permitted writer')) { this.hold(agent, 'implement', implModel.writeRefusal); return null; }
-    for (const n of this.issuesOf(agent)) {
+    for (const n of this.candidates(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
       if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
       if (this.limitedOf(agent).out) return null;   // an owner at its usage limit does not start its own implement job; another agent may take it over

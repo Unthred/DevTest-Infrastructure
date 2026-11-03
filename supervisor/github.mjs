@@ -31,6 +31,7 @@ export function githubClient(config, gh = ghRunner()) {
   const withLabels = prs => (Array.isArray(prs) ? prs.map(p => ({ ...p, labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l.name)) })) : prs);
   return {
     listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),
+    listLabels: async () => (json(['label', 'list', '--repo', repo, '--limit', '200', '--json', 'name']) || []).map(l => l.name),
     listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,closingIssuesReferences']),
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
     // Check runs of any app (issue #142), including third-party checks such as GitGuardian that gh run view cannot show.

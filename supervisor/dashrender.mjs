@@ -393,7 +393,9 @@ function workPage(view, query, path) {
       { key: 'checks', label: 'CI', html: r => checksBadge(r.checks) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'reviewRounds', label: 'Review rounds', num: true, more: true },
       { key: 'fixRounds', label: 'Fix rounds', num: true, more: true }, { key: 'rebaseRounds', label: 'Rebase rounds', num: true, more: true }, { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true }],
     totals: { number: 'count', reviewRounds: 'avg', fixRounds: 'avg', tokens: 'sum' }, emptyState: empty('No pull requests yet', 'Pull requests appear once an agent opens one.', 'list') }) });
-  return { title: 'Work', body: `${grid('work', queues, 'fit')}<div class="cards fit">${issues}${prs}</div>` };
+  const ex = view.excluded || [];
+  const excluded = card({ id: 'excluded', title: `Excluded issues (${ex.length})`, span: 12, movable: false, body: ex.length ? `<ul class="panel-list">${ex.map(e => `<li class="sev-${e.kind === 'pr-closed' ? 'action' : 'info'}"><div class="t">${issueLink(e.number)}</div><div class="sub">${esc(e.reason)}</div></li>`).join('')}</ul>` : empty('Nothing is excluded', 'Every open issue is eligible.', 'check') });
+  return { title: 'Work', body: `${grid('work', queues, 'fit')}<div class="cards fit">${issues}${excluded}${prs}</div>` };
 }
 function prDetail(view, query, path, route) {
   const p = view.prs.find(x => x.number === route.id);

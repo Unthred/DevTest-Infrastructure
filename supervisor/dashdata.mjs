@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
-import { checksState, retriedIn, prerequisites } from './team.mjs';
+import { checksState, retriedIn, prerequisites, pullPrerequisites } from './team.mjs';
 import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 
@@ -71,7 +71,8 @@ export function readSnapshots(root) {
   return out;
 }
 
-// What the cache keeps of GitHub data: just enough for the planner and the page, nothing else (no bodies, no comments).
+// What the cache keeps of GitHub data: just enough for the planner and the page, nothing else (no bodies, no comments;
+// the issue and PR references parsed from a body are kept instead).
 export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
   labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l?.name)).includes('needs-homeowner') ? ['needs-homeowner'] : [],
@@ -85,7 +86,8 @@ export const compactIssues = issues => (issues || []).map(i => ({ number: i.numb
   labels: (i.labels || []).includes('needs-homeowner')
     ? ['needs-homeowner', ...(i.labels || []).filter(l => l !== 'needs-homeowner').slice(0, 9).map(l => redact(l, 40))]
     : (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
-  prerequisites: prerequisites(i.body) }));
+  // Parsed from the full title and body before the body is dropped, so the dashboard's exclusions match the tick's (issue #212).
+  prerequisites: prerequisites(i.body), pullPrerequisites: pullPrerequisites(i.title, i.body) }));
 
 // idle | running | paused | blocked, per agent, from the supervisor's own job records.
 export function agentStates(config, jobs, now) {
@@ -149,10 +151,10 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
-  if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.fetchedAt = now;
+  if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.mergedNumbers = (team.merged || []).map(x => x.number).filter(Number.isSafeInteger); cache.fetchedAt = now;
     // file lists the tick read for the second-opinion hold (null = unreadable), so the page shows the same hold as the tick
     cache.pullFiles = team.files instanceof Map ? Object.fromEntries([...team.files].map(([n, f]) => [n, Array.isArray(f) ? f.slice(0, 300).map(x => redact(String(x), 200)) : null])) : (prev.pullFiles || {}); }
-  else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.merged = prev.merged || []; cache.pullFiles = prev.pullFiles || {}; cache.fetchedAt = prev.fetchedAt ?? null; }
+  else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.merged = prev.merged || []; cache.mergedNumbers = prev.mergedNumbers || []; cache.pullFiles = prev.pullFiles || {}; cache.fetchedAt = prev.fetchedAt ?? null; }
   atomicJson(cacheFile(root), cache);
   if (!team || (status !== 'ok' && status !== 'error')) return cache;
   const states = agentStates(team.c, jobs, now);

@@ -11,7 +11,7 @@ import { SEVERITIES, applyLayout, breakpointOf, compareValues, filterRows, foote
 import { healthOf, freshness } from '../supervisor/dashboard.mjs';
 import { matchRoute, table } from '../supervisor/dashrender.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
-import { readVersion } from '../supervisor/dashdata.mjs';
+import { compactIssues, readVersion } from '../supervisor/dashdata.mjs';
 
 const NOW = Date.UTC(2026, 9, 30, 13, 0, 0);
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -413,11 +413,23 @@ test('#141 a labelled PR gives one card, removing the label clears it, and the e
   assert.equal((await needsOf(clear)).panels.needsYou.length, 0); assert.equal((await needsOf(clear)).health.label, 'Idle');
   assert.match((await clear.get('/')).body, /Nothing needs you/);
 });
-test('#141 open issues in no agent queue give one card listing them', async t => {
-  const c = calmCache(); c.issues.push({ number: 77, title: 'Orphan', state: 'OPEN', labels: [], prerequisites: [] }, { number: 78, title: 'Closed orphan', state: 'CLOSED', labels: [], prerequisites: [] });
+test('#212 an issue in no agent list is eligible: no Needs-you card; exclusions are listed with reasons; a closed-unmerged PR raises a card', async t => {
+  const c = calmCache();
+  // Built through compactIssues, as the tick writes the cache: no body survives, only what was parsed from it.
+  const cached = compactIssues([{ number: 77, title: 'Unlisted', state: 'OPEN', labels: [] }, { number: 78, title: 'Closed', state: 'CLOSED', labels: [] },
+    { number: 79, title: 'Epic', state: 'OPEN', labels: ['epic'] }, { number: 80, title: 'Wait', state: 'OPEN', labels: [], body: 'Follow-up to PR #201' },
+    { number: 81, title: 'Gone', state: 'OPEN', labels: [], body: 'Follow-up to PR #202' }, { number: 82, title: 'Merged', state: 'OPEN', labels: [], body: 'Follow-up to PR #203' }]);
+  assert.ok(cached.every(i => !('body' in i)), 'the cache keeps no issue body');
+  c.issues.push(...cached);
+  c.pulls.push({ number: 201, title: 'The open PR', headRefName: 'feature/x', headRefOid: 'a'.repeat(40), isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] });
+  c.mergedNumbers = [203];
   const v = await needsOf(await serve(t, { cache: c }));
-  const card = v.panels.needsYou.find(x => x.id === 'unqueued'); assert.ok(card); assert.match(card.text, /1 open issue is in no agent's queue.*#77/); assert.doesNotMatch(card.text, /#78|never be started/);
-  assert.equal(v.panels.needsYou.length, 1);
+  assert.ok(!v.panels.needsYou.some(x => x.id === 'unqueued'));
+  assert.ok(v.panels.needsYou.some(x => x.id === 'prclosed-81'), 'closed without merging needs the homeowner');
+  assert.ok(!v.panels.needsYou.some(x => x.id === 'prclosed-80' || x.id === 'prclosed-82'));
+  const ex = Object.fromEntries((v.excluded || []).map(e => [e.number, e]));
+  assert.match(ex[79].reason, /labelled epic/); assert.match(ex[80].reason, /waiting for PR #201 The open PR to merge/); assert.match(ex[81].reason, /closed without merging/);
+  assert.ok(!ex[77] && !ex[82] && !ex[78], 'eligible, merged-PR and closed issues are not excluded');
 });
 test('legend (issue #160): hiding keeps the item in the legend, the last visible series cannot be hidden, Show all restores', async () => {
   const { toggleSeries, sanitizeHidden } = await import('../supervisor/dashui/logic.mjs');
