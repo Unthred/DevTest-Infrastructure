@@ -346,7 +346,16 @@ const defaultRun = (cmd, args, { cwd, timeoutMs = 120000, input } = {}) => {
 };
 const tail = r => String(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' | ').slice(0, 200);
 
-export function realDeps({ root, config, gh, listActive, verdictFor, independenceApproved = () => false, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert }) {
+const DRY_RUN_TRIES = 3, DRY_RUN_RETRY_MS = 15000;
+function checkDryRun(r) {
+  if (r.status !== 0) return { ok: false, reason: tail(r), registerRead: /cannot read docs\/DECISIONS\.md/.test(tail(r)) };
+  try {
+    const out = JSON.parse(r.stdout);
+    if (typeof out?.skipped === 'string' || !Array.isArray(out?.actions)) return { ok: false, reason: 'dry-run did not run a plan' };
+  } catch { return { ok: false, reason: 'dry-run output is not JSON' }; }
+  return { ok: true };
+}
+export function realDeps({ root, config, gh, listActive, verdictFor, independenceApproved = () => false, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert, sleep = ms => new Promise(r => setTimeout(r, ms)) }) {
   const repo = config.repo_path;
   const git = (...a) => { const r = run('git', ['-C', repo, ...a]); if (r.status !== 0) throw new Error(`git ${a[0]} failed`); return r.stdout.trim(); };
   const remoteUrl = () => git('remote', 'get-url', 'origin');
@@ -389,14 +398,15 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     activeJobs: async () => (await listActive()).length,
     preChecks: async sha => bootstrap('check', sha, 2400000),
     upgrade: async sha => bootstrap('install', sha, 3000000),
+    // A register read that fails right after an upgrade is usually transient, so it is retried (three tries, backoff) before it can roll back.
     dryRunTick: async () => {
-      const r = run(wrapper, ['team', 'tick', '--dry-run'], { timeoutMs: 180000 });
-      if (r.status !== 0) return { ok: false, reason: tail(r) };
-      try {
-        const out = JSON.parse(r.stdout);
-        if (typeof out?.skipped === 'string' || !Array.isArray(out?.actions)) return { ok: false, reason: 'dry-run did not run a plan' };
-      } catch { return { ok: false, reason: 'dry-run output is not JSON' }; }
-      return { ok: true };
+      let result;
+      for (let attempt = 0; attempt < DRY_RUN_TRIES; attempt++) {
+        if (attempt) await sleep(DRY_RUN_RETRY_MS * attempt);
+        result = checkDryRun(run(wrapper, ['team', 'tick', '--dry-run'], { timeoutMs: 180000 }));
+        if (result.ok || !result.registerRead) return { ok: result.ok, ...(result.ok ? {} : { reason: result.reason }) };
+      }
+      return { ok: false, reason: result.reason };
     },
     rollback: async (from, to) => {
       const dir = scratch();

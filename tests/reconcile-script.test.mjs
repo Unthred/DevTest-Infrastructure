@@ -120,10 +120,11 @@ const verify = new URL('../tools/verify-reconcile-env.sh', import.meta.url).path
 const installed = w => fs.existsSync(path.dirname(w.script)) || fs.readFileSync(path.join(w.plugin, 'schedule.json'), 'utf8') !== '{}';
 // A fake node that records how it was called and fails the named subcommand.
 const gateNode = (failOn, log) => [
+  `[ "$1" = -e ] && exec '${process.execPath}' "$@"`,     // the gate's own plan check runs on real node
   `echo "$PWD|$HOME|$*|${'$'}{CALLER_MARK:-unset}" >> '${log}'`,
   'case "$2" in',
   'preflight) ' + (failOn === 'preflight' ? "echo '{\"ok\":false}'; exit 3;;" : "echo '{\"ok\":true}';;"),
-  'team) ' + ({ tick: 'echo boom >&2; exit 1;;', skip: "echo '{\"skipped\":\"another tick is running\"}';;", garbage: 'echo nope;;' }[failOn] || "echo '{\"actions\":[]}';;"),
+  'team) ' + ({ tick: 'echo boom >&2; exit 1;;', planbad: "echo '{\"actions\":[]}'; exit 1;;", stray: "echo '{\"x\":1}' >&2; echo '{\"skipped\":\"x\"}'; echo '\"actions\"' >&2;;", nested: "echo '{\"plan\":{\"actions\":[]}}';;", busy: "echo '{\"skipped\":\"another tick is running\",\"actions\":[]}';;", skip: "echo '{\"skipped\":\"another tick is running\"}';;", garbage: 'echo nope;;' }[failOn] || "echo '{\"actions\":[]}';;"),
   'esac'].join('\n');
 
 test('issue #40 the gate runs preflight and a dry-run tick under env -i, from a neutral directory, then installs', t => {
@@ -138,7 +139,7 @@ test('issue #40 the gate runs preflight and a dry-run tick under env -i, from a 
   assert.ok(installed(w));
 });
 
-for (const [failOn, why] of [['preflight', /preflight/], ['tick', /team tick --dry-run/], ['skip', /no plan returned/], ['garbage', /no plan returned/]]) {
+for (const [failOn, why] of [['preflight', /preflight/], ['tick', /team tick --dry-run/], ['skip', /no plan returned/], ['garbage', /no plan returned/], ['planbad', /rc=1/], ['stray', /no plan returned/], ['nested', /no plan returned/], ['busy', /tick lock/]]) {
   test(`issue #40 the gate refuses to install when ${failOn} fails, and leaves no schedule behind`, t => {
     const w = cronWorld(t, { nodeBody: gateNode(failOn, os.devNull) });
     const r = spawnSync('bash', [install], { env: { ...w.env, GATE_LOG: path.join(w.root, 'gate.log') }, encoding: 'utf8' });
