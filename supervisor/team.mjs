@@ -1213,15 +1213,20 @@ export class Team {
       if (!allow('rebase')) break;
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
+    // Issue #451: a secret scanner that reports success on the current head means the incident was resolved; forget the earlier
+    // round and homeowner-notice markers so a later head with a new flagged secret raises a fresh item.
+    for (const pr of prs) {
+      if ((this.s.scanOnlyAnnounced[pr.number] || this.s.scanOnlyRounds[pr.number]) && latestChecks(pr.statusCheckRollup).some(c => checkDone(c) && isSecretScanner({ name: c.name || c.context }) && CHECK_OK.includes(c.conclusion || c.state))) { delete this.s.scanOnlyAnnounced[pr.number]; delete this.s.scanOnlyRounds[pr.number]; }
+    }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
     for (const pr of repair ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const checks = failingChecks(pr.statusCheckRollup, this.retried(pr));
       // Issue #400: a round whose only failing checks are secret scanners cannot be cleared by the fix job (the old commit stays flagged
-      // until the homeowner resolves the incident). It is not counted toward max_fix_attempts and never escalates. To stay bounded, one
-      // such round never counts. Once the homeowner item exists, later heads wait for the homeowner; until it does (the flag or notice
-      // post failed), the round repeats to retry the notice, at most 3 times so it stays bounded.
+      // until the homeowner resolves the incident). It is not counted toward max_fix_attempts and never escalates. Once the homeowner
+      // item exists (scanOnlyAnnounced), later heads wait for the homeowner; until it does (the flag or notice post failed), the round
+      // repeats to retry the notice, at most 3 times so it stays bounded. A green scanner check clears both markers (issue #451).
       const scanOnly = scannerOnly(checks);
       if (scanOnly && (this.s.scanOnlyAnnounced[pr.number] || (this.s.scanOnlyRounds[pr.number] || 0) >= 3)) continue;
       const escalated = !scanOnly && this.fixCount(pr.number) >= L.max_fix_attempts;

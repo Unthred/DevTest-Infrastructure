@@ -1514,7 +1514,25 @@ test('#400 a scanner-only round with an unreadable check-runs API still raises t
   await w.team.execute({ agent: 'claude', ...a });
   assert.equal(w.team.s.scanOnlyRounds[38], 1);
   assert.equal(w.team.fixCount(38), 0);
-  assert.ok(JSON.stringify(w.calls).includes('secret-scan') || JSON.stringify(w.team.s).includes('secret-scan'));
+  assert.equal(w.team.s.scanOnlyAnnounced[38], true);
+  // a later flagged head is suppressed: the homeowner item already exists
+  w.team.s.jobs = {};
+  w.gh.pulls = [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: gg })];
+  assert.equal((await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix'), undefined);
+});
+
+test('#451 a green scanner check clears the markers so a later new flagged head plans a fresh round', async t => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(3), { statusCheckRollup: gg })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.team.s.scanOnlyAnnounced[38] = true; w.team.s.scanOnlyRounds[38] = 1;
+  assert.equal((await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix'), undefined);   // still flagged: suppressed, markers kept
+  assert.equal(w.team.s.scanOnlyAnnounced[38], true);
+  const green = gg.map(c => ({ ...c, conclusion: 'SUCCESS' }));
+  w.gh.pulls = [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: green })];
+  await w.team.plan();
+  assert.ok(!w.team.s.scanOnlyAnnounced[38]); assert.ok(!w.team.s.scanOnlyRounds[38]);
+  w.gh.pulls = [pr(38, 'claude/issue-35-x', H(5), { statusCheckRollup: gg })];
+  const a = (await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix');
+  assert.equal(a?.scanOnly, true);
 });
 
 test('#400 a scanner-only round whose homeowner notice cannot be posted is still not counted, retries, and stays bounded', async t => {
