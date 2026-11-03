@@ -273,6 +273,11 @@ test('#419: an immaterial mark on a behaviour, safety or verification claim is r
     { claim: 'improves 2 tests', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
     { claim: 'the suite fails 2 tests', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
     { claim: 'reduces retries in 2 files', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
+    { claim: 'the suite has 0 failing tests', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
+    { claim: '0 failed tests', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
+    { claim: 'the suite has 2 skipped tests', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
+    { claim: 'has 3 untested files', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
+    { claim: 'the PR tests 3 files', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
     { claim: 'removes the retry loop (3 files)', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'count' }]) {
     const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [c] });
     assert.match(r.report.ingested.at(-1).error, /cannot be immaterial/);
