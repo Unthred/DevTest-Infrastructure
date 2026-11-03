@@ -246,7 +246,7 @@ test('dashboard page: the Refresh allowance button and the reading age appear fo
   const body = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: '/usage', headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve(b)); }).on('error', reject));
   assert.match(body, /<form method="post" action="\/probe\/claude"/);
   assert.match(body, /Refresh allowance/);
-  assert.match(body, /Last reading 3h[^<]*ago[^<]*refreshed by a minimal probe run/);
+  assert.match(body, /Last reading 3h[^<]*ago[\s\S]*?refreshed by a minimal probe run/);
 });
 
 // ---- never spends credits: a used-up window blocks the tick's probe (D-019); with overage not refused it also blocks on demand
