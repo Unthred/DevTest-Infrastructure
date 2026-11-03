@@ -22,7 +22,21 @@
         }
       }
     },
-    "commandsRun": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
+    "commandsRun": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+    "requirements": { "type": "array", "maxItems": 100, "items": { "type": "object", "additionalProperties": false, "required": ["requirement", "status", "evidence"], "properties": { "requirement": { "type": "string", "minLength": 1, "maxLength": 1000 }, "status": { "enum": ["met", "not-met", "not-applicable"] }, "evidence": { "type": "string", "minLength": 1, "maxLength": 2000 } } } },
+    "descriptionClaims": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["claim", "status", "evidence"],
+        "properties": {
+          "claim": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "status": { "enum": ["true", "false", "unverifiable"] },
+          "evidence": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "materiality": { "enum": ["material", "immaterial"], "description": "Issue #419. Default material. A false immaterial claim (a test count, a line count, a wording slip) cannot by itself make CHANGES or block PASS; it is a follow-up. A false claim about behaviour, safety, scope or what was verified is never immaterial; the dispatcher refuses that." },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    }
   },
   "allOf": [
     { "if": { "properties": { "verdict": { "const": "CHANGES" } } }, "then": { "properties": { "findings": { "contains": { "properties": { "kind": { "const": "blocking" } } } } } } },
