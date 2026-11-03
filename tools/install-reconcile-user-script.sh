@@ -52,8 +52,14 @@ else
   rc=$?
 fi
 printf '%s rc=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$out" >> "$LOG"
-# Trim only above the threshold, under the lock held above.
-if [ "$(stat -c %s "$LOG")" -gt 1048576 ]; then tail --bytes=262144 "$LOG" | tail -n +2 > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
+# Rotate only above the threshold, under the lock held above (issue #362): the older lines are appended to a compressed archive, never dropped.
+# Concatenated gzip members are one valid gzip file. The archive is written before the log is cut, so a failure keeps every line.
+if [ "$(stat -c %s "$LOG")" -gt 1048576 ]; then
+  tail --bytes=262144 "$LOG" | tail -n +2 > "$LOG.tmp" \
+    && cut_bytes=$(( $(stat -c %s "$LOG") - $(stat -c %s "$LOG.tmp") )) \
+    && head --bytes="$cut_bytes" "$LOG" | gzip -c >> "$LOG.archive.gz" \
+    && mv "$LOG.tmp" "$LOG"
+fi
 exit 0
 SCRIPT
 } > "$script_dir/script"

@@ -3,6 +3,7 @@
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
 import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, countText, inRange, limitsOf, pillLinks, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
+import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 
@@ -34,11 +35,12 @@ export function matchRoute(pathname) {
   if ((m = /^\/work\/issue\/(\d{1,9})$/.exec(p))) return { page: 'issue', id: Number(m[1]) };
   if ((m = /^\/work\/job\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'job', id: m[1] };
   if ((m = /^\/jobs\/([a-f0-9]{32})$/.exec(p))) return { page: 'watch', id: m[1] };
+  if (p === '/activity/timeline') return { page: 'timeline' };
   if (p === '/supervisor/ticks') return { page: 'ticks' };
   if (p === '/supervisor/upgrades') return { page: 'upgrades' };
   return null;
 }
-const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor' })[page] || page;
+const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity' })[page] || page;
 
 // ---- icons: authored for this project (24x24, 2px stroke); no third-party icon set is bundled
 const ICONS = {
@@ -133,7 +135,7 @@ ${st.page < st.pages ? `<a href="${href({ page: st.page + 1 })}" rel="next">Next
 }
 
 // ---- charts: inline SVG, hover tooltips (<title>), per-series toggles (script), colours per agent
-const fmtAxisTime = (t, range) => new Date(t).toISOString().slice(range === '24h' ? 11 : 5, range === '24h' ? 16 : 10);
+const fmtAxisTime = (t, range) => new Date(t).toISOString().slice(range === '24h' ? 11 : range === 'all' ? 0 : 5, range === '24h' ? 16 : 10);
 function legend(items) {
   return `<div class="legend" role="group" aria-label="Series">${items.map(s => `<button type="button" aria-pressed="true" data-series="${esc(s.key)}"${s.marker ? ' data-marker="true"' : ''}><i style="background:${s.colour}"></i>${esc(s.label)}</button>`).join('')}</div>`;
 }
@@ -141,7 +143,7 @@ function lineChart({ series, resets = [], expected = [], now, range, title }) {
   const pts = series.flatMap(s => s.points);
   if (!pts.length) return empty('No allowance history in this range', 'The chart fills in as ticks record what the providers report.', 'chart');
   const W = 900, H = 320, L = 44, B = 28, T = 12, R = 14;
-  const t1 = now, t0 = now - RANGES[range];
+  const t1 = now, t0 = Number.isFinite(RANGES[range]) ? now - RANGES[range] : Math.min(...pts.map(p => p.at));
   const x = t => L + ((t - t0) / (t1 - t0)) * (W - L - R), y = v => T + (1 - Math.min(1, Math.max(0, v))) * (H - T - B);
   let g = [0, 0.25, 0.5, 0.75, 1].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="gridline"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v * 100}%</text>`).join('');
   for (let i = 0; i <= 4; i++) { const t = t0 + ((t1 - t0) * i) / 4; g += `<text x="${x(t)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}" class="ax">${esc(fmtAxisTime(t, range))}</text>`; }
@@ -418,9 +420,37 @@ function issueDetail(view, query, path, route) {
     + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? `<ul class="panel-list">${dependents.map(d => `<li class="sev-info"><div class="t">${issueLink(d.number)}</div></li>`).join('')}</ul>` : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') }), 'fit') };
 }
 
+// Issue #362: the whole retained history, from the first job. Read from files only (no GitHub, no model); every field was allowlisted
+// and redacted when it was archived, and the text shown is rebuilt from those fields. Filters are plain GET parameters.
+const KIND_LABEL = { job: 'Job', verdict: 'Review', merge: 'Merge', rebase: 'Rebase', unblock: 'Unblock', migration: 'Migration' };
+const SOURCE_LABEL = { live: 'recorded live', 'job-record': 'from the job record', github: 'backfilled from GitHub' };
+const mib = n => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GiB` : n >= 1024 ** 2 ? `${(n / 1024 ** 2).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`);
+function storageCard(view) {
+  const h = view.history, st = h?.storage; if (!st) return '';
+  const warn = st.warnings.length ? `<ul class="panel-list">${st.warnings.map(w => `<li class="sev-warning"><div class="t">${esc(w)}</div></li>`).join('')}</ul>` : '';
+  return card({ id: 'hist-storage', title: 'History storage', span: 12, movable: false, body: `${warn}<dl class="kv"><dt>Used</dt><dd>${esc(mib(st.used))} (archive ${esc(mib(st.parts.archive))}, recent ticks ${esc(mib(st.parts.snapshots))}, events ${esc(mib(st.parts.events))}, job records ${esc(mib(st.parts.jobs))})</dd><dt>Growth</dt><dd>${st.perDay === null ? 'unknown (no history yet)' : `about ${esc(mib(st.perDay))} per day`}</dd><dt>Free on the volume</dt><dd>${st.free === null ? 'unknown' : `${esc(mib(st.free))}${st.daysLeft !== null ? `, about ${st.daysLeft} days at this rate` : ''}`}</dd></dl><p class="sub">Foreman never deletes history by itself.</p>` });
+}
+function timelinePage(view, query, path) {
+  const h = view.history; const crumbs = [['/activity', 'Activity'], [null, 'Timeline']];
+  if (!h) return { title: 'Activity timeline', crumbs, body: grid('activity', card({ id: 'tl', title: 'Activity timeline', span: 12, movable: false, body: empty('History is not loaded', 'The timeline could not be read.', 'pulse') })) };
+  const f = Object.fromEntries(['kind', 'agent', 'ref', 'from', 'to', 'source'].map(k => [k, (query.get(k) || '').slice(0, 40)]));
+  const shown = filterTimeline(h.timeline, f);
+  const rows = shown.map(e => { const l = entryLink(e, view.repository); return { at: e.at, kind: KIND_LABEL[e.kind] || e.kind, agent: e.agent || '', text: entryText(e), link: l, source: SOURCE_LABEL[e.source] || e.source }; });
+  const agents = [...new Set(h.timeline.map(e => e.agent).filter(Boolean))].sort();
+  const opt = (v, cur, label) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label)}</option>`;
+  const form = `<form class="tbl-bar" method="get" action="${esc(path)}" aria-label="Timeline filters"><label>Type <select name="kind">${opt('', f.kind, 'All')}${Object.entries(KIND_LABEL).map(([k, v]) => opt(k, f.kind, v)).join('')}</select></label> <label>Agent <select name="agent">${opt('', f.agent, 'All')}${agents.map(a => opt(a, f.agent, a)).join('')}</select></label> <label>Issue or PR <input name="ref" value="${esc(f.ref)}" size="6" inputmode="numeric"></label> <label>From <input type="date" name="from" value="${esc(f.from)}"></label> <label>To <input type="date" name="to" value="${esc(f.to)}"></label> <button type="submit" class="btn">Filter</button> <a class="btn" href="${esc(path)}">Clear</a></form>`;
+  const first = h.timeline[0]?.at;
+  const gaps = h.gaps || [];
+  const gapBody = gaps.length ? `<p class="sub">Foreman shows only what it stored; these periods have no stored tick-level data and are not filled in.</p><ul class="panel-list">${gaps.slice(-50).reverse().map(g => `<li class="sev-info"><div class="t">${esc(utc(g.from))} to ${esc(utc(g.to))}: ${esc(g.reason)}</div></li>`).join('')}</ul>${gaps.length > 50 ? `<p class="sub">${gaps.length - 50} older gaps not listed.</p>` : ''}` : empty('No known gaps', 'Every period since the first record has tick data.', 'check');
+  const tbl = table({ id: 'tl', path, query, noun: 'events', rows, searchKeys: ['text'],
+    cols: [{ key: 'at', label: 'When', num: true, html: r => esc(utc(r.at)) }, { key: 'kind', label: 'Type', html: r => esc(r.kind) }, { key: 'agent', label: 'Agent', html: r => esc(r.agent || '–') }, { key: 'text', label: 'What', html: r => trunc(r.text) }, { key: 'source', label: 'Source', html: r => esc(r.source) }, { key: 'link', label: 'On GitHub', sortable: false, html: r => (r.link ? ext(r.link.url, r.link.text) : '') }],
+    totals: { text: 'count' }, emptyState: empty('No activity matches', 'Nothing in the retained history matches these filters.', 'pulse') });
+  return { title: 'Activity timeline', crumbs, body: grid('activity', storageCard(view) + card({ id: 'tl-gaps', title: `Known gaps (${gaps.length})`, span: 12, movable: false, body: gapBody })
+    + card({ id: 'tl', title: `Activity timeline${first ? ` since ${utc(first)}` : ''} (${shown.length} of ${h.timeline.length})`, span: 12, movable: false, body: form + tbl })) };
+}
 function activityPage(view, query, path) {
   const grouped = query.get('group') === 'issue';
-  const toggle = `<p class="sub">View: ${grouped ? `<a href="${esc(withQuery(path, query, { group: null }))}">Timeline</a> · <b>Group by issue</b>` : `<b>Timeline</b> · <a href="${esc(withQuery(path, query, { group: 'issue' }))}">Group by issue</a>`}</p>`;
+  const toggle = `<p class="sub"><a href="/activity/timeline">Full activity timeline since the first job</a> · View: ${grouped ? `<a href="${esc(withQuery(path, query, { group: null }))}">Timeline</a> · <b>Group by issue</b>` : `<b>Timeline</b> · <a href="${esc(withQuery(path, query, { group: 'issue' }))}">Group by issue</a>`}</p>`;
   if (grouped) {
     const tls = view.issueTimelines || [];
     const body = tls.length ? tls.map(t => `<section class="issue-story"><h3>${named(`/work/issue/${t.number}`, { text: t.name, full: t.full }, `#${t.number}`)}</h3><ol class="tl">${t.events.map(e => `<li><b>${esc(utc(e.at))}</b><br>${trunc(e.text)}${e.link ? ` <a href="${esc(e.link.url)}">job page</a>` : ''}</li>`).join('')}</ol></section>`).join('') : empty('No activity yet', 'Issue timelines appear after the first job.', 'pulse');
@@ -581,7 +611,7 @@ function watchPage(view, query, path, route) {
   const panel = `<section class="card watch" data-watch data-job="${esc(route.id)}" data-live="${live}" data-last="${last}" data-started="${Number.isFinite(started) ? started : ''}" data-seed="${esc(JSON.stringify(seed))}"><div class="card-body">${head}${none}<div class="tr-log" role="log" aria-live="polite">${renderEntries(entries)}</div><p class="sub">Read-only. Known secret shapes and OpenBao paths are redacted before storage, but redaction is pattern-based and cannot catch every secret (for example a bare password in prose); transcripts are kept 7 days.</p></div></section>`;
   return { title: `Job ${route.id.slice(0, 8)}`, crumbs: [['/work', 'Work'], [null, `Job ${route.id.slice(0, 8)}`]], body: `<div class="cards">${panel}</div><script type="module" src="/static/watch.js"></script>` };
 }
-const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
 // REFS is a module-level lookup that the link helpers read; it is set for one synchronous render and cleared after (issue #182).

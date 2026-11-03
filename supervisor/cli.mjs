@@ -13,7 +13,10 @@ import { githubClient } from './github.mjs';
 import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
-import { readCache, readJobs, readEvents, readSnapshots, recordTick, tickOutcome } from './dashdata.mjs';
+import { readCache, readJobs, readEvents, readSnapshots, readTeamState, recordTick, tickOutcome } from './dashdata.mjs';
+import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
+import { readIncidents } from './migrations.mjs';
+import { ghRunner } from './github.mjs';
 import { redact } from './redact.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
@@ -295,6 +298,20 @@ async function main() {
     console.log(JSON.stringify(result));
     if (!result.ok) process.exitCode = 3;
     return;
+  }
+  if (command === 'history') {   // issue #362: backfill the retained timeline; only 'backfill --github' calls GitHub, and no model is ever called
+    const config = loadTeamConfig(teamConfigFile, root);
+    if (a._[0] === 'backfill') {
+      const jobs = readJobs(root);
+      const local = recordTimeline(root, { config, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), incidents: readIncidents(root) });
+      const github = a.github === true ? githubBackfill(root, ghRunner(), config.repository) : null;
+      console.log(JSON.stringify({ added: local, github }, null, 2)); return;
+    }
+    if (a._[0] === 'status') {
+      const timeline = readTimeline(root), now = Date.now();
+      console.log(JSON.stringify({ entries: timeline.length, first: timeline[0]?.at ?? null, storage: storageReport(root, { now, timeline }), gaps: computeGaps(timeline, allSnapshots(root, readSnapshots(root)), now).length }, null, 2)); return;
+    }
+    throw new SupervisorError('usage: history backfill [--github] | history status');
   }
   if (command === 'team') {
     if (a._[0] === 'status') {

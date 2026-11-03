@@ -9,9 +9,11 @@ import { redact } from './redact.mjs';
 import { checksState, retriedIn, prerequisites, pullPrerequisites } from './team.mjs';
 import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
+import { HOT_WINDOW_MS, archiveSnapshots, recordTimeline } from './history.mjs';
+import { readIncidents } from './migrations.mjs';
 
-export const RETENTION_MS = 35 * 86400000;
-export const MAX_SNAPSHOTS = 12000;          // five-minute ticks for ~41 days; the age bound normally applies first
+// Issue #362: the hot file keeps the last 35 days for the planner; older snapshots rotate into compressed monthly archives and are never deleted.
+export const RETENTION_MS = HOT_WINDOW_MS;
 export const STALE_TICK_MS = 10 * 60000;
 export const dashDir = root => path.join(root, 'dashboard');
 const cacheFile = root => path.join(dashDir(root), 'cache.json');
@@ -173,6 +175,8 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     agents: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])),
     allowance: Object.fromEntries(Object.entries(team.c.agents).map(([n, a]) => [n, allowance[a.provider] ? { observedAt: allowance[a.provider].observedAt, windows: allowance[a.provider].windows.map(w => ({ type: w.type, windowMinutes: w.windowMinutes ?? null, utilization: w.utilization, resetsAt: w.resetsAt })) } : null])),
     redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };
+  // Issue #362: keep a compact, allowlisted timeline of everything the live records hold now, before any of it can expire.
+  try { recordTimeline(root, { config: team.c, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), incidents: readIncidents(root) }); } catch (error) { console.error(`ai-supervisor: timeline record failed: ${error?.name || 'Error'}`); }
   appendSnapshot(root, snap, now);
   return cache;
 }
@@ -180,12 +184,14 @@ export function appendSnapshot(root, snap, now) {
   const file = historyFile(root);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.appendFileSync(file, JSON.stringify(snap) + '\n', { mode: 0o600 });
-  // Bounded retention: trim by age and count, rarely, with an atomic rewrite.
+  // Rotation (issue #362): move snapshots older than the hot window into the monthly archive, rarely, with an atomic rewrite.
   const size = fs.statSync(file).size;
   // Check at most about once an hour (first tick of the hour), or at once if the file is over the hard cap.
   const hourly = now % 3600000 < 300000 && size > 256 * 1024;
   if (!hourly && size < 16 * 1024 * 1024) return;
-  const keep = readSnapshots(root).filter(s => now - s.at <= RETENTION_MS).slice(-MAX_SNAPSHOTS);
+  const all = readSnapshots(root), keep = all.filter(s => now - s.at <= RETENTION_MS), old = all.filter(s => now - s.at > RETENTION_MS);
+  if (!old.length) return;
+  archiveSnapshots(root, old);   // archive first: a crash before the rewrite leaves a duplicate that readers drop, never a loss
   const temp = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(temp, keep.map(s => JSON.stringify(s)).join('\n') + '\n', { mode: 0o600 });
   fs.renameSync(temp, file);

@@ -9,8 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { pauseDisagreement, buildView } from '../supervisor/dashboard.mjs';
 import { renderPage } from '../supervisor/dashrender.mjs';
-import { MAX_SNAPSHOTS, appendSnapshot, compactIssues, compactPulls, readCache, readSnapshots, recordTick, redact, tickOutcome } from '../supervisor/dashdata.mjs';
+import { appendSnapshot, compactIssues, compactPulls, readCache, readSnapshots, recordTick, redact, tickOutcome } from '../supervisor/dashdata.mjs';
 import { handler, validateBind, currentView, clearRegisterMemo } from '../supervisor/dashserver.mjs';
+import { allSnapshots } from '../supervisor/history.mjs';
 import { Team } from '../supervisor/team.mjs';
 import { addUsage, usageFromLine } from '../supervisor/usage.mjs';
 
@@ -242,7 +243,7 @@ test('a tick that skipped an action is recorded as an error with the reason, not
   const v = await buildView({ config: config(), root, jobs: [fx], events: [], state: {}, cache, snapshots: readSnapshots(root), now: NOW + 2 });
   assert.ok(v.attention.some(i => i.id === 'tick-failed' && /lease conflict/.test(i.text)));
 });
-test('history retention is bounded by age and size and survives a rewrite', t => {
+test('the hot snapshot file rotates by age into the archive and loses nothing (issue #362)', t => {
   const root = setup(t);
   const DAY = 86400000, base = Date.UTC(2026, 9, 30, 12, 0, 0);       // the later appends use 12:30, outside the first five minutes of the hour (the trim window)
   for (let i = 0; i < 3000; i++) appendSnapshot(root, { at: base - 60 * DAY + i * 60000, status: 'ok', plan: [], agents: {}, allowance: {}, redCi: [], pad: 'x'.repeat(100) }, base - 60 * DAY + i * 60000);
@@ -250,7 +251,8 @@ test('history retention is bounded by age and size and survives a rewrite', t =>
   assert.equal(readSnapshots(root).length, 3001);                      // not yet trimmed: not the hourly check
   appendSnapshot(root, { at: base + 1, status: 'ok', plan: [], agents: {}, allowance: {}, redCi: [] }, Date.UTC(2026, 9, 30, 13, 0, 30));
   const kept = readSnapshots(root);
-  assert.equal(kept.length, 2); assert.ok(kept.every(s => s.at >= base - 35 * DAY)); assert.ok(kept.length <= MAX_SNAPSHOTS);
+  assert.equal(kept.length, 2); assert.ok(kept.every(s => s.at >= base - 35 * DAY));
+  assert.equal(allSnapshots(root, kept).length, 3002);                 // the 3000 old ticks moved to the archive, none dropped
 });
 test('redact removes emails, tokens, bearer values and long opaque strings but keeps commit ids', () => {
   const sha = 'a'.repeat(40);

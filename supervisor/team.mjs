@@ -13,6 +13,7 @@ import { redact, redactLong } from './redact.mjs';
 import { EXCEPTION_DECISION, validateReviewException, activeException, endedNow, modelWrittenRanges } from './review-exception.mjs';
 import { findHeadWriter } from './writerevidence.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
+import { archiveOverflow, archiveVerdict } from './history.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
@@ -1732,7 +1733,7 @@ export class Team {
     if (v?.verdict !== 'CHANGES') throw new SupervisorError(`PR #${n} has no CHANGES verdict at ${shortCommit(head)} to re-review${v ? ` (it is ${v.verdict})` : ''}`);
     if (this.fixCount(n) < this.c.limits.max_fix_attempts) throw new SupervisorError(`PR #${n} still has fix rounds left (${this.fixCount(n)} of ${this.c.limits.max_fix_attempts}); the fix loop runs first`);
     entry.requests.push({ head, decision: link, at: this.clock.now(), status: 'pending', prior: { verdict: v.verdict, reviewer: v.reviewer, job: v.job, at: v.at } });
-    delete this.s.verdicts[key];
+    this.archiveVerdict(key, v); delete this.s.verdicts[key];
     for (const k of Object.keys(this.s.reviewAttempts)) if (k.startsWith(key + ':')) delete this.s.reviewAttempts[k];
     this.save();
     await this.postNotice(n, `re-review-requested pr=${n} head=${head} n=${entry.requests.length}`, `**Re-review requested by the homeowner.** One new review of the same head \`${head}\` was requested after the decision at ${link}. This is not a pass: the earlier CHANGES verdict is set aside only so an independent reviewer can judge this head again with that decision, and the new verdict decides. No further re-review is accepted without a new decision.`);
@@ -1923,7 +1924,7 @@ export class Team {
   }
   logUnblock(report, e) {
     const entry = { at: this.clock.now(), target: e.target, tk: e.tk, what: String(e.what).slice(0, 200), why: String(e.why).slice(0, 300), result: String(e.result).slice(0, 200) };
-    this.s.unblock.log.push(entry); this.s.unblock.log = this.s.unblock.log.slice(-200); this.save();
+    this.s.unblock.log.push(entry); this.archiveOverflow('unblock', this.s.unblock.log.slice(0, -200)); this.s.unblock.log = this.s.unblock.log.slice(-200); this.save();
     (report.unblocked ||= []).push(entry);   // the event: the tick report, the tick snapshot and the Activity page read it
   }
   // Exactly one Needs you item per exhausted limit (per day, or per PR), naming the limit.
@@ -2046,7 +2047,7 @@ export class Team {
       const cur = await this.trustedRequirements(pr.headRefName);
       if (!cur) { this.reqHold.add(pr.number); (report.skipped ||= []).push({ what: `requirements of PR #${pr.number}`, reason: 'could not be read; merge held' }); continue; }
       if (cur.hash === v.requirementsHash) { this.reqHold.delete(pr.number); continue; }
-      delete this.s.verdicts[key]; delete this.s.secondOpinions[key]; delete this.s.exceptionReviews[key];
+      this.archiveVerdict(key, this.s.verdicts[key]); delete this.s.verdicts[key]; delete this.s.secondOpinions[key]; delete this.s.exceptionReviews[key];
       for (const k of Object.keys(this.s.reviewAttempts)) if (k.startsWith(key + ':')) delete this.s.reviewAttempts[k];
       this.save(); this.reqHold.delete(pr.number);
       const marker = `<!-- devtest-requirements-changed v1 pr=${pr.number} head=${pr.headRefOid} from=${v.requirementsHash.slice(0, 12)} to=${cur.hash.slice(0, 12)} -->`;
@@ -2155,6 +2156,10 @@ export class Team {
     }
   }
 
+  // Issue #362: history is kept before a capped or replaced record goes. Best effort: archiving must never stop the tick.
+  archiveOverflow(which, entries) { try { archiveOverflow(this.root, which, entries); } catch (error) { console.error(`ai-supervisor: ${which} archive failed: ${error?.name || 'Error'}`); } }
+  archiveVerdict(key, v) { try { archiveVerdict(this.root, key, v); } catch (error) { console.error(`ai-supervisor: verdict archive failed: ${error?.name || 'Error'}`); } }
+
   async execute(act, report = {}) {
     if (act.type === 'merge') {
       // D-021 (until D-024 is approved): an interim merge owes the opposite agent a post-merge review. Recorded before the merge, so a
@@ -2169,7 +2174,8 @@ export class Team {
       // Dashboard history (#32): who delivered, when the issue was started, when it merged. Bounded.
       this.s.mergeLog.push({ pr: act.pr, issue, agent: agentOfBranch(this.c, branch), reviewer: act.reviewer, startedAt: issue ? (this.s.implemented[issue] ?? null) : null, mergedAt: this.clock.now(), ...(act.exception ? { exception: EXCEPTION_DECISION, jobs: [act.job, act.commitsJob] } : {}) });
       if (act.exception) { this.s.exceptionEnded[act.pr] = { reason: 'merged', at: this.clock.now() }; await this.gh.comment(act.pr, `Merged by the dispatcher using the one-off homeowner review exception (${EXCEPTION_DECISION}): PASS from the whole-pull-request review (job ${String(act.job).slice(0, 8)}) and PASS from the review of the commits written by the other model (job ${String(act.commitsJob).slice(0, 8)}), both on exact head ${this.commitRef(act.head)}. All other merge gates applied. The exception ends with this merge.`); }
-      this.s.mergeLog = this.s.mergeLog.slice(-500);
+      // Issue #362: the state keeps the newest 500; older entries move to an append-only archive, never dropped.
+      this.archiveOverflow('merge', this.s.mergeLog.slice(0, -500)); this.s.mergeLog = this.s.mergeLog.slice(-500);
       if (issue) {
         await this.gh.comment(issue, `${this.names().pr(act.pr).text} merged at ${this.commitRef(act.head)} by the dispatcher. Gates: ${act.exception ? 'REVIEW EXCEPTION (D-027) used: two PASSes on this head; ' : ''}${act.interim ? 'interim (D-021) ' : ''}PASS from \`${act.reviewer}\` (job ${String(act.job).slice(0, 8)}) recorded for this exact head, all checks green, mergeable.${act.interim ? ' A post-merge review by the opposite agent follows.' : ''} Merged is not deployed or verified working.`);
         await this.gh.board(issue, act.base === 'main' ? 'done' : 'in_review');
