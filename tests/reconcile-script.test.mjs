@@ -8,6 +8,11 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 
 const install = new URL('../tools/install-reconcile-user-script.sh', import.meta.url).pathname;
 const remove = new URL('../tools/remove-reconcile-user-script.sh', import.meta.url).pathname;
+// Run the installer and fail with its own stderr, so a red CI run names the cause instead of a bare "Command failed".
+function runInstall(env) {
+  const r = spawnSync('bash', [install], { env, encoding: 'utf8' });
+  assert.equal(r.status, 0, `installer failed (status ${r.status}, signal ${r.signal}, error ${r.error}): ${r.stderr}`);
+}
 test('User Scripts reconciliation install and rollback preserve all existing schedules', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -18,7 +23,7 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
   const fake = path.join(root, 'fakenode'), fakeCli = path.join(root, 'cli.mjs');
   fs.writeFileSync(fake, '#!/bin/sh\necho \'{"ok":true,"actions":[]}\'\n', { mode: 0o755 }); fs.writeFileSync(fakeCli, '');
   const env = { ...process.env, AI_SUPERVISOR_USER_SCRIPTS_ROOT: root, AI_SUPERVISOR_RECONCILE_TEST: '1', AI_SUPERVISOR_NODE: fake, AI_SUPERVISOR_CLI: fakeCli };
-  execFileSync('bash', [install], { env, stdio: ['ignore', 'ignore', 'inherit'] }); // stderr kept so a CI failure names its cause
+  runInstall(env);
   const installed = JSON.parse(fs.readFileSync(path.join(root, 'schedule.json'), 'utf8'));
   assert.deepEqual(installed['/existing/script'], existing['/existing/script']);
   assert.equal(Object.keys(installed).length, 2);
@@ -49,7 +54,7 @@ function cronWorld(t, { nodeBody } = {}) {
 
 test('issue #35 the generated script runs under env -i, finds gh and node through its pinned PATH, and logs every tick', t => {
   const w = cronWorld(t);
-  execFileSync('bash', [install], { env: w.env, stdio: 'ignore' });
+  runInstall(w.env);
   const text = fs.readFileSync(w.script, 'utf8');
   assert.match(text, /^PATH=.*fakebin/m); assert.match(text, /^HOME=/m);
   const r = w.cron(); assert.equal(r.status, 0);
@@ -63,7 +68,7 @@ test('issue #35 the generated script runs under env -i, finds gh and node throug
 
 test('issue #35 the log is trimmed only above the threshold, under the lock; an overlapping run still runs and its log write waits for the lock (issue #448)', t => {
   const w = cronWorld(t);
-  execFileSync('bash', [install], { env: w.env, stdio: 'ignore' });
+  runInstall(w.env);
   w.cron(); const small = fs.readFileSync(w.log, 'utf8'); w.cron();
   assert.equal(fs.readFileSync(w.log, 'utf8').split('\n').length, small.split('\n').length + 1);     // no trim below threshold
   fs.writeFileSync(w.log, 'old line\n'.repeat(140000));                                           // > 1 MiB
