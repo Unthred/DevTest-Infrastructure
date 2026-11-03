@@ -1,3 +1,4 @@
+import { tmpDir } from './helpers/tmp.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -132,7 +133,7 @@ const gateNode = (failOn, log) => [
   'esac'].join('\n');
 
 test('issue #40 the gate runs preflight and a dry-run tick under env -i, from a neutral directory, then installs', t => {
-  const gl = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gatelog-')), 'gate.log');
+  const gl = path.join(tmpDir('gatelog-'), 'gate.log');
   const w = cronWorld(t, { nodeBody: gateNode('none', gl) });
   const env = { ...w.env, GATE_LOG: gl, CALLER_MARK: 'leaked' };
   const r = spawnSync('bash', [install], { env, encoding: 'utf8', cwd: os.tmpdir() });

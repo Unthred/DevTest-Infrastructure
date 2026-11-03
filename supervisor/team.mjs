@@ -40,6 +40,8 @@ export function validateTeamConfig(input) {
   if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
   if ('chain_seconds' in L && !(typeof L.chain_seconds === 'number' && L.chain_seconds >= 0 && L.chain_seconds <= 3600)) throw new SupervisorError('invalid team limit: chain_seconds');
   if ('test_slots' in L && !(Number.isSafeInteger(L.test_slots) && L.test_slots >= 1 && L.test_slots <= 8)) throw new SupervisorError('invalid team limit: test_slots');
+  if ('test_concurrency' in L && !(Number.isSafeInteger(L.test_concurrency) && L.test_concurrency >= 1 && L.test_concurrency <= 32)) throw new SupervisorError('invalid team limit: test_concurrency');
+  if ('test_tmp_root' in c && !(typeof c.test_tmp_root === 'string' && path.isAbsolute(c.test_tmp_root))) throw new SupervisorError('invalid team config: test_tmp_root must be an absolute path');
   if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');
   if ('chain_poll_seconds' in L && !(typeof L.chain_poll_seconds === 'number' && L.chain_poll_seconds >= 1 && L.chain_poll_seconds <= 300)) throw new SupervisorError('invalid team limit: chain_poll_seconds');
   if ('stall_hours' in L && !(typeof L.stall_hours === 'number' && L.stall_hours > 0 && L.stall_hours <= 720)) throw new SupervisorError('invalid team limit: stall_hours');
@@ -180,10 +182,11 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'test_tmp_root'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
+  if ('test_tmp_root' in local) { if (typeof local.test_tmp_root !== 'string' || !path.isAbsolute(local.test_tmp_root)) throw new SupervisorError('invalid team.local.json: test_tmp_root must be an absolute path'); out.test_tmp_root = local.test_tmp_root; }
   if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
   if ('alerts' in local) {
     const cmd = local.alerts?.command;

@@ -9,6 +9,7 @@ import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, Wo
 import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
+import { withTestConcurrency, testEnv, sweepTestTemp, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
 import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { Team, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, upgradeLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
@@ -345,14 +346,20 @@ async function main() {
   // Issue #448: `test-slot status` shows what runs and waits; `test-slot run [--label L] -- CMD ARGS` runs a full test suite once a
   // slot is free (reviews and jobs use it for their suite), so suites queue behind limits.test_slots instead of piling on.
   if (command === 'test-slot') {
-    const limit = (() => { try { return loadTeamConfig(teamConfigFile, root).limits?.test_slots ?? DEFAULT_TEST_SLOTS; } catch { return DEFAULT_TEST_SLOTS; } })();
+    const cfg = (() => { try { return loadTeamConfig(teamConfigFile, root); } catch { return {}; } })();
+    const limit = cfg.limits?.test_slots ?? DEFAULT_TEST_SLOTS;
+    if (a._[0] === 'sweep') {   // Issue #469: remove old test leftovers (test prefixes only, older than --age-hours, not open, not a cwd)
+      if (!cfg.test_tmp_root && !a.dir) throw new SupervisorError('usage: test-slot sweep [--dir ABSOLUTE_DIR] [--age-hours N] [--dry-run] (or set test_tmp_root in the team config)');
+      const res = sweepTestTemp({ tmpRoot: a.dir || cfg.test_tmp_root, ageHours: Number(a['age-hours'] ?? DEFAULT_SWEEP_AGE_HOURS), dryRun: Boolean(a['dry-run']), logFile: path.join(root, 'team', 'test-sweeps.jsonl') });
+      console.log(JSON.stringify({ removed: res.removed.length, kept: res.kept.length, skipped: res.skipped, names: res.removed.slice(0, 50) }, null, 2)); return;
+    }
     if (a._[0] === 'status') { const st = testSlotStatus(root, limit); console.log(JSON.stringify(st, null, 2)); console.error(testSlotLine(st)); return; }
     const dash = process.argv.indexOf('--');
-    if (a._[0] !== 'run' || dash < 0 || dash === process.argv.length - 1) throw new SupervisorError('usage: test-slot status | test-slot run [--label TEXT] -- COMMAND [ARGS]');
-    const cmd = process.argv.slice(dash + 1);
+    if (a._[0] !== 'run' || dash < 0 || dash === process.argv.length - 1) throw new SupervisorError('usage: test-slot status | test-slot sweep | test-slot run [--label TEXT] -- COMMAND [ARGS]');
+    const cmd = withTestConcurrency(process.argv.slice(dash + 1), cfg.limits?.test_concurrency ?? DEFAULT_TEST_CONCURRENCY);
     const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
     if (!release) { console.error('waited too long for a free test slot'); process.exitCode = 3; return; }
-    const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit' });
+    const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', env: testEnv(process.env, cfg.test_tmp_root) });
     for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
     const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, s) => resolve(c ?? (s ? 128 : 1))); });
     release(); process.exitCode = code; return;
