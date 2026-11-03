@@ -218,3 +218,22 @@ test('issue #187: validating twice, or a structuredClone of a validated config, 
   const both = validateTeamConfig(config({ limits: { per_agent: 2, roles: { implementer: 1, reviewer: 3 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 } }));
   assert.match(both.deprecations[0], /ignored because limits.roles is set/); assert.deepEqual(both.limits.roles, { implementer: 1, reviewer: 3 });
 });
+
+test('issue #379: validation does not mutate its input; per_agent next to an equal explicit roles block still says remove it', () => {
+  const lim = over => ({ overall: 2, max_review_attempts: 2, max_fix_attempts: 2, ...over });
+  const raw = config({ limits: lim({ per_agent: 2 }) }), before = structuredClone(raw);
+  const out = validateTeamConfig(raw);
+  assert.deepEqual(raw, before); assert.equal('deprecations' in raw, false); assert.equal('roles' in raw.limits, false);
+  assert.deepEqual(out.limits.roles, { implementer: 2, reviewer: 2 }); assert.notEqual(out, raw);
+  // the validated copy is still idempotent
+  assert.deepEqual(validateTeamConfig(structuredClone(out)).deprecations, out.deprecations);
+  // explicit roles equal to per_agent: roles wins, the hint to remove per_agent is kept (as before issue #187)
+  const same = config({ limits: lim({ per_agent: 2, roles: { implementer: 2, reviewer: 2 } }) });
+  const sameBefore = structuredClone(same);
+  const s = validateTeamConfig(same);
+  assert.match(s.deprecations[0], /ignored because limits.roles is set; remove it/); assert.deepEqual(same, sameBefore);
+  assert.deepEqual(validateTeamConfig(validateTeamConfig(same)).deprecations, s.deprecations);
+  // negative: an invalid config still throws and leaves the input as it was
+  const bad = config({ limits: lim({ per_agent: 0 }) }), badBefore = structuredClone(bad);
+  assert.throws(() => validateTeamConfig(bad), /per_agent/); assert.deepEqual(bad, badBefore);
+});
