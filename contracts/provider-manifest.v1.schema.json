@@ -70,6 +70,17 @@
         "fallback_to_other_billing": { "const": false }
       }
     },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["command", "session-log"] },
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "timeout_seconds": { "type": "integer", "minimum": 5, "maximum": 300 }
+      }
+    },
     "events": {
       "type": "array",
       "items": { "enum": ["usage_limit", "transient_rate_limit", "context_limit", "auth_error", "approval_required", "network_error", "crash"] }

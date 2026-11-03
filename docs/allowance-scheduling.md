@@ -55,6 +55,9 @@ Fix-round re-reviews are diff-scoped (#45). When the reviewer is low (not `norma
 | `high_water_min_hours` | `24` | … with more than this many hours to the reset makes it `reviews_only` |
 | `recent_hours` | `24` | readings used for the recent rate |
 | `exhausted_at` | `0.995` | a window at or above this is used up (`waiting`) |
+| `probe` | `true` | allow allowance probes (below) |
+| `probe_age_hours` | `2` | a held agent whose newest reading is older than this is probed |
+| `probe_interval_minutes` | `60` | at most one probe attempt per agent in this time, successful or not |
 | `can_take_over` | `["claude", "codex"]` | agents whose role allows taking another agent's implementation work |
 
 Unknown keys or out-of-range values make the tick fail closed, naming the key.
@@ -63,3 +66,13 @@ Unknown keys or out-of-range values make the tick fail closed, naming the key.
 - The figures are the providers' own readings, as fresh as the newest job that recorded them. An agent that runs nothing reports nothing new; the homeowner's interactive use between readings is not seen until the next reading.
 - The per-job cost is an estimate (see above). The exhausted-state allowance values are still not captured live (#15, D-019), so `waiting` on a reported limit relies on the same unverified shapes as `allowance.mjs`.
 - Read-only check on Tower, 2026-10-31, against the real state root: Claude weekly 60 % with 4.6 days left and Codex 96 % with 3.8 days left both project above 100 % at reset, so with the shipped settings both would be `reviews_only` and no new implementation would start until a reset (reviews and own-PR fixes continue). The homeowner may prefer a different `projected_limit`.
+
+## Allowance probe (issue #110)
+
+A held agent (`reviews_only` or `waiting`) runs no job, so its reading never refreshed: a plan upgrade or an early reset stayed invisible and the reviews-only latch held to the weekly reset. The tick now refreshes it with a **probe**:
+
+- **What.** The provider manifest's `probe` section names it. `kind: "command"` is a minimal, tool-free run of the CLI (Claude: `claude -p "reply OK" --model haiku --strict-mcp-config --tools "" --no-session-persistence --output-format stream-json --verbose`), started in an empty temporary directory outside any repository with the manifest's environment allow-list. `kind: "session-log"` is the model-free local read (Codex). Core names no provider.
+- **What is kept.** Only the allowance record (windows, status, billing flags) with `source: "probe"` and the probe time, in the dashboard cache next to the session-log probe. Message text, session ids and raw output are never stored.
+- **When.** Only while the agent is `reviews_only` or `waiting` and its newest reading is older than `probe_age_hours`, and once just after a reported reset time passes. Never while `normal`. At most one attempt per agent per `probe_interval_minutes`. Not when the last reading shows paid overage in use for a window that has not reset, nor while a window that has not reset is used up, whatever the overage status, nor while a job of the provider waits on a usage limit (D-019: no provider call while waiting; the reset probe comes after the reset). Never on a dry run.
+- **Latch.** A probe reading newer than the latch is new evidence: if the agent then no longer projects to run out and is below the high-water mark, the latch is released, the reason is recorded and the mode change is alerted once. A reading showing overage or an exhausted window leaves the agent `waiting`, as before. Credits are never used.
+- **On demand.** `ai-supervisor probe <agent>` and the **Refresh allowance** button on the Usage page (a same-origin form post, the dashboard's only write) probe at once and show the reading's age. The planner uses the reading from the next tick.

@@ -11,13 +11,13 @@
 import { SupervisorError } from './core.mjs';
 
 export const HOUR = 3600000;
-export const DEFAULT_BUDGET = { enabled: true, projected_limit: 1, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995 };
+export const DEFAULT_BUDGET = { enabled: true, projected_limit: 1, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
 // Early in a window one or two percent over an hour is noise, not a rate: projections use at least this share of the window as elapsed time (issue #159).
 export const MIN_ELAPSED_FRACTION = 0.05;
 export const REVIEWS_ONLY_TYPES = new Set(['review', 'fix', 'cifix', 'rebase']);
 const WEEK_MINUTES = 10080;
 const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
-const KEYS = ['enabled', 'projected_limit', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over'];
+const KEYS = ['enabled', 'projected_limit', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
 
 export function validateBudgetConfig(b, agentNames) {
   if (b === undefined) return;
@@ -27,6 +27,8 @@ export function validateBudgetConfig(b, agentNames) {
   const num = (k, lo, hi) => { if (k in b && !(Number.isFinite(b[k]) && b[k] >= lo && b[k] <= hi)) throw new SupervisorError(`invalid budget config: ${k}`); };
   if ('enabled' in b && typeof b.enabled !== 'boolean') throw new SupervisorError('invalid budget config: enabled');
   num('projected_limit', 0.5, 1.5); num('high_water', 0.5, 1); num('high_water_min_hours', 0, 168); num('recent_hours', 1, 168); num('exhausted_at', 0.9, 1);
+  num('probe_age_hours', 0.25, 48); num('probe_interval_minutes', 5, 1440);
+  if ('probe' in b && typeof b.probe !== 'boolean') throw new SupervisorError('invalid budget config: probe');
   if ('can_take_over' in b && !(Array.isArray(b.can_take_over) && b.can_take_over.every(n => agentNames.includes(n))))
     throw new SupervisorError('invalid budget config: can_take_over must list configured agents');
 }
@@ -137,6 +139,10 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (out.projected > settings.projected_limit) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${fig}: runs out before the reset at the current rate` };
   if (out.used >= settings.high_water && out.hoursLeft > settings.high_water_min_hours) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${fig}: at or above ${pct(settings.high_water)} with more than ${settings.high_water_min_hours}h to go` };
   // Hysteresis: once reviews-only in a weekly window, stay so until that window resets ("ownership goes back at the reset").
+  // Issue #110: a fresh probe reading taken after the latch was set is new evidence. The checks above already found that the
+  // agent no longer projects to run out and is below the high-water mark, so the latch is released (the caller records and alerts it).
+  const probed = allowance.source === 'probe' && Number.isFinite(allowance.observedAt) && Number.isFinite(latched?.since) && allowance.observedAt > latched.since;
+  if (latched?.mode === 'reviews_only' && sameReset(latched.until, weekly.resetsAt) && probed) return { ...out, reason: `${fig}; the reviews-only latch was released by a fresh allowance probe` };
   if (latched?.mode === 'reviews_only' && sameReset(latched.until, weekly.resetsAt)) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${latched.reason || fig}; held until the weekly reset` };
   return { ...out, reason: fig };
 }

@@ -141,14 +141,23 @@ export function mergeProbes(prev = {}, next = {}) {
   const out = {};
   for (const [provider, a] of [...Object.entries(prev || {}), ...Object.entries(next || {})]) {
     if (!/^[a-z][a-z0-9_-]{0,31}$/.test(provider) || !hasReading(a)) continue;
-    const clean = { provider, status: String(a.status || 'unknown').slice(0, 32), observedAt: Number(a.observedAt) || 0, source: 'session-log',
+    const clean = { provider, status: String(a.status || 'unknown').slice(0, 32), observedAt: Number(a.observedAt) || 0, source: a.source === 'probe' ? 'probe' : 'session-log',
       windows: a.windows.slice(0, 8).map(w => ({ type: String(w.type || '').slice(0, 24), windowMinutes: Number.isFinite(w.windowMinutes) ? w.windowMinutes : null, utilization: Number.isFinite(w.utilization) ? w.utilization : null, resetsAt: Number.isFinite(w.resetsAt) ? w.resetsAt : null, status: String(w.status || 'unknown').slice(0, 32) })) };
+    if (a.billing && typeof a.billing === 'object') clean.billing = { overageStatus: String(a.billing.overageStatus || 'unknown').slice(0, 32), usingOverage: a.billing.usingOverage === true, creditsAvailable: a.billing.creditsAvailable === true };
     if (!out[provider] || clean.observedAt > out[provider].observedAt) out[provider] = clean;
   }
   return out;
 }
 
 const rollup = (pr, team, now) => checksState(pr.statusCheckRollup, retriedIn(team.s?.cancelWatch, pr, now));
+// On-demand probe result (issue #110): merged into the tick cache so the next tick and the dashboard see it. Returns false when
+// there is no cache yet (a probes-only cache is created: no tick, empty lists, so the reading is never lost). The tick's own write
+// merges the same way, so the newer reading wins.
+export function storeProbes(root, probes) {
+  const prev = readCache(root) || { schema: 1, tick: null, repository: null, pulls: [], issues: [], delivered: [], merged: [], pullFiles: {}, fetchedAt: null };
+  atomicJson(cacheFile(root), { ...prev, probes: mergeProbes(prev.probes, probes) });
+  return true;
+}
 
 // A skipped action (lease conflict, gh error) is a partial failure: the dashboard must not show it as a successful tick.
 export function tickOutcome(report) {

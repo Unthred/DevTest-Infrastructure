@@ -13,11 +13,13 @@ import { githubClient } from './github.mjs';
 import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
-import { readCache, readJobs, readEvents, readSnapshots, readTeamState, recordTick, tickOutcome } from './dashdata.mjs';
+import { readCache, readJobs, readEvents, readSnapshots, readTeamState, recordTick, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
 import { ghRunner } from './github.mjs';
 import { redact } from './redact.mjs';
+import { hasProbe, refreshProvider } from './probe.mjs';
+import { probeNow } from './probenow.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
@@ -138,6 +140,16 @@ function probeAllowances(config) {
   }
   return out;
 }
+async function runDueProbes(root, registry, team, found) {
+  const due = team.probesDue(id => hasProbe(registry, id));
+  for (const d of due) {
+    team.noteProbe(d.agent, d);
+    const r = await refreshProvider(registry, d.provider);
+    if (r.record) { found[d.provider] = r.record; storeProbes(root, { [d.provider]: r.record }); }
+    else console.error(`ai-supervisor: allowance probe for ${d.agent} (${d.reason}) produced no reading: ${r.error}`);
+  }
+  return Object.keys(found).length > 0;
+}
 // Enable gate (issue #40): everything a live tick needs that a dry-run plan alone would not prove. Read-only, no model call.
 // Provider preflights run against the configured product repository, never the caller's working directory.
 async function gatePreflight(registry, config) {
@@ -176,10 +188,14 @@ async function teamTick(root, registry, dryRun, hold = null) {
     }
     const config = loadTeamConfig(teamConfigFile, root);
     // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
-    const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: probeAllowances(config), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
+    const found = {};
+    const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: mergeProbes(probeAllowances(config), found), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
     if (!config.enabled && !dryRun) { record({ status: 'disabled' }); return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' }; }
     try {
-      const team = await teamFor(root, registry, config);
+      let team = await teamFor(root, registry, config);
+      // Issue #110: refresh the allowance of a held agent whose reading is stale (or whose reset time has just passed) before
+      // planning, so a fresh reading can release the reviews-only latch in this very tick. A dry run or a hold never spends a run.
+      if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config);
       const report = await team.tick({ dryRun, hold });
       if (!dryRun) {
         record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length });
@@ -229,7 +245,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -292,6 +308,13 @@ async function main() {
     const server = await serve({ root, config: () => loadTeamConfig(teamConfigFile, root), host: a.host || process.env.DASHBOARD_HOST, port: Number(a.port || process.env.DASHBOARD_PORT || DEFAULT_PORT) });
     console.log(`dashboard listening on http://${server.address().address}:${server.address().port}/ (read-only)`);
     return;   // the server keeps the process alive
+  }
+  if (command === 'probe') {
+    if (!a._[0]) throw new SupervisorError('usage: probe <agent>');
+    const out = await probeNow({ root, registry, config: loadTeamConfig(teamConfigFile, root), agent: a._[0] });
+    console.log(JSON.stringify(out, null, 2));
+    if (!out.ok) process.exitCode = 3;
+    return;
   }
   if (command === 'preflight') {
     const result = await gatePreflight(registry, loadTeamConfig(teamConfigFile, root));

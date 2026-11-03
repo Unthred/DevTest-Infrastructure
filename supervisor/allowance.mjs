@@ -129,3 +129,6 @@ export function codexAllowanceProbe({ home = process.env.HOME || os.homedir(), n
   }
   return best;
 }
+
+// The manifest's `probe.kind: "session-log"` (issue #110): the model-free local read, named by kind so the probe core names no provider.
+export const sessionLogAllowanceProbe = codexAllowanceProbe;

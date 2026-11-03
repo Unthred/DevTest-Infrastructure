@@ -65,6 +65,9 @@
     "model": "subscription",
     "fallback_to_other_billing": false
   },
+  "probe": {
+    "kind": "session-log"
+  },
   "events": [
     "usage_limit",
     "transient_rate_limit",

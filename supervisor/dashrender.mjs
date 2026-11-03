@@ -508,20 +508,21 @@ function activityPage(view, query, path) {
 }
 // One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
 // marked and never shown as current; a limit pause says when it resets and on what basis.
-const SOURCE = { job: 'reported to a supervised job', 'session-log': 'read from the local Codex session log (no model call)' };
-function allowanceBody(u, now) {
+const SOURCE = { job: 'reported to a supervised job', probe: 'refreshed by a minimal probe run (no repository, no tools)', 'session-log': 'read from the local Codex session log (no model call)' };
+function allowanceBody(u, now, name = '') {
   const l = u.limit;
+  const refresh = u.canProbe && name ? `<form method="post" action="/probe/${encodeURIComponent(name)}" class="probe-form"><button type="submit" class="tbtn" title="Run one minimal probe to read the current allowance (no repository, no tools)">Refresh allowance</button></form>` : '';
   const limit = l ? `<p class="limit">${badge('action', 'Paused on a usage limit')} ${l.limiting ? `${esc(l.limiting)}. ` : ''}${l.resetsAt ? `resets <b>${lt(l.resetsAt)}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
-  if (!u.windows.length) return `${limit}<p>Allowance: <b>unknown</b></p>${empty('No allowance reported', 'The provider has never reported a limit window to the supervisor.', 'info')}`;
+  if (!u.windows.length) return `${limit}<p>Allowance: <b>unknown</b></p>${refresh}${empty('No allowance reported', 'The provider has never reported a limit window to the supervisor.', 'info')}`;
   const used = w => (Number.isFinite(w.utilization) ? `<div class="bar${w.expired ? ' expired' : ''}" role="img" aria-label="${pct(w.utilization)} used${w.expired ? ', expired' : ''}"><b style="width:${Math.min(100, w.utilization * 100)}%"></b></div> ${pct(w.utilization)}${w.expired ? ' <span class="muted">(expired)</span>' : ''}` : 'unknown');
   const resets = w => (!w.resetsAt ? 'unknown' : w.expired ? `reset ${esc(dur(now - w.resetsAt))} ago; current use unknown` : esc(inFuture(w.resetsAt, now)));
   const rows = u.windows.map(w => `<tr${w.expired ? ' class="expired"' : ''}><td>${esc(w.label)}</td><td>${used(w)}</td><td>${resets(w)}</td></tr>`).join('');
   const note = u.allExpired ? `<p class="sub">${badge('warning', 'Expired')} Every window in this reading has reset since; current use is unknown until the provider reports again.</p>` : '';
-  return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${lt(u.observedAt)}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>`;
+  return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${lt(u.observedAt)}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>${refresh}`;
 }
 function usagePage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
-  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now) })).join('');
+  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now, name) })).join('');
   const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }) });
   const toks = view.graphs.tokensPerPr.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.tokens, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
   const tokChart = card({ id: 'u-tok', title: 'Tokens per merged PR', span: 12, expandable: true, movable: true, body: barChart({ rows: toks, title: 'tokens per merged PR', emptyTitle: 'No merged PR has recorded tokens' }) });
