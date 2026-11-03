@@ -128,7 +128,8 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   try {
     const i = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).install;
     if (i && typeof i.result === 'string') install = { result: redact(i.result, 30), sha: typeof i.sha === 'string' ? redact(i.sha.slice(0, 7), 12) : null, at: Number.isFinite(i.at) ? i.at : null,
-      nextAttemptAt: Number.isFinite(i.nextAttemptAt) ? i.nextAttemptAt : null, reason: i.reason ? redact(String(i.reason), 200) : null };
+      nextAttemptAt: Number.isFinite(i.nextAttemptAt) ? i.nextAttemptAt : null, reason: i.reason ? redact(String(i.reason), 400) : null,
+      tests: Array.isArray(i.tests) ? i.tests.slice(0, 5).map(x => redact(String(x), 200)) : [], retried: i.retried === true };
   } catch { /* no state file: nothing installed by the loop yet */ }
   let installed = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); installed = m ? m[1].slice(0, 7) : null; } catch { /* not a versioned install */ }
