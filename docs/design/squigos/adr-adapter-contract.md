@@ -156,6 +156,18 @@ Result:
 
 Report remaining allowance. Request carries only `contract`, `op`, `requestId`.
 
+Request:
+
+```json
+{
+  "contract": "adapter.v1",
+  "op": "usage",
+  "requestId": "01JD8Z3K9Q0000000000000003"
+}
+```
+
+Result:
+
 ```json
 {
   "contract": "adapter.v1",
@@ -175,6 +187,18 @@ For an unmetered (local) model the result is `{ "metered": false, "limits": [] }
 #### `capabilities`
 
 Declare what the adapter and its models can do. Request carries only `contract`, `op`, `requestId`.
+
+Request:
+
+```json
+{
+  "contract": "adapter.v1",
+  "op": "capabilities",
+  "requestId": "01JD8Z3K9Q0000000000000004"
+}
+```
+
+Result:
 
 ```json
 {
