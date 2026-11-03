@@ -111,3 +111,14 @@ test('the real build worker loads the dashboard and reports a build error instea
   const w = createWorkerBuild();
   try { await assert.rejects(w.build({ root: '/nonexistent-root-467', config: {} }), /./); } finally { await w.close(); }
 });
+
+test('namer: a reference is formatted once and reused, and its text is unchanged (issue #467)', async () => {
+  const { makeNamer } = await import('../supervisor/naming.mjs');
+  const n = makeNamer({ repo: 'o/r', issues: [{ number: 5, title: 'A very long issue title '.repeat(6) }], pulls: [{ number: 9, title: 'PR title', headRefName: 'x/issue-5-y' }] });
+  assert.equal(n.pr(9), n.pr(9));
+  assert.equal(n.issue(5), n.issue(5));
+  assert.ok(n.issue(5).text.endsWith('…') && n.issue(5).full.length > n.issue(5).text.length);
+  const j = { id: 'abcdef123456', kind: 'review', pr: 9 };
+  assert.equal(n.job(j), n.job({ ...j }));
+  assert.equal(n.job(j).text, 'Reviewer · review · PR #9 PR title');
+});

@@ -119,13 +119,19 @@ export function makeNamer({ repo = null, issues = [], pulls = [], merged = [], m
 
   const issueOfPr = pr => { const n = prIssueMap.get(pr); return n == null ? null : { number: n, title: issueTitles.get(n) ?? null }; };
   const make = (build, url) => ({ text: build({}), full: build({ max: Infinity }), url });
-  const issue = n => make(o => formatIssue(n, issueTitles.get(n), o), gh('issues', n));
-  const pr = n => make(o => formatPr(n, prTitles.get(n), issueOfPr(n), o), gh('pull', n));
-  const job = j => {
+  // The namer's inputs are fixed once built, so each reference is formatted (and its title clipped) once and reused (issue #467).
+  const memo = fn => { const seen = new Map(); return (key, arg) => { if (!seen.has(key)) seen.set(key, fn(arg)); return seen.get(key); }; };
+  const issueRef = memo(n => make(o => formatIssue(n, issueTitles.get(n), o), gh('issues', n)));
+  const prRef = memo(n => make(o => formatPr(n, prTitles.get(n), issueOfPr(n), o), gh('pull', n)));
+  const issue = n => issueRef(n, n);
+  const pr = n => prRef(n, n);
+  const job = j => jobRef(`${j.id}|${j.kind}|${j.pr}|${j.issue}`, j);
+  const buildJob = j => {
     const subj = jobSubject(j), id = j.id;
     const issueObj = subj.issue ? { number: subj.issue, title: issueTitles.get(subj.issue) ?? null } : null;
     return make(o => formatJob({ kind: j.kind, pr: subj.pr, prTitle: subj.pr ? prTitles.get(subj.pr) ?? null : null, issue: issueObj }, o), `${jobBase}${shortJob(id)}`);
   };
+  const jobRef = memo(buildJob);
   const commit = sha => ({ text: shortCommit(sha), full: String(sha ?? ''), url: repo && sha ? gh('commit', sha) : null });
   return { issue, pr, job, commit, issueOfPr, prOfIssue: n => issuePrMap.get(n) ?? null, titleOf: n => issueTitles.get(n) ?? null, prTitleOf: n => prTitles.get(n) ?? null };
 }
