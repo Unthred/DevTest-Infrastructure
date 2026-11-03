@@ -1001,6 +1001,13 @@ export class Team {
     const cap = this.c.limits.provider_roles?.[provider]?.[role];
     return Number.isSafeInteger(cap) && (usedBy[`${provider}:${role}`] || 0) >= cap;
   }
+  // The same check against the jobs running or queued right now, for a route outside the planner (the one resume of a transiently stopped job).
+  async providerRoleFull(provider, role) {
+    if (!Number.isSafeInteger(this.c.limits.provider_roles?.[provider]?.[role])) return false;
+    const usedBy = {};
+    for (const a of await this.jobs.listActive()) if (['queued', 'running'].includes(a.status)) { const k = `${a.provider}:${roleOfType(this.s.jobs[a.id]?.kind)}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    return this.providerSlotFull(provider, role, usedBy);
+  }
   // Agents other than `agent` that could review this pull request now: independent of its writers, with allowance and attempts left.
   otherReviewers(agent, pr) {
     const key = verdictKey(pr.number, pr.headRefOid);
@@ -2133,6 +2140,7 @@ export class Team {
         const stale = await this.staleResume(id, j, open);
         if (stale) { this.s.unblock.noResume[id] = { at: this.clock.now(), why: stale }; this.save(); return; }   // notifyOne handles it as before
         if (this.limitedOf(j.agent)?.out) return;   // out of allowance: wait for the reset rather than burn the one resume
+        if (await this.providerRoleFull(job.provider ?? this.c.agents[j.agent]?.provider, roleOfType(j.kind))) return;   // issue #402: the provider's own role count is full; wait, keeping the one resume
         if (this.clock.now() - (job.updatedAt || 0) < this.unblockLimits().cooldown_ms) return;
         const target = j.issue ?? j.pr, tk = j.issue != null ? 'issue' : 'pull';
         const room = this.unblockRoom(target);
@@ -2458,7 +2466,7 @@ export class Team {
       if (!release) return { go: false, reason: 'waiting: another paused job is being resumed', retryMs: 5000 };
       try {
         const others = [];
-        for (const a of await this.jobs.listActive()) if (a.id !== job.id && ['queued', 'running'].includes(a.status)) others.push({ id: a.id, kind: (await this.jobs.get(a.id))?.kind ?? this.s.jobs[a.id]?.kind });
+        for (const a of await this.jobs.listActive()) if (a.id !== job.id && ['queued', 'running'].includes(a.status)) { const rec = await this.jobs.get(a.id); others.push({ id: a.id, kind: rec?.kind ?? this.s.jobs[a.id]?.kind, provider: a.provider ?? rec?.provider ?? this.c.agents[this.s.jobs[a.id]?.agent]?.provider }); }
         const d = resumeDecision({ job, others, limits: this.c.limits, nameOf: o => { const r = this.s.jobs[o.id] || {}; return `${r.agent || 'a'} ${o.kind || 'job'} on ${r.pr != null ? 'PR #' + r.pr : r.issue != null ? 'issue #' + r.issue : o.id.slice(0, 8)}`; } });
         if (!d.go) { release(); return d; }
         return { go: true, release };
@@ -2495,6 +2503,13 @@ export class Team {
 export function resumeDecision({ job, others, limits, nameOf = o => o.id }) {
   const role = roleOfType(job.kind), inRole = others.filter(o => roleOfType(o.kind) === role);
   if (inRole.length >= limits.roles[role]) return { go: false, reason: `waiting for the ${role} slot: ${inRole.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
+  // Issue #402: limits.provider_roles caps the job's own provider in this role. Only that provider's running or queued jobs count, so a
+  // full Claude cap never holds a Codex job. Without provider_roles (or for a role it omits) nothing changes.
+  const cap = limits.provider_roles?.[job.provider]?.[role];
+  if (Number.isSafeInteger(cap)) {
+    const mine = inRole.filter(o => o.provider === job.provider);
+    if (mine.length >= cap) return { go: false, reason: `waiting for the ${job.provider} ${role} slot (limits.provider_roles ${cap}): ${mine.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
+  }
   if (others.length >= overallCap(limits)) return { go: false, reason: `waiting for the overall cap (${overallCap(limits)}): ${others.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
   return { go: true };
 }
