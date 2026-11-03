@@ -2,9 +2,8 @@
 // Ignores the age and interval gates of the tick (a person asked), never the busy guard. The planner picks the stored reading up on the
 // next tick; nothing here changes a mode, a latch or a job.
 import { SupervisorError } from './core.mjs';
-import { storeProbes } from './dashdata.mjs';
 import { refreshProvider, overageRisk, probeKind } from './probe.mjs';
-import { readJobs, readCache, latestAllowance } from './dashdata.mjs';
+import { storeProbes, readJobs, readCache, latestAllowance } from './dashdata.mjs';
 import { budgetSettings } from './budget.mjs';
 
 export async function probeNow({ root, registry, config, agent, now = Date.now(), refresh = refreshProvider }) {

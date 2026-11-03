@@ -19,7 +19,8 @@ export const RESET_GRACE_MS = MINUTE;          // "just after a reported reset t
 const MAX_LINE = 65536, MAX_OUTPUT = 4 * 1024 * 1024;
 
 // Could a model run now draw on paid overage? True while the newest reading shows overage in use for a window that has not
-// reset, or a window that has not reset is used up and overage is not explicitly refused. Pure.
+// reset, or a window that has not reset is used up, or a used-up top-level status has no window reset time, and overage is not explicitly refused.
+// No reading at all is not a risk: the probe is how a first reading arrives. Pure.
 const USED_UP = ['rejected', 'blocked', 'exhausted', 'limit_reached'], REFUSED = ['rejected', 'disabled'];
 const liveWindows = (allowance, now) => (allowance?.windows || []).filter(w => Number.isFinite(w?.resetsAt) && w.resetsAt > now);
 // Is a window that has not reset yet used up (utilization at exhausted_at, or a rejected/blocked status)? Pure.
@@ -29,6 +30,9 @@ export function usedUpWindow(allowance, now, exhaustedAt = 0.995) {
 export function overageRisk(allowance, now, exhaustedAt = 0.995) {
   if (allowance?.billing?.usingOverage === true && liveWindows(allowance, now).length) return true;
   if (REFUSED.includes(allowance?.billing?.overageStatus)) return false;
+  // A top-level used-up status with no window reset time cannot be shown to have reset: treat it as live while overage is not refused.
+  const timed = (allowance?.windows || []).some(w => Number.isFinite(w?.resetsAt));
+  if (!timed && USED_UP.includes(allowance?.status)) return true;
   return usedUpWindow(allowance, now, exhaustedAt);
 }
 
@@ -126,10 +130,64 @@ export function hasProbe(registry, providerId) {
   } catch { return false; }
 }
 
-// Probes that are running right now, so a double click or a tick plus a click never starts two runs for one provider.
+// Probes that are running right now. The in-process set stops a double click inside one process; the lock directory
+// stops the tick, the CLI and the dashboard (separate processes) from starting two runs for one provider.
 const running = new Set();
+function lockRoot(opts) { return opts.lockDir || path.join(os.tmpdir(), `devtest-probe-locks-${process.getuid ? process.getuid() : 'user'}`); }
+function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
+function mtimeOf(p) { try { return fs.statSync(p).mtimeMs; } catch { return 0; } }
+// Process start time (Linux), so a reused pid is not mistaken for the owner; '' where it cannot be read.
+function startOf(pid) { try { return fs.readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\) /, '').split(' ')[19] || ''; } catch { return ''; } }
+function ownerAlive(token) {
+  const [pid, start] = String(token).split(':');
+  if (!(Number(pid) > 0) || !pidAlive(Number(pid))) return false;
+  const now = startOf(pid);
+  return !start || !now || start === now;
+}
+function readOwner(dir) { try { return fs.readFileSync(path.join(dir, 'owner'), 'utf8'); } catch { return null; } }
+// Take the cross-process lock for a provider; returns a release function, or null when another live process holds it.
+// The lock is a directory made with an atomic mkdir. A lock is only taken over when its owner process is gone (never by
+// age while the owner lives), and takeover runs under a second mkdir mutex that re-reads the owner after winning it, so two
+// processes that both saw the same stale lock cannot both remove it: the second sees the first one's live lock and backs off.
+// Release removes the directory only while it still carries this holder's token.
+export function acquireProbeLock(providerId, opts = {}) {
+  const dir = path.join(lockRoot(opts), String(providerId).replace(/[^A-Za-z0-9_.-]/g, '_'));
+  const mutex = dir + '.takeover';
+  fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
+  const token = `${process.pid}:${startOf(process.pid)}:${Math.random().toString(36).slice(2)}`;
+  const take = () => {
+    try {
+      fs.mkdirSync(dir, { mode: 0o700 });
+      fs.writeFileSync(path.join(dir, 'owner'), token);
+    } catch (e) { return e.code === 'EEXIST' ? undefined : null; }
+    return () => { try { if (readOwner(dir) === token) fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } };
+  };
+  const first = take();
+  if (first !== undefined) return first;
+  const owner = readOwner(dir);
+  const stale = owner === null ? Date.now() - mtimeOf(dir) > 60000 : !ownerAlive(owner);
+  if (!stale) return null;
+  // takeover mutex; one that is itself abandoned (older than 30 s: the critical section takes milliseconds) is cleared first
+  try { fs.mkdirSync(mutex, { mode: 0o700 }); } catch (e) {
+    if (e.code !== 'EEXIST' || Date.now() - mtimeOf(mutex) <= 30000) return null;
+    try { fs.rmdirSync(mutex); fs.mkdirSync(mutex, { mode: 0o700 }); } catch { return null; }
+  }
+  try {
+    const again = readOwner(dir);
+    if (again !== owner) return null; // someone replaced or released it meanwhile: do not touch it
+    if (again !== null && ownerAlive(again)) return null;
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { return null; }
+    const got = take();
+    return got === undefined ? null : got;
+  } finally { try { fs.rmdirSync(mutex); } catch { /* gone */ } }
+}
 export async function refreshProvider(registry, providerId, opts = {}) {
   if (running.has(providerId)) return { record: null, error: 'busy' };
   running.add(providerId);
-  try { return await probeProvider(registry, providerId, opts); } finally { running.delete(providerId); }
+  let release = null;
+  try {
+    release = acquireProbeLock(providerId, opts);
+    if (!release) return { record: null, error: 'busy' };
+    return await probeProvider(registry, providerId, opts);
+  } finally { if (release) release(); running.delete(providerId); }
 }

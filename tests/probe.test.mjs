@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot, provider, validateManifest, defaultRegistry } from '../supervisor/core.mjs';
 import { assessAgent, DEFAULT_BUDGET, HOUR, validateBudgetConfig } from '../supervisor/budget.mjs';
-import { probeDue, runProbeCommand, hasProbe, refreshProvider, cleanProbeRecord, MINUTE } from '../supervisor/probe.mjs';
+import { probeDue, overageRisk, runProbeCommand, hasProbe, refreshProvider, acquireProbeLock, cleanProbeRecord, MINUTE } from '../supervisor/probe.mjs';
 import { probeNow } from '../supervisor/probenow.mjs';
 import { mergeProbes, readCache, storeProbes, latestAllowance } from '../supervisor/dashdata.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
@@ -290,4 +290,67 @@ test('probeNow refuses a model-run probe on overage risk and never calls the pro
   storeProbes(root, { claude: { ...usedUp('rejected'), observedAt: NOW + 1000, source: 'probe' } });
   assert.equal((await probeNow({ root, registry: 'unused', config: cfg, agent: 'claude', now: NOW, refresh })).ok, true);
   assert.equal(calls, 1);
+});
+
+test('overageRisk: a used-up top-level status with no window reset time is a risk unless overage is refused; no reading is not', () => {
+  const noTime = (status, overageStatus) => ({ provider: 'claude', status, observedAt: NOW, windows: [{ type: 'seven_day', status: 'allowed' }], billing: { overageStatus, usingOverage: false } });
+  for (const st of ['rejected', 'blocked', 'exhausted', 'limit_reached']) {
+    assert.equal(overageRisk(noTime(st, 'allowed'), NOW), true, st);
+    assert.equal(overageRisk({ ...noTime(st, 'unknown'), windows: [] }, NOW), true, st + ' without windows');
+    assert.equal(overageRisk(noTime(st, 'rejected'), NOW), false, st + ' with overage refused');
+  }
+  assert.equal(overageRisk(noTime('allowed', 'allowed'), NOW), false);
+  assert.equal(overageRisk(null, NOW), false);
+  assert.equal(probeDue({ mode: 'waiting', allowance: noTime('rejected', 'allowed'), settings: S, now: NOW }), null);
+  assert.equal(probeDue({ mode: 'waiting', allowance: { ...noTime('rejected', 'rejected'), observedAt: NOW - 3 * HOUR }, settings: S, now: NOW }).reason, 'stale');
+});
+
+test("the probe lock is cross-process: a held lock refuses a second taker, a dead owner or release frees it", async t => {
+  const lockDir = tmp(t);
+  const rel = acquireProbeLock("claude", { lockDir });
+  assert.equal(typeof rel, "function");
+  assert.equal(acquireProbeLock("claude", { lockDir }), null, "a live holder blocks another taker");
+  assert.equal(typeof acquireProbeLock("other", { lockDir }), "function", "other providers are independent");
+  rel();
+  const again = acquireProbeLock("claude", { lockDir });
+  assert.equal(typeof again, "function", "released lock can be taken");
+  again();
+  fs.mkdirSync(path.join(lockDir, "claude")); fs.writeFileSync(path.join(lockDir, "claude", "owner"), "2147483646");
+  const taken = acquireProbeLock("claude", { lockDir });
+  assert.equal(typeof taken, "function", "a lock owned by a dead process is taken over");
+  taken();
+  // a held lock makes refreshProvider report busy without running the probe
+  const held = acquireProbeLock("claude", { lockDir });
+  assert.deepEqual(await refreshProvider("/nonexistent", "claude", { lockDir }), { record: null, error: "busy" });
+  held();
+});
+
+test("the probe lock: concurrent processes racing for one stale lock yield exactly one holder, and a live owner is never aged out", async t => {
+  const lockDir = tmp(t);
+  fs.mkdirSync(path.join(lockDir, "claude")); fs.writeFileSync(path.join(lockDir, "claude", "owner"), "2147483646");
+  const mod = new URL("../supervisor/probe.mjs", import.meta.url).href;
+  const startAt = Date.now() + 1500;
+  const code = `const { acquireProbeLock } = await import(${JSON.stringify(mod)});
+    while (Date.now() < ${startAt}) {}
+    const r = acquireProbeLock("claude", { lockDir: ${JSON.stringify(lockDir)} });
+    process.stdout.write(r ? "got" : "none");
+    if (r) await new Promise(res => setTimeout(res, 1500));
+    if (r) r();`;
+  const { spawn } = await import("node:child_process");
+  const outs = await Promise.all(Array.from({ length: 8 }, () => new Promise(res => {
+    let out = ""; const c = spawn(process.execPath, ["--input-type=module", "-e", code]);
+    c.stdout.on("data", d => { out += d; }); c.on("close", () => res(out));
+  })));
+  assert.equal(outs.filter(o => o === "got").length, 1, "exactly one process holds the lock: " + outs.join(","));
+  // a live owner is not taken over however old the lock is
+  const live = acquireProbeLock("aged", { lockDir });
+  const old = new Date(Date.now() - 3 * 3600 * 1000);
+  fs.utimesSync(path.join(lockDir, "aged"), old, old);
+  assert.equal(acquireProbeLock("aged", { lockDir }), null);
+  live();
+  // a release by a holder whose lock was replaced does not remove the new holder's lock
+  const a = acquireProbeLock("swap", { lockDir });
+  fs.writeFileSync(path.join(lockDir, "swap", "owner"), `${process.pid}:x:other`);
+  a();
+  assert.ok(fs.existsSync(path.join(lockDir, "swap")));
 });
