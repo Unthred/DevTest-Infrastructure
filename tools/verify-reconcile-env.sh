@@ -22,7 +22,8 @@ trap 'rm -f "$tick_err"' EXIT
 out=$(env -i PATH="$run_path" HOME="$run_home" "$node_bin" "$cli" team tick --dry-run 2>"$tick_err"); rc=$?
 [ "$rc" = 0 ] || fail "team tick --dry-run (rc=$rc)" "$out $(cat "$tick_err")"
 # Only a real plan counts: stdout is JSON with an "actions" array and no string "skipped". Not a lock skip, a stray line or a nested key.
-if ! printf '%s' "$out" | "$node_bin" -e 'let t="";process.stdin.on("data",d=>t+=d).on("end",()=>{try{const o=JSON.parse(t);process.exit(Array.isArray(o?.actions)&&typeof o?.skipped!=="string"?0:1)}catch{process.exit(1)}})'; then
+# A here-string, not a pipe: under pipefail a checker that exits before reading all of stdin would make printf die of SIGPIPE and fail a valid plan.
+if ! "$node_bin" -e 'let t="";process.stdin.on("data",d=>t+=d).on("end",()=>{try{const o=JSON.parse(t);process.exit(Array.isArray(o?.actions)&&typeof o?.skipped!=="string"?0:1)}catch{process.exit(1)}})' <<<"$out"; then
   case "$out" in
     *'another tick is running'*) fail 'team tick --dry-run (no plan returned: another tick holds the tick lock; retry in a minute)' "$out" ;;
     *) fail 'team tick --dry-run (no plan returned)' "$out $(cat "$tick_err")" ;;

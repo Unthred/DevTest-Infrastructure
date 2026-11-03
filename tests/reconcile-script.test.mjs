@@ -177,3 +177,11 @@ test('issue #40 real cli: preflight names a failing gh, an unreadable register a
   assert.match(out.checks.git, /^failed/);
   assert.match(out.checks['provider:claude'], /^failed/); assert.match(out.checks['provider:codex'], /^failed/);
 });
+
+test('issue #406 the gate accepts a valid plan even when the plan checker exits without reading all of stdin (no SIGPIPE flake under pipefail)', t => {
+  const pad = 'x'.repeat(200000);   // larger than the pipe buffer, so a pipe writer would block and then get EPIPE
+  const body = `case "$2" in preflight) echo '{"ok":true}';; team) printf '{"actions":[],"pad":"%s"}' '${pad}';; esac`;
+  const w = cronWorld(t, { nodeBody: `[ "$1" = -e ] && exit 0\n${body}` });
+  const r = spawnSync('bash', [install], { env: w.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, `installer failed: ${r.stderr.slice(0, 300)}`);
+});
