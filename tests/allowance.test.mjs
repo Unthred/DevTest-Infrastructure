@@ -331,3 +331,21 @@ test('issue #197: a truncated multibyte sequence at EOF is flushed into the fina
   await drive(s.root, job, s.registry, clk, s.run(s.root, job));
   assert.ok(seen.includes('tail\uFFFD'), JSON.stringify(seen));
 });
+
+test('issue #450: a truncated multibyte sequence at EOF on stderr is flushed into the final tail', async t => {
+  const seen = [];
+  const observe = (line, now) => { seen.push(line); return claude.observe(line, now); };
+  const s = sandbox(t, `process.stderr.write(Buffer.concat([Buffer.from('errtail'), Buffer.from([0xc3])]));`, { observe }), job = await createJob(s.root, s.spec, s.registry);
+  await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.ok(seen.includes('errtail�'), JSON.stringify(seen.map(l => l.slice(0, 40))));
+});
+
+test('issue #450: a flushed U+FFFD is not delivered while the stream is still discarding an oversize line', async t => {
+  const seen = [];
+  const observe = (line, now) => { seen.push(line); return claude.observe(line, now); };
+  const big = 'x'.repeat(70000);
+  const s = sandbox(t, `process.stdout.write(Buffer.concat([Buffer.from(${JSON.stringify(big)}), Buffer.from([0xc3])]));`, { observe }), job = await createJob(s.root, s.spec, s.registry);
+  await drive(s.root, job, s.registry, clk, s.run(s.root, job));
+  assert.match(logOf(s, job), /oversize_line:stdout/);
+  assert.ok(!seen.some(l => l.includes('�') || l.includes('xxxx')), 'nothing from the discarded line reaches the adapter');
+});
