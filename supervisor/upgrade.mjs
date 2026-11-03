@@ -263,6 +263,8 @@ export class SelfUpgrade {
     // Issue #265: the dashboard reads main and how far behind the install is from here (live origin/main), not from the last attempt.
     this.noteMain(from, target);
     if (this.s.handDeploy && this.s.handDeploy.from !== from) { delete this.s.handDeploy; this.save(); }   // the installed commit moved: the item is done
+    // Issue #406: a refusal item ends when the installed commit moves or main moves past the refused target.
+    if (this.s.refused && (this.s.refused.from !== from || this.s.refused.to !== target)) { delete this.s.refused; this.save(); }
     if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; delete this.s.waitingFor; this.save(); return 'current'; }
     if (!this.d.isAncestor(from, target)) {
       await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`);
@@ -285,6 +287,7 @@ export class SelfUpgrade {
     if (!eligibility.ok) {
       await this.alert(`${target}:eligibility`, `Supervisor upgrade to ${short(target)} not done: ${eligibility.reason}.`);
       this.record({ from, to: target, prs: eligibility.prs, result: 'refused', reason: eligibility.reason });
+      this.s.refused = { from, to: target, kind: 'not-eligible', reason: String(eligibility.reason).slice(0, 300), at: this.clock.now() }; this.save();
       return 'not-eligible';
     }
     const now = this.clock.now();
@@ -311,6 +314,7 @@ export class SelfUpgrade {
     if (!pre.ok) {
       const attempts = pre.environmental ? (latched?.environmental ? (latched.attempts || 1) + 1 : 1) : 0;
       this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now; delete this.s.waitingSince; delete this.s.waitingFor;
+      if (!pre.environmental) this.s.refused = { from, to: target, kind: 'precheck-failed', reason: String(pre.reason).slice(0, 300), at: now };
       this.noteInstall(pre.environmental
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
         : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre) });
@@ -341,6 +345,7 @@ export class SelfUpgrade {
       // The install-time validator, tests or payload check failed before anything was swapped: block only this commit until a newer
       // main, with one alert. No rollback and no global latch (#101).
       this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
+      this.s.refused = { from, to: target, kind: 'precheck-failed', reason: String(up.reason).slice(0, 300), at: now };
       this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up) }); this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`);
       this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: up.reason, ...failureFields(up) });

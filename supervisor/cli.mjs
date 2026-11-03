@@ -28,7 +28,7 @@ import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
-import { requestWake, clearPending, waitForTurn } from './wake.mjs';
+import { requestWake, clearPending, waitForTurn, wakePassLock } from './wake.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -466,12 +466,16 @@ async function main() {
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
+      let passRelease = null;
       if (a.wake) {
-        const turn = await waitForTurn({ reason: a.wake, sleep: realClock.sleep, tryLock: () => tickLock(root), lastTickAt: () => readCache(root)?.tick?.at });
+        // The pass lock is held to the end of the pass (the team tick inside it takes the tick lock as usual); probing the tick lock here only waits for a running tick.
+        const turn = await waitForTurn({ reason: a.wake, sleep: realClock.sleep, tryLock: () => { const p = wakePassLock(root); if (!p) return null; const t = tickLock(root); if (!t) { p(); return null; } t(); return p; }, lastTickAt: () => readCache(root)?.tick?.at });
         clearPending(root);
         wakeReads = true;
         if (!turn.ready) { console.log(JSON.stringify({ wake: a.wake, skipped: 'another tick kept the lock; the scheduled tick is the fallback' })); return; }
+        passRelease = turn.release;
       }
+      try {
       // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
       const unlockRecover = tickLock(root, 'reconcile.lock');
       let result;
@@ -491,6 +495,7 @@ async function main() {
       // Issue #406: this process ran the old code and dispatched nothing after an install; start a pass on the new code now.
       if (before.result === 'upgraded' && !a['dry-run']) wakeNextJob(root, 'install');
       console.log(JSON.stringify(result)); return;
+      } finally { passRelease?.(); }
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.
     while (true) {

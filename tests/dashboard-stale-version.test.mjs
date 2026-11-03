@@ -499,3 +499,18 @@ test('issue #209: the watchdog does nothing while an upgrade awaits verification
   const up = w.mk(); up.s.pending = { from: OLD, to: NEW, at: NOW }; up.save();
   assert.equal(await w.mk().watchdog(), 'skipped');
 });
+
+test('issue #406: a refused upgrade (not eligible or pre-checks failed) is a Needs you item until the installed commit or main moves', async t => {
+  const root = tmp(t); install(root, OLD); fs.mkdirSync(path.join(root, 'team'));
+  const state = o => fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify(o));
+  state({ main: { sha: NEW, from: OLD, behind: 1, at: NOW }, refused: { from: OLD, to: NEW, kind: 'not-eligible', reason: 'PR #7 has no recorded PASS', at: NOW } });
+  let v = await view(root, { running: OLD });
+  const r = v.attention.filter(a => a.id === 'upgrade-refused');
+  assert.equal(r.length, 1); assert.equal(r[0].severity, 'action'); assert.match(r[0].text, /no recorded PASS/);
+  state({ refused: { from: OLD, to: NEW, kind: 'precheck-failed', reason: 'tests failed', at: NOW } });
+  v = await view(root, { running: OLD });
+  assert.match(v.attention.find(a => a.id === 'upgrade-refused').text, /pre-checks failed/);
+  fs.unlinkSync(path.join(root, 'current')); install(root, NEW);
+  v = await view(root, { running: NEW });
+  assert.ok(!v.attention.some(a => a.id === 'upgrade-refused'));
+});

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { requestWake, clearPending, waitForTurn, WAKE_MAX_PER_HOUR } from '../supervisor/wake.mjs';
+import { requestWake, clearPending, waitForTurn, wakePassLock, WAKE_MAX_PER_HOUR } from '../supervisor/wake.mjs';
 import { classifyIdle, summarizeIdle } from '../supervisor/idlecause.mjs';
 import { installRequired, needsInstall } from '../supervisor/upgrade.mjs';
 
@@ -42,12 +42,12 @@ test('overlap refused: a held tick lock makes the wake wait, then give up; the s
   assert.equal(held.ready, false); assert.ok(sleeps.length >= 3);
 });
 
-test('lock released while waiting: the wake proceeds and releases its probe lock', async () => {
+test('lock released while waiting: the wake proceeds and hands back the lock it took', async () => {
   let clock = 0, polls = 0, released = 0;
   const sleep = async ms => { clock += ms; };
   const tryLock = () => (++polls < 3 ? null : () => { released++; });
   const r = await waitForTurn({ reason: 'job-end', now: () => clock, sleep, tryLock, lastTickAt: () => undefined });
-  assert.equal(r.ready, true); assert.equal(released, 1);
+  assert.equal(r.ready, true); assert.equal(released, 0); r.release(); assert.equal(released, 1);
 });
 
 test('minimum gap after the last tick applies to job-end wakes only', async () => {
@@ -140,4 +140,20 @@ test('idle causes by agent over the last day, and the idle report against the be
   assert.equal(v.agents.claude['waiting-for-tick'], 10); assert.equal(v.agents.codex.upgrade, 10);
   const r = idleReport(snaps, { now, hours: 1 });
   assert.equal(r.agents.claude.idleWithWorkPercent, 16.7); assert.equal(r.agents.claude.beforePercent, 35.5); assert.equal(r.agents.codex.beforePercent, 24.8);
+});
+
+test('wake pass lock: a second pass cannot take it while the first holds it; the lock is free after release', t => {
+  const root = tmp(t);
+  const first = wakePassLock(root);
+  assert.equal(typeof first, 'function');
+  assert.equal(wakePassLock(root), null);
+  first();
+  const again = wakePassLock(root); assert.equal(typeof again, 'function'); again();
+});
+
+test('waitForTurn keeps the lock it took for the whole pass', async () => {
+  let held = false;
+  const tryLock = () => (held ? null : (held = true, () => { held = false; }));
+  const r = await waitForTurn({ reason: 'install', now: () => 0, sleep: async () => {}, tryLock, lastTickAt: () => undefined });
+  assert.equal(r.ready, true); assert.equal(held, true); r.release(); assert.equal(held, false);
 });

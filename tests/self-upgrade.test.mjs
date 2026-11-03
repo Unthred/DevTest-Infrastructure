@@ -766,3 +766,13 @@ test('issue #448: an unwritable state root makes the install check an environmen
   const res = await none.preChecks('a'.repeat(40));
   assert.equal(res.ok, false); assert.equal(res.environmental, true); assert.match(res.reason, /test slot unavailable/);
 });
+
+test('issue #406: a not-eligible refusal records a refused item that follows main', async t => {
+  const w = world(t, { verdicts: {} });
+  assert.equal(await w.up.step(), 'not-eligible');
+  assert.equal(w.up.s.refused.kind, 'not-eligible'); assert.equal(w.up.s.refused.to, TO); assert.equal(w.up.s.refused.from, FROM);
+  w.state.target = H('e'); await w.make().step();
+  assert.equal(w.make().s.refused.to, H('e'), 'a newer main replaces the item with its own');
+  w.state.target = FROM; await w.make().step();
+  assert.equal(w.make().s.refused, undefined, 'main back at the installed commit clears the item');
+});
