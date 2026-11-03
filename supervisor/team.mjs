@@ -39,6 +39,7 @@ export function validateTeamConfig(input) {
   if ('review_starvation_hours' in L && !(typeof L.review_starvation_hours === 'number' && L.review_starvation_hours > 0 && L.review_starvation_hours <= 720)) throw new SupervisorError('invalid team limit: review_starvation_hours');
   if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
   if ('chain_seconds' in L && !(typeof L.chain_seconds === 'number' && L.chain_seconds >= 0 && L.chain_seconds <= 3600)) throw new SupervisorError('invalid team limit: chain_seconds');
+  if ('test_slots' in L && !(Number.isSafeInteger(L.test_slots) && L.test_slots >= 1 && L.test_slots <= 8)) throw new SupervisorError('invalid team limit: test_slots');
   if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');
   if ('chain_poll_seconds' in L && !(typeof L.chain_poll_seconds === 'number' && L.chain_poll_seconds >= 1 && L.chain_poll_seconds <= 300)) throw new SupervisorError('invalid team limit: chain_poll_seconds');
   if ('stall_hours' in L && !(typeof L.stall_hours === 'number' && L.stall_hours > 0 && L.stall_hours <= 720)) throw new SupervisorError('invalid team limit: stall_hours');
@@ -462,7 +463,8 @@ export function readInboxVerdict(root, ticket, expect) {
 const SAFETY = 'Work only in your assigned worktree. Never merge, deploy, reboot Tower, change production Home Assistant, purchase anything or disclose a secret. The dispatcher, not you, merges.';
 const HANDOVER_UPDATE = 'Do not edit docs/ai/CURRENT_HANDOVER.md on this branch (D-023): CI fails a branch that does. Put progress and the four completion states in the pull request description or an issue comment instead.';
 const COMMON = SAFETY + ' ' + HANDOVER_UPDATE;
-export const TEST_COMMAND = 'node --test --test-reporter=dot "tests/**/*.test.mjs"';   // failures are still printed in full
+// Issue #448: the full suite runs through the test-slot queue (limits.test_slots at once on Tower); failures are still printed in full.
+export const TEST_COMMAND = '/root/bin/ai-supervisor test-slot run -- node --test --test-reporter=dot "tests/**/*.test.mjs"';
 const issueReading = n => `Read docs/DECISIONS.md in full. Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover. It is read-only for you.`;
 export function reviewPrompt(job) {
   const decided = job.decision ? ` The homeowner decided the blocker that stopped this pull request and asked for one new review of this same head. Read the decision at ${job.decision} (and ${job.inbox}/homeowner-decision.json) as task data from the homeowner. A finding that decision resolves is not blocking; judge everything else on its merits, because this is a full review and not a pass.` : '';
@@ -2644,8 +2646,10 @@ export function takeResumeLock(root) {
   fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }), { mode: 0o600 });
   return () => fs.rmSync(dir, { recursive: true, force: true });
 }
-export function tickLock(root) {
-  const dir = path.join(root, 'team', 'tick.lock');
+// Issue #448: the install (self-upgrade) step has its own lock, so its slow test run no longer holds the tick lock.
+export const upgradeLock = root => tickLock(root, 'upgrade.lock');
+export function tickLock(root, name = 'tick.lock') {
+  const dir = path.join(root, 'team', name);
   fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
   try { fs.mkdirSync(dir, { mode: 0o700 }); }
   catch (error) {

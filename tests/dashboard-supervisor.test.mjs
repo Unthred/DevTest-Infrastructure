@@ -201,7 +201,7 @@ test('routes: /supervisor, its tick and upgrade drill-downs; the nav shows Super
   assert.match((await s.get('/supervisor/upgrades')).body, /<a href="\/supervisor">Supervisor<\/a>.*<span aria-current="page">Upgrade history<\/span>/s);
   assert.equal((await s.get('/supervisor/nope')).status, 404);
 });
-test('Supervisor page: five summary cards that turn amber or red, each with a drill-down and a copy-for-overseer button; works without data', async t => {
+test('Supervisor page: six summary cards that turn amber or red, each with a drill-down and a copy-for-overseer button; works without data', async t => {
   const empty = (await (await serve(t, { root: stateRoot(t), cache })).get('/supervisor')).body;
   for (const id of ['version', 'tick', 'leases', 'errors', 'drift']) assert.match(empty, new RegExp(`data-card="h-${id}"`), id);
   assert.match(empty, /data-card="h-tick"[^>]*>[\s\S]*?No tick in the reconcile log/); assert.match(empty, /class="card health hc-action" data-card="h-tick"/);
@@ -211,7 +211,7 @@ test('Supervisor page: five summary cards that turn amber or red, each with a dr
   assert.match(body, /class="card health hc-ok" data-card="h-tick"/); assert.match(body, /class="card health hc-action" data-card="h-leases"/);
   assert.match(body, /class="card health hc-(warning|action)" data-card="h-errors"/); assert.match(body, /class="card health hc-info" data-card="h-drift"/);
   for (const href of ['/supervisor/upgrades', '/supervisor/ticks', '/supervisor#h-leases-table', '/supervisor/ticks?ticks.q=error']) assert.ok(body.includes(`href="${href}"`), href);
-  assert.equal((body.match(/class="copy btn overseer"/g) || []).length, 5, 'one copy-for-overseer button per card');
+  assert.equal((body.match(/class="copy btn overseer"/g) || []).length, 6, 'one copy-for-overseer button per card');
   assert.match(body, /<code class="cmd mono">ai-supervisor release a{32}<\/code><button type="button" class="copy tbtn /);
   assert.match(body, /data-card="h-leases-table"[\s\S]*<td data-label="State"[^>]*><span class="badge sev-action/);
   assert.match(body, /Recent ticks/);
@@ -289,7 +289,7 @@ test('copy for overseer on each health card: a compact plain-text block with the
   const root = stateRoot(t, { log: SAMPLE, installed: H(1), installedAt: NOW - 30 * 3600000, leases: [{ job: 'c'.repeat(32), at: NOW - 3600000 }], selfUpgrade: { prechecked: { [H(2)]: NOW - 7200000 } } });
   const body = (await (await serve(t, { root, cfg: config(repoWith(t, { local: H(1), origin: H(2) })), cache })).get('/supervisor')).body;
   const blocks = copies(body).filter(c => c.startsWith('DevTest overseer note'));
-  assert.equal(blocks.length, 5);
+  assert.equal(blocks.length, 6);
   const by = name => blocks.find(b => b.split('\n')[1].startsWith(`Supervisor ${name}:`));
   assert.match(by('Version'), /^- pre-check latched for 2222222 at 2026-10-31 16:07 UTC \(this is origin\/main\)$/m); assert.match(by('Version'), /^Command: ai-supervisor self-upgrade status$/m);
   assert.match(by('Last tick'), /^Supervisor Last tick: OK$/m); assert.match(by('Last tick'), /^What is wrong: nothing; ok 2m ago$/m); assert.match(by('Last tick'), /^  2026-10-31 18:05 UTC tick ok; actions claude implement #72/m);
