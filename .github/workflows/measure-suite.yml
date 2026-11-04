@@ -1,0 +1,29 @@
+name: Measure suite
+
+# Issue #469: suite time, load and RAM against --test-concurrency on a CI runner (tools/measure-suite.mjs). Manual only.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['claude/issue-469-measure-ci']
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Measure none, 8, 4, 2 (two repeats each)
+        run: |
+          for r in 1 2; do
+            for c in none 8 4 2; do
+              node tools/measure-suite.mjs --concurrency "$c" --label "ci-run$r" | tee -a measure.jsonl
+            done
+          done
+          nproc
+          { echo '```'; cat measure.jsonl; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
