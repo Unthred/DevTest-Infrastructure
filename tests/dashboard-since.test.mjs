@@ -142,7 +142,7 @@ test('Mark as read has a cooldown that survives restart and a refused proof take
   const s = await serve(t);
   assert.equal((await s.post(H(2), {}, 'f'.repeat(64))).status, 403);
   assert.equal((await s.post(H(2))).status, 303, 'refused proof took no slot');
-  assert.equal((await s.post(H(3))).status, 303);
+  { const first = await s.post(H(3)); assert.equal(first.status, 303); assert.equal(first.headers.location, '/?notice=mark-read-cooldown', 'refused, not marked: a successful mark redirects to /'); }
   assert.equal(readLastSeen(s.root), H(2), 'nothing moved');
   s.restart(); s.clock.now += 1000;
   const r = await s.post(H(3)); assert.equal(r.headers.location, '/?notice=mark-read-cooldown', 'a new handler still refuses inside the cooldown');
@@ -150,4 +150,19 @@ test('Mark as read has a cooldown that survives restart and a refused proof take
   s.clock.now += 6000; s.restart();
   assert.equal((await s.post(H(1))).headers.location, '/', 'after the cooldown a restarted handler accepts again');
   assert.ok(fs.existsSync(path.join(s.root, 'dashboard', 'write-cooldown.json')), 'kept in the state root');
+});
+
+test('the client clears the cooldown notice from the address, keeping other parameters (issue #483)', () => {
+  const src = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  const i = src.indexOf('try {\n  const u = new URL(location.href);');
+  assert.ok(i > 0, 'the snippet is present');
+  const run = href => {
+    const calls = [];
+    new Function('location', 'history', src.slice(i))({ href }, { state: null, replaceState: (...a) => calls.push(a) });
+    return calls;
+  };
+  assert.deepEqual(run('http://h:1/?notice=mark-read-cooldown').map(a => a[2]), ['/']);
+  assert.deepEqual(run('http://h:1/?since=week&notice=mark-read-cooldown#since').map(a => a[2]), ['/?since=week#since']);
+  assert.deepEqual(run('http://h:1/'), [], 'no notice, no change');
+  assert.deepEqual(run('http://h:1/?notice=other'), [], 'other notices are left alone');
 });
