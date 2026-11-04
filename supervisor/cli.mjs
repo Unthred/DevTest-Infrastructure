@@ -369,8 +369,11 @@ async function main() {
     if (a._[0] !== 'run' || dash < 0 || dash === process.argv.length - 1) throw new SupervisorError('usage: test-slot status | test-slot sweep | test-slot run [--label TEXT] -- COMMAND [ARGS]');
     const rawCmd = process.argv.slice(dash + 1);
     const passFile = path.join(root, 'team', 'test-passes.jsonl');
-    const reuseHours = a['no-reuse'] ? 0 : (cfg.limits?.test_reuse_hours ?? DEFAULT_REUSE_HOURS);
-    const key = suiteKey(process.cwd(), rawCmd);   // Issue #469: computed before the run, always, so the recorded pass names the tree that was tested
+    const configuredReuseHours = cfg.limits?.test_reuse_hours ?? DEFAULT_REUSE_HOURS;
+    const reuseHours = a['no-reuse'] ? 0 : configuredReuseHours;
+    // Issue #469: computed before the run, so the recorded pass names the tree that was tested (also with --no-reuse, whose real pass a later job may reuse).
+    // Issue #480: when reuse is switched off in the configuration nothing would ever read a pass, so the git calls and the record are skipped.
+    const key = configuredReuseHours > 0 ? suiteKey(process.cwd(), rawCmd) : null;
     const prior = reuseHours > 0 ? findPass(passFile, key, { maxAgeHours: reuseHours }) : null;   // the same clean tree that already passed is not run again
     if (prior) { console.error(`test-slot: tree ${prior.tree} already passed this suite at ${prior.at}; not run again (use --no-reuse to force)`); process.exitCode = 0; return; }
     const keyBefore = key;   // the tree that is tested, computed before the run
@@ -380,7 +383,7 @@ async function main() {
     const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', env: testEnv(process.env, cfg.test_tmp_root) });
     for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
     const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, s) => resolve(c ?? (s ? 128 : 1))); });
-    release(); if (code === 0) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
+    release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
   }
   if (command === 'dashboard') {
     if (a._[0] !== 'serve') throw new SupervisorError('usage: dashboard serve --host LAN_IPV4 [--port N]');

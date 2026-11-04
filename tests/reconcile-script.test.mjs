@@ -10,7 +10,14 @@ const install = new URL('../tools/install-reconcile-user-script.sh', import.meta
 const remove = new URL('../tools/remove-reconcile-user-script.sh', import.meta.url).pathname;
 // Run the installer and fail with its own stderr, so a red CI run names the cause instead of a bare "Command failed".
 function runInstall(env) {
-  const r = spawnSync('bash', [install], { env, encoding: 'utf8' });
+  // Issue #480: a freshly written fake executable can be 'Text file busy' (ETXTBSY) while a concurrent spawn still holds its write descriptor.
+  // That is a load-only race in the fixture, not an installer defect, so only that exact message is retried (a few times, briefly).
+  let r;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    r = spawnSync('bash', [install], { env, encoding: 'utf8' });
+    if (r.status === 0 || !/Text file busy/.test(r.stderr || '')) break;
+    spawnSync('sleep', ['0.2']);
+  }
   assert.equal(r.status, 0, `installer failed (status ${r.status}, signal ${r.signal}, error ${r.error}): ${r.stderr}`);
 }
 test('User Scripts reconciliation install and rollback preserve all existing schedules', t => {
