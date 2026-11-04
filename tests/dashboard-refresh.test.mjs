@@ -56,3 +56,8 @@ test('the refresh waits while the viewer is busy and keeps focus, scroll and exp
 test('without script the <noscript> meta refresh is unchanged', () => {
   assert.match(render, /<noscript><meta http-equiv="refresh" content="\$\{refreshSeconds\}"><\/noscript>/);
 });
+test('a card title with a live count is part of the card region and is updated in place', () => {
+  assert.match(appJs, /m\['card:' \+ c\.dataset\.card\] = \(c\.querySelector\(':scope > header h2'\)\?\.outerHTML/, 'a changed title marks the card changed');
+  assert.match(appJs, /lh\.textContent = fh\.textContent/, 'the title text is updated without replacing the bound header buttons');
+  assert.equal(planRefresh({ 'card:needs': '<h2>Needs you</h2>body' }, { 'card:needs': '<h2>Needs you (2)</h2>body' }).changed[0], 'card:needs');
+});

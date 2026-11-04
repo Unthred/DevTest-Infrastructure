@@ -17,7 +17,7 @@ const store = {
 const swapNodes = c => [...c.children].filter(n => !n.matches('header, .resize'));
 const regionsOf = root => {
   const m = {};
-  $$('.card[data-card]', root).forEach(c => { m['card:' + c.dataset.card] = swapNodes(c).map(n => n.outerHTML).join(''); });
+  $$('.card[data-card]', root).forEach(c => { m['card:' + c.dataset.card] = (c.querySelector(':scope > header h2')?.outerHTML || '') + swapNodes(c).map(n => n.outerHTML).join(''); });   // the title carries live counts, so it is part of the card's markup
   $$('header.statusbar .stat', root).forEach((e, k) => { m['stat:' + k] = e.outerHTML; });
   return m;
 };
@@ -258,6 +258,8 @@ function syncCards(doc, plan) {
     const openDetails = $$('details', live).map(d => d.open), openRows = $$('tr', live).map(r => r.classList.contains('open'));
     localizeTimes(fresh);
     const old = swapNodes(live), next = swapNodes(fresh);
+    const lh = $('header h2', live), fh = $('header h2', fresh);   // the title text and the labels built from it update in place; the bound header buttons stay
+    if (lh && fh) { if (lh.textContent !== fh.textContent) lh.textContent = fh.textContent; const lab = $$('header [aria-label]', live); $$('header [aria-label]', fresh).forEach((e, j) => { const t = lab[j]; if (t && !t.matches('[data-collapse]') && t.getAttribute('aria-label') !== e.getAttribute('aria-label')) t.setAttribute('aria-label', e.getAttribute('aria-label')); }); }
     if (old.length) { old.slice(1).forEach(n => n.remove()); old[0].replaceWith(...next); } else live.append(...next);
     $$('details', live).forEach((d, j) => { if (openDetails[j]) d.open = true; });
     $$('tr', live).forEach((r, j) => { if (openRows[j]) r.classList.add('open'); });
