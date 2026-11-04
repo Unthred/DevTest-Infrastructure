@@ -17,14 +17,14 @@ const at = hhmm => Date.parse(`2026-11-01T${hhmm}:00Z`);
 const est = (a, b) => ({ kind: 'issue', ref: 30, agent: 'claude', status: 'estimated', finish: { p50: at(a), p90: at(b) }, text: `est. ${a}–${b}`, waits: [], basis: ['b'] });
 const withPlan = async e => {
   const v = await make([]);
-  v.nextTickAt = NOW + 240000; v.tz = 'UTC';
+  v.nextTick = { state: 'scheduled', at: NOW + 240000, lastAt: NOW - 60000 }; v.tz = 'UTC';
   v.panels.next = [{ agent: 'claude', type: 'implement', ref: 30 }];
   v.estimates = { waits: [], items: { 'issue:30': e } };
   return renderPage(v);
 };
 
 test('the Next card has no countdown; the app bar keeps its own', async () => {
-  const v = await make([]); v.nextTickAt = NOW + 240000;
+  const v = await make([]); v.nextTick = { state: 'scheduled', at: NOW + 240000, lastAt: NOW - 60000 };
   const html = renderPage(v);
   assert.doesNotMatch(card(html, 'next'), /data-countdown/);
   assert.doesNotMatch(card(html, 'next'), /Next tick/);
@@ -32,7 +32,7 @@ test('the Next card has no countdown; the app bar keeps its own', async () => {
 });
 
 test('no tick scheduled: the app bar message stays and the card adds none', async () => {
-  const v = await make([]); v.nextTickAt = null;
+  const v = await make([]); v.nextTick = null; v.nextTickAt = null;
   const html = renderPage(v);
   assert.match(html, /<span class="muted">none<\/span>/);
   assert.doesNotMatch(card(html, 'next'), /No tick is scheduled/);

@@ -44,7 +44,8 @@ test('header: a reviewer job shows the Reviewer role; a paused agent shows Pause
   const v = await build(t, { jobs: [job(), paused()] });
   const html = page(v), l = lines(html);
   assert.deepEqual(l.map(x => [x.agent, x.state, x.text]), [['claude', 'running', 'claude Implementer Running'], ['codex', 'paused', 'codex Reviewer Paused']]);
-  assert.doesNotMatch(header(html), /restarts about|<time/);
+  const agentsOnly = header(html).replace(/<div class="stat"><span class="k">Next<\/span>.*?<\/b><\/div>/s, '');   // the Next stat carries its own times (issue #473)
+  assert.doesNotMatch(agentsOnly, /restarts about|<time/);
 });
 test('header: an idle agent shows name and state only', async t => {
   const l = lines(page(await build(t, { jobs: [] })));

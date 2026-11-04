@@ -16,7 +16,7 @@ import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth } from './suphealth.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { hasProbe } from './probe.mjs';
-import { defaultRegistry } from './core.mjs';
+import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { sinceView } from './since.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
@@ -718,6 +718,25 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
 
 // ---- issue #54: what the v2 pages need on top of the v1 model. Still pure: only data already stored by the tick.
 export const TICK_INTERVAL_MS = 5 * 60000;
+// Issue #473: the app bar countdown. The reconcile cron fires on every 5 minute wall-clock slot, so the next scheduled tick is the first
+// slot after the last recorded tick, not last tick + 5 minutes. A live tick lock (its owner process still exists) means a tick is running.
+// Returns the running tick's start time, or null when no tick is running.
+export function runningTickSince(root, alive = processStart) {
+  const dir = path.join(root, 'team', 'tick.lock');
+  try {
+    const owner = JSON.parse(fs.readFileSync(path.join(dir, 'owner.json'), 'utf8'));
+    if (!owner || alive(owner.pid) !== owner.start) return null;
+    return Number.isFinite(owner.at) ? owner.at : fs.statSync(dir).mtimeMs;
+  } catch { return null; }
+}
+export const TICK_GRACE_MS = 90 * 1000;
+export function tickCountdown({ lastAt, runningSince = null, now, intervalMs = TICK_INTERVAL_MS }) {
+  if (Number.isFinite(runningSince)) return { state: 'running', since: runningSince, lastAt: lastAt ?? null };
+  if (!Number.isFinite(lastAt)) return null;
+  const slot = (Math.floor(lastAt / intervalMs) + 1) * intervalMs;
+  // A cron slot that has just passed is not late yet: the tick needs a moment to start and take the lock.
+  return { state: slot > now ? 'scheduled' : now - slot < TICK_GRACE_MS ? 'starting' : 'overdue', at: slot, lastAt };
+}
 const NEXT_STEP = {
   homeowner: 'Open the issue and answer the question it states.',
   'tick-failed': 'Read the tick error; nothing is dispatched until a tick succeeds.',
@@ -819,6 +838,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   });
   const issueTimelines = issueTimelinesOf({ jobs, state, names, jobRows, cache });
   const tickAt = cache.tick?.at ?? null;
+  const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
   const needsYou = attention.filter(a => a.severity === 'action').map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
@@ -829,7 +849,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
-    nextTickAt: Number.isFinite(tickAt) && teamEnabled ? tickAt + TICK_INTERVAL_MS : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
+    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
     panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, later: laterOf({ cache, state, pauseText, names, config }), warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
