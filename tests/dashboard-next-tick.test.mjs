@@ -136,8 +136,8 @@ test('browser run: a running bar the server now reports as none is replaced and 
 test('the real localizeTimes rewrites a swapped-in Next element in the browser time zone and leaves other text alone', () => {
   const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
   const code = js.slice(js.indexOf('const zone = '), js.indexOf('\nlocalizeTimes();'));
-  const time = { getAttribute: () => '2026-11-03T22:00:11.000Z', textContent: '2026-11-03 22:00:11 UTC', title: '' };
-  const bad = { getAttribute: () => 'not a date', textContent: 'keep', title: '' };
+  const time = { classList: { contains: () => false }, getAttribute: () => '2026-11-03T22:00:11.000Z', textContent: '2026-11-03 22:00:11 UTC', title: '' };
+  const bad = { classList: { contains: () => false }, getAttribute: () => 'not a date', textContent: 'keep', title: '' };
   const scopes = [];
   const scope = { name: 'next' };
   const ctx = { formatLocal, timeOnly: () => '', Intl, Date, Number, $$: (sel, r) => { scopes.push([sel, r]); return sel === 'time[data-local]' ? [time, bad] : []; } };
