@@ -13,7 +13,7 @@ import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
-import { matchRoute, renderRoute } from './dashrender.mjs';
+import { matchRoute, nextTickHtml, renderRoute } from './dashrender.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { defaultRegistry } from './core.mjs';
@@ -212,11 +212,14 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
         if (r.error) return send(r.error === 'too-large' ? 413 : 404, 'text/plain; charset=utf-8', r.error === 'too-large' ? 'too large' : 'not found');
         return send(200, r.type, r.body, { 'content-security-policy': "default-src 'none'; sandbox", 'content-disposition': 'inline' });
       }
-      const route = path === '/api/view.json' ? null : matchRoute(path);
-      if (path !== '/api/view.json' && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
+      const apiPath = path === '/api/view.json' || path === '/api/next';
+      const route = apiPath ? null : matchRoute(path);
+      if (!apiPath && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
       const q0 = new URLSearchParams(search);
       const view = await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(view));
+      // Issue #481: only the Next element, so a page that polls during a long tick does not re-fetch a whole page (a watch page carries its transcript).
+      if (path === '/api/next') return send(200, 'text/html; charset=utf-8', nextTickHtml(view, view.generatedAt) || '<span class="muted">none</span>');
       const watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
       const routed = watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
         : evidence ? { ...route, data: route.page === 'evidence' ? listRuns(evidenceRoot) : readRun(evidenceRoot, route.id) } : route;

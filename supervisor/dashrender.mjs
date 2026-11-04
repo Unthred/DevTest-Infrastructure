@@ -317,7 +317,7 @@ const agentBadge = a => {
 };
 // Issue #473: one of three states, never "due now". The tick's real schedule (or its live lock) is the source.
 const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-function nextTickHtml(view, now) {
+export function nextTickHtml(view, now) {
   const n = view.nextTick || (view.nextTickAt ? { state: 'scheduled', at: view.nextTickAt, lastAt: view.tick?.at } : null);
   if (!n) return '';
   if (n.state === 'running') return `<b data-tick-state="running" data-running>tick running since ${lt(n.since)}</b>`;
