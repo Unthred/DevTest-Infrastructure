@@ -98,6 +98,10 @@ test('the dashboard names the hold for the agent it belongs to, and says "next t
   assert.match(idleReason({ ...base, hold: { cause: 'named-hold', hold: 'implement slot full: #3' } }).text, /about to start implement #5 once the hold clears; held: implement slot full: #3/);
   assert.match(idleReason({ ...base, hold: { cause: 'upgrade' } }).text, /held: an upgrade is pending or draining/);
   assert.match(idleReason(base).text, /on the next tick/);
+  // No planned job (the live plan applies the same cap): the hold is still named, for the agent it belongs to only.
+  const noPlan = { ...base, plan: [] };
+  assert.equal(idleReason({ ...noPlan, hold: { cause: 'named-hold', hold: 'claude implementer slot full (limits.provider_roles 1)' } }).text, 'held: claude implementer slot full (limits.provider_roles 1)');
+  assert.equal(idleReason({ ...noPlan, hold: { cause: 'upgrade' } }).text, 'held: an upgrade is pending or draining');
   assert.match(idleReason({ ...base, hold: { cause: 'no-eligible-work' } }).text, /on the next tick/);
 });
 
