@@ -156,7 +156,7 @@ function resolveList(r, text) {
   return oldHead;
 }
 const cliPath = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
-const runPush = (r, oldHead) => { try { return { code: 0, out: execFileSync(process.execPath, [cliPath, 'rebase-push', '--worktree', r.agent, '--branch', 'feat', '--base', 'main', '--old', oldHead], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, out: e.stdout }; } };
+const runPush = (r, oldHead) => { try { return { code: 0, out: execFileSync(process.execPath, [cliPath, 'rebase-push', '--worktree', r.agent, '--branch', 'feat', '--base', 'main', '--old', oldHead], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, out: e.stdout }; } };
 
 test('a union of both sides\' list items is not lost, and rebase-push pushes it', t => {
   const r = listRepo(t); const oldHead = resolveList(r, 'export const KEYS = [\n  "a", "refusedReviews", "reviewRefusals",\n];\nconst z = 1;\n');
