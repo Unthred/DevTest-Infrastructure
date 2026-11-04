@@ -11,6 +11,7 @@ import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
 import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, DEFAULT_REUSE_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
+import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
 import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { upgradeLock } from './team.mjs';
 import { Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
@@ -385,11 +386,24 @@ async function main() {
     if (prior) { console.error(`test-slot: tree ${prior.tree} already passed this suite at ${prior.at}; not run again (use --no-reuse to force)`); process.exitCode = 0; return; }
     const keyBefore = key;   // the tree that is tested, computed before the run
     const cmd = withTestConcurrency(rawCmd, cfg.limits?.test_concurrency ?? DEFAULT_TEST_CONCURRENCY);
+    // Issue #574: size class, admission against the host budget (when one exists) and a limited launch. Without a budget file
+    // none of this changes anything: the job is granted at once and runs as before.
+    const res = cfg.test_resources || {}, klass = a.class || 'suite';
+    const allowed = checkClass(klass, res);
+    if (!allowed.ok) { console.error(`test-slot: ${allowed.reason}`); process.exitCode = 3; return; }
+    const num = v => (v === undefined ? undefined : Number(v));
+    const grant = await admit({ klass, request: { memory_mb: num(a['memory-mb']), cpus: num(a.cpus) }, cfg: res, onQueue: why => console.error(`test-slot: queued: ${why}`) });
+    if (grant.action !== 'grant') { console.error(`test-slot: waited too long for host headroom (${grant.reason})`); process.exitCode = 3; return; }
     const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
     if (!release) { console.error('waited too long for a free test slot'); process.exitCode = 3; return; }
-    const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', env: testEnv(process.env, cfg.test_tmp_root) });
-    for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
-    const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, s) => resolve(c ?? (s ? 128 : 1))); });
+    const id = `${Date.now()}-${process.pid}`;
+    const { code, kill } = grant.limits
+      ? await runLimited(cmd, { env: testEnv(process.env, cfg.test_tmp_root), limits: grant.limits, klass, id, wrapper: cgroupWrapper(grant, id, { available: fs.existsSync('/run/systemd/system') }) })
+      : await runLimited(cmd, { env: testEnv(process.env, cfg.test_tmp_root), klass, id });
+    if (kill) {
+      console.error(`test-slot: ${kill.note}`);
+      try { fs.mkdirSync(path.join(root, 'team'), { recursive: true }); fs.appendFileSync(path.join(root, 'team', 'test-job-results.jsonl'), JSON.stringify({ at: new Date().toISOString(), label: a.label || null, ...kill }) + '\n'); } catch { /* the stderr line above is the record */ }
+    }
     release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
   }
   if (command === 'dashboard') {
