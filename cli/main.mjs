@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, UsageError, COMMANDS, VERSION, CONTRACT_VERSION } from './args.mjs';
-import { loadConfig, EnvironmentError, REPO_ROOT, playwrightCacheState } from './config.mjs';
+import { loadConfig, EnvironmentError, REPO_ROOT, playwrightCacheState, axeCacheState } from './config.mjs';
 import { newRunId, createRunDir, artifactRecord, collectWebArtifacts, findRunDir, readStoredResult, writeStoredResult, stamp } from './evidence.mjs';
 import { createPlan, runContainer, releaseVolumes, sweepStaleVolumes, dockerCommand, RunnerError, targetSocketPath } from '../docker/runner.mjs';
 import { dotnetRunSpec } from '../dotnet/run.mjs';
@@ -27,6 +27,7 @@ const DESCRIPTIONS = {
   'dotnet test': 'Test in a pinned SDK container; TRX, JUnit and optional coverage artifacts.',
   'web screenshot': 'Capture one screenshot of a local page in a network-less Playwright container.',
   'web responsive': 'Capture across profiles and apply responsive layout assertions.',
+  'web a11y': 'Accessibility scan (axe-core, WCAG 2.1 A and AA) of a local page in a network-less Playwright container. Automated checks do not cover everything.',
   'web ha': 'Home Assistant read-only browser profile: anonymised local fixture by default; --live reports whether the real instance may be used (it is blocked).',
   report: 'Show a stored result by run id.',
   cleanup: 'Remove run workspaces; evidence only when its run id is named.'
@@ -96,7 +97,7 @@ async function dispatch(ctx, io) {
     case 'doctor': return doctor(ctx, io);
     case 'dotnet build': case 'dotnet test': return dotnet(ctx, io);
     case 'web ha': return ctx.options['--live'] ? haLive(ctx, io) : web(ctx, io);
-    case 'web screenshot': case 'web responsive': return web(ctx, io);
+    case 'web screenshot': case 'web responsive': case 'web a11y': return web(ctx, io);
     case 'report': return report(ctx, io);
     case 'cleanup': return cleanup(ctx, io);
     default: throw new UsageError(`unknown command ${ctx.command}`);
@@ -142,7 +143,7 @@ function dockerProblem(deps) {
 
 // Everything that can be checked before a run directory exists. Missing Docker, a missing pinned image or an unwritable
 // directory is exit 3 with an actionable message and nothing started.
-function preflight(ctx, { config, deps, runsRoot, imageIds, needPlaywrightCache }) {
+function preflight(ctx, { config, deps, runsRoot, imageIds, needPlaywrightCache, needAxe }) {
   let storage;
   try { storage = fs.statSync(config.storageRoot); } catch { storage = null; }
   if (!storage?.isDirectory()) throw new EnvironmentError(`storage root ${config.storageRoot} does not exist; create it on the cache pool`);
@@ -159,6 +160,10 @@ function preflight(ctx, { config, deps, runsRoot, imageIds, needPlaywrightCache 
   if (needPlaywrightCache) {
     const cache = playwrightCacheState(config);
     if (!cache.ok) throw new EnvironmentError(`the Playwright cache is not ready (${cache.reason}); run "node browser/prepare-cache.mjs" then "node browser/restore-cache.mjs" (docs/browser-runner.md)`);
+  }
+  if (needAxe) {
+    const axe = axeCacheState(config);
+    if (!axe.ok) throw new EnvironmentError(`the axe-core cache is not ready (${axe.reason}); run "node browser/prepare-cache.mjs" then "node browser/restore-cache.mjs" (docs/browser-runner.md)`);
   }
 }
 
@@ -250,13 +255,15 @@ async function web(ctx, io) {
   const target = isHa ? { root: repo, serveRoot: path.join(repo, 'browser', 'fixture', 'ha'), pagePath: '/', project: repo } : resolveWebTarget(ctx.options['--url'], cfg, ctx.options['--root'], io.cwd);
   if (!allowedRoots(cfg).includes(repo)) throw new EnvironmentError(`the dev-test repository (${REPO_ROOT}) must be in "allowedProjects": the browser scripts run from its read-only mount`);
   const runsRoot = evidenceRoot(ctx, cfg);
-  preflight(ctx, { config: cfg, deps, runsRoot, imageIds: ['playwright'], needPlaywrightCache: true });
+  preflight(ctx, { config: cfg, deps, runsRoot, imageIds: ['playwright'], needPlaywrightCache: true, needAxe: ctx.command === 'web a11y' });
   const responsive = ctx.command === 'web responsive';
   const browser = ctx.options['--browser'] ?? 'chromium';
   const navMs = Math.min(15000, Math.max(1000, Math.floor((cfg.limits.timeoutMs ?? 120000) / 2)));
   const common = ['--target', 'page', '--path', target.pagePath, '--browser', browser, '--timeout-ms', String(navMs)];
   const command = isHa
     ? ['node', '/src/browser/ha-readonly.mjs', '--target', 'page', '--page-set', 'fixture', '--browser', browser, '--timeout-ms', String(navMs), '--probe', 'clicks', '--name', 'ha']
+    : ctx.command === 'web a11y'
+    ? ['node', '/src/browser/a11y.mjs', ...common, '--profiles', ctx.options['--profiles'], '--name', 'a11y']
     : responsive
     ? ['node', '/src/browser/responsive.mjs', ...common, '--profiles', ctx.options['--profiles'], '--name', 'audit']
     : ['node', '/src/browser/capture.mjs', ...common, '--profile', ctx.options['--profile'], '--name', 'shot', ...(ctx.options['--full-page'] ? ['--full-page'] : [])];
@@ -284,6 +291,15 @@ async function web(ctx, io) {
         haData(summary, data, lines);
         if (wrapper === 16) { message = 'the page tried to change state (write request, non-read WebSocket frame or unprompted interaction) or the interaction guard was bypassed; it was blocked'; lines.push(...summary.readOnly.blockedWrites.slice(0, 5).map((w) => `  blocked write: ${w}`)); }
       }
+    } else if (ctx.command === 'web a11y') {
+      const summary = read('a11y.summary.json');
+      if (summary?.profiles) {
+        data.axe_version = summary.axe_version; data.tags = summary.tags; data.violation_elements = summary.violation_nodes; data.incomplete_elements = summary.incomplete_nodes; data.limitation = summary.limitation;
+        data.profiles = summary.profiles.map((p) => ({ profile: p.profile, scanned: p.scanned, violations: p.violations.map((v) => ({ id: v.id, impact: v.impact, elements: v.nodeCount })), incomplete: p.incomplete.map((v) => ({ id: v.id, impact: v.impact, elements: v.nodeCount })) }));
+        for (const p of summary.profiles) for (const v of p.violations.slice(0, 10)) lines.push(`  ${p.profile}: ${v.id} (${v.impact ?? 'n/a'}) on ${v.nodeCount} element(s)`);
+        lines.push(`  ${summary.limitation}`);
+        if (wrapper === 17) message = `${summary.violation_nodes} accessibility violation element(s) found by axe-core (${summary.incomplete_nodes} more need a person to decide). ${summary.limitation}`;
+      }
     } else if (responsive) {
       const summary = read('audit.summary.json');
       const asserted = new Set(ctx.options['--assert'] ?? []);
@@ -304,13 +320,14 @@ async function web(ctx, io) {
     }
     if (exit === 1 && !message) {
       if (wrapper === 10 && (data.problems ?? []).some((p) => /^capture failed:/.test(p))) { exit = 6; message = 'the browser wrapper crashed before testing the page; not evidence about the page. If the Playwright cache is not restored see docs/browser-runner.md'; }
-      else if ([10, 11, 12, 13, 15, 16].includes(wrapper)) message = { 16: 'a state-changing action was attempted and blocked (read-only profile)', 10: 'the page reported console, page or HTTP errors', 11: 'navigation timed out', 12: 'the page tried to reach an undeclared destination (blocked)', 13: 'TLS error', 15: 'layout defect or a profile that did not render' }[wrapper];
+      else if ([10, 11, 12, 13, 15, 16, 17].includes(wrapper)) message = { 17: 'accessibility violations found', 16: 'a state-changing action was attempted and blocked (read-only profile)', 10: 'the page reported console, page or HTTP errors', 11: 'navigation timed out', 12: 'the page tried to reach an undeclared destination (blocked)', 13: 'TLS error', 15: 'layout defect or a profile that did not render' }[wrapper];
       else { exit = 6; message = `the browser wrapper failed unexpectedly (code ${wrapper}); not evidence about the page. If the Playwright cache is not restored see docs/browser-runner.md`; }
     }
   } else if (exit === 0) {
     if (isHa) { const s = read('ha.summary.json'); if (s?.pages) haData(s, data, lines); }
-    message = isHa ? 'fixture: 3 pages at phone-390 and desktop-1280 rendered, no layout defect, no state-changing action reached the page. This is the local fixture, not the live Home Assistant' : responsive ? `no layout defect across the selected profile(s)` : 'screenshot captured with no page errors';
-    if (!artifacts.some((a) => a.kind === 'screenshot')) { exit = 6; message = 'run reported success but produced no screenshot'; }
+    message = ctx.command === 'web a11y' ? `no axe-core violation across the selected profile(s). Automated checks do not cover everything: keyboard, focus, wording and contrast in both themes still need a person` : isHa ? 'fixture: 3 pages at phone-390 and desktop-1280 rendered, no layout defect, no state-changing action reached the page. This is the local fixture, not the live Home Assistant' : responsive ? `no layout defect across the selected profile(s)` : 'screenshot captured with no page errors';
+    if (ctx.command === 'web a11y') { if (!artifacts.some((a) => a.path.endsWith('a11y.summary.json'))) { exit = 6; message = 'run reported success but produced no scan summary'; } }
+    else if (!artifacts.some((a) => a.kind === 'screenshot')) { exit = 6; message = 'run reported success but produced no screenshot'; }
     if (responsive && ctx.options['--assert']) data.asserted = ctx.options['--assert'];
   }
   if (volumeError && exit === 0) { exit = 6; message = `result files could not be read (${volumeError})`; }

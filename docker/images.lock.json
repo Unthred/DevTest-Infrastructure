@@ -28,6 +28,12 @@
       "integrity": "sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==",
       "resolved_on": "2026-10-30",
       "source": "npm registry dist.integrity; must match the Playwright version of the pinned image"
+    },
+    "axe-core": {
+      "version": "4.14.0",
+      "integrity": "sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==",
+      "resolved_on": "2026-11-04",
+      "source": "npm registry dist.integrity; accessibility scan for the browser runner (issue #455); run in the network-less container from the restored cache"
     }
   }
 }

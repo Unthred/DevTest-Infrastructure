@@ -116,6 +116,9 @@ export function checkImageLock(root, add, { maxAgeDays = null, now = new Date() 
     else if (v !== pkg.version) add('image-lock', `playwright-core ${pkg.version} does not match image tag version ${v}`);
     if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(pkg.integrity || '')) add('image-lock', 'playwright-core integrity must be an sha512 SRI value');
   } else if (pw || pkg) add('image-lock', 'playwright image and playwright-core package must both be recorded');
+  // axe-core (issue #455) is pinned the same way: exact version and an sha512 SRI value, restored into the cache for network-less runs.
+  const axe = lock.packages?.['axe-core'];
+  if (axe && (!/^\d+\.\d+\.\d+$/.test(axe.version || '') || !/^sha512-[A-Za-z0-9+/]+=*$/.test(axe.integrity || ''))) add('image-lock', 'axe-core needs an exact x.y.z version and an sha512 SRI integrity value');
   // Every digest referenced elsewhere must be in the lock (no drift between code and lock).
   for (const f of walk(root)) {
     const name = path.relative(root, f).split(path.sep).join('/');

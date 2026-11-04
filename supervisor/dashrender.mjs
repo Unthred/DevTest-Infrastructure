@@ -44,12 +44,14 @@ export function matchRoute(pathname) {
   if ((m = /^\/work\/issue\/(\d{1,9})$/.exec(p))) return { page: 'issue', id: Number(m[1]) };
   if ((m = /^\/work\/job\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'job', id: m[1] };
   if ((m = /^\/jobs\/([a-f0-9]{32})$/.exec(p))) return { page: 'watch', id: m[1] };
+  if (p === '/evidence') return { page: 'evidence' };
+  if ((m = /^\/evidence\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.exec(p))) return { page: 'evidence-run', id: m[1] };
   if (p === '/activity/timeline') return { page: 'timeline' };
   if (p === '/supervisor/ticks') return { page: 'ticks' };
   if (p === '/supervisor/upgrades') return { page: 'upgrades' };
   return null;
 }
-const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity' })[page] || page;
+const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity', evidence: 'system', 'evidence-run': 'system' })[page] || page;
 
 // ---- icons: authored for this project (24x24, 2px stroke); no third-party icon set is bundled
 const ICONS = {
@@ -594,7 +596,7 @@ function systemPage(view) {
   const facts = card({ id: 'sys', title: 'Dispatcher', span: 6, movable: false, body: `<dl class="kv"><dt>Repository</dt><dd>${esc(view.repository)}</dd><dt>Team loop</dt><dd>${view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled')}</dd>
 <dt>Health</dt><dd>${badge(view.health.severity, view.health.label)}</dd><dt>Last tick</dt><dd>${t ? `${badge(t.status === 'ok' ? 'ok' : 'action', t.status)} ${lt(t.at)} (${esc(ago(t.at, now))})` : badge('action', 'none recorded')}</dd>
 <dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${nextTickHtml(view, now) || 'none'}</dd>
-<dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${lt(now)}</dd></dl>` });
+<dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${lt(now)}</dd><dt>UI review evidence</dt><dd><a href="/evidence">Browse review runs</a></dd></dl>` });
   const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${(vs => badge(vs.level, escT(vs.label), '', true))(versionStatus(v))}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
   const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
   return { title: 'System', body: grid('system', facts + ver + all) };
@@ -695,7 +697,35 @@ function watchPage(view, query, path, route) {
   const panel = `<section class="card watch" data-watch data-job="${esc(route.id)}" data-live="${live}" data-last="${last}" data-started="${Number.isFinite(started) ? started : ''}" data-seed="${esc(JSON.stringify(seed))}"><div class="card-body">${head}${none}<div class="tr-log" role="log" aria-live="polite">${renderEntries(entries)}</div><p class="sub">Read-only. Known secret shapes and OpenBao paths are redacted before storage, but redaction is pattern-based and cannot catch every secret (for example a bare password in prose); transcripts are kept 7 days.</p></div></section>`;
   return { title: `Job ${route.id.slice(0, 8)}`, crumbs: [['/work', 'Work'], [null, `Job ${route.id.slice(0, 8)}`]], body: `<div class="cards">${panel}</div><script type="module" src="/static/watch.js"></script>` };
 }
-const PAGES = { overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+// ---- UI review evidence (issue #455): read-only browsing of <evidence root>/ui-review. Data comes from evidence.mjs through route.data.
+const evUrl = parts => `/evidence/files/${parts.map(encodeURIComponent).join('/')}`;
+const PROFILE_ORDER = ['desktop', 'tablet', 'phone', 'other'];
+const profileGroup = p => (PROFILE_ORDER.includes(p.split('-')[0]) ? p.split('-')[0] : 'other');
+const shot = (run, parts, caption) => `<figure class="ev-shot"><a href="${esc(evUrl([run, ...parts]))}"><img src="${esc(evUrl([run, ...parts]))}" alt="${esc(caption)}" loading="lazy"></a><figcaption>${esc(caption)}</figcaption></figure>`;
+function evidencePage(view, query, path, route) {
+  const data = route.data || { available: false, runs: [] };
+  const rows = data.runs.map(r => `<tr><td><a href="/evidence/${esc(encodeURIComponent(r.name))}">${esc(r.name)}</a></td><td>${lt(r.mtime)}</td><td>${r.commit ? esc(String(r.commit).slice(0, 12)) : '<span class="muted">not recorded</span>'}</td><td>${r.source ? esc(r.source) : '<span class="muted">not recorded</span>'}</td><td class="num">${r.screenshots}</td><td class="num">${r.pairs}</td><td>${r.hasReport ? badge('ok', 'Report') : badge('info', 'No report')}</td></tr>`).join('');
+  const body = data.runs.length ? `<div class="tbl-wrap"><table><thead><tr><th scope="col">Review run</th><th scope="col">Last changed</th><th scope="col">Commit</th><th scope="col">Data source</th><th scope="col" class="num">Screenshots</th><th scope="col" class="num">Before/after pairs</th><th scope="col">Report</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : empty(data.available ? 'No review run yet' : 'No evidence folder yet', data.available ? 'A UI review writes its report, manifest and screenshots to a folder here.' : 'The ui-review evidence folder does not exist on this host yet; the first UI review creates it.', 'review');
+  return { title: 'UI review evidence', crumbs: [['/system', 'System'], [null, 'UI review evidence']], bodyClass: 'ev', body: grid('evidence', card({ id: 'ev-runs', title: `Review runs (${data.runs.length})`, span: 12, movable: false, body: `${body}<p class="sub">Read-only. Screenshots are kept outside Git. Only png, json and md files in the review evidence folder are shown.</p>` })) };
+}
+function evidenceRunPage(view, query, path, route) {
+  const r = route.data;
+  if (!r) return null;
+  const facts = r.manifest.facts.length ? `<dl class="kv">${r.manifest.facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : `<p class="sub">${r.manifest.invalid ? 'manifest.json could not be read as an object.' : r.manifest.present ? 'The manifest has no simple fields to show.' : 'No manifest.json in this run.'}</p>`;
+  const files = [...(r.hasManifest ? ['manifest.json'] : []), ...r.others.filter(f => f !== 'manifest.json')].map(f => `<a class="btn" href="${esc(evUrl([r.name, f]))}">${esc(f)}</a>`).join(' ');
+  const info = card({ id: 'ev-info', title: 'Manifest', span: 4, movable: false, body: `${facts}${files ? `<p>${files}</p>` : ''}` });
+  const report = card({ id: 'ev-report', title: 'Report', span: 8, movable: false, body: r.report ? `<pre class="ev-report" tabindex="0" aria-label="Report text">${esc(r.report)}</pre>` : empty(r.reportTooLarge ? 'Report is too large to show' : 'No report.md in this run', r.reportTooLarge ? 'Open it from the file list instead.' : 'The audit PR carries the report.', 'info') });
+  const pairBlock = r.pairs.length ? PROFILE_ORDER.map(g => ({ g, items: r.pairs.filter(p => profileGroup(p.profile) === g) })).filter(x => x.items.length).map(({ g, items }) => `<h3 class="ev-h">${esc(g)}</h3><div class="ev-pairs">${items.map(p => `<div class="ev-pair"><div class="ev-name">${esc(p.name)}</div><div class="ev-sides"><div><div class="ev-side">Before</div>${shot(r.name, p.before, `Before: ${p.name}`)}</div><div><div class="ev-side">After</div>${shot(r.name, p.after, `After: ${p.name}`)}</div></div></div>`).join('')}</div>`).join('') : '';
+  const unpaired = r.unpaired.length ? `<p class="sub">Without a partner: ${r.unpaired.map(u => `${esc(u.side)}/${esc(u.name)}`).join(', ')}</p>` : '';
+  const pairs = card({ id: 'ev-pairs', title: `Before and after (${r.pairs.length})`, span: 12, movable: false, body: (pairBlock || empty('No before/after pair', 'Pairs are PNG files with the same name in the before/ and after/ folders.', 'info')) + unpaired });
+  const shotBlock = r.shots.length ? PROFILE_ORDER.map(g => ({ g, items: r.shots.filter(s => profileGroup(s.profile) === g) })).filter(x => x.items.length).map(({ g, items }) => `<h3 class="ev-h">${esc(g)}</h3><div class="ev-grid">${items.map(s => shot(r.name, s.parts, s.name)).join('')}</div>`).join('') : empty('No screenshot', 'PNG files placed in the run folder appear here, grouped by desktop, tablet and phone.', 'info');
+  const shots = card({ id: 'ev-shots', title: `Screenshots (${r.shots.length})`, span: 12, movable: false, body: shotBlock });
+  return { title: `Review run ${r.name}`, crumbs: [['/system', 'System'], ['/evidence', 'UI review evidence'], [null, r.name]], bodyClass: 'ev', body: grid('evidence-run', info + report + pairs + shots) };
+}
+const PAGES = { evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+
+export const PAGE_NAMES = Object.keys(PAGES);
 
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
 // REFS is a module-level lookup that the link helpers read; it is set for one synchronous render and cleared after (issue #182).

@@ -37,3 +37,15 @@ export function playwrightCacheState(config) {
   if (marker?.package !== 'playwright-core' || (want && marker.version !== want)) return { ok: false, reason: `cache was restored for another playwright-core version (want ${want})` };
   return { ok: true, reason: `restored playwright-core ${marker.version}` };
 }
+
+// The accessibility scan (issue #455) also needs the pinned axe-core in the same cache. The restore writes its version into the marker;
+// a cache restored before axe-core was pinned has no such field, so the scan refuses and says to run the restore again.
+export function axeCacheState(config) {
+  const base = playwrightCacheState(config);
+  if (!base.ok) return base;
+  const want = config.lock?.packages?.['axe-core']?.version;
+  if (!want) return { ok: false, reason: 'the lock file has no axe-core entry' };
+  let marker; try { marker = JSON.parse(fs.readFileSync(path.join(config.storageRoot, 'cache', PLAYWRIGHT_MARKER), 'utf8')); } catch { return { ok: false, reason: 'cache marker unreadable' }; }
+  if (marker.axeCore !== want) return { ok: false, reason: `axe-core ${want} is not in the cache (restored: ${marker.axeCore ?? 'none'})` };
+  return { ok: true, reason: `restored axe-core ${want}` };
+}

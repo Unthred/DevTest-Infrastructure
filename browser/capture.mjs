@@ -7,7 +7,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const EXIT = { ok: 0, usage: 2, problems: 10, timeout: 11, blocked: 12, tls: 13, launch: 14, layout: 15 };
+export const EXIT = { ok: 0, usage: 2, problems: 10, timeout: 11, blocked: 12, tls: 13, launch: 14, layout: 15, a11y: 17 };
 // Viewport profiles (issue #6). `phone` and `desktop` are the original #5 names and keep their meaning. The STANDARD set is the
 // width ladder 360 / 390 / 430 / 768 / 1024 / 1280 / 1440 / 1920; the rest are orientation, touch and pixel-ratio variants.
 const touch = (width, height, deviceScaleFactor) => ({ viewport: { width, height }, deviceScaleFactor, isMobile: true, hasTouch: true });

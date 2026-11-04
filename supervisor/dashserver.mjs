@@ -14,6 +14,7 @@ import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
+import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS } from './dashwrite.mjs';
 
 export const DEFAULT_PORT = 8731;
@@ -68,6 +69,8 @@ export async function currentView({ root, config, now = Date.now(), tz = default
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request.
 const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'],
   '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'] };
+// Every file the pages and scripts can load, by URL. Tests and the visual-evidence script derive what to stage from this list (issue #455).
+export const STATIC_FILES = STATIC;
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
@@ -105,7 +108,7 @@ function stream({ root, req, res, id, after, now, active }) {
 
 // Target (issue #448): a page answers within 1 second at the median while a full test suite runs; the view is reused for this long.
 export const DASHBOARD_VIEW_TTL_MS = 3000;
-export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0 }) {
+export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, evidenceRoot = DEFAULT_EVIDENCE_ROOT }) {
   // Issue #448: under load every page rebuilt the whole view from disk. With a TTL the same view is reused for a few seconds (the view
   // is already stale by its refresh interval); 0 (the default for tests) rebuilds on every request.
   const viewCache = new Map();
@@ -177,14 +180,24 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
         const r = readTranscript(root, id, { after });
         return send(200, 'application/json; charset=utf-8', JSON.stringify({ job: jobInfo(jobRecord(root, id), now()), entries: r.entries, last: r.entries.at(-1)?.seq ?? after }));
       }
+      // UI review evidence (issue #455): read-only files from <evidence root>/ui-review, png, json and md only, no symlink followed.
+      const fileRequest = /^\/evidence\/files\/(.+)$/.exec(path);
+      if (fileRequest) {
+        const parsed = parseFilePath(fileRequest[1]), r = parsed ? readEvidenceFile(evidenceRoot, parsed) : { error: 'not-found' };
+        if (r.error) return send(r.error === 'too-large' ? 413 : 404, 'text/plain; charset=utf-8', r.error === 'too-large' ? 'too large' : 'not found');
+        return send(200, r.type, r.body, { 'content-security-policy': "default-src 'none'; sandbox", 'content-disposition': 'inline' });
+      }
       const route = path === '/api/view.json' ? null : matchRoute(path);
       if (path !== '/api/view.json' && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
       const q0 = new URLSearchParams(search);
       const view = await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(view));
-      const watch = route.page === 'watch';
-      const out = renderRoute(view, watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() } : route, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
-      return send(out.status, 'text/html; charset=utf-8', withProof(out.html, root));
+      const watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
+      const routed = watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
+        : evidence ? { ...route, data: route.page === 'evidence' ? listRuns(evidenceRoot) : readRun(evidenceRoot, route.id) } : route;
+      const out = renderRoute(view, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
+      // The evidence pages show same-origin screenshots, so only they may load images from 'self'; every other page keeps data: only.
+      return send(out.status, 'text/html; charset=utf-8', withProof(out.html, root), evidence ? { 'content-security-policy': HEADERS['content-security-policy'].replace("img-src data:", "img-src 'self' data:") } : {});
     } catch (error) {
       console.error(`dashboard: ${error?.name || 'Error'}: ${redact(error?.message, 160)}`);
       return send(500, 'text/plain; charset=utf-8', 'dashboard could not read the supervisor state');
@@ -192,8 +205,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
   };
 }
 
-export function serve({ root, config, host, port = DEFAULT_PORT }) {
+export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot }) {
   validateBind(host, port);
-  const server = http.createServer(handler({ root, config, host, port, viewTtlMs: DASHBOARD_VIEW_TTL_MS }));
+  const server = http.createServer(handler({ root, config, host, port, viewTtlMs: DASHBOARD_VIEW_TTL_MS, ...(evidenceRoot ? { evidenceRoot } : {}) }));
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
 }
