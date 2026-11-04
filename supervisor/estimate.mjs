@@ -138,7 +138,7 @@ export function estimateQueue({ queues = {}, pulls = [], jobs = [], state = {}, 
       items.push({ kind: 'pr', ref: i.ref, agent: i.agent, title: i.title, reason: i.reason, pr: p, checks: checksState(p.statusCheckRollup, retriedIn(state.cancelWatch, p, now)), verdict: v });
     } else {
       if (/^PR open|^reassigned.*PR #\d+ open/.test(i.reason)) continue;   // the open PR is its own item
-      if (/^(blocked by|needs the homeowner)/.test(i.reason)) { items.push({ kind: 'issue', ref: i.ref, agent: i.agent, title: i.title, reason: i.reason, blocked: i.reason }); continue; }
+      if (/^(blocked by|needs the homeowner|stuck:)/.test(i.reason)) { items.push({ kind: 'issue', ref: i.ref, agent: i.agent, title: i.title, reason: i.reason, blocked: i.reason }); continue; }
       items.push({ kind: 'issue', ref: i.ref, agent: i.agent, title: i.title, reason: i.reason });
     }
   }

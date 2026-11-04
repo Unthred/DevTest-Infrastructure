@@ -547,6 +547,7 @@ export function readSplitDraft(root, ticket) {
   return { children: list.map(x => ({ title: redact(x.title.trim(), SPLIT_TITLE_MAX), scope: redact(x.scope.trim(), SPLIT_SCOPE_MAX) })) };
 }
 
+const STALE_MARK_MS = 10 * 60000;   // issue #521
 export class Team {
   constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
@@ -558,7 +559,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -947,6 +948,7 @@ export class Team {
     this.recordReviewWaits(prs);
     const active = await this.jobs.listActive();
     this.activeIds = new Set(active.map(j => j.id));
+    await this.findStaleMarks(prs, issueByNo, active);
     // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
     // record of (started by hand) is counted against the implementer slot, the conservative reading.
     const used = Object.fromEntries(ROLES.map(r => [r, 0]));
@@ -2061,6 +2063,37 @@ export class Team {
     await this.postNotice(issue, `split-accepted`, `**Split accepted.** Filed ${sp.children.map(c => `#${c.issue}`).join(', ')} and queued them for \`${sp.agent}\`. This issue is not started again; close it when the children are done.`);
     return sp.children.map(c => c.issue);
   }
+  // Issue #521: an "implemented" mark whose pull request is gone. implementable() skips a marked issue for ever, so when its PR was
+  // closed unmerged (or never opened) the issue would sit first in the queue and never start, with nothing saying why. The mark is NOT
+  // cleared automatically: a closed PR is often a deliberate rejection or a re-scope, and an automatic restart could loop on it.
+  // Instead it is surfaced (this.stale; the dashboard's Needs you and queue reason) with the action `team reopen N`. A mark is stale when
+  // the issue is open, not delivered, has no open PR from a configured agent and no live or unfinished job, and the mark is older than
+  // STALE_MARK_MS. A merged PR (delivered) or a reopened or new open PR therefore never counts. Recomputed every plan, so it clears itself.
+  async findStaleMarks(prs, issueByNo, active) {
+    this.stale = {};
+    const marks = Object.entries(this.s.implemented || {}).filter(([, at]) => Number.isFinite(at) && this.clock.now() - at >= STALE_MARK_MS);
+    if (!marks.length) return;
+    const live = new Set(active.map(j => this.s.jobs[j.id]?.issue).filter(Number.isSafeInteger));
+    for (const j of Object.values(this.s.jobs)) if (!j.ingested && Number.isSafeInteger(j.issue)) live.add(j.issue);
+    let closed = null;
+    for (const [k, at] of marks) {
+      const n = Number(k), issue = issueByNo.get(n), re = new RegExp(`/issue-${n}(\\D|$)`);
+      if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || live.has(n)) continue;
+      if (prs.some(p => agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName))) continue;
+      if (closed === null) { try { closed = (await this.gh.listClosedPulls?.()) ?? false; } catch { closed = false; } }
+      if (closed) {
+        const found = closed.filter(p => !p.mergedAt && agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName)).map(p => p.number);
+        if (found.length) (this.s.closedUnmerged ||= {})[n] = found; else if (this.s.closedUnmerged) delete this.s.closedUnmerged[n];
+      }
+      this.stale[n] = { issue: n, markedAt: at, prs: this.s.closedUnmerged?.[n] || [] };
+    }
+    if (this.s.closedUnmerged) for (const k of Object.keys(this.s.closedUnmerged)) if (!this.stale[k]) delete this.s.closedUnmerged[k];
+  }
+  staleText(n) {
+    const e = this.stale?.[n]; if (!e) return null;
+    return `stuck: marked implemented but ${e.prs.length ? e.prs.map(x => `PR #${x}`).join(', ') + ' closed unmerged' : 'it has no open or merged pull request'}, so Foreman will not start it again`;
+  }
+
   // Issue #490: `team reopen ISSUE` clears the "implemented" mark of one issue so the planner can start an implement job again, e.g. after
   // its only pull request was closed unmerged and the homeowner re-scoped it. Refused unless the issue is open, was marked, has no open
   // pull request (any agent's branch) and no job that is still live. The caller holds the tick lock; the audit record is the unblock log.

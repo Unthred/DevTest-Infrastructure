@@ -170,6 +170,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else if (running) reason = 'being implemented now';
     else if (hasPr) reason = 'PR open';
     else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; ${names.pr(prOf.number).text} open` : ''}`;
+    else if (team.staleText?.(n)) reason = team.staleText(n);
     else if (S.implemented?.[n]) reason = 'started earlier; no PR yet';
     else if (taker) reason = `next: reassigned for allowance from ${agent} to ${taker.agent}: ${agent} has no allowance${untilText(team.ownerOut(agent)?.until, team)} (${taker.agent} takes it; ${agent} keeps ownership)`;
     else if (planned.has(`${agent}:implement:${n}`)) reason = 'next: implement';
@@ -689,6 +690,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       // Issue #320: the cap blocks all new work and no open PR can progress: one Needs you item names the PRs and the choices.
       const dl = team.capDeadlock(c.pulls || [], c.issues || []);
       if (dl) attention.push({ id: 'cap-deadlock', text: `New work is stuck at the open-PR cap (${dl.cap}) and none of these ${dl.prs.length} open PRs can move on its own: ${dl.prs.map(n => '#' + n).join(', ')}.`, ref: null, severity: 'action', action: 'Choose one: merge or close one of these PRs, resolve what each is waiting on, or raise limits.max_open_prs in team.local.json.' }); }
+    // Issue #521: an issue marked implemented whose pull request was closed unmerged (or never opened) cannot start by itself.
+    for (const e of Object.values(team.stale || {})) attention.push({ id: `stale-mark-${e.issue}`, text: redact(`Issue #${e.issue}: ${team.staleText(e.issue).replace(/^stuck: /, '')}.`, 300), ref: e.issue, severity: 'action', action: `If it should be implemented again, run: team reopen ${e.issue}. Otherwise close the issue or leave it.` });
     // Issue #326: queued or conflicting work, but nothing planned or started for idle_minutes; clears when a job starts.
     { const idle = team.idleItem(now); if (idle) attention.push({ id: 'foreman-idle', text: redact(`Foreman has work waiting but has started nothing for ${idle.minutes} minutes: ${idle.work.join('; ')}. Reason: ${idle.reason}`, 600), ref: null, severity: 'action', action: 'Resolve what is holding the work (allowance, review independence, a conflict Foreman cannot rebase) or start it by hand.' }); }
     // Issue #193: say which job records make an agent Unknown, so nobody has to hunt through jobs/.
