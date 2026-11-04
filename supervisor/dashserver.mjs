@@ -144,13 +144,14 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     return send(303, 'text/plain; charset=utf-8', 'marked', { location: '/' });
   };
   // Watch (issue #430): the third write. It changes only which changes the dashboard follows; it starts, stops and alters no work.
-  // Same host, same origin, one small form post. The target must be an issue or PR the tick has seen.
+  // Same host, same origin, one small form post, and the access proof (issue #434) like the other writes. The target must be an issue or PR the tick has seen.
   const watch = async (req, res, send) => {
     if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
     if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
     const kind = form.get('kind'), action = form.get('action'), raw = form.get('number') || '', number = /^\d{1,7}$/.test(raw) ? Number(raw) : NaN;
     const back = /^\/[A-Za-z0-9/_-]{0,80}$/.test(form.get('back') || '') ? form.get('back') : '/';
     if (!['issue', 'pr'].includes(kind) || !Number.isSafeInteger(number) || number < 1 || !['watch', 'unwatch', 'pin', 'unpin'].includes(action)) return send(400, 'text/plain; charset=utf-8', 'bad request');

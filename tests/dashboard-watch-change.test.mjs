@@ -7,6 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { applyAction, readWatchlist, advanceWatchlist, describeWatch, factsFromCache, resolve, CLEAR_AFTER_INSTALL_MS } from '../supervisor/watchlist.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
+import { writeToken } from '../supervisor/dashwrite.mjs';
+import { compactPulls } from '../supervisor/dashdata.mjs';
 import { githubClient } from '../supervisor/github.mjs';
 
 const NOW = Date.UTC(2026, 10, 3, 12, 0, 0);
@@ -109,7 +111,8 @@ async function serve(t) {
   const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
     const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }); r.on('error', reject); r.end(body);
   });
-  const post = (body, headers = {}) => req('POST', '/watch', { headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...headers }, body });
+  // The correct access proof (issue #434) is added unless a test passes its own; `null` sends none.
+  const post = (body, headers = {}, proof = writeToken(root)) => req('POST', '/watch', { headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: proof === null ? body : `${body}&proof=${proof}` });
   return { root, port, get: p => req('GET', p), req, post };
 }
 const snapshot = root => ['jobs', 'team'].map(d => JSON.stringify(fs.readdirSync(path.join(root, d)).sort().map(f => [f, fs.readFileSync(path.join(root, d, f), 'utf8')])));
@@ -148,12 +151,28 @@ test('POST /watch refuses another origin, a wrong host, bad input, unknown targe
   assert.equal(readWatchlist(s.root).items.length, 1, 'only the one valid request wrote');
 });
 
-test('an issue is followed to an open PR whose branch name has no issue number, via closingIssuesReferences', async () => {
-  const odd = pull({ number: 40, headRefName: 'feature/watch-thing', closingIssuesReferences: [{ number: 10 }] });
+test('POST /watch needs the access proof like the other dashboard writes (issue #434)', async t => {
+  const s = await serve(t), form = 'kind=issue&number=10&action=watch';
+  for (const proof of [null, '', 'f'.repeat(64), 'x']) assert.equal((await s.post(form, {}, proof)).status, 403, `proof ${proof === null ? 'absent' : JSON.stringify(proof)}`);
+  assert.equal((await s.post('kind=issue&number=10&action=watch&other=' + writeToken(s.root), {}, null)).status, 403, 'the secret under another field name');
+  assert.equal(readWatchlist(s.root).items.length, 0, 'a refused post wrote nothing');
+  assert.equal((await s.post(form)).status, 303, 'the correct proof is accepted');
+  assert.equal(readWatchlist(s.root).items.length, 1);
+  const page = (await s.get('/work')).body, forms = page.match(/<form method="post" action="\/watch"[^>]*>/g) || [];
+  assert.ok(forms.length > 0);
+  assert.equal((page.match(new RegExp('name="proof" value="' + writeToken(s.root) + '"', 'g')) || []).length, (page.match(/<form method="post"[^>]*>/g) || []).length, 'every watch form on the page carries the proof');
+});
+
+test('an issue is followed to an open PR whose branch name has no issue number, through the cache (closingIssuesReferences)', async () => {
+  const odd = pull({ number: 40, headRefName: 'feature/watch-thing', closingIssuesReferences: [{ number: 10 }, { number: -3 }, { number: 'x' }, null] });
   assert.deepEqual(resolve({ kind: 'issue', number: 10, pr: null }, { pulls: [odd] }), { pr: 40, issue: 10 });
   let fields = '';
   const gh = args => { fields = args[args.indexOf('--json') + 1]; return JSON.stringify([odd]); };
   const pulls = await githubClient({ repository: 'o/r' }, gh).listPulls();
   assert.ok(fields.split(',').includes('closingIssuesReferences'), 'listPulls asks GitHub for the closing issues');
-  assert.deepEqual(resolve({ kind: 'issue', number: 10, pr: null }, { pulls }), { pr: 40, issue: 10 });
+  // The tick and the dashboard both resolve against the compacted cache, not the raw pulls.
+  const cached = compactPulls(pulls);
+  assert.deepEqual(cached[0].closingIssuesReferences, [{ number: 10 }], 'only valid issue numbers are kept');
+  assert.deepEqual(resolve({ kind: 'issue', number: 10, pr: null }, { pulls: cached }), { pr: 40, issue: 10 });
+  assert.deepEqual(compactPulls([{ number: 41, headRefName: 'b' }])[0].closingIssuesReferences, [], 'a PR with no references keeps an empty list');
 });
