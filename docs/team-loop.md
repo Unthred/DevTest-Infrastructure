@@ -182,3 +182,17 @@ Each tick snapshot records when the tick began (`startedAt`) and, for every agen
 - From the start of the tick that started the job to the job's start is `tick-run` (the time the tick spent before the job began).
 - Time with no tick record is `unrecorded`. "Idle with work available" is waiting-for-tick + upgrade + tick-run + named-hold, as a percent of the range.
 The dashboard shows the last 24 hours per agent beside the agent list, and an idle agent's line names its hold ("about to start implement #5 once the hold clears; held: ...") instead of "on the next tick" when one applies.
+
+## Implementer time with rebases on their own slot (issue #460)
+
+`node tools/measure-implementer.mjs --from ISO --to ISO` reads the job and event records (the method of the issue's evidence: a job runs from `started` to the next run-ending event; it queues from `created` to its first `started`) and prints implementer busy time, idle time with work queued, and the time by job kind.
+
+Window 3 Nov 2026, 14:00 to 20:00 UTC (= UK), 360 minutes, run against the live records. **Before** is what happened (rebases held the implementer slot). **After** is a replay of the same records with rebases removed from the implementer view (the rebaser slot); it is a model of the change, not a measurement after deployment. Queued intervals are not shifted in the replay, so its idle-with-queue figure is a lower bound on what changes.
+
+| | before | after (replay) |
+|---|---|---|
+| implementer busy | 255.8 min (71%) | 180.8 min (50%) |
+| implementer idle | 104.2 min | 179.2 min |
+| idle with implementer work queued | 0.5 min | 0.4 min |
+
+Implementer-job minutes by kind: fix 65.3, cifix 67.2 (fix plus cifix 51.8%), rebase 74.9 (29.3%), implement 48.4 (new work 18.9%). The idle-with-queue figure is small in both views because jobs that could start were mostly held by the overall cap and dependencies, not the implementer slot alone; the gain is that 74.9 minutes of rebase work no longer occupy the implementer slot, so new work is not made to wait behind it. Verified working after deployment is a separate state and has not been measured yet.
