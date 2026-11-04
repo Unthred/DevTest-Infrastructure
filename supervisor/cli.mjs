@@ -281,7 +281,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -418,6 +418,14 @@ async function main() {
       const release = tickLock(root);
       if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
       try { console.log(JSON.stringify({ issue: n, filed: await (await teamFor(root, registry)).acceptSplit(n) })); } finally { release(); }
+      return;
+    }
+    if (a._[0] === 'reopen') {   // issue #490: let an issue be implemented again after its pull request was closed unmerged
+      const n = Number(a._[1]);
+      if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team reopen ISSUE');
+      const release = tickLock(root);
+      if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
+      try { console.log(JSON.stringify({ issue: n, reopened: await (await teamFor(root, registry)).reopen(n) })); } finally { release(); }
       return;
     }
     if (a._[0] === 'request-review') {   // issue #366: the homeowner asks for one new review of the same head, citing the decision

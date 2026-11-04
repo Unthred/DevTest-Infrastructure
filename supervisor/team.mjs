@@ -2051,6 +2051,28 @@ export class Team {
     await this.postNotice(issue, `split-accepted`, `**Split accepted.** Filed ${sp.children.map(c => `#${c.issue}`).join(', ')} and queued them for \`${sp.agent}\`. This issue is not started again; close it when the children are done.`);
     return sp.children.map(c => c.issue);
   }
+  // Issue #490: `team reopen ISSUE` clears the "implemented" mark of one issue so the planner can start an implement job again, e.g. after
+  // its only pull request was closed unmerged and the homeowner re-scoped it. Refused unless the issue is open, was marked, has no open
+  // pull request (any agent's branch) and no job that is still live. The caller holds the tick lock; the audit record is the unblock log.
+  async reopen(issue, why = 'homeowner asked for the issue to be implemented again') {
+    const issues = await this.gh.listIssues();
+    const found = issues.find(i => i.number === issue) || (this.gh.getIssue ? await this.gh.getIssue(issue) : null);
+    if (!found) throw new SupervisorError(`issue #${issue} was not found`);
+    if (found.state !== 'OPEN') throw new SupervisorError(`issue #${issue} is not open (state: ${found.state}); nothing to reopen`);
+    if (!this.s.implemented[issue]) throw new SupervisorError(`issue #${issue} is not marked implemented; nothing to clear`);
+    const open = (await this.gh.listPulls()).filter(p => new RegExp(`/issue-${issue}(\\D|$)`).test(p.headRefName));
+    if (open.length) throw new SupervisorError(`issue #${issue} has an open pull request (${open.map(p => `#${p.number}`).join(', ')}); close or merge it first`);
+    for (const [id, j] of Object.entries(this.s.jobs)) {
+      if (j.issue !== issue && !(j.kind === 'implement' && j.key === String(issue))) continue;
+      if (!j.ingested) throw new SupervisorError(`issue #${issue} has a job that is not finished or not yet ingested (${id.slice(0, 8)}); retry after the next tick`);
+      const live = await this.jobs.get(id);
+      if (live && !TERMINAL.has(live.status)) throw new SupervisorError(`issue #${issue} has a running job (${id.slice(0, 8)}, ${live.status})`);
+    }
+    const was = this.s.implemented[issue];
+    delete this.s.implemented[issue];
+    this.logUnblock({}, { target: issue, tk: 'issue', what: 'reopened for implementation', why, result: `cleared the implemented mark set at ${new Date(was).toISOString()}` });
+    return true;
+  }
   // Once per job and state: a changed state (blocked -> failed) is a new notice; an unchanged one is never repeated.
   async notifyOne(id, j, report) {
       const job = await this.jobs.get(id);
