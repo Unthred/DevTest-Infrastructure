@@ -101,6 +101,31 @@ export function validate(root) {
     if (nums.some((n, i) => i > 0 && n !== nums[i - 1] + 1)) add('decisions', 'ids must be consecutive and in order');
   }
 
+  // Shared skills (issue #455): .agents/skills/<name>/ is the one source (Codex reads it there); Claude reads .claude/skills/<name>, which must be a
+  // RELATIVE symlink to the same directory, so there is a single copy. A missing, copied, absolute or wrongly aimed link would leave one agent without the skill.
+  const skillsDir = path.join(root, '.agents', 'skills');
+  if (fs.existsSync(skillsDir)) {
+    for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) { add('skills', `.agents/skills/${entry.name} must be a skill directory`); continue; }
+      const where = `.agents/skills/${entry.name}`;
+      const skillFile = path.join(skillsDir, entry.name, 'SKILL.md');
+      let text = ''; try { text = fs.readFileSync(skillFile, 'utf8'); } catch { add('skills', `${where} has no SKILL.md`); }
+      const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? '';
+      if (text && (front.match(/^name:\s*(\S+)\s*$/m)?.[1] !== entry.name)) add('skills', `${where}/SKILL.md front matter must carry name: ${entry.name}`);
+      if (text && !/^description:\s*\S/m.test(front)) add('skills', `${where}/SKILL.md front matter needs a description`);
+      const link = path.join(root, '.claude', 'skills', entry.name);
+      let st = null; try { st = fs.lstatSync(link); } catch { /* reported below */ }
+      if (!st) add('skills', `.claude/skills/${entry.name} is missing: Claude would not discover ${entry.name} (expected a relative symlink to ../../${where})`);
+      else if (!st.isSymbolicLink()) add('skills', `.claude/skills/${entry.name} must be a symlink to ${where}, not a second copy`);
+      else {
+        const target = fs.readlinkSync(link);
+        if (path.isAbsolute(target)) add('skills', `.claude/skills/${entry.name} must be a relative symlink, not ${target}`);
+        else if (path.resolve(path.dirname(link), target) !== path.join(skillsDir, entry.name)) add('skills', `.claude/skills/${entry.name} points at ${target}, not at ${where}`);
+        else if (!fs.existsSync(path.join(link, 'SKILL.md'))) add('skills', `.claude/skills/${entry.name} does not resolve to a skill`);
+      }
+    }
+  }
+
   // Handover
   if (has('docs/ai/CURRENT_HANDOVER.md')) {
     const text = read(root, 'docs/ai/CURRENT_HANDOVER.md');

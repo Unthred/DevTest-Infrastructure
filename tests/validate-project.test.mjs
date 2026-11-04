@@ -16,7 +16,7 @@ const cli = path.join(repo, 'tools', 'validate-project.mjs');
 
 function fixture(mutate = () => {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-validate-'));
-  fs.cpSync(repo, dir, { recursive: true, filter: (src) => !['.git', 'node_modules'].includes(path.basename(src)) });
+  fs.cpSync(repo, dir, { recursive: true, verbatimSymlinks: true, filter: (src) => !['.git', 'node_modules'].includes(path.basename(src)) });
   const api = {
     dir,
     read: (f) => fs.readFileSync(path.join(dir, f), 'utf8'),
@@ -162,4 +162,19 @@ test('fixtures leave the real repository untouched', () => {
 
 test('entrypoints: AGENTS.md must state the main-only handover rule (D-023)', () => {
   expectFinding((a) => a.write('AGENTS.md', a.read('AGENTS.md').replaceAll('D-023', 'D-0xx')), 'entrypoints', 'D-023');
+});
+
+// ---- shared skills (issue #455)
+test('the ui-ux-review skill is one source, linked relatively for Claude', () => {
+  assert.equal(fs.readlinkSync(path.join(repo, '.claude', 'skills', 'ui-ux-review')), '../../.agents/skills/ui-ux-review');
+  assert.equal(fs.realpathSync(path.join(repo, '.claude', 'skills', 'ui-ux-review', 'SKILL.md')), path.join(repo, '.agents', 'skills', 'ui-ux-review', 'SKILL.md'));
+});
+test('a skill that one agent cannot discover is a finding: missing link, copied directory, absolute link, wrong target, bad front matter', () => {
+  const link = '.claude/skills/ui-ux-review';
+  expectFinding((a) => fs.rmSync(path.join(a.dir, link)), 'skills', 'is missing');
+  expectFinding((a) => { fs.rmSync(path.join(a.dir, link)); fs.cpSync(path.join(a.dir, '.agents/skills/ui-ux-review'), path.join(a.dir, link), { recursive: true }); }, 'skills', 'not a second copy');
+  expectFinding((a) => { fs.rmSync(path.join(a.dir, link)); fs.symlinkSync(path.join(a.dir, '.agents/skills/ui-ux-review'), path.join(a.dir, link)); }, 'skills', 'must be a relative symlink');
+  expectFinding((a) => { fs.rmSync(path.join(a.dir, link)); fs.mkdirSync(path.join(a.dir, '.agents/skills/other')); fs.writeFileSync(path.join(a.dir, '.agents/skills/other/SKILL.md'), '---\nname: other\ndescription: x\n---\n'); fs.symlinkSync('../../.agents/skills/other', path.join(a.dir, link)); }, 'skills', 'not at .agents/skills/ui-ux-review');
+  expectFinding((a) => a.edit('.agents/skills/ui-ux-review/SKILL.md', 'name: ui-ux-review', 'name: something-else'), 'skills', 'must carry name: ui-ux-review');
+  expectFinding((a) => fs.rmSync(path.join(a.dir, '.agents/skills/ui-ux-review/SKILL.md')), 'skills', 'has no SKILL.md');
 });

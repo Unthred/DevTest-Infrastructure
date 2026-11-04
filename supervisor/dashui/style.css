@@ -323,3 +323,13 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .chip.on { background: var(--accent, #2b6cb0); color: #fff; font-weight: 600; }
 .chips { margin: 0 0 .6rem; }
 .tznote { margin: 1rem 1.5rem; }
+
+/* UI review evidence (issue #455) */
+.ev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,18rem),1fr));gap:var(--sp3)}
+.ev-shot{margin:0;min-width:0}.ev-shot img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface2)}
+.ev-shot figcaption{margin-top:var(--sp1);font-size:var(--fs-xs);color:var(--mut);overflow-wrap:anywhere}
+.ev-pairs{display:grid;gap:var(--sp5)}.ev-name{font-weight:600;overflow-wrap:anywhere;margin-bottom:var(--sp2)}
+.ev-sides{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp3)}.ev-side{font-size:var(--fs-xs);color:var(--mut);text-transform:uppercase;letter-spacing:.03em;margin-bottom:var(--sp1)}
+.ev-h{margin:var(--sp3) 0 var(--sp2);font-size:var(--fs-sm);text-transform:capitalize}
+.ev-report{white-space:pre-wrap;overflow-wrap:anywhere;max-height:32rem;overflow:auto;margin:0;font:var(--fs-sm) ui-monospace,SFMono-Regular,Menlo,monospace}
+@media(max-width:639px){.ev-sides{grid-template-columns:1fr}}

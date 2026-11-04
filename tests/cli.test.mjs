@@ -27,7 +27,7 @@ function sandbox(t, extra = {}) {
 }
 
 function markRestored(sb) {
-  fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.restored.json'), JSON.stringify({ package: 'playwright-core', version: lock.packages['playwright-core'].version }));
+  fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.restored.json'), JSON.stringify({ package: 'playwright-core', version: lock.packages['playwright-core'].version, axeCore: lock.packages['axe-core'].version }));
 }
 
 // Runs the CLI with fakes for Docker and the runner. `runner(plan, opts)` stands in for runContainer.
@@ -381,4 +381,45 @@ test('interrupt and timeout statuses come from the runner and reach the result',
   assert.equal(r.code, 130); assert.equal(r.result.status, 'interrupted');
   const t5 = await run(sb, ['dotnet', 'test', '--sdk', '8', '--project', sb.project, '--json'], { runner: (p) => ({ runId: p.runId, exitCode: 5, cleanup: 'complete' }) });
   assert.equal(t5.code, 5); assert.equal(t5.result.status, 'timeout');
+});
+
+// ---- web a11y (issue #455)
+const a11ySummary = (over = {}) => JSON.stringify({ axe_version: '4.14.0', tags: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'], violation_nodes: 3, incomplete_nodes: 1, limitation: 'Automated checks (axe-core) find only some accessibility problems.',
+  profiles: [{ profile: 'phone-390', scanned: true, violations: [{ id: 'image-alt', impact: 'critical', nodeCount: 2, nodes: ['body[0]>img[1]'] }, { id: 'label', impact: 'critical', nodeCount: 1, nodes: [] }], incomplete: [{ id: 'color-contrast', impact: 'serious', nodeCount: 1, nodes: [] }] }], ...over });
+test('web a11y: needs --url and --profiles, rejects unknown profiles, and runs a11y.mjs with the profile list', async (t) => {
+  const sb = sandbox(t);
+  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), ''); markRestored(sb);
+  const url = pathToFileURL(path.join(sb.project, 'page.html')).href;
+  assert.equal((await run(sb, ['web', 'a11y', '--profiles', 'phone-390', '--json'])).code, 2);
+  assert.equal((await run(sb, ['web', 'a11y', '--url', url, '--json'])).code, 2);
+  assert.equal((await run(sb, ['web', 'a11y', '--url', url, '--profiles', 'nope', '--json'])).code, 2);
+  const ok = await run(sb, ['web', 'a11y', '--url', url, '--profiles', 'phone-390,desktop-1440', '--json'], { files: { 'a11y.summary.json': a11ySummary({ violation_nodes: 0, profiles: [] }), 'a11y.report.md': '# r' } });
+  assert.equal(ok.code, 0); assert.match(ok.result.message, /do not cover everything/);
+  const args = ok.calls.runs[0].args;
+  assert.ok(args.includes('/src/browser/a11y.mjs') && args.includes('--profiles') && args.includes('phone-390,desktop-1440') && args.includes('--network=none'));
+  assert.equal((await run(sb, ['web', 'a11y', '--url', url, '--profiles', 'phone-390', '--json'], { files: {} })).code, 6, 'success without a scan summary is not a pass');
+});
+test('web a11y: violations exit 1 with counts, incomplete results and the limitation; browser failures are not page failures', async (t) => {
+  const sb = sandbox(t);
+  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), ''); markRestored(sb);
+  const url = pathToFileURL(path.join(sb.project, 'page.html')).href;
+  const wrapper = (subjectExit) => ({ runner: (p) => ({ runId: p.runId, exitCode: 1, subjectExit, cleanup: 'complete' }), files: { 'a11y.summary.json': a11ySummary(), 'a11y.report.md': '# r' } });
+  const bad = await run(sb, ['web', 'a11y', '--url', url, '--profiles', 'phone-390', '--json'], wrapper(17));
+  assert.equal(bad.code, 1); assert.equal(bad.result.data.wrapper_exit, 17); assert.equal(bad.result.data.violation_elements, 3); assert.equal(bad.result.data.incomplete_elements, 1);
+  assert.deepEqual(bad.result.data.profiles[0].violations.map((v) => v.id), ['image-alt', 'label']); assert.deepEqual(bad.result.data.profiles[0].incomplete.map((v) => v.id), ['color-contrast']);
+  assert.match(bad.result.message, /3 accessibility violation element\(s\)/); assert.match(bad.result.message, /find only some accessibility problems/);
+  assert.equal(JSON.stringify(bad.result).includes('body[0]>img[1]'), false, 'element labels stay in the stored report, not in the CLI result');
+  for (const [w, code] of [[12, 1], [14, 6], [2, 6]]) assert.equal((await run(sb, ['web', 'a11y', '--url', url, '--profiles', 'phone-390', '--json'], wrapper(w))).code, code, `wrapper ${w}`);
+});
+test('web a11y: a cache restored before axe-core was pinned is an environment fault (exit 3) and starts nothing', async (t) => {
+  const sb = sandbox(t);
+  fs.mkdirSync(path.join(sb.storage, 'cache')); fs.writeFileSync(path.join(sb.storage, 'cache', 'playwright.img'), '');
+  const marker = path.join(sb.storage, 'cache', 'playwright.restored.json');
+  const url = pathToFileURL(path.join(sb.project, 'page.html')).href;
+  fs.writeFileSync(marker, JSON.stringify({ package: 'playwright-core', version: lock.packages['playwright-core'].version }));
+  const r = await run(sb, ['web', 'a11y', '--url', url, '--profiles', 'phone-390', '--json']);
+  assert.equal(r.code, 3); assert.match(r.result.message, /axe-core/); assert.equal(r.calls.runs.length, 0);
+  assert.equal((await run(sb, ['web', 'screenshot', '--url', url, '--profile', 'desktop', '--json'], { files: { 'shot-desktop-chromium.png': 'PNG' } })).code, 0, 'screenshots do not need axe-core');
+  fs.writeFileSync(marker, JSON.stringify({ package: 'playwright-core', version: lock.packages['playwright-core'].version, axeCore: '0.0.1' }));
+  assert.equal((await run(sb, ['web', 'a11y', '--url', url, '--profiles', 'phone-390', '--json'])).code, 3, 'another axe-core version is not ready');
 });
