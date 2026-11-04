@@ -95,7 +95,7 @@ Notes:
 2. **Time is informational.** `time` is monotonic non-decreasing in `seq` order because the writer assigns both under one lock; if the host clock steps backwards the writer clamps to the previous event's time. Clock skew cannot reorder events.
 3. **Causality.** An event that reports the outcome of something cites the event that started it with `causedBy`, and its `seq` is higher. Required pairs: `RunFinished` after `RunStarted`; `ActionResolved` after `ActionRequired`; `RolledBack` after `Installed`; `Merged` after at least one `ReviewSubmitted` with `verdict: pass` and a `ChecksCompleted` with `result: pass`, for the same `head`.
 4. **Intent before effect.** The event announcing an effect (`RunStarted`, `Merged`, `Installed`) is written before the effect is reported, so a crash leaves an event without a result, never a result without an event. A reader treats a `RunStarted` with no `RunFinished` and a dead owner as an interrupted run and the host appends a `RunFinished` with `outcome: failed` and a `FailureClassified`.
-5. **At least once, idempotent.** A producer that retries after a crash sends a stable `dedupeKey` inside the payload where one applies. `dedupeKey` is an optional string allowed in the payload of every event type, in addition to that type's fixed keys in D4; it is the only payload key common to all types (for example `run` plus `operation`); the writer drops a second event with the same type and key. Projections must also tolerate a duplicate without double counting.
+5. **At least once, idempotent.** A producer that retries after a crash sends a stable `dedupeKey` (for example `run` plus `operation`) inside the payload where one applies. `dedupeKey` is an optional string allowed in the payload of every event type, in addition to that type's fixed keys in D4; it is the only payload key common to all types; the writer drops a second event with the same type and key. Projections must also tolerate a duplicate without double counting.
 6. **Per-subject order.** For one subject the order of its events is the order of their `seq`. Nothing relies on order between unrelated subjects.
 
 ### D6 — No secrets and no raw logs
@@ -270,6 +270,8 @@ One example per event type. Ids and times are illustrative.
 ```
 
 ### Events the writer rejects
+
+These examples are abbreviated: they omit required envelope fields (`id`, `seq`, `time`, `subject`, and `actor` where absent), so a real submission would also fail for those. Each shows only the reason that matters.
 
 ```json
 { "contract": "event.v1", "type": "RunFinished", "payload": { "outcome": "failed", "log": "…full command output…" } }
