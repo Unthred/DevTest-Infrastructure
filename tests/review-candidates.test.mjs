@@ -263,3 +263,15 @@ async function needsYouItem(t, w, id) {
     cache: { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: [{ ...HAND, labels: [] }], issues: [] }, snapshots: [], now: NOW });
   return v.panels.needsYou.find(a => a.id === id);
 }
+test('issue #560: writer-unknown action asks for a fresh review of a new head, not for recording the writer', async t => {
+  const { w } = await ingestReview(t, { model: 'sonnet', evidence: null });
+  const item = await needsYouItem(t, w, 'noreviewer-refused-342');
+  assert.match(item.action, /another provider/); assert.match(item.action, /fresh review of the new head/);
+  assert.doesNotMatch(item.action, /record who wrote/);
+});
+test('issue #560: refusedReviews entries are pruned once their head is no longer open, kept while it is', async t => {
+  const { w } = await ingestReview(t, { model: 'sonnet', evidence: null });
+  const key = `342:${HAND.headRefOid}`; assert.ok(w.team.s.refusedReviews[key]);
+  w.team.recordHeadWriters([HAND]); assert.ok(w.team.s.refusedReviews[key], 'kept while the head is open');
+  w.team.recordHeadWriters([{ ...HAND, headRefOid: 'f'.repeat(40) }]); assert.equal(w.team.s.refusedReviews[key], undefined);
+});

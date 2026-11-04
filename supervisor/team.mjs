@@ -630,10 +630,10 @@ export class Team {
     // is returned and reviewRefusal() refuses it.
     const cands = this.c.models?.agents?.[act.agent]?.review_candidates;
     if (typeOfKind(kind) === 'review' && act.pr != null && Array.isArray(cands) && cands.length && !(act.reReview === true && low && this.c.models.agents[act.agent].low)) {
-      const writers = this.writersOf({ number: act.pr, headRefName: act.branch });
+      const pr = { number: act.pr, headRefName: act.branch, headRefOid: act.head };   // issue #560: the same head-bound check as reviewRefusal
       const tried = cands.map(entry => resolveModel({ ...base, entryOverride: entry }));
       // act.candidate (issue #297): judge one named candidate, for the Needs you card that lists every model tried.
-      ({ fields, warnings } = Number.isInteger(act.candidate) && tried[act.candidate] ? tried[act.candidate] : tried.find(r => independentOf({ provider, model: r.fields.model ?? null }, writers)) || tried[0]);
+      ({ fields, warnings } = Number.isInteger(act.candidate) && tried[act.candidate] ? tried[act.candidate] : tried.find(r => !this.independenceRefusal(act.agent, r.fields.model ?? null, pr)) || tried[0]);
     }
     if (warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: warnings.join('; ') });
     return fields;
@@ -713,6 +713,8 @@ export class Team {
     }
     for (const k of Object.keys(this.s.headWriters)) if (!open.has(k)) delete this.s.headWriters[k];
     for (const k of Object.keys(this.s.headWriterMiss)) if (!open.has(k)) delete this.s.headWriterMiss[k];
+    // Issue #560: a refused review belongs to one head; once that head is no longer open the entry is dropped too.
+    for (const k of Object.keys(this.s.refusedReviews || {})) if (!open.has(k)) delete this.s.refusedReviews[k];
   }
   // Issue #249: open PRs whose independent PASS is green and mergeable but held only because the decision that allows the merge is
   // not yet homeowner-approved. Empty once approved or when nothing is waiting.
@@ -760,7 +762,7 @@ export class Team {
   // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
   reviewRefusal(agent, pr, key) {
     // A caller that has no provider manifests (the dashboard) judges by the configured model name.
-    const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key }, 'review', {}, true).model ?? null;
+    const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, head: pr.headRefOid, key }, 'review', {}, true).model ?? null;
     const why = this.independenceRefusal(agent, model, pr), provider = this.c.agents[agent].provider;
     if (!why) return null;
     if (why === 'writer unknown') return agent + ' cannot review PR #' + pr.number + ': the writer of this head is unknown (no job record and no session-log evidence for this exact head), so no ' + provider + ' model can be shown to differ from it';
@@ -782,7 +784,7 @@ export class Team {
   reviewTries(agent, pr, key) {
     const n = this.c.models?.agents?.[agent]?.review_candidates?.length || 0;
     return Array.from({ length: Math.max(n, 1) }, (_, i) => {
-      const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key, ...(n ? { candidate: i } : {}) }, 'review', {}, true).model ?? null;
+      const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, head: pr.headRefOid, key, ...(n ? { candidate: i } : {}) }, 'review', {}, true).model ?? null;
       return { model, refusal: this.independenceRefusal(agent, model, pr) };
     });
   }
@@ -835,7 +837,7 @@ export class Team {
     if (opus || isOpusModel(model)) return opusRefusal(act.agent, opus || model, kind);   // issue #368: before and independent of any review-model or stranding check
     const table = this.c.models?.agents?.[act.agent];
     if (model && reviewModelsOf(table).has(model)) return `${act.agent}'s ${model} model is one of its configured review models, so it is not given ${kind} work`;
-    if (act.pr != null) return this.strandsReviewer({ number: act.pr, headRefName: act.branch }, act.agent, model);
+    if (act.pr != null) return this.strandsReviewer({ number: act.pr, headRefName: act.branch, headRefOid: act.head }, act.agent, model);
     return null;
   }
   // Review models whose approval would unblock: models of this agent's provider known to its manifest that no writer used. Empty when
