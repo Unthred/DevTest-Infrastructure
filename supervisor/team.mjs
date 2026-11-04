@@ -473,14 +473,32 @@ export function isTrivialSlip(claim) {
 }
 const materialFalse = claims => claims.filter(c => c.status === 'false' && c.materiality !== 'immaterial');
 const checklistText = v => (v.requirements ? `\n\nRequirements:\n${v.requirements.map(r => `- **${r.status}**: ${r.requirement} — ${r.evidence}`).join('\n') || '_none_'}\n\nPull request description claims:\n${v.descriptionClaims.map(c => `- **${c.status}**: ${c.claim} — ${c.evidence}`).join('\n') || '_none_'}\n\n` : '');
+export const VERDICT_REFUSED = 'verdict refused:';
 export function readInboxVerdict(root, ticket, expect) {
   if (!/^[a-f0-9]{32}$/.test(ticket || '')) return { error: 'invalid ticket' };
   const file = path.join(root, 'team', 'inbox', ticket, 'verdict.json');
   let v;
   try { v = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) { return { error: error.code === 'ENOENT' ? 'no verdict file' : 'unreadable verdict file' }; }
+  v = reclassifyFalseClaims(v);
   const error = validateVerdict(v, expect);
   return error ? { error } : { verdict: v };
+}
+// Issue #550: a false description claim marked immaterial that is not a count or wording slip (isTrivialSlip) is not a malformed file: the
+// reviewer found a real false claim and misjudged its weight. Discarding the whole review loses that finding, so the claim is made material
+// and the verdict becomes CHANGES with a blocking finding that names it. This only ever tightens a verdict (PASS to CHANGES, immaterial to
+// material); it never accepts anything the validator would refuse, and every other rule still runs on the result.
+export function reclassifyFalseClaims(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v) || !Array.isArray(v.descriptionClaims) || !Array.isArray(v.findings)) return v;
+  const wrong = c => c && typeof c === 'object' && !Array.isArray(c) && c.status === 'false' && c.materiality === 'immaterial' && typeof c.claim === 'string' && !isTrivialSlip(c.claim);
+  const bad = v.descriptionClaims.filter(wrong);
+  if (!bad.length) return v;
+  const findings = [...v.findings];
+  for (const c of bad) {
+    const text = `False description claim (the reviewer called it immaterial, but it is about behaviour, safety, scope or what was verified, so it is material): ${c.claim.slice(0, 600)} Evidence: ${String(c.evidence || '').slice(0, 800)}`.slice(0, 2000);
+    if (findings.length < 50) findings.push({ kind: 'blocking', text });
+  }
+  return { ...v, verdict: 'CHANGES', descriptionClaims: v.descriptionClaims.map(c => wrong(c) ? { ...c, materiality: 'material' } : c), findings };
 }
 
 // ---- prompts: only validated tokens (numbers, SHAs, branch names, ticket) are interpolated; PR and issue text never is.
@@ -566,7 +584,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews']) this.s[k] ||= {};
     breaker.normalize(this.s.breaker ||= {});   // issue #549: the halt state lives in the state file, so a restart keeps it
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
@@ -1636,6 +1654,7 @@ export class Team {
         if ((this.s.reviewAttempts[key + ':' + agent] || 0) >= this.c.limits.max_review_attempts) add('review-attempts-' + agent, agent + ' used all its review attempts at this head');
       }
     }
+    if (!v) { const rf = Object.values(this.s.reviewRefusals || {}).find(x => x?.pr === pr.number && x.head === pr.headRefOid); if (rf) add('review-verdict-refused', `the review's verdict file was refused (${rf.error}); no verdict was recorded. The file is ${rf.file}`); }
     if (v?.verdict === 'PASS') {
       const exMissing = this.exceptionFor(pr.number) ? this.exceptionMissing(pr) : null;
       if (exMissing) add('exception-review', exMissing === 'commits' ? 'review exception: waiting for the review of the commits written by the other model' : 'review exception: waiting for the whole-pull-request review');
@@ -1752,11 +1771,26 @@ export class Team {
           return;
         } else { j.refusal = breaker.verdictErrorCode(r.error); report.ingested.push({ job: id, pr: j.pr, error: r.error }); }
       }
+      if (j.kind === 'review' && job.status !== 'completed') this.recordRefusedReview(id, j, job, report);
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
       if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
       if (j.kind === 'rebase' && job.status !== 'completed') this.recordIncompleteRebase(id, j, job, report);
       if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
       j.ingested = true; this.save();
+  }
+  // Issue #550: a review that ended without a recorded verdict because the validator refused its verdict file keeps the reason, the file and
+  // the next action for Needs you, and does not use up the head's review attempts (no verdict was recorded). The refund is bounded by
+  // max_review_attempts per head and reviewer, so a reviewer that never writes a valid file still ends in Needs you.
+  recordRefusedReview(id, j, job, report) {
+    const r = job.incompleteReason;
+    if (!r || r.cause !== 'postcondition_not_met' || !String(r.detail).startsWith(VERDICT_REFUSED) || !j.key) return;
+    const rec = (this.s.reviewRefusals[j.key] ||= { count: 0 });
+    rec.count++; rec.error = redact(String(r.detail).slice(VERDICT_REFUSED.length).trim(), 300); rec.job = id; rec.pr = j.pr; rec.head = j.head;
+    rec.file = path.join(this.root, 'team', 'inbox', String(j.ticket || ''), 'verdict.json'); rec.at = this.clock.now();
+    const refunded = rec.count <= this.c.limits.max_review_attempts && (this.s.reviewAttempts[j.key] || 0) > 0;
+    if (refunded) this.s.reviewAttempts[j.key]--;
+    this.save();
+    (report.refusedReviews ||= []).push({ pr: j.pr, job: id, error: rec.error, refunded });
   }
   // Issue #460: a rebase job that ended without completing records why on the dispatcher's job record (cause, detail, attempts), so the
   // dashboard and `team status` can show it. The wording comes from the post-condition or the run event, never from model output.
@@ -2766,7 +2800,12 @@ export class Team {
   postconditions() {
     return async job => {
       const p = job.postcondition;
-      if (p.kind === 'verdict') return !readInboxVerdict(this.root, p.ticket, { pr: p.pr, head: p.head, checklist: p.checklist === true }).error;
+      if (p.kind === 'verdict') {
+        const r = readInboxVerdict(this.root, p.ticket, { pr: p.pr, head: p.head, checklist: p.checklist === true });
+        // Issue #550: name the exact validation error, so the retry (core.prompt) and the job record can say why the verdict was refused.
+        if (r.error) job.postconditionDetail = `${VERDICT_REFUSED} ${r.error}`;
+        return !r.error;
+      }
       if (p.kind === 'new_head') { const pr = await this.gh.getPull(p.pr); return !!pr && SHA.test(pr.headRefOid) && pr.headRefOid !== p.baseHead; }
       if (p.kind === 'continued') { const pr = await this.gh.getPull(p.pr); return !!pr && SHA.test(pr.headRefOid) && (pr.headRefOid !== p.baseHead || pr.isDraft === false); }
       if (p.kind === 'rebased') {   // a new head that GitHub reports mergeable (it computes this lazily, so re-ask a few times)

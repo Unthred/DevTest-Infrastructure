@@ -114,7 +114,7 @@ function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now =
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs, probes: cache.probes, snapshots, events, now });
   const team = new Team({ config, root, gh, jobs: jobsApi, git: null, register, allowanceOf, limitedOf, usage, clock: { now: () => now }, timeZone: tz });
   team.s = { ...team.s, ...state };      // the state the caller read, so the plan and the page agree
-  for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable', 'unblock', 'refusedReviews']) team.s[k] ||= {};
+  for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable', 'unblock', 'refusedReviews']) team.s[k] ||= {};
   for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'escalated', 'queued']) team.s.unblock[k] ||= {};
   team.s.unblock.log ||= [];
   return team;
@@ -336,6 +336,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     // pending CI and no CHANGES is only awaiting review: it is queued (see the review order), not Needs you.
     const awaiting = !pr.isDraft && Number.isFinite(maxFix) && fixes >= maxFix && !verdict && !fixLimit && !reviewLimit && checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) !== 'red';
     const labelled = pr.labels?.includes('needs-homeowner') && !awaiting;
+    const refusal = !verdict && !activeKinds.has('review') ? Object.values(state.reviewRefusals || {}).find(r => r && r.pr === pr.number && r.head === pr.headRefOid) : null;
     if (!fixLimit && !reviewLimit && !labelled) continue;
     if (fixLimit) fixLimited.add(pr.number);
     // Issue #211: the dispatcher already has a next step (one final fix round), so nothing is asked of the homeowner yet.
@@ -348,6 +349,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: names.job(j).text, url: names.job(j).url }))];
     if (fixLimit) add(`fixlimit-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix})`, { kind: 'pull', n: pr.number },
       { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR. Each round was a fresh session on the same model; the final round could split out-of-scope findings. Foreman never moves a fix to a stronger model.${withheld.get(pr.number) ? ` No further round can run because ${withheld.get(pr.number)}.` : ''}`, action: `Choose one: ${FIX_LIMIT_OPTIONS}. Remove the needs-homeowner label when done.`, links });
+    else if (refusal) add(`reviewrefused-${pr.number}`, `${names.pr(pr.number).text}: the review's verdict file was refused (${refusal.error})`, { kind: 'pull', n: pr.number },
+      { tried: `A review job finished without a valid verdict file (${refusal.count} time${refusal.count === 1 ? '' : 's'} at this head), so no verdict reached GitHub. The reason: ${refusal.error}. The refused file is ${refusal.file}. A refused file records no verdict, so it does not use up the review attempts unless the refusals pass the review limit.`, action: `Read the verdict file and the review job ${String(refusal.job).slice(0, 8)} output, then review the PR by hand or push a new head to start a fresh review; remove the needs-homeowner label when done.`, links });
     else if (reviewLimit) add(`reviewlimit-${pr.number}`, `${names.pr(pr.number).text} could not be reviewed within ${maxReview} attempts`, { kind: 'pull', n: pr.number },
       { tried: `Review jobs ran ${maxReview} times at this head without recording a verdict, so Foreman stopped reviewing it.`, action: 'Read the review job output, then review the PR by hand or push a new head to start a fresh review.', links });
     else add(`homeowner-pr-${pr.number}`, `${names.pr(pr.number).text} needs the homeowner`, { kind: 'pull', n: pr.number },

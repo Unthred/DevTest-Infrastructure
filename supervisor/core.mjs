@@ -288,6 +288,8 @@ export function prompt(job, resume = false, seed = null) {
   if (job.access === 'full') head += ' Launch mode: full access (decision D-020, selected by the homeowner), the same as the interactive agents. Project rules still apply: no reboot of Tower, no production Home Assistant change, no secret disclosure, no purchases, no merge of your own work.';
   if (job.handover) head += ` Read the handover at ${job.handover} and update it only when the approved actions permit edits.`;
   if (resume) head += ` Resume the SAME issue and worktree. Read issue, Git state and handover before changing anything. Last checkpoint HEAD: ${job.checkpoint?.head || 'unknown'}. Avoid duplicate actions.`;
+  // Issue #550: the retry of an attempt whose post-condition failed is told why (for a verdict, the exact validation error).
+  if (resume && job.incompleteReason?.cause === 'postcondition_not_met' && job.incompleteReason.detail) head += ` Your previous attempt ended incomplete: ${job.incompleteReason.detail} Fix exactly that and finish.`;
   if (seed) head += `\n\n${seed}`;
   return head + '\n\n' + job.prompt;
 }
@@ -357,7 +359,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       }
       if (met) { transition(root, job, 'completed', 'completed', clock); return job; }
       // Issue #460: say why the attempt was incomplete (the checker may name the detail on job.postconditionDetail).
-      job.incompleteReason = { cause: 'postcondition_not_met', detail: String(job.postconditionDetail || 'the post-condition did not hold').slice(0, 200), attempt: job.attempts }; delete job.postconditionDetail;
+      job.incompleteReason = { cause: 'postcondition_not_met', detail: String(job.postconditionDetail || 'the post-condition did not hold').slice(0, 400), attempt: job.attempts }; delete job.postconditionDetail;
       if ((job.incompleteRetries || 0) < 1) { job.incompleteRetries = (job.incompleteRetries || 0) + 1; job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
       transition(root, job, 'blocked', 'incomplete', clock); return job;
     }
