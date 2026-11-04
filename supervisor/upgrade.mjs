@@ -549,7 +549,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     isAncestor: (a, b) => run('git', ['-C', repo, 'merge-base', '--is-ancestor', a, b]).status === 0,
     remoteUrl,
     commitsBehind: (a, b) => Number(git('rev-list', '--count', `${a}..${b}`)),
-    changedFiles: (a, b) => git('diff', '--name-only', a, b).split('\n').filter(Boolean),
+    changedFiles: (a, b) => git('diff', '--name-only', '--no-renames', a, b).split('\n').filter(Boolean),
     mainCommits: (a, b) => git('rev-list', '--first-parent', '--parents', '--reverse', `${a}..${b}`).split('\n').filter(Boolean).map(line => {
       const [sha, ...parents] = line.split(' ');
       const m = parents.length === 2 ? /^Merge pull request #(\d+) /.exec(git('log', '-1', '--format=%s', sha)) : null;
