@@ -1033,6 +1033,9 @@ test('hold (issue #134): a pending upgrade starts no job, reports the hold, and 
   assert.match(r.held.reason, /upgrade to 7777777 pending/); assert.ok(r.held.actions > 0);
   const free = mk(); const r2 = await free.team.tick();
   assert.equal(r2.held, undefined); assert.ok(free.calls.created.length > 0);
+  // issue #487: the hold names exactly the agents whose planned work it dropped, and the tick reports the planner's per-agent holds
+  assert.ok(Array.isArray(r.held.agents) && r.held.agents.length > 0 && r.held.agents.length <= 2);
+  assert.equal(typeof r.holds, 'object');
 });
 
 test('issue #191: after a rolled-back upgrade the hold handed to the team step is null and dispatch proceeds', async t => {

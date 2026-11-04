@@ -8,6 +8,7 @@ import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 
 import { agentLine } from './agentline.mjs';
+import { CAUSE_LABEL } from './idlecause.mjs';
 import { meaningfulRange } from './estimate.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -244,7 +245,8 @@ function nowPanel(view, { describe = true } = {}) {
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
     return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
   };
-  return `${slots}<ul class="panel-list">${view.agents.map(a => {
+  const ic = view.idleCauses, idleLine = ic ? Object.entries(ic.agents).map(([n, r]) => `<div class="sub" data-idle-causes="${esc(n)}">${esc(n)}, last 24 h: idle with work available ${esc(r.idleWithWorkPercent)}% (${Object.entries(r.minutes).filter(([k, v]) => v > 0 && k !== 'no-eligible-work' && k !== 'unrecorded').map(([k, v]) => `${esc(CAUSE_LABEL[k])} ${esc(Math.round(v))} min`).join(', ') || 'none'})${Object.keys(r.holds).length ? `; holds: ${Object.entries(r.holds).map(([h, m]) => `${esc(h)} ${esc(Math.round(m))} min`).join(' | ')}` : ''}</div>`).join('') : '';
+  return `${slots}${idleLine}<ul class="panel-list">${view.agents.map(a => {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j)).join('');
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${jobRef(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
