@@ -445,7 +445,7 @@ async function main() {
       const sub = a._[1];
       if (sub === 'status') { console.log(JSON.stringify(await (await teamFor(root, registry)).breakerStatus(), null, 2)); return; }
       if (sub !== 'resume' || !a._[2]) throw new SupervisorError('usage: team breaker status | team breaker resume CAUSE|global|all');
-      if (!resumeAllowed()) throw new SupervisorError('team breaker resume needs a person at a terminal; a supervised job cannot clear the breaker');
+      if (!resumeAllowed()) throw new SupervisorError('team breaker resume needs a person at a terminal, outside any supervised job; a supervised job cannot clear the breaker');
       const release = tickLock(root);
       if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
       try { console.log(JSON.stringify((await teamFor(root, registry)).breakerResume(String(a._[2])))); } finally { release(); }

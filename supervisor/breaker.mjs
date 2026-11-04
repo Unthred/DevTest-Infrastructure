@@ -1,6 +1,7 @@
 // Issue #549: a circuit breaker for work that spends usage and produces nothing. Pure functions over the job records and the
 // breaker state kept in the Foreman state file (so a restart keeps a halt). Nothing here kills a job, loosens a review gate or
 // clears itself: a halt ends only by an explicit resume from the homeowner (see resume()).
+import fs from 'node:fs';
 import { typeOfKind } from './models.mjs';
 
 export const BREAKER_DEFAULTS = Object.freeze({
@@ -60,8 +61,10 @@ export function wasteOf({ id, entry, job, verdictRecorded = false, refusal = nul
     // A review that completed with no usable verdict is waste; completed repair or implement work met its post-condition (it pushed).
     if (type === 'review' && !verdictRecorded) cause = `no-verdict:${job.incompleteReason?.cause || 'postcondition_not_met'}`;
   } else if (!(type === 'review' && verdictRecorded)) {
-    const why = job.sessions?.lastDecision || job.incompleteReason?.cause || job.lastEvent || job.status;
-    if (!NOT_WASTE.has(String(why))) cause = `${job.status}:${String(why).slice(0, 48)}`;
+    // The cause is why the job stopped, never the session-resume decision (that is set on every attempt and says nothing about the stop).
+    const why = job.incompleteReason?.cause || job.lastEvent || job.status;
+    const allowanceStop = NOT_WASTE.has(String(why)) || NOT_WASTE.has(String(job.lastEvent)) || (num(job.usageLimitHits) > 0 && why === 'retry_exhausted');
+    if (!allowanceStop) cause = `${job.status}:${String(why).slice(0, 48)}`;
   }
   if (!cause) return null;
   return {
@@ -103,11 +106,13 @@ export function evaluate(s, limits, now) {
   const live = Object.values(s.waste).filter(w => now - w.at <= window && w.at > clearedFor(s, w.cause));
   const byCause = new Map();
   for (const w of live) { if (!byCause.has(w.cause)) byCause.set(w.cause, []); byCause.get(w.cause).push(w); }
+  // $5 of waste of any kind: when all live waste together reaches the cost limit, every cause that contributed is halted in its own scope.
+  const byTotal = sum(live, 'cost') >= limits.cause_cost_usd;
   for (const [cause, list] of byCause) {
     const f = figures(list), byCount = list.length >= limits.same_cause_jobs, byCost = f.cost >= limits.cause_cost_usd;
     const held = s.halts[cause];
     if (held) { s.halts[cause] = { ...held, ...f }; continue; }
-    if (!byCount && !byCost) continue;
+    if (!byCount && !byCost && !byTotal) continue;
     s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : 'cost', ...f };
     trips.push({ scope: cause, trippedBy: s.halts[cause].trippedBy });
   }
@@ -184,11 +189,25 @@ export function haltView(s, running = []) {
   };
 }
 
-// Issue #549: only a person at a terminal may resume. A supervised job's shell has no terminal, so an agent job cannot clear a halt
-// through the CLI. (An agent with full access could still edit the state file by hand; that is a breach of its instructions, not a
-// supported route, and the halt state records every resume in resumes[] so it shows up.)
-export function resumeAllowed({ stdin = process.stdin, stdout = process.stdout } = {}) {
-  return !!(stdin?.isTTY && stdout?.isTTY);
+// Issue #549: only a person at a terminal may resume, and never a process that descends from a supervised job. The supervisor marks
+// every job's environment (JOB_MARKER); a pty from `script` still inherits it, and the check also walks the parent chain reading each
+// ancestor's environment so `env -u` does not help. (An agent with full access could still edit the state file by hand; that is a
+// breach of its instructions, not a supported route, and every resume is recorded in resumes[].)
+export const JOB_MARKER = 'AI_SUPERVISOR_JOB';
+export function underSupervisedJob({ env = process.env, pid = process.pid, readProc = p => fs.readFileSync(p, 'utf8') } = {}) {
+  if (env[JOB_MARKER]) return true;
+  let cur = pid;
+  for (let i = 0; i < 64 && cur > 1; i++) {
+    try {
+      if (readProc(`/proc/${cur}/environ`).split('\0').some(e => e.startsWith(JOB_MARKER + '='))) return true;
+      const stat = readProc(`/proc/${cur}/stat`);
+      cur = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+    } catch { break; }
+  }
+  return false;
+}
+export function resumeAllowed({ stdin = process.stdin, stdout = process.stdout, env = process.env, pid = process.pid, readProc } = {}) {
+  return !!(stdin?.isTTY && stdout?.isTTY) && !underSupervisedJob({ env, pid, readProc });
 }
 
 // Replay finished job records through the same rules, in time order, to show when the breaker would have tripped and what it would

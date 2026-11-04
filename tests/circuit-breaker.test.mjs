@@ -19,7 +19,7 @@ const waste = (job, entry = {}) => B.wasteOf({ id: job.id, entry: { kind: job.ki
 const stateWith = (...jobs) => { const s = B.emptyState(); for (const j of jobs) B.record(s, waste(j), NOW); return s; };
 
 test('what counts as waste: blocked or refused work with no usable result, never a recorded verdict or a push', () => {
-  assert.equal(waste(blocked()).cause, 'review:blocked:context_too_large');
+  assert.equal(waste(blocked()).cause, 'review:blocked:postcondition_not_met');
   assert.equal(B.wasteOf({ id: 'a', entry: { kind: 'review', pr: 1 }, job: blocked({ status: 'completed' }), refusal: 'bad-claims' }).cause, 'review:refused:bad-claims');
   // a recorded verdict (CHANGES or PASS) from a job that then blocked is not waste
   assert.equal(B.wasteOf({ id: 'a', entry: { kind: 'review', pr: 1 }, job: blocked(), verdictRecorded: true }), null);
@@ -38,7 +38,7 @@ test('what counts as waste: blocked or refused work with no usable result, never
 
 test('cause grouping is stable when display figures change', () => {
   const a = waste(blocked({ usage: { inputTokens: 5, outputTokens: 5, costUsdEstimate: 0.1 }, incompleteReason: { cause: 'postcondition_not_met', detail: 'PR #1 at abc' } }), { pr: 1 });
-  const b = waste(blocked({ usage: { inputTokens: 9_000_000, outputTokens: 9, costUsdEstimate: 3.33 }, incompleteReason: undefined }), { pr: 2 });
+  const b = waste(blocked({ usage: { inputTokens: 9_000_000, outputTokens: 9, costUsdEstimate: 3.33 }, incompleteReason: { cause: 'postcondition_not_met', detail: 'other text' }, sessions: { lastDecision: 'cache_window_expired' } }), { pr: 2 });
   assert.equal(a.cause, b.cause);
   assert.equal(B.verdictErrorCode('a false claim about behaviour, safety, scope or what was verified cannot be immaterial (only a count or wording slip can): adds 3 tests'),
     B.verdictErrorCode('a false claim about behaviour, safety, scope or what was verified cannot be immaterial (only a count or wording slip can): totally different text'));
@@ -50,7 +50,7 @@ test('same-cause trip: three wasted jobs inside six hours, not two, and not when
   assert.deepEqual(B.evaluate(s, L, NOW), []);
   B.record(s, waste(blocked({ updatedAt: NOW })), NOW);
   const trips = B.evaluate(s, L, NOW);
-  assert.deepEqual(trips.map(t => [t.scope, t.trippedBy]), [['review:blocked:context_too_large', 'count']]);
+  assert.deepEqual(trips.map(t => [t.scope, t.trippedBy]), [['review:blocked:postcondition_not_met', 'count']]);
   const old = stateWith(blocked({ updatedAt: NOW - 7 * HOUR }), blocked(), blocked());
   assert.deepEqual(B.evaluate(old, L, NOW), []);
   assert.equal(Object.keys(old.halts).length, 0);
@@ -65,11 +65,12 @@ test('cost trip: about $5 of waste of one cause inside the window, with fewer th
 });
 
 test('higher limit: waste across causes reaches $15 and every new job stops, merges continue', () => {
-  const cause = i => blocked({ sessions: { lastDecision: 'cause' + i }, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 4 } });
+  const cause = i => blocked({ incompleteReason: { cause: 'cause' + i }, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 4 } });
   const s = stateWith(cause(1), cause(2), cause(3));
-  assert.deepEqual(B.evaluate(s, L, NOW), []);   // $12: no cause is tripped and the higher limit is not reached
+  assert.deepEqual(B.evaluate(s, L, NOW).map(t => t.trippedBy), ['cost', 'cost', 'cost']);   // $12 of any kind trips each contributing cause, not yet the higher limit
+  assert.equal(s.global, null);
   B.record(s, waste(cause(4)), NOW);
-  assert.deepEqual(B.evaluate(s, L, NOW).map(t => t.scope), ['@global']);
+  assert.ok(B.evaluate(s, L, NOW).map(t => t.scope).includes('@global'));
   const acts = [{ type: 'implement', issue: 5 }, { type: 'review', pr: 1 }, { type: 'rebase', pr: 2 }, { type: 'ci-fix', pr: 3 }, { type: 'merge', pr: 4 }];
   assert.deepEqual(B.filterActions(s, L, acts).kept.map(a => a.type), ['merge']);
 });
@@ -96,7 +97,7 @@ test('a halt does not expire, is cleared only by resume, and a cleared cause doe
   assert.equal(Object.keys(s.halts).length, 1);
   assert.deepEqual(B.resume(s, 'no-such-cause', NOW), []);
   assert.equal(Object.keys(s.halts).length, 1);
-  assert.deepEqual(B.resume(s, 'review:blocked:context_too_large', NOW + 1), ['review:blocked:context_too_large']);
+  assert.deepEqual(B.resume(s, 'review:blocked:postcondition_not_met', NOW + 1), ['review:blocked:postcondition_not_met']);
   B.evaluate(s, L, NOW + 2);
   assert.equal(Object.keys(s.halts).length, 0);
   B.record(s, waste(blocked({ updatedAt: NOW + 10 })), NOW + 10); B.record(s, waste(blocked({ updatedAt: NOW + 11 })), NOW + 11);
@@ -107,7 +108,7 @@ test('a halt does not expire, is cleared only by resume, and a cleared cause doe
 });
 
 test('resume all clears the global halt too; only a terminal can resume', () => {
-  const s = stateWith(...[1, 2, 3, 4].map(i => blocked({ sessions: { lastDecision: 'c' + i }, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 4 } })));
+  const s = stateWith(...[1, 2, 3, 4].map(i => blocked({ incompleteReason: { cause: 'c' + i }, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 4 } })));
   B.evaluate(s, L, NOW);
   assert.ok(s.global);
   assert.deepEqual(B.resume(s, 'all', NOW + 1).includes('@global'), true);
@@ -158,7 +159,7 @@ test('ingest records the waste once, and three blocked reviews trip the breaker 
   const input = [{ type: 'review', agent: 'claude', pr: 41 }, { type: 'implement', agent: 'claude', issue: 5 }, { type: 'merge', agent: 'claude', pr: 40 }];
   acts = w.team.applyBreaker(input, report);
   assert.deepEqual(acts.map(a => a.type), ['implement', 'merge']);
-  assert.equal(report.breaker.tripped[0].scope, 'review:blocked:context_too_large');
+  assert.equal(report.breaker.tripped[0].scope, 'review:blocked:postcondition_not_met');
   assert.deepEqual(report.breaker.stopped.map(x => x.ref), [41]);
   assert.match(w.team.held.claude.review, /circuit breaker/);
   const v = (await w.team.breakerStatus()).view;
@@ -204,7 +205,7 @@ test('restart keeps the halt; resume clears it and survives a further restart', 
   const later = w.mk(); later.clock = { now: () => NOW + 100 * HOUR };
   later.applyBreaker([], {});
   assert.equal(Object.keys(later.s.breaker.halts).length, 1);
-  assert.deepEqual(later.breakerResume('review:blocked:context_too_large').cleared, ['review:blocked:context_too_large']);
+  assert.deepEqual(later.breakerResume('review:blocked:postcondition_not_met').cleared, ['review:blocked:postcondition_not_met']);
   assert.equal(w.mk().applyBreaker([{ type: 'review', agent: 'claude', pr: 40 }], {}).length, 1);
 });
 
@@ -235,7 +236,7 @@ test('dashboard: the halt is the top Needs you item with cause, count, cost labe
   const top = view.panels.needsYou[0];
   assert.equal(top.id, 'breaker-halt');
   assert.match(top.text, /3 wasted jobs/); assert.match(top.text, /usage equivalent/); assert.match(top.text, /#40/); assert.match(top.text, /Still running: implement 5/);
-  assert.match(top.decision, /team breaker resume review:blocked:context_too_large/);
+  assert.match(top.decision, /team breaker resume review:blocked:postcondition_not_met/);
   assert.equal(view.breaker.byCause[0].jobs, 3);
   assert.equal(view.breaker.byCause[0].halted, true);
   const html = renderRoute(view, matchRoute('/'));
@@ -249,6 +250,31 @@ test('replay: the same rules over finished job records show the trip time and th
   jobs.push(blocked({ id: 'ok', createdAt: at(1), updatedAt: at(1) + 1 }));   // has a recorded verdict: never counted
   const out = B.replay({ jobs, entries: Object.fromEntries(jobs.map(j => [j.id, { kind: 'review', pr: 7 }])), verdictJobs: new Set(['ok']) });
   assert.equal(out.wasted.jobs, 5);
-  assert.deepEqual(out.trips.map(t => [t.scope, t.at, t.jobsPrevented]), [['review:blocked:context_too_large', at(2), 2]]);   // jobs 3 and 4 were created after the trip
+  assert.deepEqual(out.trips.map(t => [t.scope, t.at, t.jobsPrevented]), [['review:blocked:postcondition_not_met', at(2), 2]]);   // jobs 3 and 4 were created after the trip
   assert.equal(out.trips[0].costSaved, 3);
+});
+
+test('cost trip counts waste of any kind: three causes of $2 each reach $5 together', () => {
+  const s = stateWith(...[1, 2, 3].map(i => blocked({ incompleteReason: { cause: 'k' + i }, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 2 } })));
+  assert.equal(B.evaluate(s, L, NOW).length, 3);
+  const small = stateWith(...[1, 2].map(i => blocked({ incompleteReason: { cause: 'k' + i }, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 2 } })));
+  assert.deepEqual(B.evaluate(small, L, NOW), []);
+});
+
+test('the cause is the stop reason, not the session-resume decision', () => {
+  const causes = ['new_job', 'within_window', 'cache_window_expired', 'context_too_large'].map(d => waste(blocked({ sessions: { lastDecision: d }, incompleteReason: undefined })).cause);
+  assert.deepEqual([...new Set(causes)], ['review:blocked:incomplete']);
+});
+
+test('a provider usage-limit stop is not waste even when a session decision is recorded', () => {
+  assert.equal(waste(blocked({ lastEvent: 'usage_limit', incompleteReason: undefined, sessions: { lastDecision: 'new_job' } })), null);
+  assert.equal(waste(blocked({ lastEvent: 'retry_exhausted', incompleteReason: undefined, usageLimitHits: 3 })), null);
+});
+
+test('resume is refused for a process under a supervised job, even with a terminal', () => {
+  const tty = { isTTY: true };
+  assert.equal(B.resumeAllowed({ stdin: tty, stdout: tty, env: {}, pid: 0 }), true);
+  assert.equal(B.resumeAllowed({ stdin: tty, stdout: tty, env: { AI_SUPERVISOR_JOB: 'j1' } }), false);
+  const proc = { '/proc/30/environ': 'PATH=/bin\0', '/proc/30/stat': '30 (sh) S 20 0', '/proc/20/environ': 'AI_SUPERVISOR_JOB=j1\0', '/proc/20/stat': '20 (claude) S 1 0' };
+  assert.equal(B.resumeAllowed({ stdin: tty, stdout: tty, env: {}, pid: 30, readProc: p => { if (!(p in proc)) throw new Error('x'); return proc[p]; } }), false);
 });
