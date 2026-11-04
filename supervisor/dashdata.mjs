@@ -119,6 +119,7 @@ export const compactIssues = issues => (issues || []).map(i => ({ number: i.numb
     : (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
   // Parsed from the full title and body before the body is dropped, so the dashboard's exclusions match the tick's (issue #212).
   prerequisites: prerequisites(i.body), pullPrerequisites: pullPrerequisites(i.title, i.body), proseDependencies: proseDependencies(i.body),
+  ...(i.unknownReason ? { unknownReason: redact(i.unknownReason, 200) } : {}),   // issue #522: why a prerequisite lookup failed
   // Issue #414: the question the issue states for the homeowner and whether Foreman filed it, read before the body is dropped.
   ...(homeownerQuestion(i.body) ? { question: homeownerQuestion(i.body) } : {}), ...(/devtest-postmerge v1/.test(i.body || '') ? { foremanFiled: true } : {}) }));
 
