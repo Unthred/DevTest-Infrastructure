@@ -199,3 +199,9 @@ test('issue #40 real cli: preflight names a failing gh, an unreadable register a
   assert.match(out.checks.git, /^failed/);
   assert.match(out.checks['provider:claude'], /^failed/); assert.match(out.checks['provider:codex'], /^failed/);
 });
+
+test('issue #565 the gate accepts a plan when the checker exits without reading stdin (no SIGPIPE under pipefail)', t => {
+  const w = cronWorld(t, { nodeBody: ['[ "$1" = -e ] && exit 0', 'case "$2" in preflight) echo \'{"ok":true}\';; team) head -c 300000 /dev/zero | tr \'\\0\' x | sed \'s/^/{"actions":[],"pad":"/;s/$/"}/\';; esac'].join('\n') });
+  const node = path.join(w.bin, 'node'), cli = path.join(w.root, 'cli.mjs');
+  for (let i = 0; i < 5; i++) assert.equal(spawnSync('bash', [verify, '/usr/bin:/bin', w.root, node, cli], { env: process.env }).status, 0);
+});
