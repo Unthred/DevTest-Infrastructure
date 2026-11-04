@@ -1,6 +1,8 @@
 // View model of the team dashboard (issue #32). Pure functions over data the tick already stored: supervisor job records,
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
+import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
+import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
 import { homeownerQuestion } from './homeowner-question.mjs';
@@ -706,6 +708,11 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       else if (w.length) attention.push({ id: 'alert-warning', text: redact(w[0].replace(/^team-alert: warning: /, 'Alerting: '), 200), ref: null, severity: 'warning' }); }
     // Issue #358: the pinned status issue could not be updated; the tick itself is unaffected.
     { const e = readStatusIssueState(root).error; if (e) attention.push({ id: 'status-issue-failed', text: redact(e, 300), ref: null, severity: 'warning' }); }
+    // Issue #549: a tripped circuit breaker is the top Needs you item and a status on the Overview; the cost is labelled usage equivalent.
+    const breakerState = breakerStateOf(state.breaker || {}), breakerRunning = jobs.filter(j => j.status === 'running').map(j => ({ id: String(j.id).slice(0, 8), type: typeOfKind(j.kind || 'job'), ref: state.jobs?.[j.id]?.pr ?? state.jobs?.[j.id]?.issue ?? j.issue ?? null }));
+    const breakerView = breakerHaltView(breakerState, breakerRunning);
+    if (breakerState.error) attention.unshift({ id: 'breaker-error', text: redact(`The circuit breaker failed: ${breakerState.error.message}. Existing halts stay in force and no new halt is being evaluated.`, 300), ref: null, severity: 'action', action: 'Read the tick report and fix the cause; the breaker retries every tick.' });
+    if (breakerView) attention.unshift({ id: 'breaker-halt', text: redact(`${breakerView.text} ${breakerView.running_text}`, 700), ref: breakerView.prs[0] ?? null, severity: 'action', action: breakerView.action });
     const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
@@ -723,6 +730,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
       budget,
       attention,
+      breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL },
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots: history?.chartSnapshots || snapshots, now, windowMs: history?.chartSnapshots ? Infinity : 30 * DAY }),
       idleCauses: idleReport({ jobs, snapshots, agents: Object.fromEntries(Object.entries(config.agents).map(([n, x]) => [n, x.provider])), from: now - 24 * 3600000, to: now }),

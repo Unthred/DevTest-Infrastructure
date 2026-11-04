@@ -6,6 +6,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
+import * as breaker from './breaker.mjs';
+import { validateBreakerConfig } from './breaker.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, isOpusModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { entryApproved } from './decisions.mjs';
@@ -50,6 +52,7 @@ export function validateTeamConfig(input) {
   if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
   validateUnblockLimits(L.unblock);
   validateSelfUpgrade(c.self_upgrade);
+  try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
   if (c.owner_comment_review !== undefined) {
@@ -188,11 +191,12 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'test_tmp_root'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
   if ('test_tmp_root' in local) { if (typeof local.test_tmp_root !== 'string' || !path.isAbsolute(local.test_tmp_root)) throw new SupervisorError('invalid team.local.json: test_tmp_root must be an absolute path'); out.test_tmp_root = local.test_tmp_root; }
+  if ('breaker' in local) { try { out.breaker = validateBreakerConfig({ ...(out.breaker || {}), ...local.breaker }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }
   if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
   if ('alerts' in local) {
     const cmd = local.alerts?.command;
@@ -563,6 +567,7 @@ export class Team {
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
     for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews']) this.s[k] ||= {};
+    breaker.normalize(this.s.breaker ||= {});   // issue #549: the halt state lives in the state file, so a restart keeps it
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -1516,6 +1521,7 @@ export class Team {
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     let actions = await this.plan();
+    actions = this.applyBreaker(actions, report, dryRun);
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
     if (!dryRun) await guard('review exceptions', () => this.endExceptions(report));
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
@@ -1540,6 +1546,30 @@ export class Team {
     return report;
   }
 
+  // Issue #549: evaluate the breaker over the waste on file, then drop the actions a halt stops. Merges are not jobs and pass. If the
+  // breaker itself throws, the failure is reported and the existing halts still apply (nothing new is halted or allowed silently).
+  applyBreaker(actions, report, dryRun = false) {
+    const limits = this.c.breaker;
+    try {
+      if (!dryRun) { const trips = breaker.evaluate(this.s.breaker, limits, this.clock.now()); this.s.breaker.error = null; if (trips.length) { (report.breaker ||= {}).tripped = trips; this.save(); } }
+    } catch (error) { this.breakerFailed(error, report); }
+    try {
+      const { kept, stopped } = breaker.filterActions(this.s.breaker, limits, actions);
+      if (stopped.length) { (report.breaker ||= {}).stopped = stopped.map(x => ({ type: x.action.type, ref: x.action.pr ?? x.action.issue ?? null, agent: x.action.agent ?? null, cause: x.cause })); }
+      for (const x of stopped) this.hold(x.action.agent, x.action.type, `circuit breaker: ${x.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + x.cause} halted new ${x.action.type} jobs until the homeowner resumes`);
+      return kept;
+    } catch (error) { this.breakerFailed(error, report); return actions; }
+  }
+  // Issue #549: clear one cause, 'global' or 'all'. Reached only from the homeowner's CLI (see cli.mjs), never from a job.
+  breakerResume(scope) {
+    const cleared = breaker.resume(this.s.breaker, scope, this.clock.now());
+    this.save();
+    return { scope, cleared };
+  }
+  async breakerStatus() {
+    const running = (await this.jobs.listActive()).filter(j => j.status === 'running').map(j => ({ id: String(j.id).slice(0, 8), type: typeOfKind(j.kind || 'job'), ref: this.s.jobs[j.id]?.pr ?? this.s.jobs[j.id]?.issue ?? j.issue ?? null }));
+    return { view: breaker.haltView(this.s.breaker, running), byCause: breaker.byCause(this.s.breaker), error: this.s.breaker.error };
+  }
   // Issue #326: Foreman has queued or conflicting work but plans and starts nothing. Records when that began (this.s.idle) and what is
   // waiting; any planned action or running job clears it. The dashboard shows a Needs you item once it lasts idle_minutes (default 30).
   async trackIdle(actions) {
@@ -1641,6 +1671,29 @@ export class Team {
   // Each effect is recorded and saved BEFORE it is posted, so a later failure in the same tick can never make the next tick
   // post it again (verdict and needs-homeowner comments were repeated every five minutes while the tick kept aborting).
   async ingestOne(id, j, report) {
+    await this.ingestOneInner(id, j, report);
+    if (j.ingested) await this.recordWaste(id, j, report);
+  }
+  // Issue #549: a finished job that spent tokens and left no usable result is recorded once, with a stable cause. A failure here is
+  // reported (state.breaker.error and the tick report), never swallowed: the existing halts stay in force and no new one is invented.
+  async recordWaste(id, j, report) {
+    try {
+      if (j.wasteChecked) return;
+      const job = await this.jobs.get(id);
+      if (!job || !TERMINAL.has(job.status)) return;
+      const b = this.s.breaker, recorded = [this.s.verdicts, this.s.secondOpinions, this.s.exceptionReviews].some(m => Object.values(m || {}).some(v => v?.job === id));
+      const w = breaker.wasteOf({ id, entry: j, job, verdictRecorded: recorded, refusal: j.refusal || null });
+      j.wasteChecked = true;
+      if (w && breaker.record(b, w, this.clock.now())) (report.wasted ||= []).push({ job: id.slice(0, 8), cause: w.cause, cost: w.cost });
+      this.save();
+    } catch (error) { this.breakerFailed(error, report); }
+  }
+  breakerFailed(error, report) {
+    this.s.breaker.error = { at: this.clock.now(), message: redact(String(error?.message || error), 200) };
+    (report.breaker ||= {}).error = this.s.breaker.error.message;
+    try { this.save(); } catch { /* the report above still carries it */ }
+  }
+  async ingestOneInner(id, j, report) {
       const job = await this.jobs.get(id);
       if (!job || !TERMINAL.has(job.status)) return;
       // An attempt that ended incomplete on a non-escalated model makes the next attempt of the same work use the stronger one.
@@ -1658,7 +1711,7 @@ export class Team {
         // refusal (that is the relaxation); the commit step must run on another model than the full-review model.
         const exStage = j.exceptionStage || null, exNow = exStage ? this.exceptionFor(j.pr) : null;
         if (r.verdict && exStage && (!exNow || (exStage === 'commits' && j.model === exNow.full_review.model) || j.model !== (exStage === 'full' ? exNow.full_review : exNow.commit_review).model)) {
-          j.ingested = true; this.save();
+          j.ingested = true; j.refusal = 'exception-model'; this.save();
           report.ingested.push({ job: id, pr: j.pr, error: !exNow ? 'review exception ended for this pull request; verdict not recorded' : 'review refused: wrong model for the exception step' });
           return;
         }
@@ -1667,7 +1720,7 @@ export class Team {
         if (why) {
           const text = why === 'writer unknown' ? `the writer of this head is unknown (no job record and no session-log evidence for this exact head), so ${reviewer.provider} model ${j.model || 'default'} cannot be shown to differ from it` : `reviewer model ${j.model || 'default'} is a model that wrote this pull request`;
           this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: why, text, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), at: this.clock.now() };
-          j.ingested = true; this.save();
+          j.ingested = true; j.refusal = 'independence'; this.save();
           report.ingested.push({ job: id, pr: j.pr, error: 'review refused: ' + text });
           return;
         }
@@ -1697,7 +1750,7 @@ export class Team {
           j.ingested = true; this.save();
           report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });
           return;
-        } else report.ingested.push({ job: id, pr: j.pr, error: r.error });
+        } else { j.refusal = breaker.verdictErrorCode(r.error); report.ingested.push({ job: id, pr: j.pr, error: r.error }); }
       }
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
       if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
@@ -1934,6 +1987,7 @@ export class Team {
   async draftSplit(id, j, job, report) {
     const nkey = `${id}:${job.status}`;
     if (this.s.splits[j.issue]) { this.s.notified[nkey] ||= this.clock.now(); this.save(); return; }
+    if (this.s.breaker.global) return;   // issue #549: the higher breaker limit stops every new job; the split draft is retried after a resume
     const a = this.c.agents[j.agent];
     const inUse = (job.usage?.inputTokens || 0) + (job.usage?.outputTokens || 0);
     const wasted = { tokens: inUse, cost: Number.isFinite(job.usage?.costUsdEstimate) ? job.usage.costUsdEstimate : null, attempts: job.attempts || 1 };
@@ -2372,6 +2426,7 @@ export class Team {
         const stale = await this.staleResume(id, j, open);
         if (stale) { this.s.unblock.noResume[id] = { at: this.clock.now(), why: stale }; this.save(); return; }   // notifyOne handles it as before
         if (this.limitedOf(j.agent)?.out) return;   // out of allowance: wait for the reset rather than burn the one resume
+        if (breaker.blocks(this.s.breaker, this.c.breaker, { type: j.kind, issue: j.issue ?? null })) return;   // issue #549: a halted job type does not restart either
         if (await this.providerRoleFull(job.provider ?? this.c.agents[j.agent]?.provider, roleOfType(j.kind))) return;   // issue #402: the provider's own role count is full; wait, keeping the one resume
         if (this.clock.now() - (job.updatedAt || 0) < this.unblockLimits().cooldown_ms) return;
         const target = j.issue ?? j.pr, tk = j.issue != null ? 'issue' : 'pull';

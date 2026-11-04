@@ -33,7 +33,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     } catch { /* the transcript is best effort */ }
   };
   const argv = adapter.command(config, job, session.resume);
-  const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+  const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: { ...safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), AI_SUPERVISOR_JOB: job.id }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   let observed = null, resetAt = null, resetSource = 'none', verified = false;
   const buffers = { stdout: '', stderr: '' };
   const nonFatal = new Set(['transient_rate_limit', 'network_error']);

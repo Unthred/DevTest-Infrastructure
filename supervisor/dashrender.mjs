@@ -291,6 +291,16 @@ function nextPanel(view) {
   const now = view.generatedAt, plan = view.panels.next;
   return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)} ${watchBtn(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref, '/')}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref), view.tz, now)}${p.reassignedFrom || p.why ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
+// Issue #549: the circuit breaker's status on the Overview, and the wasted usage by cause. Cost is the CLI's own estimate, not a cash charge.
+function breakerCard(view) {
+  const b = view.breaker;
+  if (!b || (!b.halt && !b.byCause.length && !b.error)) return '';
+  const halt = b.halt ? `<p class="sev-action"><strong>Work halted.</strong> ${escT(b.halt.text)} ${escT(b.halt.running_text)}</p><p class="sub">${escT(b.halt.action)}</p>` : '<p class="sub">Circuit breaker: no halt.</p>';
+  const err = b.error ? `<p class="sev-action">The breaker failed: ${escT(b.error)}</p>` : '';
+  const rows = b.byCause.slice(0, 12).map(r => `<tr><td>${escT(r.cause)}${r.halted ? ' (halted)' : ''}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>$${r.cost.toFixed(2)}</td><td>${escT(r.prs.map(n => '#' + n).join(', '))}</td></tr>`).join('');
+  const table = rows ? `<table><thead><tr><th>Cause</th><th>Wasted jobs</th><th>Tokens</th><th>Cost (usage equivalent)</th><th>PRs</th></tr></thead><tbody>${rows}</tbody></table><p class="sub">Cost is ${escT(b.costLabel)}.</p>` : '';
+  return card({ id: 'breaker', title: b.halt ? 'Work halted' : 'Wasted usage', span: 12, body: err + halt + table, cls: 'panel', type: b.halt ? 'action' : 'info' });
+}
 function needsPanel(view) {
   const items = view.panels.needsYou;
   return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
@@ -384,6 +394,7 @@ function overview(view, query) {
   const verdicts = view.verdicts;
   const warnCount = view.panels.warnings.length + (view.agents.some(a => a.state === 'unknown') ? 1 : 0);
   const panels = [
+    breakerCard(view),
     card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
