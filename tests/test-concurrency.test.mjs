@@ -164,3 +164,23 @@ test('a review prompt never reuses an earlier pass (D-024); fix prompts may', ()
   assert.match(reviewPrompt(j), /test-slot run --no-reuse --/);
   assert.doesNotMatch(fixPrompt(j), /--no-reuse/);
 });
+
+// Issue #480: with test_reuse_hours 0 in the configuration nothing could read a pass, so none is computed or recorded; the default still records.
+test('repeat suite: test_reuse_hours 0 records no pass and always runs; the default records one', t => {
+  const mk = limits => {
+    const state = tmp(t), repo = tmp(t), marker = path.join(state, 'runs');
+    const git = (...a) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...a], { encoding: 'utf8' });
+    git('init', '-q'); fs.writeFileSync(path.join(repo, 'f.txt'), '1'); git('add', '.'); git('commit', '-qm', 'one');
+    if (limits) fs.writeFileSync(path.join(state, 'team.local.json'), JSON.stringify({ limits }));
+    const fake = path.join(state, 'bin', 'node'); fs.mkdirSync(path.dirname(fake));
+    fs.writeFileSync(fake, `#!/bin/sh\necho x >> ${marker}\nexit 0\n`, { mode: 0o755 });
+    const run = () => spawnSync(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, '--', fake, '--test', 'x'], { cwd: repo, encoding: 'utf8', timeout: 60000 });
+    return { state, run, runs: () => fs.readFileSync(marker, 'utf8').trim().split('\n').length, passes: () => fs.existsSync(path.join(state, 'team', 'test-passes.jsonl')) };
+  };
+  const off = mk({ test_reuse_hours: 0 });
+  assert.equal(off.run().status, 0); assert.equal(off.run().status, 0);
+  assert.equal(off.runs(), 2, 'reuse off: runs every time'); assert.equal(off.passes(), false, 'reuse off: no pass recorded');
+  const on = mk(null);
+  assert.equal(on.run().status, 0); assert.equal(on.passes(), true, 'default: pass recorded');
+  assert.equal(on.run().status, 0); assert.equal(on.runs(), 1);
+});
