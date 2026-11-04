@@ -13,7 +13,7 @@ import { weeklyAtOf } from './team.mjs';
 export function planningInputs({ config, jobs, probes = {}, snapshots = [], events = [], hadLimit = null, now = Date.now() }) {
   const allowances = latestAllowance(jobs, probes);
   const providerOf = agent => config.agents[agent].provider;
-  const allowanceOf = agent => weeklyUtilization(allowances[providerOf(agent)]);
+  const allowanceOf = agent => weeklyUtilization(allowances[providerOf(agent)], now);
   const limitedJobs = new Set(events.filter(e => e.kind === 'usage_limit').map(e => e.job));
   // Whether an agent is out of allowance, from provider-reported records and its latest supervised job only.
   const limited = {};
