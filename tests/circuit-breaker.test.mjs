@@ -269,6 +269,7 @@ test('the cause is the stop reason, not the session-resume decision', () => {
 test('a provider usage-limit stop is not waste even when a session decision is recorded', () => {
   assert.equal(waste(blocked({ lastEvent: 'usage_limit', incompleteReason: undefined, sessions: { lastDecision: 'new_job' } })), null);
   assert.equal(waste(blocked({ lastEvent: 'retry_exhausted', incompleteReason: undefined, usageLimitHits: 3 })), null);
+  assert.equal(waste(blocked({ lastEvent: 'retry_exhausted', incompleteReason: { cause: 'postcondition_not_met' }, usageLimitHits: 3 })), null);
 });
 
 test('resume is refused for a process under a supervised job, even with a terminal', () => {

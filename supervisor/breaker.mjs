@@ -63,7 +63,7 @@ export function wasteOf({ id, entry, job, verdictRecorded = false, refusal = nul
   } else if (!(type === 'review' && verdictRecorded)) {
     // The cause is why the job stopped, never the session-resume decision (that is set on every attempt and says nothing about the stop).
     const why = job.incompleteReason?.cause || job.lastEvent || job.status;
-    const allowanceStop = NOT_WASTE.has(String(why)) || NOT_WASTE.has(String(job.lastEvent)) || (num(job.usageLimitHits) > 0 && why === 'retry_exhausted');
+    const allowanceStop = NOT_WASTE.has(String(why)) || NOT_WASTE.has(String(job.lastEvent)) || (num(job.usageLimitHits) > 0 && (why === 'retry_exhausted' || job.lastEvent === 'retry_exhausted'));
     if (!allowanceStop) cause = `${job.status}:${String(why).slice(0, 48)}`;
   }
   if (!cause) return null;
@@ -191,7 +191,7 @@ export function haltView(s, running = []) {
 
 // Issue #549: only a person at a terminal may resume, and never a process that descends from a supervised job. The supervisor marks
 // every job's environment (JOB_MARKER); a pty from `script` still inherits it, and the check also walks the parent chain reading each
-// ancestor's environment so `env -u` does not help. (An agent with full access could still edit the state file by hand; that is a
+// ancestor's environment, which blocks `env -u` while an ancestor is alive. This is a guard against accident, not a security boundary: there is no supported route for a job, and a deliberately detached process (for example under setsid) is not caught. (An agent with full access could still edit the state file by hand; that is a
 // breach of its instructions, not a supported route, and every resume is recorded in resumes[].)
 export const JOB_MARKER = 'AI_SUPERVISOR_JOB';
 export function underSupervisedJob({ env = process.env, pid = process.pid, readProc = p => fs.readFileSync(p, 'utf8') } = {}) {
