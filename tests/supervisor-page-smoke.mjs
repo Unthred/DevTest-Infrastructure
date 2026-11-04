@@ -63,7 +63,7 @@ async function fixtureSite(dir) {
       }
       const ui = path.join(sourceProject, 'supervisor', 'dashui');
       fs.mkdirSync(path.join(dir, 'static'));
-      for (const f of ['style.css', 'early.js', 'app.js', 'logic.mjs', 'legend.mjs']) fs.copyFileSync(path.join(ui, f), path.join(dir, 'static', f));
+      for (const f of ['style.css', 'early.js', 'layout-early.js', 'app.js', 'logic.mjs', 'legend.mjs']) fs.copyFileSync(path.join(ui, f), path.join(dir, 'static', f));
       for (const d of fs.readdirSync(dir, { recursive: true })) { const f = path.join(dir, d); fs.chmodSync(f, fs.statSync(f).isDirectory() ? 0o755 : 0o644); }
       fs.chmodSync(dir, 0o755);
       return view;
