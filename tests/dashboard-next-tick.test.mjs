@@ -168,5 +168,16 @@ test('/api/next answers running, overdue and the none fallback', async t => {
 
 test('docs: the none fallback stays until reload (issue #564)', () => {
   const md = fs.readFileSync(new URL('../docs/dashboard.md', import.meta.url), 'utf8');
-  assert.match(md, /keeps showing `none`[^.]*reload the page/);
+  assert.match(md, /keeps showing `none`[^.]*until the page reloads\. It reloads itself every refresh interval/);
+  assert.match(md, /tests\/next-swap-smoke\.mjs/);
+});
+
+test('real-browser swap check: arguments are validated and every expectation is a function (issue #564)', async () => {
+  const { parseArguments, EXPECT } = await import('../browser/next-swap.mjs');
+  const o = parseArguments(['--target', 'fixture', '--page', '/index.html', '--case', 'a=/fragments/none.html=none', '--case', 'b=/fragments/running.html=running']);
+  assert.deepEqual(o.cases.map(c => c.expect), ['none', 'running']);
+  for (const f of Object.values(EXPECT)) assert.equal(typeof f, 'function');
+  assert.throws(() => parseArguments(['--target', 'fixture']), /at least one --case/);
+  assert.throws(() => parseArguments(['--target', 'fixture', '--case', 'a=/x=bogus']), /--case must be/);
+  assert.throws(() => parseArguments(['--target', 'fixture', '--page', '//evil', '--case', 'a=/x=none']), /absolute path/);
 });
