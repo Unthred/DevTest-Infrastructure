@@ -9,6 +9,13 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 const install = new URL('../tools/install-reconcile-user-script.sh', import.meta.url).pathname;
 const remove = new URL('../tools/remove-reconcile-user-script.sh', import.meta.url).pathname;
 // Run the installer and fail with its own stderr, so a red CI run names the cause instead of a bare "Command failed".
+// Fixture executables are written to a temp name, fsynced and closed, then renamed into place, so no write descriptor is open when a spawn execs them.
+function writeExe(file, body) {
+  const tmp = `${file}.tmp${process.pid}`;
+  const fd = fs.openSync(tmp, 'w', 0o755);
+  try { fs.writeFileSync(fd, body); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.chmodSync(tmp, 0o755); fs.renameSync(tmp, file);
+}
 function runInstall(env) {
   // Issue #480: a freshly written fake executable can be 'Text file busy' (ETXTBSY) while a concurrent spawn still holds its write descriptor.
   // That is a load-only race in the fixture, not an installer defect, so only that exact message is retried (a few times, briefly).
@@ -28,7 +35,7 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
   fs.writeFileSync(path.join(root, 'schedule.json'), JSON.stringify(existing));
   fs.writeFileSync(path.join(root, 'customSchedule.cron'), '# Generated cron schedule for user.scripts\n17 6 * * * existing\n');
   const fake = path.join(root, 'fakenode'), fakeCli = path.join(root, 'cli.mjs');
-  fs.writeFileSync(fake, '#!/bin/sh\necho \'{"ok":true,"actions":[]}\'\n', { mode: 0o755 }); fs.writeFileSync(fakeCli, '');
+  writeExe(fake, '#!/bin/sh\necho \'{"ok":true,"actions":[]}\'\n'); fs.writeFileSync(fakeCli, '');
   const env = { ...process.env, AI_SUPERVISOR_USER_SCRIPTS_ROOT: root, AI_SUPERVISOR_RECONCILE_TEST: '1', AI_SUPERVISOR_NODE: fake, AI_SUPERVISOR_CLI: fakeCli };
   runInstall(env);
   const installed = JSON.parse(fs.readFileSync(path.join(root, 'schedule.json'), 'utf8'));
@@ -47,7 +54,7 @@ function cronWorld(t, { nodeBody } = {}) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, 'fakebin'), plugin = path.join(root, 'plugin');
   fs.mkdirSync(bin); fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
-  const exe = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  const exe = (name, body) => writeExe(path.join(bin, name), `#!/bin/sh\n${body}\n`);
   exe('gh', 'echo "[]"'); exe('git', 'echo git');
   exe('node', nodeBody || 'case "$2" in reconcile) gh pr list >/dev/null || exit 4; echo \'{"team":{"actions":[]}}\';; team) echo \'{"actions":[]}\';; esac');
   fs.writeFileSync(path.join(root, 'cli.mjs'), '');
@@ -104,7 +111,7 @@ test('issue #35 installing refuses when a required binary cannot be found for th
 test('issue #35 reconcile exits nonzero when the team tick fails, so the generated script logs a failing rc', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-rc35-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n', { mode: 0o755 });
+  writeExe(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n');
   fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
   const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
   const r = spawnSync(process.execPath, [cli, 'reconcile'], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_STATE_ROOT: root } });
@@ -178,9 +185,9 @@ test('issue #40 the gate script alone: exit 1 on a failing step, 2 on bad argume
 test('issue #40 real cli: preflight names a failing gh, an unreadable register and a missing provider, from any cwd, and exits 3', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-pf40-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n', { mode: 0o755 });
+  writeExe(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n');
   // git: --version style calls succeed, but reading the register from origin/main fails (the false pass at 97f0227)
-  fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\ncase "$*" in *show*) exit 42;; *) echo /nonexistent;; esac\n', { mode: 0o755 });
+  writeExe(path.join(bin, 'git'), '#!/bin/sh\ncase "$*" in *show*) exit 42;; *) echo /nonexistent;; esac\n');
   const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
   const r = spawnSync(process.execPath, [cli, 'preflight'], { cwd: '/', encoding: 'utf8', env: { PATH: bin, HOME: root, AI_SUPERVISOR_STATE_ROOT: root } });
   assert.equal(r.status, 3, r.stderr);
