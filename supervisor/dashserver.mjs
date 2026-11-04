@@ -15,7 +15,8 @@ import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
-import { matchRoute, nextTickHtml, renderRoute } from './dashrender.mjs';
+import { matchRoute, nextTickHtml, renderRoute, processesFragment } from './dashrender.mjs';
+import { createSampler } from './procsample.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { defaultRegistry } from './core.mjs';
@@ -75,7 +76,7 @@ export async function currentView({ root, config, now = Date.now(), tz = default
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
 export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
-  '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'] };
+  '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
@@ -120,7 +121,7 @@ export function diagnosticsData({ root, config, now, recorderDir }) {
   return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir });
 }
 const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, refreshing: p.refreshing, failed: p.failed });
-export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR }) {
+export function handler({ root, config, host, port, now = () => Date.now(), sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR }) {
   // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
   // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
   const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
@@ -129,6 +130,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
   const cachedView = opts => store.get(`${opts.timeline}:${opts.allTime}`, opts);
   const source = configSource(config);
   const activeStreams = new Set();
+  // Issue #568: one cached /proc reading shared by every tab (10 s); a new one is taken only when a page or the poll asks for it.
+  const procs = sampler || createSampler({ readJobs: () => readJobs(root), now });
   const allowedHost = `${host}:${port}`;
   // Mark as read (issue #253): the only write. Same-origin form POST; moves the marker to the time the page was built, so work that
   // finished between page load and click is still shown next time. It can never move the marker backwards or into the future.
@@ -219,7 +222,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
         if (r.error) return send(r.error === 'too-large' ? 413 : 404, 'text/plain; charset=utf-8', r.error === 'too-large' ? 'too large' : 'not found');
         return send(200, r.type, r.body, { 'content-security-policy': "default-src 'none'; sandbox", 'content-disposition': 'inline' });
       }
-      const apiPath = path === '/api/view.json' || path === '/api/next';
+      const apiPath = path === '/api/view.json' || path === '/api/next' || path === '/api/processes';
       const route = apiPath ? null : matchRoute(path);
       if (!apiPath && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
       const q0 = new URLSearchParams(search);
@@ -228,10 +231,14 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify({ ...view, pageData: pageData(prepared) }));
       // Issue #481: only the Next element, so a page that polls during a long tick does not re-fetch a whole page (a watch page carries its transcript).
       if (path === '/api/next') return send(200, 'text/html; charset=utf-8', nextTickHtml(view, view.generatedAt) || '<span class="muted">none</span>');
+      if (path === '/api/processes') {
+        const agent = /^[A-Za-z0-9_-]{1,40}$/.test(q0.get('agent') || '') ? q0.get('agent') : null;
+        return send(200, 'text/html; charset=utf-8', processesFragment({ ...view, generatedAt: now() }, procs.get(), agent));
+      }
       const diag = route.page === 'diagnostics', watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
-      const routed = diag ? { ...route, data: diagnosticsData({ root, config: source(), now: now(), recorderDir }) } : watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
+      const routed = diag ? { ...route, data: diagnosticsData({ root, config: source(), now: now(), recorderDir }) } : route.page === 'processes' ? { ...route, sample: procs.get() } : watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
         : evidence ? { ...route, data: route.page === 'evidence' ? listRuns(evidenceRoot) : readRun(evidenceRoot, route.id) } : route;
-      const out = renderRoute({ ...view, pageData: pageData(prepared) }, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
+      const out = renderRoute({ ...view, ...(route.page === 'processes' ? { generatedAt: now() } : {}), pageData: pageData(prepared) }, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
       // The evidence pages show same-origin screenshots, so only they may load images from 'self'; every other page keeps data: only.
       return send(out.status, 'text/html; charset=utf-8', withProof(out.html, root), evidence ? { 'content-security-policy': HEADERS['content-security-policy'].replace("img-src data:", "img-src 'self' data:") } : {});
     } catch (error) {

@@ -11,6 +11,7 @@ import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
+import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
@@ -46,6 +47,8 @@ export function matchRoute(pathname) {
   if ((m = /^\/work\/issue\/(\d{1,9})$/.exec(p))) return { page: 'issue', id: Number(m[1]) };
   if ((m = /^\/work\/job\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'job', id: m[1] };
   if ((m = /^\/jobs\/([a-f0-9]{32})$/.exec(p))) return { page: 'watch', id: m[1] };
+  if (p === '/system/processes') return { page: 'processes' };
+  if ((m = /^\/system\/processes\/([A-Za-z0-9_-]{1,40})$/.exec(p))) return { page: 'processes', agent: m[1] };
   if (p === '/evidence') return { page: 'evidence' };
   if ((m = /^\/evidence\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.exec(p))) return { page: 'evidence-run', id: m[1] };
   if (p === '/activity/timeline') return { page: 'timeline' };
@@ -53,7 +56,7 @@ export function matchRoute(pathname) {
   if (p === '/supervisor/upgrades') return { page: 'upgrades' };
   return null;
 }
-const parentOf = page => ({ agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity', evidence: 'system', 'evidence-run': 'system' })[page] || page;
+const parentOf = page => ({ processes: 'system', agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity', evidence: 'system', 'evidence-run': 'system' })[page] || page;
 
 // ---- icons: authored for this project (24x24, 2px stroke); no third-party icon set is bundled
 const ICONS = {
@@ -635,7 +638,7 @@ function systemPage(view) {
   const facts = card({ id: 'sys', title: 'Dispatcher', span: 6, movable: false, body: `<dl class="kv"><dt>Repository</dt><dd>${esc(view.repository)}</dd><dt>Team loop</dt><dd>${view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled')}</dd>
 <dt>Health</dt><dd>${badge(view.health.severity, view.health.label)}</dd><dt>Last tick</dt><dd>${t ? `${badge(t.status === 'ok' ? 'ok' : 'action', t.status)} ${lt(t.at)} (${esc(ago(t.at, now))})` : badge('action', 'none recorded')}</dd>
 <dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${nextTickHtml(view, now) || 'none'}</dd>
-<dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${lt(now)}</dd><dt>UI review evidence</dt><dd><a href="/evidence">Browse review runs</a></dd></dl>` });
+<dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${lt(now)}</dd><dt>Processes</dt><dd><a href="/system/processes">Live processes per agent</a></dd><dt>UI review evidence</dt><dd><a href="/evidence">Browse review runs</a></dd></dl>` });
   const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd><dt>State</dt><dd>${(vs => badge(vs.level, escT(vs.label), '', true))(versionStatus(v))}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
   const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
   return { title: 'System', body: grid('system', facts + ver + all) };
@@ -785,7 +788,70 @@ function diagnosticsPage(view, query, path, route) {
     : `<div class="diag-sparks">${diagSpark(r.hourly, 'loadMax', 'Load average (1 min), hourly peak', '')}${diagSpark(r.hourly, 'swapMaxPercent', 'Swap in use, hourly peak', ' %')}${diagSpark(r.hourly, 'iowaitAvg', 'CPU waiting on disk, hourly average', ' %')}</div>${plainTable(['Day', 'Samples', 'Load avg', 'Load peak', 'Swap peak', 'Disk wait avg', 'Disk wait peak', 'Blocked tasks peak'], r.days.map(x => (x.samples ? [x.day, x.samples, x.loadAvg, x.loadMax, `${x.swapMaxPercent}% (${kb(x.swapMaxKb)})`, `${x.iowaitAvg ?? '–'}%`, `${x.iowaitMax ?? '–'}%`, x.blockedMax] : [x.day, 0, '–', '–', '–', '–', '–', '–'])), 'Recorder figures per day')}<p class="sub">Disk I/O is the share of CPU time spent waiting on disk and the number of blocked tasks, both from the one-minute host samples.</p>`}` });
   return { title: 'Diagnostics', body: grid('diagnostics', intro + ticks + turn + lag + idle + rec) };
 }
-const PAGES = { diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+
+// ---- Live processes per agent and job (issue #568). Rendered from a procsample reading; /api/processes returns the same fragment
+// so processes.js can swap it in every few seconds. Names only (never arguments); a stale or failed reading is said so and dimmed.
+const mb = kb => (Number.isFinite(kb) ? (kb >= 1048576 ? `${dec1(kb / 1048576)} GB` : `${num(Math.round(kb / 1024))} MB`) : '–');
+const procLeft = n => (n ? `<span class="badge sev-warning" title="Still running after its job ended">${icon('warn')}${num(n)} leftover</span>` : '');
+const nameList = top => (top?.length ? top.map(t => `${esc(t.name)} \u00d7${num(t.count)}`).join(', ') : '–');
+function procStatus(sample, now) {
+  const st = readingStatus(sample, now), r = sample?.reading;
+  if (st === 'none' || !r) return { st: 'none', banner: `<p class="proc-note sev-action">${icon('alert')} No reading yet${sample?.error ? `: ${esc(sample.error)}` : ''}.</p>` };
+  const age = dur(Math.max(0, now - r.at)), at = `The figures are from ${esc(age)} ago`;
+  if (st === 'failed') return { st, banner: `<p class="proc-note sev-action">${icon('alert')} <b>Reading failed</b> (${esc(sample.error)}). ${at}; they are not current.</p>` };
+  if (st === 'stale') return { st, banner: `<p class="proc-note sev-warning">${icon('warn')} <b>Stale reading.</b> ${at}; they are not current.</p>` };
+  return { st, banner: `<p class="proc-note muted">Read ${esc(age === '0m' ? 'just now' : age + ' ago')} \u00b7 refreshes about every ${CLIENT_POLL_MS / 1000} s while this page is open \u00b7 memory is resident size (shared pages count in each process)</p>` };
+}
+function procSpark(sample, agent, colour) {
+  const h = sample.history?.[agent] || [];
+  return h.length >= 2 ? `<span title="Process count, last ${h.length} readings since the dashboard started">${sparkline(h.map(p => p.processes), colour)}</span>` : '<span class="muted" title="Needs two readings">–</span>';
+}
+function procTable(cols, rows, extra = '') {
+  return `<div class="tbl-wrap"><table class="proc-table"><thead><tr>${cols.map(c => `<th scope="col"${c.num ? ' class="num"' : ''}>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr${r.cls ? ` class="${r.cls}"` : ''}>${cols.map(c => `<td data-label="${esc(c.label)}"${c.num ? ' class="num"' : ''}>${c.html(r)}</td>`).join('')}</tr>`).join('')}</tbody>${extra}</table></div>`;
+}
+const jobSubject = j => (j.pr ? prLink(j.pr) : j.issue ? issueLink(j.issue) : '<span class="muted">–</span>');
+function procSummary(view, sample, now) {
+  const { st, banner } = procStatus(sample, now), r = sample.reading;
+  if (!r) return banner;
+  const cols = [
+    { label: 'Agent', html: a => (a.kind === 'agent' ? `<a href="/system/processes/${esc(encodeURIComponent(a.agent))}">${esc(a.agent)}</a>` : esc(a.label)) },
+    { label: 'Processes', num: true, html: a => num(a.processes) }, { label: 'Memory', num: true, html: a => mb(a.rssKb) }, { label: 'Swap', num: true, html: a => mb(a.swapKb) },
+    { label: 'Jobs', num: true, html: a => (a.kind === 'agent' ? num(a.jobs) : '–') }, { label: 'Leftovers', html: a => procLeft(a.leftoverProcesses) || '<span class="muted">none</span>' },
+    { label: 'History', html: a => procSpark(sample, a.agent || a.key, a.colour) }];
+  const rows = [...r.agents.map((a, i) => ({ ...a, kind: 'agent', colour: colourOf(a.agent, i) })),
+    { kind: 'row', key: '(unattributed)', label: 'Unattributed', ...r.unattributed, leftoverProcesses: 0, colour: 'var(--s3)', cls: 'proc-un' },
+    { kind: 'row', key: 'tower', label: 'Tower total', ...r.total, leftoverProcesses: 0, colour: 'var(--s4)', cls: 'proc-total' }];
+  const host = r.host?.swapTotalKb ? `<p class="proc-note muted">Host swap in use: ${mb(r.host.swapUsedKb)} of ${mb(r.host.swapTotalKb)}${r.host.memAvailableKb ? ` \u00b7 memory available: ${mb(r.host.memAvailableKb)} of ${mb(r.host.memTotalKb)}` : ''}</p>` : '';
+  const un = r.unattributed.processes ? `<p class="proc-note muted">Unattributed (not tied to any job; never guessed): ${nameList(r.unattributed.top)}${r.ambiguous ? ` \u00b7 ${num(r.ambiguous)} claimed by more than one job` : ''}</p>` : '';
+  return `${banner}<div class="proc-body" data-state="${st}">${procTable(cols, rows)}${host}${un}</div>`;
+}
+function procAgent(view, sample, agent, now) {
+  const { st, banner } = procStatus(sample, now), r = sample.reading;
+  if (!r) return banner;
+  const a = r.agents.find(x => x.agent === agent), jobs = r.jobs.filter(j => j.agent === agent);
+  if (!a) return `${banner}<div class="proc-body" data-state="${st}">${empty('No processes attributed to ' + agent, 'None of its jobs has a process running right now.', 'check')}</div>`;
+  const cols = [
+    { label: 'Job', html: j => jobLink(j.id) }, { label: 'Kind', html: j => esc(j.kind) }, { label: 'PR / issue', html: jobSubject },
+    { label: 'Processes', num: true, html: j => num(j.processes) }, { label: 'Memory', num: true, html: j => mb(j.rssKb) }, { label: 'Swap', num: true, html: j => mb(j.swapKb) },
+    { label: 'Age', num: true, html: j => (Number.isFinite(j.ageMs) ? esc(dur(j.ageMs)) : '–') },
+    { label: 'State', html: j => (j.leftover ? procLeft(j.processes) : badge('ok', 'Running')) }, { label: 'Largest by name', html: j => esc(nameList(j.top)) }];
+  const head = `<p>${num(a.processes)} processes, ${mb(a.rssKb)} memory, ${mb(a.swapKb)} swap across ${num(a.jobs)} jobs${a.leftoverJobs ? ` (${procLeft(a.leftoverProcesses)} from ${num(a.leftoverJobs)} ended jobs)` : ''}. ${procSpark(sample, agent, colourOf(agent))}</p>`;
+  return `${banner}<div class="proc-body" data-state="${st}">${head}${procTable(cols, jobs.map(j => ({ ...j, cls: j.leftover ? 'proc-left' : '' })))}</div>`;
+}
+export function processesFragment(view, sample, agent = null) {
+  REFS = view.refs || { issue: {}, pr: {}, job: {} };
+  try { return agent ? procAgent(view, sample, agent, view.generatedAt) : procSummary(view, sample, view.generatedAt); } finally { REFS = { issue: {}, pr: {}, job: {} }; }
+}
+function processesPage(view, query, pathname, route) {
+  const sample = route.sample || { ok: false, error: 'not available', reading: null }, agent = route.agent || null;
+  const known = new Set((sample.reading?.agents || []).map(a => a.agent).concat(Object.keys(view.usage || {})));
+  if (agent && sample.reading && !known.has(agent)) return null;
+  const inner = agent ? procAgent(view, sample, agent, view.generatedAt) : procSummary(view, sample, view.generatedAt);
+  const body = card({ id: agent ? 'proc-agent' : 'proc', title: agent ? `Jobs of ${agent}` : 'Processes by agent', span: 12, movable: false, body: `<div data-procs data-agent="${esc(agent || '')}" data-poll="${CLIENT_POLL_MS}">${inner}</div>` });
+  return { title: agent ? `Processes: ${agent}` : 'Processes', crumbs: agent ? [['/system', 'System'], ['/system/processes', 'Processes'], [null, agent]] : [['/system', 'System'], [null, 'Processes']], bodyClass: 'procs',
+    body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
+}
+const PAGES = { processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 export const PAGE_NAMES = Object.keys(PAGES);
 

@@ -369,7 +369,7 @@ test('server: unreadable state gives a generic 500 with no detail leaked', async
   const r = await s.get('/'); assert.equal(r.status, 500); assert.doesNotMatch(r.body, /schema|team config/);
 });
 test('the dashboard modules import no GitHub client, process spawner or network client', () => {
-  for (const f of ['dashboard', 'dashdata', 'dashrender', 'dashserver']) {
+  for (const f of ['dashboard', 'dashdata', 'dashrender', 'dashserver', 'procsample']) {
     const src = fs.readFileSync(new URL(`../supervisor/${f}.mjs`, import.meta.url), 'utf8');
     assert.doesNotMatch(src, /child_process|github\.mjs|node:https|fetch\(|node:net/, f);
   }
