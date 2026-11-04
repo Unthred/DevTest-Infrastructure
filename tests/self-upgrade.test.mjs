@@ -810,3 +810,15 @@ test('issue #488: refusal text hides private hostnames, URLs and their paths', a
   }
   assert.match(refusalText('validator could not contact tower.lan'), /validator could not contact/);
 });
+
+test('issue #489: the no-install path list decides per range; every other path needs an install', async t => {
+  const { needsNoInstall, rangeNeedsInstall } = await import('../supervisor/upgrade.mjs');
+  assert.equal(rangeNeedsInstall(['tests/a.test.mjs', 'docs/x.md', '.github/workflows/ci.yml', 'tools/ci/v.mjs', 'README.md']), false, 'a test/docs-only range needs none');
+  for (const f of ['bin/ai-supervisor', 'supervisor/team.mjs', 'tools/upgrade-supervisor.sh', 'contracts/cli.v1.json', 'package.json', 'src/new.mjs', 'docs/../bin/x', 'sub/README.md']) {
+    assert.equal(needsNoInstall(f), false, f);
+    assert.equal(rangeNeedsInstall(['tests/a.test.mjs', f]), true, `mixed range with ${f}`);
+  }
+  assert.equal(rangeNeedsInstall([]), false);
+  const w = world(t, { files: ['tests/a.test.mjs', 'bin/ai-supervisor'] });
+  assert.notEqual(await w.up.step(), 'no-supervisor-change', 'a range touching bin/ is not skipped');
+});
