@@ -431,7 +431,7 @@ function checklistError(v, expect) {
   const claims = v.descriptionClaims, plain = Array.isArray(claims) ? claims.map(({ materiality, reason, ...c }) => c) : claims;
   if (!items(plain, CLAIM_STATUS, 'claim') || !claims.every(c => (c.materiality === undefined || CLAIM_MATERIALITY.includes(c.materiality)) && (c.reason === undefined || (typeof c.reason === 'string' && c.reason.length > 0 && c.reason.length <= 1000)) && (c.materiality !== 'immaterial' || (c.status === 'false' && c.reason !== undefined)) && (c.reason === undefined || c.materiality !== undefined)))
     return 'descriptionClaims must list the pull request description claims as {claim, status: true|false|unverifiable, evidence} (an empty list when it makes none); materiality immaterial is only for a false claim and needs a reason';
-  const bad = claims.find(c => c.materiality === 'immaterial' && (MATERIAL_TOPIC.test(c.claim) || !TRIVIAL_DETAIL.test(c.claim)));
+  const bad = claims.find(c => c.materiality === 'immaterial' && !isTrivialSlip(c.claim));
   if (bad) return `a false claim about behaviour, safety, scope or what was verified cannot be immaterial (only a count or wording slip can): ${bad.claim.slice(0, 80)}`;
   if (v.verdict === 'PASS' && (v.requirements.some(r => r.status === 'not-met') || materialFalse(claims).length)) return 'PASS cannot have an unmet requirement or a false material description claim';
   // CHANGES must rest on something other than a false immaterial claim (a blocking finding that only restates one does not count).
@@ -445,7 +445,16 @@ export const CLAIM_MATERIALITY = ['material', 'immaterial'];
 // Claims a reader relies on to judge what a change does or how safe it is can never be immaterial.
 const MATERIAL_TOPIC = /\b(behaviou?rs?|safe|safety|secur\w*|secrets?|scope|verified|verif\w+|tested|passe[sd]|passing|gates?|ci|concurren\w*|races?|data loss|at a time|across processes|never|always)\b/i;
 // Only a count or a wording slip may be immaterial; any other claim (for example what the change does) stays material.
-const TRIVIAL_DETAIL = /\b\d[\d,.]*\s+(?:\w+\s+){0,2}(?:tests?|cases?|lines?|files?|commits?|assertions?|fixtures?|functions?|entries|hunks|sections?|words?|characters?|rounds?)\b|\b(?:typos?|wording|spelling|misspell\w*)\b/i;
+const TRIVIAL_DETAIL = /\b\d[\d,.]*\s+(?:tests?|cases?|lines?|files?|commits?|assertions?|fixtures?|functions?|entries|hunks|sections?|words?|characters?|rounds?)\b|\b(?:typos?|wording|spelling|misspell\w*)\b/i;
+// A claim is a trivial slip only when, with the count or wording term removed, the remainder is nothing but neutral filler (issue #449).
+// This is an allow-list, so an effect verb that is not listed (improves, fails, reduces ...) is refused rather than slipping through.
+const SLIP_FILLER = new Set(['the', 'a', 'an', 'of', 'in', 'on', 'at', 'and', 'or', 'pr', 'pull', 'request', 'description', 'title', 'body', 'comment', 'summary', 'text', 'there', 'it', 'its', 'this', 'has', 'have', 'had', 'is', 'are', 'was', 'were', 'be', 'contains', 'contain', 'touches', 'touch', 'lists', 'list', 'reports', 'report', 'shows', 'show', 'says', 'states', 'includes', 'include', 'with', 'for', 'about', 'only', 'exactly', 'total', 'suite', 'file', 'files', 'not', 'no', 'misspelled', 'misspelt', 'spelled', 'worded']);
+export function isTrivialSlip(claim) {
+  if (MATERIAL_TOPIC.test(claim) || !TRIVIAL_DETAIL.test(claim)) return false;
+  const rest = claim.replace(new RegExp(TRIVIAL_DETAIL.source, 'gi'), ' ').toLowerCase().split(/[\s,;:()'"`]+/).filter(Boolean);
+  // A token may be filler, a number, or a file path; anything else (a verb, a reason) makes the claim a behaviour claim.
+  return rest.every(w => SLIP_FILLER.has(w) || /^[\d.,%]+$/.test(w) || /^[\w./-]+\.\w+$/.test(w));
+}
 const materialFalse = claims => claims.filter(c => c.status === 'false' && c.materiality !== 'immaterial');
 const checklistText = v => (v.requirements ? `\n\nRequirements:\n${v.requirements.map(r => `- **${r.status}**: ${r.requirement} — ${r.evidence}`).join('\n') || '_none_'}\n\nPull request description claims:\n${v.descriptionClaims.map(c => `- **${c.status}**: ${c.claim} — ${c.evidence}`).join('\n') || '_none_'}\n\n` : '');
 export function readInboxVerdict(root, ticket, expect) {
