@@ -159,16 +159,15 @@ test('the Needs you item and the alert for a refused update carry the exact comm
   const cmd = `/root/bin/ai-supervisor self-upgrade hand-install ${TO}`;
   assert.equal(alerts.length, 1); assert.ok(alerts[0].includes(TO), 'full commit'); assert.ok(alerts[0].includes(cmd), 'the command');
   assert.equal(up.s.handDeploy.command, cmd);
-  const { buildView } = await import('../supervisor/dashboard.mjs').catch(() => ({}));
-  void buildView;
 });
 
-test('the real CLI command reaches SHA validation (no ReferenceError before the install route)', t => {
+test('the real CLI command refuses a malformed SHA with the exact-SHA message', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'handinst-cli-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const root = path.join(dir, 'root'); fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const cli = path.resolve(import.meta.dirname, '../supervisor/cli.mjs');
   const r = spawnSync(process.execPath, [cli, 'self-upgrade', 'hand-install', 'not-a-sha', '--state-root', root], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root }, timeout: 60000 });
   const out = r.stdout + r.stderr;
-  assert.notEqual(r.status, 0);
+  assert.equal(r.status, 1, out);
+  assert.match(out, /RESULT: refused: give the exact full 40-character commit SHA/);
   assert.doesNotMatch(out, /is not defined/);
 });
