@@ -1,5 +1,5 @@
 // Team dashboard server (issue #32). Node built-ins only. It reads the supervisor state and the cache/history the tick wrote; it makes
-// no GitHub call and no model call. GET/HEAD only, except two form posts, each needing an access proof (issue #434; the probe also has a per-agent cooldown): POST /mark-read moves the Mark as read marker (issue #253), and
+// no GitHub call and no model call. GET/HEAD only, except two form posts, each needing an access proof (issue #434; the probe has a 5-minute per-agent cooldown and Mark as read a 5-second shared cooldown, both kept in the state root): POST /mark-read moves the Mark as read marker (issue #253), and
 // POST /probe/<agent> runs one minimal allowance probe (issue #110).
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
@@ -131,7 +131,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     const at = Number(form.get('at')), t = now(), prev = readLastSeen(root);
     if (!/^\d{10,15}$/.test(form.get('at') || '') || at > t) return send(400, 'text/plain; charset=utf-8', 'bad time');
     const slot = reserveCooldown(root, 'mark-read', t, MARK_READ_COOLDOWN_MS);
-    if (!slot.ok) return send(429, 'text/plain; charset=utf-8', `too soon, try again at ${new Date(slot.retryAt).toISOString()}`, { 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    // A quick double-click lands back on the dashboard with a notice instead of a bare error page; nothing moved.
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=mark-read-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
     writeLastSeen(root, Math.max(at, prev ?? 0));
     return send(303, 'text/plain; charset=utf-8', 'marked', { location: '/' });
   };
