@@ -397,7 +397,7 @@ test('#550: a blocked review that is not a validator refusal, or that recorded a
   const r = await finish(w2, { verdict: 'PASS' });
   assert.equal(w2.team.s.reviewAttempts[r.rec.key], 1, 'a recorded verdict used the attempt');
 });
-test('#550: the PR notice and stall reasons say why the verdict file was refused and where the file is', async t => {
+test('#550: the dashboard stall reason and Needs you card say why the verdict file was refused and where the file is', async t => {
   const w = reqWorld(t); const a = await startAndRefuse(w, { verdict: 'PASS', extra: 1 }, `${VERDICT_REFUSED} verdict has an unknown field`);
   const p = w.gh.pulls[0];
   const rf = Object.values(w.team.s.reviewRefusals)[0];
