@@ -103,6 +103,6 @@ test('the dashboard names the hold for the agent it belongs to, and says "next t
 
 test('the report command reads local records only and prints the range it was asked for', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'idle-cli-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const r = spawnSync(process.execPath, ['supervisor/cli.mjs', 'team', 'idle-report', '--from', 'not-a-time'], { env: { ...process.env, AI_SUPERVISOR_ROOT: root }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['supervisor/cli.mjs', 'team', 'idle-report', '--from', 'not-a-time'], { env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root }, encoding: 'utf8' });
   assert.notEqual(r.status, 0); assert.match(r.stderr, /idle-report/);
 });
