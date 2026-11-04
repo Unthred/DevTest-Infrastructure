@@ -331,18 +331,14 @@ test("the probe lock: concurrent processes racing for one stale lock yield exact
   const lockDir = tmp(t);
   fs.mkdirSync(path.join(lockDir, "claude")); fs.writeFileSync(path.join(lockDir, "claude", "owner"), "2147483646");
   const mod = new URL("../supervisor/probe.mjs", import.meta.url).href;
-  const startAt = Date.now() + 1500;
+  // a start barrier, not a clock: the children never read the parent's time (a faked parent clock once made them spin for a day)
   const code = `const { acquireProbeLock } = await import(${JSON.stringify(mod)});
-    while (Date.now() < ${startAt}) {}
     const r = acquireProbeLock("claude", { lockDir: ${JSON.stringify(lockDir)} });
-    process.stdout.write(r ? "got" : "none");
     if (r) await new Promise(res => setTimeout(res, 1500));
-    if (r) r();`;
-  const { spawn } = await import("node:child_process");
-  const outs = await Promise.all(Array.from({ length: 8 }, () => new Promise(res => {
-    let out = ""; const c = spawn(process.execPath, ["--input-type=module", "-e", code]);
-    c.stdout.on("data", d => { out += d; }); c.on("close", () => res(out));
-  })));
+    if (r) r();
+    return r ? "got" : "none";`;
+  const { raceWorkers } = await import("./helpers/workers.mjs");
+  const outs = (await raceWorkers(8, code)).map(r => r.out);
   assert.equal(outs.filter(o => o === "got").length, 1, "exactly one process holds the lock: " + outs.join(","));
   // a live owner is not taken over however old the lock is
   const live = acquireProbeLock("aged", { lockDir });

@@ -12,7 +12,7 @@ import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
 import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, DEFAULT_REUSE_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
 import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
-import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS } from './testslots.mjs';
+import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup } from './testslots.mjs';
 import { upgradeLock } from './team.mjs';
 import { Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
@@ -376,7 +376,7 @@ async function main() {
     }
     if (a._[0] === 'status') { const st = testSlotStatus(root, limit); console.log(JSON.stringify(st, null, 2)); console.error(testSlotLine(st)); return; }
     const dash = process.argv.indexOf('--');
-    if (a._[0] !== 'run' || dash < 0 || dash === process.argv.length - 1) throw new SupervisorError('usage: test-slot status | test-slot sweep | test-slot run [--label TEXT] -- COMMAND [ARGS]');
+    if (a._[0] !== 'run' || dash < 0 || dash === process.argv.length - 1) throw new SupervisorError('usage: test-slot status | test-slot sweep | test-slot run [--label TEXT] [--max-minutes N] -- COMMAND [ARGS]');
     const rawCmd = process.argv.slice(dash + 1);
     const passFile = path.join(root, 'team', 'test-passes.jsonl');
     const configuredReuseHours = cfg.limits?.test_reuse_hours ?? DEFAULT_REUSE_HOURS;
@@ -399,13 +399,22 @@ async function main() {
     const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
     if (!release) { console.error('waited too long for a free test slot'); process.exitCode = 3; return; }
     const id = `${Date.now()}-${process.pid}`;
-    const { code, kill } = grant.limits
-      ? await runLimited(cmd, { env: testEnv(process.env, cfg.test_tmp_root), limits: grant.limits, klass, id, wrapper: cgroupWrapper(grant, id, { available: fs.existsSync('/run/systemd/system') }) })
-      : await runLimited(cmd, { env: testEnv(process.env, cfg.test_tmp_root), klass, id });
-    if (kill) {
-      console.error(`test-slot: ${kill.note}`);
-      try { fs.mkdirSync(path.join(root, 'team'), { recursive: true }); fs.appendFileSync(path.join(root, 'team', 'test-job-results.jsonl'), JSON.stringify({ at: new Date().toISOString(), label: a.label || null, ...kill }) + '\n'); } catch { /* the stderr line above is the record */ }
+    if (grant.limits) {
+      // A memory-limited job runs through the resource runner (own group, cgroup wrapper, memory watchdog).
+      const { code, kill } = await runLimited(cmd, { env: testEnv(process.env, cfg.test_tmp_root), limits: grant.limits, klass, id, wrapper: cgroupWrapper(grant, id, { available: fs.existsSync('/run/systemd/system') }) });
+      if (kill) {
+        console.error(`test-slot: ${kill.note}`);
+        try { fs.mkdirSync(path.join(root, 'team'), { recursive: true }); fs.appendFileSync(path.join(root, 'team', 'test-job-results.jsonl'), JSON.stringify({ at: new Date().toISOString(), label: a.label || null, ...kill }) + '\n'); } catch { /* the stderr line above is the record */ }
+      }
+      release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
     }
+    // Own process group, a maximum runtime, and the whole group is stopped (TERM, then KILL) on timeout, signal or exit.
+    const maxMinutes = Number(a['max-minutes']);
+    const maxRuntimeMs = Number.isFinite(maxMinutes) && maxMinutes > 0 ? maxMinutes * 60000 : DEFAULT_MAX_RUNTIME_MS;
+    const run = await runInGroup(cmd, { env: testEnv(process.env, cfg.test_tmp_root), maxRuntimeMs, graceMs: Number(process.env.AI_SUPERVISOR_TEST_GRACE_MS) || 5000 });
+    if (run.timedOut) console.error(`test-slot: stopped after the maximum runtime of ${Math.round(maxRuntimeMs / 60000)} minutes (process group terminated)`);
+    if (run.leftover) console.error('test-slot: WARNING processes of the test run survived SIGKILL');
+    const code = run.code;
     release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
   }
   if (command === 'dashboard') {
