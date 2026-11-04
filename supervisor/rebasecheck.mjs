@@ -106,6 +106,24 @@ function mentions(run, rev, name, defText) {
   return n;
 }
 
+// Issue #580: a conflict on a list (`['a', 'b']` on each side) is resolved by a union line holding both sides' items. The PR's line
+// is then not a substring of it. It survives when some line the new head has and the old head did not (a merged line, not an
+// untouched one) holds every word token of it, counted with multiplicity. Needs two or more tokens, so a bare word cannot hide
+// in any line that mentions it; a dropped statement still has a token (a call, a name) that no merged line carries.
+const tokensOf = t => t.match(/[A-Za-z0-9_$]+/g) || [];
+function unionSurvives(t, newFile, oldFile) {
+  const want = new Map();
+  for (const k of tokensOf(t)) want.set(k, (want.get(k) || 0) + 1);
+  if ([...want.values()].reduce((a, b) => a + b, 0) < 2) return false;
+  const oldSet = new Set(oldFile);
+  return newFile.some(l => {
+    if (oldSet.has(l)) return false;
+    const have = new Map();
+    for (const k of tokensOf(l)) have.set(k, (have.get(k) || 0) + 1);
+    return [...want].every(([k, n]) => (have.get(k) || 0) >= n);
+  });
+}
+
 function lostChanges(run, base, oldHead, newHead) {
   const oldMb = run(['merge-base', base, oldHead]).trim();
   const newMb = run(['merge-base', base, newHead]).trim();
@@ -124,6 +142,7 @@ function lostChanges(run, base, oldHead, newHead) {
       seen.add(t);
       if (countOf(newFile, t) >= countOf(oldFile, t) || addedAfter.has(t)) continue;
       if (t.length >= 4 && newFile.some(l => l.includes(t))) continue;   // a resolution that merged the line into a longer one keeps the change
+      if (unionSurvives(t, newFile, oldFile)) continue;   // issue #580: a list merged from both sides keeps every token
       lost.push({ file, kind: 'line', text: t.slice(0, 200) });
     }
   }
