@@ -94,6 +94,27 @@ test('tier 0, 1 and 2 tags are accepted', () => {
   assert.deepEqual(check(withEntry((e) => { e.tier = 2; }, 'rebase-conflicting-pr')), []);
 });
 
+// Strict-mode lint (ajv strictTypes): a keyword that applies to one JSON type needs that type declared in the same subschema.
+// Verified once against ajv@8 Ajv2020 {strict: true, strictTypes: true, strictRequired: true}; this keeps it from regressing without a dependency.
+function strictTypeProblems(s, where = '$', inherited = null) {
+  const out = [];
+  const need = (kw, type) => { if (kw.some((k) => k in s) && (s.type ?? inherited) !== type && !(type === 'number' && s.type === 'integer')) out.push(`${where}: needs type ${type}`); };
+  need(['properties', 'required', 'additionalProperties'], 'object');
+  need(['items', 'minItems', 'maxItems'], 'array');
+  need(['pattern', 'minLength'], 'string');
+  need(['minimum', 'maximum'], 'number');
+  for (const k of s.required || []) if (!s.properties || !(k in s.properties)) out.push(`${where}: required "${k}" not in same-level properties`);
+  // not/if/then apply to the same instance, so they inherit the parent's type; items and additionalProperties start fresh.
+  for (const k of ['not', 'if', 'then']) if (s[k] && typeof s[k] === 'object') out.push(...strictTypeProblems(s[k], `${where}.${k}`, s.type ?? inherited));
+  for (const k of ['items', 'additionalProperties']) if (s[k] && typeof s[k] === 'object') out.push(...strictTypeProblems(s[k], `${where}.${k}`));
+  for (const k of ['properties', '$defs']) for (const [n, x] of Object.entries(s[k] || {})) out.push(...strictTypeProblems(x, `${where}.${k}.${n}`));
+  return out;
+}
+
+test('the schema is strict-mode clean (types declared, required keys defined alongside)', () => {
+  assert.deepEqual(strictTypeProblems(SCHEMA), []);
+});
+
 test('the schema uses only keywords the test validator implements', () => {
   assert.deepEqual(unknownKeywords(SCHEMA), []);
 });
@@ -122,7 +143,7 @@ test('hard-limit paths and conditions are rejected', () => {
 });
 
 test('tier 2 rejects wildcard patterns in target names', () => {
-  for (const name of ['*', '**', 'repo-*', 'Unthred/*']) {
+  for (const name of ['*', '**', 'repo-*', 'Unthred/*', 'repo-?', 'repo-[ab]', 'Unthred/{a,b}']) {
     assert.ok(check(withEntry((e) => { e.scope.targets = [{ kind: 'git', name }]; }, 'rebase-conflicting-pr')).length > 0, name);
   }
 });
