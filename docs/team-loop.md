@@ -187,15 +187,15 @@ The dashboard shows the last 24 hours per agent beside the agent list, and an id
 
 `node tools/measure-implementer.mjs --from ISO --to ISO` reads the job and event records (the method of the issue's evidence: a job runs from `started` to the next run-ending event; it queues from `created` to its first `started`) and prints implementer busy time, idle time with work queued, and the time by job kind.
 
-Window 3 Nov 2026, 14:00 to 20:00 UTC (= UK), 360 minutes, run against the live records. **Before** is what happened (rebases held the implementer slot). **After** is a replay of the same records with rebases removed from the implementer view (the rebaser slot); it is a model of the change, not a measurement after deployment. Queued intervals are not shifted in the replay, so its idle-with-queue figure is a lower bound on what changes.
+Window 3 Nov 2026, 14:00 to 20:00 UTC (= UK), 360 minutes, run against the live records. **Before** is what happened (rebases held the implementer slot). **After** is a replay of the same records with rebases removed from the implementer view (the rebaser slot); it is a model of the change, not a measurement after deployment. Queued intervals are not shifted in the replay, so its idle-with-queue figure is an upper bound: work that would have started at once on a free slot is still counted as waiting. Re-measure after deployment for the verified-working state.
 
 | | before | after (replay) |
 |---|---|---|
 | implementer busy | 255.8 min (71%) | 180.8 min (50%) |
 | implementer idle | 104.2 min | 179.2 min |
-| idle with implementer work queued | 0.5 min | 0.4 min |
+| idle with implementer work queued | 7.2 min | 0.4 min |
 
-Implementer-job minutes by kind: fix 65.3, cifix 67.2 (fix plus cifix 51.8%), rebase 74.9 (29.3%), implement 48.4 (new work 18.9%). The idle-with-queue figure is small in both views because jobs that could start were mostly held by the overall cap and dependencies, not the implementer slot alone; the gain is that 74.9 minutes of rebase work no longer occupy the implementer slot, so new work is not made to wait behind it. Verified working after deployment is a separate state and has not been measured yet.
+Implementer-job minutes by kind: fix 65.3, cifix 67.2 (fix plus cifix 51.8%), rebase 74.9 (29.3%), implement 48.4 (new work 18.9%). The idle-with-queue figure is small in both views (the before figure counts jobs re-queued after an incomplete or recovered attempt, since the first version of the tool missed them) because jobs that could start were mostly held by the overall cap and dependencies, not the implementer slot alone; the gain is that 74.9 minutes of rebase work no longer occupy the implementer slot, so new work is not made to wait behind it. Verified working after deployment is a separate state and has not been measured yet.
 
 ## Circuit breaker for wasted usage (issue #549)
 

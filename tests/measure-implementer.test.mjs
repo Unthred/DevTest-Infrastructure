@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { measure } from '../tools/measure-implementer.mjs';
 const M = 60000;
 const ev = (job, kind, m) => ({ job, kind, at: m * M });
@@ -21,4 +22,27 @@ test('a job still running at the window end is counted to the end, and the windo
   const m = measure([{ id: 'a', kind: 'fix' }], [ev('a', 'created', -10), ev('a', 'started', -5)], 0, 20 * M);
   assert.equal(m.before.busyMinutes, 20);
   assert.equal(m.implementerMinutesByKind.fix, 20);
+});
+
+test('recovered and obsolete_pr_merged end a run, so a crashed run is not continuous', () => {
+  const jobs = [{ id: 'a', kind: 'fix' }, { id: 'b', kind: 'fix' }];
+  const events = [ev('a', 'created', 0), ev('a', 'started', 0), ev('a', 'recovered', 10), ev('a', 'started', 30), ev('a', 'completed', 40),
+    ev('b', 'created', 0), ev('b', 'started', 0), ev('b', 'obsolete_pr_merged', 5)];
+  const m = measure(jobs, events, 0, 60 * M);
+  assert.equal(m.before.busyMinutes, 20);   // a: 0-10 and 30-40, b: 0-5 (inside a's first run)
+});
+
+test('a job re-queued after an incomplete attempt counts as queued until its next start', () => {
+  const jobs = [{ id: 'a', kind: 'fix' }];
+  const events = [ev('a', 'created', 0), ev('a', 'started', 0), ev('a', 'incomplete', 10), ev('a', 'started', 25), ev('a', 'completed', 30)];
+  assert.equal(measure(jobs, events, 0, 60 * M).before.idleWithWorkQueuedMinutes, 15);
+  // negative: a completed job is not queued afterwards
+  assert.equal(measure(jobs, events.slice(0, 2).concat(ev('a', 'completed', 10)), 0, 60 * M).before.idleWithWorkQueuedMinutes, 0);
+});
+
+test('the CLI reports a missing jobs or events directory without a stack trace', () => {
+  const r = spawnSync(process.execPath, ['tools/measure-implementer.mjs', '--jobs', '/nonexistent-506', '--events', '/nonexistent-506', '--from', '2026-01-01T00:00:00Z', '--to', '2026-01-01T01:00:00Z'], { encoding: 'utf8' });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /directory not found/);
+  assert.doesNotMatch(r.stderr, /ENOENT|at /);
 });
