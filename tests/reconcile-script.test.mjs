@@ -10,6 +10,8 @@ const install = new URL('../tools/install-reconcile-user-script.sh', import.meta
 const remove = new URL('../tools/remove-reconcile-user-script.sh', import.meta.url).pathname;
 // Run the installer and fail with its own stderr, so a red CI run names the cause instead of a bare "Command failed".
 // Fixture executables are written to a temp name, fsynced and closed, then renamed into place, so no write descriptor is open when a spawn execs them.
+// Residual window (issue #563): rename keeps the inode, so a child forked by a concurrent async spawn while the temp fd was open still holds it until that child execs (O_CLOEXEC).
+// This narrows ETXTBSY but cannot remove it in principle; the retry in runInstall stays as the safety net. Tests here run in sequence with spawnSync, so the window is effectively closed.
 function writeExe(file, body) {
   const tmp = `${file}.tmp${process.pid}`;
   const fd = fs.openSync(tmp, 'w', 0o755);
