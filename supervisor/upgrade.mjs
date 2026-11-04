@@ -38,6 +38,12 @@ export function liveTickOutcome(tick) {
   const faults = Array.isArray(tick?.skipped) ? tick.skipped.filter(item => !item?.expected) : [];
   return faults.length ? { ok: false, reason: faults[0]?.reason } : { ok: true, reason: null };
 }
+// Issue #489: the explicit list of paths that do NOT need an install. The list is the only rule: every other path (bin/, supervisor/,
+// tools/ outside tools/ci/, a root file that is not *.md, and anything unknown) needs one.
+export const NO_INSTALL_PREFIXES = ['tests/', 'docs/', '.github/', 'tools/ci/'];
+export const needsNoInstall = file => typeof file === 'string' && !file.includes('..') && (NO_INSTALL_PREFIXES.some(p => file.startsWith(p)) || /^[^/]+\.md$/.test(file));
+export const rangeNeedsInstall = files => files.some(f => !needsNoInstall(f));
+
 export const envBackoffMs = attempts => Math.min(ENV_RETRY_MS * 2 ** Math.max(0, (attempts || 1) - 1), ENV_RETRY_MAX_MS);
 // Only the bootstrap installer cannot install itself: a change to it is a needs-homeowner card (issue #101). The main upgrader
 // (supervisor/upgrade.mjs, tools/upgrade-supervisor.sh, tools/rollback-supervisor.sh) installs like any other reviewed change.
@@ -277,7 +283,7 @@ export class SelfUpgrade {
       return 'diverged';
     }
     const files = this.d.changedFiles(from, target);
-    if (!files.some(f => f.startsWith('supervisor/'))) return 'no-supervisor-change';
+    if (!rangeNeedsInstall(files)) return 'no-supervisor-change';   // issue #489: only the no-install list exempts a path
     const touched = files.filter(f => BOOTSTRAP_PATHS.includes(f));
     if (touched.length) {
       await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${target}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically. To install it, paste on Tower: ${this.installCommand(target)} (it pauses starts, drains jobs, installs with validator and tests, checks dry-run, dashboard and the next live tick, rolls back on any failure, and always resumes).`);
