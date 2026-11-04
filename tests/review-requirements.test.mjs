@@ -288,13 +288,17 @@ test('#419: an immaterial mark on a behaviour, safety or verification claim is r
 test('#449: pure count and wording slips are still accepted as immaterial', async t => {
   for (const claim of ['the PR touches 3 files', 'the description has a typo in the title', 'tests/probe.test.mjs has 21 cases',
     // Issue #479: neutral count verbs directly before the count, "new" before the noun, and directory paths.
-    'adds 3 tests', 'the PR adds 3 tests', 'there are 4 new tests', 'removes 2 lines', 'touches 3 files in supervisor/', 'touches 3 files in supervisor/lib']) {
+    'adds 3 tests', 'the PR adds 3 tests', 'there are 4 new tests', 'removes 2 lines', 'touches 3 files in supervisor/', 'touches 3 files in supervisor/lib',
+    // Issue #513: from/to are neutral filler.
+    'removes 2 lines from supervisor/team.mjs', 'adds 3 tests to tests/', 'adds 3 tests from docs/ai']) {
     const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, claim }] });
     assert.equal(r.report.ingested.at(-1).error, undefined, claim);
   }
 });
 test('#479: widened count slips still refuse effect claims', async t => {
-  for (const claim of ['adds 3 tests that fix the retry loop', 'adds 3 new tests so the gate passes', 'removes the retry loop and 2 lines', 'touches 3 files in supervisor/ and improves retries', 'adds retry handling in 3 files']) {
+  for (const claim of ['adds 3 tests that fix the retry loop', 'adds 3 new tests so the gate passes', 'removes the retry loop and 2 lines', 'touches 3 files in supervisor/ and improves retries', 'adds retry handling in 3 files',
+    // Issue #513: a slash alone does not make a token a path; it must start at a top-level directory.
+    'adds 3 tests fix/retry', 'adds 3 tests and/or', 'removes 2 lines in disable/', 'adds 3 tests disable/auth/']) {
     const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, claim }] });
     assert.match(r.report.ingested.at(-1).error, /cannot be immaterial/, claim);
   }
