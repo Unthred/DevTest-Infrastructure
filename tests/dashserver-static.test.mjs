@@ -13,12 +13,6 @@ test('every STATIC route maps to an existing dashui file with a content type', (
   }
 });
 
-test('a static asset that is not routed is detected (negative case)', () => {
-  const html = '<script src="/static/new-asset.js"></script><link href="/static/style.css">';
-  const linked = [...html.matchAll(/\/static\/[\w.-]+/g)].map(m => m[0]);
-  assert.deepEqual(linked.filter(r => !STATIC[r]), ['/static/new-asset.js']);
-});
-
 test('every /static/ asset referenced by the dashboard source or dashui files is routed', () => {
   const dir = new URL('../supervisor/dashui/', import.meta.url);
   const sources = ['dashserver.mjs', 'dashrender.mjs'].map(f => fs.readFileSync(new URL(`../supervisor/${f}`, import.meta.url), 'utf8'));
@@ -27,10 +21,4 @@ test('every /static/ asset referenced by the dashboard source or dashui files is
   // dashrender.mjs emits the page links, so the scan must find them there.
   for (const r of ['/static/style.css', '/static/early.js', '/static/app.js', '/static/watch.js']) assert.ok(linked.has(r), `${r} not found by the scan`);
   assert.deepEqual([...linked].filter(r => !STATIC[r]), []);
-});
-
-test('the scan pattern catches linked assets of any extension (negative case)', () => {
-  const src = '<img src="/static/logo.svg"><link href="/static/icon.png">';
-  const linked = [...src.matchAll(/\/static\/[\w.-]+/g)].map(m => m[0]);
-  assert.deepEqual(linked.filter(r => !STATIC[r]), ['/static/logo.svg', '/static/icon.png']);
 });

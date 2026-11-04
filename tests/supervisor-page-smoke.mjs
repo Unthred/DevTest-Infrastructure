@@ -89,7 +89,7 @@ const site = path.join(storageRoot, 'site');
 try {
   fs.mkdirSync(site, { recursive: true, mode: 0o755 }); fs.chmodSync(storageRoot, 0o711);
   const view = await fixtureSite(site);
-  check('fixture renders all five health cards with the expected colours', view.supervisor.cards.map(c => `${c.id}:${c.severity}`).join(',') === 'version:warning,tick:ok,leases:action,errors:warning,drift:warning',
+  check('fixture renders all six health cards with the expected colours', view.supervisor.cards.map(c => `${c.id}:${c.severity}`).join(',') === 'version:warning,tick:ok,testruns:ok,leases:action,errors:warning,drift:warning',
     { cards: view.supervisor.cards.map(c => `${c.id}:${c.severity}`) });
   const pkg = lock.packages['playwright-core'];
   const restore = await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] }, null);
