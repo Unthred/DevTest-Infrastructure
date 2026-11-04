@@ -442,7 +442,7 @@ test('#132 child liveness compares the recorded start time and treats a zombie a
   assert.equal(childAlive({ childPid: pid, childStart: zstart }), true);
   process.kill(pid, 'SIGKILL');
   // Depending on the host's init/shell, the killed process stays a zombie or is reaped at once; both are dead.
-  for (let i = 0; i < 100 && processInfo(pid) && processInfo(pid).state !== 'Z'; i++) await new Promise(r => setTimeout(r, 20));
+  for (let i = 0; i < 100; i++) { const cur = processInfo(pid); if (!cur || cur.state === 'Z') break; await new Promise(r => setTimeout(r, 20)); }   // one read per poll: the process can be reaped between two reads
   const after = processInfo(pid);
   assert.ok(after === null || after.state === 'Z', `expected zombie or reaped, got ${after && after.state}`);
   assert.equal(childAlive({ childPid: pid, childStart: zstart }), false);
