@@ -3,6 +3,35 @@
 // sends nothing. It mirrors applyLayout and sanitizeCollapsed in logic.mjs (a test runs both on the same input); app.js applies
 // the same layout again once it loads, so a failure here only costs the early draw. A free layout (v: 2, a saved place and size per
 // card, grid.mjs) is applied as the card's --cx/--cy/--cw/--ch with the .free class on the grid; an old order/span/h layout is applied as before.
+// Local time (issue #493): every <time data-local> and [data-lms] is put in this browser's zone here, before the first paint, so a time
+// never changes text after the first draw. Mirrors formatLocal and timeOnly in logic.mjs (a test compares them); app.js skips .lz nodes.
+(function () {
+  try {
+    var zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    try { new Intl.DateTimeFormat('en-GB', { timeZone: zone }); } catch (e) { zone = 'UTC'; }
+    var fmt = new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' });
+    var local = function (ms) {
+      var p = {}; fmt.formatToParts(new Date(ms)).forEach(function (x) { p[x.type] = x.value; });
+      return p.year + '-' + p.month + '-' + p.day + ' ' + p.hour + ':' + p.minute + ' ' + p.timeZoneName;
+    };
+    var times = document.querySelectorAll('time[data-local]'), i;
+    for (i = 0; i < times.length; i++) {
+      var el = times[i], ms = Date.parse(el.getAttribute('datetime'));
+      if (!isFinite(ms)) continue;
+      el.setAttribute('title', el.textContent + ' (stored in UTC); shown in your time zone, ' + zone);
+      el.textContent = local(ms);
+      el.classList.add('lz');
+    }
+    var svg = document.querySelectorAll('[data-lms]');
+    for (i = 0; i < svg.length; i++) {
+      var e2 = svg[i], m2 = Number(e2.getAttribute('data-lms'));
+      if (!isFinite(m2)) continue;
+      var t = local(m2); if (e2.hasAttribute('data-tonly')) t = t.slice(11);
+      e2.textContent = (e2.getAttribute('data-tpl') || '{t}').replace('{t}', function () { return t; });
+      e2.classList.add('lz');
+    }
+  } catch (e) { /* app.js converts them later */ }
+})();
 (function () {
   try {
     var w = window.innerWidth, bp = w >= 1100 ? 'desktop' : w >= 640 ? 'tablet' : 'phone';
