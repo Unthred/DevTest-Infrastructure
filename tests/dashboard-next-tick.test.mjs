@@ -69,3 +69,12 @@ test('the client script never writes "due now"', () => {
   // the client must not claim overdue the moment the slot passes: grace first, and it re-reads the server's Next stat
   assert.match(js, /TICK_GRACE_MS/); assert.match(js, /refreshNext\(\)/); assert.match(js, /tick due, starting/);
 });
+test('a page that never reloads keeps polling while the bar says running, so running goes back to scheduled', async t => {
+  const root = emptyRoot(t), release = await tickLock(root);
+  assert.match(bar(await page(root, T0, T0 + 6 * MIN)), /data-tick-state="running" data-running/);
+  release();
+  const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  // tickClock must poll on the running element (it has neither data-countdown nor data-overdue) and swap in the server's next state
+  assert.match(js, /\.statusbar \[data-running\]'\)\.length\) refreshNext\(\)/);
+  assert.match(js, /cur\.replaceWith\(document\.importNode\(fresh, true\)\)/);
+});

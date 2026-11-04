@@ -48,6 +48,7 @@ function tickClock() {
     if (late >= TICK_GRACE_MS) el.textContent = `overdue by ${fmt(late)}`;
     refreshNext();
   }
+  if ($$('.statusbar [data-running]').length) refreshNext();   // a running tick ends without a reload: keep polling until the server says otherwise
 }
 tickClock(); setInterval(tickClock, 1000);
 

@@ -312,7 +312,7 @@ const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Ma
 function nextTickHtml(view, now) {
   const n = view.nextTick || (view.nextTickAt ? { state: 'scheduled', at: view.nextTickAt, lastAt: view.tick?.at } : null);
   if (!n) return '';
-  if (n.state === 'running') return `<b data-tick-state="running">tick running since ${lt(n.since)}</b>`;
+  if (n.state === 'running') return `<b data-tick-state="running" data-running>tick running since ${lt(n.since)}</b>`;
   const last = `, last tick ${lt(n.lastAt)}`;
   if (n.state === 'starting') return `<b data-tick-state="starting"><span data-overdue="${n.at}">tick due, starting</span></b>`;
   if (n.state === 'overdue') return `<b data-tick-state="overdue"><span data-overdue="${n.at}">overdue by ${esc(clock(now - n.at))}</span>${last}</b>`;
