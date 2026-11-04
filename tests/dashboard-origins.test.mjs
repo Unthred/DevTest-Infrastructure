@@ -75,3 +75,13 @@ test('dashboard.allowed_origins accepts exact origins only', () => {
   assert.equal(applyLocalOverride(base, { dashboard: { allowed_origins: [PUBLIC] } }).dashboard.allowed_origins[0], PUBLIC);
   assert.throws(() => applyLocalOverride(base, { dashboard: { allowed_origins: ['*'] } }), /allowed_origins/);
 });
+
+test('a refused write is logged, and a wrong Host gets a readable page with the received values', async t => {
+  const s = await serve(t), lines = [], orig = console.error; console.error = (...a) => lines.push(a.join(' ')); t.after(() => { console.error = orig; });
+  await s.writes.watch('https://other.example.test');
+  const r = await new Promise((res, rej) => { const q = http.request({ host: '127.0.0.1', port: s.port, path: '/watch', method: 'POST', headers: { host: 'evil.example', origin: PUBLIC, 'content-type': 'application/x-www-form-urlencoded' } }, x => { let b = ''; x.on('data', d => (b += d)); x.on('end', () => res({ status: x.statusCode, body: b })); }); q.on('error', rej); q.end('kind=issue&number=10&action=watch'); });
+  console.error = orig;
+  assert.equal(r.status, 421); assert.match(r.body, /Back to the dashboard/); assert.match(r.body, /evil\.example/);
+  assert.ok(lines.some(l => l.includes('write refused') && l.includes('"https://other.example.test"')));
+  assert.ok(lines.some(l => l.includes('unexpected host') && l.includes('host="evil.example"')));
+});

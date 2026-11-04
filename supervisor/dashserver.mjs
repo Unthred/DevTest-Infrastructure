@@ -153,11 +153,12 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // A readable page with a way back, not a bare text body. It names the Host and Origin received so the right origin can be configured;
   // both are escaped, and the response is still a 403 that changes nothing.
   const esc = v => String(v ?? '(none)').slice(0, 200).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+  const refuseHost = (req, send) => { const q = v => JSON.stringify(String(v ?? '(none)').slice(0, 200)); console.error(`dashboard: write refused, unexpected host (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return send(421, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Unexpected host</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>Unexpected host</h1><p>The dashboard did not accept this action because the request arrived with a Host it does not serve (unexpected host). Nothing was changed.</p><p>Host received: <code>${esc(req.headers.host)}</code><br>Origin received: <code>${esc(req.headers.origin)}</code></p><p>If a reverse proxy sits in front of this dashboard, it must forward the upstream Host (see docs/supervisor.md).</p><p><a href="/">Back to the dashboard</a></p></main></body></html>`);};
   const refuseOrigin = (req, send) => { const q = v => JSON.stringify(String(v ?? '(none)').slice(0, 200)); console.error(`dashboard: write refused (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return send(403, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Request refused</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>Request refused</h1><p>The dashboard did not accept this action because it came from an address that is not allowed (cross-origin request refused). Nothing was changed.</p><p>Origin received: <code>${esc(req.headers.origin)}</code><br>Host received: <code>${esc(req.headers.host)}</code></p><p>If this is the public address of this dashboard, add that origin to <code>dashboard.allowed_origins</code> in <code>team.local.json</code>.</p><p><a href="/">Back to the dashboard</a></p></main></body></html>`);};
   // Mark as read (issue #253): the only write. Same-origin form POST; moves the marker to the time the page was built, so work that
   // finished between page load and click is still shown next time. It can never move the marker backwards or into the future.
   const markRead = async (req, res, send) => {
-    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+    if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
@@ -175,7 +176,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // Watch (issue #430): the third write. It changes only which changes the dashboard follows; it starts, stops and alters no work.
   // Same host, same origin, one small form post, and the access proof (issue #434) like the other writes. The target must be an issue or PR the tick has seen.
   const watch = async (req, res, send) => {
-    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+    if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
@@ -244,7 +245,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.
     const probePath = req.method === 'POST' ? /^\/probe\/([A-Za-z0-9_-]{1,40})$/.exec(reqPath) : null;
     if (probePath) {
-      if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+      if (req.headers.host !== allowedHost) return refuseHost(req, send);
       if (!originAllowed(req)) return refuseOrigin(req, send);
       const chunks = []; let size = 0;
       for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
