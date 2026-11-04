@@ -31,7 +31,12 @@ Today the homeowner is asked about actions they would always approve (release a 
 ### D1 — A policy is a versioned file of standing permissions
 
 - The policy is a single JSON document, versioned in Git and reviewed like code. It carries `contract` (a version string, e.g. `policy.v1`), `policyVersion` (an integer that increases with every change) and `entries`.
-- A **local override** may exist on the host. It can only **narrow** the committed policy: disable an entry, lower a bound, shrink a scope. It can never add an entry, enable a disabled one, raise a bound, widen a scope or change a tier. The loader computes the merge and rejects the whole override, not just the offending field, if any part widens (see D5).
+- A **local override** may exist on the host. It can only **narrow** the committed policy: disable an entry, lower a bound, shrink a scope. It can never add an entry, enable a disabled one, raise a bound, widen a scope or change a tier. The loader computes the merge and rejects the whole override, not just the offending field, if any part widens.
+
+Local override and merge:
+
+- The merged effective policy must be a subset of the committed one: every entry id exists in both, no bound is higher, no scope is wider, `enabled` is not flipped from `false` to `true`, `tier` is unchanged.
+- Any violation rejects the override and the host keeps the committed policy, with an alert.
 - The policy is data. The host never executes a policy field as a command; an entry names an **action class** from a catalogue compiled into the host (D3).
 - An unknown field, an unknown `contract` version, or an unparseable file makes the loader reject the file. With no valid policy loaded the host runs with an empty one: nothing is pre-authorised and everything becomes a card.
 
@@ -77,6 +82,7 @@ Required bounds are stricter as the tier rises. An entry at tier 2 without `maxP
 - The `tier` on an entry is a **tag for the reader and a check**, not a source of truth. At load the host compares it with the action class's minimum tier. If the tag is lower than the minimum the loader rejects the entry. A tag higher than the minimum is allowed (it is stricter, for example to require stricter bounds).
 - At use the host computes the tier of the concrete action as ADR-0009 requires (from target, environment, action and the paths or resources involved). The entry applies only if the computed tier is **less than or equal to** the entry's tag and **at most 2**. If the real action is higher, for example it touches a path that makes it tier 3, the entry does not cover it and the host raises a card (D6). The Run is held when the action is part of a Run (ADR-0009 `ScopeBreach`).
 - A model name, an adapter name or an adapter's `trustedForHighRisk` declaration (ADR-0010) is never a permission and cannot make an entry apply.
+- This policy grants actions, not adapters. It does not decide which adapter may be assigned tier 2 or 3 Run work (ADR-0010 D5); that is an open question below. Until it is answered the host assigns no adapter to tier 2 or 3 Run work without a Human decision (an `ActionRequired` card).
 
 ### D5 — Tier 3 and the hard limits cannot be granted
 
@@ -93,20 +99,17 @@ Two rules, both enforced by the loader and again at use:
 
    The loader rejects any entry whose `action` class, `scope.targets`, `scope.paths` or `conditions` touch a hard limit. Each action class in the catalogue is marked in code as touching a hard limit or not; a class that does is simply not selectable by a policy.
 
+3. **A hard-limit action is refused, never carded.** If an action that touches a hard limit is attempted at run time (by an agent, a Run, a bug or a stale file), the host refuses it outright and raises an alert (`ScopeBreach` when it is part of a Run). No Approve/Reject card is raised and no Human Approve can authorise it, so the D6 card never applies to a hard limit. Changing a hard limit is a change to host code, reviewed in Git, not a decision made on the dashboard.
+
 Because the loader rejects the file, a policy author learns of the problem at review time, not at the moment an action is attempted. The host also checks the hard limits at use, so a bug in the loader or a hand-edited file cannot grant one.
-
-Local override and merge:
-
-- The merged effective policy must be a subset of the committed one: every entry id exists in both, no bound is higher, no scope is wider, `enabled` is not flipped from `false` to `true`, `tier` is unchanged.
-- Any violation rejects the override and the host keeps the committed policy, with an alert.
 
 ### D6 — Anything not covered becomes one Approve/Reject card
 
-- An action that is not covered by an enabled entry, exceeds a bound, or fails a condition becomes an **action-required item**: one card on the dashboard "Needs you" panel. It states what will happen, on what, at which computed tier, and what happens on reject. It is never a question in chat or in an agent's report; agent prompts say so.
+- An action that is not covered by an enabled entry, exceeds a bound, or fails a condition, and does not touch a hard limit (D5 rule 3: those are refused, not carded), becomes an **action-required item**: one card on the dashboard "Needs you" panel. It states what will happen, on what, at which computed tier, and what happens on reject. It is never a question in chat or in an agent's report; agent prompts say so.
 - One card per distinct action on one subject. Repeating the same uncovered action does not raise another card while one is open.
-- **Approve** carries out that single action once. It does not create or widen an entry. **Reject** records the decision and takes the action's reject path (`onReject`), for example: leave the item as it is and do not retry for the cooldown period.
+- **Approve** carries out that single action once (never a hard-limit action, which has no card). It does not create or widen an entry. **Reject** records the decision and takes the action's reject path (`onReject`), for example: leave the item as it is and do not retry for the cooldown period.
 - Making an approval standing means editing the policy file in Git and passing review (D1). The host may suggest an entry when the Human approves the same action repeatedly; it does not write one.
-- Tier 3 actions raise a card whose approval is a single, explicit Human decision. The card shows the computed tier and the reason.
+- Tier 3 actions that do not touch a hard limit raise a card whose approval is a single, explicit Human decision. The card shows the computed tier and the reason.
 
 ### D7 — Every action under a standing permission is recorded
 
@@ -122,7 +125,7 @@ Local override and merge:
 
 ## Example policy
 
-A policy file with five entries, all at tiers 0 to 2. The tier tag follows the action class minimum shown in the rationale column. Hard-limit and tier 3 examples follow.
+A policy file with five entries, all at tiers 0 to 2. Each tier tag equals or exceeds the action class minimum (D4). Hard-limit and tier 3 examples follow.
 
 ```json
 {
@@ -215,10 +218,10 @@ Each of these fails at load, with the entry id and rule in the message.
 Rejected: `host.reboot` touches a hard limit (no reboot). Not selectable.
 
 ```json
-{ "id": "tune-ha", "action": "ha.service-call",
+{ "id": "tune-ha", "action": "ha.service-call", "tier": 2,
   "scope": { "targets": [ { "kind": "live-system", "name": "home-assistant-production" } ] } }
 ```
-Rejected: a production live-system target beyond read only is a hard limit.
+Rejected: a production live-system target beyond read only is a hard limit, whatever the tier tag.
 
 ```json
 { "id": "auto-merge-own-work", "action": "pr.merge", "tier": 3, "...": "..." }
@@ -272,4 +275,4 @@ Rejected: the tag 0 is below the action class minimum (1).
 
 - Extends ADR-0009 (D2 targets and tiers, D4 no credentials for Implementers, D5 mechanical scope). Consistent with ADR-0010 (the host owns tiers and every consequential action; `trustedForHighRisk` is not a permission). Does not supersede either.
 - Related drafts: adapter contract (#237), event contract (#239; event names used here: `PolicyActionTaken`, `PolicyRejected`, `ActionRequired`, `ActionResolved`, to be confirmed there). JSON Schema drafts: #240 to #242, the policy file schema is #241. Implementation: #102 after the Human accepts this ADR.
-- Open questions for review: whether `maxPerDay` should be required at tier 1 too; whether the host should be allowed to suggest a new entry after repeated approvals; whether `window` is needed in the first version.
+- Open questions for review: how the host decides which adapter may be assigned tier 2 or 3 work (ADR-0010 D5), for example a Human-maintained per-adapter maximum tier in host configuration checked against the Run's computed tier, with `trustedForHighRisk` only an input; whether `maxPerDay` should be required at tier 1 too; whether the host should be allowed to suggest a new entry after repeated approvals; whether `window` is needed in the first version.
