@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { resumeAllowed } from './breaker.mjs';
 import { rangeEqual } from './rangediff.mjs';
 import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
 import path from 'node:path';
@@ -298,7 +299,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -438,6 +439,16 @@ async function main() {
       const release = tickLock(root);
       if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
       try { console.log(JSON.stringify({ issue: n, filed: await (await teamFor(root, registry)).acceptSplit(n) })); } finally { release(); }
+      return;
+    }
+    if (a._[0] === 'breaker') {   // issue #549: the circuit breaker's status, and the homeowner's resume
+      const sub = a._[1];
+      if (sub === 'status') { console.log(JSON.stringify(await (await teamFor(root, registry)).breakerStatus(), null, 2)); return; }
+      if (sub !== 'resume' || !a._[2]) throw new SupervisorError('usage: team breaker status | team breaker resume CAUSE|global|all');
+      if (!resumeAllowed()) throw new SupervisorError('team breaker resume needs a person at a terminal; a supervised job cannot clear the breaker');
+      const release = tickLock(root);
+      if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
+      try { console.log(JSON.stringify((await teamFor(root, registry)).breakerResume(String(a._[2])))); } finally { release(); }
       return;
     }
     if (a._[0] === 'reopen') {   // issue #490: let an issue be implemented again after its pull request was closed unmerged
