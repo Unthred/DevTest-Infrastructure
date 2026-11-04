@@ -77,13 +77,14 @@ async function serve(t) {
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, pulls: [], issues: [{ number: 10, title: 'Ten', state: 'OPEN', labels: [] }] }));
   const clock = { now: NOW };
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
-  const port = server.address().port; server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => clock.now }));
+  const port = server.address().port; const mount = () => server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => clock.now })); mount();
+  const restart = () => { server.removeAllListeners('request'); mount(); };
   const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
     const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject);
     r.end(body);
   });
   const post = (at, headers = {}, proof) => req('POST', '/mark-read', { headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: `at=${at}&proof=${proof === undefined ? writeToken(root) : proof}` });
-  return { clock, root, port, get: p => req('GET', p), req, post };
+  return { clock, root, port, restart, get: p => req('GET', p), req, post };
 }
 
 test('page shows the panel with a copy button, a picker and Mark as read; page load does not move the marker', async t => {
@@ -110,7 +111,7 @@ test('Mark as read moves the marker to the page time and the next view uses it',
   const body = (await s.get('/')).body;
   assert.match(body, /Last marked as read: <time[^>]*data-local>2026-11-02 13:00 UTC<\/time>/);
   assert.match(body, /PRs merged <span class="muted">\(0\)/);          // the merge 4 h ago is now before the marker
-  assert.equal((await s.post(H(9))).status, 429, 'second mark inside the cooldown is refused');
+  { const r = await s.post(H(9)); assert.equal(r.status, 303, 'second mark inside the cooldown goes back to the dashboard'); assert.equal(r.headers.location, '/?notice=mark-read-cooldown'); assert.ok(Number(r.headers['retry-after']) >= 1); assert.match((await s.get('/?notice=mark-read-cooldown')).body, /that click was ignored/); assert.doesNotMatch((await s.get('/')).body, /that click was ignored/); }
   s.clock.now += 6000;
   assert.equal((await s.post(H(9))).status, 303); assert.equal(readLastSeen(s.root), H(2), 'never moves backwards');
 });
@@ -141,7 +142,12 @@ test('Mark as read has a cooldown that survives restart and a refused proof take
   const s = await serve(t);
   assert.equal((await s.post(H(2), {}, 'f'.repeat(64))).status, 403);
   assert.equal((await s.post(H(2))).status, 303, 'refused proof took no slot');
-  const r = await s.post(H(3)); assert.equal(r.status, 429); assert.match(r.body, /too soon, try again at/);
+  assert.equal((await s.post(H(3))).status, 303);
   assert.equal(readLastSeen(s.root), H(2), 'nothing moved');
+  s.restart(); s.clock.now += 1000;
+  const r = await s.post(H(3)); assert.equal(r.headers.location, '/?notice=mark-read-cooldown', 'a new handler still refuses inside the cooldown');
+  assert.equal(readLastSeen(s.root), H(2), 'still nothing moved');
+  s.clock.now += 6000; s.restart();
+  assert.equal((await s.post(H(1))).headers.location, '/', 'after the cooldown a restarted handler accepts again');
   assert.ok(fs.existsSync(path.join(s.root, 'dashboard', 'write-cooldown.json')), 'kept in the state root');
 });
