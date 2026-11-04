@@ -95,8 +95,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -189,8 +190,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -290,8 +292,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -394,8 +397,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -512,8 +516,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -639,8 +644,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -729,8 +735,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -823,8 +830,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -916,8 +924,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -1023,8 +1032,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -1123,8 +1133,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -1213,8 +1224,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -1308,8 +1320,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -1399,8 +1412,9 @@
           },
           "propertyNames": {
             "not": {
-              "pattern": "^(?:log|logs|stdout|stderr|output|transcript|prompt|diff|patch|content|contents|body|env|environment|secret|secrets|token|tokens|password|passwd|cookie|cookies|credential|credentials|authorization|apikey|api_key|privatekey|private_key)$",
-              "$comment": "Case-insensitive match is applied by validators that support the i flag; the closed key set is the real guard."
+              "type": "string",
+              "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$",
+              "$comment": "Case-insensitive by spelling out both cases of each letter, because JSON Schema patterns carry no flags. The closed key set (additionalProperties: false) remains the primary guard; this is defence in depth."
             }
           }
         }
@@ -1423,9 +1437,10 @@
     },
     "noSecret": {
       "not": {
-        "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----|\\b(?:ghp|gho|ghu|ghs|ghr|github_pat|sk|pk|xox[abprs])[-_][A-Za-z0-9_-]{16,}|\\bAKIA[0-9A-Z]{16}\\b|\\b[Bb]earer\\s+[A-Za-z0-9._~+/=-]{16,}|\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{5,}"
+        "type": "string",
+        "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----|\\b(?:ghp|gho|ghu|ghs|ghr|github_pat|sk|pk|xox[abprs])[-_][A-Za-z0-9_-]{16,}|\\bAKIA[0-9A-Z]{16}\\b|\\b[Bb]earer\\s+[A-Za-z0-9._~+/=-]{16,}|\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{5,}|\\b(?:[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss][Ww][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy])\\s*[=:]\\s*\\S{4,}"
       },
-      "description": "Rejects secret-shaped values (private key header, common token prefixes, cloud key ids, bearer values, JWTs). The writer also runs the full secret scanner (D6)."
+      "description": "Rejects secret-shaped values (private key header, common token prefixes, cloud key ids, bearer values, JWTs, and key=value pairs naming a password, secret, token or API key). Generic high-entropy strings are NOT detected here; the writer full secret scanner (D6) must cover them."
     },
     "ident": {
       "allOf": [
@@ -1475,13 +1490,13 @@
         {
           "type": "string",
           "maxLength": 300,
-          "pattern": "^(?![/\\\\])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+          "pattern": "^(?![/\\\\])(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._/-]+$"
         },
         {
           "$ref": "#/$defs/noSecret"
         }
       ],
-      "description": "Relative to a named root; no absolute paths, no parent segments."
+      "description": "Relative to a named root; no absolute paths, no \".\" or \"..\" segments."
     },
     "evidenceList": {
       "type": "array",
@@ -1497,8 +1512,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 300,
-          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
-          "description": "One plain sentence written by the host: 300 characters or fewer, no control characters or newlines."
+          "pattern": "^[^\\u0000-\\u001f\\u007f\\u0085\\u2028\\u2029]+$",
+          "description": "One plain sentence written by the host: 300 characters or fewer, no control characters, newlines or Unicode line/paragraph separators (U+0085, U+2028, U+2029)."
         },
         {
           "$ref": "#/$defs/noSecret"
@@ -1509,7 +1524,12 @@
       "type": "object",
       "maxProperties": 20,
       "propertyNames": {
-        "pattern": "^[A-Za-z][A-Za-z0-9]{0,39}$"
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9]{0,39}$",
+        "not": {
+          "type": "string",
+          "pattern": "^(?:[lL][oO][gG]|[lL][oO][gG][sS]|[sS][tT][dD][oO][uU][tT]|[sS][tT][dD][eE][rR][rR]|[oO][uU][tT][pP][uU][tT]|[tT][rR][aA][nN][sS][cC][rR][iI][pP][tT]|[pP][rR][oO][mM][pP][tT]|[dD][iI][fF][fF]|[pP][aA][tT][cC][hH]|[cC][oO][nN][tT][eE][nN][tT]|[cC][oO][nN][tT][eE][nN][tT][sS]|[bB][oO][dD][yY]|[eE][nN][vV]|[eE][nN][vV][iI][rR][oO][nN][mM][eE][nN][tT]|[sS][eE][cC][rR][eE][tT]|[sS][eE][cC][rR][eE][tT][sS]|[tT][oO][kK][eE][nN]|[tT][oO][kK][eE][nN][sS]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][oO][oO][kK][iI][eE]|[cC][oO][oO][kK][iI][eE][sS]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[aA][pP][iI][kK][eE][yY]|[aA][pP][iI]_[kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE][kK][eE][yY]|[pP][rR][iI][vV][aA][tT][eE]_[kK][eE][yY])$"
+        }
       },
       "additionalProperties": {
         "type": [
@@ -1517,7 +1537,7 @@
           "null"
         ]
       },
-      "description": "Counters reported by the adapter, numbers only."
+      "description": "Counters reported by the adapter, numbers or null only, so no text can leak through a value. Counter names equal (any case) to a guarded name such as secret, token or password are rejected; other names are not vetted, so the writer full scanner (D6) must still cover them."
     },
     "target": {
       "type": "object",
