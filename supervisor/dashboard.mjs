@@ -653,7 +653,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     team.view = { prs: c.pulls || [], issues: c.issues || [] }; team.merged = await team.gh.listMergedPulls();
     const excluded = (c.issues || []).filter(i => i.state === 'OPEN' && !team.delivered?.has(i.number)).sort((x, y) => x.number - y.number).flatMap(i => {
       const ex = team.exclusion(i.number, byNoAll, c.pulls || []);
-      if (ex) return [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: ex.kind, reason: redact(ex.kind === 'prerequisite' ? `blocked by ${ex.refs.map(d => names.issue(d).text).join(', ')}` : ex.text, 300) }];
+      if (ex) return [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: ex.kind, reason: redact(ex.kind === 'prerequisite' && !ex.unknown ? `blocked by ${ex.refs.map(d => names.issue(d).text).join(', ')}` : ex.text, 300) }];
       const held = (c.pulls || []).find(p => agentOfBranch(config, p.headRefName) && new RegExp(`/issue-${i.number}(\\D|$)`).test(p.headRefName));
       return held ? [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: 'pr-open', reason: `held by open ${names.pr(held.number).text}` }] : [];
     });

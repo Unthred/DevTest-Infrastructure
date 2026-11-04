@@ -716,6 +716,9 @@ export class Team {
     const label = EXCLUDING_LABELS.find(l => (issue.labels || []).includes(l));
     if (label) return { kind: 'label', label, text: label === 'needs-homeowner' ? 'needs the homeowner' : `labelled ${label}` };
     const open = (this.c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => issueByNo.get(d)?.state !== 'CLOSED');
+    // Issue #522: a prerequisite whose lookup failed is unknown, not open: it is named with the reason, and the next tick looks it up again.
+    const unknown = open.filter(d => issueByNo.get(d)?.state === 'UNKNOWN');
+    if (unknown.length && unknown.length === open.length) return { kind: 'prerequisite', refs: open, unknown, text: `prerequisite state unknown: ${unknown.map(d => `#${d} (${issueByNo.get(d).unknownReason || 'lookup failed'})`).join(', ')}` };
     if (open.length) return { kind: 'prerequisite', refs: open, text: `blocked by ${open.map(d => `#${d}`).join(', ')}` };
     for (const p of issue.pullPrerequisites ?? pullPrerequisites(issue.title, issue.body)) {   // a cached issue has no body, only the parsed list
       const live = prs.find(x => x.number === p);
