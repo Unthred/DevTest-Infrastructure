@@ -400,7 +400,7 @@ export const EXCLUDING_LABELS = ['epic', 'tracking', 'parked', 'needs-homeowner'
 // Stops that Foreman resumes once (issue #163): provider/network faults, a crash, an incomplete run, a used-up allowance window.
 // Issue #188: resumeTransient looks only at jobs started within this window and stops reading a job once it finished normally.
 const RESUME_WINDOW_MS = 7 * 86400000;
-const TRANSIENT_STOPS = new Set(['crash', 'network_error', 'incomplete', 'transient_rate_limit']);   // never usage_limit or retry_exhausted: D-019 bounds those launches, then the homeowner decides
+const TRANSIENT_STOPS = new Set(['crash', 'network_error', 'incomplete', 'transient_rate_limit', 'checkpoint_failed']);   // never usage_limit or retry_exhausted: D-019 bounds those launches, then the homeowner decides
 const redactEvent = e => String(e || 'an unknown event').replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40);
 export const CAUSE_TEXT = { split: 'the proposed split was accepted', 'secret-scan': 'the secret scanner no longer fails', job: 'the job was resumed or completed', fixlimit: 'a new head was reviewed with PASS and its CI is not red', 'cancelled-ci': 'the check is green again' };
 // True when a finding repeats the homeowner-required text: any five consecutive words of it appear in the required text, or a
@@ -1756,6 +1756,8 @@ export class Team {
       if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
       if (j.kind === 'rebase' && job.status !== 'completed') this.recordIncompleteRebase(id, j, job, report);
       if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
+      // Issue #579: an implement job that ended without completing leaves no pull request; the issue's mark is surfaced at once (findStaleMarks).
+      if (j.kind === 'implement' && job.status !== 'completed') j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
       j.ingested = true; this.save();
   }
   // Issue #460: a rebase job that ended without completing records why on the dispatcher's job record (cause, detail, attempts), so the
@@ -2143,7 +2145,9 @@ export class Team {
   // STALE_MARK_MS. A merged PR (delivered) or a reopened or new open PR therefore never counts. Recomputed every plan, so it clears itself.
   async findStaleMarks(prs, issueByNo, active) {
     this.stale = {};
-    const marks = Object.entries(this.s.implemented || {}).filter(([, at]) => Number.isFinite(at) && this.clock.now() - at >= STALE_MARK_MS);
+    // Issue #579: a mark whose implement job has already ended without a pull request is surfaced at once, not after STALE_MARK_MS.
+    const ended = new Map(Object.values(this.s.jobs).filter(j => j.kind === 'implement' && j.ingested && j.endedNoPr && Number.isSafeInteger(j.issue)).map(j => [j.issue, j.endedNoPr]));
+    const marks = Object.entries(this.s.implemented || {}).filter(([k, at]) => Number.isFinite(at) && (this.clock.now() - at >= STALE_MARK_MS || ended.has(Number(k))));
     if (!marks.length) return;
     const live = new Set(active.map(j => this.s.jobs[j.id]?.issue).filter(Number.isSafeInteger));
     for (const j of Object.values(this.s.jobs)) if (!j.ingested && Number.isSafeInteger(j.issue)) live.add(j.issue);
@@ -2157,12 +2161,13 @@ export class Team {
         const found = closed.filter(p => !p.mergedAt && agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName)).map(p => p.number);
         if (found.length) (this.s.closedUnmerged ||= {})[n] = found; else if (this.s.closedUnmerged) delete this.s.closedUnmerged[n];
       }
-      this.stale[n] = { issue: n, markedAt: at, prs: this.s.closedUnmerged?.[n] || [] };
+      this.stale[n] = { issue: n, markedAt: at, prs: this.s.closedUnmerged?.[n] || [], ended: ended.get(n) || null };
     }
     if (this.s.closedUnmerged) for (const k of Object.keys(this.s.closedUnmerged)) if (!this.stale[k]) delete this.s.closedUnmerged[k];
   }
   staleText(n) {
     const e = this.stale?.[n]; if (!e) return null;
+    if (e.ended && !e.prs.length) return `stuck: its implement job ended ${e.ended.status}${e.ended.event ? ` (${e.ended.event})` : ''} with no pull request; the work stays in its worktree and the issue is marked implemented, so Foreman will not start it again`;
     return `stuck: marked implemented but ${e.prs.length ? e.prs.map(x => `PR #${x}`).join(', ') + ' closed unmerged' : 'it has no open or merged pull request'}, so Foreman will not start it again`;
   }
 

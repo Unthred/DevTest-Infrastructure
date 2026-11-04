@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { limitFromAllowance } from './allowance.mjs';
+import { redact } from './redact.mjs';
 
 export const defaultRegistry = new URL('./providers.json', import.meta.url).pathname;
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped']);
@@ -84,11 +85,22 @@ export function event(root, job, kind, clock = realClock) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.appendFileSync(file, JSON.stringify({ at: clock.now(), job: job.id, kind }) + '\n', { mode: 0o600 });
 }
+// Issue #579: a git call that times out under host load is retried (longer each time) before it counts as a failure, and a failure keeps
+// its real reason (timeout, spawn error, or the redacted first line of stderr) instead of a bare "Git check failed".
+const timedOut = r => r.error?.code === 'ETIMEDOUT' || (r.status === null && r.signal === 'SIGTERM');
 export function git(root, ...args) {
-  const r = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 10000, maxBuffer: 65536 });
-  if (r.status !== 0) throw new SupervisorError(`Git check failed: ${args[0]}`);
+  let r;
+  for (const timeout of GIT_TIMEOUTS) {
+    r = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout, maxBuffer: 65536 });
+    if (!timedOut(r)) break;
+  }
+  if (r.status !== 0) {
+    const why = timedOut(r) ? `timed out after ${GIT_TIMEOUTS.length} attempts` : r.error ? String(r.error.code || r.error.name) : redact(String(r.stderr || '').split('\n').find(Boolean) || `exit ${r.status}`, 160);
+    throw new SupervisorError(`Git check failed: ${args[0]}: ${why}`);
+  }
   return r.stdout.trim();
 }
+export const GIT_TIMEOUTS = [10000, 20000, 40000];   // mutable so a test can shorten them
 export function validateSpec(spec) {
   for (const key of ['role', 'provider', 'repository', 'worktree', 'issue', 'scope', 'allowed_actions', 'prompt'])
     if (!(key in spec)) throw new SupervisorError(`missing job field: ${key}`);
@@ -400,7 +412,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       job.sessionId = null; job.nextAttemptAt = clock.now(); saveJob(root, job, clock);
       transition(root, job, 'queued', 'context_fresh_session', clock); continue;
     }
-    if (['network_error', 'crash'].includes(result.event) && restartable() && job.attempts < maxAttempts) {
+    if (['network_error', 'crash', 'checkpoint_failed'].includes(result.event) && restartable() && job.attempts < maxAttempts) {
       const delay = result.event === 'network_error' ? Math.min(300000, 30000 * 2 ** (job.attempts - 1)) : Math.min(120000, 10000 * 2 ** (job.attempts - 1));
       job.nextAttemptAt = clock.now() + delay;
       transition(root, job, 'queued', result.event, clock);
