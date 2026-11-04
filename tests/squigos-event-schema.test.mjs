@@ -211,3 +211,49 @@ test('invalid: absolute or escaping paths and non-relative evidence are rejected
   }
   const e = clone(VALID.ChecksCompleted); e.payload.evidence = ['/abs/checks.json']; assertInvalid(e, 'pattern', '/payload/evidence/0');
 });
+
+// Issue #472: follow-ups from the PR #471 review.
+test('strict-mode shape: every schema node with a string keyword also declares type string (Ajv strictTypes)', () => {
+  const bad = [];
+  (function walk(o, path) {
+    if (!o || typeof o !== 'object') return;
+    if (!Array.isArray(o) && ('pattern' in o || 'minLength' in o || 'maxLength' in o) && typeof o.pattern !== 'object') {
+      const t = [].concat(o.type ?? []);
+      // Keywords that sit under allOf/ref siblings still need their own type in strict mode.
+      if (!t.includes('string') && !path.endsWith('/properties') && !path.endsWith('/$defs')) bad.push(path);
+    }
+    for (const [k, v] of Object.entries(o)) walk(v, `${path}/${k}`);
+  })(SCHEMA, '');
+  assert.deepEqual(bad, []);
+});
+
+test('invalid: usage counter names that match a guarded name in any case are rejected', () => {
+  for (const key of ['secret', 'Secret', 'Token', 'PASSWORD', 'apikey', 'ApiKey', 'log']) {
+    const u = clone(VALID.RunFinished); u.payload.usage[key] = 1; assertInvalid(u, 'propertyNames', `/payload/usage/${key}`);
+  }
+  const ok = clone(VALID.RunFinished); ok.payload.usage.cachedTokens = 3; assertValid(ok);
+});
+
+test('invalid: key=value secrets in text fields are rejected', () => {
+  for (const s of ['password=hunter22x', 'Password: hunter22x', 'the api_key = abcd1234', 'TOKEN=abcd']) {
+    const d = clone(VALID.FailureClassified); d.payload.summary = s; assertInvalid(d, 'not', '/payload/summary');
+  }
+  const ok = clone(VALID.FailureClassified); ok.payload.summary = 'The password policy check was skipped.'; assertValid(ok);
+});
+
+test('invalid: Unicode line separators are rejected in single-line text', () => {
+  for (const c of [' ', ' ', '\u0085']) {
+    const d = clone(VALID.FailureClassified); d.payload.summary = `one${c}two`; assertInvalid(d, 'pattern', '/payload/summary');
+  }
+});
+
+test('invalid: relPath rejects dot segments, accepts plain relative paths', () => {
+  const rel = SCHEMA.$defs.relPath;
+  for (const p of ['./x', 'a/./b', '.', '../x', 'a/..', '/abs']) assert.ok(check(rel, p, SCHEMA).length > 0, p);
+  for (const p of ['a/b.txt', '.hidden/x', 'a/.b', 'a/b..c']) assert.deepEqual(check(rel, p, SCHEMA), [], p);
+});
+
+test('the propertyNames guard itself is case-insensitive (not only the closed key set)', () => {
+  const guard = SCHEMA.oneOf[3].properties.payload.propertyNames;
+  for (const k of ['Log', 'apiKey', 'PrivateKey', 'STDERR']) assert.ok(check(guard, k, SCHEMA).length > 0, k);
+});
