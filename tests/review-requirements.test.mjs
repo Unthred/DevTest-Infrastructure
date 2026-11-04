@@ -279,8 +279,12 @@ test('#419: an immaterial mark on a behaviour, safety or verification claim is r
     { claim: 'has 3 untested files', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
     { claim: 'the PR tests 3 files', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'a count' },
     { claim: 'removes the retry loop (3 files)', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'count' }]) {
-    const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [c] });
-    assert.match(r.report.ingested.at(-1).error, /cannot be immaterial/);
+    // Issue #550: the review is not thrown away; the claim becomes material and the verdict a recorded CHANGES.
+    const { r, w } = await err(t, { verdict: 'PASS', descriptionClaims: [c] });
+    assert.equal(r.report.ingested.at(-1).error, undefined, c.claim);
+    const v = w.team.s.verdicts['77:' + H(5)];
+    assert.equal(v.verdict, 'CHANGES', c.claim);
+    assert.ok(v.findings.some(x => x.kind === 'blocking' && x.text.includes(c.claim.slice(0, 40))), 'a blocking finding names the claim');
   }
   const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, reason: undefined }] });
   assert.match(r.report.ingested.at(-1).error, /needs a reason/);
@@ -299,8 +303,9 @@ test('#479: widened count slips still refuse effect claims', async t => {
   for (const claim of ['adds 3 tests that fix the retry loop', 'adds 3 new tests so the gate passes', 'removes the retry loop and 2 lines', 'touches 3 files in supervisor/ and improves retries', 'adds retry handling in 3 files',
     // Issue #513: a slash alone does not make a token a path; it must start at a top-level directory.
     'adds 3 tests fix/retry', 'adds 3 tests and/or', 'removes 2 lines in disable/', 'adds 3 tests disable/auth/']) {
-    const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, claim }] });
-    assert.match(r.report.ingested.at(-1).error, /cannot be immaterial/, claim);
+    const { r, w } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, claim }] });
+    assert.equal(r.report.ingested.at(-1).error, undefined, claim);
+    assert.equal(w.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES', claim);
   }
 });
 test('#419: the review prompt asks for one complete pass and sends far-fetched cases to follow-ups', async t => {
@@ -315,4 +320,91 @@ test('#419: a far-fetched finding recorded as a follow-up PASSes; a realistic on
   assert.equal(a.w.team.s.verdicts['77:' + H(5)].verdict, 'PASS');
   const b = await err(t, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'a normal run with two equal projections loses a job' }], descriptionClaims: [] });
   assert.equal(b.w.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES');
+});
+
+// ---- Issue #550: a refused verdict file no longer throws away the whole review.
+import { reclassifyFalseClaims, VERDICT_REFUSED } from '../supervisor/team.mjs';
+import { prompt } from '../supervisor/core.mjs';
+const blockedWith = (w, id, detail) => { w.jobs.states[id] = { id, status: 'blocked', provider: 'claude', lastEvent: 'incomplete', incompleteReason: { cause: 'postcondition_not_met', detail, attempt: 2 } }; };
+const startAndRefuse = async (w, verdict, detail) => {
+  await startReview(w);
+  const [id, rec] = Object.entries(w.team.s.jobs).at(-1);
+  writeVerdict(w.team, rec.ticket, { pr: rec.pr, headSha: rec.head, findings: [], commandsRun: ['node --test'], ...verdict });
+  blockedWith(w, id, detail); const report = { ingested: [] }; await w.team.ingest(report); return { id, rec, report };
+};
+test('#550: a PASS with a false claim about what was verified, marked immaterial, becomes a visible CHANGES', async t => {
+  const verified = { claim: 'the full suite passes', status: 'false', evidence: 'planning-parity is red on main', materiality: 'immaterial', reason: 'it was red before this PR' };
+  const { w, r } = await err(t, { verdict: 'PASS', descriptionClaims: [verified] });
+  assert.equal(r.report.ingested.at(-1).error, undefined);
+  const v = w.team.s.verdicts['77:' + H(5)];
+  assert.equal(v.verdict, 'CHANGES');
+  assert.ok(v.findings.some(f => f.kind === 'blocking' && /the full suite passes/.test(f.text) && /planning-parity/.test(f.text)));
+  assert.match(w.calls.comments.at(-1)[1], /\*\*CHANGES\*\*/, 'the CHANGES verdict is posted on the PR');
+  assert.equal(w.calls.issues.length, 0, 'no follow-up issue is made for it');
+});
+test('#550: reclassification only tightens: it never turns CHANGES into PASS, never touches true claims or count slips', () => {
+  const base = { pr: 77, headSha: H(5), verdict: 'PASS', findings: [], commandsRun: ['x'], requirements: [ok] };
+  const verified = { claim: 'all gates passed', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'r' };
+  const out = reclassifyFalseClaims({ ...base, descriptionClaims: [verified, count, claim] });
+  assert.equal(out.verdict, 'CHANGES');
+  assert.deepEqual(out.descriptionClaims.map(c => c.materiality), ['material', 'immaterial', undefined]);
+  assert.equal(out.findings.filter(f => f.kind === 'blocking').length, 1);
+  assert.equal(reclassifyFalseClaims({ ...base, descriptionClaims: [count, claim] }).verdict, 'PASS');
+  const inp = { ...base, descriptionClaims: [verified] }; reclassifyFalseClaims(inp); assert.equal(inp.verdict, 'PASS', 'the input is not mutated');
+  assert.equal(reclassifyFalseClaims('nonsense'), 'nonsense');
+});
+test('#550: malformed verdicts and broken evidence rules are still refused, with the exact error', async t => {
+  const cases = [[{ verdict: 'MAYBE' }, /verdict must be PASS or CHANGES/], [{ verdict: 'PASS', commandsRun: [] }, /commandsRun/],
+    [{ verdict: 'PASS', descriptionClaims: [], requirements: [{ ...ok, status: 'not-met' }] }, /PASS cannot have an unmet requirement/],
+    [{ verdict: 'PASS', descriptionClaims: [lock] }, /material/]];
+  for (const [bad, re] of cases) { const { r } = await err(t, bad); assert.match(r.report.ingested.at(-1).error, re); }
+});
+test('#550: the post-condition names the exact validation error, and the retry prompt carries it', async t => {
+  const w = reqWorld(t); await startReview(w);
+  const [id, rec] = Object.entries(w.team.s.jobs).at(-1);
+  writeVerdict(w.team, rec.ticket, { pr: rec.pr, headSha: rec.head, verdict: 'PASS', findings: [], commandsRun: [], requirements: [ok], descriptionClaims: [] });
+  const job = { postcondition: { kind: 'verdict', ticket: rec.ticket, pr: rec.pr, head: rec.head, checklist: true } };
+  assert.equal(await w.team.postconditions()(job), false);
+  assert.equal(job.postconditionDetail, `${VERDICT_REFUSED} commandsRun must list the commands run (required for PASS)`);
+  const retry = prompt({ role: 'devtest', issue: 77, worktree: '/w', scope: 's', allowedActions: ['read'], prompt: 'REVIEW', incompleteReason: { cause: 'postcondition_not_met', detail: job.postconditionDetail, attempt: 1 } }, true);
+  assert.match(retry, /commandsRun must list the commands run \(required for PASS\)/);
+  assert.doesNotMatch(prompt({ role: 'devtest', issue: 77, worktree: '/w', scope: 's', allowedActions: ['read'], prompt: 'REVIEW' }, true), /previous attempt ended incomplete/);
+  // a valid file (even one the reclassifier tightened) satisfies the post-condition
+  writeVerdict(w.team, rec.ticket, { pr: rec.pr, headSha: rec.head, verdict: 'PASS', findings: [], commandsRun: ['x'], requirements: [ok], descriptionClaims: [{ claim: 'all gates passed', status: 'false', evidence: 'x', materiality: 'immaterial', reason: 'r' }] });
+  const job2 = { postcondition: job.postcondition }; assert.equal(await w.team.postconditions()(job2), true); assert.equal(job2.postconditionDetail, undefined);
+});
+test('#550: a blocked review refused by the validator does not use up the head\'s review attempts, within a bound', async t => {
+  const w = reqWorld(t); const detail = `${VERDICT_REFUSED} verdict has an unknown field`;
+  const a = await startAndRefuse(w, { verdict: 'PASS', extra: 1 }, detail);
+  const k = a.rec.key; assert.ok(k);
+  assert.equal(w.team.s.reviewAttempts[k], 0, 'the attempt is handed back');
+  assert.equal(w.team.s.reviewRefusals[k].count, 1);
+  assert.match(w.team.s.reviewRefusals[k].error, /unknown field/);
+  assert.equal(a.report.refusedReviews[0].refunded, true);
+  assert.equal(w.team.s.verdicts['77:' + H(5)], undefined, 'no verdict was recorded');
+  // bound: max_review_attempts (2) refunds, then attempts count again
+  await startAndRefuse(w, { verdict: 'PASS', extra: 1 }, detail);
+  assert.equal(w.team.s.reviewAttempts[k], 0);
+  const c = await startAndRefuse(w, { verdict: 'PASS', extra: 1 }, detail);
+  assert.equal(c.report.refusedReviews[0].refunded, false);
+  assert.equal(w.team.s.reviewAttempts[k], 1, 'beyond the bound the attempt stays used so the loop ends in Needs you');
+});
+test('#550: a blocked review that is not a validator refusal, or that recorded a verdict, keeps its attempt used', async t => {
+  const w = reqWorld(t);
+  const a = await startAndRefuse(w, { verdict: 'PASS' }, 'the post-condition did not hold');
+  assert.equal(w.team.s.reviewAttempts[a.rec.key], 1); assert.equal(w.team.s.reviewRefusals[a.rec.key], undefined);
+  const w2 = reqWorld(t); await startReview(w2);
+  const r = await finish(w2, { verdict: 'PASS' });
+  assert.equal(w2.team.s.reviewAttempts[r.rec.key], 1, 'a recorded verdict used the attempt');
+});
+test('#550: the dashboard stall reason and Needs you card say why the verdict file was refused and where the file is', async t => {
+  const w = reqWorld(t); const a = await startAndRefuse(w, { verdict: 'PASS', extra: 1 }, `${VERDICT_REFUSED} verdict has an unknown field`);
+  const p = w.gh.pulls[0];
+  const rf = Object.values(w.team.s.reviewRefusals)[0];
+  assert.equal(rf.head, p.headRefOid); assert.equal(rf.file, path.join(w.team.dir, 'inbox', a.rec.ticket, 'verdict.json'));
+  assert.ok(fs.existsSync(rf.file), 'the refused file is kept');
+  const why = w.team.stallReasons(p).find(x => x.code === 'review-verdict-refused');
+  assert.ok(why, 'the notice reason is recorded');
+  assert.match(why.text, /unknown field/); assert.ok(why.text.includes(rf.file));
+  assert.equal(w.team.stallReasons({ ...p, headRefOid: H(6) }).some(x => x.code === 'review-verdict-refused'), false, 'a new head clears it');
 });
