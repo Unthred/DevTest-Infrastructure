@@ -2106,10 +2106,19 @@ export class Team {
     const open = (await this.gh.listPulls()).filter(p => new RegExp(`/issue-${issue}(\\D|$)`).test(p.headRefName));
     if (open.length) throw new SupervisorError(`issue #${issue} has an open pull request (${open.map(p => `#${p.number}`).join(', ')}); close or merge it first`);
     for (const [id, j] of Object.entries(this.s.jobs)) {
-      if (j.issue !== issue && !(j.kind === 'implement' && j.key === String(issue))) continue;
+      // Review, fix, rebase and cifix jobs store the PR number in `issue`; match those by their branch, the others by the issue number.
+      const prKeyed = ['review', 'fix', 'rebase', 'cifix'].includes(j.kind);
+      const mine = prKeyed ? new RegExp(`/issue-${issue}(\\D|$)`).test(j.branch || '') : (j.issue === issue || (j.kind === 'implement' && j.key === String(issue)));
+      if (!mine) continue;
       if (!j.ingested) throw new SupervisorError(`issue #${issue} has a job that is not finished or not yet ingested (${id.slice(0, 8)}); retry after the next tick`);
       const live = await this.jobs.get(id);
       if (live && !TERMINAL.has(live.status)) throw new SupervisorError(`issue #${issue} has a running job (${id.slice(0, 8)}, ${live.status})`);
+    }
+    // The next implement job reuses an existing worktree directory and local branch as they are, so rejected commits would come back.
+    if (this.git.leftoversFor) {
+      const agents = Object.entries(this.c.agents || {});
+      const left = await this.git.leftoversFor({ issue, worktrees: agents.map(([n]) => path.join(this.c.worktree_base, `DevTest-Infrastructure-${n}-${issue}`)), branchPrefixes: agents.map(([, a]) => `${a.branch_prefix}issue-${issue}-`) });
+      if (left && left.length) throw new SupervisorError(`issue #${issue} still has ${left.join(', ')}; remove the worktree (git worktree remove) and delete the local branch first, so the new job starts from origin/main`);
     }
     const was = this.s.implemented[issue];
     delete this.s.implemented[issue];

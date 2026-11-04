@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Team } from '../supervisor/team.mjs';
+import { spawnSync } from 'node:child_process';
+import { Team, tickLock } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 
 const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n';
@@ -64,4 +65,35 @@ test('after reopen the planner plans an implement job for the issue, the audit r
   assert.ok(!(await implementsOf(w.team)).includes(24), 'the other issue stays marked');
   // Persisted: a fresh Team on the same state root sees it.
   assert.equal(JSON.parse(fs.readFileSync(path.join(w.team.dir, 'state.json'), 'utf8')).implemented?.[23], undefined);
+});
+
+test('issue #495: refused while a worktree or local branch of the issue is left over, allowed once removed', async t => {
+  const w = world(t); let left = ['a worktree at /p/DevTest-Infrastructure-claude-23', 'the local branch claude/issue-23-a'];
+  let seen; w.team.git.leftoversFor = async o => { seen = o; return left; };
+  await assert.rejects(w.team.reopen(23), /still has a worktree at .*the local branch claude\/issue-23-a/);
+  assert.deepEqual(seen.worktrees, ['/p/DevTest-Infrastructure-claude-23']); assert.deepEqual(seen.branchPrefixes, ['claude/issue-23-']);
+  assert.equal(w.team.s.implemented[23], 1); assert.equal(w.team.s.unblock.log.length, 0);
+  left = []; assert.equal(await w.team.reopen(23), true);
+});
+
+test('issue #495: pull-request-keyed jobs are matched by branch, not by the PR number stored in issue', async t => {
+  // A live review of PR #23 (another issue's pull request) must not block reopening issue #23 ...
+  const a = world(t, { jobStatus: 'running' });
+  a.team.s.jobs[ID] = { kind: 'review', agent: 'claude', key: '23', issue: 23, branch: 'claude/issue-99-z', ingested: true, at: 1 };
+  assert.equal(await a.team.reopen(23), true);
+  // ... while a live fix job on the closed PR of this issue (stored under another PR number) does.
+  const b = world(t, { jobStatus: 'running' });
+  b.team.s.jobs[ID] = { kind: 'fix', agent: 'claude', key: 'x', issue: 411, branch: 'claude/issue-23-a', ingested: true, at: 1 };
+  await assert.rejects(b.team.reopen(23), /running job/);
+});
+
+test('issue #495: the CLI parses the issue number and reports the usage error', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cli-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+  const run = (...args) => spawnSync(process.execPath, [cli, 'team', ...args], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+  for (const bad of ['abc', '0', '-3', '1.5']) { const r = run('reopen', bad); assert.notEqual(r.status, 0); assert.match(r.stdout + r.stderr, /usage: team reopen ISSUE/); }
+  const none = run('reopen'); assert.notEqual(none.status, 0); assert.match(none.stdout + none.stderr, /usage: team reopen ISSUE/);
+  // A held tick lock is reported, not waited for.
+  const lock = tickLock(stateRoot(root)); t.after(() => lock && lock());
+  const held = run('reopen', '23'); assert.notEqual(held.status, 0); assert.match(held.stdout + held.stderr, /a team tick is running; retry in a minute/);
 });

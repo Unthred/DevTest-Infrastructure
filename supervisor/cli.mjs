@@ -117,6 +117,12 @@ function realGit(repoPath) {
     checkRebase: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return checkRebase({ repoPath, base, oldHead, newHead }); },
     // issue #302: true only when git can prove the worktree has no uncommitted work (tracked or untracked); anything else is false/null
     isClean: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 ? r.stdout.trim() === '' : null; },
+    // issue #495: existing worktree directories and local branches a new implement job would reuse unreset
+    leftoversFor: async ({ worktrees, branchPrefixes }) => {
+      const out = worktrees.filter(w => fs.existsSync(w)).map(w => `a worktree at ${w}`);
+      for (const pre of branchPrefixes) { const r = spawnSync('git', ['-C', repoPath, 'for-each-ref', '--format=%(refname:short)', `refs/heads/${pre}*`], { encoding: 'utf8', timeout: 60000 }); if (r.status !== 0) throw new SupervisorError('git for-each-ref failed'); out.push(...r.stdout.split('\n').filter(Boolean).map(b => `the local branch ${b}`)); }
+      return out;
+    },
     worktreeFor: async branch => { const out = git('worktree', 'list', '--porcelain').split('\n\n'); const hit = out.find(b => b.includes(`branch refs/heads/${branch}`)); return hit ? hit.split('\n')[0].replace('worktree ', '') : null; },
     ensureWorktree: async ({ path: wt, branch, base }) => {
       if (fs.existsSync(wt)) {
