@@ -454,7 +454,7 @@ export const CLAIM_MATERIALITY = ['material', 'immaterial'];
 // Claims a reader relies on to judge what a change does or how safe it is can never be immaterial.
 const MATERIAL_TOPIC = /\b(behaviou?rs?|safe|safety|secur\w*|secrets?|scope|verified|verif\w+|tested|passe[sd]|passing|gates?|ci|concurren\w*|races?|data loss|at a time|across processes|never|always)\b/i;
 // Only a count or a wording slip may be immaterial; any other claim (for example what the change does) stays material.
-const TRIVIAL_DETAIL = /\b\d[\d,.]*\s+(?:tests?|cases?|lines?|files?|commits?|assertions?|fixtures?|functions?|entries|hunks|sections?|words?|characters?|rounds?)\b|\b(?:typos?|wording|spelling|misspell\w*)\b/i;
+const TRIVIAL_DETAIL = /(?:\b(?:adds?|added|removes?|removed)\s+)?\b\d[\d,.]*\s+(?:(?:new|more|extra)\s+)?(?:tests?|cases?|lines?|files?|commits?|assertions?|fixtures?|functions?|entries|hunks|sections?|words?|characters?|rounds?)\b|\b(?:typos?|wording|spelling|misspell\w*)\b/i;
 // A claim is a trivial slip only when, with the count or wording term removed, the remainder is nothing but neutral filler (issue #449).
 // This is an allow-list, so an effect verb that is not listed (improves, fails, reduces ...) is refused rather than slipping through.
 const SLIP_FILLER = new Set(['the', 'a', 'an', 'of', 'in', 'on', 'at', 'and', 'or', 'pr', 'pull', 'request', 'description', 'title', 'body', 'comment', 'summary', 'text', 'there', 'it', 'its', 'this', 'has', 'have', 'had', 'is', 'are', 'was', 'were', 'be', 'contains', 'contain', 'touches', 'touch', 'lists', 'list', 'reports', 'report', 'shows', 'show', 'says', 'states', 'includes', 'include', 'with', 'for', 'about', 'only', 'exactly', 'total', 'suite', 'file', 'files', 'not', 'no', 'misspelled', 'misspelt', 'spelled', 'worded']);
@@ -462,7 +462,7 @@ export function isTrivialSlip(claim) {
   if (MATERIAL_TOPIC.test(claim) || !TRIVIAL_DETAIL.test(claim)) return false;
   const rest = claim.replace(new RegExp(TRIVIAL_DETAIL.source, 'gi'), ' ').toLowerCase().split(/[\s,;:()'"`]+/).filter(Boolean);
   // A token may be filler, a number, or a file path; anything else (a verb, a reason) makes the claim a behaviour claim.
-  return rest.every(w => SLIP_FILLER.has(w) || /^[\d.,%]+$/.test(w) || /^[\w./-]+\.\w+$/.test(w));
+  return rest.every(w => SLIP_FILLER.has(w) || /^[\d.,%]+$/.test(w) || /^[\w./-]+\.\w+$/.test(w) || /^(?:[\w.-]+\/)+(?:[\w.-]+)?$/.test(w));
 }
 const materialFalse = claims => claims.filter(c => c.status === 'false' && c.materiality !== 'immaterial');
 const checklistText = v => (v.requirements ? `\n\nRequirements:\n${v.requirements.map(r => `- **${r.status}**: ${r.requirement} — ${r.evidence}`).join('\n') || '_none_'}\n\nPull request description claims:\n${v.descriptionClaims.map(c => `- **${c.status}**: ${c.claim} — ${c.evidence}`).join('\n') || '_none_'}\n\n` : '');
