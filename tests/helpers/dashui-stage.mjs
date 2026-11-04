@@ -67,3 +67,8 @@ export function selectPages(plan, arg) {
   if (unknown.length || !names.length) throw new Error(`unknown page(s) ${unknown.join(', ') || '(none given)'}; available: ${plan.map(e => e.name).join(', ')}`);
   return [...new Set(names)].map(n => have.get(n));
 }
+
+// Issue #502: the saved snapshot is served from a static directory with no /api routes, so a live watch panel's event stream
+// (/api/jobs/<id>/events) answered 404 and every capture of a running job exited 10. The snapshot is already complete (the transcript is
+// rendered on the server), so the staged copy is switched to the non-live form; the live stream is not part of what is photographed.
+export const freezeLivePanels = html => String(html).replace(/(<[^>]*\sdata-watch\b[^>]*\sdata-live=")true(")/g, '$1false$2');

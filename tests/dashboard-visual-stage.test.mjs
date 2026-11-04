@@ -8,7 +8,8 @@ import path from 'node:path';
 import { buildView } from '../supervisor/dashboard.mjs';
 import { renderRoute, PAGE_NAMES, matchRoute } from '../supervisor/dashrender.mjs';
 import { STATIC } from '../supervisor/dashserver.mjs';
-import { loadedFiles, pagePlan, readServed, refsInHtml, refsInModule, selectPages, stageDashui } from './helpers/dashui-stage.mjs';
+import { freezeLivePanels, loadedFiles, pagePlan, readServed, refsInHtml, refsInModule, selectPages, stageDashui } from './helpers/dashui-stage.mjs';
+import { reportSummary, summarizeReport } from './helpers/capture-report.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const NOW = Date.UTC(2026, 10, 4, 12, 0, 0);
@@ -69,3 +70,32 @@ test('the page list covers every dashboard route and the page argument selects f
   assert.throws(() => selectPages(plan, 'work,nope'), /unknown page\(s\) nope; available: overview/);
   assert.throws(() => selectPages(plan, ','), /unknown page/);
 });
+
+test('a running job\'s watch page is staged without the live stream, other pages are untouched (issue #502)', async t => {
+  const { root, view } = await makeView(t);
+  const entry = pagePlan(view, { root }).find(e => e.name === 'watch');
+  assert.ok(entry, 'the view has a watchable job');
+  const html = renderRoute(view, entry.route, { pathname: entry.path }).html;
+  assert.match(html, /data-watch[^>]*data-live="true"/, 'precondition: the real page opens the event stream');
+  const frozen = freezeLivePanels(html);
+  assert.match(frozen, /data-watch[^>]*data-live="false"/);
+  assert.doesNotMatch(frozen, /data-live="true"/);
+  assert.equal(frozen.replace('data-live="false"', 'data-live="true"'), html, 'nothing else changes');
+  const other = '<div data-live="true">x</div>';
+  assert.equal(freezeLivePanels(other), other, 'only the watch panel is changed');
+  assert.equal(freezeLivePanels('<section data-watch data-job="a" data-live="false">'), '<section data-watch data-job="a" data-live="false">');
+});
+
+test('a capture report is summarised for the failure line, bounded and tolerant (issue #502)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'visrep-')); t_cleanup(dir);
+  fs.writeFileSync(path.join(dir, 'a-chromium.report.json'), JSON.stringify({ problems: ['the page reported errors'], httpErrors: [{ status: 404, url: 'http://127.0.0.1:1/api/x' }], consoleErrors: Array.from({ length: 8 }, (_, i) => `e${i}`) }));
+  fs.writeFileSync(path.join(dir, 'b-chromium.report.json'), '{not json');
+  fs.writeFileSync(path.join(dir, 'c.png'), 'x');
+  const out = reportSummary(dir);
+  assert.match(out, /a-chromium\.report\.json: problems: the page reported errors \| httpErrors: 404 http:\/\/127\.0\.0\.1:1\/api\/x \| consoleErrors: e0; e1; e2; e3; e4 \(\+3 more\)/);
+  assert.doesNotMatch(out, /b-chromium|c\.png/);
+  assert.equal(reportSummary(path.join(dir, 'missing')), '');
+  assert.equal(summarizeReport(null), '');
+  assert.equal(summarizeReport({ problems: [], httpErrors: [] }), '');
+});
+function t_cleanup(dir) { process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true })); }
