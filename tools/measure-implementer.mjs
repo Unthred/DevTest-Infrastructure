@@ -7,7 +7,9 @@
 // Idle with work queued = minutes when no job of that view runs while at least one is queued. Busy shares are of the window.
 import fs from 'node:fs';
 import path from 'node:path';
-const END = new Set(['completed', 'incomplete', 'usage_limit', 'manual_stop', 'manual_pause', 'approval_required', 'retry_exhausted', 'auth_error', 'leases_released']);
+const END = new Set(['completed', 'incomplete', 'usage_limit', 'manual_stop', 'manual_pause', 'approval_required', 'retry_exhausted', 'auth_error', 'leases_released', 'recovered', 'obsolete_pr_merged']);
+// A job waits again after an attempt that ended without finishing it: it is queued from that end to its next `started` (an attempt never restarted leaves no queue time: it was abandoned, not waiting).
+const REQUEUE = new Set(['incomplete', 'recovered']);
 const BEFORE = new Set(['implement', 'continue', 'fix', 'cifix', 'rebase']);
 const AFTER = new Set(['implement', 'continue', 'fix', 'cifix']);
 const min = ms => Math.round(ms / 600) / 100;
@@ -23,10 +25,12 @@ export function measure(jobs, events, from, to) {
   const runs = [], queued = [];
   for (const [id, evs] of by) {
     const kind = kindOf.get(id); if (!kind) continue;
-    const created = evs.find(e => e.kind === 'created')?.at, first = evs.find(e => e.kind === 'started')?.at;
-    if (created != null) queued.push({ kind, iv: [created, first ?? to] });
-    let open = null;
-    for (const e of evs) { if (e.kind === 'started' && open == null) open = e.at; else if (END.has(e.kind) && open != null) { runs.push({ kind, iv: [open, e.at] }); open = null; } }
+    let open = null, requeued = false, waitFrom = evs.find(e => e.kind === 'created')?.at;
+    for (const e of evs) {
+      if (e.kind === 'started' && open == null) { open = e.at; requeued = false; if (waitFrom != null) { queued.push({ kind, iv: [waitFrom, e.at] }); waitFrom = null; } }
+      else if (END.has(e.kind)) { if (open != null) { runs.push({ kind, iv: [open, e.at] }); open = null; if (REQUEUE.has(e.kind)) { waitFrom = e.at; requeued = true; } } else if (REQUEUE.has(e.kind) && waitFrom == null) { waitFrom = e.at; requeued = true; } }
+    }
+    if (waitFrom != null && open == null && !requeued) queued.push({ kind, iv: [waitFrom, to] });
     if (open != null) runs.push({ kind, iv: [open, to] });
   }
   const view = set => {
@@ -45,6 +49,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const root = process.env.AI_SUPERVISOR_DIR ?? '/mnt/cache/ai-supervisor', jd = get('--jobs') ?? path.join(root, 'jobs'), ed = get('--events') ?? path.join(root, 'events');
   const to = Date.parse(get('--to') ?? new Date().toISOString()), from = Date.parse(get('--from') ?? new Date(to - 6 * 3600e3).toISOString());
   if (!(from < to)) { console.error('--from must be before --to'); process.exit(2); }
+  for (const [flag, d] of [['--jobs', jd], ['--events', ed]]) if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) { console.error(`${flag} directory not found: ${d}`); process.exit(2); }
   const jobs = fs.readdirSync(jd).filter(f => f.endsWith('.json')).flatMap(f => { try { const j = JSON.parse(fs.readFileSync(path.join(jd, f), 'utf8')); return [{ id: j.id ?? f.slice(0, -5), kind: j.kind }]; } catch { return []; } });
   const events = fs.readdirSync(ed).filter(f => f.endsWith('.jsonl')).flatMap(f => fs.readFileSync(path.join(ed, f), 'utf8').split('\n').filter(Boolean).flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } }));
   console.log(JSON.stringify({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), ...measure(jobs, events, from, to) }, null, 2));
