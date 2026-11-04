@@ -499,3 +499,17 @@ test('issue #209: the watchdog does nothing while an upgrade awaits verification
   const up = w.mk(); up.s.pending = { from: OLD, to: NEW, at: NOW }; up.save();
   assert.equal(await w.mk().watchdog(), 'skipped');
 });
+
+test('issue #488: the dashboard shows the refusal item only while installed commit and main still match it', async t => {
+  const root = tmp(t); install(root, OLD); fs.mkdirSync(path.join(root, 'team'));
+  const state = o => fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify(o));
+  state({ main: { sha: NEW, from: OLD, behind: 1, at: NOW }, refusal: { from: OLD, to: NEW, kind: 'not-eligible', reason: 'CI was not green', at: NOW } });
+  let v = await view(root, { running: OLD });
+  const it = v.attention.filter(a => a.id === 'upgrade-refused');
+  assert.equal(it.length, 1); assert.equal(it[0].severity, 'action'); assert.match(it[0].text, /not eligible.*CI was not green/);
+  state({ main: { sha: 'c'.repeat(40), from: OLD, behind: 2, at: NOW }, refusal: { from: OLD, to: NEW, kind: 'not-eligible', reason: 'x', at: NOW } });
+  v = await view(root, { running: OLD }); assert.ok(!v.attention.some(a => a.id === 'upgrade-refused'), 'main moved');
+  state({ main: { sha: NEW, from: OLD, behind: 1, at: NOW }, refusal: { from: OLD, to: NEW, kind: 'precheck', reason: 'x', at: NOW } });
+  fs.unlinkSync(path.join(root, 'current')); install(root, NEW);
+  v = await view(root, { running: NEW }); assert.ok(!v.attention.some(a => a.id === 'upgrade-refused'), 'installed commit moved');
+});

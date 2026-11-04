@@ -13,9 +13,11 @@ import { atomicJson } from './core.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES } from './team.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
-import { redact, redactLong } from './redact.mjs';
+import { redact, redactLong, redactAddresses } from './redact.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
+// Issue #488: a refusal reason kept in the upgrade history and shown on the dashboard carries no secret, address or absolute path.
+export const refusalText = r => redactAddresses(redact(r, 300)).replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
 export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
 // A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
@@ -213,6 +215,14 @@ export class SelfUpgrade {
     if (m && m.sha === target && m.from === from && m.behind === behind) return;
     this.s.main = { sha: target, from, behind, at: this.clock.now() }; this.save();
   }
+  // Issue #488: a refused upgrade (not eligible, diverged, or a non-environmental check failure) is one Needs you item for this target
+  // until the installed commit or main moves. Environmental failures never come here; they stay a supervisor health warning.
+  refuse(from, to, kind, reason) {
+    const r = refusalText(reason), old = this.s.refusal;
+    if (old && old.from === from && old.to === to && old.kind === kind && old.reason === r) return r;
+    this.s.refusal = { from, to, kind, reason: r, at: this.clock.now() }; this.save();
+    return r;
+  }
   record(entry) {
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     fs.appendFileSync(this.recordFile, `${JSON.stringify({ at: this.clock.now(), ...entry })}\n`, { mode: 0o600 });
@@ -257,10 +267,13 @@ export class SelfUpgrade {
     if (this.s.fetchFailures) { delete this.s.fetchFailures; delete this.s.fetchRetryAt; if (this.s.install?.result === 'transient' && !this.s.install.sha) delete this.s.install; this.save(); }
     // Issue #265: the dashboard reads main and how far behind the install is from here (live origin/main), not from the last attempt.
     this.noteMain(from, target);
+    if (this.s.refusal && (this.s.refusal.from !== from || this.s.refusal.to !== target)) { delete this.s.refusal; this.save(); }   // issue #488: the installed commit or main moved
     if (this.s.handDeploy && this.s.handDeploy.from !== from) { delete this.s.handDeploy; this.save(); }   // the installed commit moved: the item is done
     if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; delete this.s.waitingFor; this.save(); return 'current'; }
     if (!this.d.isAncestor(from, target)) {
       await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`);
+      const why = this.refuse(from, target, 'diverged', `installed ${short(from)} is not an ancestor of main ${short(target)}`);
+      if (this.s.divergedRecorded !== target) { this.s.divergedRecorded = target; this.save(); this.record({ from, to: target, result: 'refused', kind: 'diverged', reason: why }); }
       return 'diverged';
     }
     const files = this.d.changedFiles(from, target);
@@ -279,9 +292,10 @@ export class SelfUpgrade {
     const eligibility = await this.eligibility(from, target);
     if (!eligibility.ok) {
       await this.alert(`${target}:eligibility`, `Supervisor upgrade to ${short(target)} not done: ${eligibility.reason}.`);
-      this.record({ from, to: target, prs: eligibility.prs, result: 'refused', reason: eligibility.reason });
+      this.record({ from, to: target, prs: eligibility.prs, result: 'refused', kind: 'not-eligible', reason: this.refuse(from, target, 'not-eligible', eligibility.reason) });
       return 'not-eligible';
     }
+    if (this.s.refusal?.kind === 'not-eligible') { delete this.s.refusal; this.save(); }
     const now = this.clock.now();
     // A failed check latches this commit until a newer main; an environmental failure is retried after ENV_RETRY_MS (#69).
     // Checked before the quiet wait so a latched target never holds dispatch for a commit that will not be installed (#134).
@@ -311,7 +325,8 @@ export class SelfUpgrade {
         : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre) });
       this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).${excerptNote(pre)}`);
-      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.reason, ...failureFields(pre) });
+      if (!pre.environmental) this.refuse(from, target, 'precheck', pre.reason);
+      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.environmental ? pre.reason : refusalText(pre.reason), ...failureFields(pre) });
       return 'precheck-failed';
     }
     checks.preChecks = flaky ? 'ok-after-retry' : 'ok';
@@ -338,7 +353,8 @@ export class SelfUpgrade {
       this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
       this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up) }); this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`);
-      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: up.reason, ...failureFields(up) });
+      this.refuse(from, target, 'install-check', up.reason);
+      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: refusalText(up.reason), ...failureFields(up) });
       return 'precheck-failed';
     }
     if (!up.ok) {

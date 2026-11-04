@@ -766,3 +766,38 @@ test('issue #448: an unwritable state root makes the install check an environmen
   const res = await none.preChecks('a'.repeat(40));
   assert.equal(res.ok, false); assert.equal(res.environmental, true); assert.match(res.reason, /test slot unavailable/);
 });
+
+test('issue #488: each refusal kind raises one refusal item, clears when main or the install moves, and environmental failures raise none', async t => {
+  const leak = '/mnt/cache/private/dir token=abc123 at 10.1.2.3:8080';
+  // not eligible
+  let w = world(t, { verdicts: {} });
+  assert.equal(await w.up.step(), 'not-eligible');
+  assert.equal(w.up.s.refusal.kind, 'not-eligible'); assert.equal(w.up.s.refusal.to, TO);
+  const first = w.up.s.refusal.at; w.state.now += 1000; assert.equal(await w.up.step(), 'not-eligible'); assert.equal(w.up.s.refusal.at, first, 'one item per target');
+  assert.equal(w.records().at(-1).kind, 'not-eligible');
+  // main moves: cleared
+  w.state.target = H('e'); w.state.verdicts[`7:${H('d')}`] = { verdict: 'PASS', reviewer: 'codex' };
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.refusal, undefined);
+  // diverged
+  w = world(t, { ancestor: false });
+  assert.equal(await w.up.step(), 'diverged'); assert.equal(w.up.s.refusal.kind, 'diverged');
+  await w.up.step(); assert.equal(w.records().filter(r => r.kind === 'diverged').length, 1);
+  w.state.installed = H('f'); w.state.ancestor = true; w.state.files = ['docs/x.md'];
+  assert.equal(await w.up.step(), 'no-supervisor-change'); assert.equal(w.up.s.refusal, undefined, 'installed commit moved');
+  // non-environmental pre-check failure, reason sanitised in state and history
+  w = world(t, { pre: { ok: false, reason: `validator failed in ${leak}` } });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  assert.equal(w.up.s.refusal.kind, 'precheck');
+  for (const text of [w.up.s.refusal.reason, w.records().at(-1).reason]) { assert.doesNotMatch(text, /abc123|10\.1\.2\.3|\/mnt\/cache/); assert.match(text, /validator failed/); }
+  w.state.target = H('e'); w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.refusal, undefined);
+  // install-time check failure
+  w = world(t, { up: { ok: false, blocked: true, reason: `payload check failed ${leak}` } });
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.refusal.kind, 'install-check');
+  assert.doesNotMatch(JSON.stringify(w.up.s.refusal) + JSON.stringify(w.records()), /abc123|10\.1\.2\.3|\/mnt\/cache/);
+  // environmental failures raise nothing
+  w = world(t, { pre: { ok: false, environmental: true, reason: 'GitHub unreachable' } });
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.refusal, undefined);
+  w = world(t, { up: { ok: false, environmental: true, reason: 'clean copy failed' } });
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.refusal, undefined);
+});
