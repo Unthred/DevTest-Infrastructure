@@ -30,10 +30,10 @@ let nextFetch = 0;
 async function refreshNext() {
   if (Date.now() - nextFetch < 10000) return; nextFetch = Date.now();
   try {
-    const r = await fetch(location.href, { headers: { accept: 'text/html' }, credentials: 'same-origin', cache: 'no-store' }); if (!r.ok) return;
+    const r = await fetch('/api/next', { headers: { accept: 'text/html' }, credentials: 'same-origin', cache: 'no-store' }); if (!r.ok) return;   // issue #481: only the Next element, not the whole page
     const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-    const fresh = doc.querySelector('.statusbar [data-tick-state]'), cur = document.querySelector('.statusbar [data-tick-state]');
-    if (fresh && cur) { cur.replaceWith(document.importNode(fresh, true)); tickClock(); }
+    const fresh = doc.querySelector('[data-tick-state]'), cur = document.querySelector('.statusbar [data-tick-state]');
+    if (fresh && cur) { const el = document.importNode(fresh, true); cur.replaceWith(el); localizeTimes(el); tickClock(); }
   } catch { /* offline: keep the text */ }
 }
 function tickClock() {
@@ -424,21 +424,24 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
 }
 
 // Local time (issue #76): the server renders UTC; every <time data-local> is rewritten in this browser's time zone. Data stays UTC.
-{
-  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  for (const el of $$('time[data-local]')) {
+const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+function localizeTimes(scope = document) {   // also run on the Next element refreshNext swaps in, so its time is not left in UTC
+  for (const el of $$('time[data-local]', scope)) {
     const ms = Date.parse(el.getAttribute('datetime'));
     if (!Number.isFinite(ms)) continue;
     el.title = `${el.textContent} (stored in UTC); shown in your time zone, ${zone}`;
     el.textContent = formatLocal(ms, zone);
   }
   // Chart axis labels and tooltips (SVG cannot hold <time>): rebuilt from their template in this zone.
-  for (const el of $$('[data-lms]')) {
+  for (const el of $$('[data-lms]', scope)) {
     const ms = Number(el.getAttribute('data-lms'));
     if (!Number.isFinite(ms)) continue;
     const t = el.hasAttribute('data-tonly') ? timeOnly(ms, zone) : formatLocal(ms, zone);
     el.textContent = (el.getAttribute('data-tpl') || '{t}').replace('{t}', () => t);
   }
+}
+localizeTimes();
+{
   const note = $('#tznote');
   if (note) note.textContent = `Times are shown in your time zone (${zone}). Data is stored in UTC; hover a time to see it.`;
 }
