@@ -16,7 +16,8 @@ const limits = { cpus: 1, memoryMb: 1024, pids: 128, shmMb: 64, timeoutMs: 60000
 const RUN = 'a'.repeat(16);
 // Secret-looking values are built at run time so this file never contains one.
 const canary = (tag) => ['canary', tag, 'x9Q2', 'm7Lp4Zr8'].join('-');
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-broker-'));
+import { tmpDir } from './helpers/tmp.mjs';
+const tmp = () => tmpDir('devtest-broker-');
 const secretRoot = () => { const d = tmp(); fs.chmodSync(d, 0o700); return d; };
 const me = { uid: process.getuid(), gid: process.getgid() };
 

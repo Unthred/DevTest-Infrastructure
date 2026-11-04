@@ -1,5 +1,6 @@
 // Issue #303: agents cannot mark a decision homeowner-approved. Register check (CI), Needs you item for proposals, and the
 // decisionApproved() enforcement of every decision code must check. Fixtures use git init, never a linked worktree.
+import { tmpDir } from './helpers/tmp.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -152,7 +153,7 @@ test('parser divergence cannot hide an approval: a second Status line or an unre
 
 test('readHeadRegister does not cache a failed read', async () => {
   const { readHeadRegister } = await import('../supervisor/planning.mjs');
-  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-src-')), clone = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-clone-'));
+  const src = tmpDir('hr-src-'), clone = tmpDir('hr-clone-');
   const git = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }).trim();
   git(src, 'init', '-q'); fs.mkdirSync(path.join(src, 'docs')); fs.writeFileSync(path.join(src, 'docs/DECISIONS.md'), BASE);
   git(src, 'add', '.'); git(src, 'commit', '-qm', 'x'); const sha = git(src, 'rev-parse', 'HEAD');

@@ -1,4 +1,5 @@
 // One naming scheme (issue #147): the formatter for each kind, and every surface rendering a known job through it.
+import { tmpDir } from './helpers/tmp.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -112,7 +113,7 @@ const state = { verdicts: { [`146:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'co
 const PRN = `PR #146 ${clipTitle(PRT)}`;
 const known = () => `Reviewer · review · ${PRN}`;
 const strip = html => html.replace(/<(script|style)[\s\S]*?<\/\1>/g, '').replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-const build = (over = {}) => buildView({ config, root: fs.mkdtempSync(path.join(os.tmpdir(), 'nm-')), jobs, events, state, cache: cache(), snapshots: [], now: NOW, ...over });
+const build = (over = {}) => buildView({ config, root: tmpDir('nm-'), jobs, events, state, cache: cache(), snapshots: [], now: NOW, ...over });
 const ROUTES = ['/', '/agents', '/agents/codex', '/agents/claude', '/work', '/work/pr/146', '/work/issue/104', '/work/job/3f2a91c0', '/work/job/9d8e7f60', '/activity', '/activity?group=issue', '/reviews', '/usage'];
 
 test('Activity, Now, Needs you, Reviews and Work render the known job and PR through the formatter, linked', async () => {
