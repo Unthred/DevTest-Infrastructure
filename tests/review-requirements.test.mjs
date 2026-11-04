@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Team, applyLocalOverride, validateTeamConfig, weeklyAtOf, touchesPaths } from '../supervisor/team.mjs';
+import { Team, TOP_LEVEL_DIRS, ROOT_FILES, applyLocalOverride, validateTeamConfig, weeklyAtOf, touchesPaths } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { outOfAllowance } from '../supervisor/interim.mjs';
 
@@ -294,15 +294,27 @@ test('#449: pure count and wording slips are still accepted as immaterial', asyn
     // Issue #479: neutral count verbs directly before the count, "new" before the noun, and directory paths.
     'adds 3 tests', 'the PR adds 3 tests', 'there are 4 new tests', 'removes 2 lines', 'touches 3 files in supervisor/', 'touches 3 files in supervisor/lib',
     // Issue #513: from/to are neutral filler.
-    'removes 2 lines from supervisor/team.mjs', 'adds 3 tests to tests/', 'adds 3 tests from docs/ai']) {
+    'removes 2 lines from supervisor/team.mjs', 'adds 3 tests to tests/', 'adds 3 tests from docs/ai', 'removes 2 lines from README.md', 'adds 3 tests to .gitignore', 'adds 3 tests to team.mjs']) {
     const { r } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, claim }] });
     assert.equal(r.report.ingested.at(-1).error, undefined, claim);
   }
 });
+test('#559: TOP_LEVEL_DIRS and ROOT_FILES match the real repository root', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const root = new URL('..', import.meta.url).pathname;
+  const tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
+  const dirs = new Set(tracked.filter(f => f.includes('/')).map(f => f.split('/')[0]));
+  const files = new Set(tracked.filter(f => !f.includes('/')).map(f => f.toLowerCase()));
+  // .agents and .claude are tool configuration, not places a description names.
+  for (const d of dirs) if (!['.agents', '.claude'].includes(d)) assert.ok(TOP_LEVEL_DIRS.has(d), 'TOP_LEVEL_DIRS lacks ' + d);
+  for (const d of TOP_LEVEL_DIRS) assert.ok(dirs.has(d), 'TOP_LEVEL_DIRS has a directory that is not tracked: ' + d);
+  for (const f of files) assert.ok(ROOT_FILES.has(f), 'ROOT_FILES lacks ' + f);
+  for (const f of ROOT_FILES) assert.ok(files.has(f), 'ROOT_FILES has an untracked file: ' + f);
+});
 test('#479: widened count slips still refuse effect claims', async t => {
   for (const claim of ['adds 3 tests that fix the retry loop', 'adds 3 new tests so the gate passes', 'removes the retry loop and 2 lines', 'touches 3 files in supervisor/ and improves retries', 'adds retry handling in 3 files',
     // Issue #513: a slash alone does not make a token a path; it must start at a top-level directory.
-    'adds 3 tests fix/retry', 'adds 3 tests and/or', 'removes 2 lines in disable/', 'adds 3 tests disable/auth/']) {
+    'adds 3 tests fix/retry', 'adds 3 tests fix.retry', 'adds 3 tests docs/../fix', 'adds 3 tests fix/retry.mjs', 'adds 3 tests ../tests/x.mjs', 'adds 3 tests and/or', 'removes 2 lines in disable/', 'adds 3 tests disable/auth/']) {
     const { r, w } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, claim }] });
     assert.equal(r.report.ingested.at(-1).error, undefined, claim);
     assert.equal(w.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES', claim);

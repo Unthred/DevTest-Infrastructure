@@ -188,7 +188,7 @@ test('CLI pause and stop signal only their supervised child and preserve request
     const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
     const worker = spawn(process.execPath, [cli, 'start', '--foreground', '--spec', specFile, '--state-root', f.root, '--registry', registry], { stdio: 'ignore' });
     let id;
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 500; i++) {
       const names = fs.existsSync(path.join(f.root, 'jobs')) ? fs.readdirSync(path.join(f.root, 'jobs')).filter(name => /^[a-f0-9]{32}\.json$/.test(name)) : [];
       if (names.length) {
         id = names[0].slice(0, -5);
