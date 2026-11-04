@@ -122,3 +122,79 @@ test('namer: a reference is formatted once and reused, and its text is unchanged
   assert.equal(n.job(j), n.job({ ...j }));
   assert.equal(n.job(j).text, 'Reviewer · review · PR #9 PR title');
 });
+
+// Issue #467, rebuild flaw: the single timer rebuilds a requested view before it can go stale.
+const mkTimed = (over = {}) => {
+  let t = 1000, builds = 0, running = 0, maxRunning = 0, stops = 0, starts = 0, tickFn = null; const slow = [];
+  const build = async o => {
+    builds++; running++; maxRunning = Math.max(maxRunning, running);
+    if (o?.slow) { const g = gate(); slow.push(g); await g.p; }
+    running--; if (o?.fail) throw new Error('disk gone');
+    return { n: builds };
+  };
+  const every = fn => { starts++; tickFn = fn; return () => { stops++; tickFn = null; }; };
+  const store = createViewStore({ build, ttlMs: 3000, staleMs: 30000, refreshMs: 15000, activeMs: 300000, clock: () => t, yieldTo: fn => fn(), every, ...over });
+  return { store, advance: ms => { t += ms; }, builds: () => builds, maxRunning: () => maxRunning, slow, fire: async () => { tickFn?.(); await settle(); }, stops: () => stops, starts: () => starts, timerSet: () => !!tickFn };
+};
+const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
+
+test('a tab reloading every 60 seconds is never served a stale copy while the system is healthy', async () => {
+  const x = mkTimed(); await x.store.get('k', {});
+  for (let minute = 1; minute <= 4; minute++) {
+    for (let step = 0; step < 4; step++) { x.advance(15000); await x.fire(); }   // the timer rebuilds before the copy is 30 s old
+    const o = await x.store.get('k', {});   // the 60 s page reload
+    assert.equal(o.stale, false, `reload in minute ${minute} must not be stale`);
+    assert.ok(o.ageMs <= 15000, `copy is fresh (${o.ageMs} ms)`);
+  }
+});
+
+test('there is one timer for every key, and a rebuild never overlaps another for the same key', async () => {
+  const x = mkTimed(); await x.store.get('k', { slow: false }); await x.store.get('other', {});
+  assert.equal(x.starts(), 1, 'one timer');
+  await x.store.get('k', { slow: true });   // refresh the stored opts so the next rebuild of k is slow
+  x.advance(16000); await x.fire();         // k and other rebuild; k's stays running
+  assert.equal(x.slow.length, 1, 'one slow rebuild of k started');
+  x.advance(16000); await x.fire(); await x.fire(); await x.store.get('k', { slow: true });   // more timer ticks and a request while it runs
+  assert.equal(x.slow.length, 1, 'no second build of a key whose rebuild is still running');
+  for (const g of x.slow) g.open(); await settle();
+});
+
+test('the timer stops when nobody has requested the view for the active window, and an unwatched dashboard builds nothing', async () => {
+  const x = mkTimed(); await x.store.get('k', {});
+  assert.equal(x.timerSet(), true);
+  x.advance(301000); await x.fire();
+  assert.equal(x.stops(), 1); assert.equal(x.timerSet(), false);
+  const before = x.builds();
+  x.advance(3600000); await x.fire(); await settle();
+  assert.equal(x.builds(), before, 'no build while nobody is viewing');
+  const back = await x.store.get('k', {});   // a viewer returns: the old copy is served at once, one rebuild starts, the timer restarts
+  assert.equal(back.stale, true); assert.equal(x.timerSet(), true); await settle(); assert.equal(x.builds(), before + 1);
+});
+
+test('a failed timed rebuild keeps the last view and marks it stale with the reason', async () => {
+  const x = mkTimed(); await x.store.get('k', {});
+  await x.store.get('k', { fail: true });   // the stored opts make the next timed rebuild fail
+  x.advance(16000); await x.fire();
+  const o = await x.store.get('k', { fail: true });
+  assert.deepEqual(o.view, { n: 1 }); assert.equal(o.stale, true); assert.match(o.failed, /disk gone/);
+});
+
+test('a slow timed rebuild keeps the last view, which is marked stale once it passes the stale limit', async () => {
+  const x = mkTimed(); await x.store.get('k', {});
+  await x.store.get('k', { slow: true });
+  x.advance(16000); await x.fire();   // the rebuild starts and does not finish
+  x.advance(20000);
+  const o = await x.store.get('k', { slow: true });
+  assert.equal(o.view.n, 1); assert.equal(o.stale, true); assert.equal(o.refreshing, true);
+  for (const g of x.slow) g.open(); await settle();
+});
+
+test('a persistently failing rebuild is retried by the timer no more often than the refresh interval', async () => {
+  const x = mkTimed(); await x.store.get('k', {});
+  await x.store.get('k', { fail: true });
+  x.advance(16000); await x.fire();
+  const before = x.builds();
+  x.advance(5000); await x.fire(); x.advance(5000); await x.fire();
+  assert.equal(x.builds(), before, 'no retry inside the refresh interval');
+  x.advance(6000); await x.fire(); assert.equal(x.builds(), before + 1, 'retried after the interval');
+});

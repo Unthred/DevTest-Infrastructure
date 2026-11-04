@@ -117,7 +117,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
   // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
   // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
   const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
-  const store = createViewStore({ build: worker ? worker.build : currentView, ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now() });
+  const store = createViewStore({ build: worker ? worker.build : currentView, ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now(),
+    rebuildOpts: o => ({ ...o, now: now(), config: source(), configError: source.invalid }) });   // the timer rebuilds with the current time and config, not the last request's
   const cachedView = opts => store.get(`${opts.timeline}:${opts.allTime}`, opts);
   const source = configSource(config);
   const activeStreams = new Set();
