@@ -811,6 +811,17 @@ test('issue #488: refusal text hides private hostnames, URLs and their paths', a
   assert.match(refusalText('validator could not contact tower.lan'), /validator could not contact/);
 });
 
+test('issue #501: refusal text hides bare host:port tokens and configured local domains, keeps file:line', async () => {
+  const { refusalText } = await import('../supervisor/upgrade.mjs');
+  for (const t of ['could not reach tower:8123', 'nas.example.com:8080 refused', 'ha.mylab.net failed']) {
+    const out = refusalText(t, ['mylab.net', 'nas.example.com']);
+    assert.doesNotMatch(out, /tower|nas\.example|mylab/, t);
+    assert.match(out, /\[host\]/);
+  }
+  assert.match(refusalText('see build.mjs:42 error', []), /build\.mjs:42/);
+  assert.match(refusalText('open nas.example.com ok', []), /nas\.example\.com/, 'no configured domain: ordinary public name stays');
+});
+
 test('issue #489: the no-install path list decides per range; every other path needs an install', async t => {
   const { needsNoInstall, rangeNeedsInstall } = await import('../supervisor/upgrade.mjs');
   assert.equal(rangeNeedsInstall(['tests/a.test.mjs', 'docs/x.md', '.github/workflows/ci.yml', 'tools/ci/v.mjs', 'README.md']), false, 'a test/docs-only range needs none');
