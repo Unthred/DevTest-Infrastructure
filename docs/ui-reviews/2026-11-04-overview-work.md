@@ -218,8 +218,8 @@ Walked by clicking from the Overview, 28 steps on each profile, then a direct lo
 UX-01 (squeezed page head, may be fixed under #447), UX-02 (Overview overflow), UX-08 (Supervisor crumb), UX-09 (Stale vs No warnings).
 
 ## Cost of this trial
-- Images opened: 7, each once (desktop-1440: Overview, Work, PR page, issue 243; phone-390: Overview, PR page; tablet-768: Overview). Images reused from an earlier run: 0 (no earlier manifest existed). Images captured: about 140 in the evidence folder; most were judged from the page text and JSON files instead.
-- Tokens used: not measurable from inside the session; the dispatcher's job record for this issue holds the figure.
+- Images opened: 7, each once (desktop-1440: Overview, Work, PR page, issue 243; phone-390: Overview, PR page; tablet-768: Overview). Images reused from an earlier run: 0 (no earlier manifest existed). Images captured: 72 PNG in the evidence folder (plus 9 JSON and the page-text files; 81 manifest entries, each resolving to a file with a matching sha256); most were judged from the page text and JSON files instead.
+- Tokens used (writer job ffc2996b511881326cb2cf8cfdd6b733, from the dispatcher job record): 5,504,484 input and 47,802 output, estimated cost USD 1.67. Review jobs on this PR are not included.
 - Browser runs: 8 container runs, one at a time, niced; one needed `node browser/prepare-cache.mjs` (the vendored packages were absent from this worktree; integrity-checked against the lock).
 
 ## Approval
