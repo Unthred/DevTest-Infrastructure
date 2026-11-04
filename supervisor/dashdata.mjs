@@ -12,6 +12,7 @@ import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 import { HOT_WINDOW_MS, archiveSnapshots, recordTimeline } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
+import { classifyIdle } from './idlecause.mjs';
 
 // Issue #362: the hot file keeps the last 35 days for the planner; older snapshots rotate into compressed monthly archives and are never deleted.
 export const RETENTION_MS = HOT_WINDOW_MS;
@@ -170,7 +171,7 @@ export function tickOutcome(report) {
 }
 
 // Written by the tick (never by the dashboard server). `error` is the failure of this tick, if any.
-export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0 }) {
+export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0, startedAt = null, heldAgents = null, holds = {} }) {
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
@@ -186,6 +187,8 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     plan: actions.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, ...(a.secondOpinion ? { secondOpinion: true } : {}), ...(a.postMerge ? { postMerge: true } : {}) })),
     agents: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])),
     allowance: Object.fromEntries(Object.entries(team.c.agents).map(([n, a]) => [n, allowance[a.provider] ? { observedAt: allowance[a.provider].observedAt, windows: allowance[a.provider].windows.map(w => ({ type: w.type, windowMinutes: w.windowMinutes ?? null, utilization: w.utilization, resetsAt: w.resetsAt })) } : null])),
+    // Issue #487: when the tick began and why each idle agent was idle (upgrade hold, a named hold for that agent, or nothing to do).
+    ...(Number.isFinite(startedAt) ? { startedAt } : {}), idle: classifyIdle({ states: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])), heldAgents, holds, plan: actions }),
     redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };
   // Issue #362: keep a compact, allowlisted timeline of everything the live records hold now, before any of it can expire.
   try { recordTimeline(root, { config: team.c, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), incidents: readIncidents(root) }); } catch (error) { console.error(`ai-supervisor: timeline record failed: ${error?.name || 'Error'}`); }

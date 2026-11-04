@@ -17,6 +17,7 @@ import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, readTeamState, recordTick, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
+import { idleReport, renderIdleReport } from './idlecause.mjs';
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
 import { ghRunner } from './github.mjs';
@@ -207,6 +208,7 @@ async function teamTick(root, registry, dryRun, hold = null) {
       }
     }
     const config = loadTeamConfig(teamConfigFile, root);
+    const tickStartedAt = Date.now();   // issue #487: tick run time before a job starts is measured from here
     // The dashboard cache and history (#32) are written here, at the end of a real tick, and nowhere else.
     const found = {};
     const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: mergeProbes(probeAllowances(config), found), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
@@ -218,7 +220,7 @@ async function teamTick(root, registry, dryRun, hold = null) {
       if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config);
       const report = await team.tick({ dryRun, hold });
       if (!dryRun) {
-        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length });
+        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds });
         // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
         await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
       }
@@ -434,7 +436,14 @@ async function main() {
       try { console.log(JSON.stringify(await (await teamFor(root, registry)).requestReReview(a._[1], a._[2]))); } finally { release(); }
       return;
     }
-    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team status [--json] | team accept-split ISSUE | team request-review PR DECISION_LINK');
+    if (a._[0] === 'idle-report') {   // issue #487: idle time by cause for a time range; reads local records only (no GitHub, no model)
+      const config = loadTeamConfig(teamConfigFile, root), to = a.to ? Date.parse(a.to) : Date.now();
+      const from = a.from ? Date.parse(a.from) : to - Number(a.hours ?? 24) * 3600000;
+      if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new SupervisorError('usage: team idle-report [--hours N | --from ISO_TIME [--to ISO_TIME]] [--json]');
+      const rep = idleReport({ jobs: readJobs(root), snapshots: allSnapshots(root, readSnapshots(root)), agents: Object.fromEntries(Object.entries(config.agents).map(([n, x]) => [n, x.provider])), from, to });
+      console.log(a.json === true ? JSON.stringify(rep, null, 2) : renderIdleReport(rep)); return;
+    }
+    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team idle-report [--hours N | --from T --to T] [--json] | team status [--json] | team accept-split ISSUE | team request-review PR DECISION_LINK');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
   }
   if (command === 'self-upgrade') {

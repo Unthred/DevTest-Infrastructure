@@ -172,3 +172,13 @@ The order only ranks; it never makes a PR eligible, and which agent reviews (iss
 | 2 | 131.7 / 129.7 | 0.75 / 1.62; 0.68 / 2.32 | 11 / 11 | 653 / 656 MB | 0 |
 
 On a 4-core runner the suite takes about 125 seconds whatever the limit (a few long files bound it) and 2 is about 5% slower, so CI shows no time cost for any value from 4 up. CI has no swap pressure, so it does not argue against 8, which stays the default because of the Tower figures (the old unlimited run gave 30 processes and 2.6 GB there); re-run the tool on Tower when the host is quiet to refine the value. The effect of skipping repeat suites is not measured: it removes whole suites (about 85 seconds each at 8), in proportion to how often the same tree is re-run.
+
+## Idle time by cause (issue #487)
+Each tick snapshot records when the tick began (`startedAt`) and, for every agent idle when the tick ended, why: `upgrade` (the upgrade hold dropped work planned for that agent), `named-hold` (the planner named a hold for that agent, with its text), `work-planned`, or `no-eligible-work`. A hold belongs to the agent it names; other idle agents are not charged for it. Nothing here calls a model or GitHub: the report reads the local job records and snapshots.
+
+`ai-supervisor team idle-report [--hours N | --from TIME [--to TIME]] [--json]` prints, per agent, minutes by cause over the range. The method is the one behind the figures in #406:
+- A gap runs from the end of the agent's last job to the start of its next one. An agent with any job running is busy (a job is busy from creation to its last update; a job paused on a usage limit still counts as busy).
+- Inside a gap, the interval after a tick that held the agent's work for an upgrade is `upgrade`; after a tick that named a hold for it, `named-hold`; an interval that ends at the tick that started the job is `waiting-for-tick`; otherwise `no-eligible-work`.
+- From the start of the tick that started the job to the job's start is `tick-run` (the time the tick spent before the job began).
+- Time with no tick record is `unrecorded`. "Idle with work available" is waiting-for-tick + upgrade + tick-run + named-hold, as a percent of the range.
+The dashboard shows the last 24 hours per agent beside the agent list, and an idle agent's line names its hold ("about to start implement #5 once the hold clears; held: ...") instead of "on the next tick" when one applies.

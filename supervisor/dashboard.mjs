@@ -18,6 +18,7 @@ import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { hasProbe } from './probe.mjs';
 import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
+import { idleReport } from './idlecause.mjs';
 import { sinceView } from './since.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
@@ -188,11 +189,15 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
 
 // Why an idle agent is idle, in plain words (issue #50). Homeowner waits first, then what is in flight, then drafts, then blocked issues.
 // Returns { text, links } where links are { text, url } for the PRs and issues named; null when the agent is not idle or has a planned job.
-export function idleReason({ agent, config, team, cache, plan, state, now = Date.now(), names = makeNamer({ repo: config.repository, issues: cache.issues, pulls: cache.pulls, merged: cache.merged }) }) {
+export function idleReason({ agent, config, team, cache, plan, state, now = Date.now(), hold = null, names = makeNamer({ repo: config.repository, issues: cache.issues, pulls: cache.pulls, merged: cache.merged }) }) {
   if (state !== 'idle') return null;
   if (config.enabled === false) return { text: 'the team loop is switched off', links: [] };
   const next = plan.find(a => a.agent === agent);
-  if (next) return { text: `about to start ${next.type === 'cifix' ? 'fix CI on' : next.type} ${['implement', 'continue'].includes(next.type) ? names.issue(next.issue).text : names.pr(next.pr).text} on the next tick`, links: [] };
+  // Issue #487: name the hold from the last tick's record for this agent; "on the next tick" only when no hold applied to it.
+  const held = hold?.cause === 'upgrade' ? 'an upgrade is pending or draining' : hold?.cause === 'named-hold' ? hold.hold : null;
+  if (next) return { text: `about to start ${next.type === 'cifix' ? 'fix CI on' : next.type} ${['implement', 'continue'].includes(next.type) ? names.issue(next.issue).text : names.pr(next.pr).text} ${held ? `once the hold clears; held: ${held}` : 'on the next tick'}`, links: [] };
+  // A slot or cap hold stops the planner too, so the live plan has no work for this agent: name the hold anyway.
+  if (held) return { text: `held: ${held}`, links: [] };
   const c = team.c, a = c.agents[agent], L = c.limits, S = team.s, prs = cache.pulls || [], issues = cache.issues || [];
   const byNo = new Map(issues.map(i => [i.number, i]));
   const url = (kind, n) => `https://github.com/${config.repository}/${kind}/${n}`;
@@ -646,10 +651,11 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       const held = (c.pulls || []).find(p => agentOfBranch(config, p.headRefName) && new RegExp(`/issue-${i.number}(\\D|$)`).test(p.headRefName));
       return held ? [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: 'pr-open', reason: `held by open ${names.pr(held.number).text}` }] : [];
     });
+    const lastTick = [...(snapshots || [])].sort((x, y) => y.at - x.at)[0] || null;
     const agents = Object.entries(config.agents).map(([name, a]) => {
       const s = states[name], j = s.job;
       const base = { name, provider: a.provider, state: s.state, lastActivityAt: s.last ? Math.max(s.last.updatedAt || 0, s.last.lastProgress || 0) || null : null, job: null };
-      base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state, now, names });
+      base.idleReason = idleReason({ agent: name, config, team, cache: c, plan, state: s.state, now, hold: lastTick?.idle?.[name] || null, names });
       // Issue #213: one entry per running or paused job, with its role, model and item, so concurrent jobs on one agent each get a card.
       base.jobs = (s.jobs || []).map(x => { const r = state.jobs?.[x.id] || {}; return { id: shortJob(x.id), fullId: x.id, name: redact(names.job(x).text, 300), kind: x.kind || r.kind || 'job', role: roleOfType(r.kind || x.kind), model: redact(r.model || x.model || '', 40) || null, status: x.status, lastEvent: redact(x.lastEvent || '', 48), nextAttemptAt: x.nextAttemptAt || null, startedAt: x.createdAt, elapsedMs: now - x.createdAt, attempts: x.attempts || 0, paused: ['paused_limit', 'paused_manual'].includes(x.status), resumeWait: x.resumeWait?.reason ? redact(x.resumeWait.reason, 300) : null }; });
       if (j) base.job = { id: shortJob(j.id), fullId: j.id, name: redact(names.job(j).text, 300), kind: j.kind || 'job', ref: j.issue, branch: redact(j.branch || '', 100), startedAt: j.createdAt, elapsedMs: now - j.createdAt, status: j.status, lastEvent: redact(j.lastEvent || '', 48), resetAt: j.resetAt || null, nextAttemptAt: j.nextAttemptAt || null, attempts: j.attempts || 0 };
@@ -710,6 +716,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       attention,
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots: history?.chartSnapshots || snapshots, now, windowMs: history?.chartSnapshots ? Infinity : 30 * DAY }),
+      idleCauses: idleReport({ jobs, snapshots, agents: Object.fromEntries(Object.entries(config.agents).map(([n, x]) => [n, x.provider])), from: now - 24 * 3600000, to: now }),
       history: history ? { timeline: history.timeline, gaps: history.gaps, storage: history.storage, allTime: !!history.chartSnapshots } : null,
       activity: activity({ config, jobs, events, state, cache, snapshots, now, root, incidents: readIncidents(root), names })
     };

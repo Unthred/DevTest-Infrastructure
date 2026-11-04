@@ -1506,10 +1506,12 @@ export class Team {
     if (!dryRun) await guard('review exceptions', () => this.endExceptions(report));
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
     if (hold) {
-      report.held = { reason: `upgrade to ${String(hold.to || '').slice(0, 7) || 'a newer supervisor'} pending`, actions: actions.filter(a => a.type !== 'merge').length };
+      report.held = { reason: `upgrade to ${String(hold.to || '').slice(0, 7) || 'a newer supervisor'} pending`, actions: actions.filter(a => a.type !== 'merge').length,
+        agents: [...new Set(actions.filter(a => a.type !== 'merge' && a.agent).map(a => a.agent))] };   // issue #487: the hold belongs to these agents only
       actions = actions.filter(a => a.type === 'merge');
     }
     report.actions = actions;
+    report.holds = JSON.parse(JSON.stringify(this.held || {}));   // issue #487: the planner's per-agent hold texts, for the idle-cause record
     if (!dryRun) await this.checkStalls(report);
     if (this.modes) report.allowance = Object.fromEntries(Object.entries(this.modes).map(([n, m]) => [n, { mode: m.mode, reason: m.reason, until: m.until, ...(this.held[n] ? { held: this.held[n] } : {}) }]));
     if (dryRun) return report;
