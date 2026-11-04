@@ -1,5 +1,5 @@
 // Issue #469: lighter test runs. (1) A worker limit per suite: `node --test` gets `--test-concurrency=N` so one suite no longer
-// runs a child process per file. (2) A configured temp root (cache drive) so test clones and temp files stay off the RAM disk.
+// runs a child process per file. (2) A configured temp root (opt-in; never the worn cache drive, the scratch pool once it exists) so test clones and temp files stay off the RAM disk.
 // (3) A sweep for leftovers: only directories with the tests' own prefixes, old enough, not open and not any process's cwd.
 import fs from 'node:fs';
 import path from 'node:path';

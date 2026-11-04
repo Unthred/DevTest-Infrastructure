@@ -359,8 +359,8 @@ async function main() {
     const rawCmd = process.argv.slice(dash + 1);
     const passFile = path.join(root, 'team', 'test-passes.jsonl');
     const reuseHours = a['no-reuse'] ? 0 : (cfg.limits?.test_reuse_hours ?? DEFAULT_REUSE_HOURS);
-    const key = reuseHours > 0 ? suiteKey(process.cwd(), rawCmd) : null;   // Issue #469: the same clean tree that already passed is not run again
-    const prior = findPass(passFile, key, { maxAgeHours: reuseHours });
+    const key = suiteKey(process.cwd(), rawCmd);   // Issue #469: computed before the run, always, so the recorded pass names the tree that was tested
+    const prior = reuseHours > 0 ? findPass(passFile, key, { maxAgeHours: reuseHours }) : null;   // the same clean tree that already passed is not run again
     if (prior) { console.error(`test-slot: tree ${prior.tree} already passed this suite at ${prior.at}; not run again (use --no-reuse to force)`); process.exitCode = 0; return; }
     const keyBefore = key;   // the tree that is tested, computed before the run
     const cmd = withTestConcurrency(rawCmd, cfg.limits?.test_concurrency ?? DEFAULT_TEST_CONCURRENCY);
@@ -369,7 +369,7 @@ async function main() {
     const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', env: testEnv(process.env, cfg.test_tmp_root) });
     for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
     const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, s) => resolve(c ?? (s ? 128 : 1))); });
-    release(); if (code === 0) recordPass(passFile, keyBefore ?? suiteKey(process.cwd(), rawCmd), { label: a.label }); process.exitCode = code; return;
+    release(); if (code === 0) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
   }
   if (command === 'dashboard') {
     if (a._[0] !== 'serve') throw new SupervisorError('usage: dashboard serve --host LAN_IPV4 [--port N]');

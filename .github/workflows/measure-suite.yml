@@ -3,8 +3,6 @@ name: Measure suite
 # Issue #469: suite time, load and RAM against --test-concurrency on a CI runner (tools/measure-suite.mjs). Manual only.
 on:
   workflow_dispatch:
-  push:
-    branches: ['claude/issue-469-measure-ci']
 
 permissions:
   contents: read
