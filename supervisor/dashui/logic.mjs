@@ -284,3 +284,16 @@ export function activityFilters(query) {
 export function filterActivity(rows, f) {
   return rows.filter(r => (!f.agent || r.agent === f.agent) && (!f.outcome || r.outcome === f.outcome) && (!f.kind || r.jobKind === f.kind));
 }
+
+// ---- refresh in place (issue #431). The page keeps its document; each periodic refresh compares the server's markup per region
+// (a card by id, a status-bar item by position) with what the server sent last time and replaces only the regions that differ.
+// Returns { added, removed, changed, sameSet }: regions new in `next`, regions gone from it, and regions in both whose markup differs.
+// A changed set is handled in place (never a reload), and a region present in both that differs is still in `changed`, also in the
+// same refresh as an added or removed one.
+export function planRefresh(prev, next) {
+  const a = Object.keys(prev), b = Object.keys(next);
+  const added = b.filter(k => !Object.hasOwn(prev, k)), removed = a.filter(k => !Object.hasOwn(next, k));
+  return { added, removed, changed: a.filter(k => Object.hasOwn(next, k) && prev[k] !== next[k]), sameSet: !added.length && !removed.length };
+}
+// A refresh waits while the viewer is busy in a way a swap would disturb (typing in a field, a drag or resize in progress, text selected).
+export const refreshBlocked = ({ typing = false, dragging = false, selecting = false } = {}) => typing || dragging || selecting;
