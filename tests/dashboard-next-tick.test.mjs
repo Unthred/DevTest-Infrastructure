@@ -165,3 +165,8 @@ test('/api/next answers running, overdue and the none fallback', async t => {
   const none = await (await mkServer(emptyRoot(t), T0, { fetchedAt: T0, delivered: [], pulls: [], issues: [] }))('/api/next');
   assert.equal(none.status, 200); assert.equal(none.body, '<span class="muted">none</span>');
 });
+
+test('docs: the none fallback stays until reload (issue #564)', () => {
+  const md = fs.readFileSync(new URL('../docs/dashboard.md', import.meta.url), 'utf8');
+  assert.match(md, /keeps showing `none`[^.]*reload the page/);
+});
