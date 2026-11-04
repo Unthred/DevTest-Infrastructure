@@ -32,6 +32,7 @@ import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
+import { requestWake, clearPending, waitForTurn, wakePassLock, wakeTarget } from './wake.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -62,6 +63,19 @@ function installRunning(root) {
   const unlock = upgradeLock(root);
   if (!unlock) return true;
   unlock(); return false;
+}
+// Issue #406: ask for one extra reconcile pass now. Best effort and model-free; the scheduled tick is the fallback, so a failure
+// here only loses the speed-up. An 'install' wake runs the freshly installed code (the old process cannot dispatch after an install).
+let registryOption = null;
+function wakeNextJob(root, reason) {
+  try {
+    if (!loadTeamConfig(teamConfigFile, root).enabled) return;
+    const target = wakeTarget({ root, reason, self });
+    requestWake({ root, reason, spawnWake: why => {
+      const child = spawn(process.execPath, [target, 'reconcile', '--wake', why, '--state-root', root, '--registry', path.resolve(registryOption || defaultRegistry)], { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+      child.unref(); return { pid: child.pid, start: processStart(child.pid) };
+    }, alive: p => !!p.pid && processStart(p.pid) === p.start });
+  } catch (error) { console.error(`ai-supervisor: wake not requested: ${error?.name || 'Error'}`); }
 }
 function reconcileOnce(root, registry, installing = false) {
   const dir = path.join(root, 'jobs');
@@ -301,6 +315,7 @@ async function main() {
   const a = args(command === 'test-slot' && cut >= 0 ? rest.slice(0, cut) : rest);   // the command after `--` is not ours to parse
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
+  registryOption = registry;
   if (command === 'help') {
     console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
@@ -346,6 +361,7 @@ async function main() {
     const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null, async j => (await teamFor(root, registry, undefined, false)).resumeGate()(j));
     result.workerPid = null; result.workerStart = null; saveJob(root, result);
     } finally { release(); }
+    wakeNextJob(root, 'job-end');
     return;
   }
   if (command === 'status') {
@@ -530,6 +546,19 @@ async function main() {
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
+      // Issue #406: one pass at a time. A wake pass waits for the pass lock; a scheduled run that finds it held queues exactly one
+      // follow-up pass (never lost, never overlapping) and ends. The lock is held to the end of the pass, upgrade step included.
+      let passRelease = null;
+      if (a.wake) {
+        const turn = await waitForTurn({ reason: a.wake, sleep: realClock.sleep, tryLock: () => wakePassLock(root), lastTickAt: () => readCache(root)?.tick?.at });
+        clearPending(root);
+        if (!turn.ready) { console.log(JSON.stringify({ wake: a.wake, skipped: 'another pass kept the lock; the scheduled tick is the fallback' })); return; }
+        passRelease = turn.release;
+      } else {
+        passRelease = wakePassLock(root);
+        if (!passRelease) { wakeNextJob(root, 'queued'); console.log(JSON.stringify({ skipped: 'a pass is running; one follow-up pass is queued' })); return; }
+      }
+      try {
       // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
       const unlockRecover = tickLock(root, 'reconcile.lock');
       let result;
@@ -546,7 +575,10 @@ async function main() {
       } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
       // After the lock is released, so the new version's dry-run health check can take it. A failure here never fails the tick.
       try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
+      // Issue #406: this process ran the old code and dispatched nothing after an install; start a pass on the new code now.
+      if (before.result === 'upgraded') wakeNextJob(root, 'install');
       console.log(JSON.stringify(result)); return;
+      } finally { passRelease?.(); }
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.
     while (true) {
