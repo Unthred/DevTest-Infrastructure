@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildView } from '../supervisor/dashboard.mjs';
 import { renderRoute, PAGE_NAMES, matchRoute } from '../supervisor/dashrender.mjs';
-import { STATIC_FILES } from '../supervisor/dashserver.mjs';
+import { STATIC } from '../supervisor/dashserver.mjs';
 import { loadedFiles, pagePlan, readServed, refsInHtml, refsInModule, selectPages, stageDashui } from './helpers/dashui-stage.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -36,10 +36,10 @@ test('every file a rendered page loads, and every script those load in turn, is 
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'visstage-out-')); t.after(() => fs.rmSync(dest, { recursive: true, force: true }));
   const staged = stageDashui(dest);
   for (const url of loaded) {
-    assert.ok(STATIC_FILES[url], `${url} is loaded by a page but the server does not serve it`);
+    assert.ok(STATIC[url], `${url} is loaded by a page but the server does not serve it`);
     assert.ok(staged.includes(url) && fs.existsSync(path.join(dest, url)), `${url} is loaded by a page but was not staged`);
   }
-  assert.deepEqual(fs.readdirSync(path.join(dest, 'static')).sort(), Object.values(STATIC_FILES).map(([f]) => f).sort(), 'the whole served set is staged');
+  assert.deepEqual(fs.readdirSync(path.join(dest, 'static')).sort(), Object.values(STATIC).map(([f]) => f).sort(), 'the whole served set is staged');
 });
 
 test('the test fails if a loaded dashui file is not staged (negative)', () => {

@@ -3,7 +3,7 @@
 // dashboard route is left out. Pure functions plus one copy step; no browser, no Docker.
 import fs from 'node:fs';
 import path from 'node:path';
-import { STATIC_FILES } from '../../supervisor/dashserver.mjs';
+import { STATIC } from '../../supervisor/dashserver.mjs';
 import { NAV, matchRoute } from '../../supervisor/dashrender.mjs';
 import { readTranscript } from '../../supervisor/transcript.mjs';
 import { listRuns, readRun } from '../../supervisor/evidence.mjs';
@@ -13,7 +13,7 @@ const dashui = new URL('../../supervisor/dashui/', import.meta.url).pathname;
 // Copies every served static file to <dest>/static/<name>. Returns the URL paths staged.
 export function stageDashui(dest, srcDir = dashui) {
   fs.mkdirSync(path.join(dest, 'static'), { recursive: true });
-  return Object.entries(STATIC_FILES).map(([url, [file]]) => { fs.copyFileSync(path.join(srcDir, file), path.join(dest, 'static', file)); return url; }).sort();
+  return Object.entries(STATIC).map(([url, [file]]) => { fs.copyFileSync(path.join(srcDir, file), path.join(dest, 'static', file)); return url; }).sort();
 }
 
 // /static/... URLs a page loads (script, stylesheet, module preload).
@@ -33,7 +33,7 @@ export function loadedFiles(htmls, read) {
   while (queue.length) { const u = queue.pop(); if (seen.has(u)) continue; seen.add(u); if (/\.m?js$/.test(u)) { const src = read(u); if (src != null) queue.push(...refsInModule(src)); } }
   return [...seen].sort();
 }
-export const readServed = (url, srcDir = dashui) => { const e = STATIC_FILES[url]; return e ? fs.readFileSync(path.join(srcDir, e[0]), 'utf8') : null; };
+export const readServed = (url, srcDir = dashui) => { const e = STATIC[url]; return e ? fs.readFileSync(path.join(srcDir, e[0]), 'utf8') : null; };
 
 // Lower case, because the browser wrapper only accepts simple lower-case file names (capture.mjs --name).
 const slug = s => String(s).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
