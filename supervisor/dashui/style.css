@@ -142,7 +142,7 @@ dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px var(--sp4);marg
   .cards{grid-template-columns:1fr}.card{grid-column:1/-1}
   .resize,.wide-only{display:none!important}
   .nav{position:fixed;bottom:0;left:0;right:0;z-index:30;justify-content:space-between;padding:0;border-top:1px solid var(--line);border-bottom:0;box-shadow:0 -2px 8px rgba(0,0,0,.1)}
-  .nav a{flex:1;flex-direction:column;justify-content:center;gap:2px;padding:0 var(--sp1);font-size:11px;min-width:44px;min-height:var(--nav-h);border-bottom:0;border-top:3px solid transparent}
+  .nav a{flex:1 0 auto;flex-direction:column;justify-content:center;gap:2px;padding:0 var(--sp1);font-size:11px;min-width:44px;min-height:var(--nav-h);border-bottom:0;border-top:3px solid transparent}
   .nav a[aria-current=page]{border-top-color:var(--link)}
   .statusbar{gap:var(--sp2)}.stat .k{display:none}
   .tbtn,.theme,.legend button,.ranges a,.tbar button,.tbar input,.tbar select,.pager a,.btn{min-height:44px;min-width:44px}
@@ -183,7 +183,7 @@ ul.mini{margin:0;padding-left:1.1em}ul.mini li{margin:2px 0}ul.mini.notes{margin
   .btn.overseer{width:100%;justify-content:center}.btn.copyall{width:100%;justify-content:center}
   .card.health dl.kv{grid-template-columns:1fr}.card.health dl.kv dt{margin-top:var(--sp1)}
   td .tick-detail{text-align:left;width:100%}td dl.kv{grid-template-columns:1fr}
-  .nav a{padding:0 2px;font-size:10px}
+  .nav a{padding:0 1px;font-size:10px}
 }
 @media(prefers-reduced-motion:no-preference){.card,.kpi,.btn{transition:border-color .15s,box-shadow .15s}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
@@ -342,3 +342,4 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .wstep.st-done{border-top-color:var(--ok,#2a7)}.wstep.st-active{border-top-color:var(--info,#27c)}.wstep.st-blocked{border-top-color:var(--bad,#c33)}.wstep.st-skipped{opacity:.6}.wstep.cur .wlabel{text-decoration:underline}
 .whist{margin:var(--sp1) 0;padding-left:1.1em;font-size:.85em}.watch-sentence{margin:var(--sp1) 0}
 @media (max-width:700px){.wsteps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.diag-sparks{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:var(--sp2);margin-bottom:var(--sp2)}.diag-spark svg.spark{width:100%;height:36px;display:block}

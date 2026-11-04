@@ -6,7 +6,7 @@
 // Issue #455: every file the dashboard serves is staged (the page and script lists come from the server, not from this script), the page
 // list is derived from the dashboard routes, and the pages to capture are selectable: argv[3] is a comma list of page names (default: all).
 // DASH_VIEWPORT=1 captures the first screen only instead of the full page (full-page images of long pages are downscaled until text is unreadable).
-// DASH_EVIDENCE_ROOT adds the UI review evidence pages. An unknown page name stops the run and lists the choices.
+// DASH_RECORDER_DIR points the Diagnostics page at the memory flight recorder logs (read-only; without it the page shows them as missing). DASH_EVIDENCE_ROOT adds the UI review evidence pages. An unknown page name stops the run and lists the choices.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -31,7 +31,7 @@ const cfg = { allowedProjects: [project], storageRoot, uid, gid, lock, limits: {
 const view = await currentView({ root: stateRoot, config });
 const evidenceRoot = process.env.DASH_EVIDENCE_ROOT || undefined;
 let pages;
-try { pages = selectPages(pagePlan(view, { root: stateRoot, evidenceRoot }), process.argv[3]); } catch (error) { console.error(error.message); process.exit(2); }
+try { pages = selectPages(pagePlan(view, { root: stateRoot, evidenceRoot, recorderDir: process.env.DASH_RECORDER_DIR || null }), process.argv[3]); } catch (error) { console.error(error.message); process.exit(2); }
 const site = fs.mkdtempSync(path.join('/mnt/cache/appdata/devtest-infrastructure/vis58-', ''));
 for (const theme of ['light', 'dark']) {
   const dir = path.join(site, theme); fs.mkdirSync(path.join(dir, 'static'), { recursive: true });

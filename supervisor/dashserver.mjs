@@ -21,6 +21,7 @@ import { readTranscript } from './transcript.mjs';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
+import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS } from './dashwrite.mjs';
 
 export const DEFAULT_PORT = 8731;
@@ -112,8 +113,14 @@ function stream({ root, req, res, id, after, now, active }) {
 
 // Target (issue #448): a page answers within 1 second at the median while a full test suite runs; the view is reused for this long.
 export const DASHBOARD_VIEW_TTL_MS = 3000;
+// Issue #496: the Diagnostics page's data, from local records and the recorder logs only.
+export function diagnosticsData({ root, config, now, recorderDir }) {
+  if (typeof config === 'function') config = config();
+  const cfg = validateTeamConfig(config);
+  return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir });
+}
 const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, refreshing: p.refreshing, failed: p.failed });
-export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false }) {
+export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR }) {
   // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
   // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
   const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
@@ -221,8 +228,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify({ ...view, pageData: pageData(prepared) }));
       // Issue #481: only the Next element, so a page that polls during a long tick does not re-fetch a whole page (a watch page carries its transcript).
       if (path === '/api/next') return send(200, 'text/html; charset=utf-8', nextTickHtml(view, view.generatedAt) || '<span class="muted">none</span>');
-      const watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
-      const routed = watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
+      const diag = route.page === 'diagnostics', watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
+      const routed = diag ? { ...route, data: diagnosticsData({ root, config: source(), now: now(), recorderDir }) } : watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
         : evidence ? { ...route, data: route.page === 'evidence' ? listRuns(evidenceRoot) : readRun(evidenceRoot, route.id) } : route;
       const out = renderRoute({ ...view, pageData: pageData(prepared) }, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
       // The evidence pages show same-origin screenshots, so only they may load images from 'self'; every other page keeps data: only.
