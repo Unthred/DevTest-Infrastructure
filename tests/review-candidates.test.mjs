@@ -221,3 +221,45 @@ test('a new head clears the record; a miss is retried only after five minutes; a
   const m = world(t, { pulls: [HAND], headWriterOf: () => (++n, null) }); const before = n;
   await m.team.plan(); await m.team.plan(); assert.equal(n - before, 1, 'miss cached');
 });
+
+// Issue #547: ingestion judges a hand-pushed head by the job's reviewed head, with the tick's view cleared, as dispatch does.
+const TICKET = 'a'.repeat(32);
+async function ingestReview(t, { model, evidence }) {
+  const w = world(t, { pulls: [HAND] });
+  if (evidence) w.team.s.headWriters[`342:${HAND.headRefOid}`] = { provider: 'claude', models: evidence, sessions: ['s1'], at: NOW, source: 'session-log' };
+  w.team.view = null;   // the tick clears the view before ingestion
+  const d = path.join(w.team.dir, 'inbox', TICKET); fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'verdict.json'), JSON.stringify({ pr: 342, headSha: HAND.headRefOid, verdict: 'PASS', findings: [], commandsRun: ['node --test'] }));
+  w.team.s.jobs.rv = { kind: 'review', agent: 'claude', model, pr: 342, head: HAND.headRefOid, branch: HAND.headRefName, ticket: TICKET, ingested: false, at: NOW - 5000 };
+  w.jobs.states.rv = { id: 'rv', status: 'completed' };
+  const report = { ingested: [] };
+  await w.team.ingestOne('rv', w.team.s.jobs.rv, report);
+  return { w, report };
+}
+test('hand-pushed head, evidence says opus wrote it: a sonnet review is accepted at ingestion with the view cleared', async t => {
+  const { w, report } = await ingestReview(t, { model: 'sonnet', evidence: ['claude-opus-5-5'] });
+  assert.equal(report.ingested[0].verdict, 'PASS'); assert.equal(w.team.s.verdicts[`342:${HAND.headRefOid}`].verdict, 'PASS');
+  assert.deepEqual(w.team.refusedVerdicts([HAND]), []);
+});
+test('hand-pushed head, evidence says opus wrote it: an opus review is refused, settled once, and visible in Needs you', async t => {
+  const { w, report } = await ingestReview(t, { model: 'opus', evidence: ['claude-opus-5-5'] });
+  assert.match(report.ingested[0].error, /a model that wrote this pull request/); assert.equal(w.team.s.verdicts[`342:${HAND.headRefOid}`], undefined);
+  assert.equal(w.team.s.jobs.rv.ingested, true);
+  const [r] = w.team.refusedVerdicts([HAND]); assert.equal(r.pr, 342); assert.equal(r.reason, 'it wrote this head'); assert.ok(fs.existsSync(r.file));
+  const item = await needsYouItem(t, w, 'noreviewer-refused-342');
+  assert.equal(item.severity, 'action'); assert.match(item.text, /342/); assert.match(item.text, /verdict\.json/); assert.match(item.action || JSON.stringify(item), /different model/);
+});
+test('hand-pushed head with no evidence: any Claude review is refused as writer unknown and visible; a moved head or a recorded verdict hides it', async t => {
+  const { w } = await ingestReview(t, { model: 'sonnet', evidence: null });
+  const [r] = w.team.refusedVerdicts([HAND]); assert.equal(r.reason, 'writer unknown');
+  const item = await needsYouItem(t, w, 'noreviewer-refused-342'); assert.match(item.text, /writer of this head is unknown/);
+  assert.deepEqual(w.team.refusedVerdicts([{ ...HAND, headRefOid: 'f'.repeat(40) }]), []);
+  w.team.s.verdicts[`342:${HAND.headRefOid}`] = { verdict: 'PASS', reviewer: 'codex', job: 'x' };
+  assert.deepEqual(w.team.refusedVerdicts([HAND]), []);
+});
+async function needsYouItem(t, w, id) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rev-cand-n-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); fs.chmodSync(root, 0o700);
+  const v = await buildView({ config: w.team.c, root, jobs: [], events: [], state: { jobs: w.team.s.jobs, refusedReviews: w.team.s.refusedReviews, verdicts: w.team.s.verdicts }, register: REGISTER,
+    cache: { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: [{ ...HAND, labels: [] }], issues: [] }, snapshots: [], now: NOW });
+  return v.panels.needsYou.find(a => a.id === id);
+}
