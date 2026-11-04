@@ -5,7 +5,7 @@
 // with the full test suite running, before and after a change; use the same arguments each time. Reads pages only.
 const [base, n = '21', gap = '0', conc = '1'] = process.argv.slice(2);
 if (!base) { console.error('usage: measure-dashboard-pages.mjs <base-url> [samples] [gap-ms] [concurrency]'); process.exit(2); }
-const PAGES = ['/', '/timeline', '/api/view.json'], samples = Number(n), wait = Number(gap), width = Math.max(1, Number(conc));
+const PAGES = ['/', '/activity/timeline', '/api/view.json'], samples = Number(n), wait = Number(gap), width = Math.max(1, Number(conc));
 const stats = xs => { const s = [...xs].sort((a, b) => a - b); return { median: s[Math.floor(s.length / 2)], mean: Math.round(xs.reduce((a, b) => a + b, 0) / xs.length), worst: s.at(-1) }; };
 const one = async page => {
   const t = performance.now(); let bad = 0;
