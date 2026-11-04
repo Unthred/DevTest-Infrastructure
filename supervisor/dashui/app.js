@@ -442,3 +442,13 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
   const note = $('#tznote');
   if (note) note.textContent = `Times are shown in your time zone (${zone}). Data is stored in UTC; hover a time to see it.`;
 }
+
+// The cooldown notice (issue #483) arrives as ?notice=mark-read-cooldown. Once it is on screen, drop it from the address so a reload or
+// bookmark does not show "that click was ignored" again. Other query parameters (range, filters) are kept.
+try {
+  const u = new URL(location.href);
+  if (u.searchParams.get('notice') === 'mark-read-cooldown' && history.replaceState) {
+    u.searchParams.delete('notice');
+    history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+  }
+} catch { /* the notice just stays in the address bar */ }
