@@ -2,40 +2,129 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Unthred/SquigOS/schemas/policy.v1.schema.json",
   "title": "SquigOS policy file (contract policy.v1, DRAFT for issue #241, design only)",
-  "description": "Standing permissions tagged with risk tiers (ADR-0011 draft, issue #238). Tier 3 and the hard limits cannot be granted. The host re-checks both at use; this schema is early feedback at review time, not the guarantee.",
+  "description": "Standing permissions tagged with risk tiers (ADR-0011 draft, issue #238). Tier 3 and the hard limits cannot be granted. The host re-checks both at use; this schema is early feedback at review time, not the guarantee. Not expressible in JSON Schema and left to the loader and host: unique entry ids (ADR D2; a repository test checks it), the closed action catalogue (D3), and the full hard-limit check of scope.paths and conditions (D5.2; only a conservative word denylist is applied here).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["contract", "policyVersion", "entries"],
+  "required": [
+    "contract",
+    "policyVersion",
+    "entries"
+  ],
   "properties": {
-    "contract": { "const": "policy.v1" },
-    "policyVersion": { "type": "integer", "minimum": 1 },
-    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+    "contract": {
+      "const": "policy.v1"
+    },
+    "policyVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
   },
   "$defs": {
     "entry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "description", "action", "tier", "scope", "bounds", "enabled"],
+      "required": [
+        "id",
+        "description",
+        "action",
+        "tier",
+        "scope",
+        "bounds",
+        "enabled"
+      ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
-        "description": { "type": "string", "minLength": 1 },
-        "action": { "$ref": "#/$defs/actionClass" },
-        "tier": { "description": "Tag 0 to 2 only. Tier 3 is never grantable (D5.1).", "enum": [0, 1, 2] },
-        "scope": { "$ref": "#/$defs/scope" },
-        "bounds": { "$ref": "#/$defs/bounds" },
-        "enabled": { "type": "boolean" },
-        "onReject": { "type": "string", "minLength": 1 }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "$ref": "#/$defs/actionClass"
+        },
+        "tier": {
+          "description": "Tag 0 to 2 only. Tier 3 is never grantable (D5.1).",
+          "enum": [
+            0,
+            1,
+            2
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "bounds": {
+          "$ref": "#/$defs/bounds"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "onReject": {
+          "type": "string",
+          "minLength": 1
+        }
       },
-      "if": { "properties": { "tier": { "const": 2 } }, "required": ["tier"] },
-      "then": {
-        "description": "Tier 2 needs maxPerDay, a non-wildcard targets list and at least one condition (D2).",
+      "if": {
         "properties": {
-          "bounds": { "required": ["maxPerDay"] },
-          "scope": {
-            "required": ["targets", "conditions"],
+          "tier": {
+            "const": 2
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "description": "Tier 2 needs maxPerDay, a non-wildcard targets list (no glob characters * ? [ ] { }) and at least one condition (D2).",
+        "properties": {
+          "bounds": {
+            "type": "object",
+            "required": [
+              "maxPerDay"
+            ],
             "properties": {
-              "targets": { "minItems": 1, "items": { "properties": { "name": { "not": { "const": "*" } } } } },
-              "conditions": { "minItems": 1 }
+              "maxPerDay": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "scope": {
+            "type": "object",
+            "required": [
+              "targets",
+              "conditions"
+            ],
+            "properties": {
+              "targets": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "not": {
+                        "type": "string",
+                        "pattern": "[*?\\[\\]{}]"
+                      }
+                    }
+                  }
+                }
+              },
+              "conditions": {
+                "type": "array",
+                "minItems": 1
+              }
             }
           }
         }
@@ -46,43 +135,151 @@
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$",
       "not": {
-        "pattern": "^(host\\.(reboot|shutdown|power-.*)|ha\\.service-call|pr\\.merge|review\\.(bypass|skip|waive)|credential\\..*|billing\\..*|credits\\..*|firewall\\..*|exposure\\..*|remote-access\\..*)$"
+        "description": "Denylist applied to the whole class string so a hard-limit word is caught in any namespace. Stop-gap: the end state is an allow-list enum of catalogue classes once the catalogue exists (ADR D3).",
+        "pattern": "reboot|restart|shutdown|power-|merge|bypass|skip|waive|secret|token|openbao|credential|billing|credit|firewall|exposure|remote-access|tunnel|^(ha|dns|vpn)\\."
       }
     },
     "scope": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "targets": { "type": "array", "items": { "$ref": "#/$defs/target" } },
-        "paths": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "subjects": { "type": "array", "items": { "enum": ["lease", "job", "pr", "issue", "commit"] } },
-        "conditions": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" } }
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/target"
+          }
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "not": {
+              "pattern": "ssh|secret|credential|token|\\.env|openbao|shadow|passwd"
+            }
+          }
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "lease",
+              "job",
+              "pr",
+              "issue",
+              "commit"
+            ]
+          }
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+            "not": {
+              "pattern": "skip|bypass|waive|override|ignore|disable"
+            }
+          }
+        }
       }
     },
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "name"],
+      "required": [
+        "kind",
+        "name"
+      ],
       "properties": {
-        "kind": { "enum": ["git", "live-system", "host"] },
-        "name": { "type": "string", "minLength": 1 }
+        "kind": {
+          "enum": [
+            "git",
+            "live-system",
+            "host"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
       },
-      "if": { "properties": { "kind": { "const": "live-system" } }, "required": ["kind"] },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "live-system"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
       "then": {
-        "description": "A production live-system target beyond read only is a hard limit (D5.2).",
-        "properties": { "name": { "not": { "pattern": "production|prod\\b" } } }
+        "description": "A production live-system target beyond read only is a hard limit (D5.2). Allow-list: a live-system name must be lowercase kebab-case ending in -test, -dev, -staging or -sandbox, so case variants and unlabelled names such as home-assistant are rejected.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-(test|dev|staging|sandbox)$"
+          }
+        },
+        "type": "object"
       }
     },
     "bounds": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "maxPerHour": { "type": "integer", "minimum": 1 },
-        "maxPerDay": { "type": "integer", "minimum": 1 },
-        "maxPerSubject": { "type": "integer", "minimum": 1 },
-        "maxChangedLines": { "type": "integer", "minimum": 1 },
-        "maxFiles": { "type": "integer", "minimum": 1 },
-        "window": { "type": "object" }
+        "maxPerHour": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxPerDay": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxPerSubject": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxChangedLines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxFiles": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "window": {
+          "description": "Days and hours when the entry applies (ADR bounds.window).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "days": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "enum": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ]
+              }
+            },
+            "hours": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 24
+              }
+            }
+          }
+        }
       }
     }
   }
