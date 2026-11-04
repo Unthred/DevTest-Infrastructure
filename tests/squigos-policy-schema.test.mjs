@@ -10,6 +10,17 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SCHEMA = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/design/squigos/schemas/policy.v1.schema.json'), 'utf8'));
 const ADR = fs.readFileSync(path.join(ROOT, 'docs/design/squigos/adr-policy-contract.md'), 'utf8');
 
+// Keywords the validator implements; any other schema keyword makes the suite fail instead of being ignored.
+const KNOWN = new Set(['$schema', '$id', '$ref', '$defs', 'title', 'description', 'type', 'const', 'enum', 'not', 'pattern', 'minLength', 'minimum', 'maximum', 'minItems', 'maxItems', 'items', 'required', 'properties', 'additionalProperties', 'if', 'then']);
+function unknownKeywords(s, where = '$') {
+  const out = [];
+  for (const [k, v] of Object.entries(s)) {
+    if (!KNOWN.has(k)) out.push(`${where}: ${k}`);
+    if (['not', 'items', 'if', 'then', 'additionalProperties'].includes(k) && v && typeof v === 'object') out.push(...unknownKeywords(v, `${where}.${k}`));
+    if (['properties', '$defs'].includes(k)) for (const [n, x] of Object.entries(v)) out.push(...unknownKeywords(x, `${where}.${k}.${n}`));
+  }
+  return out;
+}
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function errorsFor(v, s, where = '$') {
   const out = [];
@@ -27,12 +38,16 @@ function errorsFor(v, s, where = '$') {
   if (s.type === 'boolean' && typeof v !== 'boolean') out.push(`${where}: must be a boolean`);
   if (s.type === 'integer') {
     if (!Number.isInteger(v)) out.push(`${where}: must be an integer`);
-    else if (s.minimum !== undefined && v < s.minimum) out.push(`${where}: below minimum`);
+    else {
+      if (s.minimum !== undefined && v < s.minimum) out.push(`${where}: below minimum`);
+      if (s.maximum !== undefined && v > s.maximum) out.push(`${where}: above maximum`);
+    }
   }
   if (s.type === 'array' || s.items || s.minItems) {
     if (!Array.isArray(v)) { if (s.type === 'array') out.push(`${where}: must be an array`); }
     else {
       if (s.minItems && v.length < s.minItems) out.push(`${where}: too few items`);
+      if (s.maxItems !== undefined && v.length > s.maxItems) out.push(`${where}: too many items`);
       if (s.items) v.forEach((x, i) => out.push(...errorsFor(x, s.items, `${where}[${i}]`)));
     }
   }
@@ -75,6 +90,53 @@ test('an empty policy is valid (nothing pre-authorised)', () => {
 
 test('tier 0, 1 and 2 tags are accepted', () => {
   for (const tier of [0, 1]) assert.deepEqual(check(withEntry((e) => { e.tier = tier; })), []);
+  // Tier 2 is built from a tier-2 entry, which carries the extra bounds, targets and conditions it needs.
+  assert.deepEqual(check(withEntry((e) => { e.tier = 2; }, 'rebase-conflicting-pr')), []);
+});
+
+test('the schema uses only keywords the test validator implements', () => {
+  assert.deepEqual(unknownKeywords(SCHEMA), []);
+});
+
+test('hard-limit action synonyms in any namespace are rejected', () => {
+  for (const action of ['host.restart', 'vm.reboot', 'machine.reboot', 'secret.rotate', 'token.create', 'openbao.write', 'pr.auto-merge', 'gate.bypass', 'dns.publish', 'tunnel.open', 'ha.config-write', 'ha.automation-update', 'billing-api.enable']) {
+    assert.ok(check(withEntry((e) => { e.action = action; })).some((x) => x.includes('.action')), action);
+  }
+  for (const action of ['lease.release', 'job.retry', 'commit.install', 'pr.rebase', 'issue.file']) {
+    assert.deepEqual(check(withEntry((e) => { e.action = action; })), [], action);
+  }
+});
+
+test('live-system names are an allow-list of non-production names, case-insensitively', () => {
+  for (const name of ['Home-Assistant-Production', 'PRODUCTION', 'homeassistant-live', 'home-assistant', 'home-assistant-prod']) {
+    assert.ok(check(withEntry((e) => { e.scope.targets = [{ kind: 'live-system', name }]; })).length > 0, name);
+  }
+  for (const name of ['home-assistant-test', 'ha-sandbox']) {
+    assert.deepEqual(check(withEntry((e) => { e.scope.targets = [{ kind: 'live-system', name }]; })), [], name);
+  }
+});
+
+test('hard-limit paths and conditions are rejected', () => {
+  assert.ok(check(withEntry((e) => { e.scope.paths = ['/root/.ssh/**']; })).length > 0);
+  assert.ok(check(withEntry((e) => { e.scope.conditions = ['skip-review']; })).length > 0);
+});
+
+test('tier 2 rejects wildcard patterns in target names', () => {
+  for (const name of ['*', '**', 'repo-*', 'Unthred/*']) {
+    assert.ok(check(withEntry((e) => { e.scope.targets = [{ kind: 'git', name }]; }, 'rebase-conflicting-pr')).length > 0, name);
+  }
+});
+
+test('bounds.window is constrained', () => {
+  assert.deepEqual(check(withEntry((e) => { e.bounds.window = { days: ['mon', 'tue'], hours: [8, 18] }; })), []);
+  for (const window of [{ days: ['funday'] }, { hours: [8] }, { hours: [8, 30] }, { x: 1 }, 'always']) {
+    assert.ok(check(withEntry((e) => { e.bounds.window = window; })).length > 0, JSON.stringify(window));
+  }
+});
+
+test('entry ids are unique (not expressible in JSON Schema, checked here for the ADR example)', () => {
+  const ids = example.entries.map((e) => e.id);
+  assert.equal(new Set(ids).size, ids.length);
 });
 
 test('a tier-3 grant is rejected', () => {
