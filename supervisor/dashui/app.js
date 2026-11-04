@@ -1,6 +1,6 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
-// scroll restoration (all saved per breakpoint, in this browser only). It reads nothing from the network and sends nothing.
+// scroll restoration (all saved per breakpoint, in this browser only). It sends nothing; its only network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends, initResetLayout } from './legend.mjs';
 
@@ -32,7 +32,7 @@ async function refreshNext() {
   try {
     const r = await fetch('/api/next', { headers: { accept: 'text/html' }, credentials: 'same-origin', cache: 'no-store' }); if (!r.ok) return;   // issue #481: only the Next element, not the whole page
     const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-    const fresh = doc.querySelector('[data-tick-state]'), cur = document.querySelector('.statusbar [data-tick-state]');
+    const fresh = doc.querySelector('[data-tick-state], .muted'), cur = document.querySelector('.statusbar [data-tick-state]');
     if (fresh && cur) { const el = document.importNode(fresh, true); cur.replaceWith(el); localizeTimes(el); tickClock(); }
   } catch { /* offline: keep the text */ }
 }

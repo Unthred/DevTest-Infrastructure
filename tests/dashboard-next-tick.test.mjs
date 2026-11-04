@@ -9,6 +9,7 @@ import vm from 'node:vm';
 import { buildView, TICK_GRACE_MS, tickCountdown, runningTickSince } from '../supervisor/dashboard.mjs';
 import { renderPage } from '../supervisor/dashrender.mjs';
 import { tickLock } from '../supervisor/team.mjs';
+import { formatLocal } from '../supervisor/dashui/logic.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 
 const MIN = 60000, T0 = Date.UTC(2026, 10, 3, 22, 0, 0);   // a cron slot
@@ -78,7 +79,7 @@ function tickHarness({ fragments, start }) {
   const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
   const code = js.slice(js.indexOf('const fmt = '), js.indexOf('tickClock(); setInterval'));
   assert.ok(code.includes('async function refreshNext'));
-  const mk = html => { const state = /data-tick-state="(\w+)"/.exec(html)[1]; return { state, html, running: /data-running/.test(html), countdown: /data-countdown="(\d+)"/.exec(html)?.[1], dataset: {}, parentElement: null, textContent: '', replaceWith: x => { bar.el = x; } }; };
+  const mk = html => { const state = /data-tick-state="(\w+)"/.exec(html)?.[1] ?? 'none'; return { state, html, running: /data-running/.test(html), countdown: /data-countdown="(\d+)"/.exec(html)?.[1], dataset: {}, parentElement: null, textContent: '', replaceWith: x => { bar.el = x; } }; };
   const bar = { el: mk(start) }, localized = [], urls = []; let now = T0;
   const bind = el => { if (el.countdown) el.dataset.countdown = el.countdown; return el; };
   bind(bar.el);
@@ -86,7 +87,7 @@ function tickHarness({ fragments, start }) {
     Date: { now: () => now }, location: { href: 'http://x/watch/1' },
     $$: sel => (sel === '.statusbar [data-running]' ? (bar.el.running ? [bar.el] : []) : sel === '[data-countdown]' ? (bar.el.countdown ? [bar.el] : []) : []),
     document: { querySelector: () => bar.el, importNode: e => e },
-    DOMParser: class { parseFromString(text) { return { querySelector: () => (/data-tick-state/.test(text) ? bind(mk(text)) : null) }; } },
+    DOMParser: class { parseFromString(text) { return { querySelector: () => (/data-tick-state|class="muted"/.test(text) ? bind(mk(text)) : null) }; } },
     fetch: async url => { urls.push(url); return { ok: true, text: async () => fragments.shift() }; },
     localizeTimes: el => localized.push(el),
   };
@@ -123,4 +124,44 @@ test('/api/next serves just the Next element', async t => {
   assert.equal(ok.status, 200); assert.match(ok.type, /text\/html/);
   assert.match(ok.body, /^<b data-tick-state="scheduled"><span data-countdown="\d+">in 3:00</); assert.doesNotMatch(ok.body, /<html|<header|<main/);
   assert.equal((await get('/api/nope')).status, 404);
+});
+test('browser run: a running bar the server now reports as none is replaced and polling stops', async () => {
+  const run = '<b data-tick-state="running" data-running>tick running since <time data-local>x</time></b>';
+  const h = tickHarness({ start: run, fragments: ['<span class="muted">none</span>', run] });
+  h.advance(1000); h.ctx.tickClock(); await new Promise(r => setImmediate(r));
+  assert.equal(h.bar.el.state, 'none'); assert.equal(h.bar.el.running, false);
+  h.advance(20000); h.ctx.tickClock(); await new Promise(r => setImmediate(r));
+  assert.equal(h.urls.length, 1);
+});
+test('the real localizeTimes rewrites a swapped-in Next element in the browser time zone and leaves other text alone', () => {
+  const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  const code = js.slice(js.indexOf('const zone = '), js.indexOf('\nlocalizeTimes();'));
+  const time = { getAttribute: () => '2026-11-03T22:00:11.000Z', textContent: '2026-11-03 22:00:11 UTC', title: '' };
+  const bad = { getAttribute: () => 'not a date', textContent: 'keep', title: '' };
+  const scopes = [];
+  const scope = { name: 'next' };
+  const ctx = { formatLocal, timeOnly: () => '', Intl, Date, Number, $$: (sel, r) => { scopes.push([sel, r]); return sel === 'time[data-local]' ? [time, bad] : []; } };
+  vm.runInNewContext(`${code}; this.localizeTimes = localizeTimes;`, ctx);
+  ctx.localizeTimes(scope);
+  assert.ok(scopes.every(([, r]) => r === scope));   // limited to the swapped-in element
+  assert.equal(time.textContent, formatLocal(Date.parse('2026-11-03T22:00:11.000Z'), Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'));
+  assert.match(time.title, /2026-11-03 22:00:11 UTC \(stored in UTC\)/);
+  assert.equal(bad.textContent, 'keep'); assert.equal(bad.title, '');
+});
+test('/api/next answers running, overdue and the none fallback', async t => {
+  const mkServer = async (root, now, cache) => {
+    for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
+    fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify(cache));
+    const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+    const port = server.address().port; server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => now }));
+    return p => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p, headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject));
+  };
+  const cache = { tick: { at: T0, status: 'ok', lastOkAt: T0 }, fetchedAt: T0, delivered: [], pulls: [], issues: [] };
+  const rootA = emptyRoot(t), release = tickLock(rootA); t.after(() => release());
+  const running = await (await mkServer(rootA, T0 + 12 * MIN, cache))('/api/next');
+  assert.match(running.body, /^<b data-tick-state="running" data-running>tick running since <time/);
+  const overdue = await (await mkServer(emptyRoot(t), T0 + 9 * MIN, cache))('/api/next');
+  assert.match(overdue.body, /^<b data-tick-state="overdue"><span data-overdue="\d+">overdue by 4:00<\/span>, last tick <time/);
+  const none = await (await mkServer(emptyRoot(t), T0, { fetchedAt: T0, delivered: [], pulls: [], issues: [] }))('/api/next');
+  assert.equal(none.status, 200); assert.equal(none.body, '<span class="muted">none</span>');
 });
