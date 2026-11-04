@@ -16,7 +16,8 @@ import { createStaticServer, listenOnSocket } from '../browser/static-server.mjs
 import { stageProject } from './stage-project.mjs';
 import { currentView } from '../supervisor/dashserver.mjs';
 import { renderRoute } from '../supervisor/dashrender.mjs';
-import { pagePlan, selectPages, stageDashui } from './helpers/dashui-stage.mjs';
+import { freezeLivePanels, pagePlan, selectPages, stageDashui } from './helpers/dashui-stage.mjs';
+import { reportSummary } from './helpers/capture-report.mjs';
 
 const sourceProject = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const stateRoot = process.env.DASH_STATE_COPY, outDir = path.resolve(process.argv[2] || '');
@@ -36,7 +37,7 @@ for (const theme of ['light', 'dark']) {
   const dir = path.join(site, theme); fs.mkdirSync(path.join(dir, 'static'), { recursive: true });
   stageDashui(dir, path.join(sourceProject, 'supervisor', 'dashui'));
   for (const e of pages) if (e.route.page === 'evidence-run') fs.cpSync(path.join(evidenceRoot, 'ui-review', e.route.id), path.join(dir, 'evidence', 'files', e.route.id), { recursive: true, dereference: false, filter: src => { const st = fs.lstatSync(src); return !st.isSymbolicLink() && (st.isDirectory() || /\.(png|json|md)$/.test(src)); } });
-  for (const { name, path: p, route } of pages) fs.writeFileSync(path.join(dir, `${name}.html`), renderRoute(view, route, { pathname: p }).html.replace('<html lang="en">', `<html lang="en" data-theme="${theme}">`).replace(/<meta http-equiv="refresh"[^>]*>/, ''));
+  for (const { name, path: p, route } of pages) fs.writeFileSync(path.join(dir, `${name}.html`), freezeLivePanels(renderRoute(view, route, { pathname: p }).html).replace('<html lang="en">', `<html lang="en" data-theme="${theme}">`).replace(/<meta http-equiv="refresh"[^>]*>/, ''));
 }
 fs.chmodSync(site, 0o755); for (const t of ['light', 'dark']) fs.chmodSync(path.join(site, t), 0o755);
 const failures = [];
@@ -44,7 +45,7 @@ const run = async (name, spec, dir) => {
   const runId = crypto.randomBytes(8).toString('hex');
   const plan = createPlan({ project, runId, image: 'playwright', ...spec, targets: dir ? ['fixture'] : [] }, cfg);
   const server = dir ? await listenOnSocket(createStaticServer(dir), targetSocketPath(storageRoot, runId, 'fixture'), { uid, gid }) : null;
-  try { const r = await runContainer(plan, { keepVolume: true }); console.log(JSON.stringify({ run: name, exit: r.subjectExit, cleanup: r.cleanup })); if (r.subjectExit !== 0 || r.cleanup !== 'complete') failures.push(`${name}: exit ${r.subjectExit}, cleanup ${r.cleanup}`); if (dir) for (const f of fs.readdirSync(plan.out)) if (f.endsWith('.png')) fs.copyFileSync(path.join(plan.out, f), path.join(outDir, f)); return r; }
+  try { const r = await runContainer(plan, { keepVolume: true }); console.log(JSON.stringify({ run: name, exit: r.subjectExit, cleanup: r.cleanup })); if (r.subjectExit !== 0 || r.cleanup !== 'complete') failures.push(`${name}: exit ${r.subjectExit}, cleanup ${r.cleanup}${reportSummary(plan.out)}`); if (dir) for (const f of fs.readdirSync(plan.out)) if (f.endsWith('.png')) fs.copyFileSync(path.join(plan.out, f), path.join(outDir, f)); return r; }
   finally { await server?.close(); releaseVolumes(plan); }
 };
 try {

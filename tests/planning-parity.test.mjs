@@ -161,3 +161,10 @@ test('`team status` reads the register from origin/main: no warning when readabl
   assert.equal(count(readable), 0, 'origin/main has the register: no warning');
   assert.ok(planned(readable).some(x => /:merge:119$/.test(x)), 'the register the CLI read is used: the interim PASS leads to a planned merge');
 });
+
+test('allowanceOf judges window expiry by the clock given to planningInputs, not the wall clock', () => {
+  const at = NOW - 3600000;
+  const j = [{ id: 'd'.repeat(32), provider: 'codex', kind: 'review', status: 'completed', createdAt: at, updatedAt: at, allowance: codexAl(0.5, at) }];
+  assert.equal(planningInputs({ config: config(), jobs: j, now: NOW }).allowanceOf('codex'), 0.5);
+  assert.equal(planningInputs({ config: config(), jobs: j, now: RESET + 1 }).allowanceOf('codex'), null);
+});
