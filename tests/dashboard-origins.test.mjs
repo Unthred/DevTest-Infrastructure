@@ -70,7 +70,7 @@ test('the refusal page escapes the received Origin and Host', async t => {
 test('dashboard.allowed_origins accepts exact origins only', () => {
   const ok = o => validateTeamConfig({ ...base, dashboard: { allowed_origins: o } });
   ok([PUBLIC, 'http://10.0.0.5:8731']);
-  for (const bad of [['*'], ['https://*.example.test'], [`${PUBLIC}/x`], [`${PUBLIC}/`], ['ftp://x.test'], ['https://u:p@x.test'], ['x.test'], [5], 'https://x.test', ['https://x.test?a=1']]) assert.throws(() => ok(bad), /allowed_origins/, JSON.stringify(bad));
+  for (const bad of [['*'], ['https://*.example.test'], [`${PUBLIC}/x`], [`${PUBLIC}/`], ['ftp://x.test'], ['https://u:p@x.test'], ['x.test'], [5], 'https://x.test', ['https://x.test?a=1'], ['https://Agents.Example.test']]) assert.throws(() => ok(bad), /allowed_origins/, JSON.stringify(bad));
   assert.throws(() => validateTeamConfig({ ...base, dashboard: { other: 1 } }), /dashboard/);
   assert.equal(applyLocalOverride(base, { dashboard: { allowed_origins: [PUBLIC] } }).dashboard.allowed_origins[0], PUBLIC);
   assert.throws(() => applyLocalOverride(base, { dashboard: { allowed_origins: ['*'] } }), /allowed_origins/);

@@ -95,8 +95,8 @@ export const DRAIN_DEFAULT_MINUTES = 30;
 export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 45;
 =======
 // Issue #556: origins other than the listen address that may POST to the dashboard (a reverse proxy at a public address). Exact
-// scheme://host[:port] only, no path, wildcard or credentials; anything not listed is still refused.
-export const ORIGIN_PATTERN = /^https?:\/\/[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:\d{1,5})?$/;
+// lowercase scheme://host[:port] only (browsers send a lowercase Origin), no path, wildcard or credentials; anything not listed is still refused.
+export const ORIGIN_PATTERN = /^https?:\/\/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:\d{1,5})?$/;
 function validateDashboard(d) {
   if (d === undefined) return;
   if (!d || typeof d !== 'object' || Array.isArray(d) || Object.keys(d).some(k => k !== 'allowed_origins')) throw new SupervisorError('invalid team config: dashboard');
