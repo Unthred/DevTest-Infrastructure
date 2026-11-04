@@ -27,12 +27,12 @@ export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding
 export function githubClient(config, gh = ghRunner()) {
   const repo = config.repository;
   const json = args => JSON.parse(gh(args) || 'null');
-  const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels';
+  const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels,closingIssuesReferences';
   const withLabels = prs => (Array.isArray(prs) ? prs.map(p => ({ ...p, labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l.name)) })) : prs);
   return {
     listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),
     listLabels: async () => (json(['label', 'list', '--repo', repo, '--limit', '200', '--json', 'name']) || []).map(l => l.name),
-    listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,closingIssuesReferences']),
+    listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,mergeCommit,closingIssuesReferences']),
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
     // Check runs of any app (issue #142), including third-party checks such as GitGuardian that gh run view cannot show.
     listCheckRuns: async sha => { if (!/^[0-9a-f]{40}$/.test(String(sha))) throw new SupervisorError('invalid commit sha'); return json(['api', '--method', 'GET', `repos/${repo}/commits/${sha}/check-runs`, '-f', 'per_page=100'])?.check_runs || []; },

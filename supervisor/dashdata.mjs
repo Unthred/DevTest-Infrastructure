@@ -86,13 +86,15 @@ export function readSnapshots(root) {
 // the issue and PR references parsed from a body are kept instead).
 export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
+  // Issue #430: only the numbers of the issues a PR closes, so a watched issue is followed to a PR whose branch has no issue-<n>.
+  closingIssuesReferences: (p.closingIssuesReferences || []).map(r => ({ number: r?.number })).filter(r => Number.isSafeInteger(r.number) && r.number > 0).slice(0, 10),
   labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l?.name)).includes('needs-homeowner') ? ['needs-homeowner'] : [],
   statusCheckRollup: (p.statusCheckRollup || []).slice(0, 40).map(c => ({ name: redact(c.name || c.context || '', 80), status: c.status, conclusion: c.conclusion, state: c.state })) }));
 // The issue a merged PR closed: its closing reference, else the issue-<n> in its branch name (issue #147).
 const issueOfMerged = m => { const n = m.closingIssuesReferences?.[0]?.number ?? Number(/\/issue-(\d+)(\D|$)/.exec(m.headRefName || '')?.[1]); return Number.isSafeInteger(n) && n > 0 ? n : null; };
 // Recently merged PRs (number, title, time) for the "merged today" section of `team status`.
 export const compactMerged = merged => (merged || []).filter(m => Number.isSafeInteger(m.number) && typeof m.mergedAt === 'string')
-  .sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).slice(0, 30).map(m => ({ number: m.number, title: redact(m.title, 120), mergedAt: m.mergedAt, issue: issueOfMerged(m) }));
+  .sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).slice(0, 30).map(m => ({ number: m.number, title: redact(m.title, 120), mergedAt: m.mergedAt, issue: issueOfMerged(m), ...(/^[0-9a-f]{40}$/.test(m.mergeCommit?.oid || '') ? { mergeSha: m.mergeCommit.oid } : {}) }));
 export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, 120), state: i.state,
   labels: (i.labels || []).includes('needs-homeowner')
     ? ['needs-homeowner', ...(i.labels || []).filter(l => l !== 'needs-homeowner').slice(0, 9).map(l => redact(l, 40))]

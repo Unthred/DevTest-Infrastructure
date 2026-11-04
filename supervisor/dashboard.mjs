@@ -6,6 +6,7 @@ import path from 'node:path';
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
+import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs, readHeadRegister } from './planning.mjs';
 import { proposalsAdded } from './decisions.mjs';
@@ -635,7 +636,7 @@ export function refsOf({ names, cache, jobs, state }) {
 // First-seen times of inconsistent checks, per PR head (see stuckChecks). In memory: a restart restarts the clock.
 const stuckSeen = new Map();
 export const stuckSeenFor = pr => { const k = `${pr.number}:${pr.headRefOid}`; if (!stuckSeen.has(k)) { for (const o of [...stuckSeen.keys()]) if (o.startsWith(`${pr.number}:`)) stuckSeen.delete(o); stuckSeen.set(k, new Map()); } return stuckSeen.get(k); };
-export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null, configError = null, history = null }) {
+export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null, configError = null, history = null, watchlist = null }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
@@ -711,6 +712,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),
       estimates,
+      watching: watchingView({ items: watchlist?.items || [], cache: c, state, prs: extra.prs, issues: extra.issues, jobs: extra.jobs, names, now }),
       generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
@@ -723,6 +725,28 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       activity: activity({ config, jobs, events, state, cache, snapshots, now, root, incidents: readIncidents(root), names })
     };
   });
+}
+
+// Issue #430: the watched changes, each with its seven steps, the one sentence and the history behind every step. Pure: the stored list plus
+// data already in the view. An item follows its issue and PR, never a head, so a new head or an issue becoming a PR keeps the watch.
+export function watchingView({ items, cache, state, prs, issues, jobs, names, now }) {
+  const seen = new Set(), out = [];
+  for (const item of items) {
+    const { pr, issue } = resolveWatch(item, { pulls: cache.pulls, merged: cache.merged, mergeLog: state.mergeLog });
+    const key = issue ?? `pr${pr}`;
+    if (seen.has(key)) continue;       // watching an issue and its PR shows the change once
+    seen.add(key);
+    const prRow = pr !== null ? prs.find(p => p.number === pr) : null, issueRow = issue !== null ? issues.find(i => i.number === issue) : null;
+    const f = { issue: issueRow ? { number: issueRow.number, state: issueRow.state, needsHomeowner: issueRow.needsHomeowner } : issue !== null ? { number: issue, state: 'OPEN', needsHomeowner: false } : null,
+      pr: prRow ? { number: prRow.number, status: prRow.status, checks: prRow.checks, verdict: prRow.verdict, head: prRow.head, fixRounds: prRow.fixRounds, needsHomeowner: prRow.needsHomeowner, verdicts: prRow.verdicts, mergedAt: prRow.mergedAt ? Date.parse(prRow.mergedAt) || null : null } : null,
+      lastEventAt: prRow?.timeline?.at(-1)?.at ?? null };
+    const live = { ...item, pr: pr ?? item.pr, issue: issue ?? item.issue };
+    const d = describeWatch(live, f, now);
+    const rowJobs = prRow ? prRow.jobs : jobs.filter(j => issue !== null && j.ref === issue && ['implement', 'continue'].includes(j.kind));
+    out.push({ id: item.id, kind: item.kind, number: item.number, pinned: item.pinned === true, pr, issue, title: redact(prRow?.title || issueRow?.title || (pr !== null ? names.pr(pr).text : names.issue(issue).text), 160),
+      addedAt: item.addedAt, status: prRow?.status ?? null, installedAt: item.installedAt ?? null, ...d, history: historyOf(live, f, rowJobs) });
+  }
+  return out;
 }
 
 // ---- issue #54: what the v2 pages need on top of the v1 model. Still pure: only data already stored by the tick.
@@ -833,6 +857,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
       checks: p ? checksState(p.statusCheckRollup, retriedIn(state.cancelWatch, p, now)) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length, carry: p && key ? carryRecordOf(state.verdicts?.[key], p) : null,
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
+      head: p?.headRefOid ?? null, needsHomeowner: (p?.labels || []).includes('needs-homeowner'), mergedAt: m?.mergedAt ?? null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,
       timeline: [...vs.map(v => ({ at: v.at, text: `${v.reviewer}${v.model ? ` (${v.model})` : ''}: ${v.verdict} at ${v.head}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length === 1 ? '' : 's'})` : ''}` })),
         ...vs.filter(v => v.carry).map(v => ({ at: v.carry.at ?? v.at, text: `verdict ${carryText(v.carry)}` })), ...(m ? [{ at: m.mergedAt, text: 'merged' }] : []), ...prJobs.map(j => ({ at: j.startedAt, text: `${j.agent}: ${j.kind} job ${j.status}` }))].filter(r => Number.isFinite(r.at)).sort((a, b) => a.at - b.at) };
