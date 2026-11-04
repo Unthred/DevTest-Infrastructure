@@ -97,3 +97,14 @@ test('issue #495: the CLI parses the issue number and reports the usage error', 
   const lock = tickLock(stateRoot(root)); t.after(() => lock && lock());
   const held = run('reopen', '23'); assert.notEqual(held.status, 0); assert.match(held.stdout + held.stderr, /a team tick is running; retry in a minute/);
 });
+
+test('issue #495: a live rebase job as the real start() records it blocks reopening its own issue', async t => {
+  const w = world(t, { jobStatus: 'running' }); delete w.team.s.jobs[ID];
+  const created = 'b'.repeat(32); w.jobs.states[created] = { id: created, status: 'running' };
+  const act = { type: 'rebase', agent: 'claude', pr: 411, head: 'h'.repeat(40), base: 'main', branch: 'claude/issue-23-a', key: '411:hhhh' };
+  await w.team.execute(act, {});
+  const rec = w.team.s.jobs[created];
+  assert.equal(rec.kind, 'rebase'); assert.equal(rec.branch, 'claude/issue-23-a');
+  rec.ingested = true;
+  await assert.rejects(w.team.reopen(23), /running job/);
+});
