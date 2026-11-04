@@ -33,7 +33,7 @@ export function formatPr(number, prTitle = null, issue = null, { max = TITLE_MAX
   const clause = `(for ${formatIssue(issue.number, issue.title, { max: max === Infinity ? Infinity : Math.floor(max / 2) })})`;
   return max === Infinity || head.length + 1 + clause.length <= FOR_ROOM ? `${head} ${clause}` : head;
 }
-export const roleName = kind => (kind === 'review' ? 'Reviewer' : 'Implementer');
+export const roleName = kind => (kind === 'review' ? 'Reviewer' : kind === 'rebase' ? 'Rebaser' : 'Implementer');
 export const actionName = kind => (kind === 'cifix' ? 'CI fix' : kind || 'job');
 // kind: implement | continue | review | fix | rebase | cifix | ...; subject is { pr, prTitle, issue } as for the work it is doing.
 export function formatJob({ kind, pr = null, prTitle = null, issue = null }, opts = {}) {

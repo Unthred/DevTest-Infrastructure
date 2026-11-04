@@ -203,12 +203,12 @@ test('issue #83 upgrade accepts both launcher forms that exec /root/bin/ai-super
 
 test('issue #148 role slots: the implementer and reviewer slots are shown with agent, model and work; an empty slot is idle', async () => {
   const idle = await status();
-  assert.deepEqual(idle.slots.map(x => x.text), ['Implementer: idle', 'Reviewer: idle']);
-  assert.match(text(idle), /=== Role slots\n  Implementer: idle\n  Reviewer: idle/);
+  assert.deepEqual(idle.slots.map(x => x.text), ['Implementer: idle', 'Reviewer: idle', 'Rebaser: idle']);
+  assert.match(text(idle), /=== Role slots\n  Implementer: idle\n  Reviewer: idle\n  Rebaser: idle/);
   const a = 'a'.repeat(32), b = 'b'.repeat(32);
   const s = await status({ jobs: [job({ id: a }), job({ id: b, kind: 'review', issue: undefined, pr: 146 })],
     state: { jobs: { [a]: { kind: 'implement', agent: 'claude', model: 'sonnet', issue: 104 }, [b]: { kind: 'review', agent: 'claude', model: 'opus', pr: 146 } } } });
-  assert.deepEqual(s.slots.map(x => x.text), ['Implementer: claude · sonnet · #104 · implementing', 'Reviewer: claude · opus · PR #146 · reviewing']);
+  assert.deepEqual(s.slots.map(x => x.text), ['Implementer: claude · sonnet · #104 · implementing', 'Reviewer: claude · opus · PR #146 · reviewing', 'Rebaser: idle']);
   // negative: a finished job holds no slot
   const done = await status({ jobs: [job({ id: a, status: 'completed' })], state: { jobs: { [a]: { kind: 'implement', agent: 'claude', model: 'sonnet', issue: 104 } } } });
   assert.equal(done.slots[0].text, 'Implementer: idle');

@@ -95,10 +95,10 @@ test('a repair job is refused when a running implement job expects the same file
   assert.equal(acts2.filter(a => a.type === 'rebase').length, 0);
 });
 
-test('concurrent rebases: N implementer slots rebase the first N conflicting PRs in queue order; one slot keeps one', async t => {
+test('concurrent rebases: N rebaser slots rebase the first N conflicting PRs in queue order; one slot keeps one (issue #460)', async t => {
   for (const [n, want] of [[1, [1]], [2, [1, 2]], [3, [1, 2, 3]]]) {
-    const w = world(t, { roles: { implementer: n, reviewer: 1 }, pulls: [1, 2, 3, 4].map(conflicting) });
+    const w = world(t, { roles: { implementer: 1, reviewer: 1, rebaser: n }, pulls: [1, 2, 3, 4].map(conflicting) });
     const acts = await w.team.plan();
-    assert.deepEqual(acts.filter(a => a.type === 'rebase').map(a => a.pr).sort(), want, `implementer ${n}`);
+    assert.deepEqual(acts.filter(a => a.type === 'rebase').map(a => a.pr).sort(), want, `rebaser ${n}`);
   }
 });

@@ -38,20 +38,28 @@ test('a backlog of conflicting PRs: only the PR next to merge is rebased, never 
   assert.deepEqual(rebases.map(a => a.pr), [301]);
 });
 
-test('after a rebase job, a queued implement job gets the implementer slot instead of the next rebase', async t => {
+test('issue #460: a rebase and a queued implement job both start in one tick: new work is not held by the rebase', async t => {
   const team = world(t, backlog());
-  team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 301, key: `301:${H(1)}`, ingested: true, at: 100 };
+  const acts = await team.plan();
+  assert.deepEqual(acts.map(a => [a.type, a.issue ?? a.pr]), [['rebase', 301], ['implement', 258]]);   // the rebase still plans first
+});
+
+test('issue #460: a rebase running holds the rebaser slot only; queued new work starts, and no second rebase starts', async t => {
+  const team = world(t, backlog());
+  const id = 'r'.repeat(32);
+  team.jobs.listActive = async () => [{ id, status: 'running', provider: 'claude' }];
+  team.s.jobs[id] = { kind: 'rebase', agent: 'claude', pr: 301, key: `301:${H(1)}`, ingested: false, at: 100 };
   const acts = await team.plan();
   assert.deepEqual(acts.map(a => [a.type, a.issue ?? a.pr]), [['implement', 258]]);
 });
 
-test('after the implement job, rebasing resumes (alternation, not a permanent block)', async t => {
+test('issue #460 negative: a running implement job does not hold a rebase back; the rebase takes the rebaser slot', async t => {
   const team = world(t, backlog());
-  team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 301, key: 'k', ingested: true, at: 100 };
-  team.s.jobs.i1 = { kind: 'implement', agent: 'claude', issue: 258, key: '258', ingested: true, at: 200 };
+  const id = 'i'.repeat(32);
+  team.jobs.listActive = async () => [{ id, status: 'running', provider: 'claude' }];
+  team.s.jobs[id] = { kind: 'implement', agent: 'claude', issue: 258, key: '258', ingested: false, at: 100 };
   team.s.implemented[258] = 1;
-  const acts = await team.plan();
-  assert.deepEqual(acts.map(a => [a.type, a.pr]), [['rebase', 301]]);
+  assert.deepEqual((await team.plan()).map(a => [a.type, a.pr]), [['rebase', 301]]);
 });
 
 test('negative: with no implement job startable, rebases are not held back after a rebase', async t => {
@@ -119,10 +127,10 @@ test('#326 a single conflicting PR is rebased', async t => {
   const team = world(t, [pr(305, H(5))]);
   assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [305]);
 });
-test('#326 negative: newest first, after a rebase with an implement job startable, the implement job still takes the slot', async t => {
+test('#326 negative: newest first, with an implement job startable, the lowest PR is rebased and the implement job starts beside it (issue #460)', async t => {
   const team = world(t, backlog().reverse());
   team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 301, key: 'k', ingested: true, at: 100 };
-  assert.deepEqual((await team.plan()).map(a => [a.type, a.issue ?? a.pr]), [['implement', 258]]);
+  assert.deepEqual((await team.plan()).map(a => [a.type, a.issue ?? a.pr]), [['rebase', 301], ['implement', 258]]);
 });
 test('#326 negative: newest first, an exhausted lowest PR is skipped for the next lowest', async t => {
   const team = world(t, backlog().reverse());
