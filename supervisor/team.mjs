@@ -62,6 +62,7 @@ export function validateTeamConfig(input) {
   validateSelfUpgrade(c.self_upgrade);
   try { validateChangeCheck(c.change_check); } catch (error) { throw new SupervisorError(error.message); }   // issue #755
   try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
+  validateDashboard(c.dashboard);
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
   if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir'))) throw new SupervisorError('invalid inbox: { dir: absolute path }');   // issue #124
@@ -89,8 +90,20 @@ export function validateTeamConfig(input) {
 
 // Issue #136: how long a pending supervisor install drains running jobs (no new job starts) before it goes ahead.
 export const DRAIN_DEFAULT_MINUTES = 30;
+<<<<<<< HEAD
 // Batching (issue #695): a new install begins draining only this long after the last install finished (0 = no wait), unless nothing is running or planned, or the install is urgent.
 export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 45;
+=======
+// Issue #556: origins other than the listen address that may POST to the dashboard (a reverse proxy at a public address). Exact
+// scheme://host[:port] only, no path, wildcard or credentials; anything not listed is still refused.
+export const ORIGIN_PATTERN = /^https?:\/\/[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:\d{1,5})?$/;
+function validateDashboard(d) {
+  if (d === undefined) return;
+  if (!d || typeof d !== 'object' || Array.isArray(d) || Object.keys(d).some(k => k !== 'allowed_origins')) throw new SupervisorError('invalid team config: dashboard');
+  const a = d.allowed_origins;
+  if (!Array.isArray(a) || a.length > 10 || !a.every(o => typeof o === 'string' && ORIGIN_PATTERN.test(o))) throw new SupervisorError('invalid team config: dashboard.allowed_origins must be a list of exact origins such as https://host (no path)');
+}
+>>>>>>> fb8ab92 (Dashboard writes: accept configured public origins and show a readable refusal page (issue #556))
 function validateSelfUpgrade(u) {
   if (u === undefined) return;
   if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => !['drain_max_minutes', 'min_install_gap_minutes', 'public_dashboard_url'].includes(k))) throw new SupervisorError('invalid team config: self_upgrade');
@@ -204,7 +217,11 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
+<<<<<<< HEAD
   const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox', 'change_check'].includes(k));
+=======
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox', 'dashboard'].includes(k));
+>>>>>>> fb8ab92 (Dashboard writes: accept configured public origins and show a readable refusal page (issue #556))
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
@@ -213,6 +230,7 @@ export function applyLocalOverride(shipped, local) {
   if ('change_check' in local) { try { validateChangeCheck(local.change_check); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } out.change_check = { ...(out.change_check || {}), ...local.change_check }; }   // issue #755
   if ('inbox' in local) out.inbox = local.inbox;   // issue #642: validated like the shipped key by validateTeamConfig, which loadTeamConfig runs on the merged result
   if ('breaker' in local) { try { out.breaker = validateBreakerConfig({ ...(out.breaker || {}), ...local.breaker }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }
+  if ('dashboard' in local) { validateDashboard(local.dashboard); out.dashboard = { ...local.dashboard }; }
   if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
   if ('alerts' in local) {
     const cmd = local.alerts?.command;
