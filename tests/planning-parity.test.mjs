@@ -15,8 +15,7 @@ import { recordTick } from '../supervisor/dashdata.mjs';
 const T = iso => Date.parse(iso);
 const NOW = T('2026-11-01T10:00:00Z');
 const H = n => String(n).repeat(40).slice(0, 40);
-// Far future: the code reads the real clock for window expiry, so a near reset date turns this test red once it passes.
-const RESET = T('2099-11-04T07:18:00Z');
+const RESET = NOW + 3 * 86400000 + 20 * 3600000; // relative to NOW so the weekly window never lapses against the real clock
 const codexAl = (weekly, at) => ({ provider: 'codex', status: 'allowed', observedAt: at,
   windows: [{ type: 'primary', windowMinutes: 300, utilization: 0.1, resetsAt: at + 3600000, status: 'unknown' }, { type: 'secondary', windowMinutes: 10080, utilization: weekly, resetsAt: RESET, status: 'unknown' }] });
 const config = () => ({ schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
