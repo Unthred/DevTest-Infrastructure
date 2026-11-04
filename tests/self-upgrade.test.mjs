@@ -801,3 +801,12 @@ test('issue #488: each refusal kind raises one refusal item, clears when main or
   w = world(t, { up: { ok: false, environmental: true, reason: 'clean copy failed' } });
   assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.refusal, undefined);
 });
+
+test('issue #488: refusal text hides private hostnames, URLs and their paths', async () => {
+  const { refusalText } = await import('../supervisor/upgrade.mjs');
+  for (const t of ['validator could not contact tower.lan at http://tower.lan/private/status', 'host nas.home.arpa:8080/x failed', 'see https://example.com/a/b']) {
+    const out = refusalText(t);
+    assert.doesNotMatch(out, /tower|\.lan|home\.arpa|private\/status|example\.com|\/a\/b/);
+  }
+  assert.match(refusalText('validator could not contact tower.lan'), /validator could not contact/);
+});

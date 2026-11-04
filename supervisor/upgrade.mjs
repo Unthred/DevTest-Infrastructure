@@ -17,7 +17,7 @@ import { redact, redactLong, redactAddresses } from './redact.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 // Issue #488: a refusal reason kept in the upgrade history and shown on the dashboard carries no secret, address or absolute path.
-export const refusalText = r => redactAddresses(redact(r, 300)).replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
+export const refusalText = r => redactAddresses(redact(r, 300)).replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]').replace(/\b(?:[a-z0-9-]+\.)+(?:lan|local|internal|home|intranet|corp|private|localdomain|arpa)\b(?::\d+)?(?:\/\S*)?/gi, '[host]').replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
 export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
 // A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
