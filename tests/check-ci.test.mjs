@@ -95,6 +95,7 @@ test('image lock: Playwright package version must match the image tag; integrity
   expect((a) => a.lock((l) => { l.packages['playwright-core'].integrity = 'nope'; }), 'image-lock', 'sha512 SRI');
   expect((a) => a.lock((l) => { delete l.packages['playwright-core']; }), 'image-lock', 'both be recorded');
   expect((a) => a.lock((l) => { l.packages['axe-core'].integrity = 'nope'; }), 'image-lock', 'axe-core needs an exact');
+  expect((a) => a.lock((l) => { delete l.packages['axe-core']; }), 'image-lock', 'axe-core package must be recorded');
   expect((a) => a.lock((l) => { l.packages['axe-core'].version = '4'; }), 'image-lock', 'axe-core needs an exact');
 });
 
