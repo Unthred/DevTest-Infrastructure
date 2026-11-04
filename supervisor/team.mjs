@@ -559,7 +559,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews']) this.s[k] ||= {};
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
@@ -735,18 +735,29 @@ export class Team {
   reviewRefusal(agent, pr, key) {
     // A caller that has no provider manifests (the dashboard) judges by the configured model name.
     const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key }, 'review', {}, true).model ?? null;
-    const reviewer = { provider: this.c.agents[agent].provider, model };
-    if (independentOf(reviewer, this.writersOf(pr))) return null;
-    if (this.writerUnknown(pr, reviewer.provider)) return agent + ' cannot review PR #' + pr.number + ': the writer of this head is unknown (no job record and no session-log evidence for this exact head), so no ' + reviewer.provider + ' model can be shown to differ from it';
+    const why = this.independenceRefusal(agent, model, pr), provider = this.c.agents[agent].provider;
+    if (!why) return null;
+    if (why === 'writer unknown') return agent + ' cannot review PR #' + pr.number + ': the writer of this head is unknown (no job record and no session-log evidence for this exact head), so no ' + provider + ' model can be shown to differ from it';
     return agent + ' would review PR #' + pr.number + ' on ' + (model || 'its default model') + ', the model that wrote it; a review needs a different model';
+  }
+  // Issue #547: the one independence check. Dispatch (reviewTries, reviewRefusal) and ingestion both call it with the PR's real head
+  // (headRefOid), so they cannot disagree. Returns null (independent), 'writer unknown' or 'it wrote this head'.
+  independenceRefusal(agent, model, pr) {
+    const provider = this.c.agents[agent].provider, writers = this.writersOf(pr);
+    if (independentOf({ provider, model: model ?? null }, writers)) return null;
+    return writers.some(w => w.provider === provider && !w.model) ? 'writer unknown' : 'it wrote this head';
+  }
+  // Issue #547: reviews whose verdict was refused at ingestion, for open PRs still at the reviewed head with no recorded verdict.
+  refusedVerdicts(prs = this.view?.prs || []) {
+    return prs.map(p => ({ p, e: this.s.refusedReviews?.[verdictKey(p.number, p.headRefOid)] })).filter(({ p, e }) => e && !this.s.verdicts[verdictKey(p.number, p.headRefOid)]).map(({ p, e }) => ({ pr: p.number, ...e }));
   }
   // Issue #297: every review model an agent could use on this PR, each with the reason it is refused (null = usable). Without a
   // candidate list there is one entry, the agent's review model.
   reviewTries(agent, pr, key) {
-    const n = this.c.models?.agents?.[agent]?.review_candidates?.length || 0, writers = this.writersOf(pr), provider = this.c.agents[agent].provider;
+    const n = this.c.models?.agents?.[agent]?.review_candidates?.length || 0;
     return Array.from({ length: Math.max(n, 1) }, (_, i) => {
       const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key, ...(n ? { candidate: i } : {}) }, 'review', {}, true).model ?? null;
-      return { model, refusal: independentOf({ provider, model }, writers) ? null : writers.some(w => w.provider === provider && !w.model) ? 'writer unknown' : 'it wrote this head' };
+      return { model, refusal: this.independenceRefusal(agent, model, pr) };
     });
   }
   // Issue #316: would adding a writer on this agent's provider and 'model' to the PR leave no available independent reviewer?
@@ -1648,9 +1659,13 @@ export class Team {
           report.ingested.push({ job: id, pr: j.pr, error: !exNow ? 'review exception ended for this pull request; verdict not recorded' : 'review refused: wrong model for the exception step' });
           return;
         }
-        if (r.verdict && !exStage && !independentOf(reviewer, this.writersOf({ number: j.pr, headRefName: branch }))) {
+        // Issue #547: judged on the job's reviewed head, exactly as dispatch judged it. A refusal is settled (no retry) but recorded for Needs you.
+        const why = r.verdict && !exStage ? this.independenceRefusal(j.agent, reviewer.model, { number: j.pr, headRefName: branch, headRefOid: j.head }) : null;
+        if (why) {
+          const text = why === 'writer unknown' ? `the writer of this head is unknown (no job record and no session-log evidence for this exact head), so ${reviewer.provider} model ${j.model || 'default'} cannot be shown to differ from it` : `reviewer model ${j.model || 'default'} is a model that wrote this pull request`;
+          this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: why, text, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), at: this.clock.now() };
           j.ingested = true; this.save();
-          report.ingested.push({ job: id, pr: j.pr, error: 'review refused: reviewer model ' + (j.model || 'default') + ' is a model that wrote this pull request' });
+          report.ingested.push({ job: id, pr: j.pr, error: 'review refused: ' + text });
           return;
         }
         if (r.verdict) {
