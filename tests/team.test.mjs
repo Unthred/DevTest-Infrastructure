@@ -1549,3 +1549,12 @@ test('#400 a scanner-only round whose homeowner notice cannot be posted is still
   w.team.s.scanOnlyRounds[38] = 3;
   assert.equal((await w.team.plan()).find(x => x.agent === 'claude' && x.type === 'cifix'), undefined);
 });
+
+test('#451 the marker reset runs even when a conflicting PR makes plan() return a rebase action', async t => {
+  const green = gg.map(c => ({ ...c, conclusion: 'SUCCESS' }));
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: green, mergeable: 'CONFLICTING' })], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')] });
+  w.team.s.scanOnlyAnnounced[38] = true; w.team.s.scanOnlyRounds[38] = 1;
+  const acts = await w.team.plan();
+  assert.equal(acts.find(x => x.agent === 'claude')?.type, 'rebase');
+  assert.ok(!w.team.s.scanOnlyAnnounced[38]); assert.ok(!w.team.s.scanOnlyRounds[38]);
+});

@@ -915,6 +915,12 @@ export class Team {
       const b = /\/issue-(\d+)(\D|$)/.exec(m.headRefName || '');
       if (b && agentOfBranch(this.c, m.headRefName)) this.delivered.add(Number(b[1]));
     }
+    // Issue #451: a secret scanner that reports success on the current head means the incident was resolved; forget the earlier
+    // round and homeowner-notice markers so a later head with a new flagged secret raises a fresh item. Done first in plan(), before any
+    // merge, rebase or other early-return path can skip it.
+    for (const pr of prs) {
+      if ((this.s.scanOnlyAnnounced[pr.number] || this.s.scanOnlyRounds[pr.number]) && latestChecks(pr.statusCheckRollup).some(c => checkDone(c) && isSecretScanner({ name: c.name || c.context }) && CHECK_OK.includes(c.conclusion || c.state))) { delete this.s.scanOnlyAnnounced[pr.number]; delete this.s.scanOnlyRounds[pr.number]; }
+    }
     this.modes = this.budgets(); this.held = {}; this.heldPr = {};
     await this.loadFiles(prs);
     this.recordHeadWriters(prs);
@@ -1212,11 +1218,6 @@ export class Team {
       if (this.writeBlock(pr, 'rebase') || this.repairOverlap(agent, 'rebase', pr, issueByNo)) continue;
       if (!allow('rebase')) break;
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
-    }
-    // Issue #451: a secret scanner that reports success on the current head means the incident was resolved; forget the earlier
-    // round and homeowner-notice markers so a later head with a new flagged secret raises a fresh item.
-    for (const pr of prs) {
-      if ((this.s.scanOnlyAnnounced[pr.number] || this.s.scanOnlyRounds[pr.number]) && latestChecks(pr.statusCheckRollup).some(c => checkDone(c) && isSecretScanner({ name: c.name || c.context }) && CHECK_OK.includes(c.conclusion || c.state))) { delete this.s.scanOnlyAnnounced[pr.number]; delete this.s.scanOnlyRounds[pr.number]; }
     }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
     for (const pr of repair ? prs : []) {
