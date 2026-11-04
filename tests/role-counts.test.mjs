@@ -28,8 +28,9 @@ const plan = async (t, limits, active = []) => {
 };
 
 test('overall follows the role counts when it is not set; an explicit overall still wins', () => {
-  assert.equal(overallCap({ roles: { implementer: 1, reviewer: 1 } }), 2);   // identical to today's shipped 2
-  assert.equal(overallCap({ roles: { implementer: 5, reviewer: 5 } }), 10);
+  assert.equal(overallCap({ roles: { implementer: 1, reviewer: 1 } }), 3);   // issue #460: the rebaser slot (default 1) adds one to the former 2
+  assert.equal(overallCap({ roles: { implementer: 1, reviewer: 1, rebaser: 2 } }), 4);
+  assert.equal(overallCap({ roles: { implementer: 5, reviewer: 5 } }), 11);
   assert.equal(overallCap({ roles: { implementer: 5, reviewer: 5 }, overall: 3 }), 3);
 });
 
@@ -64,7 +65,7 @@ test('validation: counts must be positive integers, overall is optional and unbo
 import { capNotes } from '../supervisor/team.mjs';
 test('capNotes names what holds the count down, and nothing when nothing does', () => {
   assert.deepEqual(capNotes({ roles: { implementer: 3, reviewer: 2 } }), []);
-  assert.deepEqual(capNotes({ roles: { implementer: 3, reviewer: 2 }, overall: 5 }), []);
-  assert.match(capNotes({ roles: { implementer: 3, reviewer: 2 }, overall: 3 })[0], /overall is 3, below the 5 slots/);
+  assert.deepEqual(capNotes({ roles: { implementer: 3, reviewer: 2 }, overall: 6 }), []);
+  assert.match(capNotes({ roles: { implementer: 3, reviewer: 2 }, overall: 3 })[0], /overall is 3, below the 6 slots/);
   assert.match(capNotes({ roles: { implementer: 3, reviewer: 2 } }, 'Paused new work: 4 open PRs (cap 4)')[0], /max_open_prs/);
 });

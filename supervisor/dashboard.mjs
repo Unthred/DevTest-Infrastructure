@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
 import { homeownerQuestion } from './homeowner-question.mjs';
-import { CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType } from './team.mjs';
+import { CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
@@ -606,7 +606,7 @@ const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.
 export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: the real tick would refuse to launch jobs.';
 // Role slots (issue #148): who holds the implementer and reviewer slot right now, with the model and the work. A job the dispatcher has
 // no record of (started by hand) counts against the implementer slot, as the planner counts it.
-const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer' };
+const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer', rebaser: 'Rebaser' };
 const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
 export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.repository, stateJobs: state.jobs, titles: state.titles })) {
   return ROLES.map(role => {
@@ -617,7 +617,7 @@ export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.
     });
     const label = SLOT_LABEL[role];
     const text = held.length ? `${label}: ${held.map(h => [h.agent, h.model, h.name, h.kind ? SLOT_WHAT[h.kind] || h.kind : null].filter(Boolean).join(' · ')).join('; ')}` : `${label}: idle`;
-    return { role, label, capacity: config.limits?.roles?.[role] ?? 1, held, text };
+    return { role, label, capacity: roleCount(config.limits, role), held, text };
   });
 }
 

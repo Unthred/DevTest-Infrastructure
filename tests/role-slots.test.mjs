@@ -90,7 +90,7 @@ test('the reviewer slot is not blocked by an implementer job, and a review does 
   running(w, 'r', 'review', 'claude', { pr: 3 });
   const acts = await w.team.plan();
   assert.deepEqual(acts.map(a => a.type), ['implement']);   // the review slot is taken; the implementer slot is free
-  assert.ok(roleOfType('review') === 'reviewer' && ['implement', 'continue', 'fix', 'cifix', 'rebase'].every(k => roleOfType(k) === 'implementer'));
+  assert.ok(roleOfType('review') === 'reviewer' && ['implement', 'continue', 'fix', 'cifix'].every(k => roleOfType(k) === 'implementer') && roleOfType('rebase') === 'rebaser');
 });
 
 test('with both agents available a review goes to the other provider first, though the author provider could review on another model', async t => {
@@ -153,7 +153,7 @@ test('repair work outranks a new implement across agents: a rejected or red PR o
   assert.deepEqual(b.map(x => [x.agent, x.type]), [['codex', 'cifix']]);
   // and a conflicting PR
   const conflict = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { mergeable: 'CONFLICTING' })] });
-  assert.deepEqual((await conflict.team.plan()).filter(x => x.type !== 'review').map(x => [x.agent, x.type]), [['codex', 'rebase']]);
+  assert.deepEqual((await conflict.team.plan()).filter(x => x.type !== 'review').map(x => [x.agent, x.type]), [['claude', 'implement'], ['codex', 'rebase']]);   // issue #460: the rebase has its own slot, so new work starts beside it
   // with no repair pending, the first agent's implement still wins the tie (owner order)
   const none = world(t);
   assert.deepEqual((await none.team.plan()).map(x => [x.agent, x.type]), [['claude', 'implement']]);

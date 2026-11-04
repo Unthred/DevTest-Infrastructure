@@ -245,7 +245,7 @@ function nowPanel(view, { describe = true } = {}) {
   // The description is the link text, once; the agent card passes describe:false and gets a plain id link (issue #421).
   const jobRef = (id, name) => (describe ? named(jobPath(id), REFS.job[String(id).slice(0, 8)], name || `job ${String(id).slice(0, 8)}`) : named(jobPath(id), null, `job ${String(id).slice(0, 8)}`));
   const jobItem = (a, j) => {
-    const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : 'Implementer';
+    const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : j.role === 'rebaser' ? 'Rebaser' : 'Implementer';
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
     return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
   };
@@ -310,7 +310,7 @@ function warningsPanel(view) {
 // (it lives once, on the Now card); several jobs show a count instead of a role.
 const agentBadge = a => {
   const jobs = a.jobs?.length ? a.jobs : a.job ? [a.job] : [];
-  const mid = jobs.length > 1 ? `${jobs.length} jobs` : jobs.length === 1 ? (jobs[0].role === 'reviewer' ? 'Reviewer' : 'Implementer') : '';
+  const mid = jobs.length > 1 ? `${jobs.length} jobs` : jobs.length === 1 ? (jobs[0].role === 'reviewer' ? 'Reviewer' : jobs[0].role === 'rebaser' ? 'Rebaser' : 'Implementer') : '';
   const st = ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[a.state] || a.state;
   const label = [a.name, mid, st].filter(Boolean).join(' · ');
   return `<li><a class="agent-badge sev-${esc(stateSev[a.state] || 'info')}" href="/agents/${esc(encodeURIComponent(a.name))}" data-agent="${esc(a.name)}" data-state="${esc(a.state)}" aria-label="${esc(label)}" title="${esc(label)}"><b class="ab-name">${esc(a.name)}</b>${mid ? `<span class="ab-role">${esc(mid)}</span>` : ''}<span class="ab-state">${esc(st)}</span></a></li>`;

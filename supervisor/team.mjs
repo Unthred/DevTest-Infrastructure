@@ -95,8 +95,12 @@ function validateUnblockLimits(u) {
 // Concurrency is counted per role (issue #148): limits.roles = { implementer, reviewer }. The old limits.per_agent is accepted for one
 // release: it maps to both role slots and leaves a deprecation warning (c.deprecations) that the tick reports. roles wins when both are set.
 const TYPE_ORDER = ['merge', 'rebase', 'cifix', 'fix', 'review', 'continue', 'implement'];   // the per-agent priority of choose()
-export const ROLES = ['implementer', 'reviewer'];
-export const roleOfType = type => (type === 'review' ? 'reviewer' : 'implementer');   // implement, continue, fix, cifix, rebase -> implementer; review -> reviewer
+// Issue #460: a rebase has its own role slot (limits.roles.rebaser, default 1), so it never holds the implementer slot from new work.
+export const ROLES = ['implementer', 'reviewer', 'rebaser'];
+export const DEFAULT_REBASERS = 1;
+// The count of a role: the configured one, else 1. limits.roles.rebaser is optional; an absent value is left absent so a config is not rewritten.
+export const roleCount = (L, r) => (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : r === 'rebaser' ? DEFAULT_REBASERS : 1);
+export const roleOfType = type => (type === 'review' ? 'reviewer' : type === 'rebase' ? 'rebaser' : 'implementer');   // implement, continue, fix, cifix -> implementer; review -> reviewer; rebase -> rebaser
 // The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
 // role count is the only change needed. One implementer and one reviewer give 2, as before.
 // Issue #344: the one replaceable function that predicts which files an implement job will edit. No model call: it reads the paths the
@@ -111,12 +115,12 @@ export const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''
 // Issue #344: what holds the running count below the sum of the chosen role counts, for the dashboard: an explicit overall limit, or
 // the open-PR cap pausing new implement work. Empty when nothing does.
 export function capNotes(L, pauseText = null) {
-  const sum = ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0), out = [];
+  const sum = ROLES.reduce((n, r) => n + roleCount(L, r), 0), out = [];
   if (Number.isSafeInteger(L?.overall) && L.overall >= 1 && L.overall < sum) out.push(`limits.overall is ${L.overall}, below the ${sum} slots the role counts allow, so at most ${L.overall} jobs run at once`);
   if (pauseText) out.push(`${pauseText}; no new implement job starts while the open-PR cap (limits.max_open_prs) is reached`);
   return out;
 }
-export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : 1), 0));
+export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + roleCount(L, r), 0));
 function normalizeRoleLimits(c) {
   const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1;   // no upper bound: the count per role is the homeowner's choice (#344)
   // Idempotent on its own output, also after a structuredClone (issue #379): the per_agent text already on a validated config is kept, so
@@ -130,7 +134,8 @@ function normalizeRoleLimits(c) {
     if (L.roles === undefined) L.roles = { implementer: L.per_agent, reviewer: L.per_agent };
   }
   const R = L.roles;
-  if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]))) throw new SupervisorError('invalid team limit: roles');
+  // issue #460: rebaser is optional (default 1); implementer and reviewer stay required
+  if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]) || (k === 'rebaser' && R[k] === undefined))) throw new SupervisorError('invalid team limit: roles');
   // Issue #402: optional limits.provider_roles { <provider>: { implementer?, reviewer? } }. A provider's count caps its own jobs in that
   // role, so one provider's reviews cannot fill the slot meant for the other. A role it omits is limited only by limits.roles.
   const P = L.provider_roles;
@@ -977,7 +982,7 @@ export class Team {
     // to the reviewer with the most spare allowance (issue #402), after any review only that agent can do, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
-      while (used[role] < L.roles[role] && total < overallCap(L)) {
+      while (used[role] < roleCount(L, role) && total < overallCap(L)) {
         const cands = [];
         for (const [agent, a] of this.agents()) {
           if (this.providerSlotFull(a.provider, role, usedBy)) continue;
@@ -1009,7 +1014,7 @@ export class Team {
     const L = this.c.limits, names = this.names();
     const nameOf = j => { const r = this.s.jobs[j.id] || {}; const ref = r.pr != null ? names.pr(r.pr).text : r.issue != null ? names.issue(r.issue).text : j.id.slice(0, 8); return `${r.agent || j.provider} ${r.kind || 'job'} on ${ref}`.slice(0, 120); };
     for (const role of ROLES) {
-      const byRole = used[role] >= L.roles[role], byTotal = total >= overallCap(L);
+      const byRole = used[role] >= roleCount(L, role), byTotal = total >= overallCap(L);
       if (!byRole && !byTotal) continue;
       const holders = (byRole ? occupying.filter(j => roleOfType(this.s.jobs[j.id]?.kind) === role) : occupying).map(nameOf);
       const text = `${role} slot full${byRole ? '' : ' (overall cap reached)'}: ${holders.slice(0, 5).join('; ') || 'running jobs'}`;
@@ -1209,8 +1214,9 @@ export class Team {
     const L = this.c.limits;
     const paused = !!this.pauseInfo(prs, [...issueByNo.values()]);
     // While new work is paused the implementer slot also takes reviews (review independence, D-024, is still checked below).
-    const impl = role !== 'reviewer', rev = role !== 'implementer' || (paused && !implementOnly);
+    const impl = role !== 'reviewer' && role !== 'rebaser', rev = role === 'reviewer' || role === null || (role === 'implementer' && paused && !implementOnly);
     const repair = impl && !implementOnly;
+    const rebasing = (role === 'rebaser' || role === null) && !implementOnly;   // issue #460: only the rebaser slot (or an unscoped probe) plans a rebase
     const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key) || !!this.taken?.has(`${kind}:${key}`);
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
@@ -1219,7 +1225,7 @@ export class Team {
     const allow = type => { const r = admits(B, type, owed); if (!r.ok) this.hold(agent, type, r.why); return r.ok; };
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
-    for (const pr of repair ? prs : []) {
+    for (const pr of rebasing ? prs : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       // Issue #79: rebase only on a conflict, or right before merge (a PR that already has its PASS and green CI, and that GitHub
@@ -1431,20 +1437,12 @@ export class Team {
       return i < 0 ? Infinity : i;
     };
     const ranked = prs.filter(wants).map(p => ({ p, r: rank(p) }));
-    // Issue #344: with N implementer slots the first N candidates in that order may rebase at once (their expected files are kept apart by
-    // the overlap guard, and a rebase that still conflicts is retried in the same order). One slot keeps the single next candidate.
+    // Issue #460: rebases have their own slot count (limits.roles.rebaser), so the first N candidates in that order may rebase at once.
+    // A rebase never holds the implementer slot, so the alternation with implement jobs (issue #266) is no longer needed: new work
+    // starts on its own slot whatever the rebase backlog is. Rebases still plan first (TYPE_ORDER, and the rebaser slot is filled first).
     const order = ranked.sort((x, y) => (x.r === y.r ? 0 : x.r < y.r ? -1 : 1) || x.p.number - y.p.number).map(x => x.p);
-    const n = Number.isSafeInteger(L.roles?.implementer) ? L.roles.implementer : 1;
-    if (order.length && !order.slice(0, n).some(p => p.number === pr.number)) return true;
-    if (n > 1) return false;   // alternation with implement jobs is only needed when one slot is shared
-    const last = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && Number.isFinite(j.at)).sort((x, y) => y.at - x.at)[0];
-    if (last?.kind !== 'rebase') return false;
-    // An implement job is startable when choose() would return one for some agent (same allowance path); choose() is probed with
-    // rebases skipped and its dashboard hold reasons left untouched.
-    const held = this.held; this.held = JSON.parse(JSON.stringify(held));
-    try {
-      return this.agents().some(([ag, a]) => this.choose(ag, a, prs, issueByNo, 'implementer', { implementOnly: true })?.type === 'implement');
-    } finally { this.held = held; }
+    const n = roleCount(L, 'rebaser');
+    return order.length > 0 && !order.slice(0, n).some(p => p.number === pr.number);
   }
 
   // Whether the agent's mode admits a job of this type now, with the reserve for owed reviews and the cost already planned this tick;
@@ -1683,8 +1681,18 @@ export class Team {
       }
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
       if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
+      if (j.kind === 'rebase' && job.status !== 'completed') this.recordIncompleteRebase(id, j, job, report);
       if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
       j.ingested = true; this.save();
+  }
+  // Issue #460: a rebase job that ended without completing records why on the dispatcher's job record (cause, detail, attempts), so the
+  // dashboard and `team status` can show it. The wording comes from the post-condition or the run event, never from model output.
+  recordIncompleteRebase(id, j, job, report) {
+    const r = job.incompleteReason || { cause: String(job.lastEvent || job.status).slice(0, 48), detail: `the job ended ${job.status}` };
+    const cause = r.cause === 'postcondition_not_met' && /still conflicts/.test(r.detail) ? 'conflict' : r.cause;
+    j.incomplete = { cause, detail: String(r.detail).slice(0, 200), attempts: job.attempts ?? null, status: job.status };
+    this.save();
+    (report.incompleteRebases ||= []).push({ pr: j.pr, job: id, ...j.incomplete });
   }
   // Issue #158: what the rebase did, recorded on the job (old head, new head, commit list) and checked by patch-id against the old
   // head. A commit that was on the old head and is not in the result is announced once on the PR with its id and subject, the
@@ -2647,14 +2655,16 @@ export class Team {
       if (p.kind === 'new_head') { const pr = await this.gh.getPull(p.pr); return !!pr && SHA.test(pr.headRefOid) && pr.headRefOid !== p.baseHead; }
       if (p.kind === 'continued') { const pr = await this.gh.getPull(p.pr); return !!pr && SHA.test(pr.headRefOid) && (pr.headRefOid !== p.baseHead || pr.isDraft === false); }
       if (p.kind === 'rebased') {   // a new head that GitHub reports mergeable (it computes this lazily, so re-ask a few times)
+        const why = text => { job.postconditionDetail = text; return false; };   // issue #460: the reason an incomplete rebase records
         for (let i = 0; i < 4; i++) {
           const pr = await this.gh.getPull(p.pr);
-          if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === p.baseHead) return false;
+          if (!pr || !SHA.test(pr.headRefOid)) return why('the pull request head could not be read');
+          if (pr.headRefOid === p.baseHead) return why('no new head was pushed: the branch is unchanged');
           if (pr.mergeable === 'MERGEABLE') return true;
-          if (pr.mergeable === 'CONFLICTING') return false;
+          if (pr.mergeable === 'CONFLICTING') return why('a new head was pushed but the pull request still conflicts with its base');
           await this.sleep(2000);
         }
-        return false;
+        return why('a new head was pushed but GitHub did not report it mergeable');
       }
       if (p.kind === 'split_drafted') return !readSplitDraft(this.root, p.ticket).error;
       if (p.kind === 'pr_opened') return (await this.gh.listPulls()).some(x => x.headRefName === p.branch);
@@ -2667,7 +2677,7 @@ export class Team {
 // role has a free slot and the overall cap leaves room; otherwise the reason names the jobs filling them.
 export function resumeDecision({ job, others, limits, nameOf = o => o.id }) {
   const role = roleOfType(job.kind), inRole = others.filter(o => roleOfType(o.kind) === role);
-  if (inRole.length >= limits.roles[role]) return { go: false, reason: `waiting for the ${role} slot: ${inRole.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
+  if (inRole.length >= roleCount(limits, role)) return { go: false, reason: `waiting for the ${role} slot: ${inRole.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
   // Issue #402: limits.provider_roles caps the job's own provider in this role. Only that provider's running or queued jobs count, so a
   // full Claude cap never holds a Codex job. Without provider_roles (or for a role it omits) nothing changes.
   const cap = limits.provider_roles?.[job.provider]?.[role];

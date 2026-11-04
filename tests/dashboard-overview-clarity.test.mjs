@@ -36,7 +36,7 @@ test('header: both running shows two compact running badges that link to the age
   const v = await build(t, { jobs: [job(), job({ id: 'c'.repeat(32), provider: 'codex', kind: 'rebase', issue: 41, branch: 'codex/issue-3-x' })] });
   const l = lines(page(v));
   assert.deepEqual(l.map(x => [x.agent, x.state, x.href]), [['claude', 'running', '/agents/claude'], ['codex', 'running', '/agents/codex']]);
-  assert.equal(l[0].text, 'claude Implementer Running'); assert.equal(l[1].text, 'codex Implementer Running');
+  assert.equal(l[0].text, 'claude Implementer Running'); assert.equal(l[1].text, 'codex Rebaser Running');   // issue #460: a rebase holds the Rebaser slot
   assert.match(l[0].html, /aria-label="claude · Implementer · Running"/);
   assert.doesNotMatch(header(page(v)), /title="Overall health"/);
 });

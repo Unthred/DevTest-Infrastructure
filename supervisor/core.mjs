@@ -356,6 +356,8 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
         catch (error) { event(root, job, `postcondition_exception:${String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48)}`, clock); met = false; }
       }
       if (met) { transition(root, job, 'completed', 'completed', clock); return job; }
+      // Issue #460: say why the attempt was incomplete (the checker may name the detail on job.postconditionDetail).
+      job.incompleteReason = { cause: 'postcondition_not_met', detail: String(job.postconditionDetail || 'the post-condition did not hold').slice(0, 200), attempt: job.attempts }; delete job.postconditionDetail;
       if ((job.incompleteRetries || 0) < 1) { job.incompleteRetries = (job.incompleteRetries || 0) + 1; job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
       transition(root, job, 'blocked', 'incomplete', clock); return job;
     }
@@ -404,6 +406,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       transition(root, job, 'queued', result.event, clock);
       await clock.sleep(delay); continue;
     }
+    job.incompleteReason = { cause: String(result.event || 'crash').slice(0, 48), detail: `the run ended with ${String(result.event || 'crash').slice(0, 48)} (exit ${Number.isFinite(result.code) ? result.code : 'unknown'})`, attempt: job.attempts };   // issue #460
     const blocked = ['auth_error', 'preflight_failed', 'approval_required', 'context_limit', 'usage_limit'].includes(result.event);
     transition(root, job, blocked ? 'blocked' : 'failed', result.event || 'crash', clock);
     return job;
