@@ -12,7 +12,7 @@ import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
 import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, DEFAULT_REUSE_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
 import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
-import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup } from './testslots.mjs';
+import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup, formatRuntime } from './testslots.mjs';
 import { upgradeLock } from './team.mjs';
 import { Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
@@ -414,7 +414,7 @@ async function main() {
     const maxMinutes = Number(a['max-minutes']);
     const maxRuntimeMs = Number.isFinite(maxMinutes) && maxMinutes > 0 ? maxMinutes * 60000 : DEFAULT_MAX_RUNTIME_MS;
     const run = await runInGroup(cmd, { env: testEnv(process.env, cfg.test_tmp_root), maxRuntimeMs, graceMs: Number(process.env.AI_SUPERVISOR_TEST_GRACE_MS) || 5000 });
-    if (run.timedOut) console.error(`test-slot: stopped after the maximum runtime of ${Math.round(maxRuntimeMs / 60000)} minutes (process group terminated)`);
+    if (run.timedOut) console.error(`test-slot: stopped after the maximum runtime of ${formatRuntime(maxRuntimeMs)} (process group terminated)`);
     if (run.leftover) console.error('test-slot: WARNING processes of the test run survived SIGKILL');
     const code = run.code;
     release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
