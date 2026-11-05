@@ -3,6 +3,7 @@
 // scroll restoration (all saved per breakpoint, in this browser only). It sends nothing; its only network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends, initResetLayout } from './legend.mjs';
+import { watchLists } from './lists-ui.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -11,6 +12,9 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: the layout simply is not remembered */ } },
   del(k) { try { localStorage.removeItem(k); } catch { /* nothing to remove */ } }
 };
+
+// shared lists (search, sort, state across refresh): initialised right away, and again for any list a later refresh swaps in
+watchLists(document.body);
 
 // theme
 const root = document.documentElement;

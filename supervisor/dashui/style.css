@@ -351,3 +351,34 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .proc-table tr.proc-left td{background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent)}
 [data-procs].stale .proc-body,.proc-body[data-state=stale],.proc-body[data-state=failed]{opacity:.55}
 .proc-table .spark{width:96px;height:24px}
+
+/* ---- shared lists (dlist in dashrender.mjs, lists-ui.mjs): every Overview list has a fixed maximum height and scrolls inside its own
+   card, so the page does not grow with the item count; a short list is only as tall as its rows. The bar (search, sort) needs the
+   script, so without it the bar is not shown and the list still shows and scrolls with the native scrollbar (the overlay bars start
+   with the script). The height is a variable so a resized or expanded card can give its list the extra room. */
+.dlist{display:flex;flex-direction:column;min-width:0;--dl-max:clamp(10rem,42vh,26rem)}
+.dlist.compact{--dl-max:clamp(5rem,20vh,10rem)}
+.dl-scroll{max-height:var(--dl-max);overflow-y:auto;overflow-x:hidden;overscroll-behavior:auto;scrollbar-gutter:auto;min-height:0;outline-offset:2px}
+.dl-scroll:focus-visible{outline:2px solid var(--focus)}
+.dl-scroll>li[hidden]{display:none}
+.since-list.dl-scroll,.dlist.compact .dl-scroll{padding-right:var(--sp1)}
+.dl-bar{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:center;margin-bottom:var(--sp2)}
+html:not(.js) .dl-bar{display:none}
+.dl-search{position:relative;flex:1 1 9rem;min-width:7rem;display:flex;align-items:center}
+.dl-bar input[type=search],.dl-bar select{font:inherit;font-size:var(--fs-sm);padding:4px 8px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);color:var(--fg);min-height:32px;max-width:100%}
+.dl-bar input[type=search]{width:100%;padding-right:34px}
+.dl-clear{position:absolute;right:2px;top:0;min-width:32px;min-height:32px}
+.dl-clear .icon{width:14px;height:14px}
+.dl-dir{min-height:32px;padding:2px 8px;font-size:var(--fs-sm);gap:var(--sp1)}
+.dl-dir .icon{width:14px;height:14px}
+.dl-none{margin:var(--sp2) 0}
+.dl-foot{margin-top:var(--sp2);display:flex;flex-wrap:wrap;gap:var(--sp2);min-height:1.4em}
+/* a card the viewer resized, or expanded, gives its list the extra room (the list then scrolls inside the card's own height) */
+.card[style*="--h:"] .dlist{--dl-max:max(8rem,calc(var(--h) - 11rem))}
+.card.expanded .dlist{--dl-max:calc(94vh - 13rem)}
+.card.expanded .dlist.compact{--dl-max:calc(94vh - 13rem)}
+@media(max-width:639px){
+  .dlist{--dl-max:clamp(9rem,38vh,20rem)}
+  .dlist.compact{--dl-max:clamp(5rem,20vh,9rem)}
+  .dl-bar input[type=search],.dl-bar select,.dl-dir,.dl-clear{min-height:44px}
+}
