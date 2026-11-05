@@ -133,9 +133,11 @@ export function createSampler({ readJobs, procRoot = '/proc', now = () => Date.n
     try {
       const table = read(procRoot), result = attribute(table, readJobs(), at);
       lastGood = { at, ...result };
-      for (const a of [...result.agents.map(x => ({ agent: x.agent, processes: x.processes, rssKb: x.rssKb, swapKb: x.swapKb })), { agent: '(unattributed)', ...result.unattributed }]) {
-        const h = history.get(a.agent) || []; h.push({ at, processes: a.processes, rssKb: a.rssKb, swapKb: a.swapKb });
-        while (h.length > HISTORY_POINTS) h.shift(); history.set(a.agent, h);
+      const pts = new Map([...result.agents.map(x => [x.agent, x]), ['(unattributed)', result.unattributed], ['tower', result.total]]);
+      for (const k of history.keys()) if (!pts.has(k)) pts.set(k, { processes: 0, rssKb: 0, swapKb: 0 });   // an idle agent plots zero, not a gap
+      for (const [k, a] of pts) {
+        const h = history.get(k) || []; h.push({ at, processes: a.processes, rssKb: a.rssKb, swapKb: a.swapKb });
+        while (h.length > HISTORY_POINTS) h.shift(); history.set(k, h);
       }
       latest = { at, ok: true, error: null };
     } catch (error) { latest = { at, ok: false, error: String(error?.message || error).replace(/[^\x20-\x7e]/g, '?').slice(0, 120) }; }

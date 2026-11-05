@@ -349,5 +349,5 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .proc-note.sev-warning,.proc-note.sev-action{padding:var(--sp1) var(--sp2);border-radius:6px;border:1px solid var(--line)}
 .proc-table tr.proc-total td{font-weight:600;border-top:2px solid var(--line)}
 .proc-table tr.proc-left td{background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent)}
-[data-procs].stale .proc-body{opacity:.55}
+[data-procs].stale .proc-body,.proc-body[data-state=stale],.proc-body[data-state=failed]{opacity:.55}
 .proc-table .spark{width:96px;height:24px}

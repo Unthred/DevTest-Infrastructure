@@ -198,3 +198,18 @@ test('process.mjs keeps the job group after the child exits (what leftover detec
   const src = fs.readFileSync(new URL('../supervisor/process.mjs', import.meta.url), 'utf8');
   assert.match(src, /job\.childGroup = child\.pid/); assert.match(src, /job\.childEndedAt = clock\.now\(\)/);
 });
+
+test('history: an idle agent plots zero (no gap) and the Tower total has its own series', t => {
+  const r = fakeProc(t); proc(r, { pid: 100, start: 100 }); proc(r, { pid: 9, ppid: 1 });
+  let clock = NOW, jobs = [job()]; const s = createSampler({ procRoot: r, now: () => clock, readJobs: () => jobs });
+  s.get(); fs.rmSync(path.join(r, '100'), { recursive: true }); clock += SAMPLE_TTL_MS; s.get();
+  const h = s.get().history; assert.equal(h.claude.length, 2); assert.equal(h.claude[1].processes, 0);
+  assert.equal(h.tower.length, 2);
+});
+
+test('server-rendered stale and failed readings are dimmed by the stylesheet, and the client checks age and times out', () => {
+  const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.proc-body\[data-state=stale\]/); assert.match(css, /\.proc-body\[data-state=failed\]/);
+  const js = fs.readFileSync(new URL('../supervisor/dashui/processes.js', import.meta.url), 'utf8');
+  assert.match(js, /AbortController/); assert.match(js, /signal: ctl\.signal/); assert.match(js, /STALE_AFTER/); assert.match(js, /lastOk/);
+});
