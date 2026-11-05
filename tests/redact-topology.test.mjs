@@ -57,3 +57,11 @@ test('issue #607: image tags and versions are kept, real host:port values still 
   assert.equal(redactTopology('redis:7000', []), '[host]');
   assert.equal(redactTopology('api.example.org:22', []), '[host]');
 });
+
+test('issue #607: a hyphen after a real host:port does not leak it', () => {
+  assert.equal(redactTopology('api.example.org:8000-8100', []), '[host]-8100');
+  assert.equal(redactTopology('myhost:8000-8100', []), '[host]-8100');
+  assert.equal(redactTopology('myhost:8123-ha', []), '[host]-ha');
+  assert.equal(redactTopology('api.example.org:8123-ha', []), '[host]-ha');
+  assert.equal(redactTopology('postgres:16-alpine', []), 'postgres:16-alpine');
+});
