@@ -5,7 +5,7 @@ Every issue passes these gates in order. A gate that cannot be shown is reported
 ## Completion states (D-013)
 Report these four separately for every item. Never merge them.
 1. **Implemented in source** — the change exists on a branch.
-2. **CI/review passed** — exact-head CI is green and the opposite agent has reviewed.
+2. **CI/review passed** — exact-head CI is green and an independent reviewer (D-024: fresh session, model differs from the head's writer) has reviewed.
 3. **Deployed** — installed where it runs, with the exact version or SHA.
 4. **Verified working** — observed doing its job, with evidence.
 A merged PR or green CI alone is state 1–2, not 4.
@@ -16,7 +16,7 @@ A merged PR or green CI alone is state 1–2, not 4.
 | G1 Source | Change on its own branch and worktree (D-011, D-018); checked against every register entry; `node tools/validate-project.mjs` passes. | commit SHA |
 | G2 Tests | Positive **and** negative cases, run for real; flaky tests are failures. | command, output, exit code |
 | G3 CI | Exact-head CI green. | run id and head SHA |
-| G4 Review | Reviewed by the opposite agent, independently (it re-runs the tests, does not trust the author's report). Findings fixed or answered. | review link |
+| G4 Review | Reviewed independently (D-024: fresh session, model differs from the head's writer; the reviewer re-runs the tests, does not trust the author's report). Findings fixed or answered. | review link |
 | G5 Security | No secret in Git, logs or artifacts; no Docker socket or privileged mode; no production mutation; no reboot; images pinned by digest. | validator output |
 | G6 Evidence | Reproducible commands and outputs linked on the issue; sensitive values redacted. | issue comment |
 | G7 Handover | The four states, SHA and blockers are in the PR description and issue comment. The handover file is not edited on the feature branch (D-023); it is updated on main after merge. | PR description; main handover commit |
@@ -27,7 +27,7 @@ Dependencies come first: do not start an issue whose prerequisites are not at le
 ## Per-issue required evidence
 | Issue | Must show |
 |---|---|
-| #1 Architecture | These documents, register, contracts and entry points; validator and tests including negative cases; CI; opposite-agent review. |
+| #1 Architecture | These documents, register, contracts and entry points; validator and tests including negative cases; CI; independent review (D-024). |
 | #2 Docker foundation | Hardening baseline enforced by the runner (D-015), pinned digests in the lock file, cleanup leaves nothing running, refusal tests for socket, privileged and bad mounts. |
 | #3–#4 .NET | Each SDK major builds and tests a real fixture, no network during build/test (D-016), TRX and coverage artifacts. |
 | #5–#6 Browser | Real screenshots at phone and desktop profiles; a deliberately broken page is detected; browser track runs without .NET. |

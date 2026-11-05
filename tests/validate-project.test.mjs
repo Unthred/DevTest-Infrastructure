@@ -164,6 +164,23 @@ test('entrypoints: AGENTS.md must state the main-only handover rule (D-023)', ()
   expectFinding((a) => a.write('AGENTS.md', a.read('AGENTS.md').replaceAll('D-023', 'D-0xx')), 'entrypoints', 'D-023');
 });
 
+// ---- stale review wording (D-024)
+test('entrypoints: AGENTS.md must state the independent-review rule (D-024)', () => {
+  expectFinding((a) => a.write('AGENTS.md', a.read('AGENTS.md').replaceAll('Independent review (D-024)', 'Review')), 'entrypoints', 'Independent review (D-024)');
+});
+test('stale wording: "opposite agent" or "opposite-agent" in AGENTS.md or a current doc is a finding', () => {
+  expectFinding((a) => a.write('AGENTS.md', a.read('AGENTS.md') + '\nReviewed by the opposite agent.\n'), 'stale-wording', 'AGENTS.md');
+  expectFinding((a) => a.write('docs/team-loop.md', a.read('docs/team-loop.md') + '\nOpposite-agent review.\n'), 'stale-wording', 'docs/team-loop.md');
+});
+test('stale wording: decision history, handover and evidence may keep the old phrase', () => {
+  const api = fixture((a) => {
+    a.write('docs/DECISIONS.md', a.read('docs/DECISIONS.md') + '\n<!-- the opposite agent -->\n');
+    a.write('docs/ai/CURRENT_HANDOVER.md', a.read('docs/ai/CURRENT_HANDOVER.md') + '\nthe opposite agent reviewed\n');
+    a.write('docs/evidence/x/note.md', 'opposite-agent review\n');
+  });
+  assert.ok(!checks(api).includes('stale-wording'));
+});
+
 // ---- shared skills (issue #455)
 test('the ui-ux-review skill is one source, linked relatively for Claude', () => {
   assert.equal(fs.readlinkSync(path.join(repo, '.claude', 'skills', 'ui-ux-review')), '../../.agents/skills/ui-ux-review');

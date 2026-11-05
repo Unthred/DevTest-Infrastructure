@@ -158,7 +158,7 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
 }
 
 // Whether `agent` may start a job of `type`: its mode allows the type, and the estimated cost fits in what is left, keeping a
-// reserve for the opposite-agent reviews still pending on it (reviews themselves draw on that reserve).
+// reserve for the independent reviews (D-024) still pending on it (reviews themselves draw on that reserve).
 export function admits(a, type, pendingReviews = 0) {
   if (!a) return { ok: true };
   if (a.mode === 'waiting') return { ok: false, why: a.reason };

@@ -552,7 +552,7 @@ export function fixPrompt(job) {
 }
 export function rebasePrompt(job) {
   const why = job.behind ? `is mergeable but behind ${job.base}, and has a recorded PASS, so it is rebased right before merge` : `conflicts with ${job.base}`;
-  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) ${why}. Do a conflict-only rebase, and only through the two guarded steps below (issue #158). Step 1, right before you rebase: run \`ai-supervisor rebase-prepare --worktree <this worktree> --branch ${job.branch}\`; it fetches and puts the branch on the REMOTE head, which it prints as oldHead (never rebase a cached local copy). Then rebase onto origin/${job.base} and resolve conflicts keeping the intent of both sides; change nothing else in the rebase (do not amend, squash, reword or reorder commits, so an unchanged patch stays recognisable); read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}. Step 2, instead of a plain push: run \`ai-supervisor rebase-push --worktree <this worktree> --branch ${job.branch} --base ${job.base} --old <oldHead from step 1>\`; it checks by patch-id that every commit of the old remote head that is not on ${job.base} is in your result, and also compares the lines and call sites the PR added before and after (issue #415: a resolution must not drop a change or leave a function without its call), and only then pushes with --force-with-lease against the head step 1 fetched. If it reports pushed:false (a dropped commit, a lost change, or the branch moved during the job) do NOT push by any other means: stop and say which. Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. The dispatcher itself compares the two heads: a recorded PASS for the old head carries over to the new head only when every commit is unchanged (equal patches and messages); otherwise the opposite agent reviews the new head. The post-condition is a new pushed head that is mergeable.`;
+  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) ${why}. Do a conflict-only rebase, and only through the two guarded steps below (issue #158). Step 1, right before you rebase: run \`ai-supervisor rebase-prepare --worktree <this worktree> --branch ${job.branch}\`; it fetches and puts the branch on the REMOTE head, which it prints as oldHead (never rebase a cached local copy). Then rebase onto origin/${job.base} and resolve conflicts keeping the intent of both sides; change nothing else in the rebase (do not amend, squash, reword or reorder commits, so an unchanged patch stays recognisable); read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}. Step 2, instead of a plain push: run \`ai-supervisor rebase-push --worktree <this worktree> --branch ${job.branch} --base ${job.base} --old <oldHead from step 1>\`; it checks by patch-id that every commit of the old remote head that is not on ${job.base} is in your result, and also compares the lines and call sites the PR added before and after (issue #415: a resolution must not drop a change or leave a function without its call), and only then pushes with --force-with-lease against the head step 1 fetched. If it reports pushed:false (a dropped commit, a lost change, or the branch moved during the job) do NOT push by any other means: stop and say which. Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. The dispatcher itself compares the two heads: a recorded PASS for the old head carries over to the new head only when every commit is unchanged (equal patches and messages); otherwise an independent reviewer (a fresh session on a different model, D-024) reviews the new head. The post-condition is a new pushed head that is mergeable.`;
 }
 export function ciFixPrompt(job) {
   const checks = job.checks.length ? ` Failing checks: ${job.checks.join(', ')}.` : '';
@@ -774,7 +774,7 @@ export class Team {
     }
   }
   // An interim (D-021) PASS recorded earlier may merge once D-024 is approved, or while D-021 is approved; under D-021 the merge
-  // still owes the opposite agent a post-merge review (recorded in execute()).
+  // still owes a post-merge review by a reviewer on another model (recorded in execute()). Live only while D-024 is not approved.
   interimMergeAllowed() { return this.independenceApproved() || (decisionApproved(this.register, 'D-021') && this.c.interim_review?.enabled !== false); }
   // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
   reviewRefusal(agent, pr, key) {
@@ -1035,7 +1035,7 @@ export class Team {
       const interim = v?.interim === true && v.reviewer === author;
       if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.carryOk(v, pr) && !this.reqHoldAll && !this.reqHold?.has(pr.number) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr) && !(this.exceptionFor(pr.number) && this.exceptionMissing(pr))) {
         const exception = !!this.exceptionFor(pr.number);
-        // Until D-024 is approved, an interim merge owes the opposite agent a post-merge review (D-021).
+        // Applies only while D-024 is not approved (D-021): an interim merge owes a post-merge review by a reviewer on another model.
         actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job, ...(interim && !this.independenceApproved() ? { interim: true, branch: pr.headRefName, author } : {}), ...(exception ? { exception: true, commitsJob: this.s.exceptionReviews[verdictKey(pr.number, pr.headRefOid)]?.job } : {}) });
         break;
       }
@@ -2762,7 +2762,7 @@ export class Team {
 
   async execute(act, report = {}) {
     if (act.type === 'merge') {
-      // D-021 (until D-024 is approved): an interim merge owes the opposite agent a post-merge review. Recorded before the merge, so a
+      // D-021 (applies only while D-024 is not approved): an interim merge owes a post-merge review by a reviewer on another model. Recorded before the merge, so a
       // crash after it cannot lose the debt; a refused merge removes it again.
       if (act.interim) { this.s.postMerge[act.pr] = { head: act.head, branch: act.branch, author: act.author, interimReviewer: act.reviewer, interimJob: act.job, at: this.clock.now() }; this.save(); }
       try { await this.gh.merge(act.pr, act.head); }      // GitHub refuses unless the head still equals act.head
@@ -2777,7 +2777,7 @@ export class Team {
       // Issue #362: the state keeps the newest 500; older entries move to an append-only archive, never dropped.
       this.archiveOverflow('merge', this.s.mergeLog.slice(0, -500)); this.s.mergeLog = this.s.mergeLog.slice(-500);
       if (issue) {
-        await this.gh.comment(issue, `${this.names().pr(act.pr).text} merged at ${this.commitRef(act.head)} by the dispatcher. Gates: ${act.exception ? 'REVIEW EXCEPTION (D-027) used: two PASSes on this head; ' : ''}${act.interim ? 'interim (D-021) ' : ''}PASS from \`${act.reviewer}\` (job ${String(act.job).slice(0, 8)}) recorded for this exact head, all checks green, mergeable.${act.interim ? ' A post-merge review by the opposite agent follows.' : ''} Merged is not deployed or verified working.`);
+        await this.gh.comment(issue, `${this.names().pr(act.pr).text} merged at ${this.commitRef(act.head)} by the dispatcher. Gates: ${act.exception ? 'REVIEW EXCEPTION (D-027) used: two PASSes on this head; ' : ''}${act.interim ? 'interim (D-021) ' : ''}PASS from \`${act.reviewer}\` (job ${String(act.job).slice(0, 8)}) recorded for this exact head, all checks green, mergeable.${act.interim ? ' A post-merge review by a reviewer on another model follows.' : ''} Merged is not deployed or verified working.`);
         await this.gh.board(issue, act.base === 'main' ? 'done' : 'in_review');
       }
       if (act.interim) await this.gh.addLabel(act.pr, 'post-merge-review');
