@@ -36,9 +36,10 @@ export function createViewStore({ build, ttlMs = VIEW_TTL_MS, staleMs = VIEW_STA
   const startBuild = (key, opts, entry) => {
     if (entry.running) return entry.running;   // a build already running is shared, never repeated
     entry.triedAt = clock();   // a failing rebuild is not retried by the timer more often than refreshMs
+    const startedAt = clock();   // the files are read when the build starts, so the copy's age counts from here, not from when it finished
     const gen = entry.runningGen = entry.gen;   // the writes this build is guaranteed to include: those before it started
     entry.running = new Promise((resolve, reject) => yieldTo(() => {
-      Promise.resolve().then(() => build(opts)).then(view => { entry.view = view; entry.builtAt = clock(); entry.builtGen = gen; entry.failed = null; resolve(entry); }, error => {
+      Promise.resolve().then(() => build(opts)).then(view => { entry.view = view; entry.builtAt = startedAt; entry.builtGen = gen; entry.failed = null; resolve(entry); }, error => {
         entry.failed = String(error?.message || error).slice(0, 160); reject(error);
       });
     })).finally(() => { entry.running = null; });
@@ -53,6 +54,7 @@ export function createViewStore({ build, ttlMs = VIEW_TTL_MS, staleMs = VIEW_STA
       catch { return; }   // failed: the entry records it and the old copy is served stale
     }
   };
+  // stale also covers a copy older than the last write (rebuildAfterWrite gave up after 3 rounds): it is never shown as current.
   // Returns { view, builtAt, ageMs, stale, refreshing, failed }.
   async function get(key, opts) {
     let entry = entries.get(key);
@@ -64,7 +66,7 @@ export function createViewStore({ build, ttlMs = VIEW_TTL_MS, staleMs = VIEW_STA
     else if (entry.builtGen !== entry.gen) await rebuildAfterWrite(key, opts, entry);   // a write happened since this copy's build began: never serve it as current
     else if (now - entry.builtAt >= ttlMs) startBuild(key, opts, entry).catch(() => {});   // old copy: serve it, rebuild in the background
     const at = clock(), ageMs = Math.max(0, at - entry.builtAt);
-    return { view: entry.view, builtAt: entry.builtAt, ageMs, stale: ageMs >= staleMs || !!entry.failed, refreshing: !!entry.running, failed: entry.failed };
+    return { view: entry.view, builtAt: entry.builtAt, ageMs, stale: ageMs >= staleMs || !!entry.failed || entry.builtGen !== entry.gen, refreshing: !!entry.running, failed: entry.failed };
   }
   // A dashboard write calls this before it redirects: every copy built before the write stops counting as current.
   const invalidate = () => { for (const entry of entries.values()) entry.gen++; return entries.size; };
