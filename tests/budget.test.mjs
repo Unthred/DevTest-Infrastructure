@@ -531,3 +531,13 @@ test('budget #680: the retired forecast settings are still accepted and range-ch
   const local = validateTeamConfig(applyLocalOverride(validateTeamConfig(config({ budget: { high_water: 0.85 } })), { budget: { projected_limit: 1.5 } }));
   assert.equal(local.budget.projected_limit, 1.5);   // an installed team.local.json that still sets it loads
 });
+
+test('just after a weekly reset a short burst is not extrapolated: 4% used is not projected as hundreds of percent (issue #619)', () => {
+  const left = 156, resetsAt = NOW + left * HOUR;   // 12h into the week
+  const history = [{ at: NOW - 2 * HOUR, used: 0, resetsAt }, { at: NOW, used: 0.04, resetsAt }];
+  const a = assessAgent({ allowance: codexAl(0.04, { resetsAt }), history, now: NOW });
+  assert.equal(a.rateSource, 'window average'); assert.ok(a.projected < 1, `projected ${a.projected}`); assert.equal(a.mode, 'normal');
+  // once the window has run as long as the recent span, the recent rate counts again
+  const later = NOW + 20 * HOUR, r2 = NOW + 120 * HOUR, h2 = [{ at: later - 3 * HOUR, used: 0.1, resetsAt: r2 }, { at: later, used: 0.3, resetsAt: r2 }];
+  assert.equal(assessAgent({ allowance: codexAl(0.3, { resetsAt: r2, at: later }), history: h2, now: later }).rateSource, 'recent');
+});
