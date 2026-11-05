@@ -39,6 +39,9 @@ const ATTRIBUTION_RULES = [
 export const secretShaped = text => SECRET_RULES.some(re => re.test(String(text ?? '')));
 export const attributionShaped = text => ATTRIBUTION_RULES.some(re => re.test(String(text ?? '')));
 
+const flat = t => String(t).replace(/\r/g, '').replace(/\t/g, ' ').trim();
+export const displayChanges = text => redactLong(flat(text), flat(text).length + 16, ' [cut]') !== flat(text);
+
 // Returns { ok:true, item } with only the known fields, or { ok:false, reason } (a short sentence safe to show; it never quotes the text).
 export function validateItem(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: 'the item is not a JSON object' };
@@ -54,6 +57,9 @@ export function validateItem(raw) {
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, reason: `${k} contains control characters` };
     if (secretShaped(v)) return { ok: false, reason: `${k} contains secret-shaped text` };
     if (attributionShaped(v)) return { ok: false, reason: `${k} contains AI attribution text, which this project does not allow` };
+    // The card shows redacted text, so anything the display redactor would change (e-mail addresses, digests, short key=value values)
+    // is refused: the card must show exactly what the job receives.
+    if (displayChanges(v)) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
   }
   if (/[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
   return { ok: true, item: Object.fromEntries(allowed.filter(k => raw[k] !== undefined).map(k => [k, raw[k]])) };
