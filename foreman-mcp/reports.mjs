@@ -2,6 +2,7 @@
 // Never writes, never follows a symlink, never reads outside the folder, and returns bounded text (redacted before it is cut).
 import fs from 'node:fs';
 import path from 'node:path';
+import { redact } from './redact.mjs';
 
 export const REPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.(md|txt)$/;   // one path component: no separators, no leading dot, a known extension
 export const REPORT_MAX_BYTES = 256 * 1024;   // most of a report ever read from disk
@@ -9,7 +10,7 @@ export const REPORT_LIST_MAX = 100;
 
 const truncatedMarker = n => `\n\n[truncated: ${n} more characters not shown]`;
 
-export function createReports(dir, { fsApi = fs, redact = x => x } = {}) {
+export function createReports(dir, { fsApi = fs, redact: redactText = redact } = {}) {
   const need = () => { if (!dir) throw new Error('no reports folder is configured (reportsDir in the server configuration)'); return path.resolve(dir); };
   return {
     list() {
@@ -34,7 +35,7 @@ export function createReports(dir, { fsApi = fs, redact = x => x } = {}) {
       try {
         const s = fsApi.fstatSync(fd); if (!s.isFile()) throw new Error('that report cannot be read (not a regular file)');
         const buf = Buffer.alloc(Math.min(s.size, REPORT_MAX_BYTES + 1)); const n = fsApi.readSync(fd, buf, 0, buf.length, 0);
-        let text = redact(buf.subarray(0, Math.min(n, REPORT_MAX_BYTES)).toString('utf8')), more = s.size > REPORT_MAX_BYTES ? s.size - REPORT_MAX_BYTES : 0;
+        let text = redactText(buf.subarray(0, Math.min(n, REPORT_MAX_BYTES)).toString('utf8')), more = s.size > REPORT_MAX_BYTES ? s.size - REPORT_MAX_BYTES : 0;
         if (maxChars && text.length > maxChars) { more += text.length - maxChars; text = text.slice(0, maxChars); }
         return `${name} (${new Date(s.mtimeMs).toISOString()}, ${s.size} bytes)\n\n${text}${more ? truncatedMarker(more) : ''}`;
       } finally { try { fsApi.closeSync(fd); } catch { /* closed */ } }
