@@ -238,7 +238,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
       }
       // Issue #623: two bounded, redacted, read-only records for the Foreman MCP tools (the account there cannot read the state root).
       if ((m = /^\/api\/jobs\/([a-f0-9]{32})\/outcome\.json$/.exec(path))) { const out = jobOutcome(root, m[1]); return out ? send(200, 'application/json; charset=utf-8', JSON.stringify(out)) : send(404, 'text/plain; charset=utf-8', 'not found'); }
-      if (path === '/api/discarded.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(discarded(readTeamState(root))));
+      if (path === '/api/discarded.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(discarded(readTeamState(root), 200)));
       // UI review evidence (issue #455): read-only files from <evidence root>/ui-review, png, json and md only, no symlink followed.
       const fileRequest = /^\/evidence\/files\/(.+)$/.exec(path);
       if (fileRequest) {

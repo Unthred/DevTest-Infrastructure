@@ -87,6 +87,12 @@ test('the dashboard routes are GET-only, strict about the id, and end to end thr
   assert.equal((await s.raw('POST', `/api/jobs/${ID}/outcome.json`)).status !== 200, true);
   assert.equal((await s.raw('POST', '/api/discarded.json')).status !== 200, true);
   assert.equal(JSON.parse((await s.raw('GET', '/api/discarded.json')).body).count, 2);
+  // More than 50 records: the dashboard must serve up to 200, not the helper's default of 50.
+  const stPath = path.join(root, 'team', 'state.json'); const st0 = JSON.parse(fs.readFileSync(stPath, 'utf8')); const waste0 = st0.breaker.waste;
+  st0.breaker.waste = { ...waste0, ...Object.fromEntries(Array.from({ length: 120 }, (_, i) => [`w${i}`, { job: `w${i}`, at: 100 + i, type: 'review', cause: 'review:no-verdict:x', tokens: 1, cost: 0.01 }])) };
+  fs.writeFileSync(stPath, JSON.stringify(st0));
+  const big = JSON.parse((await s.raw('GET', '/api/discarded.json')).body); assert.equal(big.count, 122); assert.equal(big.items.length, 122);
+  st0.breaker.waste = waste0; fs.writeFileSync(stPath, JSON.stringify(st0));
   const before = fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8');
   const view = { jobs: [{ fullId: ID }, { fullId: ID2 }, { fullId: ID.slice(0, 7) + 'a'.repeat(25) }] };
   const tools = createTools({ source: { get: async () => ({ view, ageMs: 0, stale: false }) }, readHost: () => ({}), getPath: p => getJson(new URL(p, `${s.base}/api/view.json`).href) });
