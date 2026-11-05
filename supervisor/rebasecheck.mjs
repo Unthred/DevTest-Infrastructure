@@ -40,7 +40,7 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
   // date and subject, so a commit with no patch-id match is paired with an unused new commit of the same identity.
   // Known limits (issue #164, pinned by tests, all fail safe): the fallback proves presence, not that the content survived a
   // resolution; each new commit pairs at most once, so identical-identity twins need two new commits; --reset-author-date,
-  // --ignore-date, squashes and commits emptied by a resolution (git drops them) are reported missing, unless the new base already holds their change (issue #640).
+  // --ignore-date, squashes and commits emptied by a resolution (git drops them) are reported missing, unless the new base already holds their change, even next to another main edit (issue #640).
   const used = new Set();
   const unmatched = [];
   for (const c of old) {
@@ -63,8 +63,47 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
 function alreadyApplied(run, sha, base) {
   try {
     const out = run(['merge-tree', '--write-tree', `--merge-base=${sha}^`, base, sha]).trim().split('\n')[0];
-    return SHA.test(out) && out === run(['rev-parse', base + '^{tree}']).trim();
-  } catch { return false; }   // conflict, a root commit or an old git: keep the commit reported
+    if (SHA.test(out) && out === run(['rev-parse', base + '^{tree}']).trim()) return true;
+  } catch { /* a conflict, a root commit or an old git: judge by the changed lines below */ }
+  return changedLinesOnBase(run, sha, base);
+}
+
+// The same change made next to another main edit: git's three-way merge conflicts although the commit's own lines are on main.
+// Judged by lines, per hunk with no context: the lines the commit added appear in order, consecutively, in the base's file, and a
+// line it removed is gone from the base's file (unless the commit re-adds it). Added, deleted, renamed and binary files are not
+// judged this way and stay reported.
+function changedLinesOnBase(run, sha, base) {
+  let diff;
+  try { diff = run(['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', `${sha}^`, sha]).split('\n'); } catch { return false; }
+  if (diff.length > MAX_DIFF_LINES) return false;
+  const hunks = []; let file = null; let header = false; let cur = null;
+  for (const line of diff) {
+    if (line.startsWith('diff --git ')) { header = true; file = null; cur = null; continue; }
+    if (header) {
+      if (/^(new file mode|deleted file mode|rename |Binary files|GIT binary)/.test(line)) return false;
+      if (line.startsWith('+++ ')) file = line.slice(6).replace(/\t.*$/, '');
+      else if (line.startsWith('@@')) header = false;
+      if (header) continue;
+    }
+    if (line.startsWith('@@')) { cur = { file, removed: [], added: [] }; hunks.push(cur); continue; }
+    if (!cur) continue;
+    if (line.startsWith('-')) cur.removed.push(line.slice(1).trim());
+    else if (line.startsWith('+')) cur.added.push(line.slice(1).trim());
+  }
+  if (!hunks.length) return false;
+  for (const h of hunks) {
+    if (!h.file) return false;
+    const lines = fileLines(run, base, h.file);
+    if (!lines.length) return false;
+    if (!h.added.some(meaningful) && !h.removed.some(meaningful)) return false;
+    if (h.added.some(meaningful)) {
+      let found = false;
+      for (let i = 0; i + h.added.length <= lines.length && !found; i++) found = h.added.every((t, k) => lines[i + k] === t);
+      if (!found) return false;
+    }
+    for (const t of h.removed.filter(meaningful)) if (!h.added.includes(t) && lines.includes(t)) return false;
+  }
+  return true;
 }
 
 // Issue #415: a conflict resolution can lose a change INSIDE a commit while the commit list still looks complete (PR #222 kept
