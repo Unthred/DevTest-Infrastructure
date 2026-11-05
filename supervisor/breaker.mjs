@@ -173,7 +173,14 @@ export function byCause(s, { since = 0, until = Infinity } = {}) {
 }
 
 // What the Needs you item and the Overview say. `running` is the list of jobs still going: [{ id, type, ref }].
-export const COST_LABEL = 'usage equivalent (the CLI\'s own estimate; plan usage is not a cash charge)';
+// Display text for each trippedBy value. 'cost' is a single cause's own waste, or (with scope @global) the higher cross-cause limit.
+export const TRIPPED_BY_LABEL = {
+  count: 'same cause, job count',
+  cost: 'cost limit',
+  'any-kind-cost': 'cost of waste of any kind',
+};
+export const trippedByLabel = (v) => TRIPPED_BY_LABEL[v] || String(v);
+export const COST_LABEL ='usage equivalent (the CLI\'s own estimate; plan usage is not a cash charge)';
 export function haltView(s, running = []) {
   normalize(s);
   const entries = [...(s.global ? [{ ...s.global, cause: '@global' }] : []), ...Object.values(s.halts)].sort((a, b) => a.since - b.since);
