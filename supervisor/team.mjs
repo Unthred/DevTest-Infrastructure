@@ -648,8 +648,11 @@ export class Team {
     // low-allowance fix-round re-review entry keeps its rule and is checked as it stands. With none independent the first candidate
     // is returned and reviewRefusal() refuses it.
     const cands = this.c.models?.agents?.[act.agent]?.review_candidates;
-    if (typeOfKind(kind) === 'review' && act.pr != null && Array.isArray(cands) && cands.length && !(act.reReview === true && low && this.c.models.agents[act.agent].low)) {
-      const pr = { number: act.pr, headRefName: act.branch, headRefOid: act.head };   // issue #560: the same head-bound check as reviewRefusal
+    // Issue #619: the low entry is used only when it is independent of the PR's writers; otherwise the candidates are used, so a
+    // re-review never starts on a model that the independence check would refuse after the usage is spent.
+    const pr = { number: act.pr, headRefName: act.branch, headRefOid: act.head };   // issue #560: the same head-bound check as reviewRefusal
+    const lowEntry = act.reReview === true && low && this.c.models?.agents?.[act.agent]?.low;
+    if (typeOfKind(kind) === 'review' && act.pr != null && Array.isArray(cands) && cands.length && !(lowEntry && !this.independenceRefusal(act.agent, fields.model ?? null, pr))) {
       const tried = cands.map(entry => resolveModel({ ...base, entryOverride: entry }));
       // act.candidate (issue #297): judge one named candidate, for the Needs you card that lists every model tried.
       ({ fields, warnings } = Number.isInteger(act.candidate) && tried[act.candidate] ? tried[act.candidate] : tried.find(r => !this.independenceRefusal(act.agent, r.fields.model ?? null, pr)) || tried[0]);
