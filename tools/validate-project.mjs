@@ -144,9 +144,16 @@ export function validate(root) {
   if (has('AGENTS.md')) {
     const text = read(root, 'AGENTS.md');
     for (const [needle, why] of [['docs/DECISIONS.md', 'decision register'], ['docs/ai/CURRENT_HANDOVER.md', 'canonical handover'], ['One writer per worktree', 'worktree rule'],
-      ['OpenBao', 'secrets rule'], ['Docker socket', 'Docker socket rule'], ['Opposite-agent review', 'review rule'], ['dev-test', 'single CLI'], ['No AI attribution', 'attribution rule'], ['D-023', 'main-only handover rule']]) {
+      ['OpenBao', 'secrets rule'], ['Docker socket', 'Docker socket rule'], ['Independent review (D-024)', 'review rule'], ['dev-test', 'single CLI'], ['No AI attribution', 'attribution rule'], ['D-023', 'main-only handover rule']]) {
       if (!text.includes(needle)) add('entrypoints', `AGENTS.md must state the ${why} ("${needle}")`);
     }
+  }
+
+  // Stale review wording (D-024): review independence is by session and model, not by provider, so current instructions must not
+  // say "opposite agent". Decision history, the handover, evidence and other historical records are exempt, as are tests.
+  const historical = new Set(['docs/DECISIONS.md', 'docs/history.md', 'docs/allowance-evidence.md', 'docs/provider-observations.md', 'docs/ai/CURRENT_HANDOVER.md']);
+  for (const doc of ['AGENTS.md', 'README.md', ...walk(root).map((f) => rel(root, f)).filter((r) => r.startsWith('docs/') && r.endsWith('.md') && !r.startsWith('docs/evidence/') && !historical.has(r))]) {
+    if (has(doc) && /opposite[ -]agent/i.test(read(root, doc))) add('stale-wording', `${doc} says "opposite agent"; use the D-024 rule (independent review: fresh session, model differs from the head's writer)`);
   }
 
   // Contracts

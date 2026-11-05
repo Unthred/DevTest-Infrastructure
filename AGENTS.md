@@ -12,7 +12,7 @@ Resume from repository state, never from assumed chat memory.
 ## Rules that always apply
 - **One entry point.** Build and test through the `dev-test` CLI ([`docs/cli-contract.md`](docs/cli-contract.md)). No ad-hoc `docker run`, no second launcher.
 - **One writer per worktree.** Work on `<agent>/issue-<n>-<slug>` in `DevTest-Infrastructure-<agent>-<n>`. Never edit, reset, stash or clean another agent's worktree, and never overwrite a shared handover. Git fixtures in tests use independent clones or `git init`, never a linked worktree.
-- **Opposite-agent review** before any merge. You do not merge your own PR.
+- **Independent review (D-024)** before any merge: a fresh session on a different model from the writer of the head; a different provider is not required. You do not merge your own PR.
 - **Secrets.** OpenBao only, scoped and read-only. Never in Git, logs, artifacts, issue text or command-line arguments.
 - **No Docker socket, no privileged containers**, images pinned by digest, containers removed after every run.
 - **Read-only against production.** No unattended mutation of Home Assistant, applications or the network. No reboots. Firewall or remote-access changes need fresh explicit homeowner approval.

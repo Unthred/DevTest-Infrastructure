@@ -93,7 +93,7 @@ Two rules, both enforced by the loader and again at use:
    - no reboot of the host or any machine;
    - no change to a production live-system target (for the homeowner's house: production Home Assistant) beyond read only;
    - no paid overage, credits or switch to paid API billing;
-   - no bypassing a review or merge gate (an author does not merge their own work; opposite-agent review stands);
+   - no bypassing a review or merge gate (an author does not merge their own work; independent review (D-024) stands);
    - no public exposure of a service, and no firewall or remote-access change;
    - no disclosure, creation or change of a credential.
 
@@ -188,7 +188,7 @@ A policy file with five entries, all at tiers 0 to 2. Each tier tag equals or ex
     },
     {
       "id": "install-reviewed-merged-commit",
-      "description": "Install a commit that is merged to main after opposite-agent review and green CI.",
+      "description": "Install a commit that is merged to main after independent review (D-024) and green CI.",
       "action": "commit.install",
       "tier": 2,
       "scope": {
