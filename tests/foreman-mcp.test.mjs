@@ -93,7 +93,9 @@ test('tools: each tool answers from the view, with the planner\'s queue, reasons
   const wb = await j('foreman_why_blocked', { kind: 'pr', number: 8 }); assert.equal(wb.found, true); assert.match(wb.queue[0].reason, /CI failing/); assert.equal(wb.needsYou[0].text, '#8 needs you');
   const wi = await j('foreman_why_blocked', { kind: 'issue', number: 9 }); assert.match(wi.excluded[0].reason, /blocked by #1/); assert.equal(wi.waits[0].waits, 'a prerequisite');
   const jobs = await j('foreman_jobs', { ref: 7 }); assert.equal(jobs.jobs[0].costUsdEquivalent, 0.5); assert.match(jobs.note, /not a cash charge/); assert.equal(jobs.jobs[0].transcriptAvailable, true); assert.ok(!('transcript' in jobs.jobs[0]));
-  assert.equal((await j('foreman_plan')).plannedActions[0].type, 'review');
+  assert.equal((await j('foreman_plan')).plannedActions[0].type, 'review'); assert.equal((await j('foreman_plan')).breakerHalt.halted, false);
+  const halted = createProtocol({ tools: toolsFor(() => ({ ...smallView(), breaker: { halt: { scope: 'every new job', cause: '@global' } } })) });
+  const hp = JSON.parse((await call(halted, 'foreman_plan')).result.content[0].text); assert.equal(hp.breakerHalt.halted, true); assert.match(hp.breakerHalt.caution, /would drop/);
   assert.equal((await j('foreman_host')).load.one, 1);
   const bad = await call(p, 'foreman_why_blocked', { kind: 'pr', number: -1 }); assert.equal(bad.result.isError, true);
 });
@@ -122,7 +124,8 @@ test('source: a silent dashboard times out, an oversized body is refused, a fail
 test('source: host figures come from /proc text and anything unreadable is null', () => {
   const files = { '/p/loadavg': '1.5 2.5 3.5 1/200 99\n', '/p/meminfo': 'MemTotal: 1024000 kB\nMemAvailable: 512000 kB\nMemFree: 1000 kB\nCached: 2000 kB\nSwapTotal: 2048000 kB\nSwapFree: 512000 kB\n' };
   const h = readHost({ proc: '/p', fsRead: f => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; } });
-  assert.deepEqual(h.load, { one: 1.5, five: 2.5, fifteen: 3.5 }); assert.equal(h.swapMb.usedPercent, 75); assert.equal(h.memoryMb.available, 500); assert.equal(h.memoryPressure, null);
+  assert.deepEqual(h.load, { one: 1.5, five: 2.5, fifteen: 3.5 }); assert.equal(h.swapMb.usedPercent, 75); assert.equal(h.memoryMb.available, 500); assert.ok(!('memoryPressure' in h));
+  files['/p/pressure/memory'] = 'some avg10=0.00\nfull avg10=0.00\n'; assert.equal(readHost({ proc: '/p', fsRead: f => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; } }).memoryPressure.length, 2);
 });
 
 // ---- the review order agrees with the planner

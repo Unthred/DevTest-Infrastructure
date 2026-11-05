@@ -53,10 +53,11 @@ export function readHost({ proc = '/proc', fsRead = fs.readFileSync } = {}) {
   const mb = k => (Number.isFinite(mem[k]) ? Math.round(mem[k] / 1024) : null);
   const swapTotal = mb('SwapTotal'), swapFree = mb('SwapFree');
   const psi = (read(`${proc}/pressure/memory`, fsRead) || '').split('\n').filter(Boolean).slice(0, 2);
-  return {
+  const out = {
     load: { one: Number(la[0]) || null, five: Number(la[1]) || null, fifteen: Number(la[2]) || null },
     memoryMb: { total: mb('MemTotal'), available: mb('MemAvailable'), free: mb('MemFree'), cached: mb('Cached') },
     swapMb: { total: swapTotal, free: swapFree, used: swapTotal != null && swapFree != null ? swapTotal - swapFree : null, usedPercent: swapTotal ? Math.round(((swapTotal - swapFree) / swapTotal) * 1000) / 10 : null },
-    memoryPressure: psi.length ? psi : null,
   };
+  if (psi.length) out.memoryPressure = psi;   // omitted when the kernel has no /proc/pressure (Tower's has none)
+  return out;
 }
