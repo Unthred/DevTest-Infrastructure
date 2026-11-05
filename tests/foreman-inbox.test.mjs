@@ -420,6 +420,17 @@ test('priority: reviews follow it among equals, but a starved review still goes 
   w.team.s.reviewSince[7] = 5000 - 48 * 3600000;
   assert.equal(w.team.reviewQueue('claude', prs)[0].pr.number, 7, 'starvation protection outranks priority');
 });
+test('priority: with two agents the planner order matches the shown order: a prioritised PR precedes a sole-reviewer PR, a starved one still leads', t => {
+  const w = world(t); w.team.ciState = () => 'green';
+  w.team.agents = () => [['claude'], ['codex']]; w.team.otherReviewers = (agent, pr) => pr.number === 31 ? [] : ['codex']; w.team.reviewRefusal = () => null;
+  fs.writeFileSync(path.join(w.dir, 'priority.json'), JSON.stringify({ items: ['pr:30'] }));
+  const prs = [openPr(30), openPr(31)], plan = () => { const rq = w.team.reviewQueue('claude', prs); return [rq.map(r => r.pr.number), w.team.reviewOrder('claude', rq.map(r => r.pr), rq).map(p => p.number)]; };
+  const [shown, planned] = plan(); assert.deepEqual(shown, [30, 31]); assert.deepEqual(planned, shown);
+  fs.writeFileSync(path.join(w.dir, 'priority.json'), JSON.stringify({ items: [] }));
+  assert.deepEqual(plan()[1], [31, 30], 'without a priority the sole-reviewer rule still leads');
+  fs.writeFileSync(path.join(w.dir, 'priority.json'), JSON.stringify({ items: ['pr:31'] })); w.team.s.reviewSince[30] = 5000 - 48 * 3600000;
+  assert.deepEqual(plan(), [[30, 31], [30, 31]], 'a starved review leads in both');
+});
 test('priority: the MCP tool accepts a priority item without a title, writes only to items/, and refuses a bad list', async t => {
   const dir = makeInbox(t), tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: createInbox({ dir }) });
   const ok = await tools.call('foreman_propose', PRIO(['pr:3'])); assert.equal(ok.isError, false);

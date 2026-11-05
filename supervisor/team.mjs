@@ -1138,10 +1138,13 @@ export class Team {
       && this.s.verdicts[key]?.reviewer !== n && (this.s.reviewAttempts[`${key}:${n}`] || 0) < this.c.limits.max_review_attempts);
   }
   // Issue #402: pull requests only `agent` can review come first, so a scarce provider spends its reviews where nobody else can.
-  reviewOrder(agent, prs) {
+  // Issue #628: a starved PR still leads and a prioritised PR comes before the sole-reviewer rule; the rest keep the #402 order.
+  reviewOrder(agent, prs, rows = []) {
     if (this.agents().length < 2) return prs;
+    const info = new Map(rows.map(r => [r.pr.number, r]));
+    const lead = p => info.get(p.number)?.starved ? 0 : 1, place = p => info.get(p.number)?.place ?? 1e9;
     const sole = new Map(prs.map(p => [p.number, SHA.test(p.headRefOid) && agentOfBranch(this.c, p.headRefName) && !p.isDraft && this.otherReviewers(agent, p).length === 0]));
-    return prs.map((p, i) => [p, i]).sort(([p, i], [q, j]) => (sole.get(p.number) ? 0 : 1) - (sole.get(q.number) ? 0 : 1) || i - j).map(([p]) => p);
+    return prs.map((p, i) => [p, i]).sort(([p, i], [q, j]) => (lead(p) - lead(q)) || (lead(p) === 0 ? i - j : 0) || (place(p) - place(q)) || (sole.get(p.number) ? 0 : 1) - (sole.get(q.number) ? 0 : 1) || i - j).map(([p]) => p);
   }
   // Issue #402: why this reviewer was chosen, for the dashboard. Null for second opinions, post-merge reviews and exception stages.
   reviewWhy(agent, act, prs) {
@@ -1340,7 +1343,7 @@ export class Team {
     // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
     const wtBusy = false;   // issue #344: every review has its own worktree and lease, so no review waits for another
     // review: any agent's PR whose head was written by another model, green CI, mergeable, no verdict yet on this exact head
-    for (const pr of rev && !wtBusy ? this.reviewOrder(agent, this.reviewQueue(agent, prs).map(q => q.pr)) : []) {   // issue #405: closest to merge first; issue #402: then PRs only this agent can review first
+    for (const pr of rev && !wtBusy ? this.reviewOrder(agent, ...(rq => [rq.map(q => q.pr), rq])(this.reviewQueue(agent, prs))) : []) {   // issue #405: closest to merge first; issue #402: then PRs only this agent can review first
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
