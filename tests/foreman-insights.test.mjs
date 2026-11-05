@@ -69,3 +69,36 @@ test('through the tools: both are listed read-only, take no arguments, and no se
   assert.equal(JSON.parse((await t.call('foreman_needs_you', {})).text).totalItems, 7);
   assert.ok(JSON.parse((await t.call('foreman_mismatches', {})).text).count >= 2);
 });
+
+// Issue #633: foreman_rebase_stats.
+import { rebaseStats } from '../foreman-mcp/insights.mjs';
+const H = 3600000;
+const merged = (n, openAt, mergedAt, rebaseRounds, reviewRounds) => ({ number: n, status: 'merged', mergedAt, rebaseRounds, reviewRounds, timeline: openAt === null ? [] : [{ at: openAt }, { at: mergedAt }] });
+
+test('rebase stats: per-pull-request averages and open-to-merge time, before and after a split', () => {
+  const v = { prs: [merged(1, 0, 10 * H, 4, 3), merged(2, 0, 20 * H, 2, 2), merged(3, 100 * H, 104 * H, 0, 1), merged(4, 100 * H, 108 * H, 1, 1), { number: 5, status: 'open', rebaseRounds: 9, reviewRounds: 9, timeline: [{ at: 1 }] }] };
+  const s = rebaseStats(v, { splitAt: new Date(50 * H).toISOString() });
+  assert.equal(s.all.pullRequests, 4, 'an open pull request is not counted');
+  assert.deepEqual([s.before.pullRequests, s.before.rebases.perPullRequest, s.before.reviews.perPullRequest, s.before.openToMergeHours.median], [2, 3, 2.5, 15]);
+  assert.deepEqual([s.after.pullRequests, s.after.rebases.perPullRequest, s.after.reviews.perPullRequest, s.after.openToMergeHours.mean], [2, 0.5, 1, 6]);
+  assert.equal(s.recent[0].pr, 4, 'newest merge first');
+});
+
+test('rebase stats: no merges gives nulls, a missing timestamp leaves out only the time, a bad splitAt is refused', () => {
+  assert.equal(rebaseStats({ prs: [] }).all.rebases.perPullRequest, null);
+  const s = rebaseStats({ prs: [merged(1, null, 5 * H, 2, 1)] });
+  assert.equal(s.all.pullRequests, 1); assert.equal(s.all.rebases.total, 2); assert.equal(s.all.openToMergeHours.measured, 0); assert.equal(s.all.openToMergeHours.median, null);
+  assert.throws(() => rebaseStats({ prs: [] }, { splitAt: 'not a date' }), /splitAt/);
+});
+
+test('rebase stats tool: read-only, bounded, and no secret-shaped text escapes (fixtures built at run time)', async () => {
+  const v = { prs: [{ ...merged(7, 0, H, 1, 1), name: `leak ${GH}` }, merged(8, 0, 2 * H, 0, 1)] };
+  const t = toolsFor(v), d = t.list().find(x => x.name === 'foreman_rebase_stats');
+  assert.equal(d.annotations.readOnlyHint, true);
+  const r = await t.call('foreman_rebase_stats', { splitAt: `${new Date(H).toISOString()} ${GH} ${PW}=${PWVAL}` });
+  assert.equal(r.isError, true, 'a splitAt that is not a date is refused');
+  for (const bad of [GH, PWVAL]) assert.ok(!r.text.includes(bad), 'the refusal does not echo secret-shaped input');
+  const ok = await t.call('foreman_rebase_stats', { limit: 1 }); assert.equal(ok.isError, false);
+  const j = JSON.parse(ok.text); assert.equal(j.recent.length, 1); assert.equal(j.all.pullRequests, 2);
+  for (const bad of [GH, PWVAL]) assert.ok(!ok.text.includes(bad));
+});

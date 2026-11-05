@@ -54,7 +54,7 @@ test('protocol: initialize negotiates the version, notifications get no reply, p
   assert.equal(p.initialized, true);
   assert.deepEqual((await rpc(p, { id: 3, method: 'ping' })).result, {});
   const list = (await rpc(p, { id: 4, method: 'tools/list' })).result.tools;
-  assert.deepEqual(list.map(x => x.name).sort(), ['foreman_discarded', 'foreman_host', 'foreman_job_outcome', 'foreman_jobs', 'foreman_mismatches', 'foreman_needs_you', 'foreman_plan', 'foreman_reports', 'foreman_review_order', 'foreman_status', 'foreman_why_blocked']);
+  assert.deepEqual(list.map(x => x.name).sort(), ['foreman_discarded', 'foreman_host', 'foreman_job_outcome', 'foreman_jobs', 'foreman_mismatches', 'foreman_needs_you', 'foreman_plan', 'foreman_rebase_stats', 'foreman_reports', 'foreman_review_order', 'foreman_status', 'foreman_why_blocked']);
   assert.ok(list.every(x => x.annotations.readOnlyHint === true && x.annotations.destructiveHint === false && x.inputSchema.type === 'object'));
 });
 test('protocol: a malformed line, a batch, a bad request, an unknown method and an unknown tool each get a JSON-RPC error and the server carries on', async () => {

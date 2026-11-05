@@ -3,7 +3,7 @@
 // directory and nothing else (issue #124); it cannot approve, run or change anything. No tool takes a lock, reads a transcript or calls a model.
 import { redact, redactDeep } from './redact.mjs';
 import { createInbox } from './inbox.mjs';
-import { mismatches, needsYouGroups } from './insights.mjs';
+import { mismatches, needsYouGroups, rebaseStats } from './insights.mjs';
 
 export const MAX_TEXT = 24000;      // characters of one tool result
 export const CALLS_PER_MINUTE = 30; // rate limit for all tools together
@@ -93,6 +93,8 @@ export function createTools({ source, readHost, getPath = null, reports = null, 
       run: () => withView(v => mismatches(v, now())) },
     { name: 'foreman_needs_you', description: 'The Needs you items grouped by cause, with the count, the pull requests or issues involved and the action asked for each group, so a cluster of one cause shows as one decision. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => needsYouGroups(v)) },
+    { name: 'foreman_rebase_stats', description: 'Rebases per merged pull request, reviews per merged pull request, and the time from first recorded activity to merge (mean and median), for all merged pull requests the view holds and, with splitAt (ISO date), before and after that time, so a change to the rebase policy can be measured. Read-only.', inputSchema: { type: 'object', properties: { splitAt: { type: 'string', maxLength: 40 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
+      run: args => withView(v => rebaseStats(v, { splitAt: args.splitAt === undefined ? null : String(args.splitAt), limit: args.limit })) },
     ...(inbox.enabled ? [
       { name: 'foreman_propose', description: 'Propose one item for the homeowner to approve on the Foreman dashboard. kind "prompt": a task to run as a supervised Foreman job (it cannot merge, approve reviews or widen its limits). kind "issue_draft": an issue to post as the homeowner. This only writes a proposal; nothing happens until the homeowner approves it, and you cannot approve it. Secret-shaped text, AI attribution text, oversized items and unknown fields are refused. Read the outcome with foreman_proposal_status.',
         inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['prompt', 'issue_draft'] }, title: { type: 'string', maxLength: 200 }, prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' }, body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' }, why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' } }, required: ['kind', 'title'], additionalProperties: false },

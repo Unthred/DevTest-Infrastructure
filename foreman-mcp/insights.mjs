@@ -51,3 +51,29 @@ export function mismatches(view, now = Date.now()) {
   }
   return { count: found.length, shown: Math.min(found.length, CAP), items: found.slice(0, CAP), kindsChecked: ['implemented-without-pr', 'finished-not-recorded', 'stale-label', 'hold-by-old-job'], note: 'Read from the dashboard view only; the remote is not checked. Empty means none of these four kinds is visible, not that everything is correct.' };
 }
+
+// Issue #633: how many rebases and reviews a merged pull request took, and how long from its first recorded activity to merge, so a change to the
+// rebase policy can be measured before and after. Pure reading of the view's merged pull requests. "Opened" is the earliest timeline entry the view
+// holds for the pull request (a job start or a verdict), a proxy: the view carries no GitHub creation time. A pull request with no timestamp
+// has no duration and is left out of the time figures only. `splitAt` (ISO time) divides merges into before and after.
+const median = xs => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const round1 = x => (x === null ? null : Math.round(x * 10) / 10);
+function summarise(rows) {
+  const avg = f => (rows.length ? round1(rows.reduce((a, r) => a + f(r), 0) / rows.length) : null);
+  const hours = rows.map(r => r.hours).filter(h => h !== null);
+  return { pullRequests: rows.length, rebases: { total: rows.reduce((a, r) => a + r.rebases, 0), perPullRequest: avg(r => r.rebases) }, reviews: { total: rows.reduce((a, r) => a + r.reviews, 0), perPullRequest: avg(r => r.reviews) },
+    openToMergeHours: { measured: hours.length, median: round1(median(hours)), mean: hours.length ? round1(hours.reduce((a, h) => a + h, 0) / hours.length) : null } };
+}
+export function rebaseStats(view, { splitAt = null, limit = 100 } = {}) {
+  const split = splitAt === null ? null : Date.parse(splitAt);
+  if (splitAt !== null && !Number.isFinite(split)) throw new Error('splitAt must be an ISO date or time');
+  const rows = (view.prs || []).filter(p => p.status === 'merged' && Number.isFinite(p.mergedAt)).map(p => {
+    const first = Math.min(...(p.timeline || []).map(t => t.at).filter(Number.isFinite));
+    return { pr: p.number, mergedAt: p.mergedAt, rebases: Number.isFinite(p.rebaseRounds) ? p.rebaseRounds : 0, reviews: Number.isFinite(p.reviewRounds) ? p.reviewRounds : 0, hours: Number.isFinite(first) && p.mergedAt >= first ? (p.mergedAt - first) / 3600000 : null };
+  }).sort((a, b) => b.mergedAt - a.mergedAt);
+  const out = { all: summarise(rows) };
+  if (split !== null) { out.before = summarise(rows.filter(r => r.mergedAt < split)); out.after = summarise(rows.filter(r => r.mergedAt >= split)); out.splitAt = iso(split); }
+  out.recent = rows.slice(0, Math.max(1, Math.min(200, Number(limit) || 100))).map(r => ({ pr: r.pr, mergedAt: iso(r.mergedAt), rebases: r.rebases, reviews: r.reviews, openToMergeHours: round1(r.hours) }));
+  out.note = 'Merged pull requests the view still holds. Rebases are the rebase attempts recorded; reviews are the verdicts recorded (a carried verdict counts as one). Open time is measured from the first recorded activity, not the GitHub creation time.';
+  return out;
+}
