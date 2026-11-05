@@ -46,3 +46,18 @@ test('the CLI reports a missing jobs or events directory without a stack trace',
   assert.match(r.stderr, /directory not found/);
   assert.doesNotMatch(r.stderr, /ENOENT|at /);
 });
+
+test('crash and network_error end a run and re-queue it; transient_rate_limit ends it without queue time', () => {
+  const jobs = [{ id: 'a', kind: 'fix' }];
+  const m = measure(jobs, [ev('a', 'created', 0), ev('a', 'started', 0), ev('a', 'crash', 10), ev('a', 'started', 25), ev('a', 'completed', 30)], 0, 60 * M);
+  assert.equal(m.implementerMinutesByKind.fix, 15);   // the crashed run ends at 10, it is not open until a later end
+  assert.equal(m.before.idleWithWorkQueuedMinutes, 15);   // waiting 10..25
+  const t = measure(jobs, [ev('a', 'created', 0), ev('a', 'started', 0), ev('a', 'transient_rate_limit', 10)], 0, 60 * M);
+  assert.equal(t.before.busyMinutes, 10);
+});
+
+test('a re-queued job not restarted by the window end is queued only when its current status is queued', () => {
+  const events = [ev('a', 'created', 0), ev('a', 'started', 0), ev('a', 'incomplete', 10)];
+  assert.equal(measure([{ id: 'a', kind: 'fix', status: 'queued' }], events, 0, 30 * M).before.idleWithWorkQueuedMinutes, 20);
+  assert.equal(measure([{ id: 'a', kind: 'fix', status: 'failed' }], events, 0, 30 * M).before.idleWithWorkQueuedMinutes, 0);
+});

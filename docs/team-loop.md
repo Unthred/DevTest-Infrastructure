@@ -195,7 +195,7 @@ Window 3 Nov 2026, 14:00 to 20:00 UTC (= UK), 360 minutes, run against the live 
 | implementer idle | 104.2 min | 179.2 min |
 | idle with implementer work queued | 7.2 min | 0.4 min |
 
-Implementer-job minutes by kind: fix 65.3, cifix 67.2 (fix plus cifix 51.8%), rebase 74.9 (29.3%), implement 48.4 (new work 18.9%). The idle-with-queue figure is small in both views (the before figure counts jobs re-queued after an incomplete or recovered attempt, since the first version of the tool missed them) because jobs that could start were mostly held by the overall cap and dependencies, not the implementer slot alone; the gain is that 74.9 minutes of rebase work no longer occupy the implementer slot, so new work is not made to wait behind it. Verified working after deployment is a separate state and has not been measured yet.
+Implementer-job minutes by kind: fix 65.3, cifix 67.2 (fix plus cifix 51.8%), rebase 74.9 (29.3%), implement 48.4 (new work 18.9%). The before idle-with-queue figure of 7.2 minutes is almost entirely rebases waiting (decomposed on the live records: rebase 11.45, fix 0.33, cifix 0.01, implement 0.04 minutes, summed per kind so the kinds overlap in time); the after figure is low because rebases no longer wait on the implementer slot, so 7.2 to 0.4 is the effect of moving rebases, not an improvement to new work, whose own wait is small in both views (held mostly by the overall cap and dependencies); the gain is that 74.9 minutes of rebase work no longer occupy the implementer slot, so new work is not made to wait behind it. Verified working after deployment is a separate state and has not been measured yet.
 
 ## Circuit breaker for wasted usage (issue #549)
 
