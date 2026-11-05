@@ -280,6 +280,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: A public or LAN listener for the server (a new port); sharing the dashboard's process or the root account; a shell login with a command filter; exposing any write action in this entry.
 - Superseded-by: none
 
+## D-031 — The overseer inbox: one narrow write from the MCP server, approved on the dashboard
+- Status: agent-proposal
+- Date: 2026-11-05
+- Source: issue #124; the homeowner's approval comment on this issue: https://github.com/Unthred/DevTest-Infrastructure/issues/124#issuecomment-6649903462; extends D-030
+- Decision: The `foreman-mcp` server (D-030) gains one narrow write: `foreman_propose` writes a proposal file into an inbox `items/` directory owned by the `foreman-mcp` account, and nowhere else (the launcher's Node permission model allows writes to that directory only); `foreman_proposal_status` reads back a status file that only Foreman writes. Only two kinds are accepted: `prompt` (run as one supervised Foreman job) and `issue_draft` (post as the homeowner). Foreman treats every item as untrusted: shape, size limits, a cap on pending items, a refusal of secret-shaped and AI-attribution text, and a content hash that must still match at approval and at use. Nothing runs without an approval, and approval is possible only through the dashboard's write route (D-029: Host, Origin, secret proof, cooldown), never through MCP. An approved prompt is an ordinary job: role slots, allowance, breaker, usage-limit and model rules apply, it never writes as Opus (D-026 and issue #368), and it cannot merge, approve, write a verdict or bypass a review gate. An approved issue draft is posted once (a marker is recorded and looked up before posting), redacted, with no attribution. Every proposal and decision is logged with time, kind and a hash of the content, never the content. No new listening port and no network route. Config changes and standing permissions (#102) are out of scope.
+- Rationale: Every overseer prompt was pasted into a Tower session by hand. A queue that the homeowner approves with one click removes the paste without giving the overseer any ability to act on its own.
+- Rejected: Approval through MCP or by a file the MCP account can write; running an item without approval; a second write path into Foreman state; free-form item kinds; a new port for the inbox.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.

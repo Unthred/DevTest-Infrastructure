@@ -116,7 +116,7 @@ export function validateSpec(spec) {
   const handover = spec.handover ? path.resolve(worktree, spec.handover) : null;
   if (handover && !handover.startsWith(worktree + path.sep)) throw new SupervisorError('handover must be in worktree');
   const kind = spec.kind ?? 'implement';
-  if (!['implement', 'continue', 'review', 'fix', 'rebase', 'cifix', 'split'].includes(kind)) throw new SupervisorError('invalid job kind');
+  if (!['implement', 'continue', 'review', 'fix', 'rebase', 'cifix', 'split', 'inbox'].includes(kind)) throw new SupervisorError('invalid job kind');
   const access = spec.access ?? 'standard';
   if (!['standard', 'full'].includes(access)) throw new SupervisorError('invalid access mode');
   if (access === 'full') {
@@ -266,7 +266,7 @@ export function checkpoint(root, job, clock = realClock) {
   const status = git(job.worktree, 'status', '--short', '--untracked-files=no').split('\n').filter(Boolean).slice(0, 80);
   let issueState = job.checkpoint?.issueState || 'unknown';
   let issueCheckedAt = job.checkpoint?.issueCheckedAt || 0;
-  if (clock.now() - issueCheckedAt >= 300000 && git(job.worktree, 'remote').split('\n').includes('origin')) {
+  if (clock.now() - issueCheckedAt >= 300000 && job.kind !== 'inbox' && git(job.worktree, 'remote').split('\n').includes('origin')) {   // an inbox job (issue #124) has no real issue: its number is a unique placeholder
     const result = spawnSync('gh', ['issue', 'view', String(job.issue), '--json', 'state'], { cwd: job.worktree, encoding: 'utf8', timeout: 10000, maxBuffer: 4096 });
     if (result.status === 0) {
       try { issueState = JSON.parse(result.stdout).state || 'unknown'; issueCheckedAt = clock.now(); } catch { /* retain prior state */ }
@@ -293,7 +293,7 @@ export function checkpoint(root, job, clock = realClock) {
   job.lastProgress = clock.now(); saveJob(root, job, clock); event(root, job, 'checkpoint', clock);
 }
 export function prompt(job, resume = false, seed = null) {
-  let head = `Selected launcher role: ${job.role}. Supervised issue #${job.issue} in ${job.worktree}. Approved scope: ${job.scope}. Allowed actions: ${job.allowedActions.join(', ')}. Preserve project and role governance. Do not purchase credits, switch to paid API billing, deploy, merge, reboot or change credentials without separate authorization.`;
+  let head = `Selected launcher role: ${job.role}. Supervised ${job.kind === 'inbox' ? 'overseer task (approved by the homeowner on the dashboard)' : `issue #${job.issue}`} in ${job.worktree}. Approved scope: ${job.scope}. Allowed actions: ${job.allowedActions.join(', ')}. Preserve project and role governance. Do not purchase credits, switch to paid API billing, deploy, merge, reboot or change credentials without separate authorization.`;
   // Observed 2026-10-30: a supervised Claude Bash tool starts in /root (the shell profile changes directory), so a bare
   // `node --test` found no tests. Say so explicitly instead of assuming the process cwd carries over.
   head += ` Your shell may start in another directory: begin every command with cd ${JSON.stringify(job.worktree)}.`;

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// foreman-mcp: a read-only stdio MCP server for the overseer. Reads the local dashboard view and /proc; writes only its own call log.
-// Configuration: FOREMAN_MCP_CONFIG (a JSON file: { "viewUrl": "http://HOST:PORT/api/view.json", "logFile": "/path/calls.log" }); both can also be
-// given as FOREMAN_MCP_VIEW_URL and FOREMAN_MCP_LOG. Nothing but protocol is ever written to stdout.
+// foreman-mcp: a stdio MCP server for the overseer. Reads the local dashboard view and /proc; writes only its own call log and, through
+// foreman_propose, proposal files in the inbox directory (issue #124).
+// Configuration: FOREMAN_MCP_CONFIG (a JSON file: { "viewUrl": "http://HOST:PORT/api/view.json", "logFile": "/path/calls.log", "inboxDir": "/path/inbox" }); each can also be
+// given as FOREMAN_MCP_VIEW_URL, FOREMAN_MCP_LOG and FOREMAN_MCP_INBOX. Nothing but protocol is ever written to stdout.
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { createProtocol } from './protocol.mjs';
@@ -10,16 +11,17 @@ import { createViewSource, readHost } from './source.mjs';
 import { createCallLog } from './calllog.mjs';
 import { createReports } from './reports.mjs';
 import { redact } from './redact.mjs';
+import { createInbox } from './inbox.mjs';
 
 function loadConfig(env = process.env) {
   let cfg = {};
   if (env.FOREMAN_MCP_CONFIG) { try { cfg = JSON.parse(fs.readFileSync(env.FOREMAN_MCP_CONFIG, 'utf8')); } catch { cfg = {}; } }
-  return { viewUrl: env.FOREMAN_MCP_VIEW_URL || cfg.viewUrl || null, logFile: env.FOREMAN_MCP_LOG || cfg.logFile || null, reportsDir: env.FOREMAN_MCP_REPORTS || cfg.reportsDir || null };
+  return { viewUrl: env.FOREMAN_MCP_VIEW_URL || cfg.viewUrl || null, logFile: env.FOREMAN_MCP_LOG || cfg.logFile || null, reportsDir: env.FOREMAN_MCP_REPORTS || cfg.reportsDir || null, inboxDir: env.FOREMAN_MCP_INBOX || cfg.inboxDir || null };
 }
 
 export function buildServer(config) {
   const callLog = createCallLog(config.logFile);
-  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost, reports: createReports(config.reportsDir, { redact }) });
+  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost, reports: createReports(config.reportsDir, { redact }), inbox: createInbox({ dir: config.inboxDir }) });
   return createProtocol({ tools, log: e => callLog.record(e) });
 }
 

@@ -127,7 +127,7 @@ export function evaluate(s, limits, now) {
 // Does a halt stop this action? Merges are not jobs and always go ahead. Returns the halt or null.
 export function blocks(s, limits, act) {
   if (!limits.enabled || !s) return null;
-  const type = typeOfKind(act.type || '');
+  const type = typeOfKind(act.type === 'inbox' ? 'implement' : act.type || '');   // an approved overseer prompt (issue #124) is held like any new implement job
   if (type === 'merge') return null;
   if (s.global) return { ...s.global, cause: '@global', scope: 'all new jobs' };
   const fixable = ['implement', 'continue'].includes(type) && (limits.fix_issues || []).includes(act.issue);

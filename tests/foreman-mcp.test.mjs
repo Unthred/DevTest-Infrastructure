@@ -46,7 +46,7 @@ const rpc = (p, o) => p.handleLine(JSON.stringify({ jsonrpc: '2.0', ...o }));
 const call = async (p, name, args = {}) => (await rpc(p, { id: 1, method: 'tools/call', params: { name, arguments: args } }));
 
 // ---- protocol
-test('protocol: initialize negotiates the version, notifications get no reply, ping works, tools/list names seven read-only tools', async () => {
+test('protocol: initialize negotiates the version, notifications get no reply, ping works, tools/list names seven read-only tools (no inbox configured)', async () => {
   const p = createProtocol({ tools: toolsFor(smallView) });
   for (const v of SUPPORTED) assert.equal((await rpc(p, { id: 1, method: 'initialize', params: { protocolVersion: v } })).result.protocolVersion, v);
   assert.equal((await rpc(p, { id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } })).result.protocolVersion, SUPPORTED[0], 'an unknown version gets the newest we support');
@@ -154,6 +154,8 @@ test('read-only: the sources contain no file-writing, process-spawning or Forema
   for (const f of fs.readdirSync(mcpDir).filter(x => x.endsWith('.mjs'))) {
     const src = fs.readFileSync(path.join(mcpDir, f), 'utf8').replace(/\/\/.*$/gm, '');
     if (f === 'calllog.mjs') { assert.deepEqual([...new Set(src.match(/\b(appendFileSync|mkdirSync|renameSync)\b/g))].sort(), ['appendFileSync', 'mkdirSync', 'renameSync']); assert.ok(!/writeFile|createWriteStream|rmSync|unlink|chmod/.test(src)); continue; }
+    // issue #124: the inbox is the one other writer. It may only create a new file (flag wx) in <inbox>/items; no other write call, no spawn, no Foreman import.
+    if (f === 'inbox.mjs') { assert.deepEqual([...new Set(src.match(/\b(writeFile(Sync)?|appendFile(Sync)?|mkdir(Sync)?|rm(Sync)?|rename(Sync)?|unlink(Sync)?|copyFile(Sync)?|chmod(Sync)?|createWriteStream)\b/g))], ['writeFileSync']); assert.equal(src.match(/writeFileSync\(/g).length, 1); assert.match(src, /writeFileSync\(file, .*flag: 'wx'/); assert.match(src, /file = path\.join\(items, /); assert.ok(!/child_process|spawn|supervisor\//.test(src)); continue; }
     assert.ok(!FORBIDDEN.test(src), `${f} must not write files, spawn processes or import Foreman code`);
   }
 });

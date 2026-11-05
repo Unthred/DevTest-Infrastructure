@@ -22,7 +22,7 @@ export function createProtocol({ tools, log = () => {} }) {
       if (method === 'initialize') {
         const asked = params?.protocolVersion;
         return ok(id, { protocolVersion: SUPPORTED.includes(asked) ? asked : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: SERVER_INFO,
-          instructions: 'Read-only access to Foreman state. Cost figures are usage-equivalent estimates. No tool changes anything.' });
+          instructions: 'Read access to Foreman state, plus foreman_propose, which only writes a proposal for the homeowner to approve on the dashboard. Cost figures are usage-equivalent estimates. No tool changes Foreman state or can approve anything.' });
       }
       if (method === 'tools/list') return ok(id, { tools: tools.list() });
       if (method === 'tools/call') {
