@@ -2,13 +2,15 @@
 // the five scripts and missed legend.mjs): stage EVERY file the dashboard serves, and derive the page list from the routes so no
 // dashboard route is left out. Pure functions plus one copy step; no browser, no Docker.
 import fs from 'node:fs';
+import { createSampler } from '../../supervisor/procsample.mjs';
+import { readJobs } from '../../supervisor/dashdata.mjs';
 import path from 'node:path';
 import { STATIC } from '../../supervisor/dashserver.mjs';
 import { NAV, matchRoute } from '../../supervisor/dashrender.mjs';
 import { readTranscript } from '../../supervisor/transcript.mjs';
 import { listRuns, readRun } from '../../supervisor/evidence.mjs';
 import { buildDiagnostics } from '../../supervisor/diagnostics.mjs';
-import { readJobs, readSnapshots, readTeamState } from '../../supervisor/dashdata.mjs';
+import { readSnapshots, readTeamState } from '../../supervisor/dashdata.mjs';
 
 const dashui = new URL('../../supervisor/dashui/', import.meta.url).pathname;
 
@@ -42,11 +44,12 @@ const slug = s => String(s).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(
 // One entry per dashboard route that the view (and the evidence folder) can fill: { name, path, route, data? }. `name` is what the
 // script's page argument selects. Detail routes use the first item the view has.
 export function pagePlan(view, { root, evidenceRoot, recorderDir = null } = {}) {
+  let procSample = null;   // one live reading shared by the processes pages of this capture (issue #568)
   const entries = NAV.map(([page, href]) => ({ name: page, path: href }));
-  entries.push({ name: 'timeline', path: '/activity/timeline' }, { name: 'ticks', path: '/supervisor/ticks' }, { name: 'upgrades', path: '/supervisor/upgrades' }, { name: 'evidence', path: '/evidence' });
+  entries.push({ name: 'timeline', path: '/activity/timeline' }, { name: 'ticks', path: '/supervisor/ticks' }, { name: 'upgrades', path: '/supervisor/upgrades' }, { name: 'evidence', path: '/evidence' }, { name: 'processes', path: '/system/processes' });
   const first = obj => Object.keys(obj || {})[0];
   const agent = (view.agents || [])[0]?.name, pr = first(view.refs?.pr), issue = first(view.refs?.issue), jobKey = first(view.refs?.job), watch = (view.jobs || []).find(j => j.fullId)?.fullId;
-  if (agent) entries.push({ name: `agent-${slug(agent)}`, path: `/agents/${agent}` });
+  if (agent) entries.push({ name: `agent-${slug(agent)}`, path: `/agents/${agent}` }, { name: `processes-${slug(agent)}`, path: `/system/processes/${agent}` });
   if (pr) entries.push({ name: `pr-${slug(pr)}`, path: `/work/pr/${pr}` });
   if (issue) entries.push({ name: `issue-${slug(issue)}`, path: `/work/issue/${issue}` });
   if (jobKey) entries.push({ name: `job-${slug(jobKey)}`, path: `/work/job/${jobKey}` });
@@ -55,9 +58,10 @@ export function pagePlan(view, { root, evidenceRoot, recorderDir = null } = {}) 
   if (run) entries.push({ name: 'evidence-run', path: `/evidence/${run}` });
   return entries.map(e => {
     const route = matchRoute(e.path);
+    const sample = route.page === 'processes' ? (procSample ||= createSampler({ readJobs: () => (root ? readJobs(root) : []) }).get()) : null;
     const data = route.page === 'evidence-run' ? readRun(evidenceRoot, route.id) : null;
     const extra = route.page === 'diagnostics' ? { data: buildDiagnostics({ jobs: root ? readJobs(root) : [], snapshots: root ? readSnapshots(root) : [], verdicts: root ? readTeamState(root)?.verdicts || {} : {}, agents: Object.fromEntries((view.agents || []).map(a => [a.name, a.provider || a.name])), now: view.generatedAt, recorderDir }) } : route.page === 'watch' ? { transcript: readTranscript(root, route.id), job: (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'jobs', `${route.id}.json`), 'utf8')); } catch { return null; } })(), runningNow: view.generatedAt } : route.page === 'evidence' ? { data: listRuns(evidenceRoot || '/nonexistent') } : data ? { data } : {};
-    return { ...e, route: { ...route, ...extra } };
+    return { ...e, route: { ...route, ...extra, ...(sample ? { sample } : {}) } };
   });
 }
 

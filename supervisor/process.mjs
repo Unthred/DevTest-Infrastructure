@@ -34,7 +34,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     } catch { /* the transcript is best effort */ }
   };
   const argv = adapter.command(config, job, session.resume);
-  const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: { ...safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), AI_SUPERVISOR_JOB: job.id }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+  const child = spawn(argv[0], argv.slice(1), { cwd: job.worktree, env: { ...safeEnvironment(process.env, config.manifest.launch.env_allowlist || []), AI_SUPERVISOR_JOB: job.id, DEVTEST_JOB_ID: String(job.id) }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });   // inherited by every descendant, so the dashboard can attribute a process reparented to init (issue #568)
   let observed = null, resetAt = null, resetSource = 'none', verified = false;
   const buffers = { stdout: '', stderr: '' };
   const nonFatal = new Set(['transient_rate_limit', 'network_error']);
@@ -64,7 +64,9 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   const onTerm = () => signalChild('SIGTERM');
   process.on('SIGUSR1', onInt); process.on('SIGTERM', onTerm);
   // Publish the child only after the worker can accept a stop/pause signal.
-  job.childPid = child.pid; job.childStart = processInfo(child.pid)?.start || null; saveJob(root, job, clock);
+  job.childPid = child.pid; job.childStart = processInfo(child.pid)?.start || null;
+  job.childGroup = child.pid; job.childEndedAt = null;   // kept after the job ends so the dashboard can flag leftovers (issue #568)
+  saveJob(root, job, clock);
   // A child that exits before reading its prompt closes the pipe; that is an exit status, not a supervisor crash.
   child.stdin.on('error', () => {});
   child.stdin.end(prompt(job, job.attempts > 1, job.attempts > 1 && !session.resume ? sessionSeed(job) : null));
@@ -145,7 +147,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     }
     const current = readJob(root, job.id);
     if (current.status === 'paused_manual' || current.status === 'stopped') job.status = current.status;
-    job.childPid = null; job.childStart = null; saveJob(root, job, clock);
+    job.childPid = null; job.childStart = null; job.childEndedAt = clock.now(); saveJob(root, job, clock);
     if (stopping) return { code: 1, event: checkpointFailed ? 'checkpoint_failed' : 'manual_stop' };
     return { code: result.code, event: observed || result.event, resetAt, resetSource, verified };
   } finally {

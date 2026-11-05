@@ -343,3 +343,11 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .whist{margin:var(--sp1) 0;padding-left:1.1em;font-size:.85em}.watch-sentence{margin:var(--sp1) 0}
 @media (max-width:700px){.wsteps{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .diag-sparks{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:var(--sp2);margin-bottom:var(--sp2)}.diag-spark svg.spark{width:100%;height:36px;display:block}
+
+/* ---- live processes (issue #568) */
+.proc-note{margin:0 0 var(--sp2);font-size:var(--fs-sm,.9rem)}
+.proc-note.sev-warning,.proc-note.sev-action{padding:var(--sp1) var(--sp2);border-radius:6px;border:1px solid var(--line)}
+.proc-table tr.proc-total td{font-weight:600;border-top:2px solid var(--line)}
+.proc-table tr.proc-left td{background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent)}
+[data-procs].stale .proc-body,.proc-body[data-state=stale],.proc-body[data-state=failed]{opacity:.55}
+.proc-table .spark{width:96px;height:24px}
