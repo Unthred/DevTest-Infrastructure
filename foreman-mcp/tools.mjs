@@ -3,6 +3,7 @@
 // directory and nothing else (issue #124); it cannot approve, run or change anything. No tool takes a lock, reads a transcript or calls a model.
 import { redact, redactDeep } from './redact.mjs';
 import { createInbox } from './inbox.mjs';
+import { mismatches, needsYouGroups } from './insights.mjs';
 
 export const MAX_TEXT = 24000;      // characters of one tool result
 export const CALLS_PER_MINUTE = 30; // rate limit for all tools together
@@ -88,6 +89,10 @@ export function createTools({ source, readHost, getPath = null, reports = null, 
       } },
     { name: 'foreman_discarded', description: 'Every result Foreman threw away in the last 7 days (a review refused at ingestion, a review that ended with no verdict, a job that failed after spending), newest first, with the cause and the cost (usage equivalent, not a charge). Optional limit (default 50).', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
       run: async args => { if (!getPath) throw new Error('discarded results are not available on this server'); const out = await getPath('/api/discarded.json'); const limit = num(args.limit, 1, 200, 50); return { ...out, shown: Math.min(out.items?.length || 0, limit), items: (out.items || []).slice(0, limit) }; } },
+    { name: 'foreman_mismatches', description: 'Records that disagree with reality, read from the dashboard view: an issue recorded as implemented with no pull request or job, a review that finished with no verdict recorded, stale needs-homeowner labels, and holds kept by old jobs. Each has the evidence. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      run: () => withView(v => mismatches(v, now())) },
+    { name: 'foreman_needs_you', description: 'The Needs you items grouped by cause, with the count, the pull requests or issues involved and the action asked for each group, so a cluster of one cause shows as one decision. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      run: () => withView(v => needsYouGroups(v)) },
     ...(inbox.enabled ? [
       { name: 'foreman_propose', description: 'Propose one item for the homeowner to approve on the Foreman dashboard. kind "prompt": a task to run as a supervised Foreman job (it cannot merge, approve reviews or widen its limits). kind "issue_draft": an issue to post as the homeowner. This only writes a proposal; nothing happens until the homeowner approves it, and you cannot approve it. Secret-shaped text, AI attribution text, oversized items and unknown fields are refused. Read the outcome with foreman_proposal_status.',
         inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['prompt', 'issue_draft'] }, title: { type: 'string', maxLength: 200 }, prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' }, body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' }, why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' } }, required: ['kind', 'title'], additionalProperties: false },

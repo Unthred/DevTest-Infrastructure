@@ -46,7 +46,7 @@ const rpc = (p, o) => p.handleLine(JSON.stringify({ jsonrpc: '2.0', ...o }));
 const call = async (p, name, args = {}) => (await rpc(p, { id: 1, method: 'tools/call', params: { name, arguments: args } }));
 
 // ---- protocol
-test('protocol: initialize negotiates the version, notifications get no reply, ping works, tools/list names nine read-only tools (no inbox configured)', async () => {
+test('protocol: initialize negotiates the version, notifications get no reply, ping works, tools/list names eleven read-only tools (no inbox configured)', async () => {
   const p = createProtocol({ tools: toolsFor(smallView) });
   for (const v of SUPPORTED) assert.equal((await rpc(p, { id: 1, method: 'initialize', params: { protocolVersion: v } })).result.protocolVersion, v);
   assert.equal((await rpc(p, { id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } })).result.protocolVersion, SUPPORTED[0], 'an unknown version gets the newest we support');
@@ -54,7 +54,7 @@ test('protocol: initialize negotiates the version, notifications get no reply, p
   assert.equal(p.initialized, true);
   assert.deepEqual((await rpc(p, { id: 3, method: 'ping' })).result, {});
   const list = (await rpc(p, { id: 4, method: 'tools/list' })).result.tools;
-  assert.deepEqual(list.map(x => x.name).sort(), ['foreman_discarded', 'foreman_host', 'foreman_job_outcome', 'foreman_jobs', 'foreman_plan', 'foreman_reports', 'foreman_review_order', 'foreman_status', 'foreman_why_blocked']);
+  assert.deepEqual(list.map(x => x.name).sort(), ['foreman_discarded', 'foreman_host', 'foreman_job_outcome', 'foreman_jobs', 'foreman_mismatches', 'foreman_needs_you', 'foreman_plan', 'foreman_reports', 'foreman_review_order', 'foreman_status', 'foreman_why_blocked']);
   assert.ok(list.every(x => x.annotations.readOnlyHint === true && x.annotations.destructiveHint === false && x.inputSchema.type === 'object'));
 });
 test('protocol: a malformed line, a batch, a bad request, an unknown method and an unknown tool each get a JSON-RPC error and the server carries on', async () => {
