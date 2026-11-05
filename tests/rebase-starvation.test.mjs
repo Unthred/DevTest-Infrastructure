@@ -198,6 +198,7 @@ test('#326 a PR refused by writeBlock does not hold the next rebase', async t =>
 test('#633 a conflicting PR waits while a green unreviewed PR is ahead; a lone conflicting PR rebases', async t => {
   const ahead = pr(302, H(2), { mergeable: 'MERGEABLE' });
   const team = world(t, [pr(301, H(1)), ahead]);
+  team.otherReviewers = () => ['codex'];
   assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [], 'deferred: 302 is next to review');
   const lone = world(t, [pr(301, H(1))]);
   assert.deepEqual((await lone.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
