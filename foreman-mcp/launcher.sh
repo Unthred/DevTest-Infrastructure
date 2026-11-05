@@ -5,5 +5,5 @@
 DIR=$(dirname "$0")
 . "$DIR/launcher.env" 2>/dev/null || exit 70
 export FOREMAN_MCP_CONFIG="$CONFIG_FILE"
-exec "$NODE_BIN" --permission --allow-fs-read="$DIR" --allow-fs-read=/proc --allow-fs-read="$CONFIG_FILE" --allow-fs-read="$LOG_DIR" --allow-fs-write="$LOG_DIR" \
+exec "$NODE_BIN" --permission --allow-fs-read="$DIR" --allow-fs-read=/proc --allow-fs-read="$CONFIG_FILE" --allow-fs-read="$LOG_DIR" ${REPORTS_DIR:+--allow-fs-read="$REPORTS_DIR"} --allow-fs-write="$LOG_DIR" \
   "$DIR/server.mjs"

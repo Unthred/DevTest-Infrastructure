@@ -8,16 +8,17 @@ import { createProtocol } from './protocol.mjs';
 import { createTools } from './tools.mjs';
 import { createViewSource, readHost } from './source.mjs';
 import { createCallLog } from './calllog.mjs';
+import { createReports } from './reports.mjs';
 
 function loadConfig(env = process.env) {
   let cfg = {};
   if (env.FOREMAN_MCP_CONFIG) { try { cfg = JSON.parse(fs.readFileSync(env.FOREMAN_MCP_CONFIG, 'utf8')); } catch { cfg = {}; } }
-  return { viewUrl: env.FOREMAN_MCP_VIEW_URL || cfg.viewUrl || null, logFile: env.FOREMAN_MCP_LOG || cfg.logFile || null };
+  return { viewUrl: env.FOREMAN_MCP_VIEW_URL || cfg.viewUrl || null, logFile: env.FOREMAN_MCP_LOG || cfg.logFile || null, reportsDir: env.FOREMAN_MCP_REPORTS || cfg.reportsDir || null };
 }
 
 export function buildServer(config) {
   const callLog = createCallLog(config.logFile);
-  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost });
+  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost, reports: createReports(config.reportsDir) });
   return createProtocol({ tools, log: e => callLog.record(e) });
 }
 
