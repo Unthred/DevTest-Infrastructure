@@ -55,7 +55,8 @@ Fix-round re-reviews are diff-scoped (#45). When the reviewer is low (not `norma
 | `high_water_min_hours` | `24` | … with more than this many hours to the reset makes it `reviews_only` |
 | `recent_hours` | `24` | readings used for the recent rate |
 | `recent_min_window_hours` | `12` | issue #627: no forecast can make an agent `reviews_only` until this many hours of the weekly window have passed (the first hours after a reset are a burst, not a rate); until then only actual use against `high_water`, and `exhausted_at`, apply, and the dashboard says so |
-| `recent_min_samples` | `12` | issue #627: readings needed inside `recent_hours` before the recent rate is used; with fewer, the window average alone judges || `exhausted_at` | `0.995` | a window at or above this is used up (`waiting`) |
+| `recent_min_samples` | `12` | issue #627: readings needed inside `recent_hours` before the recent rate is used; with fewer, the window average alone judges |
+| `exhausted_at` | `0.995` | a window at or above this is used up (`waiting`) |
 | `probe` | `true` | allow allowance probes (below) |
 | `probe_age_hours` | `2` | a held agent whose newest reading is older than this is probed |
 | `probe_interval_minutes` | `60` | at most one probe attempt per agent in this time, successful or not |

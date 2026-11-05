@@ -9,6 +9,7 @@
 //   waiting       nothing starts: a window is used up, or the provider reports paid overage in use. Waits for the reset.
 // Paid overage and credits are never enabled or relied on: an agent that has nothing left waits.
 import { SupervisorError } from './core.mjs';
+import { redact } from './redact.mjs';
 
 export const HOUR = 3600000;
 export const DEFAULT_BUDGET = { enabled: true, projected_limit: 1, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, recent_min_window_hours: 12, recent_min_samples: 12, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
@@ -152,7 +153,7 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   // Issue #627: a short burst must not hold an agent for the week. The checks above found the agent below the high-water mark; once the forecast is
   // also clearly back under the limit (or too early in the window to be judged) the latch lets go by itself, with no probe.
   if (latched?.mode === 'reviews_only' && sameReset(latched.until, weekly.resetsAt) && (out.early || out.projected <= settings.projected_limit * LATCH_RELEASE_FRACTION)) return { ...out, reason: `${fig}; the reviews-only latch released itself: the forecast is back under the limit` };
-  if (latched?.mode === 'reviews_only' && sameReset(latched.until, weekly.resetsAt)) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${latched.reason || fig}; held until the weekly reset` };
+  if (latched?.mode === 'reviews_only' && sameReset(latched.until, weekly.resetsAt)) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${redact(latched.reason, 300) || fig}; held until the weekly reset` };
   return { ...out, reason: fig };
 }
 
@@ -174,5 +175,5 @@ export const MODE_LABEL = { normal: 'normal', reviews_only: 'reviews only', wait
 // "codex: reviews only until Wed 07:18 — weekly 92%, projected 184% at reset (3.5 days left, window average): …"
 export function modeLine(agent, a, tz) {
   const when = a.until ? ` until ${new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(a.until)).replace(',', '')}` : '';
-  return `${agent}: ${MODE_LABEL[a.mode]}${a.mode === 'normal' ? '' : when}${a.reason ? ` — ${a.reason}` : ''}`;
+  return `${agent}: ${MODE_LABEL[a.mode]}${a.mode === 'normal' ? '' : when}${a.reason ? ` — ${redact(a.reason, 300)}` : ''}`;
 }

@@ -523,6 +523,14 @@ test('budget #627: the latch lets go by itself once the forecast is back under t
   const near = assessAgent({ allowance: claudeAt(now, 0.11), history: [], now, latched, settings: { ...DEFAULT_BUDGET, projected_limit: 0.5, recent_min_window_hours: 0 } });
   assert.equal(near.mode, 'reviews_only');
 });
+test('budget #627: a token-shaped value in a latched reason does not reach the reason or the mode line', () => {
+  const secret = ['gh', 'p_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('');   // assembled at run time
+  const now = R0 + 40 * HOUR, hot = []; for (let t = now - 24 * HOUR; t <= now; t += 15 * 60000) hot.push({ at: t, used: 0.01 * ((t - (now - 24 * HOUR)) / HOUR), resetsAt: R1 });
+  const a = assessAgent({ allowance: claudeAt(now, 0.24), history: hot, now, latched: { mode: 'reviews_only', since: R0, until: R1, reason: `weekly 8%, token ${secret}` } });
+  assert.equal(a.mode, 'reviews_only');
+  assert.ok(!a.reason.includes(secret));
+  assert.ok(!modeLine('claude', { ...a, reason: `x token ${secret}` }, 'UTC').includes(secret));
+});
 test('budget #627: the new settings are validated and overridable', () => {
   validateBudgetConfig({ recent_min_window_hours: 6, recent_min_samples: 8 }, ['claude']);
   for (const bad of [{ recent_min_window_hours: -1 }, { recent_min_window_hours: 200 }, { recent_min_samples: 1 }, { recent_min_samples: 'x' }]) assert.throws(() => validateBudgetConfig(bad, ['claude']), /invalid budget config/, JSON.stringify(bad));
