@@ -324,6 +324,8 @@ export function jobSummary(j) {
 export const jobPr = j => (j ? (Number.isSafeInteger(j.postcondition?.pr) ? j.postcondition.pr : ['implement', 'continue'].includes(j.kind) ? null : (Number.isSafeInteger(j.issue) ? j.issue : null)) : null);
 // Issue #467: a dashboard build asks for the latest verdict of every job. The verdicts and the pull requests are indexed once per object
 // (WeakMap), so each lookup is a map read instead of a scan and sort over every verdict.
+// CAVEAT: the index is built on first use and never refreshed. Callers must pass freshly read objects (as each dashboard build does); a caller that
+// changes state.verdicts or cache.pulls in place after it was indexed would get stale lookups. Use a new object, or do not index it.
 const verdictIndexes = new WeakMap(), pullIndexes = new WeakMap();
 export function verdictIndex(verdicts) {
   if (!verdicts || typeof verdicts !== 'object') return new Map();
