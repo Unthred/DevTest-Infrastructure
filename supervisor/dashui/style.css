@@ -293,12 +293,12 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 /* issue #76 */
 /* issues #76, #421: compact agent badges; the bar stays on one row at desktop and has its own layout on a phone */
 .agent-lines ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:nowrap;gap:var(--sp1) var(--sp2)}
-.agent-badge{display:inline-flex;align-items:center;gap:var(--sp1);padding:2px var(--sp2);border-radius:999px;border:1px solid currentColor;font-size:var(--fs-xs);white-space:nowrap;text-decoration:none}
+.agent-badge{display:inline-flex;align-items:center;gap:var(--sp1);min-height:24px;padding:2px var(--sp2);border-radius:999px;border:1px solid currentColor;font-size:var(--fs-xs);white-space:nowrap;text-decoration:none}
 .agent-badge b{font-weight:700}.agent-badge .ab-role,.agent-badge .ab-state{font-weight:500}
 .agent-badge .ab-role::before,.agent-badge .ab-state::before{content:"\00b7";margin-right:var(--sp1)}
 @media(min-width:1100px){
-  .statusbar{flex-wrap:nowrap;gap:var(--sp2) var(--sp3)}
-  .statusbar>*{flex:none;white-space:nowrap}.statusbar>.pagehead{flex:1 1 0;min-width:0;white-space:normal}
+  .statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}
+  .statusbar>*{flex:none;white-space:nowrap}.statusbar>.pagehead{flex:1 1 100%;min-width:0;white-space:normal}
   .statusbar .pagehead h1{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .brand{margin-right:0}
 }
