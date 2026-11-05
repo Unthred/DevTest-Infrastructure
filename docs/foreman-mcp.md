@@ -26,8 +26,8 @@ Hand-run Tower sessions can leave a final report for the overseer in one fixed f
 
 ## Install (on Tower, as root; needs the homeowner's approval of D-030)
 1. Copy `foreman-mcp/` to a persistent directory owned by root and read-only to the account, outside every Foreman checkout and not on the RAM disk, for example `<install dir>/foreman-mcp`. Record the commit it came from in a `VERSION` file beside it.
-2. Write the configuration, owned by root and readable by the account: `{ "viewUrl": "http://<dashboard host>:<port>/api/view.json", "logFile": "<account home>/logs/calls.log" }`. Use the address the dashboard serves on; it is not kept in Git.
-3. Write `launcher.env` beside `launcher.sh`: `NODE_BIN=<absolute node>`, `CONFIG_FILE=<configuration file>`, `LOG_DIR=<account home>/logs`.
+2. Write the configuration, owned by root and readable by the account: `{ "viewUrl": "http://<dashboard host>:<port>/api/view.json", "logFile": "<account home>/logs/calls.log", "reportsDir": "<reports folder>" }` (`reportsDir` is the folder described in the reports section above; leave it out only if `foreman_reports` is not wanted). Use the address the dashboard serves on; it is not kept in Git.
+3. Write `launcher.env` beside `launcher.sh`: `NODE_BIN=<absolute node>`, `CONFIG_FILE=<configuration file>`, `LOG_DIR=<account home>/logs`, and `REPORTS_DIR=<reports folder>` (the same folder as `reportsDir`; it gives the launcher read access to it).
 4. Create the account `foreman-mcp`: locked password, its own home, no extra groups, and a login shell that can run the forced command (for example `/bin/sh`). Create the log directory owned by the account, mode 0700.
 5. Put one line in `<account home>/.ssh/authorized_keys` (home mode 0755 or tighter and owned by root or the account, `.ssh` 0700, file 0600, all owned by the account):
    `restrict,command="<absolute path>/launcher.sh" ssh-ed25519 <public key> <comment>`

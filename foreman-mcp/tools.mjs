@@ -107,6 +107,8 @@ export function createTools({ source, readHost, getPath = null, reports = null, 
       const t = now(); while (calls.length && t - calls[0] > 60000) calls.shift();
       if (calls.length >= CALLS_PER_MINUTE) return { isError: true, text: `rate limit: more than ${CALLS_PER_MINUTE} calls in a minute; try again shortly` };
       calls.push(t);
+      // Layering: reports.read redacts before it truncates, so a secret cannot straddle the cut. This second
+      // redaction is a deliberate backstop for every string-returning tool, not the primary control; the slice only bounds length.
       try { const out = await def.run(args && typeof args === 'object' ? args : {}); return { isError: false, text: typeof out === 'string' ? redact(out).slice(0, MAX_TEXT) : bounded(redactDeep(out)) }; }
       catch (error) { return { isError: true, text: bounded(redactDeep({ error: String(error?.message || error).slice(0, 400) })) }; }
     },
