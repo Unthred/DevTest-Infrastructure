@@ -65,3 +65,8 @@ test('issue #607: a hyphen after a real host:port does not leak it', () => {
   assert.equal(redactTopology('api.example.org:8123-ha', []), '[host]-ha');
   assert.equal(redactTopology('postgres:16-alpine', []), 'postgres:16-alpine');
 });
+
+test('issue #607: recorded trade-off, a dotless host with a 2-digit port is kept (3+ digits needed), a dotted host is not', () => {
+  assert.equal(redactTopology('myhost:22 myhost:80', []), 'myhost:22 myhost:80');
+  assert.equal(redactTopology('api.example.org:80', []), '[host]');
+});
