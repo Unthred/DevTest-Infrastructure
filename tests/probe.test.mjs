@@ -121,10 +121,14 @@ test('a fresh probe reading below the thresholds releases the reviews-only latch
   const projected = assessAgent({ allowance: claudeAl(0.6, { at: NOW, source: 'probe' }), now: NOW, latched });
   assert.equal(projected.mode, 'reviews_only', '60% with half the window gone projects past 100%');
 });
-test('only a probe releases: a low job reading still holds, and a probe older than the latch does not release', () => {
-  assert.equal(assessAgent({ allowance: claudeAl(0.05, { at: NOW, source: 'job' }), now: NOW, latched }).mode, 'reviews_only');
-  assert.equal(assessAgent({ allowance: claudeAl(0.05, { at: NOW }), now: NOW, latched }).mode, 'reviews_only');
-  assert.equal(assessAgent({ allowance: claudeAl(0.05, { at: NOW - 3 * HOUR, source: 'probe' }), now: NOW, latched }).mode, 'reviews_only');
+test('issue #627: a low reading releases the latch by itself, a probe is no longer needed; a forecast still over the limit holds', () => {
+  for (const al of [claudeAl(0.05, { at: NOW, source: 'job' }), claudeAl(0.05, { at: NOW }), claudeAl(0.05, { at: NOW - 3 * HOUR, source: 'probe' })]) {
+    const a = assessAgent({ allowance: al, now: NOW, latched });
+    assert.equal(a.mode, 'normal'); assert.match(a.reason, /released itself|released by a fresh allowance probe/);
+  }
+  const hot = assessAgent({ allowance: claudeAl(0.6, { at: NOW, source: 'job' }), now: NOW, latched });
+  assert.equal(hot.mode, 'reviews_only', 'a forecast over the limit holds with no probe');
+  assert.equal(assessAgent({ allowance: claudeAl(0.6, { at: NOW, source: 'probe' }), now: NOW, latched }).mode, 'reviews_only', 'and a probe does not release it');
 });
 test('a probe that reports overage in use or an exhausted window never frees the agent', () => {
   assert.equal(assessAgent({ allowance: claudeAl(0.05, { at: NOW, source: 'probe', overage: true }), now: NOW, latched }).mode, 'waiting');
