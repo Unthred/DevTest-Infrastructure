@@ -38,6 +38,9 @@ export const VERIFY_MAX_WAIT_MS = 60 * 60 * 1000;
 // the first retry after ENV_RETRY_MS, doubling each time up to ENV_RETRY_MAX_MS. Only a failed validator or test run latches.
 export const ENV_RETRY_MS = 10 * 60 * 1000;
 export const ENV_RETRY_MAX_MS = 4 * 60 * 60 * 1000;
+// Issue #581: a commit refused by a failed check gets one more attempt after this delay without waiting for main to move
+// (a check that fails only under load is not a defect of the commit). A second failure latches it until a newer main.
+export const PRECHECK_RETRY_MS = 30 * 60 * 1000;
 // Issue #302: what a live tick says about the new version. Only a thrown error or a skipped item that is a real fault fails it.
 // A lease held by a running job is an expected wait, reported under `waiting` and never `skipped`; an item flagged `expected`
 // is ignored too. Items needing the homeowner are reported under `blocked`: they are the condition, not a fault of the code.
@@ -314,7 +317,8 @@ export class SelfUpgrade {
     // A failed check latches this commit until a newer main; an environmental failure is retried after ENV_RETRY_MS (#69).
     // Checked before the quiet wait so a latched target never holds dispatch for a commit that will not be installed (#134).
     const latched = this.s.prechecked[target];
-    if (latched && !(latched.environmental && now - latched.at >= envBackoffMs(latched.attempts))) return 'precheck-failed';
+    const retryDue = typeof latched === 'number' && !this.s.precheckRetried?.[target] && now - latched >= PRECHECK_RETRY_MS;
+    if (latched && !retryDue && !(latched.environmental && now - latched.at >= envBackoffMs(latched.attempts))) return 'precheck-failed';
     // The wait belongs to one target: a newer main starts a fresh wait instead of inheriting the old start (review of PR #162).
     if (this.s.waitingFor !== target || this.s.waitingSince == null) { this.s.waitingSince = now; this.s.waitingFor = target; }
     // Drain (issue #136): while jobs run and the bound is not reached, no new job starts; the install happens at the first job
@@ -334,6 +338,7 @@ export class SelfUpgrade {
     if (!pre.ok) {
       const attempts = pre.environmental ? (latched?.environmental ? (latched.attempts || 1) + 1 : 1) : 0;
       this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now; delete this.s.waitingSince; delete this.s.waitingFor;
+      this.s.precheckRetried = retryDue && !pre.environmental ? { [target]: true } : {};   // one delayed retry per commit
       this.noteInstall(pre.environmental
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
         : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre) });
@@ -365,6 +370,7 @@ export class SelfUpgrade {
       // The install-time validator, tests or payload check failed before anything was swapped: block only this commit until a newer
       // main, with one alert. No rollback and no global latch (#101).
       this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
+      this.s.precheckRetried = retryDue ? { [target]: true } : {};
       this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up) }); this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`);
       this.refuse(from, target, 'install-check', up.reason);
