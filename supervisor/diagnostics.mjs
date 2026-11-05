@@ -120,7 +120,7 @@ export function readRecorder(dir, from, to) {
     return { ...out, status: 'unreadable', note: 'The memory flight recorder log folder cannot be read.' };
   }
   const first = dayStart(from);
-  const wanted = names.filter(n => { const m = FILE.exec(n); return m && Date.UTC(+m[1], +m[2] - 1, +m[3]) >= first && Date.UTC(+m[1], +m[2] - 1, +m[3]) <= to; }).sort();
+  const wanted = names.filter(n => { const m = FILE.exec(n); return m && Date.UTC(+m[1], +m[2] - 1, +m[3]) >= first && Date.UTC(+m[1], +m[2] - 1, +m[3]) <= to; }).sort().reverse();
   const notes = []; let budget = MAX_TOTAL_BYTES, bad = 0;
   if (wanted.length > MAX_RECORDER_FILES) { wanted.splice(0, wanted.length - MAX_RECORDER_FILES); notes.push('Only the newest log files were read (file limit).'); }
   const seen = new Set(), hours = new Map();
