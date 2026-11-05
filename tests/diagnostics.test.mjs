@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { tickGaps, jobTurnaround, verdictLag, idleHistory, readRecorder, buildDiagnostics, clearRecorderCache, RETENTION_DAYS, DAY_MS, MAX_FILE_BYTES } from '../supervisor/diagnostics.mjs';
+import { tickGaps, jobTurnaround, verdictLag, idleHistory, readRecorder, buildDiagnostics, clearRecorderCache, RETENTION_DAYS, DAY_MS, MAX_FILE_BYTES, MAX_RECORDER_FILES } from '../supervisor/diagnostics.mjs';
 import { idleReport } from '../supervisor/idlecause.mjs';
 import { handler, currentView } from '../supervisor/dashserver.mjs';
 import { renderRoute, NAV, matchRoute } from '../supervisor/dashrender.mjs';
@@ -124,6 +124,37 @@ test('recorder: one huge file is read from its newest part only, within the size
   assert.equal(r.status, 'partial'); assert.match(r.note, /newest part only/);
   assert.ok(r.samples < n && r.samples > 1000, `read ${r.samples} of ${n}`); assert.ok(r.samples * line.length <= MAX_FILE_BYTES + 2 * line.length);
   assert.equal(r.hourly.at(-1).loadMax, 8, 'the newest line is the one kept');
+});
+
+test('recorder: over the file limit the newest files are kept and the oldest dropped, and it says so', t => {
+  clearRecorderCache();
+  const dir = tmp(t);
+  // 8 days (28 Oct to 4 Nov) x 6 files = 48 files, over the limit of 40. Load encodes the day so the kept days are visible.
+  for (let day = 28; day <= 35; day++) {
+    const d = day > 31 ? day - 31 : day, mo = day > 31 ? '11' : '10', dd = String(d).padStart(2, '0'), stamp = `2026${mo}${dd}`;
+    for (let i = 0; i < 6; i++) fs.writeFileSync(path.join(dir, i === 0 ? `host-${stamp}.jsonl` : `host-${stamp}-00${i}.jsonl`), host(`2026-${mo}-${dd}T0${i}:00:00Z`, day, 1, 1, 1) + '\n');
+  }
+  assert.equal(fs.readdirSync(dir).length, 48); assert.ok(48 > MAX_RECORDER_FILES);
+  const r = readRecorder(dir, FROM, NOW);
+  assert.equal(r.status, 'partial'); assert.equal(r.files, MAX_RECORDER_FILES); assert.match(r.note, /newest log files were read \(file limit\)/);
+  assert.equal(r.hourly.at(-1).loadMax, 35, 'today (4 Nov) is kept');
+  assert.equal(r.days.find(d => d.day === '2026-10-28').samples, 0, 'the oldest day is the one dropped');
+  assert.equal(r.days.find(d => d.day === '2026-11-04').samples, 6);
+});
+
+test('recorder: the per-call size budget is spent on the newest files first', t => {
+  clearRecorderCache();
+  const dir = tmp(t);
+  // Seven full-size days (29 Oct to 4 Nov), one distinct load each: 7 x 8 MiB is over the 48 MiB budget, so the oldest day gets what is left.
+  for (let day = 29; day <= 35; day++) {
+    const d = day > 31 ? day - 31 : day, mo = day > 31 ? '11' : '10', dd = String(d).padStart(2, '0'), line = host(`2026-${mo}-${dd}T09:00:00Z`, day, 1, 1, 1) + '\n';
+    fs.writeFileSync(path.join(dir, `host-2026${mo}${dd}.jsonl`), line.repeat(Math.floor(MAX_FILE_BYTES / line.length)));
+  }
+  const r = readRecorder(dir, FROM, NOW);
+  assert.equal(r.status, 'partial'); assert.match(r.note, /per-call size limit/);
+  assert.ok(r.days.find(d => d.day === '2026-11-04').samples > 0, 'today is read');
+  const n = day => r.days.find(d => d.day === day).samples;
+  assert.ok(n('2026-10-29') < n('2026-11-04') / 2, 'the oldest day gets only what is left of the budget');
 });
 
 test('recorder: a missing folder, a folder that is a file, an empty folder and an unreadable log each say so', t => {
