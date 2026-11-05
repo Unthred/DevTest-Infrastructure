@@ -68,6 +68,7 @@ export function resolveModel(ctx) {
   const table = ctx.entryOverride && ctx.modelsConfig?.agents?.[ctx.agent] ? { ...ctx.modelsConfig.agents[ctx.agent], review: ctx.entryOverride } : ctx.modelsConfig?.agents?.[ctx.agent];
   let type = typeOfKind(ctx.kind);
   if ((type === 'interim-review' || type === 'split') && table && !table[type]) type = 'review';   // a split draft is a cheap read-only session (issue #244)
+  if (type === 'inbox') type = 'implement';   // an approved overseer prompt (issue #124) uses the implement model entry: the same writer rules, never a review model
   if (!table || !table[type]) return { fields: {}, warnings: [] };
   const threshold = ctx.modelsConfig.allowance_threshold ?? DEFAULT_THRESHOLD;
   if (type === 'rebase') ctx = { ...ctx, escalation: null };

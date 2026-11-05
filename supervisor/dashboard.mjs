@@ -23,6 +23,7 @@ import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { sinceView } from './since.mjs';
+import { pendingCards as inboxCards } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -673,6 +674,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const pauseText = team.pauseText(c.pulls || [], c.issues || []);
     const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
+    // Issue #124: each pending inbox item is one Approve/Reject card. Nothing here runs anything; the card posts to the dashboard's own write route.
+    if (config.inbox?.dir) for (const card of inboxCards(config.inbox.dir)) attention.push({ id: `inbox-${card.id}`, text: card.broken ? `An inbox item cannot be shown: ${card.broken}` : `Overseer proposal (${card.kind === 'prompt' ? 'run as a job' : 'post as an issue'}): ${card.title}`, ref: null, severity: 'action', inbox: card, action: card.broken ? 'Reject it; the overseer can propose it again.' : card.will });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: deploy needed.`, ref: null, severity: 'warning' });
     // Issue #265: one Needs you item while main needs a hand-deployed bootstrap installer change; it ends when the installed commit moves.
@@ -902,7 +905,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, later: laterOf({ cache, state, pauseText, names, config }), warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact((['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, later: laterOf({ cache, state, pauseText, names, config }), warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };

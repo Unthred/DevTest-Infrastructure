@@ -23,7 +23,8 @@ import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
-import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS } from './dashwrite.mjs';
+import { decide as decideInbox, ID_RE as INBOX_ID } from './inbox.mjs';
+import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 
 export const DEFAULT_PORT = 8731;
 
@@ -172,11 +173,30 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
     store.invalidate();   // issue #467: as for Mark as read
     return send(303, 'text/plain; charset=utf-8', 'ok', { location: back });
   };
+  // Inbox (issue #124): Approve or Reject one pending overseer proposal. The same write protection as the other posts (D-029): host, origin, the
+  // secret proof, and a short cooldown. The decision is recorded only; the next tick acts on an approval. This route is the only way to approve.
+  const inbox = async (req, res, send) => {
+    if (!source().inbox?.dir) return send(404, 'text/plain; charset=utf-8', 'the inbox is not configured');
+    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+    if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+    const id = form.get('id') || '', decision = form.get('decision') || '';
+    if (!INBOX_ID.test(id) || !['approve', 'reject'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
+    const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    const r = decideInbox(source().inbox.dir, id, decision, t);
+    if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
+    return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
+  };
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
     if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
     if (req.method === 'POST' && reqPath === '/watch') return watch(req, res, send);
+    if (req.method === 'POST' && reqPath === '/inbox') return inbox(req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.
     const probePath = req.method === 'POST' ? /^\/probe\/([A-Za-z0-9_-]{1,40})$/.exec(reqPath) : null;

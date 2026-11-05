@@ -1,6 +1,8 @@
-// The tools. Each one is read-only, bounded and derived from the dashboard's own view (which the dashboard builds with the planner's code), so
-// an answer here cannot disagree with what the planner will do. No tool writes, takes a lock, reads a transcript or calls a model.
+// The tools. Each one is bounded. All but foreman_propose are read-only and derived from the dashboard's own view (which the dashboard builds with the
+// planner's code), so an answer here cannot disagree with what the planner will do. foreman_propose writes one proposal file into the inbox
+// directory and nothing else (issue #124); it cannot approve, run or change anything. No tool takes a lock, reads a transcript or calls a model.
 import { redact, redactDeep } from './redact.mjs';
+import { createInbox } from './inbox.mjs';
 
 export const MAX_TEXT = 24000;      // characters of one tool result
 export const CALLS_PER_MINUTE = 30; // rate limit for all tools together
@@ -23,7 +25,7 @@ export function bounded(value, max = MAX_TEXT) {
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : dflt; };
 
-export function createTools({ source, readHost, reports = null, now = Date.now }) {
+export function createTools({ source, readHost, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
   const calls = [];   // times of recent calls, for the rate limit
   const withView = async fn => { const r = await source.get(); return { ...fn(r.view), viewAgeSeconds: Math.round(r.ageMs / 1000), ...(r.stale ? { stale: true, staleBecause: r.error } : {}) }; };
   const reviewQueues = view => Object.fromEntries(Object.entries(view.queues || {}).map(([agent, items]) => [agent, (items || []).filter(i => i.type === 'review').sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.ref - b.ref).map(i => ({ order: i.order ?? null, pr: i.ref, next: !!i.next, title: i.title, reason: i.reason }))]));
@@ -75,10 +77,18 @@ export function createTools({ source, readHost, reports = null, now = Date.now }
       run: () => ({ ...readHost(), readAt: iso(now()) }) },
     { name: 'foreman_reports', description: 'Reports that hand-run sessions left for the overseer. With no name: the list (name, time, size), newest first. With a name: that one report as text (redacted, truncated if long). Reads one fixed folder only.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'a report name from the list, for example speedup.md' } }, additionalProperties: false },
       run: args => { if (!reports) throw new Error('reports are not available on this server'); return args.name === undefined ? reports.list() : reports.read(args.name, MAX_TEXT - 400); } },
+    ...(inbox.enabled ? [
+      { name: 'foreman_propose', description: 'Propose one item for the homeowner to approve on the Foreman dashboard. kind "prompt": a task to run as a supervised Foreman job (it cannot merge, approve reviews or widen its limits). kind "issue_draft": an issue to post as the homeowner. This only writes a proposal; nothing happens until the homeowner approves it, and you cannot approve it. Secret-shaped text, AI attribution text, oversized items and unknown fields are refused. Read the outcome with foreman_proposal_status.',
+        inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['prompt', 'issue_draft'] }, title: { type: 'string', maxLength: 200 }, prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' }, body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' }, why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' } }, required: ['kind', 'title'], additionalProperties: false },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, run: args => inbox.propose(args) },
+      { name: 'foreman_proposal_status', description: 'The state of a proposal made with foreman_propose: waiting, pending (awaiting the homeowner), refused (with the reason), rejected, approved, running, done or failed, with the result summary once there is one.',
+        inputSchema: { type: 'object', properties: { id: { type: 'string', pattern: '^[a-f0-9]{32}$' } }, required: ['id'], additionalProperties: false }, run: args => inbox.status(args.id) },
+    ] : []),
   ];
 
+  const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   return {
-    list: () => defs.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } })),
+    list: () => defs.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations: annotations || READ_ONLY })),
     has: name => defs.some(d => d.name === name),
     async call(name, args = {}) {
       const def = defs.find(d => d.name === name);

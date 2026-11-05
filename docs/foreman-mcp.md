@@ -1,6 +1,6 @@
 # Foreman MCP server (read-only, for the overseer)
 
-Issue #569, decision D-030 (an agent proposal until the homeowner approves it). A small stdio MCP server that lets the overseer read Foreman's state from Claude desktop, over SSH to a restricted Tower account. It reads; it never writes. Posting to GitHub stays with issue #124.
+Issue #569, decision D-030 (an agent proposal until the homeowner approves it). A small stdio MCP server that lets the overseer read Foreman's state from Claude desktop, over SSH to a restricted Tower account. It reads, with one exception: the inbox (issue #124, D-031 proposed, below), where it can only propose items for the homeowner to approve on the dashboard.
 
 ## What it is
 - `foreman-mcp/` holds the server: `server.mjs` (stdio entry), `protocol.mjs` (JSON-RPC and MCP), `tools.mjs`, `source.mjs`, `redact.mjs`, `calllog.mjs` and `launcher.sh`. It imports nothing from `supervisor/` and uses no npm packages.
@@ -36,6 +36,30 @@ The server works only while the computer and Claude desktop are running. Nothing
 
 ## Revoke access
 Remove the one line from `<account home>/.ssh/authorized_keys`, or lock the account (`usermod -L foreman-mcp`), or delete it (`userdel foreman-mcp`). Remove the server directory and the configuration if the server is retired. On Unraid, also remove the line that recreates the account from `/boot/config/go` and the script it runs.
+
+## The inbox (issue #124, D-031 proposed)
+The overseer can propose; only the homeowner can approve. This is the one write the server has, and it goes into one directory.
+
+- **Tools.** `foreman_propose` (kind `prompt` or `issue_draft`, a title, the text, an optional reason) and `foreman_proposal_status` (the state and result of one item). They appear only when an inbox directory is configured. There is no tool that approves, rejects or runs anything.
+- **Layout.** `<inbox>/items/<id>.json` is written by the `foreman-mcp` account (the server picks the 32-hex-character name; a call cannot name a path). `<inbox>/status/<id>.json` and `<inbox>/audit.jsonl` are written only by Foreman (root) and readable by the account. The launcher gives Node write permission to `<inbox>/items` only, so the server cannot touch `status/`, the audit log or anything else.
+- **What Foreman does with an item** (each tick, so allow up to five minutes before a card appears). It reads only regular files of at most 32 KB, validates the shape, refuses unknown kinds and fields, text over 8,000 characters (title 200), control characters, secret-shaped text and AI-attribution text, and allows at most 10 items waiting at once. A refused item records the reason (never the text) in its status. Each valid item becomes one Approve/Reject card in Needs you, showing the exact text. The card is bound to a hash of the file: an item edited after pickup is refused at approval and again at use.
+- **Approve and reject.** The card posts to the dashboard's `/inbox` route, protected like the other dashboard writes (D-029): Host, Origin, the secret proof in the state root, and a one-second cooldown. Reject records it and does nothing. Approve is recorded; the next tick acts.
+- **An approved prompt** starts one ordinary job (kind `inbox`) in its own worktree and branch `<prefix>inbox-<id8>`, in an implementer slot, under the same allowance, usage-limit, breaker and model rules as an implement job. It never writes as Opus. The prompt text is passed as quoted task data, and the limits (no merge, no approval, no verdict, no review bypass) are stated before and after it. The job writes a short summary to a file Foreman gives it; Foreman redacts it and records it as the item's `result`.
+- **An approved issue draft** is posted by the tick as the homeowner's GitHub account, redacted, after a final secret and attribution check. The state `posting` is recorded before the post and a marker comment in the body is looked up first, so it is posted once.
+- **Audit.** `<inbox>/audit.jsonl` has one line per event (time, id, event, kind, SHA-256 of the item). No content and no secrets. Finished items and their status are removed after 14 days.
+- **Statuses** (`foreman_proposal_status`): `waiting` (not yet picked up), `pending`, `refused`, `rejected`, `approved`, `running`, `posting`, `done`, `failed`.
+
+### Install the inbox (on Tower, as root; needs the homeowner's approval of D-031)
+1. Create the inbox directory outside the Foreman state root and outside every checkout, owned by root and readable by the account: `<inbox>` mode 0755, `<inbox>/status` root-owned 0755, `<inbox>/items` owned by `foreman-mcp` mode 0700. Foreman (root) reads and writes everywhere in it.
+2. Add `"inboxDir": "<inbox>"` to the server configuration file, and `INBOX_DIR=<inbox>` to `launcher.env`. Copy the updated `foreman-mcp/` directory (including `inbox.mjs`) and record the commit in `VERSION`.
+3. Add `"inbox": { "dir": "<inbox>" }` to `team.local.json`. Without it Foreman ignores the inbox and the dashboard has no `/inbox` route. Restart the dashboard server so it reads the setting.
+4. Check as the account (`ssh foreman-mcp@<tower>` through the forced command): `tools/list` shows the two new tools; a proposal appears in `items/`.
+
+### Trial account and revoking access
+The trial account's key and forced command are unchanged by this feature. To stop proposals but keep reads: remove `INBOX_DIR` from `launcher.env` and `inboxDir` from the configuration (the tools disappear), or remove the `inbox` block from `team.local.json` (Foreman stops reading the inbox and the route disappears). To revoke everything: remove the one `authorized_keys` line, lock or delete the account, as above. Items already approved but not yet started stop being planned when the `inbox` block is removed.
+
+### Tests
+`node --test tests/foreman-inbox.test.mjs`: validation, refusal before a card, the pending cap, tamper detection, reject and approve, the audit log without content, the MCP tools and the permission flags (writes to `items/` only; `status/` and everywhere else denied), the card and the write protection, and the team side (planning, limits, no Opus, results written back, an issue draft posted once without attribution).
 
 ## Checks
 `node --test tests/foreman-mcp.test.mjs` covers the protocol, agreement with the planner's order, the proof that it cannot modify Foreman state (a fake state tree is byte-for-byte unchanged, only GETs reach the dashboard, and the permission model refuses other writes), bounded output, and no secret-shaped output. The restricted-key check required by #569 (no shell, no other command, no pty, no forwarding, tools callable over SSH) is a recorded manual check on the host.
