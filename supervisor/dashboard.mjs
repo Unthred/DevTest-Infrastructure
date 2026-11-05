@@ -16,7 +16,7 @@ import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
-import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth } from './suphealth.mjs';
+import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { hasProbe } from './probe.mjs';
 import { defaultRegistry, processStart } from './core.mjs';
@@ -302,6 +302,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
+  const heldJobs = n => Object.values(state.unblock?.flags?.[n] || {}).filter(x => x.kind === 'job').map(x => x.job);   // issue #583: jobs holding the label
   const prCarded = new Set();   // PRs that already have a limit or needs-homeowner card; a failed job on one folds into it
   const openPulls = new Set((cache?.pulls || []).map(p => p.number));
   const fixLimited = new Set();
@@ -354,7 +355,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     else if (reviewLimit) add(`reviewlimit-${pr.number}`, `${names.pr(pr.number).text} could not be reviewed within ${maxReview} attempts`, { kind: 'pull', n: pr.number },
       { tried: `Review jobs ran ${maxReview} times at this head without recording a verdict, so Foreman stopped reviewing it.`, action: 'Read the review job output, then review the PR by hand or push a new head to start a fresh review.', links });
     else add(`homeowner-pr-${pr.number}`, `${names.pr(pr.number).text} needs the homeowner`, { kind: 'pull', n: pr.number },
-      { tried: 'Foreman labelled this PR needs-homeowner and posted the reason as a notice on it.', action: 'Read the notice on the PR and decide; remove the needs-homeowner label when it is handled.', links });
+      { tried: heldJobs(pr.number).length ? `Foreman labelled this PR needs-homeowner because ${heldJobs(pr.number).map(id => `job ${String(id).slice(0, 8)}`).join(' and ')} stopped (blocked, failed or stopped) and holds the label.` : 'Foreman labelled this PR needs-homeowner and posted the reason as a notice on it.',
+        action: heldJobs(pr.number).length ? `The label clears by itself once ${heldJobs(pr.number).length === 1 ? 'that job is' : 'those jobs are'} resumed, or once the PR head has moved past the job's head and the job's worktree has no uncommitted or unpushed work. To clear it now: ${heldJobs(pr.number).map(id => `ai-agent --supervisor resume ${id}`).join(' or ')} (uses allowance), or inspect the job's worktree and push or discard its work; Foreman then removes the label. Otherwise remove the needs-homeowner label by hand when it is handled.` : 'Read the notice on the PR and decide; remove the needs-homeowner label when it is handled.', links });
   }
   // Issue #249: an unapproved decision that holds green, passed PRs back is one item naming it, what it unblocks and how to approve.
   if (gated?.prs.length && gated.info?.status === 'agent-proposal') {
@@ -556,7 +558,7 @@ export function describeFor(j, { names, state }) {
   let verdict = null, opened = null;
   if (kind === 'review') {
     const pr = rec?.pr ?? j.issue, start = j.createdAt || 0;
-    verdict = Object.entries(state.verdicts || {}).filter(([k, v]) => k.split(':')[0] === String(pr) && (!v.at || v.at >= start)).map(([, v]) => v).sort((a, b) => (a.at || 0) - (b.at || 0))[0] || null;
+    verdict = (verdictIndex(state.verdicts).get(String(pr)) || []).map(([, v]) => v).filter(v => !v.at || v.at >= start).reduce((best, v) => (!best || (v.at || 0) < (best.at || 0) ? v : best), null);
   } else if (['implement', 'continue'].includes(kind)) opened = rec?.pr ?? names.prOfIssue(rec?.issue ?? j.issue);
   return redact(describeJob({ ...j, kind }, { names, rec, verdict, opened }), 400);
 }

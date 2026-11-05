@@ -119,6 +119,8 @@ function realGit(repoPath) {
     checkRebase: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return checkRebase({ repoPath, base, oldHead, newHead }); },
     // issue #302: true only when git can prove the worktree has no uncommitted work (tracked or untracked); anything else is false/null
     isClean: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 ? r.stdout.trim() === '' : null; },
+    // issue #583: commits in the worktree's HEAD that no remote branch has; null when it cannot be told (callers then keep the hold)
+    unpushedCommits: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'rev-list', '--count', 'HEAD', '--not', '--remotes'], { encoding: 'utf8', timeout: 60000 }); const n = Number(r.stdout.trim()); return r.status === 0 && Number.isSafeInteger(n) ? n : null; },
     // issue #495: existing worktree directories and local branches a new implement job would reuse unreset
     leftoversFor: async ({ worktrees, branchPrefixes }) => {
       const out = worktrees.filter(w => fs.existsSync(w)).map(w => `a worktree at ${w}`);
@@ -306,12 +308,12 @@ async function main() {
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
   if (command === 'rebase-prepare') {
     if (!a.worktree || !a.branch) throw new SupervisorError('usage: rebase-prepare --worktree DIR --branch BRANCH');
-    print(prepareRebase({ worktree: a.worktree, branch: a.branch })); return;
+    console.log(JSON.stringify(prepareRebase({ worktree: a.worktree, branch: a.branch }), null, 2)); return;
   }
   if (command === 'rebase-push') {
     if (!a.worktree || !a.branch || !a.base || !a.old) throw new SupervisorError('usage: rebase-push --worktree DIR --branch BRANCH --base BASE --old OLD_HEAD');
     const result = pushRebase({ worktree: a.worktree, branch: a.branch, base: a.base, oldHead: a.old });
-    print(result); if (!result.pushed) process.exitCode = 3; return;
+    console.log(JSON.stringify(result, null, 2)); if (!result.pushed) process.exitCode = 3; return;
   }
   if (command === 'dry-run' || command === 'start') {
     if (!a.spec) throw new SupervisorError('--spec FILE is required');

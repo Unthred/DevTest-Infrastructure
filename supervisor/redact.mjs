@@ -4,7 +4,21 @@ export const MAX_SCAN = 2000;
 export const KEY = '(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|credential)s?';
 // Auth scheme words that may precede a credential; the key rule consumes the scheme and the credential together.
 const SCHEME = '(?:bearer|basic|token|digest)';
+// Issue #467: redact is pure, and a dashboard build calls it for the same job texts on every build. A bounded memo (cleared when full, keys
+// capped at MAX_SCAN characters) skips the ten regular expressions for text already seen.
+const MEMO_MAX = 5000, MEMO_TEXT = 600;   // at most ~6 MB
+let memo = new Map();
 export function redact(value, max = 200) {
+  const text = String(value ?? '');
+  if (text.length > MEMO_TEXT) return redactUncached(text, max);
+  const key = `${max}\u0000${text}`, hit = memo.get(key);
+  if (hit !== undefined) return hit;
+  const out = redactUncached(text, max);
+  if (memo.size >= MEMO_MAX) memo = new Map();
+  memo.set(key, out);
+  return out;
+}
+function redactUncached(value, max) {
   return String(value ?? '').slice(0, MAX_SCAN)
     .replace(new RegExp(`("${KEY}"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"`, 'gi'), '$1"[secret]"')
     .replace(new RegExp(`\\b(${KEY})(\\s*[=:]\\s*)(?!\\[)(?:${SCHEME}\\s+)?[^\\s,;&"']+`, 'gi'), '$1$2[secret]')
@@ -50,3 +64,20 @@ export function redactLong(value, max, marker = '') {
 export const redactAddresses = s => String(s ?? '')
   .replace(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d]|\.\d)/g, '[ip]')
   .replace(/(?<![\w:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![\w:])|(?<![\w:])(?:[0-9a-f]{1,4}:){1,6}(?::[0-9a-f]{1,4}){1,6}(?![\w:])|(?<![\w:]):(?::[0-9a-f]{1,4}){1,7}(?![\w:])|(?<![\w:])(?:[0-9a-f]{1,4}:){1,7}:(?![\w:])/gi, '[ip]');
+// Issue #584: topology (LAN addresses, bare host:port, local domains) must not reach the public repository. This is the rule for every body
+// posted to GitHub. refusalText (supervisor/upgrade.mjs) keeps its own, stricter patterns. Unlike refusal text this keeps URLs and file paths, which findings legitimately cite.
+const HOST_PORT_SKIP = /\.(?:mjs|cjs|js|json|sh|md|ya?ml|ts|txt|log|html|css|py|cs|csproj|sln|toml|lock)$/i;
+const escRe = x => x.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&');
+export const LOCAL_SUFFIXES = 'lan|local|internal|home|intranet|corp|private|localdomain|arpa';
+export const localDomainsFromEnv = () => (process.env.DEVTEST_LOCAL_DOMAINS || '').split(',');
+function topologyPart(text, localDomains) {
+  let out = redactAddresses(text).replace(new RegExp(`\\b(?:[a-z0-9-]+\\.)+(?:${LOCAL_SUFFIXES})\\b(?::\\d+)?`, 'gi'), '[host]');
+  const doms = localDomains.map(d => String(d).trim().replace(/^\.+/, '')).filter(d => /^[a-z0-9.-]+$/i.test(d));
+  if (doms.length) out = out.replace(new RegExp(`\\b(?:[a-z0-9-]+\\.)*(?:${doms.map(escRe).join('|')})\\b(?::\\d+)?`, 'gi'), '[host]');
+  // A bare host:port: the host has a letter (so 12:30 and 3:45 stay) and is not a file name (build.mjs:42).
+  return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => { const h = m.replace(/:\d+$/, ''); return !/[a-z]/i.test(h) || HOST_PORT_SKIP.test(h) ? m : '[host]'; });
+}
+// Only marker-shaped HTML comments (the dispatcher's idempotency markers) pass through untouched so a marker lookup still matches.
+const MARKER = /^<!--\s*(?:devtest-|foreman-)/;
+export const redactTopology = (value, localDomains = localDomainsFromEnv()) =>
+  String(value ?? '').split(/(<!--[\s\S]*?-->)/).map((p, i) => i % 2 && MARKER.test(p) ? p : topologyPart(p, localDomains)).join('');

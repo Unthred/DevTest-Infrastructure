@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { SupervisorError } from './core.mjs';
 import { isStatusIssue } from './statusissue.mjs';
+import { redactTopology } from './redact.mjs';
 
 const TRANSIENT = /error connecting to|connection (reset|refused|timed out)|timeout|timed out|temporarily unavailable|\bEOF\b|TLS handshake|HTTP 5\d\d|could not resolve host/i;
 export const isTransient = text => TRANSIENT.test(String(text || ''));
@@ -61,18 +62,18 @@ export function githubClient(config, gh = ghRunner()) {
       const c = json(['api', '--method', 'GET', `repos/${repo}/issues/comments/${id}`]);
       return c ? { login: c.user?.login ?? null, createdAt: c.created_at, url: String(c.html_url || ''), body: String(c.body || '') } : null;
     },
-    comment: async (n, body) => { gh(['issue', 'comment', String(n), '--repo', repo, '--body-file', '-'], body, { retry: false }); },
+    comment: async (n, body) => { gh(['issue', 'comment', String(n), '--repo', repo, '--body-file', '-'], redactTopology(body), { retry: false }); },
     // True when a comment on the issue or PR already contains the text (idempotency check before a non-retried write).
     hasComment: async (n, text) => (json(['issue', 'view', String(n), '--repo', repo, '--json', 'comments'])?.comments || []).some(c => String(c.body || '').includes(text)),
     findIssueByMarker: async marker => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '1000', '--json', 'number,body'])
       .find(i => String(i.body || '').includes(marker))?.number || null,
     createIssue: async (title, body) => {
-      const url = gh(['issue', 'create', '--repo', repo, '--title', title, '--body-file', '-'], body, { retry: false }).trim();
+      const url = gh(['issue', 'create', '--repo', repo, '--title', redactTopology(title), '--body-file', '-'], redactTopology(body), { retry: false }).trim();
       const match = /\/issues\/(\d+)$/.exec(url);
       if (!match) throw new SupervisorError('created follow-up issue number was not returned');
       return Number(match[1]);
     },
-    updateIssueBody: async (n, body) => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'edit', String(n), '--repo', repo, '--body-file', '-'], body); },
+    updateIssueBody: async (n, body) => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'edit', String(n), '--repo', repo, '--body-file', '-'], redactTopology(body)); },
     pinIssue: async n => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'pin', String(n), '--repo', repo]); },
     addLabel: async (n, label) => {
       gh(['label', 'create', label, '--repo', repo, '--force', '--color', 'B60205', '--description', 'Needs a homeowner decision']);

@@ -322,12 +322,32 @@ export function jobSummary(j) {
   return scrub(`Job ${j.id}: status ${j.status}, kind ${j.kind || 'job'}, provider ${j.provider}, ref #${j.issue ?? '?'}, attempts ${j.attempts || 0}, last event ${j.lastEvent || 'none'}, postcondition ${pc}, updated ${iso(j.updatedAt)}`, 500);
 }
 export const jobPr = j => (j ? (Number.isSafeInteger(j.postcondition?.pr) ? j.postcondition.pr : ['implement', 'continue'].includes(j.kind) ? null : (Number.isSafeInteger(j.issue) ? j.issue : null)) : null);
+// Issue #467: a dashboard build asks for the latest verdict of every job. The verdicts and the pull requests are indexed once per object
+// (WeakMap), so each lookup is a map read instead of a scan and sort over every verdict.
+const verdictIndexes = new WeakMap(), pullIndexes = new WeakMap();
+export function verdictIndex(verdicts) {
+  if (!verdicts || typeof verdicts !== 'object') return new Map();
+  let idx = verdictIndexes.get(verdicts);
+  if (!idx) {
+    idx = new Map();
+    for (const [k, v] of Object.entries(verdicts)) { const pr = k.split(':')[0]; if (!idx.has(pr)) idx.set(pr, []); idx.get(pr).push([k, v]); }
+    for (const list of idx.values()) list.sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+    verdictIndexes.set(verdicts, idx);
+  }
+  return idx;
+}
+function headOf(pulls, number) {
+  if (!Array.isArray(pulls)) return undefined;
+  let idx = pullIndexes.get(pulls);
+  if (!idx) { idx = new Map(); for (const p of pulls) if (!idx.has(p.number)) idx.set(p.number, p.headRefOid); pullIndexes.set(pulls, idx); }
+  return idx.get(number);
+}
 export function latestVerdict(state, pr, cache) {
   if (!Number.isSafeInteger(pr)) return null;
-  const entries = Object.entries(state?.verdicts || {}).filter(([k]) => k.split(':')[0] === String(pr)).sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+  const entries = verdictIndex(state?.verdicts).get(String(pr)) || [];
   if (!entries.length) return `PR #${pr} latest review: none recorded`;
   const [key, v] = entries[0], head = key.split(':')[1] || '';
-  const cur = (cache?.pulls || []).find(p => p.number === pr)?.headRefOid;
+  const cur = headOf(cache?.pulls, pr);
   const blocking = (Array.isArray(v.findings) ? v.findings : []).filter(f => f?.kind === 'blocking').length;
   return scrub(`PR #${pr} latest review: ${v.verdict || '?'} by ${v.reviewer || '?'} at ${short(head)}${cur ? (cur === head ? ' (current head)' : ` (head is now ${short(cur)})`) : ''}, ${iso(v.at)}${blocking ? `, ${blocking} blocking finding(s)` : ''}`, 300);
 }

@@ -338,6 +338,13 @@ export function nextTickHtml(view, now) {
   return `<b data-tick-state="scheduled"><span data-countdown="${n.at}">in ${esc(clock(n.at - now))}</span><span data-after hidden>${last}</span></b>`;
 }
 const agentStat = view => `<div class="stat agent-lines" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
+// Issue #467: how old the prepared copy behind this page is. Never shown as current once it is old or its rebuild failed.
+function pageDataStat(view) {
+  const d = view.pageData; if (!d || !Number.isFinite(d.ageMs)) return '';
+  const secs = Math.round(d.ageMs / 1000), age = secs < 60 ? `${secs} s` : `${Math.round(secs / 60)} min`;
+  const why = d.failed ? `The last rebuild failed (${d.failed}); this is the last good copy.` : d.stale ? 'This copy is older than expected and is being rebuilt.' : 'Pages are served from a copy prepared in the background.';
+  return `<div class="stat" data-page-data="${d.stale ? 'stale' : 'ok'}" title="${esc(why)}"><span class="k">Page data</span>${d.stale ? badge('warning', `Stale · ${age} old`) : `<span>${esc(age)} old</span>`}</div>`;
+}
 function statusBar(view, route, head = '') {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
@@ -348,6 +355,7 @@ ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" ti
 ${agentStat(view)}
 <div class="stat"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
+${pageDataStat(view)}
 <div class="stat"><span class="k">Data</span>${pill(L.data, badge(fr.level, fr.label), 'Data freshness follows the last tick')}</div>
 <div class="stat"><span class="k">Team loop</span>${pill(L.team, view.teamEnabled ? badge('ok', 'Enabled') : badge('info', 'Disabled'), 'Open the dispatcher facts')}</div>
 <div class="stat"><span class="k">Version</span>${pill(vs.href, badge(vs.level, escT(vs.label), '', true), 'Open the version health card')}</div>

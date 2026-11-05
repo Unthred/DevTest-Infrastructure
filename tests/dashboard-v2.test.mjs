@@ -621,3 +621,11 @@ test('#550 Needs you names the refused verdict file, the reason and what to do',
   const other = await needsOf(await serve(t, { cache: calmCache(), state: { reviewAttempts: maxed, reviewRefusals: { [`41:${H(2)}:codex`]: { ...refusal, head: H(2) } }, verdicts: {}, jobs: {} } }));
   assert.deepEqual(other.panels.needsYou.map(c => c.id), ['reviewlimit-41'], 'a refusal for another head does not apply');
 });
+test('#583 the PR card names the job holding needs-homeowner and the command that clears it', async t => {
+  const state = { fixAttempts: {}, verdicts: {}, jobs: {}, unblock: { flags: { 41: { 'job:cb82e026aaaa0123456789abcdef0123': { key: 'job:cb82e026aaaa0123456789abcdef0123', kind: 'job', job: 'cb82e026aaaa0123456789abcdef0123', tk: 'pull' } } } } };
+  const v = await needsOf(await serve(t, { cache: calmCache({ labels: ['needs-homeowner'] }), state }));
+  const card = v.panels.needsYou.find(c => c.id === 'homeowner-pr-41');
+  assert.match(card.tried, /job cb82e026/); assert.match(card.action, /ai-agent --supervisor resume cb82e026aaaa0123456789abcdef0123 /); assert.match(card.action, /unpushed/);
+  const plain = await needsOf(await serve(t, { cache: calmCache({ labels: ['needs-homeowner'] }), state: { fixAttempts: {}, verdicts: {}, jobs: {} } }));
+  assert.doesNotMatch(plain.panels.needsYou.find(c => c.id === 'homeowner-pr-41').action, /supervisor resume/);
+});
