@@ -357,3 +357,84 @@ test('config: inbox is allowed in team.local.json, validated, and the shipped va
   fs.writeFileSync(local, JSON.stringify({ bogus: 1 }));
   assert.throws(() => loadTeamConfig(shipped, root), /key not overridable: bogus/);    // other unknown keys are still refused
 });
+
+// ---- issue #628: the priority order. Applied without an approval click, audit logged, honoured by the planner inside its gates.
+const PRIO = items => ({ kind: 'priority', items, why: 'the homeowner wants these first' });
+const openIssue = (number, extra = {}) => ({ number, title: `issue ${number}`, state: 'OPEN', labels: [], body: '', ...extra });
+const SHA1 = 'a'.repeat(40);
+const openPr = (number, extra = {}) => ({ number, title: `pr ${number}`, headRefName: `claude/issue-${number}-x`, headRefOid: SHA1, isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [], ...extra });
+
+test('priority: validateItem accepts a bounded list of known shapes and refuses everything else', () => {
+  assert.equal(inbox.validateItem(PRIO(['pr:12', 'issue:34'])).ok, true);
+  assert.equal(inbox.validateItem(PRIO([])).ok, true, 'an empty list clears the order');
+  for (const items of [undefined, 'pr:1', ['pr:0'], ['pr:1', 'pr:1'], ['pull:1'], ['pr:1; rm'], [12], Array.from({ length: 21 }, (_, i) => `pr:${i + 1}`)]) assert.equal(inbox.validateItem({ kind: 'priority', items }).ok, false, JSON.stringify(items));
+  assert.equal(inbox.validateItem({ ...PRIO(['pr:1']), title: 'x' }).ok, false, 'unknown field');
+  assert.equal(inbox.validateItem({ ...PRIO(['pr:1']), why: 'ok ' + TOKEN }).ok, false, 'secret-shaped text');
+});
+test('priority: Foreman applies it with no approval, replaces the order, and writes an audit entry (who, item, old and new place, time)', async t => {
+  const w = world(t); w.gh.listPulls = async () => [openPr(7)]; w.gh.listIssues = async () => [openIssue(5), openIssue(9)];
+  const first = drop(w.dir, PRIO(['issue:9', 'pr:7']));
+  await w.team.processInbox(rep());
+  assert.equal(inbox.statusOf(w.dir, first).state, 'done');
+  assert.deepEqual(inbox.readPriority(w.dir), ['issue:9', 'pr:7']);
+  const second = drop(w.dir, PRIO(['pr:7', 'issue:5']));
+  await w.team.processInbox(rep());
+  assert.deepEqual(inbox.readPriority(w.dir), ['pr:7', 'issue:5']);
+  const rows = fs.readFileSync(path.join(w.dir, 'audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(r => r.event === 'priority');
+  assert.equal(rows.length, 2); assert.equal(rows[1].id, second); assert.match(rows[1].by, /overseer/); assert.match(rows[1].at, /^\d{4}-\d\d-\d\dT/);
+  assert.deepEqual(rows[1].changes.sort((a, b) => a.item.localeCompare(b.item)), [{ item: 'issue:5', from: null, to: 2 }, { item: 'issue:9', from: 1, to: null }, { item: 'pr:7', from: 2, to: 1 }]);
+  assert.equal(inbox.pendingCards(w.dir).length, 0, 'no approval card');
+  const clear = drop(w.dir, PRIO([])); await w.team.processInbox(rep());
+  assert.deepEqual(inbox.readPriority(w.dir), []); assert.equal(inbox.statusOf(w.dir, clear).state, 'done');
+});
+test('priority: an unknown or closed item is refused and the stored order is left alone; the audit log holds no content', async t => {
+  const w = world(t); w.gh.listPulls = async () => [openPr(7)]; w.gh.listIssues = async () => [openIssue(5), openIssue(6, { state: 'CLOSED' })];
+  drop(w.dir, PRIO(['pr:7'])); await w.team.processInbox(rep());
+  for (const items of [['pr:999'], ['issue:6'], ['pr:7', 'issue:123456']]) {
+    const id = drop(w.dir, { ...PRIO(items), why: 'a distinctive reason' }); await w.team.processInbox(rep());
+    assert.equal(inbox.statusOf(w.dir, id).state, 'refused', JSON.stringify(items)); assert.match(inbox.statusOf(w.dir, id).reason, /not an open pull request or issue/);
+  }
+  assert.deepEqual(inbox.readPriority(w.dir), ['pr:7']);
+  const log = fs.readFileSync(path.join(w.dir, 'audit.jsonl'), 'utf8'); assert.ok(!log.includes('distinctive'));
+});
+test('priority: the planner implements the prioritised issue first among equals', async t => {
+  const w = world(t); w.gh.listIssues = async () => [openIssue(5), openIssue(6), openIssue(7)];
+  assert.equal((await w.team.plan()).find(a => a.type === 'implement').issue, 5, 'number order without a priority');
+  drop(w.dir, PRIO(['issue:7', 'issue:6'])); await w.team.processInbox(rep());
+  assert.equal((await w.team.plan()).find(a => a.type === 'implement').issue, 7);
+});
+test('priority: a prioritised item that cannot run (held, labelled for the homeowner) does not block the others', async t => {
+  const w = world(t); w.gh.listIssues = async () => [openIssue(5), openIssue(6, { labels: ['needs-homeowner'] }), openIssue(7, { body: 'Prerequisites: #99' })];
+  drop(w.dir, PRIO(['issue:6', 'issue:7', 'issue:5'])); await w.team.processInbox(rep());
+  assert.equal((await w.team.plan()).find(a => a.type === 'implement')?.issue, 5);
+});
+test('priority: reviews follow it among equals, but a starved review still goes first and a gate is never bypassed', t => {
+  const w = world(t); w.team.ciState = () => 'green';
+  fs.writeFileSync(path.join(w.dir, 'priority.json'), JSON.stringify({ items: ['pr:9', 'pr:8'] }));
+  const prs = [openPr(7), openPr(8), openPr(9), openPr(10, { isDraft: true }), openPr(11, { mergeable: 'CONFLICTING' })];
+  const q = w.team.reviewQueue('claude', prs);
+  assert.deepEqual(q.map(r => r.pr.number), [9, 8, 7], 'draft and conflicting pull requests are not queued even with a priority');
+  assert.match(q[0].reason, /priority 1/);
+  fs.writeFileSync(path.join(w.dir, 'priority.json'), JSON.stringify({ items: ['pr:9', 'pr:10'] }));
+  assert.ok(!w.team.reviewQueue('claude', prs).some(r => r.pr.number === 10));
+  w.team.s.reviewSince[7] = 5000 - 48 * 3600000;
+  assert.equal(w.team.reviewQueue('claude', prs)[0].pr.number, 7, 'starvation protection outranks priority');
+});
+test('priority: with two agents the planner order matches the shown order: a prioritised PR precedes a sole-reviewer PR, a starved one still leads', t => {
+  const w = world(t); w.team.ciState = () => 'green';
+  w.team.agents = () => [['claude'], ['codex']]; w.team.otherReviewers = (agent, pr) => pr.number === 31 ? [] : ['codex']; w.team.reviewRefusal = () => null;
+  fs.writeFileSync(path.join(w.dir, 'priority.json'), JSON.stringify({ items: ['pr:30'] }));
+  const prs = [openPr(30), openPr(31)], plan = () => { const rq = w.team.reviewQueue('claude', prs); return [rq.map(r => r.pr.number), w.team.reviewOrder('claude', rq.map(r => r.pr), rq).map(p => p.number)]; };
+  const [shown, planned] = plan(); assert.deepEqual(shown, [30, 31]); assert.deepEqual(planned, shown);
+  fs.writeFileSync(path.join(w.dir, 'priority.json'), JSON.stringify({ items: [] }));
+  assert.deepEqual(plan()[1], [31, 30], 'without a priority the sole-reviewer rule still leads');
+  fs.writeFileSync(path.join(w.dir, 'priority.json'), JSON.stringify({ items: ['pr:31'] })); w.team.s.reviewSince[30] = 5000 - 48 * 3600000;
+  assert.deepEqual(plan(), [[30, 31], [30, 31]], 'a starved review leads in both');
+});
+test('priority: the MCP tool accepts a priority item without a title, writes only to items/, and refuses a bad list', async t => {
+  const dir = makeInbox(t), tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: createInbox({ dir }) });
+  const ok = await tools.call('foreman_propose', PRIO(['pr:3'])); assert.equal(ok.isError, false);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['items', 'status']); assert.equal(fs.readdirSync(path.join(dir, 'items')).length, 1);
+  for (const bad of [{ kind: 'priority' }, PRIO(['pr:0']), PRIO(['pr:1', 'pr:1']), { ...PRIO(['pr:1']), why: TOKEN }, { ...PRIO(['pr:1']), title: 't' }]) assert.equal((await tools.call('foreman_propose', bad)).isError, true, JSON.stringify(bad).slice(0, 50));
+  assert.equal(fs.readdirSync(path.join(dir, 'items')).length, 1);
+});

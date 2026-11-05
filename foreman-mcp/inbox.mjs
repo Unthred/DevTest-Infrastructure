@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 
-export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, items: 60 };   // items: files in the directory at once (Foreman removes finished ones)
+export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, items: 60, priorityItems: 20 };   // items: files in the directory at once (Foreman removes finished ones)
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
 
@@ -15,12 +15,18 @@ const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|
 export function checkProposal(args) {
   const a = args && typeof args === 'object' ? args : {};
   const kind = a.kind;
-  if (!['prompt', 'issue_draft'].includes(kind)) return { ok: false, error: 'kind must be "prompt" or "issue_draft"' };
-  const bodyKey = kind === 'prompt' ? 'prompt' : 'body', allowed = ['kind', 'title', bodyKey, 'why'];
+  if (!['prompt', 'issue_draft', 'priority'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft" or "priority"' };
+  const bodyKey = kind === 'prompt' ? 'prompt' : 'body', allowed = kind === 'priority' ? ['kind', 'items', 'why'] : ['kind', 'title', bodyKey, 'why'];
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, error: `unknown argument: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const item = { kind };
-  for (const k of ['title', bodyKey, 'why']) {
+  if (kind === 'priority') {   // issue #628: applied by Foreman without an approval click; the order cannot raise spending
+    const l = a.items;
+    if (!Array.isArray(l) || l.length > LIMITS.priorityItems || l.some(x => typeof x !== 'string' || !/^(pr|issue):[1-9]\d{0,6}$/.test(x))) return { ok: false, error: `items must be a list of at most ${LIMITS.priorityItems} entries like "pr:12" or "issue:34" (an empty list clears the order)` };
+    if (new Set(l).size !== l.length) return { ok: false, error: 'items names the same pull request or issue twice' };
+    item.items = l;
+  }
+  for (const k of kind === 'priority' ? ['why'] : ['title', bodyKey, 'why']) {
     const v = a[k];
     if (v === undefined && k === 'why') continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
@@ -30,7 +36,7 @@ export function checkProposal(args) {
     if (ATTRIBUTION.some(re => re.test(v))) return { ok: false, error: `${k} contains AI attribution text, which this project does not allow` };
     item[k] = v;
   }
-  if (/[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
+  if (item.title && /[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
   return { ok: true, item };
 }
 
