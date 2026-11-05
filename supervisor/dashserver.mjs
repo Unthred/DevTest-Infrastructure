@@ -16,7 +16,7 @@ import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
 import { matchRoute, nextTickHtml, renderRoute, processesFragment } from './dashrender.mjs';
-import { createSampler } from './procsample.mjs';
+import { createSampler, createJobReader } from './procsample.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
@@ -133,7 +133,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
   const source = configSource(config);
   const activeStreams = new Set();
   // Issue #568: one cached /proc reading shared by every tab (10 s); a new one is taken only when a page or the poll asks for it.
-  const procs = sampler || createSampler({ readJobs: () => readJobs(root), now });
+  const procs = sampler || createSampler({ readJobs: createJobReader(root), now });
   const allowedHost = `${host}:${port}`;
   // Mark as read (issue #253): the only write. Same-origin form POST; moves the marker to the time the page was built, so work that
   // finished between page load and click is still shown next time. It can never move the marker backwards or into the future.
