@@ -6,6 +6,33 @@ import path from 'node:path';
 import { requestWake, clearPending, waitForTurn, wakePassLock, wakeTarget, WAKE_MAX_PER_HOUR } from '../supervisor/wake.mjs';
 
 const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
+// Cleanup waits for a real completion signal instead of killing or sleeping: a wake pass can still be writing into the state directory when a
+// test ends (the job it just resumed ends, which requests one more pass). Everything the state directory records as running is checked by
+// pid and start time: the pending wake marker, every lock owner and every job worker or child. Quiet means none is alive (this process
+// excluded). If something is still alive at the deadline it is killed and the cleanup fails with a message naming it.
+function runningInState(root) {
+  const live = [], seen = new Set(), read = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+  const cmd = pid => { try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean).slice(1, 5).map(a => path.basename(a)).join(' ').slice(0, 80); } catch { return '?'; } };
+  const kids = pid => { try { const c = fs.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8').trim().split(' ').filter(Boolean).slice(0, 3); return c.length ? ' [children: ' + c.map(k => `${k}=${cmd(k)}`).join('; ') + ']' : ''; } catch { return ''; } };
+  const add = (what, pid, start) => { if (Number.isInteger(pid) && pid !== process.pid && !seen.has(pid) && start != null && processStart(pid) === start) { seen.add(pid); live.push({ what, pid, cmd: cmd(pid) + kids(pid) }); } };
+  const pending = read(path.join(root, 'team', 'wake.json'))?.pending; if (pending) add('pending wake pass', pending.pid, pending.start);
+  try { for (const n of fs.readdirSync(path.join(root, 'team'))) if (n.endsWith('.lock')) { const o = read(path.join(root, 'team', n, 'owner.json')); if (o) add('holder of ' + n, o.pid, o.start); } } catch { /* no team directory */ }
+  try { for (const n of fs.readdirSync(path.join(root, 'jobs'))) if (n.endsWith('.json')) { const j = read(path.join(root, 'jobs', n)); if (j) { add('worker of job ' + n.slice(0, 8), j.workerPid, j.workerStart); add('child of job ' + n.slice(0, 8), j.childPid, j.childStart); } } } catch { /* no jobs directory */ }
+  return live;
+}
+async function cleanupWhenQuiet(root, remove, { quietMs = 10000, jobsMs = 30000 } = {}) {
+  const wait = async ms => { const end = Date.now() + ms; let live = runningInState(root); while (live.length && Date.now() < end) { await new Promise(r => setTimeout(r, 100)); live = runningInState(root); } return live; };
+  const kill = list => { for (const l of list) { try { process.kill(l.pid, 'SIGKILL'); } catch { /* gone */ } } };
+  // 1. a wake pass normally ends by itself after the assertions; give it the chance.
+  let live = await wait(quietMs);
+  // 2. a pass can legitimately idle in its own upgrade step after the test has what it needs. Stop it on purpose, then wait for the jobs it started
+  //    to finish: they are what would still be writing into the directory.
+  const passes = live.filter(l => /wake pass|holder of/.test(l.what));
+  if (passes.length) { kill(passes); live = await wait(jobsMs); }
+  if (live.length) kill(live);
+  remove();
+  if (live.length) throw new Error(`test cleanup: still running after ${Math.round((quietMs + jobsMs) / 1000)} s and killed: ${live.map(l => `${l.what} (pid ${l.pid}: ${l.cmd})`).join(', ')}`);
+}
 const spawner = () => { const calls = []; return { calls, spawnWake: r => { calls.push(r); return { pid: 100 + calls.length, start: 's' }; } }; };
 
 test('job end requests one wake; a second while one is pending is merged', t => {
@@ -99,7 +126,7 @@ const cli = path.join(here, '..', 'supervisor', 'cli.mjs'), register = path.join
 function world(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-cli-'));
   const root = path.join(dir, 'state'), bin = path.join(dir, 'bin'), ghlog = path.join(dir, 'gh-calls');
-  t.after(() => { for (const f of ['wake.json']) { try { const p = JSON.parse(fs.readFileSync(path.join(root, 'team', f), 'utf8')).pending; if (p?.pid) process.kill(p.pid, 'SIGKILL'); } catch { /* none */ } } fs.rmSync(dir, { maxRetries: 8, retryDelay: 250, recursive: true, force: true }); });
+  t.after(() => cleanupWhenQuiet(root, () => fs.rmSync(dir, { maxRetries: 8, retryDelay: 250, recursive: true, force: true })));
   fs.mkdirSync(path.join(root, 'team'), { recursive: true, mode: 0o700 }); fs.chmodSync(root, 0o700); fs.mkdirSync(bin);
   const exe = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   exe('gh', `echo "$*" >> '${ghlog}'\necho "[]"`);
@@ -299,7 +326,7 @@ function plannerWorld(t) {
   for (const id of ['fake', 'claude', 'codex']) { fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify(manifest(id))); providers[id] = { adapter: 'base', manifest: id + '.json' }; }
   const registry = path.join(dir, 'registry.json'); fs.writeFileSync(registry, JSON.stringify({ schemaVersion: 1, providers }));
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-  t.after(() => { try { const p = JSON.parse(fs.readFileSync(path.join(root, 'team', 'wake.json'), 'utf8')).pending; if (p?.pid) process.kill(p.pid, 'SIGKILL'); } catch { /* none */ } fs.rmSync(dir, { maxRetries: 8, retryDelay: 250, recursive: true, force: true }); });
+  t.after(() => cleanupWhenQuiet(root, () => fs.rmSync(dir, { maxRetries: 8, retryDelay: 250, recursive: true, force: true })));
   const ghCalls = pat => (fs.existsSync(ghlog) ? fs.readFileSync(ghlog, 'utf8').split('\n').filter(l => pat.test(l)).length : 0);
   const sh = (cwd, ...a) => git(cwd, ...a);
   const make = async issue => { const worktree = path.join(dir, 'wt' + issue); sh(repo, 'worktree', 'add', '-qb', 'issue-' + issue, worktree); return createJob(root, { role: 'devtest', provider: 'fake', repository: repo, worktree, issue, scope: 'fixture', allowed_actions: ['read'], prompt: 'x', handover: 'H.md', autoResume: true }, registry); };
