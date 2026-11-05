@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Team, TOP_LEVEL_DIRS, ROOT_FILES, applyLocalOverride, validateTeamConfig, weeklyAtOf, touchesPaths } from '../supervisor/team.mjs';
+import { Team, TOP_LEVEL_DIRS, ROOT_FILES, applyLocalOverride, isTrivialSlip, validateTeamConfig, weeklyAtOf, touchesPaths } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { outOfAllowance } from '../supervisor/interim.mjs';
 
@@ -319,6 +319,12 @@ test('#479: widened count slips still refuse effect claims', async t => {
     assert.equal(r.report.ingested.at(-1).error, undefined, claim);
     assert.equal(w.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES', claim);
   }
+});
+test('#592: a bare file name with a listed extension is accepted without an existence check; a slashed token needs the extension too', () => {
+  // Known, accepted limit: the check is lexical, so a count slip may name a file that does not exist.
+  assert.equal(isTrivialSlip('adds 3 tests disable.sh'), true);
+  assert.equal(isTrivialSlip('adds 3 tests tests/fix.retry'), false);
+  assert.equal(isTrivialSlip('adds 3 tests tests/fix.mjs'), true);
 });
 test('#419: the review prompt asks for one complete pass and sends far-fetched cases to follow-ups', async t => {
   const w = reqWorld(t); const { spec } = await startReview(w);
