@@ -104,7 +104,7 @@ test('the browser script keys the saved layout by breakpoint and never reads or 
   assert.match(js, /dash\.layout\.\$\{page\}\.\$\{bpNow\(\)\}/);
   assert.doesNotMatch(js, /XMLHttpRequest|WebSocket|sendBeacon|eval\(|new Function|innerHTML|document\.write|import\(/);
   // Issue #61: the one network use is a same-origin GET of the page's own address to update a table in place; nothing is sent.
-  assert.equal((js.match(/fetch\(/g) || []).length, 2, 'exactly two fetches: the table update and the app bar Next stat refresh (both same-origin GETs)');
+  assert.equal((js.match(/fetch\(/g) || []).length, 3, 'exactly three fetches: the table update, the app bar Next stat refresh and the in-place refresh (issue #431), all same-origin GETs');
   assert.match(js, /url = location\.pathname \+ \(qs/); assert.match(js, /fetch\(url, \{ headers: \{ accept: 'text\/html' \}, credentials: 'same-origin' \}\)/);
   assert.doesNotMatch(js, /method:\s*['"](?!GET)|body:\s/, 'no request carries a body');
 });

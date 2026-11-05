@@ -1,7 +1,7 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
 // scroll restoration (all saved per breakpoint, in this browser only). It sends nothing; its only network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
-import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
+import { COPY_FEEDBACK_MS, planRefresh, refreshBlocked, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends, initResetLayout } from './legend.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -11,6 +11,18 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: the layout simply is not remembered */ } },
   del(k) { try { localStorage.removeItem(k); } catch { /* nothing to remove */ } }
 };
+
+// What the server sent, per region, taken before this script changes anything (issue #431). A card is swapped by its content; its header
+// (title, handle, buttons) and resize handles stay, as does the card element, so layout, collapsed and expanded state survive.
+const swapNodes = c => [...c.children].filter(n => !n.matches('header, .resize'));
+const regionsOf = root => {
+  const m = {};
+  $$('.card[data-card]', root).forEach(c => { m['card:' + c.dataset.card] = (c.querySelector(':scope > header h2')?.outerHTML || '') + swapNodes(c).map(n => n.outerHTML).join(''); });   // the title carries live counts, so it is part of the card's markup
+  $$('header.statusbar .stat', root).forEach((e, k) => { m['stat:' + k] = e.outerHTML; });
+  return m;
+};
+let served = regionsOf(document), refreshing = false;
+let bindAddedCard = () => {};   // set once the grid code below has run: wires a card that appeared during a refresh
 
 // theme
 const root = document.documentElement;
@@ -61,10 +73,11 @@ initLegends({ document, store, legendKey });
 // expand a chart card to a modal
 let scrim = null;
 function collapse() { $('.card.expanded')?.classList.remove('expanded'); scrim?.remove(); scrim = null; }
-for (const b of $$('[data-expand]')) b.addEventListener('click', () => {
+const bindExpand = b => b.addEventListener('click', () => {
   const card = b.closest('.card'); if (card.classList.contains('expanded')) return collapse();
   collapse(); card.classList.add('expanded'); scrim = document.createElement('div'); scrim.className = 'scrim'; scrim.addEventListener('click', collapse); document.body.append(scrim); b.focus();
 });
+for (const b of $$('[data-expand]')) bindExpand(b);
 addEventListener('keydown', e => { if (e.key === 'Escape') collapse(); });
 
 // phone: tap a table row to open it (but not when the tap was on a button, link or the detail toggle inside it)
@@ -203,13 +216,82 @@ function restoreScroll() {
 history.scrollRestoration = 'manual';
 // The periodic refresh is driven from here, not by a <meta refresh>: a declarative refresh keeps the address the page loaded
 // with, so it would undo an in-place table change (replaceState). Without script the <noscript> meta still refreshes.
+// Issue #431: the refresh is done in place. It fetches the same address and replaces only the cards and status-bar items whose
+// markup changed. A card element itself stays (its place, size, collapsed or expanded state and handlers, the scroll position and the
+// focus are untouched). A card that appeared is inserted and wired, one that vanished is removed; the page is never reloaded, and a
+// failed fetch simply waits for the next tick. The controls inside a swapped card body (legends, table bar, copy buttons) are wired again.
+function rewire(scope) {
+  initLegends({ document, store, legendKey, scope });
+  for (const region of $$('[data-tregion]', scope)) bindTable(region);
+  bindCopy(scope);
+}
+function syncStats(doc, plan) {   // only the items the plan names: a countdown the script ticked is not "changed" by the server
+  const live = $$('header.statusbar .stat'), fresh = $$('header.statusbar .stat', doc);
+  fresh.forEach((f, k) => {
+    const id = 'stat:' + k;
+    if (!plan.changed.includes(id) && !plan.added.includes(id)) return;
+    localizeTimes(f);
+    if (live[k]) live[k].replaceWith(f);
+    else (live[k - 1] || $('header.statusbar'))?.after(f);
+    live[k] = f;
+  });
+  live.slice(fresh.length).forEach(e => e.remove());
+}
+function syncCards(doc, plan) {
+  const liveOf = id => $$('.card[data-card]').find(c => c.dataset.card === id);
+  const freshCards = $$('.card[data-card]', doc), freshIds = freshCards.map(c => c.dataset.card);
+  for (const c of $$('.card[data-card]')) if (!freshIds.includes(c.dataset.card)) { if (c.classList.contains('expanded')) collapse(); c.remove(); }
+  freshCards.forEach((fresh, k) => {
+    const live = liveOf(fresh.dataset.card);
+    if (!live) {   // a card that appeared: insert it next to its neighbours, then wire it like the ones from the first load
+      localizeTimes(fresh);
+      const prev = freshCards.slice(0, k).reverse().map(c => liveOf(c.dataset.card)).find(Boolean);
+      const nextLive = freshCards.slice(k + 1).map(c => liveOf(c.dataset.card)).find(Boolean);
+      if (prev) prev.after(fresh); else if (nextLive) nextLive.before(fresh); else (grid || $('#main') || document.body).append(fresh);
+      $$('[data-expand]', fresh).forEach(bindExpand);
+      bindAddedCard(fresh); rewire(fresh);
+      return;
+    }
+    if (!plan.changed.includes('card:' + fresh.dataset.card)) return;
+    const focusAt = live.contains(document.activeElement) ? Array.from(live.querySelectorAll('*')).indexOf(document.activeElement) : -1;
+    const focusTag = focusAt >= 0 ? document.activeElement.tagName : '';
+    const openDetails = $$('details', live).map(d => d.open), openRows = $$('tr', live).map(r => r.classList.contains('open'));
+    localizeTimes(fresh);
+    const old = swapNodes(live), next = swapNodes(fresh);
+    const lh = $('header h2', live), fh = $('header h2', fresh);   // the title text and the labels built from it update in place; the bound header buttons stay
+    if (lh && fh) { if (lh.textContent !== fh.textContent) lh.textContent = fh.textContent; const lab = $$('header [aria-label]', live); $$('header [aria-label]', fresh).forEach((e, j) => { const t = lab[j]; if (t && !t.matches('[data-collapse]') && t.getAttribute('aria-label') !== e.getAttribute('aria-label')) t.setAttribute('aria-label', e.getAttribute('aria-label')); }); }
+    if (old.length) { old.slice(1).forEach(n => n.remove()); old[0].replaceWith(...next); } else live.append(...next);
+    $$('details', live).forEach((d, j) => { if (openDetails[j]) d.open = true; });
+    $$('tr', live).forEach((r, j) => { if (openRows[j]) r.classList.add('open'); });
+    rewire(live);
+    // keyboard focus survives the body swap: the same element position is focused again
+    if (focusAt >= 0) { const el = Array.from(live.querySelectorAll('*'))[focusAt]; if (el && el.tagName === focusTag) el.focus({ preventScroll: true }); }
+  });
+}
+async function refreshInPlace() {
+  if (refreshing) return; refreshing = true;
+  try {
+    const ae = document.activeElement;
+    if (refreshBlocked({ typing: !!ae?.matches?.('input,textarea,select,[contenteditable]'), dragging: !!$('.dragging,.resizing,.dock-zones,.copy-manual'), selecting: !!getSelection()?.toString() })) return;
+    const res = await fetch(location.pathname + location.search, { headers: { accept: 'text/html' }, credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const now = regionsOf(doc), plan = planRefresh(served, now), y = scrollY;
+    syncStats(doc, plan); syncCards(doc, plan);
+    paintCollapsed(); if (!plan.sameSet) gridApply();
+    served = now; tickClock();
+    if (scrollY !== y) scrollTo(scrollX, y);
+  } catch { /* keep the page as it is; the next tick tries again */ }
+  finally { refreshing = false; }
+}
 {
   const secs = Number($('meta[name=refresh-seconds]')?.content) || 60;
-  setInterval(() => { saveScroll(); location.reload(); }, secs * 1000);
+  setInterval(refreshInPlace, secs * 1000);
 }
 
 // movable and resizable cards
 const grid = $('.cards[data-layout]');
+let gridApply = () => {};
 const bpNow = () => breakpointOf(innerWidth);
 
 // collapsing cards (issue #61): double-click a card header or use its chevron. Saved with the layout, per breakpoint and page, by
@@ -274,7 +356,7 @@ async function loadTable(region, qs, { syncInput = false } = {}) {
     if (hadFocus && !document.contains(hadFocus) && focusTitle) $$('[title]', region).find(a => a.getAttribute('title') === focusTitle)?.focus({ preventScroll: true });
   } catch { if (tableSeq.get(id) === seq) fallbackNavigate(url); }
 }
-for (const region of $$('[data-tregion]')) {
+function bindTable(region) {
   const id = region.dataset.tregion, form = $('form.tbar', region);
   const search = $('input[type=search]', region);
   const typed = debounce(() => loadTable(region, tableChange(location.search, id, { q: search.value.trim() })), FILTER_DEBOUNCE_MS);
@@ -289,6 +371,7 @@ for (const region of $$('[data-tregion]')) {
     loadTable(region, mergeTableParams(location.search, u.search, id), { syncInput: true });
   });
 }
+for (const region of $$('[data-tregion]')) bindTable(region);
 
 // back to top (issue #61): shown after scrolling down, smooth unless the viewer prefers reduced motion; focus returns to the page start
 {
@@ -327,9 +410,10 @@ if (grid) {
   }
   apply(); let last = bpNow(); addEventListener('resize', () => { if (bpNow() !== last) { last = bpNow(); apply(); } });
   // keyboard / touch reorder
-  for (const b of $$('[data-move]', grid)) b.addEventListener('click', () => {
+  const bindMove = b => b.addEventListener('click', () => {
     const c = b.closest('.card'); lay.order = moveItem(lay.order, c.dataset.card, Number(b.dataset.move)); save(); apply(); b.focus();
   });
+  for (const b of $$('[data-move]', grid)) bindMove(b);
   // geometry helpers for snapping: one grid column pitch, and the card's size in columns
   const gap = () => parseFloat(getComputedStyle(grid).columnGap) || 0;
   const cols = () => (bpNow() === 'tablet' ? 6 : 12);
@@ -348,8 +432,8 @@ if (grid) {
     $('.rz-key', c)?.setAttribute('aria-valuenow', r.span);
   }
   let drag = null;
-  for (const c of cards()) {
-    const h = $('[data-handle]', c); if (!h) continue;
+  const bindCard = c => {
+    const h = $('[data-handle]', c); if (!h) return;
     // drag the header handle to reorder (pointer devices)
     h.draggable = true;
     h.addEventListener('dragstart', e => { drag = c; c.classList.add('dragging'); e.dataTransfer.setData('text/plain', c.dataset.card); e.dataTransfer.effectAllowed = 'move'; });
@@ -374,7 +458,10 @@ if (grid) {
       const d = { ArrowRight: ['e', 1, 0], ArrowLeft: ['e', -1, 0], ArrowDown: ['s', 0, 1], ArrowUp: ['s', 0, -1] }[e.key]; if (!d || bpNow() === 'phone') return;
       e.preventDefault(); setSize(c, d[0], d[1] * pitch(), d[2] * ROW_STEP, { span: spanOf(c), h: c.offsetHeight }); save();
     });
-  }
+  };
+  for (const c of cards()) bindCard(c);
+  gridApply = apply;
+  bindAddedCard = c => { $$('[data-move]', c).forEach(bindMove); bindCard(c); };
   initResetLayout({ document, store, layoutKey: key, legendKey, reload: () => location.reload() });
 }
 requestAnimationFrame(() => requestAnimationFrame(restoreScroll));

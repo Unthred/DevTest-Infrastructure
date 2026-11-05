@@ -230,7 +230,7 @@ test('the periodic refresh is script-driven so it keeps an in-place table addres
   const html = (await (await serve(t)).get('/work')).body;
   assert.match(html, /<noscript><meta http-equiv="refresh" content="60"><\/noscript>/);
   assert.doesNotMatch(html.replace(/<noscript>.*?<\/noscript>/s, ''), /http-equiv="refresh"/);
-  assert.match(appJs, /setInterval\(\(\) => \{ saveScroll\(\); location\.reload\(\); \}/);
+  assert.match(appJs, /setInterval\(refreshInPlace, secs \* 1000\)/);   // issue #431: in place, never a reload
   assert.doesNotMatch(appJs, /\bscrollKey\b/);   // the key is computed from the current address at save and restore time
   assert.match(appJs, /scrollKeyNow\(\)/);
 });
