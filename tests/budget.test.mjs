@@ -525,10 +525,13 @@ test('budget #627: the latch lets go by itself once the forecast is back under t
 });
 test('budget #627: a token-shaped value in a latched reason does not reach the reason or the mode line', () => {
   const secret = ['gh', 'p_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('');   // assembled at run time
-  const now = R0 + 40 * HOUR, hot = []; for (let t = now - 24 * HOUR; t <= now; t += 15 * 60000) hot.push({ at: t, used: 0.01 * ((t - (now - 24 * HOUR)) / HOUR), resetsAt: R1 });
-  const a = assessAgent({ allowance: claudeAt(now, 0.24), history: hot, now, latched: { mode: 'reviews_only', since: R0, until: R1, reason: `weekly 8%, token ${secret}` } });
+  // 22.6% used 40h in projects to about 95% of the limit: inside the 90-100% band, so the latch holds and its reason is read
+  const now = R0 + 40 * HOUR;
+  const a = assessAgent({ allowance: claudeAt(now, 0.226), now, settings: { ...DEFAULT_BUDGET, recent_min_window_hours: 0 }, latched: { mode: 'reviews_only', since: R0, until: R1, reason: `weekly 8%, token ${secret}` } });
   assert.equal(a.mode, 'reviews_only');
+  assert.match(a.reason, /held until the weekly reset/, 'the latched-hold branch was reached');
   assert.ok(!a.reason.includes(secret));
+  assert.match(a.reason, /\[token\]/);
   assert.ok(!modeLine('claude', { ...a, reason: `x token ${secret}` }, 'UTC').includes(secret));
 });
 test('budget #627: the new settings are validated and overridable', () => {
