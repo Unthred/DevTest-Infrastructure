@@ -11,13 +11,15 @@
 import { SupervisorError } from './core.mjs';
 
 export const HOUR = 3600000;
-export const DEFAULT_BUDGET = { enabled: true, projected_limit: 1, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
+export const DEFAULT_BUDGET = { enabled: true, projected_limit: 1, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, recent_min_window_hours: 12, recent_min_samples: 12, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
 // Early in a window one or two percent over an hour is noise, not a rate: projections use at least this share of the window as elapsed time (issue #159).
 export const MIN_ELAPSED_FRACTION = 0.05;
+// The latch releases when the forecast is at or under this share of the limit, so a forecast hovering at the limit does not flip the mode every tick.
+export const LATCH_RELEASE_FRACTION = 0.9;
 export const REVIEWS_ONLY_TYPES = new Set(['review', 'fix', 'cifix', 'rebase']);
 const WEEK_MINUTES = 10080;
 const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
-const KEYS = ['enabled', 'projected_limit', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
+const KEYS = ['enabled', 'projected_limit', 'high_water', 'high_water_min_hours', 'recent_hours', 'recent_min_window_hours', 'recent_min_samples', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
 
 export function validateBudgetConfig(b, agentNames) {
   if (b === undefined) return;
@@ -26,7 +28,7 @@ export function validateBudgetConfig(b, agentNames) {
   if (bad) throw new SupervisorError(`invalid budget config: unknown key ${bad}`);
   const num = (k, lo, hi) => { if (k in b && !(Number.isFinite(b[k]) && b[k] >= lo && b[k] <= hi)) throw new SupervisorError(`invalid budget config: ${k}`); };
   if ('enabled' in b && typeof b.enabled !== 'boolean') throw new SupervisorError('invalid budget config: enabled');
-  num('projected_limit', 0.5, 1.5); num('high_water', 0.5, 1); num('high_water_min_hours', 0, 168); num('recent_hours', 1, 168); num('exhausted_at', 0.9, 1);
+  num('projected_limit', 0.5, 1.5); num('high_water', 0.5, 1); num('high_water_min_hours', 0, 168); num('recent_hours', 1, 168); num('recent_min_window_hours', 0, 168); num('recent_min_samples', 2, 10000); num('exhausted_at', 0.9, 1);
   num('probe_age_hours', 0.25, 48); num('probe_interval_minutes', 5, 1440);
   if ('probe' in b && typeof b.probe !== 'boolean') throw new SupervisorError('invalid budget config: probe');
   if ('can_take_over' in b && !(Array.isArray(b.can_take_over) && b.can_take_over.every(n => agentNames.includes(n))))
@@ -55,9 +57,9 @@ export function weeklyHistory(snapshots, agent, current = null) {
 }
 // Recent burn in fraction-of-allowance per hour, from readings of the same weekly window over the last `hours`.
 // Needs two readings at least two hours apart; otherwise null (the window average is used alone).
-export function recentRate(history, resetsAt, now, hours) {
+export function recentRate(history, resetsAt, now, hours, minSamples = 2) {
   const pts = history.filter(p => sameReset(p.resetsAt, resetsAt) && now - p.at <= hours * HOUR && p.at <= now);
-  if (pts.length < 2) return null;
+  if (pts.length < Math.max(2, minSamples)) return null;   // issue #627: a few readings are not a rate
   const span = (pts.at(-1).at - pts[0].at) / HOUR;
   return span >= 2 ? Math.max(0, (pts.at(-1).used - pts[0].used) / span) : null;
 }
@@ -120,8 +122,12 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (weekly) {
     const windowH = (weekly.windowMinutes || WEEK_MINUTES) / 60, hoursLeft = (weekly.resetsAt - now) / HOUR;
     const average = weekly.utilization / Math.max(windowH * MIN_ELAPSED_FRACTION, windowH - hoursLeft);
-    const recent = recentRate(history, weekly.resetsAt, now, settings.recent_hours);
+    // Issue #627: the first hours after a reset are a burst, not a rate. Until recent_min_window_hours of the window have passed no forecast
+    // can hold an agent (actual use against the high-water mark still does), and a recent rate also needs recent_min_samples readings.
+    const early = windowH - hoursLeft < settings.recent_min_window_hours;
+    const recent = early ? null : recentRate(history, weekly.resetsAt, now, settings.recent_hours, settings.recent_min_samples);
     const rate = Math.max(average, recent ?? 0);
+    out.early = early; out.minWindowHours = settings.recent_min_window_hours;
     Object.assign(out, { known: true, used: weekly.utilization, resetsAt: weekly.resetsAt, hoursLeft, ratePerHour: rate, rateSource: recent !== null && recent > average ? 'recent' : 'window average',
       projected: weekly.utilization + rate * hoursLeft, runsOutAt: weekly.utilization >= 1 ? now : rate > 0 ? now + ((1 - weekly.utilization) / rate) * HOUR : null, costs: jobCosts(jobs, weekly, now) });
   } else out.reason = windows.length ? 'no weekly window reported' : 'no current allowance reading (window reset since the last report)';
@@ -135,14 +141,17 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (reported) return { ...out, mode: 'waiting', until: reported.until, reason: reported.reason };
   if (!weekly) return out;
   // reviews_only: projected to run out before the reset, or at or above the high-water mark with more than a day to go
-  const fig = `weekly ${pct(out.used)}, projected ${pct(out.projected)} at reset (${hrs(out.hoursLeft)} left, ${out.rateSource})`;
-  if (out.projected > settings.projected_limit) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${fig}: runs out before the reset at the current rate` };
+  const fig = `weekly ${pct(out.used)}, projected ${pct(out.projected)} at reset (${hrs(out.hoursLeft)} left, ${out.rateSource})` + (out.early ? `; no forecast yet, under ${out.minWindowHours}h into the window: judged by actual use against the ${pct(settings.high_water)} high-water mark` : '');
+  if (!out.early && out.projected > settings.projected_limit) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${fig}: runs out before the reset at the current rate (rule: ${out.rateSource === 'recent' ? 'recent rate' : 'window average'} over the limit)` };
   if (out.used >= settings.high_water && out.hoursLeft > settings.high_water_min_hours) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${fig}: at or above ${pct(settings.high_water)} with more than ${settings.high_water_min_hours}h to go` };
   // Hysteresis: once reviews-only in a weekly window, stay so until that window resets ("ownership goes back at the reset").
   // Issue #110: a fresh probe reading taken after the latch was set is new evidence. The checks above already found that the
   // agent no longer projects to run out and is below the high-water mark, so the latch is released (the caller records and alerts it).
   const probed = allowance.source === 'probe' && Number.isFinite(allowance.observedAt) && Number.isFinite(latched?.since) && allowance.observedAt > latched.since;
   if (latched?.mode === 'reviews_only' && sameReset(latched.until, weekly.resetsAt) && probed) return { ...out, reason: `${fig}; the reviews-only latch was released by a fresh allowance probe` };
+  // Issue #627: a short burst must not hold an agent for the week. The checks above found the agent below the high-water mark; once the forecast is
+  // also clearly back under the limit (or too early in the window to be judged) the latch lets go by itself, with no probe.
+  if (latched?.mode === 'reviews_only' && sameReset(latched.until, weekly.resetsAt) && (out.early || out.projected <= settings.projected_limit * LATCH_RELEASE_FRACTION)) return { ...out, reason: `${fig}; the reviews-only latch released itself: the forecast is back under the limit` };
   if (latched?.mode === 'reviews_only' && sameReset(latched.until, weekly.resetsAt)) return { ...out, mode: 'reviews_only', until: weekly.resetsAt, reason: `${latched.reason || fig}; held until the weekly reset` };
   return { ...out, reason: fig };
 }

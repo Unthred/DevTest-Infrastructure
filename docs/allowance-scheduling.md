@@ -54,7 +54,8 @@ Fix-round re-reviews are diff-scoped (#45). When the reviewer is low (not `norma
 | `high_water` | `0.85` | weekly use at or above which … |
 | `high_water_min_hours` | `24` | … with more than this many hours to the reset makes it `reviews_only` |
 | `recent_hours` | `24` | readings used for the recent rate |
-| `exhausted_at` | `0.995` | a window at or above this is used up (`waiting`) |
+| `recent_min_window_hours` | `12` | issue #627: no forecast can make an agent `reviews_only` until this many hours of the weekly window have passed (the first hours after a reset are a burst, not a rate); until then only actual use against `high_water`, and `exhausted_at`, apply, and the dashboard says so |
+| `recent_min_samples` | `12` | issue #627: readings needed inside `recent_hours` before the recent rate is used; with fewer, the window average alone judges || `exhausted_at` | `0.995` | a window at or above this is used up (`waiting`) |
 | `probe` | `true` | allow allowance probes (below) |
 | `probe_age_hours` | `2` | a held agent whose newest reading is older than this is probed |
 | `probe_interval_minutes` | `60` | at most one probe attempt per agent in this time, successful or not |
@@ -75,4 +76,5 @@ A held agent (`reviews_only` or `waiting`) runs no job, so its reading never ref
 - **What is kept.** Only the allowance record (windows, status, billing flags) with `source: "probe"` and the probe time, in the dashboard cache next to the session-log probe. Message text, session ids and raw output are never stored.
 - **When.** Only while the agent is `reviews_only` or `waiting` and its newest reading is older than `probe_age_hours`, and once just after a reported reset time passes. Never while `normal`. At most one attempt per agent per `probe_interval_minutes`. Not when the last reading shows paid overage in use for a window that has not reset, nor while a window that has not reset is used up, whatever the overage status, nor while a job of the provider waits on a usage limit (D-019: no provider call while waiting; the reset probe comes after the reset). Never on a dry run.
 - **Latch.** A probe reading newer than the latch is new evidence: if the agent then no longer projects to run out and is below the high-water mark, the latch is released, the reason is recorded and the mode change is alerted once. A reading showing overage or an exhausted window leaves the agent `waiting`, as before. Credits are never used.
+- **Self-release (issue #627).** A short burst does not hold an agent for the week: once the checks above find it below the high-water mark and its forecast is at or under 90 % of `projected_limit` (or it is still too early in the window to forecast), the latch lets go by itself with no probe, and the reason says so. A forecast between 90 % and 100 % of the limit stays held, so the mode does not flip every tick.
 - **On demand.** `ai-supervisor probe <agent>` and the **Refresh allowance** button on the Usage page (a same-origin form post, the dashboard's only write) probe at once and show the reading's age. The planner uses the reading from the next tick.

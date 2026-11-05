@@ -90,8 +90,9 @@ test('recent rate from the snapshot history overrides a lower window average', (
   const history = weeklyHistory(snaps, 'codex', current);
   assert.equal(history.length, 3);
   assert.ok(Math.abs(recentRate(history, resetsAt, NOW, 24) - 0.15 / 6) < 1e-9);
-  const a = assessAgent({ allowance: current, history, now: NOW });
+  const a = assessAgent({ allowance: current, history, settings: { ...DEFAULT_BUDGET, recent_min_samples: 3 }, now: NOW });   // issue #627: three readings are enough only when the setting says so
   assert.equal(a.rateSource, 'recent'); assert.equal(a.mode, 'reviews_only');
+  assert.equal(assessAgent({ allowance: current, history, now: NOW }).rateSource, 'window average', 'by default three readings are not a rate');
   assert.equal(assessAgent({ allowance: current, now: NOW }).mode, 'normal', 'without history the window average alone is used');
   // negative: readings from another window, or under two hours apart, give no recent rate
   assert.equal(recentRate(history.map(p => ({ ...p, resetsAt: p.resetsAt - 7 * 24 * HOUR })), resetsAt, NOW, 24), null);
@@ -476,4 +477,54 @@ test('currentView shows the reassignment time in the given zone, and in the host
     process.env.TZ = 'Pacific/Auckland';
     assert.equal(await until({}), auckland, 'with no tz the host zone is used, not UTC');
   } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
+});
+
+// Issue #627. 5 Nov 2026: the weekly window began at 04:00; 5% used by 07:45 was projected as 280% and Claude was held for the week.
+const R0 = Date.parse('2026-11-05T04:00:00Z'), R1 = R0 + 7 * 24 * HOUR;
+const burst = (upto, per5 = 0) => { const h = []; for (let t = R0 + 5 * 60000; t <= upto; t += 5 * 60000) h.push({ at: t, used: Math.min(0.08, 0.05 * (t - R0) / (3.75 * HOUR)) + per5, resetsAt: R1 }); return h; };
+const claudeAt = (at, used) => claudeAl(used, { at, resetsAt: R1 });
+test('budget #627: 5% by 07:45 and 8% by 10:00 after a 04:00 reset stays normal, even with the old latch recorded', () => {
+  const latched = { mode: 'reviews_only', since: R0 + 2.3 * HOUR, until: R1, reason: 'weekly 5%, projected 280% at reset' };
+  for (const [at, used] of [[R0 + 3.75 * HOUR, 0.05], [R0 + 6 * HOUR, 0.08]]) {
+    const hist = burst(at);
+    for (const l of [null, latched]) {
+      const a = assessAgent({ allowance: claudeAt(at, used), history: hist, now: at, latched: l });
+      assert.equal(a.mode, 'normal', `${used} at ${new Date(at).toISOString()} latched=${!!l}: ${a.reason}`);
+      assert.match(a.reason, /no forecast yet, under 12h into the window/); assert.match(a.reason, /high-water mark/);
+    }
+  }
+  // the old rule, for contrast: with the minimum evidence switched off the same numbers hold the agent
+  const off = { ...DEFAULT_BUDGET, recent_min_window_hours: 0, recent_min_samples: 2 };
+  assert.equal(assessAgent({ allowance: claudeAt(R0 + 6 * HOUR, 0.08), history: burst(R0 + 6 * HOUR), settings: off, now: R0 + 6 * HOUR }).mode, 'reviews_only');
+});
+test('budget #627: a genuinely high sustained rate after the minimum evidence still gives reviews_only, and says which rule', () => {
+  const now = R0 + 20 * HOUR, hist = []; for (let t = R0 + 2 * HOUR; t <= now; t += 15 * 60000) hist.push({ at: t, used: 0.02 * ((t - R0) / HOUR - 1), resetsAt: R1 });   // 2%/h
+  const a = assessAgent({ allowance: claudeAt(now, 0.38), history: hist, now });
+  assert.equal(a.mode, 'reviews_only'); assert.equal(a.rateSource, 'recent'); assert.match(a.reason, /rule: recent rate over the limit/);
+  // too few readings in recent_hours: the window average alone judges (here it is high enough as well, and says so)
+  const few = assessAgent({ allowance: claudeAt(now, 0.38), history: hist.slice(-3), now });
+  assert.equal(few.rateSource, 'window average'); assert.equal(few.mode, 'reviews_only'); assert.match(few.reason, /rule: window average over the limit/);
+  // a modest rate with enough history stays normal
+  const calm = []; for (let t = R0 + 2 * HOUR; t <= now; t += 15 * 60000) calm.push({ at: t, used: 0.002 * ((t - R0) / HOUR), resetsAt: R1 });
+  assert.equal(assessAgent({ allowance: claudeAt(now, 0.04), history: calm, now }).mode, 'normal');
+  // high-water and exhausted do not wait for the minimum evidence
+  assert.equal(assessAgent({ allowance: claudeAt(R0 + 3 * HOUR, 0.9), history: [], now: R0 + 3 * HOUR }).mode, 'reviews_only');
+  assert.equal(assessAgent({ allowance: claudeAt(R0 + 3 * HOUR, 0.999), history: [], now: R0 + 3 * HOUR }).mode, 'waiting');
+});
+test('budget #627: the latch lets go by itself once the forecast is back under the limit, and holds while it is not', () => {
+  const now = R0 + 40 * HOUR, since = R0 + 6 * HOUR, latched = { mode: 'reviews_only', since, until: R1, reason: 'weekly 8%, projected 162% at reset' };
+  const flat = []; for (let t = now - 24 * HOUR; t <= now; t += 15 * 60000) flat.push({ at: t, used: 0.10 + 0.0005 * ((t - (now - 24 * HOUR)) / HOUR), resetsAt: R1 });
+  const released = assessAgent({ allowance: claudeAt(now, 0.112), history: flat, now, latched });   // not a probe reading, no probe needed
+  assert.equal(released.mode, 'normal'); assert.match(released.reason, /latch released itself/);
+  const hot = []; for (let t = now - 24 * HOUR; t <= now; t += 15 * 60000) hot.push({ at: t, used: 0.01 * ((t - (now - 24 * HOUR)) / HOUR), resetsAt: R1 });
+  const held = assessAgent({ allowance: claudeAt(now, 0.24), history: hot, now, latched });
+  assert.equal(held.mode, 'reviews_only'); assert.match(held.reason, /held until the weekly reset|runs out before the reset/);
+  // a forecast just under the limit does not release it (no flapping at the limit)
+  const near = assessAgent({ allowance: claudeAt(now, 0.11), history: [], now, latched, settings: { ...DEFAULT_BUDGET, projected_limit: 0.5, recent_min_window_hours: 0 } });
+  assert.equal(near.mode, 'reviews_only');
+});
+test('budget #627: the new settings are validated and overridable', () => {
+  validateBudgetConfig({ recent_min_window_hours: 6, recent_min_samples: 8 }, ['claude']);
+  for (const bad of [{ recent_min_window_hours: -1 }, { recent_min_window_hours: 200 }, { recent_min_samples: 1 }, { recent_min_samples: 'x' }]) assert.throws(() => validateBudgetConfig(bad, ['claude']), /invalid budget config/, JSON.stringify(bad));
+  assert.equal(DEFAULT_BUDGET.recent_min_window_hours, 12); assert.equal(DEFAULT_BUDGET.recent_min_samples, 12);
 });
