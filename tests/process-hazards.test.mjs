@@ -92,14 +92,15 @@ test('test-slot run --max-minutes stops the run, its grandchildren and returns n
   const env = { ...process.env, AI_SUPERVISOR_TEST_GRACE_MS: '300' };
   const r = spawnSync(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, '--max-minutes', '0.02', '--no-reuse', '--', fake, 'x'], { encoding: 'utf8', timeout: 30000, env, cwd: state });
   assert.notEqual(r.status, 0); assert.match(r.stderr, /maximum runtime/);
-  assert.equal(alive(Number(fs.readFileSync(pidFile, 'utf8'))), false, 'the job\'s child is gone after the timeout');
+  const gone = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.ok(await until(() => !alive(gone), 8000), 'the job\'s child is gone after the timeout');
   fs.rmSync(pidFile);
   const runner = spawn(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, '--no-reuse', '--', fake, 'x'], { env, cwd: state, stdio: 'ignore' });
   assert.ok(await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim()));
   const sleeper = Number(fs.readFileSync(pidFile, 'utf8'));
   runner.kill('SIGTERM');
   await new Promise(r => runner.on('exit', r));
-  assert.equal(alive(sleeper), false, 'SIGTERM on the runner reached the job group');
+  assert.ok(await until(() => !alive(sleeper), 8000), 'SIGTERM on the runner reached the job group');
 });
 
 test('a SIGKILLed test-slot runner does not orphan the job group: the watchdog kills it', async t => {
