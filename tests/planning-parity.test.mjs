@@ -162,6 +162,7 @@ test('`team status` reads the register from origin/main: no warning when readabl
   assert.ok(planned(readable).some(x => /:merge:119$/.test(x)), 'the register the CLI read is used: the interim PASS leads to a planned merge');
 });
 
+// Regression test only: the clock fix itself (weeklyUtilization(..., now) in supervisor/planning.mjs) landed with issue #495.
 test('allowanceOf judges window expiry by the clock given to planningInputs, not the wall clock', () => {
   const at = NOW - 3600000;
   const j = [{ id: 'd'.repeat(32), provider: 'codex', kind: 'review', status: 'completed', createdAt: at, updatedAt: at, allowance: codexAl(0.5, at) }];
