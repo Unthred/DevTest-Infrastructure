@@ -115,9 +115,12 @@ test('resume all clears the global halt too; only a terminal can resume', () => 
   assert.equal(s.global, null);
   B.evaluate(s, L, NOW + 2);
   assert.equal(s.global, null);
-  assert.equal(B.resumeAllowed({ stdin: { isTTY: false }, stdout: { isTTY: true } }), false);
-  assert.equal(B.resumeAllowed({ stdin: { isTTY: true }, stdout: { isTTY: false } }), false);
-  assert.equal(B.resumeAllowed({ stdin: { isTTY: true }, stdout: { isTTY: true } }), true);
+  // Inject env/pid/readProc so the result does not depend on whether the suite itself runs under a supervised job.
+  const clean = { env: {}, pid: 1, readProc: () => { throw new Error('no proc'); } };
+  assert.equal(B.resumeAllowed({ ...clean, stdin: { isTTY: false }, stdout: { isTTY: true } }), false);
+  assert.equal(B.resumeAllowed({ ...clean, stdin: { isTTY: true }, stdout: { isTTY: false } }), false);
+  assert.equal(B.resumeAllowed({ ...clean, stdin: { isTTY: true }, stdout: { isTTY: true } }), true);
+  assert.equal(B.resumeAllowed({ ...clean, env: { [B.JOB_MARKER]: '1' }, stdin: { isTTY: true }, stdout: { isTTY: true } }), false, 'a supervised job cannot resume');
 });
 
 test('config: defaults, validation and a team.local.json override', () => {
