@@ -357,3 +357,123 @@ test('config: inbox is allowed in team.local.json, validated, and the shipped va
   fs.writeFileSync(local, JSON.stringify({ bogus: 1 }));
   assert.throws(() => loadTeamConfig(shipped, root), /key not overridable: bogus/);    // other unknown keys are still refused
 });
+
+// ---- Issue #629: named job actions (new review attempt, reopen, close, stop, resume), approved on the dashboard
+const HEAD = 'a1'.repeat(20), HEAD2 = 'b2'.repeat(20), JOB = 'c3'.repeat(16);
+const act = (action, target, reason = 'Foreman spent the attempts on its own faults') => ({ kind: 'action', title: `${action} ${target}`, action, target: String(target), reason });
+const runAction = async (w, item) => { const id = approve(w, item); await w.team.processInbox(rep()); return inbox.statusOf(w.dir, id); };
+function actionWorld(t, { jobStatus = 'blocked', git = {} } = {}) {
+  const w = world(t);
+  w.gh.prs = [{ number: 5, headRefName: 'claude/issue-5-x', headRefOid: HEAD2, isDraft: false, labels: [] }];
+  w.gh.listPulls = async () => w.gh.prs; w.gh.listIssues = async () => [{ number: 23, state: 'OPEN', title: 'T', body: '', labels: [] }];
+  w.calls.stopped = []; w.calls.resumed = []; w.calls.saved = [];
+  w.jobs.states[JOB] = { id: JOB, status: jobStatus, provider: 'claude', worktree: '/p/wt' };
+  w.jobs.stop = async id => { w.calls.stopped.push(id); w.jobs.states[id].status = 'stopped'; };
+  w.jobs.resume = async id => { w.calls.resumed.push(id); w.jobs.states[id].status = 'running'; };
+  w.team.git.isClean = async () => true; w.team.git.unpushedCommits = async () => 0; w.team.git.currentBranch = async () => 'claude/issue-5-x';
+  w.team.git.saveWork = async (wt, o) => { w.calls.saved.push([wt, o]); return {}; };
+  Object.assign(w.team.git, git);
+  w.team.s.jobs[JOB] = { kind: 'fix', agent: 'claude', pr: 5, head: HEAD, branch: 'claude/issue-5-x', ingested: true, at: 1 };
+  return w;
+}
+test('action items: shape is validated; unknown action, wrong target shape, extra field, free text in the target and secret-shaped reason are refused', () => {
+  assert.equal(inbox.validateItem(act('new_review_attempt', 5)).ok, true);
+  assert.equal(inbox.validateItem(act('close_job', 'c3c3c3c3')).ok, true);
+  assert.match(inbox.validateItem(act('format_disk', 5)).reason, /unknown action/);
+  assert.match(inbox.validateItem(act('reopen', 'abc')).reason, /issue number/);
+  assert.match(inbox.validateItem(act('stop_job', 7)).reason, /job id/);
+  assert.match(inbox.validateItem(act('stop_job', '../../etc')).reason, /control|job id/);
+  assert.match(inbox.validateItem({ ...act('reopen', 5), command: 'rm' }).reason, /unknown field/);
+  assert.match(inbox.validateItem({ ...act('reopen', 5), reason: `use ${TOKEN}` }).reason, /secret-shaped/);
+  assert.match(inbox.validateItem({ ...act('reopen', 5), reason: 'Co-authored-by: x' }).reason, /attribution/);
+  assert.equal(inbox.validateItem({ ...act('reopen', 5), reason: undefined }).ok, false, 'a reason is required');
+});
+test('action items: the MCP proposal check agrees, and a proposal cannot carry a state or an approval', t => {
+  assert.equal(checkProposal({ ...act('stop_job', 'c3c3c3c3') }).ok, true);
+  assert.equal(checkProposal({ ...act('reopen', 'x') }).ok, false);
+  assert.equal(checkProposal({ ...act('nope', 5) }).ok, false);
+  assert.equal(checkProposal({ ...act('reopen', 5), state: 'approved' }).ok, false);
+  const dir = makeInbox(t), r = createInbox({ dir }).propose(act('reopen', 5));
+  const id = r.id; inbox.scan(dir, 1); assert.equal(inbox.statusOf(dir, id).state, 'pending', 'written by the proposer, still pending');
+  const forged = drop(dir, { ...act('reopen', 5), state: 'approved' }); inbox.scan(dir, 2);
+  assert.equal(inbox.statusOf(dir, forged).state, 'refused');
+});
+test('action items: the card says exactly what will happen; nothing runs before the dashboard approval', async t => {
+  const w = actionWorld(t); const id = drop(w.dir, act('close_job', 'c3c3c3c3'));
+  await w.team.processInbox(rep());
+  const [card] = inbox.pendingCards(w.dir); assert.equal(card.id, id); assert.match(card.will, /Unpushed work is saved/); assert.match(card.text, /close_job c3c3c3c3/);
+  assert.equal(w.calls.saved.length, 0); assert.equal(w.calls.stopped.length, 0); assert.equal(inbox.statusOf(w.dir, id).state, 'pending');
+  inbox.decide(w.dir, id, 'reject', 3); await w.team.processInbox(rep()); assert.equal(inbox.statusOf(w.dir, id).state, 'rejected'); assert.equal(w.calls.saved.length, 0);
+});
+test('action reopen: clears the implemented mark; refused for an issue that is not marked or not found; audit logged', async t => {
+  const w = actionWorld(t); w.team.s.implemented[23] = 1;
+  const ok = await runAction(w, act('reopen', 23));
+  assert.equal(ok.state, 'done'); assert.equal(w.team.s.implemented[23], undefined);
+  assert.ok(w.team.s.unblock.log.some(e => /reopened/.test(e.what) && e.why.includes('homeowner approved')));
+  for (const n of [23, 99]) { const bad = await runAction(w, act('reopen', n)); assert.equal(bad.state, 'failed'); assert.match(bad.reason, /not marked implemented|not found/); assert.match(bad.result, /nothing was changed/); }
+  const events = fs.readFileSync(inbox.dirs(w.dir).audit, 'utf8').trim().split('\n').map(l => JSON.parse(l)).map(e => e.event);
+  assert.ok(events.includes('approved') && events.includes('running') && events.includes('done') && events.includes('failed'));
+});
+test('action new_review_attempt: only spent counters move by one; refused with attempts left, a verdict, a live review, or a PR that is not open', async t => {
+  const w = actionWorld(t), key = `5:${HEAD2}`;
+  const left = await runAction(w, act('new_review_attempt', 5)); assert.equal(left.state, 'failed'); assert.match(left.reason, /attempts left/);
+  w.team.s.reviewAttempts[`${key}:claude`] = 2; w.team.s.reviewAttempts[key] = 2; w.team.s.reviewAttempts['6:' + HEAD2] = 2;
+  const ok = await runAction(w, act('new_review_attempt', 5));
+  assert.equal(ok.state, 'done'); assert.equal(w.team.s.reviewAttempts[`${key}:claude`], 1); assert.equal(w.team.s.reviewAttempts[key], 1); assert.equal(w.team.s.reviewAttempts['6:' + HEAD2], 2, 'another PR is untouched');
+  assert.ok(w.team.s.unblock.log.some(e => e.target === 5 && /one more review attempt/.test(e.what)));
+  w.team.s.reviewAttempts[key] = 2; w.team.s.verdicts[key] = { verdict: 'PASS' };
+  assert.match((await runAction(w, act('new_review_attempt', 5))).reason, /already has a PASS verdict/); delete w.team.s.verdicts[key];
+  w.team.s.jobs[JOB] = { kind: 'review', agent: 'claude', pr: 5, head: HEAD2, ingested: false, at: 1 }; w.jobs.states[JOB].status = 'running';
+  assert.match((await runAction(w, act('new_review_attempt', 5))).reason, /review running/);
+  assert.equal(w.team.s.reviewAttempts[key], 2, 'a refusal changes nothing');
+  assert.match((await runAction(w, act('new_review_attempt', 77))).reason, /not open/);
+});
+test('action stop_job and resume_job: refused for a wrong state, an unknown job or a job on a newer head; run once otherwise', async t => {
+  const w = actionWorld(t, { jobStatus: 'running' });
+  assert.match((await runAction(w, act('stop_job', 'deadbeef'))).reason, /no job/);
+  assert.match((await runAction(w, act('resume_job', JOB.slice(0, 8)))).reason, /not resumable/);
+  assert.equal((await runAction(w, act('stop_job', JOB.slice(0, 8)))).state, 'done'); assert.deepEqual(w.calls.stopped, [JOB]);
+  assert.match((await runAction(w, act('stop_job', JOB.slice(0, 8)))).reason, /already ended/); assert.equal(w.calls.stopped.length, 1);
+  const w2 = actionWorld(t, { jobStatus: 'blocked' }); w2.team.s.jobs[JOB].head = HEAD2;
+  const r = await runAction(w2, act('resume_job', JOB.slice(0, 8))); assert.equal(r.state, 'done'); assert.deepEqual(w2.calls.resumed, [JOB]);
+  const w3 = actionWorld(t, { jobStatus: 'blocked' });   // job started at HEAD, PR is now at HEAD2
+  const r3 = await runAction(w3, act('resume_job', JOB.slice(0, 8))); assert.equal(r3.state, 'failed'); assert.match(r3.reason, /newer head/); assert.equal(w3.calls.resumed.length, 0);
+});
+test('action close_job: work is saved first, then the job is closed and stops holding the PR; unsaved work or a job not overtaken keeps it open', async t => {
+  const w = actionWorld(t);
+  const ok = await runAction(w, act('close_job', JOB.slice(0, 8)));
+  assert.equal(ok.state, 'done'); assert.equal(w.calls.saved.length, 1); assert.equal(w.calls.saved[0][0], '/p/wt');
+  assert.ok(w.team.s.jobs[JOB].closed); assert.ok(w.team.s.unblock.log.some(e => /closed the fix job/.test(e.what)));
+  assert.equal(await w.team.jobSuperseded(JOB, w.jobs.states[JOB], w.gh.prs[0]), true);
+  assert.match((await runAction(w, act('close_job', JOB.slice(0, 8)))).reason, /already closed/);
+  // the save fails: nothing is closed
+  const bad = actionWorld(t, { git: { saveWork: async () => { throw new Error('the job work could not be pushed'); } } });
+  const f = await runAction(bad, act('close_job', JOB.slice(0, 8))); assert.equal(f.state, 'failed'); assert.equal(bad.team.s.jobs[JOB].closed, undefined);
+  // the save "worked" but the tree still holds work: proven again, not trusted
+  const dirty = actionWorld(t, { git: { isClean: async () => false } });
+  assert.match((await runAction(dirty, act('close_job', JOB.slice(0, 8)))).reason, /unsaved work remains/); assert.equal(dirty.team.s.jobs[JOB].closed, undefined);
+  const unpushed = actionWorld(t, { git: { unpushedCommits: async () => 2 } });
+  assert.match((await runAction(unpushed, act('close_job', JOB.slice(0, 8)))).reason, /unsaved work remains/);
+  // not overtaken (PR still at the job's head), still running, or no PR at all
+  const same = actionWorld(t); same.gh.prs[0].headRefOid = HEAD;
+  assert.match((await runAction(same, act('close_job', JOB.slice(0, 8)))).reason, /not overtaken/); assert.equal(same.calls.saved.length, 0, 'nothing is saved for a job that is refused');
+  // another live job uses the same worktree, or the worktree is on another branch: nothing is saved, nothing is closed
+  const shared = actionWorld(t); const OTHER = 'd4d4d4d4' + JOB.slice(8);
+  shared.jobs.states[OTHER] = { id: OTHER, status: 'running', provider: 'claude', worktree: '/p/wt' }; shared.team.s.jobs[OTHER] = { kind: 'fix', agent: 'claude', pr: 5, head: HEAD2, branch: 'claude/issue-5-x', at: 2 };
+  assert.match((await runAction(shared, act('close_job', JOB.slice(0, 8)))).reason, /same worktree/); assert.equal(shared.calls.saved.length, 0); assert.equal(shared.team.s.jobs[JOB].closed, undefined);
+  const moved = actionWorld(t, { git: { currentBranch: async () => 'claude/other' } });
+  assert.match((await runAction(moved, act('close_job', JOB.slice(0, 8)))).reason, /no longer on the job branch/); assert.equal(moved.calls.saved.length, 0);
+  // a closed job without a worktree stops holding the PR too
+  const nowt = actionWorld(t); nowt.jobs.states[JOB].worktree = undefined;
+  assert.equal((await runAction(nowt, act('close_job', JOB.slice(0, 8)))).state, 'done');
+  assert.equal(await nowt.team.jobSuperseded(JOB, nowt.jobs.states[JOB], nowt.gh.prs[0]), true);
+  const live = actionWorld(t, { jobStatus: 'running' });
+  assert.match((await runAction(live, act('close_job', JOB.slice(0, 8)))).reason, /only a blocked, failed or stopped/);
+});
+test('actions: a failed outcome and the result stay redacted and bounded; no secret-shaped output reaches the status file the overseer reads', async t => {
+  const w = actionWorld(t); w.gh.listPulls = async () => { throw new Error(`boom ${TOKEN} ${PW}=${hex(8)}`); };
+  const st = await runAction(w, act('new_review_attempt', 5));
+  assert.equal(st.state, 'failed');
+  const blob = fs.readFileSync(path.join(inbox.dirs(w.dir).status, `${st.id}.json`), 'utf8') + fs.readFileSync(inbox.dirs(w.dir).audit, 'utf8');
+  assert.ok(!blob.includes(TOKEN)); assert.ok(!inbox.secretShaped(blob.replace(/"hash":"[a-f0-9]+"/g, '')), 'no secret-shaped text in status or audit');
+});

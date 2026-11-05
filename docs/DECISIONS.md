@@ -298,6 +298,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: A better forecast (issue #627: a minimum of evidence, a self-releasing latch), a forecast margin setting, and switching allowance-aware scheduling off, which would also disable the overage check.
 - Superseded-by: none
 
+## D-033 — Inbox actions: named job operations approved on the dashboard
+- Status: agent-proposal
+- Date: 2026-11-05
+- Source: issue #629; extends D-031
+- Decision: The inbox (D-031) gains a third kind, `action`, with a fixed list of names and one target each: `new_review_attempt` (a pull request number), `reopen` (an issue number), `close_job`, `stop_job` and `resume_job` (the 8-character job id). The item carries a title and a reason of at most 300 characters and no command, path or other argument. Approval is the same as for every inbox item: the dashboard's write route only (D-029), never MCP and never an agent job. On the next tick Foreman records `running` before it acts (at most once), re-checks the target and refuses a wrong one with a reason, changing nothing. `new_review_attempt` lowers each review-attempt counter at the limit for that head by one, and is refused with attempts left, a verdict, or a live review. `reopen` is the existing `team reopen` with all its checks. `close_job` applies only to a blocked, failed or stopped job whose pull request head has moved on; its worktree is saved first (uncommitted work committed on the job branch, ignored files excluded, and pushed to a new `saved/` branch on the remote), and the job is closed only if git then proves the tree clean and nothing local unpushed. `resume_job` is refused for a job on an overtaken head, when the agent is out of allowance, or when the provider role is full. Every outcome is logged in the inbox audit log and the unblock log.
+- Rationale: Jobs overtaken by a newer head, attempts spent by Foreman's own faults and stuck marks needed a terminal; each is now one reviewed click, with the same safeguards as the terminal commands.
+- Rejected: A free-form command or argument in an item; approval through MCP; closing a job without saving its work; a count of extra review attempts larger than one per approval.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.

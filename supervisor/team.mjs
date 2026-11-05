@@ -1761,8 +1761,107 @@ export class Team {
         const l = inboxStore.loadItem(dir, st.id);
         if (!l.ok) { if (st.state === 'approved') inboxStore.finish(dir, st.id, { state: 'failed', reason: l.reason, result: 'nothing was done' }, now); continue; }
         if (st.kind === 'issue_draft') await this.postIssueDraft(dir, st, l.item, report);
+        if (st.kind === 'action' && st.state === 'approved') await this.runInboxAction(dir, st, l.item, report);
       } catch (error) { (report.skipped ||= []).push({ what: `inbox ${st.id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
     }
+  }
+  // Issue #629: an approved named action. 'running' is recorded BEFORE the effect, so a crash leaves it unrepeated (at most once); a refusal
+  // is a normal outcome: the item ends 'failed' with the reason and nothing is changed. The audit log and the unblock log record it.
+  async runInboxAction(dir, st, item, report) {
+    const id = st.id, now = () => this.clock.now();
+    inboxStore.finish(dir, id, { state: 'running' }, now());
+    try {
+      const result = String(await this.applyInboxAction(item, report)).slice(0, 300);
+      inboxStore.finish(dir, id, { state: 'done', result }, now());
+      (report.actions ||= []).push({ type: 'inbox-action', result: `${item.action} ${item.target}: ${result}` });
+    } catch (error) {
+      inboxStore.finish(dir, id, { state: 'failed', reason: String(error?.message || error).slice(0, 250), result: 'nothing was changed by this action' }, now());
+    }
+  }
+  // The job record for an 8-character id shown on the dashboard; a prefix that matches none or several is refused.
+  jobByPrefix(prefix) {
+    const hits = Object.keys(this.s.jobs).filter(k => k.startsWith(prefix));
+    if (hits.length !== 1) throw new SupervisorError(hits.length ? `job id ${prefix} is ambiguous` : `no job ${prefix}`);
+    return hits[0];
+  }
+  async applyInboxAction({ action, target, reason }, report) {
+    const n = Number(target);
+    if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
+    if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
+    const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
+    if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
+    const tk = rec.issue != null && !['review', 'fix', 'rebase', 'cifix'].includes(rec.kind) ? 'issue' : 'pull', tgt = rec.pr ?? rec.issue;
+    const log = (what, result) => this.logUnblock(report, { target: tgt, tk, what, why: `homeowner approved on the dashboard: ${reason}`, result });
+    if (action === 'stop_job') {
+      if (TERMINAL.has(job.status)) throw new SupervisorError(`job ${target} already ended (${job.status})`);
+      if (typeof this.jobs.stop !== 'function') throw new SupervisorError('this supervisor cannot stop a job');
+      await this.jobs.stop(id); log(`stopped the ${rec.kind} job ${target}`, 'stopped'); return `job ${target} stopped`;
+    }
+    if (action === 'resume_job') {
+      if (!['paused_manual', 'paused_limit', 'blocked', 'failed'].includes(job.status)) throw new SupervisorError(`job ${target} is ${job.status}, not resumable`);
+      if (typeof this.jobs.resume !== 'function') throw new SupervisorError('this supervisor cannot resume a job');
+      const pr = rec.pr != null ? (await this.gh.listPulls()).find(p => p.number === rec.pr) : null;
+      if (rec.pr != null && (!pr || (rec.head && pr.headRefOid !== rec.head))) throw new SupervisorError(`PR #${rec.pr} is closed or has a newer head, so job ${target} cannot be resumed to any purpose; close it instead`);
+      if (this.limitedOf(rec.agent)?.out) throw new SupervisorError(`${rec.agent} is out of allowance; resume it after the reset`);
+      if (await this.providerRoleFull(job.provider ?? this.c.agents[rec.agent]?.provider, roleOfType(rec.kind))) throw new SupervisorError('the provider has no free slot for this role right now');
+      rec.ingested = false; this.save();
+      await this.jobs.resume(id); log(`resumed the ${rec.kind} job ${target}`, 'resumed once'); return `job ${target} resumed`;
+    }
+    if (action === 'close_job') return this.closeJob(id, rec, job, reason, log);
+    throw new SupervisorError('unknown action');
+  }
+  // One more review attempt at the same head, for attempts spent by Foreman's own faults. Only counters that reached the limit move, each by
+  // one, so the total stays bounded; refused when the head already has a verdict, a live review, or any attempt left.
+  async grantReviewAttempt(n, reason) {
+    const pr = (await this.gh.listPulls()).find(p => p.number === n);
+    if (!pr) throw new SupervisorError(`PR #${n} is not open`);
+    if (!agentOfBranch(this.c, pr.headRefName) || !SHA.test(pr.headRefOid)) throw new SupervisorError(`PR #${n} is not a Foreman pull request with a usable head`);
+    const key = verdictKey(n, pr.headRefOid), max = this.c.limits.max_review_attempts;
+    if (this.s.verdicts[key]) throw new SupervisorError(`PR #${n} already has a ${this.s.verdicts[key].verdict} verdict at this head`);
+    for (const [id, j] of Object.entries(this.s.jobs)) {
+      if (j.kind !== 'review' || j.pr !== n || j.head !== pr.headRefOid) continue;
+      const live = await this.jobs.get(id);
+      if (live && !TERMINAL.has(live.status)) throw new SupervisorError(`PR #${n} has a review running (${id.slice(0, 8)})`);
+    }
+    const spent = Object.keys(this.s.reviewAttempts).filter(k => (k === key || k.startsWith(key + ':')) && this.s.reviewAttempts[k] >= max);
+    if (!spent.length) throw new SupervisorError(`PR #${n} still has review attempts left at this head; nothing to grant`);
+    for (const k of spent) this.s.reviewAttempts[k] = max - 1;
+    this.save();
+    this.logUnblock({}, { target: n, tk: 'pull', what: 'granted one more review attempt at the same head', why: `homeowner approved on the dashboard: ${reason}`, result: `${spent.length} counter(s) at ${max} set to ${max - 1}` });
+    return `PR #${n} has one more review attempt at ${shortCommit(pr.headRefOid)}`;
+  }
+  // Close a stopped job that a newer head overtook. The worktree's work is saved to a remote branch BEFORE the record changes; if it cannot be
+  // proven saved (clean tree, nothing missing from every remote branch) the job stays as it is.
+  async closeJob(id, rec, job, reason, log) {
+    if (!['blocked', 'failed', 'stopped'].includes(job.status)) throw new SupervisorError(`job ${id.slice(0, 8)} is ${job.status}; only a blocked, failed or stopped job can be closed (stop it first)`);
+    if (rec.closed) throw new SupervisorError(`job ${id.slice(0, 8)} is already closed`);
+    const pr = rec.pr != null ? (await this.gh.listPulls()).find(p => p.number === rec.pr) : null;
+    if (!pr || !rec.head || rec.head === pr.headRefOid) throw new SupervisorError(`job ${id.slice(0, 8)} is not overtaken: it needs an open pull request whose head has moved on since the job started`);
+    let saved = 'nothing to save';
+    if (job.worktree) {
+      if (typeof this.git.saveWork !== 'function' || typeof this.git.isClean !== 'function' || typeof this.git.unpushedCommits !== 'function') throw new SupervisorError('this supervisor cannot save a worktree, so the job is not closed');
+      // The worktree may be shared (fix jobs reuse the PR branch's worktree, review worktrees are reused) and saving commits there:
+      // refuse while another live job uses it, or when it is no longer on this job's branch.
+      for (const oid of Object.keys(this.s.jobs)) {
+        if (oid === id) continue;
+        const o = await this.jobs.get(oid).catch(() => null);
+        if (o && o.worktree === job.worktree && !TERMINAL.has(o.status)) throw new SupervisorError(`job ${oid.slice(0, 8)} is using the same worktree, so job ${id.slice(0, 8)} is not closed`);
+      }
+      if (rec.branch) {
+        if (typeof this.git.currentBranch !== 'function') throw new SupervisorError('this supervisor cannot check the worktree branch, so the job is not closed');
+        if ((await this.git.currentBranch(job.worktree)) !== rec.branch) throw new SupervisorError('the job worktree is no longer on the job branch, so the job is not closed');
+      }
+      const r = await this.git.saveWork(job.worktree, { branch: rec.branch, id: id.slice(0, 8) });
+      if (r?.ref) saved = `saved to ${r.ref}`;
+      const clean = await this.git.isClean(job.worktree);
+      if (clean === false || (clean === true && (await this.git.unpushedCommits(job.worktree)) !== 0)) throw new SupervisorError('unsaved work remains in the job worktree, so the job is not closed');
+      if (clean === null && r?.missing !== true) throw new SupervisorError('the job worktree could not be checked, so the job is not closed');
+    }
+    rec.closed = { at: this.clock.now(), reason: String(reason).slice(0, 300), saved }; rec.ingested = true; rec.settled = true;
+    if (typeof this.jobs.release === 'function') { try { await this.jobs.release(id); } catch { /* leases are released by the next sweep */ } }
+    this.save();
+    log(`closed the ${rec.kind} job ${id.slice(0, 8)}, overtaken by a newer head of PR #${rec.pr}`, saved);
+    return `job ${id.slice(0, 8)} closed (${saved})`;
   }
   // Posted once only: the state is recorded as 'posting' BEFORE the effect, and the item's marker is looked for on GitHub first, so a lost
   // response or a repeated tick finds the issue instead of filing a second one. The text is redacted again and must carry no AI attribution.
@@ -2736,7 +2835,9 @@ export class Team {
   // any remote branch); anything unproven keeps the hold, so work is never discarded silently. Returns false, never throws.
   async jobSuperseded(id, job, pr) {
     const rec = this.s.jobs[id];
-    if (!job || !pr || !rec || rec.pr == null || rec.pr !== pr.number || !rec.head || rec.head === pr.headRefOid || !job.worktree) return false;
+    if (!job || !pr || !rec || rec.pr == null || rec.pr !== pr.number || !rec.head || rec.head === pr.headRefOid) return false;
+    if (rec.closed) return true;   // issue #629: the homeowner closed it on the dashboard, after its work was saved
+    if (!job.worktree) return false;
     if (typeof this.git.isClean !== 'function' || typeof this.git.unpushedCommits !== 'function') return false;
     try {
       // Issue #610: a later job may have reused the worktree; only a worktree still on this job's branch proves anything about it.

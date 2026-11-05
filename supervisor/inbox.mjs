@@ -8,10 +8,20 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
 
-export const KINDS = ['prompt', 'issue_draft'];
+export const KINDS = ['prompt', 'issue_draft', 'action'];
+// Issue #629: named actions for cases that needed a terminal. Each is a fixed name with one target of a fixed shape (a pull request or issue
+// number, or the 8-character job id the dashboard shows); the item carries no command, path or free-form argument.
+export const ACTIONS = {
+  new_review_attempt: { target: 'pr', noun: 'pull request', will: "Give one more review attempt at the same head of this pull request (use it when attempts were spent by Foreman's own faults). Nothing is merged or approved; the new review decides." },
+  reopen: { target: 'issue', noun: 'issue', will: 'Clear the "implemented" mark of this issue so Foreman can start it again. Refused while a pull request, a live job or saved work for it exists.' },
+  close_job: { target: 'job', noun: 'job', will: 'Close this stopped job of a pull request that a newer head has overtaken. Unpushed work is saved to a branch on the remote first; the job is closed only once nothing local is unsaved.' },
+  stop_job: { target: 'job', noun: 'job', will: 'Stop this running or paused job.' },
+  resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
+};
+const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 10, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
-const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'] };
+const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'] };
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 
 export const dirs = inboxDir => ({ items: path.join(inboxDir, 'items'), status: path.join(inboxDir, 'status'), audit: path.join(inboxDir, 'audit.jsonl') });
@@ -48,7 +58,7 @@ export function validateItem(raw) {
   if (!KINDS.includes(raw.kind)) return { ok: false, reason: `unknown kind (accepted: ${KINDS.join(', ')})` };
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
-  const bodyKey = raw.kind === 'prompt' ? 'prompt' : 'body', max = { title: LIMITS.title, [bodyKey]: LIMITS[bodyKey], why: LIMITS.title * 2 };
+  const bodyKey = raw.kind === 'prompt' ? 'prompt' : raw.kind === 'action' ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
     if (v === undefined && k === 'why') continue;
@@ -62,6 +72,11 @@ export function validateItem(raw) {
     if (displayChanges(v)) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
   }
   if (/[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
+  if (raw.kind === 'action') {
+    const spec = Object.hasOwn(ACTIONS, raw.action) ? ACTIONS[raw.action] : null;
+    if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(ACTIONS).join(', ')})` };
+    if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
+  }
   return { ok: true, item: Object.fromEntries(allowed.filter(k => raw[k] !== undefined).map(k => [k, raw[k]])) };
 }
 
@@ -142,8 +157,8 @@ export function pendingCards(inboxDir) {
     if (!l.ok) return { id: s.id, kind: s.kind, broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
     return { id: s.id, kind: it.kind, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
-      will: it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
-      text: clip(it.kind === 'prompt' ? it.prompt : it.body, LIMITS.prompt) };
+      will: it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
+      text: clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
   });
 }
 
