@@ -25,7 +25,7 @@ export function bounded(value, max = MAX_TEXT) {
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : dflt; };
 
-export function createTools({ source, readHost, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
+export function createTools({ source, readHost, getPath = null, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
   const calls = [];   // times of recent calls, for the rate limit
   const withView = async fn => { const r = await source.get(); return { ...fn(r.view), viewAgeSeconds: Math.round(r.ageMs / 1000), ...(r.stale ? { stale: true, staleBecause: r.error } : {}) }; };
   const reviewQueues = view => Object.fromEntries(Object.entries(view.queues || {}).map(([agent, items]) => [agent, (items || []).filter(i => i.type === 'review').sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.ref - b.ref).map(i => ({ order: i.order ?? null, pr: i.ref, next: !!i.next, title: i.title, reason: i.reason }))]));
@@ -77,6 +77,17 @@ export function createTools({ source, readHost, reports = null, inbox = createIn
       run: () => ({ ...readHost(), readAt: iso(now()) }) },
     { name: 'foreman_reports', description: 'Reports that hand-run sessions left for the overseer. With no name: the list (name, time, size), newest first. With a name: that one report as text (redacted, truncated if long). Reads one fixed folder only.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'a report name from the list, for example speedup.md' } }, additionalProperties: false },
       run: args => { if (!reports) throw new Error('reports are not available on this server'); return args.name === undefined ? reports.list() : reports.read(args.name, MAX_TEXT - 400); } },
+    { name: 'foreman_job_outcome', description: 'One job: what it was asked to do, what it did (tool counts, last message), whether any work was pushed (evidence), how it ended (status, post-condition and why not), its cost, and a redacted log tail. Give the full job id or a unique prefix of at least 6 characters (see foreman_jobs). Read-only, no model call.', inputSchema: { type: 'object', properties: { id: { type: 'string', minLength: 6, maxLength: 32, pattern: '^[a-f0-9]{6,32}$' } }, required: ['id'], additionalProperties: false },
+      run: async args => {
+        const id = String(args.id || '');
+        if (!/^[a-f0-9]{6,32}$/.test(id)) throw new Error('give the job id (6 to 32 hex characters) from foreman_jobs');
+        if (!getPath) throw new Error('job outcomes are not available on this server');
+        let full = id;
+        if (id.length < 32) { const r = await source.get(); const hits = (r.view.jobs || []).filter(j => String(j.fullId || '').startsWith(id)); if (hits.length !== 1) throw new Error(hits.length ? 'that prefix matches more than one job; give more characters' : 'no job with that id in the recent jobs (give the full 32-character id for an older job)'); full = hits[0].fullId; }
+        return await getPath(`/api/jobs/${full}/outcome.json`);
+      } },
+    { name: 'foreman_discarded', description: 'Every result Foreman threw away in the last 7 days (a review refused at ingestion, a review that ended with no verdict, a job that failed after spending), newest first, with the cause and the cost (usage equivalent, not a charge). Optional limit (default 50).', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
+      run: async args => { if (!getPath) throw new Error('discarded results are not available on this server'); const out = await getPath('/api/discarded.json'); const limit = num(args.limit, 1, 200, 50); return { ...out, shown: Math.min(out.items?.length || 0, limit), items: (out.items || []).slice(0, limit) }; } },
     ...(inbox.enabled ? [
       { name: 'foreman_propose', description: 'Propose one item for the homeowner to approve on the Foreman dashboard. kind "prompt": a task to run as a supervised Foreman job (it cannot merge, approve reviews or widen its limits). kind "issue_draft": an issue to post as the homeowner. This only writes a proposal; nothing happens until the homeowner approves it, and you cannot approve it. Secret-shaped text, AI attribution text, oversized items and unknown fields are refused. Read the outcome with foreman_proposal_status.',
         inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['prompt', 'issue_draft'] }, title: { type: 'string', maxLength: 200 }, prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' }, body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' }, why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' } }, required: ['kind', 'title'], additionalProperties: false },
