@@ -140,7 +140,7 @@ test('review order: the tool lists reviews in exactly the order the planner\'s o
   const dir = tmp(t);
   const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh: { listPulls: async () => pulls, getPull: async n => pulls.find(p => p.number === n) || null, listIssues: async () => [], listMergedPulls: async () => [] }, jobs: { listActive: async () => [], get: async () => null }, git: { worktreeFor: async () => null }, register: '', clock: { now: () => 5000 } });
   team.s.verdicts = structuredClone(state.verdicts);
-  const planner = team.reviewOrder('claude', team.reviewQueue('claude', pulls).map(q => q.pr)).map(p => p.number);
+  const rq = team.reviewQueue('claude', pulls), planner = team.reviewOrder('claude', rq.map(q => q.pr), rq).map(p => p.number);
   const view = await buildView({ config: cfg, root: '/nonexistent', jobs: [], events: [], state, cache: { tick: { at: 4000, status: 'ok', lastOkAt: 4000 }, fetchedAt: 4000, pulls, issues: [], merged: [] }, snapshots: [], now: 5000 });
   const tools = createTools({ source: { get: async () => ({ view, ageMs: 0, stale: false }) }, readHost: () => ({}) });
   const r = JSON.parse((await tools.call('foreman_review_order')).text);
