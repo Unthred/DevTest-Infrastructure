@@ -207,3 +207,75 @@ test('rebase-prepare prints oldHead so the agent can pass it to rebase-push', t 
   const out = execFileSync(process.execPath, [cliPath, 'rebase-prepare', '--worktree', r.agent, '--branch', 'feat'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] });
   assert.match(JSON.parse(out).oldHead, /^[0-9a-f]{40}$/);
 });
+
+// ---- issue #640: both sides edited one line; a commit main already covers; a real loss is still refused
+function lineRepo(t, { base, feat, main, extra = '' }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rl640-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const remote = path.join(dir, 'remote.git'); git(dir, 'init', '-q', '--bare', '-b', 'main', remote);
+  const seed = path.join(dir, 'seed'); git(dir, 'clone', '-q', remote, seed);
+  const f = x => `function go() {\n${x}\n}\n`;
+  write(seed, 'l.mjs', f(base)); commit(seed, 'base'); git(seed, 'branch', '-M', 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  git(seed, 'checkout', '-q', '-b', 'feat'); write(seed, 'l.mjs', f(feat)); commit(seed, 'pr change'); git(seed, 'push', '-q', 'origin', 'feat');
+  git(seed, 'checkout', '-q', 'main'); write(seed, 'l.mjs', f(main)); commit(seed, 'main change'); git(seed, 'push', '-q', 'origin', 'main');
+  const agent = path.join(dir, 'agent'); git(dir, 'clone', '-q', remote, agent);
+  return { dir, remote, agent, f };
+}
+function resolveLine(r, text) {
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  write(r.agent, 'l.mjs', r.f(text)); git(r.agent, 'add', '-A');
+  execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+  return oldHead;
+}
+const T640 = { base: '  title("names six read-only tools");', feat: '  title("names six read-only tools (no inbox configured)");', main: '  title("names seven read-only tools");' };
+
+test('#640: both sides edited the same line and the result has main\'s change plus the PR\'s addition: not lost, pushed', t => {
+  const r = lineRepo(t, T640); const oldHead = resolveLine(r, '  title("names seven read-only tools (no inbox configured)");');
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.lostChanges, []); assert.deepEqual(c.missing, []);
+  const p = runPush(r, oldHead); assert.equal(p.code, 0); assert.equal(JSON.parse(p.out).pushed, true);
+});
+
+test('#640: both sides edited the same line and the result keeps main\'s line only: still refused with a message naming the line', t => {
+  const r = lineRepo(t, T640); const oldHead = resolveLine(r, T640.main);
+  assert.ok(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges.some(x => x.text.includes('(no inbox configured)')));
+  const p = runPush(r, oldHead); assert.equal(p.code, 3);
+  const out = JSON.parse(p.out); assert.equal(out.pushed, false);   // main's line alone also empties the commit, so git drops it: reported as missing
+  assert.match(out.message, /no inbox configured/); assert.match(out.message, /homeowner or a reviewer/); assert.match(out.message, /force-with-lease/);
+  assert.equal(git(r.dir, '--git-dir', r.remote, 'rev-parse', 'feat'), oldHead);
+});
+
+test('#640: both sides edited the same line and the result keeps the PR\'s line only: main\'s change is not required, the PR\'s is kept', t => {
+  const r = lineRepo(t, T640); const oldHead = resolveLine(r, T640.feat);
+  assert.deepEqual(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges, []);
+});
+
+test('#640: a merged line that carries main\'s change but not the PR\'s addition is refused', t => {
+  const r = lineRepo(t, T640); const oldHead = resolveLine(r, '  title("names seven read-only tools") && other();');
+  assert.ok(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges.some(x => x.text.includes('(no inbox configured)')));
+});
+
+// A commit main already covers: main makes the same change by hand (a different patch-id once reformatted), the resolution empties the PR commit.
+function coveredRepo(t, mainText) {
+  const r = lineRepo(t, { base: '  const z = 1;', feat: '  const z = 3;', main: mainText });
+  return r;
+}
+test('#640: a PR commit whose change main already contains is not missing', t => {
+  const r = coveredRepo(t, '  const z = 3;');
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* may skip the commit as already applied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* no rebase in progress */ }
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.missing, []); assert.deepEqual(c.lostChanges, []);
+});
+
+test('#640: a commit emptied by keeping a main fix that differs from the PR\'s is still missing, and refused', t => {
+  const r = coveredRepo(t, '  const z = 2;');
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none */ }
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.equal(c.missing.length, 1);
+  const p = runPush(r, oldHead); assert.equal(p.code, 3); const out = JSON.parse(p.out);
+  assert.equal(out.reason, 'missing'); assert.match(out.message, /pr change/);
+});

@@ -51,9 +51,19 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
   const missing = [];
   for (const c of unmatched) {
     const m = now.find(n => !used.has(n.sha) && n.ident === c.ident && n.subject === c.subject);
-    if (m) used.add(m.sha); else missing.push({ sha: c.sha, subject: c.subject });
+    if (m) used.add(m.sha); else if (!alreadyApplied(run, c.sha, newHead)) missing.push({ sha: c.sha, subject: c.subject });
   }
   return { oldHead, newHead, commits: now.map(c => ({ sha: c.sha, subject: c.subject })), missing, lostChanges: lostChanges(run, base, oldHead, newHead), resolvedConflicts: resolvedConflicts(run, base, oldHead, newHead) };
+}
+
+// Issue #640: a commit that a resolution emptied (git drops it) is not missing when the result already holds its change: a trial
+// three-way merge of the commit onto the new head, from the commit's parent, is clean and leaves the new head's tree unchanged.
+// A change main made differently (the merge conflicts) is NOT applied, so it stays refused and a person decides.
+function alreadyApplied(run, sha, newHead) {
+  try {
+    const out = run(['merge-tree', '--write-tree', `--merge-base=${sha}^`, newHead, sha]).trim().split('\n')[0];
+    return SHA.test(out) && out === run(['rev-parse', newHead + '^{tree}']).trim();
+  } catch { return false; }   // conflict, a root commit or an old git: keep the commit reported
 }
 
 // Issue #415: a conflict resolution can lose a change INSIDE a commit while the commit list still looks complete (PR #222 kept
@@ -73,8 +83,9 @@ const DEFINITION = [
 ];
 
 // { file -> [added line text] } of `from..to` (no context, no renames, so a rename shows as delete plus add and fails safe).
-function addedLines(run, from, to) {
+function addedLines(run, from, to, bases = null) {
   const out = new Map();
+  let removed = [];
   const diff = run(['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, to]).split('\n');
   if (diff.length > MAX_DIFF_LINES) throw new SupervisorError('rebase check: diff too large to compare');
   let file = null; let header = false;
@@ -82,10 +93,16 @@ function addedLines(run, from, to) {
     if (line.startsWith('diff --git ')) { header = true; file = null; continue; }
     if (header) {
       if (line.startsWith('+++ ')) file = line === '+++ /dev/null' ? null : line.slice(6).replace(/\t.*$/, '');
-      else if (line.startsWith('@@')) header = false;
+      else if (line.startsWith('@@')) { header = false; removed = []; }
       continue;
     }
-    if (file && line.startsWith('+')) { if (!out.has(file)) out.set(file, []); out.get(file).push(line.slice(1)); }
+    if (line.startsWith('@@')) { removed = []; continue; }
+    if (line.startsWith('-')) removed.push(line.slice(1).trim());
+    if (file && line.startsWith('+')) {
+      if (!out.has(file)) out.set(file, []);
+      out.get(file).push(line.slice(1));
+      if (bases && removed.length) bases.set(`${file}\0${line.slice(1).trim()}`, removed.slice());   // the lines this hunk replaced (issue #640)
+    }
   }
   return out;
 }
@@ -123,11 +140,41 @@ function unionSurvives(t, newFile, oldFile, mainFile) {
   });
 }
 
+// Issue #640: both sides edited the same line. The PR changed base line B into `t`; main changed B into some M. A correct resolution is
+// a line L in neither head's file (a real merge) that holds every token of a main-changed line M and, in order, every token the PR
+// added to B. A line taken whole from main, or from the PR, is excluded by the file checks, so a dropped change is still refused.
+function addedTokens(t, baseLine) {
+  const a = lexOf(baseLine), b = lexOf(t);
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const kept = new Set(); let i = 0, j = 0;
+  while (i < a.length && j < b.length) { if (a[i] === b[j]) { kept.add(j); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++; }
+  return b.filter((_, k) => !kept.has(k));
+}
+const inOrder = (want, have) => { let i = 0; for (const k of have) if (i < want.length && k === want[i]) i++; return i === want.length; };
+const wordy = ks => ks.filter(k => /[A-Za-z0-9_$]/.test(k)).length;
+function sameLineMerged(t, baseLines, newFile, oldFile, mainFile, baseFile) {
+  const exclude = new Set([...oldFile, ...mainFile]);
+  const baseSet = new Set(baseFile);
+  const mains = mainFile.filter(m => meaningful(m) && !baseSet.has(m) && !oldFile.includes(m) && wordy(lexOf(m)) >= 2);
+  for (const b of baseLines) {
+    const added = addedTokens(t, b);
+    if (!wordy(added)) continue;   // a punctuation-only edit is too weak to prove
+    for (const l of newFile) {
+      if (exclude.has(l)) continue;
+      const lex = lexOf(l);
+      if (inOrder(added, lex) && mains.some(m => inOrder(lexOf(m), lex))) return true;
+    }
+  }
+  return false;
+}
+
 function lostChanges(run, base, oldHead, newHead) {
   const oldMb = run(['merge-base', base, oldHead]).trim();
   const newMb = run(['merge-base', base, newHead]).trim();
   if (!SHA.test(oldMb) || !SHA.test(newMb)) throw new SupervisorError('rebase check: no merge base');
-  const before = addedLines(run, oldMb, oldHead);
+  const bases = new Map();
+  const before = addedLines(run, oldMb, oldHead, bases);
   const after = addedLines(run, newMb, newHead);
   const lost = [];
   const addedAfter = new Set([...after.values()].flat().map(t => t.trim()));
@@ -135,6 +182,7 @@ function lostChanges(run, base, oldHead, newHead) {
     const oldFile = fileLines(run, oldHead, file);
     const newFile = fileLines(run, newHead, file);
     const mainFile = fileLines(run, base, file);
+    let baseFile = null;
     const seen = new Set();
     for (const raw of lines) {
       const t = raw.trim();
@@ -143,6 +191,8 @@ function lostChanges(run, base, oldHead, newHead) {
       if (countOf(newFile, t) >= countOf(oldFile, t) || addedAfter.has(t)) continue;
       if (t.length >= 4 && newFile.some(l => l.includes(t))) continue;   // a resolution that merged the line into a longer one keeps the change
       if (unionSurvives(t, newFile, oldFile, mainFile)) continue;   // issue #580: a list merged from both sides keeps every token
+      const key = `${file}\0${t}`;
+      if (bases.has(key)) { baseFile ??= fileLines(run, oldMb, file); if (sameLineMerged(t, bases.get(key), newFile, oldFile, mainFile, baseFile)) continue; }   // issue #640
       lost.push({ file, kind: 'line', text: t.slice(0, 200) });
     }
   }
@@ -186,6 +236,15 @@ export function prepareRebase({ worktree, branch }) {
   return { branch, oldHead };
 }
 
+// Issue #640: a refusal names what it saw and who can accept it, so a person can push deliberately if the resolution is right.
+function refusal(check, branch, oldHead) {
+  const parts = [];
+  if (check.missing.length) parts.push(`commit ${check.missing[0].sha.slice(0, 8)} "${check.missing[0].subject}" is not in the result`);
+  if (check.lostChanges.length) parts.push(`${check.lostChanges[0].file}: "${check.lostChanges[0].text}" is not in the result`);
+  const what = parts.join('; ');
+  return `Refused: ${what}. If the resolution is deliberate, only the homeowner or a reviewer may accept it, by pushing with git push --force-with-lease=refs/heads/${branch}:${oldHead} origin HEAD:refs/heads/${branch}.`;
+}
+
 // Last step: verify, then push with a lease on the fetched head. Returns { pushed, ... } and never throws for the two
 // refusals the caller must report: `missing` (a commit was dropped) and `lease` (the branch moved during the job).
 export function pushRebase({ worktree, branch, base, oldHead }) {
@@ -194,8 +253,8 @@ export function pushRebase({ worktree, branch, base, oldHead }) {
   run(['fetch', '--quiet', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`]);
   const newHead = run(['rev-parse', 'HEAD']).trim();
   const check = checkRebase({ repoPath: worktree, base: `origin/${base}`, oldHead, newHead });
-  if (check.missing.length) return { pushed: false, reason: 'missing', ...check };
-  if (check.lostChanges.length) return { pushed: false, reason: 'lost-changes', ...check };   // issue #415: nothing is pushed as a clean rebase
+  if (check.missing.length) return { pushed: false, reason: 'missing', message: refusal(check, branch, oldHead), ...check };
+  if (check.lostChanges.length) return { pushed: false, reason: 'lost-changes', message: refusal(check, branch, oldHead), ...check };   // issue #415: nothing is pushed as a clean rebase
   const r = spawnSync('git', ['-C', worktree, 'push', '--quiet', `--force-with-lease=refs/heads/${branch}:${oldHead}`, 'origin', `HEAD:refs/heads/${branch}`], { encoding: 'utf8', timeout: 120000 });
   if (r.status !== 0) return { pushed: false, reason: 'lease', ...check };
   return { pushed: true, ...check };
