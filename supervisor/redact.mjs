@@ -75,7 +75,8 @@ function topologyPart(text, localDomains) {
   const doms = localDomains.map(d => String(d).trim().replace(/^\.+/, '')).filter(d => /^[a-z0-9.-]+$/i.test(d));
   if (doms.length) out = out.replace(new RegExp(`\\b(?:[a-z0-9-]+\\.)*(?:${doms.map(escRe).join('|')})\\b(?::\\d+)?`, 'gi'), '[host]');
   // A bare host:port: the host has a letter (so 12:30 and 3:45 stay) and is not a file name (build.mjs:42).
-  return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => { const h = m.replace(/:\d+$/, ''); return !/[a-z]/i.test(h) || HOST_PORT_SKIP.test(h) ? m : '[host]'; });
+  // Issue #607: image tags and versions are kept (node:20, ubuntu:22.04, postgres:16-alpine): a dotless host needs a port of 3+ digits, and a port may not continue as a version (.04); a hyphen after the port is not exempt (port ranges, host:8123-x).
+  return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b(?!\.\d)/gi, m => { const h = m.replace(/:\d+$/, ''), port = m.length - h.length - 1; return !/[a-z]/i.test(h) || HOST_PORT_SKIP.test(h) || (!h.includes('.') && port < 3) ? m : '[host]'; });
 }
 // Only marker-shaped HTML comments (the dispatcher's idempotency markers) pass through untouched so a marker lookup still matches.
 const MARKER = /^<!--\s*(?:devtest-|foreman-)/;
