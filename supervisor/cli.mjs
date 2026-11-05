@@ -32,7 +32,7 @@ import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
-import { requestWake, clearPending, waitForTurn, wakePassLock, wakeTarget } from './wake.mjs';
+import { requestWake, clearPending, waitForTurn, wakePassLock, wakeTarget, wakeArgs, workerArgs } from './wake.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -53,7 +53,8 @@ function print(job) {
   console.log(JSON.stringify({ id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities, allowance, kind, access, autoRestart, incompleteRetries, postcondition, model, effort, modelSource, modelReason, modelWarning, sessions }, null, 2));
 }
 function startWorker(root, id, registry) {
-  const child = spawn(process.execPath, [self, 'worker', id, '--state-root', root, '--registry', registry],
+  // The default registry is not passed: it would be this version's path, and a wake handed on to a newer install would load the old manifests.
+  const child = spawn(process.execPath, workerArgs({ self, id, root, registry, defaultRegistry }),
     { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
   child.unref();
   return child.pid;
@@ -72,7 +73,7 @@ function wakeNextJob(root, reason) {
     if (!loadTeamConfig(teamConfigFile, root).enabled) return;
     const target = wakeTarget({ root, reason, self });
     requestWake({ root, reason, spawnWake: why => {
-      const child = spawn(process.execPath, [target, 'reconcile', '--wake', why, '--state-root', root, '--registry', path.resolve(registryOption || defaultRegistry)], { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+      const child = spawn(process.execPath, wakeArgs({ target, reason: why, root, registry: registryOption }), { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
       child.unref(); return { pid: child.pid, start: processStart(child.pid) };
     }, alive: p => !!p.pid && processStart(p.pid) === p.start });
   } catch (error) { console.error(`ai-supervisor: wake not requested: ${error?.name || 'Error'}`); }
@@ -315,7 +316,7 @@ async function main() {
   const a = args(command === 'test-slot' && cut >= 0 ? rest.slice(0, cut) : rest);   // the command after `--` is not ours to parse
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
-  registryOption = registry;
+  registryOption = a.registry ? registry : null;   // only an operator-given registry is passed on; a default is resolved by the code that runs (issue #406)
   if (command === 'help') {
     console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
@@ -550,8 +551,8 @@ async function main() {
       // follow-up pass (never lost, never overlapping) and ends. The lock is held to the end of the pass, upgrade step included.
       let passRelease = null;
       if (a.wake) {
-        const turn = await waitForTurn({ reason: a.wake, sleep: realClock.sleep, tryLock: () => wakePassLock(root), lastTickAt: () => readCache(root)?.tick?.at });
-        clearPending(root);
+        const turn = await waitForTurn({ reason: a.wake, ...(a.wake !== 'queued' && Number(process.env.AI_SUPERVISOR_WAKE_LOCK_WAIT_MS) > 0 ? { lockWaitMs: Number(process.env.AI_SUPERVISOR_WAKE_LOCK_WAIT_MS) } : {}), sleep: realClock.sleep, tryLock: () => wakePassLock(root), lastTickAt: () => readCache(root)?.tick?.at });
+        clearPending(root, process.pid);
         if (!turn.ready) { console.log(JSON.stringify({ wake: a.wake, skipped: 'another pass kept the lock; the scheduled tick is the fallback' })); return; }
         passRelease = turn.release;
       } else {
@@ -573,7 +574,7 @@ async function main() {
         // A skipped item (lease conflict, gh error) keeps the other items running but still makes the scheduled run fail visibly.
         if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
       } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
-      // After the lock is released, so the new version's dry-run health check can take it. A failure here never fails the tick.
+      // The pass lock is still held here; the new version's dry-run health check does not take it (it uses `team tick --dry-run`). A failure here never fails the tick.
       try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
       // Issue #406: this process ran the old code and dispatched nothing after an install; start a pass on the new code now.
       if (before.result === 'upgraded') wakeNextJob(root, 'install');

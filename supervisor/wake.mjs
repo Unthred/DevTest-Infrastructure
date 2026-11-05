@@ -43,6 +43,10 @@ export function wakeTarget({ root, self }) {
   const installed = path.join(root, 'current', 'supervisor', 'cli.mjs');
   return fs.existsSync(installed) ? installed : self;
 }
+// The command lines of a wake pass and of a worker. A registry is passed on only when the operator gave one: a default is resolved by the code
+// that runs, so a pass handed to a newer install loads that install's provider manifests, not the old version's (reviewed on PR #525).
+export const wakeArgs = ({ target, reason, root, registry }) => [target, 'reconcile', '--wake', reason, '--state-root', root, ...(registry ? ['--registry', registry] : [])];
+export const workerArgs = ({ self, id, root, registry, defaultRegistry }) => [self, 'worker', id, '--state-root', root, ...(path.resolve(registry) === path.resolve(defaultRegistry) ? [] : ['--registry', registry])];
 // One wake pass at a time, held from the start of the pass to its end.
 export const wakePassLock = root => dirLock(root, 'wake-pass.lock');
 // The read-modify-write of wake.json runs under a short lock, so two job-end workers cannot both pass the pending check.
@@ -60,14 +64,20 @@ function requestWakeLocked({ root, reason, now = Date.now(), spawnWake, alive })
   const s = read(root);
   const force = reason === 'install';
   const uncapped = force || reason === 'queued';   // a queued follow-up replaces a scheduled fire; the cap must not drop it
-  if (!force && s.pending && alive(s.pending)) return { requested: false, why: 'a wake is already pending' };
+  // A queued follow-up is merged only into another queued waiter, which waits however long the pass runs. A pending job-end waiter gives up
+  // after WAKE_LOCK_WAIT_MS, so merging a scheduled fire into it would lose the fire when the pass is longer (reviewed on PR #525).
+  const mergeable = s.pending && alive(s.pending) && !(reason === 'queued' && s.pending.reason !== 'queued');
+  if (!force && mergeable) return { requested: false, why: 'a wake is already pending' };
   const recent = s.started.filter(t => now - t < HOUR);
   if (!uncapped && recent.length >= WAKE_MAX_PER_HOUR) return { requested: false, why: 'wake rate cap reached; the scheduled tick is the fallback' };
   const child = spawnWake(reason);
   write(root, { pending: { pid: child.pid, start: child.start ?? null, reason, at: now }, started: [...recent, now] });
   return { requested: true, reason };
 }
-export const clearPending = root => withFileLock(root, () => { const s = read(root); if (s.pending) write(root, { ...s, pending: null }); });
+// With `pid`, only that waiter's own marker (or one whose process is gone) is cleared: a job-end waiter that gives up must not erase the marker
+// of a queued waiter that replaced it.
+const markerAlive = p => !!p?.pid && processStart(p.pid) === p.start;
+export const clearPending = (root, pid, alive = markerAlive) => withFileLock(root, () => { const s = read(root); if (s.pending && (pid === undefined || s.pending.pid === pid || !alive(s.pending))) write(root, { ...s, pending: null }); });
 
 // What a wake pass does before it runs the normal reconcile: wait until it can take the locks (`tryLock` returns the release the caller holds for the whole pass), and (except after an install) until
 // WAKE_MIN_GAP_MS have passed since the last tick finished. Returns { ready, waitedMs, release }; ready is false when the lock stayed held.
