@@ -13,19 +13,12 @@ import { atomicJson } from './core.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES } from './team.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
-import { redact, redactLong, redactAddresses } from './redact.mjs';
+import { redact, redactLong, redactAddresses, redactTopology } from './redact.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 // Issue #488: a refusal reason kept in the upgrade history and shown on the dashboard carries no secret, address or absolute path.
-const HOST_PORT_SKIP = /\.(?:mjs|cjs|js|json|sh|md|ya?ml|ts|txt|log)$/i;
-const escRe = x => x.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
-// Issue #501: also hide a bare host:port token (tower:8123) and any operator-configured local domain (DEVTEST_LOCAL_DOMAINS, comma-separated), even under a public suffix.
-export const refusalText = (r, localDomains = (process.env.DEVTEST_LOCAL_DOMAINS || '').split(',')) => {
-  let out = redactAddresses(redact(r, 300)).replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]').replace(/\b(?:[a-z0-9-]+\.)+(?:lan|local|internal|home|intranet|corp|private|localdomain|arpa)\b(?::\d+)?(?:\/\S*)?/gi, '[host]');
-  const doms = localDomains.map(d => d.trim().replace(/^\.+/, '')).filter(d => /^[a-z0-9.-]+$/i.test(d));
-  if (doms.length) out = out.replace(new RegExp('\\b(?:[a-z0-9-]+\\.)*(?:' + doms.map(escRe).join('|') + ')\\b(?::\\d+)?(?:\\/\\S*)?', 'gi'), '[host]');
-  return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => HOST_PORT_SKIP.test(m.replace(/:\d+$/, '')) ? m : '[host]').replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
-};
+export const refusalText = (r, localDomains) => redactTopology(redactAddresses(redact(r, 300)).replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]'), localDomains)
+  .replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
 export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
 // A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
