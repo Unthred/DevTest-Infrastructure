@@ -1,6 +1,7 @@
 // Runs before the page is painted (issue #58): puts the saved navigation dock and rail state on <html> so there is no jump.
 // Same-origin, sends nothing. The breakpoint edges and dock names mirror logic.mjs (a test keeps them identical).
 (function () {
+  var cl = document.documentElement.classList; if (cl) cl.add('js');   // lets the stylesheet reserve the list controls' room before paint (no jump when the script starts)
   try {
     var w = window.innerWidth, bp = w >= 1100 ? 'desktop' : w >= 640 ? 'tablet' : 'phone';
     var d = JSON.parse(localStorage.getItem('dash.dock.' + bp));

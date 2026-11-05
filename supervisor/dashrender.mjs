@@ -6,6 +6,7 @@ import { resultSeverity, tickLine } from './suphealth.mjs';
 import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
+import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
 
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
@@ -118,6 +119,26 @@ const jobRef = (j, view) => (['implement', 'continue'].includes(j.kind) ? issueL
 
 // ---- empty / error states
 const empty = (title, hint, ic = 'info') => `<div class="empty">${icon(ic)}<b>${esc(title)}</b><span>${esc(hint)}</span></div>`;
+// ---- lists (one shared component for every Overview list): a row is built by dli(), a list by dlist().
+// The server renders the default order and the footer, so a list is complete and scrolls inside its own card without script;
+// dashui/lists-ui.mjs adds the search box, the sort controls and keeps their state across the page's refresh.
+// A row carries what the controls sort and search on: severity (data-sev), a number, a short name and the age in ms.
+const plain = h => String(h ?? '').replace(/<[^>]*>/g, ' ').replace(/&(amp|lt|gt|quot|#39);/g, (m, c) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[c]).replace(/\s+/g, ' ').trim();
+export function dli({ cls = '', id = '', extra = '', key = '', sev = null, num = null, name = '', age = null, inner = '' }) {
+  const attrs = [cls ? `class="${esc(cls)}"` : '', id ? `id="${esc(id)}"` : '', key ? `data-key="${esc(key)}"` : '', sev ? `data-sev="${esc(sev)}"` : '',
+    Number.isFinite(num) ? `data-num="${num}"` : '', name ? `data-name="${esc(String(name).slice(0, 120))}"` : '', Number.isFinite(age) ? `data-age="${Math.round(age)}"` : '', extra].filter(Boolean).join(' ');
+  return { html: `<li ${attrs}>${inner}</li>`, sev, num: Number.isFinite(num) ? num : null, name, age: Number.isFinite(age) ? age : null };
+}
+// `sorts` are the sort keys that make sense for these rows (lists.mjs SORT_KEYS); `defaultSort` is what the list is rendered in.
+// `compact` is for small lists inside a card that has other content (a shorter fixed height).
+export function dlist({ id, label, noun = 'items', rows, sorts = ['default'], defaultSort = { key: 'default', dir: 'asc' }, defaultLabel = 'Original order', compact = false, listCls = 'panel-list' }) {
+  const ordered = sortListRows(rows.map((r, i) => ({ ...r, i })), defaultSort.key, defaultSort.dir);
+  const words = k => (k === 'default' ? [defaultLabel, 'Reversed'] : DIRECTION_WORDS[k]);
+  const search = searchVisible(rows.length), sort = sortsVisible(sorts) && rows.length > 1;
+  const word = words(defaultSort.key)[defaultSort.dir === 'desc' ? 1 : 0];
+  const bar = search || sort ? `<div class="dl-bar">${search ? `<div class="dl-search"><input type="search" class="dl-q" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Search ${esc(label)}" maxlength="200"><button type="button" class="tbtn dl-clear" aria-label="Clear search" title="Clear search" hidden>${icon('stop')}</button></div>` : ''}${sort ? `<label class="dl-sort"><span class="vh">Sort ${esc(label)} by</span><select class="dl-key">${sorts.map(k => `<option value="${k}"${k === defaultSort.key ? ' selected' : ''}>${esc(k === 'default' ? defaultLabel : SORT_LABELS[k])}</option>`).join('')}</select></label><button type="button" class="btn dl-dir" aria-label="Sort direction: ${esc(word)}. Press to reverse." title="Reverse the order" ${sorts.length ? '' : 'hidden'}>${icon(defaultSort.dir === 'desc' ? 'down' : 'up')}<span>${esc(word)}</span></button>` : ''}</div>` : '';
+  return `<div class="dlist${compact ? ' compact' : ''}" data-dlist="${esc(id)}" data-sorts="${esc(sorts.join(','))}" data-default-key="${esc(defaultSort.key)}" data-default-dir="${defaultSort.dir === 'desc' ? 'desc' : 'asc'}" data-default-label="${esc(defaultLabel)}" data-noun="${esc(noun)}">${bar}<ul class="${esc(listCls)} dl-scroll" tabindex="0" aria-label="${esc(label)}">${ordered.map(r => r.html.replace('<li ', `<li data-i="${r.i}" `)).join('')}</ul><p class="dl-none sub" role="status" hidden></p><div class="dl-foot sub" data-dl-foot aria-live="polite">${esc(footerText(rows, rows, noun))}</div></div>`;
+}
 
 // ---- tables: server-side sort, filter, pagination, footer. State lives in the URL, namespaced by table id.
 const withQuery = (path, query, set) => {
@@ -242,7 +263,7 @@ const grid = (layout, cards, cls = '') => `<div class="cards ${cls}" data-layout
 const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div><div class="spark-slot">${spark}</div></a>`;
 
 // ---- the four panels (Overview top) and the status bar
-function nowPanel(view, { describe = true } = {}) {
+function nowPanel(view, { describe = true, list = null } = {}) {
   const now = view.generatedAt;
   const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${esc(x.text)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}${(view.capNotes || []).map(n => `<div class="cap-note">Held down: ${esc(n)}</div>`).join('')}${Object.entries(view.budget || {}).filter(([, b]) => b.known).map(([n, b]) => `<div class="rate-note">${esc(n)}: ${Number.isFinite(b.ratePerHour) ? `${(b.ratePerHour * 100).toFixed(2)}% of the week per hour, ` : ''}projected ${Number.isFinite(b.projected) ? `${Math.round(b.projected * 100)}%` : 'unknown'} at reset</div>`).join('')}</div>`;
   // Issue #213: one card per running or paused job (role, model, item, elapsed); an agent with none gets one idle/blocked/unknown card.
@@ -251,16 +272,17 @@ function nowPanel(view, { describe = true } = {}) {
   const jobItem = (a, j) => {
     const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : j.role === 'rebaser' ? 'Rebaser' : 'Implementer';
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
-    return `<li class="sev-${level}" data-job-card="${esc(j.id)}"><div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div></li>`;
+    return dli({ cls: `sev-${level}`, extra: `data-job-card="${esc(j.id)}"`, key: `job-${j.id}`, sev: level, name: a.name, age: j.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div>` });
   };
   const ic = view.idleCauses, idleLine = ic ? Object.entries(ic.agents).map(([n, r]) => `<div class="sub" data-idle-causes="${esc(n)}">${esc(n)}, last 24 h: idle with work available ${esc(r.idleWithWorkPercent)}% (${Object.entries(r.minutes).filter(([k, v]) => v > 0 && k !== 'no-eligible-work' && k !== 'unrecorded').map(([k, v]) => `${esc(CAUSE_LABEL[k])} ${esc(Math.round(v))} min`).join(', ') || 'none'})${Object.keys(r.holds).length ? `; holds: ${Object.entries(r.holds).map(([h, m]) => `${esc(h)} ${esc(Math.round(m))} min`).join(' | ')}` : ''}</div>`).join('') : '';
-  return `${slots}${idleLine}<ul class="panel-list">${view.agents.map(a => {
-    if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j)).join('');
+  const rows = view.agents.flatMap(a => {
+    if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j));
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${jobRef(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
       : `<span>Idle: ${a.idleReason ? esc(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
-    return `<li class="sev-${level}"><div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div></li>`;
-  }).join('')}</ul>`;
+    return [dli({ cls: `sev-${level}`, key: `agent-${a.name}`, sev: level, name: a.name, age: j?.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div>` })];
+  });
+  return `${slots}${idleLine}${list ? dlist({ id: list, label: 'Now', noun: 'agents and jobs', rows, sorts: ['default', 'severity', 'age', 'name'], defaultLabel: 'Agent order', compact: false }) : `<ul class="panel-list">${rows.map(r => r.html).join('')}</ul>`}`;
 }
 // Allowance mode and weekly projection for one agent (issue #56).
 function budgetBlock(view, name) {
@@ -285,15 +307,19 @@ const globalWaitsHtml = view => (view.estimates?.waits || []).map(w => `<p class
 function nextWhyHtml(view) {
   const w = view.panels.nextWhy; if (!w) return '';
   const li = [];
-  for (const b of w.busy) li.push(`<li>${agentTag(b.agent, view)} is busy with a running job (see Now)</li>`);
-  for (const p of w.paused) li.push(`<li>${agentTag(p.agent, view)} is paused${p.resumeAt ? `, resumes about ${lt(p.resumeAt)}` : ''}</li>`);
-  if (w.blocked) li.push(`<li><a href="/work?issues.show=blocked">${w.blocked} queued item${w.blocked === 1 ? '' : 's'} blocked by dependencies</a></li>`);
-  if (w.waitingReview) li.push(`<li><a href="/work?prs.show=awaiting-review">${w.waitingReview} waiting for review</a></li>`);
-  return `<div class="why" data-why><p class="sub">Nothing is planned because:</p>${li.length ? `<ul class="panel-list">${li.join('')}</ul>` : '<p class="sub">no agent has work waiting.</p>'}</div>`;
+  for (const b of w.busy) li.push(dli({ key: `busy-${b.agent}`, name: b.agent, sev: 'info', inner: `${agentTag(b.agent, view)} is busy with a running job (see Now)` }));
+  for (const p of w.paused) li.push(dli({ key: `paused-${p.agent}`, name: p.agent, sev: 'warning', inner: `${agentTag(p.agent, view)} is paused${p.resumeAt ? `, resumes about ${lt(p.resumeAt)}` : ''}` }));
+  if (w.blocked) li.push(dli({ key: 'blocked', name: 'blocked by dependencies', sev: 'info', inner: `<a href="/work?issues.show=blocked">${w.blocked} queued item${w.blocked === 1 ? '' : 's'} blocked by dependencies</a>` }));
+  if (w.waitingReview) li.push(dli({ key: 'review', name: 'waiting for review', sev: 'info', inner: `<a href="/work?prs.show=awaiting-review">${w.waitingReview} waiting for review</a>` }));
+  return `<div class="why" data-why><p class="sub">Nothing is planned because:</p>${li.length ? dlist({ id: 'next-why', label: 'Why nothing is planned', noun: 'reasons', rows: li, sorts: ['default', 'severity', 'name'], defaultLabel: 'As listed', compact: true }) : '<p class="sub">no agent has work waiting.</p>'}</div>`;
 }
 function nextPanel(view) {
   const now = view.generatedAt, plan = view.panels.next;
-  return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? `<ul class="panel-list">${plan.map(p => `<li class="sev-info"><div class="t">${agentTag(p.agent, view)}: ${esc(p.type === 'cifix' ? 'fix CI' : p.type)}</div><div>${['implement', 'continue'].includes(p.type) ? issueLink(p.ref) : prLink(p.ref)} ${watchBtn(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref, '/')}</div>${estHtml(estFor(view, ['implement', 'continue'].includes(p.type) ? 'issue' : 'pr', p.ref), view.tz, now)}${p.reassignedFrom || p.why ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}</li>`).join('')}</ul>` : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
+  const rows = plan.map(p => {
+    const issueLike = ['implement', 'continue'].includes(p.type), kind = issueLike ? 'issue' : 'pr', what = p.type === 'cifix' ? 'fix CI' : p.type;
+    return dli({ cls: 'sev-info', key: `next-${p.agent || ''}-${p.type}-${p.ref}`, sev: 'info', num: Number(p.ref), name: `${p.agent || ''} ${what}`, inner: `<div class="t">${agentTag(p.agent, view)}: ${esc(what)}</div><div>${issueLike ? issueLink(p.ref) : prLink(p.ref)} ${watchBtn(view, kind, p.ref, '/')}</div>${estHtml(estFor(view, kind, p.ref), view.tz, now)}${p.reassignedFrom || p.why ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}` });
+  });
+  return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? dlist({ id: 'next', label: 'Next', noun: 'planned items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Run order' }) : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 // Issue #549: the circuit breaker's status on the Overview, and the wasted usage by cause. Cost is the CLI's own estimate, not a cash charge.
 function breakerCard(view) {
@@ -310,18 +336,19 @@ const inboxForm = (id, decision, label, cls) => `<form method="post" action="/in
 const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div></div>`;
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
+  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
+  return items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Most urgent first' })}`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 // Issue #414: parked or staged work, quieter than Needs you: what it waits for and who or what ends the wait.
 function laterPanel(view) {
   const items = view.panels.later || [];
-  return items.length ? `<ul class="panel-list">${items.map(a => `<li class="sev-info" id="later-${esc(a.number)}"><div class="t">${ext(a.url, a.name)}</div><div class="sub">Waits: ${esc(a.waits)}</div><div class="sub">Ends: ${esc(a.ends)}</div></li>`).join('')}</ul>` : empty('Nothing later', 'No parked or staged work is waiting.', 'check');
+  return items.length ? dlist({ id: 'later', label: 'Later', noun: 'items', rows: items.map(a => dli({ cls: 'sev-info', id: `later-${a.number}`, key: `later-${a.number}`, sev: 'info', num: Number(a.number), name: a.name, inner: `<div class="t">${ext(a.url, a.name)}</div><div class="sub">Waits: ${esc(a.waits)}</div><div class="sub">Ends: ${esc(a.ends)}</div>` })), sorts: ['default', 'number', 'name'], defaultLabel: 'As parked' }) : empty('Nothing later', 'No parked or staged work is waiting.', 'check');
 }
 function warningsPanel(view) {
   const unknown = view.agents.filter(a => a.state === 'unknown');
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
-  return items.length ? `${copyAllBtn(items, 'warnings')}<ul class="panel-list">${items.map(a => `<li class="sev-${esc(a.severity)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
+  return items.length ? `${copyAllBtn(items, 'warnings')}${dlist({ id: 'warnings', label: 'Warnings', noun: 'warnings', rows: items.map((a, n) => dli({ cls: `sev-${a.severity}`, key: `warn-${a.id || n}`, sev: a.severity, num: a.ref?.n, name: a.text, inner: `<div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` })), sorts: ['severity', 'default', 'number', 'name'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'As reported' })}` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
 // Issues #76, #421: one compact badge per agent: name, role, state, linking to the agent's page. The job description is NOT here
 // (it lives once, on the Now card); several jobs show a count instead of a role.
@@ -377,8 +404,8 @@ function sincePanel(view, query) {
   const picker = `<div class="ranges" role="group" aria-label="Summary range">${Object.entries(SINCE_RANGES).map(([k, label]) => `<a href="${esc(withQuery('/', query, { since: k === DEFAULT_SINCE ? null : k }))}"${k === range ? ' aria-current="true"' : ''}>${esc(label)}</a>`).join('')}</div>`;
   const when = sv.lastSeen === null ? 'never marked as read' : lt(sv.lastSeen);
   const total = SECTIONS.slice(0, 5).reduce((n, [k]) => n + r[k].length, 0);
-  const item = i => `<li>${i.url ? `<a href="${esc(i.url)}">${esc(i.text)}</a>` : esc(i.text)}${Number.isFinite(i.at) ? ` <span class="muted">${esc(ago(i.at, now))}</span>` : ''}</li>`;
-  const sections = SECTIONS.map(([k, label]) => `<div class="since-sec"><h3>${esc(label)} <span class="muted">(${r[k].length})</span></h3>${r[k].length ? `<ul class="since-list">${r[k].slice(0, 30).map(item).join('')}${r[k].length > 30 ? `<li class="muted">and ${r[k].length - 30} more</li>` : ''}</ul>` : '<p class="muted">None</p>'}</div>`).join('');
+  const item = (k, i, n) => dli({ key: `since-${k}-${n}`, name: i.text, age: Number.isFinite(i.at) ? now - i.at : null, inner: `${i.url ? `<a href="${esc(i.url)}">${esc(i.text)}</a>` : esc(i.text)}${Number.isFinite(i.at) ? ` <span class="muted">${esc(ago(i.at, now))}</span>` : ''}` });
+  const sections = SECTIONS.map(([k, label]) => `<div class="since-sec"><h3>${esc(label)} <span class="muted">(${r[k].length})</span></h3>${r[k].length ? dlist({ id: `since-${k}`, label, noun: 'entries', rows: r[k].slice(0, 30).map((i, n) => item(k, i, n)), listCls: 'since-list', sorts: ['age', 'name', 'default'], defaultSort: { key: 'default', dir: 'asc' }, defaultLabel: 'As listed', compact: true }) + (r[k].length > 30 ? `<p class="muted">and ${r[k].length - 30} more</p>` : '') : '<p class="muted">None</p>'}</div>`).join('');
   const note = query.get('notice') === 'mark-read-cooldown' ? '<p class="muted" role="status">Marked as read a moment ago, so that click was ignored. Try again in a few seconds.</p>' : '';
   const body = `${note}<div class="since-head"><span>Last marked as read: ${when}. Showing ${esc(r.label.toLowerCase())}, from ${lt(r.from)}${r.fallback ? ' (you have not marked anything as read yet, so this is the last 24 h)' : ''}.</span>${copyBtn(r.text, 'the summary', { label: 'Copy summary' })}<form method="post" action="/mark-read" class="since-mark"><input type="hidden" name="at" value="${esc(now)}"><button class="btn" type="submit">Mark as read</button></form></div>
 <p class="since-tokens">Tokens used: <b>${r.tokens === null ? 'unknown' : esc(num(r.tokens))}</b> <span class="muted">across ${r.tokenJobs} job${r.tokenJobs === 1 ? '' : 's'}</span></p>${total || r.needsYou.length ? '' : '<p class="muted">Nothing has happened in this range.</p>'}<div class="since-grid">${sections}</div>`;
@@ -395,9 +422,9 @@ function watchingCard(view) {
     const steps = w.steps.map(st => { const h = w.history[st.key] || []; return `<li class="wstep st-${esc(st.status)}${w.current === st.key ? ' cur' : ''}" data-step="${esc(st.key)}" data-status="${esc(st.status)}"><details><summary><span class="wlabel">${esc(st.label)}</span><span class="wstate">${esc(STEP_WORD[st.status] || st.status)}</span></summary>${h.length ? `<ul class="whist">${h.map(r => `<li><b>${lt(r.at)}</b> ${esc(r.text)}</li>`).join('')}</ul>` : '<p class="sub">Nothing recorded yet.</p>'}</details></li>`; }).join('');
     const issueTag = w.pr !== null && w.issue !== null ? ` <span class="sub">for ${issueLink(w.issue)}</span>` : '';
     const est = w.done ? '' : estHtml(estFor(view, w.pr !== null ? 'pr' : 'issue', w.pr !== null ? w.pr : w.issue), view.tz, now);
-    return `<li class="watch-item${w.needs ? ' needs' : ''}" data-watch="${esc(w.id)}"><div class="watch-head"><b>${ref}</b>${issueTag}${w.pinned ? ' <span class="badge sev-info">Pinned</span>' : ''}<span class="watch-acts">${watchForm(w.kind, w.number, w.pinned ? 'unpin' : 'pin', w.pinned ? 'Unpin' : 'Pin', back)}${watchForm(w.kind, w.number, 'unwatch', 'Stop watching', back, 'watch-on')}</span></div><ol class="wsteps" aria-label="Steps from implement to verified">${steps}</ol><p class="watch-sentence">${esc(w.sentence)}</p>${est}</li>`;
+    return dli({ cls: `watch-item${w.needs ? ' needs' : ''}`, extra: `data-watch="${esc(w.id)}"`, key: `watch-${w.id}`, sev: w.needs ? 'action' : w.done ? 'ok' : 'info', num: Number(w.number), name: w.pr !== null ? `PR ${w.pr}` : `issue ${w.issue}`, age: Number.isFinite(w.since) ? now - w.since : null, inner: `<div class="watch-head"><b>${ref}</b>${issueTag}${w.pinned ? ' <span class="badge sev-info">Pinned</span>' : ''}<span class="watch-acts">${watchForm(w.kind, w.number, w.pinned ? 'unpin' : 'pin', w.pinned ? 'Unpin' : 'Pin', back)}${watchForm(w.kind, w.number, 'unwatch', 'Stop watching', back, 'watch-on')}</span></div><ol class="wsteps" aria-label="Steps from implement to verified">${steps}</ol><p class="watch-sentence">${esc(w.sentence)}</p>${est}` });
   };
-  const body = list.length ? `<ul class="watch-list">${list.map(item).join('')}</ul>` : empty('Nothing watched', 'Press Watch on any issue or pull request to follow it from start to installed.', 'info');
+  const body = list.length ? dlist({ id: 'watching', label: 'Watching', noun: 'watched items', rows: list.map(item), listCls: 'watch-list', sorts: ['severity', 'age', 'number', 'name', 'default'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'Order added' }) : empty('Nothing watched', 'Press Watch on any issue or pull request to follow it from start to installed.', 'info');
   return card({ id: 'watching', title: `Watching${list.length ? ` (${list.length})` : ''}`, span: 12, movable: false, body, cls: 'panel watching', type: 'panel' });
 }
 function overview(view, query) {
@@ -410,7 +437,7 @@ function overview(view, query) {
   const warnCount = view.panels.warnings.length + (view.agents.some(a => a.state === 'unknown') ? 1 : 0);
   const panels = [
     breakerCard(view),
-    card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view), href: '/agents', cls: 'panel', type: 'panel' }),
+    card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view, { list: 'now' }), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'later', title: `Later${(view.panels.later || []).length ? ` (${view.panels.later.length})` : ''}`, span: 3, body: laterPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
