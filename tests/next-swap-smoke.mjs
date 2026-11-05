@@ -32,7 +32,7 @@ async function buildSite(dir) {
   try {
     const view = await buildView({ config: cfg, root, jobs: [], events: [], state: { jobs: {} }, cache: { tick: { at: NOW - 2 * MIN, status: 'ok', lastOkAt: NOW - 2 * MIN }, pulls: [], issues: [] }, snapshots: [], now: NOW });
     const { html } = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(''), pathname: '/' });
-    fs.writeFileSync(path.join(dir, 'index.html'), html.replace('<meta http-equiv="refresh" content="60">', ''));
+    fs.writeFileSync(path.join(dir, 'index.html'), html.replace('<meta http-equiv="refresh" content="60">', '').replace('<meta name="refresh-seconds" content="60">', '<meta name="refresh-seconds" content="3600">'));
     stageDashui(dir);
     fs.mkdirSync(path.join(dir, 'fragments'));
     fs.writeFileSync(path.join(dir, 'fragments', 'none.html'), '<span class="muted">none</span>');   // what dashserver.mjs sends for /api/next without a schedule
