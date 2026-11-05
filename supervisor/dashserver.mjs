@@ -9,6 +9,8 @@ import { SupervisorError } from './core.mjs';
 import { readTimeline, computeGaps, allSnapshots, storageReport } from './history.mjs';
 import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { applyAction, readWatchlist } from './watchlist.mjs';
+import { createViewStore, VIEW_STALE_MS } from './viewstore.mjs';
+import { createWorkerBuild } from './viewworker.mjs';
 import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
@@ -110,17 +112,14 @@ function stream({ root, req, res, id, after, now, active }) {
 
 // Target (issue #448): a page answers within 1 second at the median while a full test suite runs; the view is reused for this long.
 export const DASHBOARD_VIEW_TTL_MS = 3000;
-export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, evidenceRoot = DEFAULT_EVIDENCE_ROOT }) {
-  // Issue #448: under load every page rebuilt the whole view from disk. With a TTL the same view is reused for a few seconds (the view
-  // is already stale by its refresh interval); 0 (the default for tests) rebuilds on every request.
-  const viewCache = new Map();
-  const cachedView = async opts => {
-    const key = `${opts.timeline}:${opts.allTime}`, hit = viewCache.get(key), at = Date.now();
-    if (viewTtlMs > 0 && hit && at - hit.at < viewTtlMs) return hit.view;
-    const view = await currentView(opts);
-    if (viewTtlMs > 0) viewCache.set(key, { at, view });
-    return view;
-  };
+const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, refreshing: p.refreshing, failed: p.failed });
+export function handler({ root, config, host, port, now = () => Date.now(), probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false }) {
+  // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
+  // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
+  const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
+  const store = createViewStore({ build: worker ? worker.build : currentView, ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now(),
+    rebuildOpts: o => ({ ...o, now: now(), config: source(), configError: source.invalid }) });   // the timer rebuilds with the current time and config, not the last request's
+  const cachedView = opts => store.get(`${opts.timeline}:${opts.allTime}`, opts);
   const source = configSource(config);
   const activeStreams = new Set();
   const allowedHost = `${host}:${port}`;
@@ -139,6 +138,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     // A quick double-click lands back on the dashboard with a notice instead of a bare error page; nothing moved.
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=mark-read-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
     writeLastSeen(root, Math.max(at, prev ?? 0));
+    store.invalidate();   // issue #467: the redirect page must show this write, not the copy built before it
     return send(303, 'text/plain; charset=utf-8', 'marked', { location: '/' });
   };
   // Watch (issue #430): the third write. It changes only which changes the dashboard follows; it starts, stops and alters no work.
@@ -159,6 +159,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     }
     const r = applyAction(root, { kind, number, action, now: now() });
     if (!r.ok) return send(409, 'text/plain; charset=utf-8', r.reason);
+    store.invalidate();   // issue #467: as for Mark as read
     return send(303, 'text/plain; charset=utf-8', 'ok', { location: back });
   };
   return async (req, res) => {
@@ -183,6 +184,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
       try {
         const out = await probe({ root, registry, config: source(), agent, now: at });
         if (out.error === 'overage-risk' || out.error === 'busy') releaseCooldown(root, `probe:${agent}`, at);   // nothing was spent
+        store.invalidate();   // issue #467: the page after the probe must show its reading
         return send(303, 'text/plain; charset=utf-8', out.ok ? 'refreshed\n' : 'no reading\n', { location: `/usage?probe=${out.ok ? 'ok' : 'failed'}` });
       } catch (error) {
         releaseCooldown(root, `probe:${agent}`, at);
@@ -214,14 +216,15 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
       const route = apiPath ? null : matchRoute(path);
       if (!apiPath && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
       const q0 = new URLSearchParams(search);
-      const view = await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
-      if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(view));
+      const prepared = await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
+      const view = prepared.view;
+      if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify({ ...view, pageData: pageData(prepared) }));
       // Issue #481: only the Next element, so a page that polls during a long tick does not re-fetch a whole page (a watch page carries its transcript).
       if (path === '/api/next') return send(200, 'text/html; charset=utf-8', nextTickHtml(view, view.generatedAt) || '<span class="muted">none</span>');
       const watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
       const routed = watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
         : evidence ? { ...route, data: route.page === 'evidence' ? listRuns(evidenceRoot) : readRun(evidenceRoot, route.id) } : route;
-      const out = renderRoute(view, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
+      const out = renderRoute({ ...view, pageData: pageData(prepared) }, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
       // The evidence pages show same-origin screenshots, so only they may load images from 'self'; every other page keeps data: only.
       return send(out.status, 'text/html; charset=utf-8', withProof(out.html, root), evidence ? { 'content-security-policy': HEADERS['content-security-policy'].replace("img-src data:", "img-src 'self' data:") } : {});
     } catch (error) {
@@ -233,6 +236,6 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
 
 export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot }) {
   validateBind(host, port);
-  const server = http.createServer(handler({ root, config, host, port, viewTtlMs: DASHBOARD_VIEW_TTL_MS, ...(evidenceRoot ? { evidenceRoot } : {}) }));
+  const server = http.createServer(handler({ root, config, host, port, viewTtlMs: DASHBOARD_VIEW_TTL_MS, offload: true, ...(evidenceRoot ? { evidenceRoot } : {}) }));
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
 }
