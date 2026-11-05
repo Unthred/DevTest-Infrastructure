@@ -11,14 +11,14 @@ Only what the dispatcher already has, with no model call and no extra provider c
 ## Weekly burn, per agent and tick
 - `used`: the weekly window's utilisation (the most used weekly window if a provider reports several). A reading whose window has already reset no longer counts.
 - `rate`: the higher of the window average (`used / hours since the window started`) and the recent rate (rise between readings of the same window over the last `recent_hours`, needing two readings at least 2 h apart).
-- `projected = used + rate × hours to reset`; `runsOutAt` when the rate would reach 100 %.
+- `projected = used + rate × hours to reset`; `runsOutAt` when the rate would reach 100 %. **These are an estimate, for information (issue #680, homeowner decision 5 Nov 2026: the aim is not to spread work over the week but to maximise the processing the server can do).** They are shown on the dashboard and in `team status`, and the spare-allowance reviewer choice uses them to pick between agents, but a projection never sets a mode, never latches, and never holds work back.
 - **Cost of one job** (estimate, used for rule 4 and the reserve): the median rise in weekly use per token between consecutive job readings in this window, times the median tokens of the last ten jobs of that kind. Interactive use in between also counts, so the estimate is high, not low. With fewer than two samples the cost is *unknown*, and an unknown cost never holds a job back.
 
 ## Modes
 | Mode | When | May start |
 |---|---|---|
 | `normal` | otherwise | every job type |
-| `reviews_only` | `projected > projected_limit` (runs out before its reset at the current rate), **or** `used ≥ high_water` (85 %) with more than `high_water_min_hours` (24 h) to the reset | reviews and fixes on its own PRs: `review`, `fix`, `cifix`, `rebase`. No `implement`, no `continue` |
+| `reviews_only` | `used ≥ high_water` (85 %) with more than `high_water_min_hours` (24 h) to the reset. A projection does not count (issue #680) | reviews and fixes on its own PRs: `review`, `fix`, `cifix`, `rebase`. No `implement`, no `continue` |
 | `waiting` | a weekly or 5-hour window is used up (`≥ exhausted_at`), the provider reports the limit reached, or the provider reports **paid overage in use** | nothing; waits for the reset |
 
 - **A reported limit counts without numbers.** "The provider reports the limit reached" means an exhausted status (`rejected`, `blocked`, `exhausted`, `limit_reached`) on the record or on any window, whether or not a window carries a numeric reading — the same evidence `allowance.mjs` treats as a usage limit. It waits until the latest reported reset time still ahead. If every reported reset time has passed, the limit has reset. With no reset time at all, it waits one hour from the reading (D-019's first conservative wait); the next launch then takes a fresh reading.
@@ -39,7 +39,7 @@ Only what the dispatcher already has, with no model call and no extra provider c
 Fix-round re-reviews are diff-scoped (#45). When the reviewer is low (not `normal`, or weekly use at or above `models.allowance_threshold`), a re-review uses the agent's `low` entry in the `models` table when one is configured (shipped: Claude `sonnet`/`low`, Codex effort `low`); a full review keeps the `review` entry. While low, escalation to the strong model is suppressed. See [model-routing.md](model-routing.md).
 
 ## Visibility
-- `team status` has an **Allowance** section, for example `codex: reviews only until Wed 07:18 — weekly 92%, projected 184% at reset (3.5 days left, window average): runs out before the reset at the current rate`, and marks a planned job `(reassigned from codex for allowance)`.
+- `team status` has an **Allowance** section, for example `codex: reviews only until Wed 07:18 — weekly 92%: at or above 85% with more than 24h to go`, and `claude: normal — weekly 11%; estimate at reset 155% (6.5 days left, recent), for information only`, and marks a planned job `(reassigned from codex for allowance)`.
 - Dashboard: the Agents page and the Usage page show each agent's mode, the reason, the weekly projection and what is held back; the Next panel and the issue queue say "reassigned for allowance"; the jobs tables have a *Reassigned from* column.
 - **Alerts**: one alert per mode change (`Allowance: <line>`), recorded as sent only when the channel accepted it, so a failed delivery is retried on the next tick. An agent's first `normal` reading is not announced.
 - `team tick --dry-run` and the dashboard plan with the same modes but never record a change or alert.
@@ -50,12 +50,11 @@ Fix-round re-reviews are diff-scoped (#45). When the reviewer is low (not `norma
 | Key | Shipped | Meaning |
 |---|---|---|
 | `enabled` | `true` | `false` makes every agent `normal` |
-| `projected_limit` | `1` | projected weekly use at reset above which an agent is `reviews_only` (e.g. `0.9` for a 10 % margin) |
+| `projected_limit` | — | retired (issue #680): still accepted in `team.local.json` and ignored, so an installed file keeps loading |
 | `high_water` | `0.85` | weekly use at or above which … |
 | `high_water_min_hours` | `24` | … with more than this many hours to the reset makes it `reviews_only` |
-| `recent_hours` | `24` | readings used for the recent rate |
-| `recent_min_window_hours` | `12` | issue #627: no forecast can make an agent `reviews_only` until this many hours of the weekly window have passed (the first hours after a reset are a burst, not a rate); until then only actual use against `high_water`, and `exhausted_at`, apply, and the dashboard says so |
-| `recent_min_samples` | `12` | issue #627: readings needed inside `recent_hours` before the recent rate is used; with fewer, the window average alone judges |
+| `recent_hours` | `24` | readings used for the recent rate (the estimate) |
+| `recent_min_window_hours`, `recent_min_samples` | — | retired (issues #627, #680): accepted and ignored |
 | `exhausted_at` | `0.995` | a window at or above this is used up (`waiting`) |
 | `probe` | `true` | allow allowance probes (below) |
 | `probe_age_hours` | `2` | a held agent whose newest reading is older than this is probed |
@@ -67,7 +66,7 @@ Unknown keys or out-of-range values make the tick fail closed, naming the key.
 ## Limits of the evidence
 - The figures are the providers' own readings, as fresh as the newest job that recorded them. An agent that runs nothing reports nothing new; the homeowner's interactive use between readings is not seen until the next reading.
 - The per-job cost is an estimate (see above). The exhausted-state allowance values are still not captured live (#15, D-019), so `waiting` on a reported limit relies on the same unverified shapes as `allowance.mjs`.
-- Read-only check on Tower, 2026-10-31, against the real state root: Claude weekly 60 % with 4.6 days left and Codex 96 % with 3.8 days left both project above 100 % at reset, so with the shipped settings both would be `reviews_only` and no new implementation would start until a reset (reviews and own-PR fixes continue). The homeowner may prefer a different `projected_limit`.
+- Read-only check on Tower, 2026-10-31 (superseded by issue #680): Claude weekly 60 % and Codex 96 % both projected above 100 %, which used to make both `reviews_only`. A projection no longer does; only Codex's 96 % (above the high-water mark) holds it to reviews and fixes.
 
 ## Allowance probe (issue #110)
 
@@ -76,6 +75,5 @@ A held agent (`reviews_only` or `waiting`) runs no job, so its reading never ref
 - **What.** The provider manifest's `probe` section names it. `kind: "command"` is a minimal, tool-free run of the CLI (Claude: `claude -p "reply OK" --model haiku --strict-mcp-config --tools "" --no-session-persistence --output-format stream-json --verbose`), started in an empty temporary directory outside any repository with the manifest's environment allow-list. `kind: "session-log"` is the model-free local read (Codex). Core names no provider.
 - **What is kept.** Only the allowance record (windows, status, billing flags) with `source: "probe"` and the probe time, in the dashboard cache next to the session-log probe. Message text, session ids and raw output are never stored.
 - **When.** Only while the agent is `reviews_only` or `waiting` and its newest reading is older than `probe_age_hours`, and once just after a reported reset time passes. Never while `normal`. At most one attempt per agent per `probe_interval_minutes`. Not when the last reading shows paid overage in use for a window that has not reset, nor while a window that has not reset is used up, whatever the overage status, nor while a job of the provider waits on a usage limit (D-019: no provider call while waiting; the reset probe comes after the reset). Never on a dry run.
-- **Latch.** A probe reading newer than the latch is new evidence: if the agent then no longer projects to run out and is below the high-water mark, the latch is released, the reason is recorded and the mode change is alerted once. A reading showing overage or an exhausted window leaves the agent `waiting`, as before. Credits are never used.
-- **Self-release (issue #627).** A short burst does not hold an agent for the week: once the checks above find it below the high-water mark and its forecast is at or under 90 % of `projected_limit` (or it is still too early in the window to forecast), the latch lets go by itself with no probe, and the reason says so. A forecast between 90 % and 100 % of the limit stays held, so the mode does not flip every tick.
+- **Latch.** Only the high-water rule latches (`rule: high-water` in the recorded state): once `reviews_only` for it, the agent stays so to the weekly reset, unless a fresh probe reading taken after the latch shows it no longer at the mark, which releases it; the reason is recorded and the mode change alerted once. A latch recorded without that rule (an older forecast latch) is ignored and clears on the first tick (issue #680). A reading showing overage or an exhausted window leaves the agent `waiting`. Credits are never used.
 - **On demand.** `ai-supervisor probe <agent>` and the **Refresh allowance** button on the Usage page (a same-origin form post, the dashboard's only write) probe at once and show the reading's age. The planner uses the reading from the next tick.

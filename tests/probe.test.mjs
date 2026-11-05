@@ -112,24 +112,33 @@ test('the probe command comes from the manifest: both shipped manifests validate
 });
 
 // ---- the latch
-const latched = { mode: 'reviews_only', until: RESET, since: NOW - 2 * HOUR, reason: 'weekly 90%' };
+const latched = { mode: 'reviews_only', rule: 'high-water', until: RESET, since: NOW - 2 * HOUR, reason: 'weekly 90%' };   // a high-water latch (issue #680: only that rule latches)
 test('a fresh probe reading below the thresholds releases the reviews-only latch; above them it keeps it', () => {
   const low = assessAgent({ allowance: claudeAl(0.05, { at: NOW, source: 'probe' }), now: NOW, latched });
   assert.equal(low.mode, 'normal'); assert.match(low.reason, /released by a fresh allowance probe/);
   const high = assessAgent({ allowance: claudeAl(0.9, { at: NOW, source: 'probe' }), now: NOW, latched });
   assert.equal(high.mode, 'reviews_only');
   const projected = assessAgent({ allowance: claudeAl(0.6, { at: NOW, source: 'probe' }), now: NOW, latched });
-  assert.equal(projected.mode, 'reviews_only', '60% with half the window gone projects past 100%');
+  assert.equal(projected.mode, 'normal', 'issue #680: a projection past 100% is an estimate and keeps nothing latched');
 });
-test('issue #627: a low reading releases the latch by itself, a probe is no longer needed; a forecast still over the limit holds', () => {
-  for (const al of [claudeAl(0.05, { at: NOW, source: 'job' }), claudeAl(0.05, { at: NOW }), claudeAl(0.05, { at: NOW - 3 * HOUR, source: 'probe' })]) {
-    const a = assessAgent({ allowance: al, now: NOW, latched });
-    assert.equal(a.mode, 'normal'); assert.match(a.reason, /released itself|released by a fresh allowance probe/);
-  }
-  const hot = assessAgent({ allowance: claudeAl(0.6, { at: NOW, source: 'job' }), now: NOW, latched });
-  assert.equal(hot.mode, 'reviews_only', 'a forecast over the limit holds with no probe');
-  assert.equal(assessAgent({ allowance: claudeAl(0.6, { at: NOW, source: 'probe' }), now: NOW, latched }).mode, 'reviews_only', 'and a probe does not release it');
+test('issue #680: a high-water latch is released only by a fresh probe; a latch from an old forecast (no rule) clears on any reading', () => {
+  for (const al of [claudeAl(0.05, { at: NOW, source: 'job' }), claudeAl(0.05, { at: NOW }), claudeAl(0.05, { at: NOW - 3 * HOUR, source: 'probe' })]) assert.equal(assessAgent({ allowance: al, now: NOW, latched }).mode, 'reviews_only');
+  const forecastLatch = { mode: 'reviews_only', until: RESET, since: NOW - 2 * HOUR, reason: 'weekly 11%, projected 155% at reset' };
+  for (const al of [claudeAl(0.11, { at: NOW, source: 'job' }), claudeAl(0.6, { at: NOW }), claudeAl(0.11, { at: NOW - 3 * HOUR, source: 'probe' })]) assert.equal(assessAgent({ allowance: al, now: NOW, latched: forecastLatch }).mode, 'normal');
 });
+test('issue #680: a latch recorded from a forecast clears on the first tick after install, and is alerted once', async t => {
+  const stored = { mode: 'reviews_only', until: RESET, since: NOW - 2 * HOUR, reason: 'weekly 11%, projected 155% at reset (6.5 days left, recent): runs out before the reset at the current rate', alerted: true };   // as the old rule stored it
+  const w = world(t, { allowance: { claude: claudeAl(0.11, { at: NOW, source: 'job' }) }, stored });
+  w.team.modes = w.team.budgets();
+  assert.equal(w.team.modes.claude.mode, 'normal');
+  const report = {}; await w.team.updateBudget(report); await w.team.updateBudget({});
+  assert.equal(w.team.s.budget.claude.mode, 'normal'); assert.equal(w.alerts.length, 1); assert.match(w.alerts[0], /claude: normal/);
+  // a genuine high-water latch recorded by the old code (no rule yet) gets its rule once the live check fires again
+  const w2 = world(t, { allowance: { claude: claudeAl(0.9, { at: NOW, source: 'job' }) }, stored: { mode: 'reviews_only', until: RESET, since: NOW - 2 * HOUR, reason: 'weekly 90%: at or above 85%', alerted: true } });
+  w2.team.modes = w2.team.budgets(); await w2.team.updateBudget({});
+  assert.equal(w2.team.s.budget.claude.mode, 'reviews_only'); assert.equal(w2.team.s.budget.claude.rule, 'high-water'); assert.equal(w2.alerts.length, 0);
+});
+
 test('a probe that reports overage in use or an exhausted window never frees the agent', () => {
   assert.equal(assessAgent({ allowance: claudeAl(0.05, { at: NOW, source: 'probe', overage: true }), now: NOW, latched }).mode, 'waiting');
   const exhausted = claudeAl(0.1, { at: NOW, source: 'probe' }); exhausted.status = 'rejected'; exhausted.windows[1].status = 'rejected';
@@ -175,7 +184,7 @@ test('team: after a reported reset time passes a waiting agent is probed once an
   assert.equal(w.alerts.length, 1, 'alerted once'); assert.match(w.alerts[0], /claude: normal/);
 });
 test('team: the released latch is recorded with its reason and alerted once', async t => {
-  const stored = { mode: 'reviews_only', until: RESET, since: NOW - 2 * HOUR, reason: 'weekly 90%', alerted: true };
+  const stored = { mode: 'reviews_only', rule: 'high-water', until: RESET, since: NOW - 2 * HOUR, reason: 'weekly 90%', alerted: true };
   const w = world(t, { allowance: { claude: claudeAl(0.04, { at: NOW, source: 'probe' }) }, stored });
   w.team.modes = w.team.budgets();
   const report = {}; await w.team.updateBudget(report); await w.team.updateBudget({});

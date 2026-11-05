@@ -953,9 +953,10 @@ export class Team {
       const sameUntil = (prev?.until ?? null) === (a.until ?? null) || (Number.isFinite(prev?.until) && Number.isFinite(a.until) && Math.abs(prev.until - a.until) <= 600000);
       if (!prev || prev.mode !== a.mode || !sameUntil) {
         // The first reading of a normal agent is not a change and is not announced.
-        this.s.budget[agent] = { mode: a.mode, reason: String(a.reason || '').slice(0, 300), until: a.until ?? null, since: this.clock.now(), alerted: !prev && a.mode === 'normal' };
+        this.s.budget[agent] = { mode: a.mode, reason: String(a.reason || '').slice(0, 300), until: a.until ?? null, rule: a.rule ?? null, since: this.clock.now(), alerted: !prev && a.mode === 'normal' };
         this.save(); (report.budget ||= []).push({ agent, from: prev?.mode ?? null, to: a.mode, reason: a.reason });
       }
+      else if (a.mode === 'reviews_only' && (prev.rule ?? null) !== (a.rule ?? null)) { prev.rule = a.rule ?? null; this.save(); }   // issue #680: an older latch gets its rule on the next tick
       const e = this.s.budget[agent];
       if (e.alerted || !this.alert) continue;
       try { await this.alert(`Allowance: ${modeLine(agent, { ...a, mode: e.mode, reason: e.reason, until: e.until }, this.timeZone)}`); e.alerted = true; this.save(); }
@@ -1105,13 +1106,13 @@ export class Team {
     const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
     return !!issue && this.overlapHold(agent, n, issue, type);
   }
-  // Issue #402: spare allowance of an agent, from the projection the budget already holds: projected_limit minus the projected weekly use
-  // at the reset, unclamped so that any difference in projection counts. An unknown reading (no usage data, a stale or reset window) scores 0: behind any reviewer that
+  // Issue #402: spare allowance of an agent, from the projection the budget already holds: the whole week (1) minus the projected weekly use
+  // at the reset, unclamped. It only chooses between agents (issue #680); it never holds work back so that any difference in projection counts. An unknown reading (no usage data, a stale or reset window) scores 0: behind any reviewer that
   // is known to have spare, ahead of one projected to run out.
   spareScore(agent) {
     const m = this.modes?.[agent];
     if (!m?.known || !Number.isFinite(m.projected)) return 0;
-    return budgetSettings(this.c).projected_limit - m.projected;
+    return 1 - m.projected;
   }
   // True when `provider` already runs its limits.provider_roles count in `role` (no such limit: never).
   providerSlotFull(provider, role, usedBy) {

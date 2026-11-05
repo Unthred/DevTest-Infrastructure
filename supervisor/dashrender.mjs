@@ -267,7 +267,7 @@ function budgetBlock(view, name) {
   const b = view.budget?.[name];
   if (!b) return '';
   const sev = { normal: 'ok', reviews_only: 'warning', waiting: 'action' }[b.mode] || 'info', now = view.generatedAt;
-  const proj = b.known ? `Weekly ${pct(b.used)} used, projected <b>${pct(b.projected)}</b> at reset (${esc(inFuture(b.resetsAt, now))}; rate from the ${esc(b.rateSource)})${b.runsOutAt && b.runsOutAt < b.resetsAt ? `; runs out ${esc(inFuture(b.runsOutAt, now))}` : ''}` : 'Weekly use unknown';
+  const proj = b.known ? `Weekly ${pct(b.used)} used; estimate at reset <b>${pct(b.projected)}</b> (${esc(inFuture(b.resetsAt, now))}; rate from the ${esc(b.rateSource)}; an estimate only, it does not hold work back)${b.runsOutAt && b.runsOutAt < b.resetsAt ? `; at this rate it would run out ${esc(inFuture(b.runsOutAt, now))}` : ''}` : 'Weekly use unknown';
   return `<div class="budget" data-mode="${esc(b.mode)}"><p>${badge(sev, b.label)}${b.mode !== 'normal' && b.until ? ` <span class="sub">until ${lt(b.until)}</span>` : ''}</p><p class="sub">${proj}</p>${b.reason ? `<p class="sub">Why: ${esc(b.reason)}</p>` : ''}${Object.entries(b.held || {}).map(([t, w]) => `<p class="sub">Held back (${esc(t)}): ${esc(w)}</p>`).join('')}</div>`;
 }
 // Issue #156: the estimated finish with its basis on hover; waits Foreman knows about get their own time.

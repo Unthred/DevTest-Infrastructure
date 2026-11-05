@@ -289,6 +289,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Approval through MCP or by a file the MCP account can write; running an item without approval; a second write path into Foreman state; free-form item kinds; a new port for the inbox.
 - Superseded-by: none
 
+## D-032 — A forecast of weekly use informs; it never holds work back
+- Status: agent-proposal
+- Date: 2026-11-05
+- Source: homeowner decision 2026-11-05, given to the overseer: "the aim is not to spread work out over the week; the aim is to maximise the processing we can do on the server." https://github.com/Unthred/DevTest-Infrastructure/issues/680 (supersedes the forecast rules of issue #627 and PR #644)
+- Decision: The projection of weekly use (rate, projected use at the reset, run-out time) is an estimate shown on the dashboard and used only to choose between agents. It never sets `reviews_only` or any other mode, never latches, and never moves a scheduling estimate. Actual use still holds work: the paid-overage stop, `exhausted_at` on a weekly or short window, a provider-reported limit, and the high-water reserve (reviews and fixes only at 85 % used with more than `high_water_min_hours` left) are unchanged, as is the per-job cost check against the weekly limit.
+- Rationale: Spreading work over the week left the server idle while allowance remained, and a forecast built from a few hours after a reset held Claude off implementation at 9 % to 11 % used.
+- Rejected: A better forecast (issue #627: a minimum of evidence, a self-releasing latch), a forecast margin setting, and switching allowance-aware scheduling off, which would also disable the overage check.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.
