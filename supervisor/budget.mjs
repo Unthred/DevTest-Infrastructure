@@ -124,7 +124,9 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (weekly) {
     const windowH = (weekly.windowMinutes || WEEK_MINUTES) / 60, hoursLeft = (weekly.resetsAt - now) / HOUR;
     const average = weekly.utilization / Math.max(windowH * MIN_ELAPSED_FRACTION, windowH - hoursLeft);
-    const recent = recentRate(history, weekly.resetsAt, now, settings.recent_hours);
+    // Just after a reset little has been used and a short burst extrapolates wildly (4% used read as 299%, issue #619):
+    // the recent rate counts only once the window has run as long as the recent-rate span.
+    const recent = windowH - hoursLeft >= settings.recent_hours ? recentRate(history, weekly.resetsAt, now, settings.recent_hours) : null;
     const rate = Math.max(average, recent ?? 0);
     Object.assign(out, { known: true, used: weekly.utilization, resetsAt: weekly.resetsAt, hoursLeft, ratePerHour: rate, rateSource: recent !== null && recent > average ? 'recent' : 'window average',
       projected: weekly.utilization + rate * hoursLeft, runsOutAt: weekly.utilization >= 1 ? now : rate > 0 ? now + ((1 - weekly.utilization) / rate) * HOUR : null, costs: jobCosts(jobs, weekly, now) });
