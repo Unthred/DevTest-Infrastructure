@@ -50,3 +50,10 @@ test('issue #584: every GitHub write (comment, issue create, issue body) is reda
   }
   assert.match(calls[0].input, /finding: \[ip\] and \[host\]/);
 });
+
+test('issue #607: image tags and versions are kept, real host:port values still redacted', () => {
+  assert.equal(redactTopology('node:20 ubuntu:22.04 postgres:16-alpine nginx:1.25.3', []), 'node:20 ubuntu:22.04 postgres:16-alpine nginx:1.25.3');
+  assert.equal(redactTopology(host, []), '[host]');
+  assert.equal(redactTopology('redis:7000', []), '[host]');
+  assert.equal(redactTopology('api.example.org:22', []), '[host]');
+});
