@@ -2321,6 +2321,9 @@ export class Team {
       if (this.awaitingResume(id, job, j)) return;   // issue #163: a transient stop is resumed once before the homeowner is asked
       this.s.notified[nkey] = this.clock.now(); this.save();
       const target = j.issue ?? j.pr;
+      // Issue #124: an inbox job has no issue or PR on GitHub, so there is nowhere to flag or comment. Its outcome is written to the item
+      // (ingestInbox), where the overseer reads it and the homeowner sees it; no GitHub write is attempted, now or on later ticks.
+      if (target == null) return;
       try {
       await this.flag(target, { key: `job:${id}`, kind: 'job', job: id, tk: j.issue != null ? 'issue' : 'pull' });
       await this.postNotice(target, `job=${id} status=${job.status}`, `**Needs the homeowner.** Supervised ${this.names().job({ id, kind: j.kind, pr: j.pr ?? (j.issue != null && !['implement', 'continue'].includes(j.kind) ? j.issue : null), issue: ['implement', 'continue'].includes(j.kind) ? j.issue : null }).text} (${j.agent}) stopped as \`${job.status}\` (last event: \`${job.lastEvent}\`). Required: inspect \`ai-agent --supervisor status ${id}\` and \`logs ${id}\`, then decide whether to \`resume\`, reassign or close. Other agents keep working.`);

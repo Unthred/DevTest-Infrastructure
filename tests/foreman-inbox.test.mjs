@@ -306,6 +306,18 @@ test('team: a job that ends without a summary is recorded as failed, with the re
   w.jobs.states[jobId].status = 'blocked'; await w.team.ingest(rep());
   assert.equal(inbox.statusOf(w.dir, id).state, 'failed');
 });
+test('team: a blocked inbox job makes no GitHub write and leaves no flag for an undefined target', async t => {
+  const w = world(t); approve(w, GOOD);
+  const labels = []; w.gh.addLabel = async (...a) => labels.push(a);
+  await w.team.runAction((await w.team.plan()).find(a => a.type === 'inbox'), rep());
+  const [jobId] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox');
+  w.jobs.states[jobId].status = 'blocked'; w.jobs.states[jobId].lastEvent = 'incomplete';
+  const r = rep(); r.notified = r.notified || [];
+  await w.team.notifyBlocked(r); await w.team.notifyBlocked(r);
+  assert.equal(labels.length, 0); assert.equal(w.calls.comments.length, 0);
+  assert.ok(!('undefined' in (w.team.s.unblock?.flags || {})));
+  assert.equal(r.notified.length, 0);
+});
 test('team: an approved issue draft is posted once, redacted, with no attribution; repeated ticks and a lost response never post it twice', async t => {
   const w = world(t); const id = approve(w, DRAFT);
   await w.team.processInbox(rep()); await w.team.processInbox(rep()); await w.team.processInbox(rep());
