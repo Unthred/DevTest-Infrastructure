@@ -1511,8 +1511,13 @@ export class Team {
   // ahead is next, so it rebases at once. A behind-with-PASS rebase (right before merge) is never deferred here.
   rebaseNotNext(pr, prs) {
     if (pr.mergeable !== 'CONFLICTING') return false;
-    return (prs || []).some(o => o.number !== pr.number && !o.isDraft && SHA.test(o.headRefOid) && agentOfBranch(this.c, o.headRefName) && o.mergeable !== 'CONFLICTING' && this.ciState(o) === 'green'
-      && (!this.s.verdicts[verdictKey(o.number, o.headRefOid)] || this.s.verdicts[verdictKey(o.number, o.headRefOid)].verdict === 'PASS'));
+    return (prs || []).some(o => {
+      if (o.number === pr.number || o.isDraft || !SHA.test(o.headRefOid) || !agentOfBranch(this.c, o.headRefName) || o.mergeable === 'CONFLICTING' || this.ciState(o) !== 'green') return false;
+      if (this.parkedReason(o, null, prs)) return false;   // needs-homeowner or a PASS held on a decision cannot move, so it is not ahead
+      const v = this.s.verdicts[verdictKey(o.number, o.headRefOid)];
+      if (!v) return this.otherReviewers('', o).length > 0;   // unreviewed: ahead only if some agent can review it now
+      return v.verdict === 'PASS' && o.mergeStateStatus !== 'BLOCKED';   // a PASS GitHub reports blocked cannot merge next
+    });
   }
   rebaseDeferred(pr, prs, issueByNo, busy) {
     const L = this.c.limits;

@@ -209,3 +209,21 @@ test('#633 a PASS-holding green PR is ahead too; once it is gone the conflicting
   team.gh.pulls = [pr(301, H(1))];
   assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
 });
+// Issue #633: only a PR that can move now is "ahead"; one that is stuck must not hold a conflicting PR's rebase.
+const rebasesOf = async team => (await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr);
+test('#633 a needs-homeowner PR ahead does not defer the rebase', async t => {
+  const team = world(t, [pr(301, H(1)), pr(302, H(2), { mergeable: 'MERGEABLE', labels: ['needs-homeowner'] })]);
+  assert.deepEqual(await rebasesOf(team), [301]);
+  team.s.verdicts[`302:${H(2)}`] = { verdict: 'PASS', reviewer: 'codex' };
+  assert.deepEqual(await rebasesOf(team), [301]);
+});
+test('#633 a PASS that GitHub reports BLOCKED does not defer the rebase', async t => {
+  const team = world(t, [pr(301, H(1)), pr(302, H(2), { mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED' })]);
+  team.s.verdicts[`302:${H(2)}`] = { verdict: 'PASS', reviewer: 'codex' };
+  assert.deepEqual(await rebasesOf(team), [301]);
+});
+test('#633 an unreviewed PR no agent can review does not defer the rebase', async t => {
+  const team = world(t, [pr(301, H(1)), pr(302, H(2), { mergeable: 'MERGEABLE' })]);
+  team.otherReviewers = () => [];
+  assert.deepEqual(await rebasesOf(team), [301]);
+});
