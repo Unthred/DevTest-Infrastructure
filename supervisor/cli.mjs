@@ -107,6 +107,13 @@ function realJobs(root, registry) {
       job.attempts = 0; job.incompleteRetries = 0; job.nextAttemptAt = Date.now(); saveJob(root, job, realClock, true);
       startWorker(root, id, registry);
     },
+    // Issue #629: the homeowner's approved stop, the same steps as `ai-supervisor stop ID`
+    stop: async id => {
+      const job = readJob(root, id);
+      if (terminal.has(job.status)) throw new SupervisorError('terminal job cannot be stopped');
+      if (job.workerPid && processStart(job.workerPid) === job.workerStart) process.kill(job.workerPid, 'SIGTERM');
+      transition(root, job, 'stopped', 'manual_stop');
+    },
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
 }
@@ -121,6 +128,24 @@ function realGit(repoPath) {
     isClean: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 ? r.stdout.trim() === '' : null; },
     // issue #610: the branch the worktree has checked out (null when detached or unknown)
     currentBranch: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null; },
+    // issue #629: save a job's worktree before it is closed: commit uncommitted work (ignored files stay out) and push HEAD to a new branch under saved/,
+    // which never matches an agent branch prefix. Returns { ref } when something was pushed, { missing: true } when there is no worktree.
+    saveWork: async (wt, { branch, id }) => {
+      if (!fs.existsSync(wt)) return { missing: true };
+      const run = (...args) => spawnSync('git', ['-C', wt, ...args], { encoding: 'utf8', timeout: 120000 });
+      const dirty = run('status', '--porcelain', '--untracked-files=all');
+      if (dirty.status !== 0) throw new SupervisorError('git status failed in the job worktree');
+      if (dirty.stdout.trim()) {
+        if (run('add', '-A').status !== 0 || run('-c', 'user.name=Foreman', '-c', 'user.email=foreman@localhost', 'commit', '-q', '-m', `Save unfinished work of job ${id}`).status !== 0) throw new SupervisorError('the job worktree could not be committed');
+      }
+      run('fetch', '--quiet', 'origin');
+      const n = Number(run('rev-list', '--count', 'HEAD', '--not', '--remotes').stdout.trim());
+      if (!Number.isSafeInteger(n)) throw new SupervisorError('git could not tell what is unpushed');
+      if (n === 0) return {};
+      const ref = `saved/${id}-${String(branch || 'work').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 60)}`;
+      if (run('push', '-q', 'origin', `HEAD:refs/heads/${ref}`).status !== 0) throw new SupervisorError('the job work could not be pushed to a saved branch');
+      return { ref };
+    },
     // issue #583: commits in the worktree's HEAD that no remote branch has; null when it cannot be told (callers then keep the hold)
     unpushedCommits: async wt => { if (!fs.existsSync(wt)) return null; spawnSync('git', ['-C', wt, 'fetch', '--quiet', 'origin'], { encoding: 'utf8', timeout: 60000 }); /* issue #610: best effort; a failed fetch leaves stale refs, which only keeps the hold */ const r = spawnSync('git', ['-C', wt, 'rev-list', '--count', 'HEAD', '--not', '--remotes'], { encoding: 'utf8', timeout: 60000 }); const n = Number(r.stdout.trim()); return r.status === 0 && Number.isSafeInteger(n) ? n : null; },
     // issue #495: existing worktree directories and local branches a new implement job would reuse unreset

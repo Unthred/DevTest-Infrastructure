@@ -7,7 +7,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 
-export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, items: 60 };   // items: files in the directory at once (Foreman removes finished ones)
+export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, items: 60 };
+const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts   // items: files in the directory at once (Foreman removes finished ones)
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
 
@@ -15,22 +16,26 @@ const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|
 export function checkProposal(args) {
   const a = args && typeof args === 'object' ? args : {};
   const kind = a.kind;
-  if (!['prompt', 'issue_draft'].includes(kind)) return { ok: false, error: 'kind must be "prompt" or "issue_draft"' };
-  const bodyKey = kind === 'prompt' ? 'prompt' : 'body', allowed = ['kind', 'title', bodyKey, 'why'];
+  if (!['prompt', 'issue_draft', 'action'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft" or "action"' };
+  const bodyKey = kind === 'prompt' ? 'prompt' : kind === 'action' ? 'reason' : 'body', allowed = kind === 'action' ? ['kind', 'title', 'action', 'target', 'reason'] : ['kind', 'title', bodyKey, 'why'];
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, error: `unknown argument: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const item = { kind };
-  for (const k of ['title', bodyKey, 'why']) {
+  for (const k of allowed.filter(k => k !== 'kind')) {
     const v = a[k];
     if (v === undefined && k === 'why') continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
-    if (v.length > LIMITS[k]) return { ok: false, error: `${k} is longer than ${LIMITS[k]} characters` };
+    if (v.length > (LIMITS[k] ?? 40)) return { ok: false, error: `${k} is longer than ${LIMITS[k]} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, error: `${k} contains control characters` };
     if (redact(v) !== v) return { ok: false, error: `${k} contains secret-shaped text; remove it` };
     if (ATTRIBUTION.some(re => re.test(v))) return { ok: false, error: `${k} contains AI attribution text, which this project does not allow` };
     item[k] = v;
   }
   if (/[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
+  if (kind === 'action') {
+    if (!Object.hasOwn(ACTIONS, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(ACTIONS).join(', ')}` };
+    if (!ACTIONS[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
+  }
   return { ok: true, item };
 }
 
