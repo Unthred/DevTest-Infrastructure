@@ -286,3 +286,8 @@ test('resume is refused for a process under a supervised job, even with a termin
   const proc = { '/proc/30/environ': 'PATH=/bin\0', '/proc/30/stat': '30 (sh) S 20 0', '/proc/20/environ': 'AI_SUPERVISOR_JOB=j1\0', '/proc/20/stat': '20 (claude) S 1 0' };
   assert.equal(B.resumeAllowed({ stdin: tty, stdout: tty, env: {}, pid: 30, readProc: p => { if (!(p in proc)) throw new Error('x'); return proc[p]; } }), false);
 });
+
+test('trippedBy labels: every value the breaker records has display text, unknown values pass through', () => {
+  for (const v of ['count', 'cost', 'any-kind-cost']) assert.notEqual(B.trippedByLabel(v), v);
+  assert.equal(B.trippedByLabel('something-new'), 'something-new');
+});

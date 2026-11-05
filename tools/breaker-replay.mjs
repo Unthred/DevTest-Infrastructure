@@ -4,7 +4,7 @@
 // usage: node tools/breaker-replay.mjs --from 2026-11-03T07:50:00Z --to 2026-11-04T13:50:00Z [--root DIR] [--json]
 import fs from 'node:fs';
 import path from 'node:path';
-import { replay, COST_LABEL } from '../supervisor/breaker.mjs';
+import { replay, COST_LABEL, trippedByLabel } from '../supervisor/breaker.mjs';
 import { readJobs } from '../supervisor/dashdata.mjs';
 
 const argv = process.argv.slice(2), args = {};
@@ -19,4 +19,4 @@ const iso = t => new Date(t).toISOString().slice(0, 16) + 'Z', usd = n => `$${n.
 console.log(`Wasted jobs in range: ${out.wasted.jobs}, ${out.wasted.tokens.toLocaleString('en-GB')} tokens (${out.wasted.inputTokens.toLocaleString('en-GB')} in, ${out.wasted.outputTokens.toLocaleString('en-GB')} out), ${usd(out.wasted.cost)} ${COST_LABEL}`);
 for (const c of out.byCause) console.log(`  ${c.cause}: ${c.jobs} jobs, ${usd(c.cost)}`);
 if (!out.trips.length) console.log('The breaker would not have tripped.');
-for (const t of out.trips) console.log(`Would trip ${t.scope === '@global' ? 'GLOBAL (all new jobs)' : t.scope} at ${iso(t.at)} (${t.trippedBy}); would have prevented ${t.jobsPrevented} later wasted jobs, saving ${t.tokensSaved.toLocaleString('en-GB')} tokens and ${usd(t.costSaved)}`);
+for (const t of out.trips) console.log(`Would trip ${t.scope === '@global' ? 'GLOBAL (all new jobs)' : t.scope} at ${iso(t.at)} (${trippedByLabel(t.trippedBy)}); would have prevented ${t.jobsPrevented} later wasted jobs, saving ${t.tokensSaved.toLocaleString('en-GB')} tokens and ${usd(t.costSaved)}`);
