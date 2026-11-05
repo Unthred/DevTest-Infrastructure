@@ -15,12 +15,14 @@ import { entryApproved } from './decisions.mjs';
 import { redact, redactLong } from './redact.mjs';
 import { EXCEPTION_DECISION, validateReviewException, activeException, endedNow, modelWrittenRanges } from './review-exception.mjs';
 import { findHeadWriter } from './writerevidence.mjs';
+import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
+const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
 // Issue #368: the held reason shown when the configured writing model is Opus (no other writer is available for that job).
 const opusRefusal = (agent, model, kind) => `no permitted writer: ${agent}'s ${kind} model is ${model}, and Opus is never given implement or fix work; set a non-Opus ${kind} model in the models config`;
@@ -593,9 +595,9 @@ export function readSplitDraft(root, ticket) {
 
 const STALE_MARK_MS = 10 * 60000;   // issue #521
 export class Team {
-  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
+  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
-    this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
+    this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
     this.c = validateTeamConfig(config); this.root = root; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
@@ -729,6 +731,9 @@ export class Team {
       const key = `${pr.number}:${pr.headRefOid}`; open.add(key);
       if (this.s.headWriters[key] || now - (this.s.headWriterMiss[key] || 0) < 300000) continue;
       if (Object.values(this.s.jobs).some(j => WRITER_KINDS.has(j.kind) && this.c.agents[j.agent] && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)))) continue;
+      // An inbox job may push to a branch of its own naming; git's reflog in that job's worktree then binds the head to the job.
+      const viaJob = this.inboxWritersOf(pr, author);
+      if (viaJob.length) { this.s.headWriters[key] = { provider: this.c.agents[author].provider, models: [...new Set(viaJob.map(x => x.model))].sort(), sessions: [], jobs: viaJob.map(x => x.id.slice(0, 8)), at: now, source: 'worktree-reflog' }; continue; }
       let found = null; try { found = this.headWriterOf({ head: pr.headRefOid, branch: pr.headRefName, now }); } catch { found = null; }
       if (found && found.provider === this.c.agents[author].provider && found.models?.length) this.s.headWriters[key] = { provider: found.provider, models: found.models, sessions: found.sessions || [], at: now, source: 'session-log' };
       else this.s.headWriterMiss[key] = now;
@@ -737,6 +742,18 @@ export class Team {
     for (const k of Object.keys(this.s.headWriterMiss)) if (!open.has(k)) delete this.s.headWriterMiss[k];
     // Issue #560: a refused review belongs to one head; once that head is no longer open the entry is dropped too.
     for (const k of Object.keys(this.s.refusedReviews || {})) if (!open.has(k)) delete this.s.refusedReviews[k];
+  }
+  // Inbox jobs (same provider as the branch's agent, a recorded model) whose own worktree reflog shows a commit entry for this exact head
+  // inside the job's run window. The worktree is the one Foreman made for the job (recorded, or derived from the inbox id for older records).
+  inboxWritersOf(pr, author) {
+    const provider = this.c.agents[author].provider, out = [];
+    for (const [id, j] of Object.entries(this.s.jobs)) {
+      if (j.kind !== 'inbox' || !j.inboxId || !j.model || !this.c.agents[j.agent] || this.c.agents[j.agent].provider !== provider || !Number.isFinite(j.at)) continue;
+      const worktree = j.worktree || path.join(this.c.worktree_base, `DevTest-Infrastructure-${j.agent}-inbox-${String(j.inboxId).slice(0, 8)}`);
+      let hit = null; try { hit = this.worktreeWriterOf({ worktree, head: pr.headRefOid, from: j.at, to: Number.isFinite(j.endedAt) ? j.endedAt : j.at + INBOX_WINDOW_MS, repoPath: this.c.repo_path }); } catch { hit = null; }
+      if (hit) out.push({ id, model: j.model });
+    }
+    return out;
   }
   // Issue #249: open PRs whose independent PASS is green and mergeable but held only because the decision that allows the merge is
   // not yet homeowner-approved. Empty once approved or when nothing is waiting.
@@ -787,7 +804,7 @@ export class Team {
     const model = this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, head: pr.headRefOid, key }, 'review', {}, true).model ?? null;
     const why = this.independenceRefusal(agent, model, pr), provider = this.c.agents[agent].provider;
     if (!why) return null;
-    if (why === 'writer unknown') return agent + ' cannot review PR #' + pr.number + ': the writer of this head is unknown (no job record and no session-log evidence for this exact head), so no ' + provider + ' model can be shown to differ from it';
+    if (why === 'writer unknown') return agent + ' cannot review PR #' + pr.number + ': the writer of this head is unknown (no job record and no session-log or worktree evidence for this exact head), so no ' + provider + ' model can be shown to differ from it';
     return agent + ' would review PR #' + pr.number + ' on ' + (model || 'its default model') + ', the model that wrote it; a review needs a different model';
   }
   // Issue #547: the one independence check. Dispatch (reviewTries, reviewRefusal) and ingestion both call it with the PR's real head
@@ -1761,6 +1778,7 @@ export class Team {
   // A finished inbox prompt job: write its outcome back to the item, where the overseer can read it.
   ingestInbox(id, j, job) {
     const dir = this.inboxDir(); if (!dir || !j.inboxId) return;
+    const ended = job.childEndedAt ?? job.updatedAt; if (Number.isFinite(ended)) j.endedAt = ended;   // closes the window in which a reflog commit counts as this job's
     let summary = '';
     if (job.status === 'completed') { try { summary = fs.readFileSync(path.join(this.dir, 'inbox', String(j.ticket || 'none'), 'inbox-result.txt'), 'utf8'); } catch { /* checked by the post-condition */ } }
     const ok = job.status === 'completed' && summary.trim();
@@ -1822,7 +1840,7 @@ export class Team {
         // Issue #547: judged on the job's reviewed head, exactly as dispatch judged it. A refusal is settled (no retry) but recorded for Needs you.
         const why = r.verdict && !exStage ? this.independenceRefusal(j.agent, reviewer.model, { number: j.pr, headRefName: branch, headRefOid: j.head }) : null;
         if (why) {
-          const text = why === 'writer unknown' ? `the writer of this head is unknown (no job record and no session-log evidence for this exact head), so ${reviewer.provider} model ${j.model || 'default'} cannot be shown to differ from it` : `reviewer model ${j.model || 'default'} is a model that wrote this pull request`;
+          const text = why === 'writer unknown' ? `the writer of this head is unknown (no job record and no session-log or worktree evidence for this exact head), so ${reviewer.provider} model ${j.model || 'default'} cannot be shown to differ from it` : `reviewer model ${j.model || 'default'} is a model that wrote this pull request`;
           this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: why, text, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), at: this.clock.now() };
           j.ingested = true; j.refusal = 'independence'; this.save();
           report.ingested.push({ job: id, pr: j.pr, error: 'review refused: ' + text });
@@ -2871,7 +2889,7 @@ export class Team {
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-inbox-${short}`), branch, base: 'origin/main' });
       spec = { ...common, kind: 'inbox', worktree: wt, issue: inboxStore.placeholderIssue(act.inboxId), scope: `Overseer prompt ${short}: ${redact(l.item.title, 100)}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
         prompt: inboxPrompt({ title: l.item.title, prompt: l.item.prompt, branch, resultFile }), postcondition: { kind: 'inbox_result', ticket } };
-      meta = { inboxId: act.inboxId, branch };
+      meta = { inboxId: act.inboxId, branch, worktree: wt };
       bump = () => inboxStore.finish(this.inboxDir(), act.inboxId, { state: 'running', job: Object.keys(this.s.jobs).find(k => this.s.jobs[k].inboxId === act.inboxId)?.slice(0, 8) }, this.clock.now());
     } else {
       const branch = `${a.branch_prefix}issue-${act.issue}-${slug(act.title)}`;
