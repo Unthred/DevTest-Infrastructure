@@ -7,9 +7,9 @@
 // Idle with work queued = minutes when no job of that view runs while at least one is queued. Busy shares are of the window.
 import fs from 'node:fs';
 import path from 'node:path';
-const END = new Set(['completed', 'incomplete', 'usage_limit', 'manual_stop', 'manual_pause', 'approval_required', 'retry_exhausted', 'auth_error', 'leases_released', 'recovered', 'obsolete_pr_merged']);
-// A job waits again after an attempt that ended without finishing it: it is queued from that end to its next `started` (an attempt never restarted leaves no queue time: it was abandoned, not waiting).
-const REQUEUE = new Set(['incomplete', 'recovered']);
+const END = new Set(['completed', 'incomplete', 'usage_limit', 'manual_stop', 'manual_pause', 'approval_required', 'retry_exhausted', 'auth_error', 'leases_released', 'recovered', 'obsolete_pr_merged', 'crash', 'network_error', 'transient_rate_limit']);
+// A job waits again after an attempt that ended without finishing it: it is queued from that end to its next `started` (an attempt never restarted leaves no queue time unless the job's current status is 'queued': then it is waiting now).
+const REQUEUE = new Set(['incomplete', 'recovered', 'crash', 'network_error']);
 const BEFORE = new Set(['implement', 'continue', 'fix', 'cifix', 'rebase']);
 const AFTER = new Set(['implement', 'continue', 'fix', 'cifix']);
 const min = ms => Math.round(ms / 600) / 100;
@@ -18,9 +18,9 @@ const total = iv => iv.reduce((s, [a, b]) => s + (b - a), 0);
 const clip = (iv, from, to) => iv.map(([a, b]) => [Math.max(a, from), Math.min(b, to)]).filter(([a, b]) => b > a);
 const subtract = (iv, minus) => { let cur = iv; for (const [c, d] of minus) cur = cur.flatMap(([a, b]) => (d <= a || c >= b) ? [[a, b]] : [[a, Math.max(a, c)], [Math.min(b, d), b]].filter(([x, y]) => y > x)); return cur; };
 
-// jobs: [{ id, kind }]; events: [{ at, job, kind }]. Returns the figures for the window [from, to] (ms).
+// jobs: [{ id, kind, status? }]; events: [{ at, job, kind }]. Returns the figures for the window [from, to] (ms).
 export function measure(jobs, events, from, to) {
-  const kindOf = new Map(jobs.map(j => [j.id, j.kind])), by = new Map();
+  const kindOf = new Map(jobs.map(j => [j.id, j.kind])), statusOf = new Map(jobs.map(j => [j.id, j.status])), by = new Map();
   for (const e of [...events].sort((a, b) => a.at - b.at)) { if (!by.has(e.job)) by.set(e.job, []); by.get(e.job).push(e); }
   const runs = [], queued = [];
   for (const [id, evs] of by) {
@@ -30,7 +30,7 @@ export function measure(jobs, events, from, to) {
       if (e.kind === 'started' && open == null) { open = e.at; requeued = false; if (waitFrom != null) { queued.push({ kind, iv: [waitFrom, e.at] }); waitFrom = null; } }
       else if (END.has(e.kind)) { if (open != null) { runs.push({ kind, iv: [open, e.at] }); open = null; if (REQUEUE.has(e.kind)) { waitFrom = e.at; requeued = true; } } else if (REQUEUE.has(e.kind) && waitFrom == null) { waitFrom = e.at; requeued = true; } }
     }
-    if (waitFrom != null && open == null && !requeued) queued.push({ kind, iv: [waitFrom, to] });
+    if (waitFrom != null && open == null && (!requeued || statusOf.get(id) === 'queued')) queued.push({ kind, iv: [waitFrom, to] });
     if (open != null) runs.push({ kind, iv: [open, to] });
   }
   const view = set => {
@@ -50,7 +50,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const to = Date.parse(get('--to') ?? new Date().toISOString()), from = Date.parse(get('--from') ?? new Date(to - 6 * 3600e3).toISOString());
   if (!(from < to)) { console.error('--from must be before --to'); process.exit(2); }
   for (const [flag, d] of [['--jobs', jd], ['--events', ed]]) if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) { console.error(`${flag} directory not found: ${d}`); process.exit(2); }
-  const jobs = fs.readdirSync(jd).filter(f => f.endsWith('.json')).flatMap(f => { try { const j = JSON.parse(fs.readFileSync(path.join(jd, f), 'utf8')); return [{ id: j.id ?? f.slice(0, -5), kind: j.kind }]; } catch { return []; } });
+  const jobs = fs.readdirSync(jd).filter(f => f.endsWith('.json')).flatMap(f => { try { const j = JSON.parse(fs.readFileSync(path.join(jd, f), 'utf8')); return [{ id: j.id ?? f.slice(0, -5), kind: j.kind, status: j.status }]; } catch { return []; } });
   const events = fs.readdirSync(ed).filter(f => f.endsWith('.jsonl')).flatMap(f => fs.readFileSync(path.join(ed, f), 'utf8').split('\n').filter(Boolean).flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } }));
   console.log(JSON.stringify({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), ...measure(jobs, events, from, to) }, null, 2));
 }
