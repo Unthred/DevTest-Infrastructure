@@ -95,7 +95,7 @@ test('issue #35 the log is trimmed only above the threshold, under the lock; an 
   const before = fs.readFileSync(w.log, 'utf8');
   const holder = spawn('flock', [`${w.log}.lock`, 'sleep', '1']);
   t.after(() => holder.kill());
-  const deadline = Date.now() + 2000; while (Date.now() < deadline) { const probe = spawnSync('flock', ['-n', `${w.log}.lock`, 'true']); if (probe.status !== 0) break; }
+  const deadline = performance.now() + 2000; while (performance.now() < deadline) { const probe = spawnSync('flock', ['-n', `${w.log}.lock`, 'true']); if (probe.status !== 0) break; }
   assert.equal(w.cron().status, 0);
   const after = fs.readFileSync(w.log, 'utf8');
   assert.ok(after.length > before.length, 'the line of the overlapping run was written after the lock was released');

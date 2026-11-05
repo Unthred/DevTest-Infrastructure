@@ -86,7 +86,7 @@ test('a view built on the worker thread leaves the event loop free', async () =>
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'viewworker-'));
   const file = path.join(dir, 'slow.mjs');
   fs.writeFileSync(file, `import { parentPort } from 'node:worker_threads';
-parentPort.on('message', ({ id }) => { const end = Date.now() + 300; while (Date.now() < end); parentPort.postMessage({ id, json: JSON.stringify({ ok: true }) }); });\n`);
+parentPort.on('message', ({ id }) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300); parentPort.postMessage({ id, json: JSON.stringify({ ok: true }) }); });\n`);
   const w = createWorkerBuild({ url: new URL(`file://${file}`).href });
   try {
     const started = Date.now(), building = w.build({});

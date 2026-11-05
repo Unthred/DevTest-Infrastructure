@@ -3,6 +3,7 @@
 // What runs and what waits is written to disk, so `ai-supervisor test-slot status`, the team status and the dashboard can show it.
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { processStart } from './core.mjs';
 
 export const DEFAULT_TEST_SLOTS = 2;
@@ -65,4 +66,44 @@ export async function withTestSlot(root, opts, fn) {
   const release = await acquireTestSlot(root, opts);
   if (!release) return { ok: false, environmental: true, reason: `waited more than ${Math.round((opts.timeoutMs ?? 3600000) / 60000)} minutes for a free test slot` };
   try { return await fn(); } finally { release(); }
+}
+
+// Incident 2026-11-04: test workers outlived their parent and spun for ten hours. A job now runs in its own process group,
+// has a maximum runtime, and on timeout, signal or exit the WHOLE group gets TERM, then KILL, and is checked empty.
+export const DEFAULT_MAX_RUNTIME_MS = 2 * 3600 * 1000;
+const groupAlive = pgid => { try { process.kill(-pgid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const signalGroup = (pgid, sig) => { try { process.kill(-pgid, sig); } catch { /* group already gone */ } };
+const wait = ms => new Promise(r => setTimeout(r, ms));
+// TERM, wait up to graceMs, then KILL, wait up to graceMs; resolves true when no member remains.
+export async function stopGroup(pgid, { graceMs = 5000, pollMs = 50 } = {}) {
+  for (const [sig, ms] of [['SIGTERM', graceMs], ['SIGKILL', graceMs]]) {
+    if (!groupAlive(pgid)) return true;
+    signalGroup(pgid, sig);
+    for (let waited = 0; groupAlive(pgid) && waited < ms; waited += pollMs) await wait(pollMs);
+  }
+  return !groupAlive(pgid);
+}
+// Runs cmd in its own session; resolves { code, timedOut, leftover } (leftover = group members that survived KILL).
+export async function runInGroup(cmd, { env, maxRuntimeMs = DEFAULT_MAX_RUNTIME_MS, graceMs = 5000, stdio = 'inherit', onSignalTarget = process } = {}) {
+  const child = spawn(cmd[0], cmd.slice(1), { stdio, env, detached: true });
+  const pgid = child.pid;
+  // The job left our group, so a detached watchdog outside it kills the job's group if this runner disappears (SIGKILL, OOM kill)
+  // or the maximum runtime passes without the runner acting on it.
+  let dog = null;
+  if (pgid) {
+    const src = 'const [r,g,d]=process.argv.slice(1).map(Number);const k=()=>{try{process.kill(-g,"SIGKILL")}catch{}process.exit(0)};setInterval(()=>{try{process.kill(r,0)}catch{k()}if(Date.now()>d)k();try{process.kill(-g,0)}catch{process.exit(0)}},200);';
+    dog = spawn(process.execPath, ['-e', src, String(process.pid), String(pgid), String(Date.now() + maxRuntimeMs + 2 * graceMs + 1000)], { detached: true, stdio: 'ignore' });
+    dog.unref(); dog.on('error', () => {});
+  }
+  let timedOut = false, stopping = null;
+  const stop = () => (stopping ??= stopGroup(pgid, { graceMs }));
+  const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(sig => { const h = () => { stop(); }; onSignalTarget.on(sig, h); return [sig, h]; });
+  const timer = pgid ? setTimeout(() => { timedOut = true; stop(); }, maxRuntimeMs) : null;
+  const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, s) => resolve(c ?? (s ? 128 : 1))); });
+  clearTimeout(timer);
+  // the leader is gone; sweep any member it left behind (orphans keep the group id)
+  const clean = pgid ? await stop() : true;
+  for (const [sig, h] of handlers) onSignalTarget.off(sig, h);
+  if (dog) { try { dog.kill('SIGKILL'); } catch { /* already gone */ } }
+  return { code: timedOut ? 124 : code, timedOut, leftover: !clean };
 }
