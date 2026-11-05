@@ -32,7 +32,8 @@ export function layoutCheck(options) {
   const controls = new Set(['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'IMG']);
   for (const el of elements) {
     const c = getComputedStyle(el);
-    if ((c.overflowX === 'hidden' || c.overflowX === 'clip') && el.scrollWidth > el.clientWidth + tol)
+    const srOnly = c.position === 'absolute' && el.clientWidth <= 1 && el.getBoundingClientRect().height <= 1; // the standard visually-hidden label (.vh): 1 px by design, not clipped content (issue #526)
+    if ((c.overflowX === 'hidden' || c.overflowX === 'clip') && !srOnly && el.scrollWidth > el.clientWidth + tol)
       add(c.textOverflow === 'ellipsis' ? 'truncated' : 'clipped', c.textOverflow === 'ellipsis' ? 'warn' : 'fail', el, { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
     const p = el.parentElement;
     if (p && p !== document.body && (controls.has(el.tagName) || el.hasAttribute('data-ui')) && !beyond.has(el)) {
