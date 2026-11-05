@@ -565,18 +565,18 @@ export function describeFor(j, { names, state }) {
 const modelOf = j => (j ? [j.provider || 'unknown provider', j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
 // Raw events kept before idle ticks collapse (issue #76): idle ticks are the bulk of the history and fold into a few rows.
 export const ACTIVITY_LIMIT = 400;
-const OUTCOME = { created: 'queued', started: 'started', completed: 'completed', usage_limit: 'paused', manual_pause: 'paused', transient_rate_limit: 'paused', recovered: 'recovered', incomplete: 'blocked', retry_exhausted: 'blocked', blocked: 'blocked', crash: 'failed', auth_error: 'failed', approval_required: 'blocked', manual_stop: 'stopped' };
+const OUTCOME = { created: 'queued', started: 'started', completed: 'completed', usage_limit: 'paused', manual_pause: 'paused', transient_rate_limit: 'paused', recovered: 'recovered', incomplete: 'blocked', retry_exhausted: 'blocked', blocked: 'blocked', crash: 'failed', auth_error: 'failed', approval_required: 'blocked', manual_stop: 'stopped', checkpoint_failed: 'failed' };
 function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names, root }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: (kind === 'pull' ? names.pr(n) : names.issue(n)).text } : null);
   const jobLink = j => (['implement', 'continue'].includes(j.kind) ? link('issue', j.issue) : link('pull', j.issue));
   const agentName = j => Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
-  const eventNames = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand' };
+  const eventNames = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand', checkpoint_failed: 'stopped: progress checkpoint failed' };
   for (const e of events) {
-    if (!eventNames[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover'].includes(e.kind)) continue;
+    if (!eventNames[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover', 'checkpoint_failed'].includes(e.kind)) continue;
     const j = jobById.get(e.job); if (!j) continue;
-    const done = ['completed', 'blocked', 'retry_exhausted', 'crash', 'manual_stop'].includes(e.kind);
+    const done = ['completed', 'blocked', 'retry_exhausted', 'crash', 'manual_stop', 'checkpoint_failed'].includes(e.kind);
     const what = e.kind === 'completed' ? describeFor(j, { names, state }) : `${names.job(j).text}: ${eventNames[e.kind] || redact(e.kind, 40)}`;
     rows.push({ at: e.at, kind: 'job', agent: agentName(j), outcome: OUTCOME[e.kind] || 'other', jobKind: j.kind || null, durationMs: done && j.updatedAt >= j.createdAt ? j.updatedAt - j.createdAt : null, tokens: done && j.usage ? j.usage.inputTokens + j.usage.outputTokens : null,
       text: `${agentName(j)}: ${what}`, link: { url: names.job(j).url, text: names.job(j).text }, ...(root && transcriptExists(root, j.id) ? { transcript: j.id } : {}) });

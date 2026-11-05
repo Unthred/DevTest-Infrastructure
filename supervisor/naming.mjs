@@ -48,7 +48,7 @@ export const jobSubject = job => (IMPLEMENTING.includes(job?.kind) ? { issue: jo
 // ---- one-line description of a job (issue #204). `ctx` carries what the caller already resolved:
 //   { names, rec (the dispatcher's job record), verdict ({verdict,findings}|null), opened (PR number an implement job opened, or null) }
 // Only existing data: role, kind, target, outcome, the stop reason and the agent's last summary line when the job record has one.
-const REASON_TEXT = { retry_exhausted: 'retries exhausted', usage_limit: 'usage limit reached', auth_error: 'sign-in problem', crash: 'the agent crashed', incomplete: 'it ended without its post-condition', approval_required: 'approval required', context_limit: 'context limit reached', preflight_failed: 'preflight check failed', network_error: 'network error', manual_stop: 'stopped by hand', stale_handover: 'stale handover', issue_closed: 'the issue was closed' };
+const REASON_TEXT = { retry_exhausted: 'retries exhausted', usage_limit: 'usage limit reached', auth_error: 'sign-in problem', crash: 'the agent crashed', incomplete: 'it ended without its post-condition', approval_required: 'approval required', context_limit: 'context limit reached', preflight_failed: 'preflight check failed', network_error: 'network error', manual_stop: 'stopped by hand', checkpoint_failed: 'progress checkpoint failed', stale_handover: 'stale handover', issue_closed: 'the issue was closed' };
 const reasonText = (job, rec) => {
   const detail = [rec?.failure, rec?.reason, job?.failureReason].find(v => typeof v === 'string' && v.trim());
   if (detail) return clipTitle(detail, 140);

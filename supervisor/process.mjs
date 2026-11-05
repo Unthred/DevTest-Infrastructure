@@ -3,6 +3,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { billingRisk, limitFromAllowance } from './allowance.mjs';
 import { addUsage, sessionFromLine, usageFromLine } from './usage.mjs';
 import { begin as beginSession, recordUsage, seed as sessionSeed, touch } from './session.mjs';
+import { redact } from './redact.mjs';
 import { TranscriptWriter, oneLine, pruneTranscripts } from './transcript.mjs';
 import { checkpoint, processInfo, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
@@ -102,10 +103,14 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     }
   };
   child.stdout.on('data', onData('stdout')); child.stderr.on('data', onData('stderr'));
-  const interval = setInterval(() => { try { checkpoint(root, job, clock); } catch (error) {
+  // Issue #579: a failed checkpoint is recorded with its real (redacted) error and the job carries on; only `checkpointLimit`
+  // failures in a row stop it, and then as `checkpoint_failed` (resumable, work kept), never as a manual stop.
+  let checkpointFails = 0, checkpointFailed = false;
+  const interval = setInterval(() => { try { checkpoint(root, job, clock); checkpointFails = 0; } catch (error) {
     const errorClass = String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48);
-    event(root, job, `checkpoint_exception:${errorClass}:message_redacted`, clock);
-    signalChild('SIGINT');
+    checkpointFails++;
+    event(root, job, `checkpoint_failed:${errorClass}:${checkpointFails}:${redact(String(error?.message || error), 200)}`, clock);
+    if (checkpointFails >= (options.checkpointLimit || 5)) { checkpointFailed = true; signalChild('SIGINT'); }
   } }, options.checkpointMs || 60000);
   try {
     const result = await new Promise(resolve => {
@@ -141,7 +146,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     const current = readJob(root, job.id);
     if (current.status === 'paused_manual' || current.status === 'stopped') job.status = current.status;
     job.childPid = null; job.childStart = null; saveJob(root, job, clock);
-    if (stopping) return { code: 1, event: 'manual_stop' };
+    if (stopping) return { code: 1, event: checkpointFailed ? 'checkpoint_failed' : 'manual_stop' };
     return { code: result.code, event: observed || result.event, resetAt, resetSource, verified };
   } finally {
     clearInterval(interval);
