@@ -106,6 +106,23 @@ function mentions(run, rev, name, defText) {
   return n;
 }
 
+// Issue #580: a conflict on a list (`['a', 'b']` on each side) is resolved by a union line holding both sides' items. The PR's line
+// is then not a substring of it. It survives only when a truly merged line, one that is in neither the old head's file nor the
+// base's (main's) file, carries the PR line as an ordered subsequence of its tokens AND punctuation (whitespace ignored), so a
+// negation, a reordered argument list or a line taken from main is not a union. Needs two or more word tokens.
+const lexOf = t => t.match(/[A-Za-z0-9_$]+|[^\sA-Za-z0-9_$]/g) || [];
+function unionSurvives(t, newFile, oldFile, mainFile) {
+  const want = lexOf(t);
+  if (want.filter(k => /[A-Za-z0-9_$]/.test(k)).length < 2) return false;
+  const exclude = new Set([...oldFile, ...mainFile]);
+  return newFile.some(l => {
+    if (exclude.has(l)) return false;
+    let i = 0;
+    for (const k of lexOf(l)) if (i < want.length && k === want[i]) i++;
+    return i === want.length;
+  });
+}
+
 function lostChanges(run, base, oldHead, newHead) {
   const oldMb = run(['merge-base', base, oldHead]).trim();
   const newMb = run(['merge-base', base, newHead]).trim();
@@ -117,6 +134,7 @@ function lostChanges(run, base, oldHead, newHead) {
   for (const [file, lines] of before) {
     const oldFile = fileLines(run, oldHead, file);
     const newFile = fileLines(run, newHead, file);
+    const mainFile = fileLines(run, base, file);
     const seen = new Set();
     for (const raw of lines) {
       const t = raw.trim();
@@ -124,6 +142,7 @@ function lostChanges(run, base, oldHead, newHead) {
       seen.add(t);
       if (countOf(newFile, t) >= countOf(oldFile, t) || addedAfter.has(t)) continue;
       if (t.length >= 4 && newFile.some(l => l.includes(t))) continue;   // a resolution that merged the line into a longer one keeps the change
+      if (unionSurvives(t, newFile, oldFile, mainFile)) continue;   // issue #580: a list merged from both sides keeps every token
       lost.push({ file, kind: 'line', text: t.slice(0, 200) });
     }
   }

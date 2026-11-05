@@ -133,3 +133,76 @@ test('with no lost change the same record carries nothing extra and raises nothi
   assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 0); assert.deepEqual(w.calls.labels, []);
   assert.equal(w.team.s.jobs.r1.rebase.lostChanges, undefined);
 });
+
+// ---- issue #580: a list merged from both sides is not lost; rebase-push prints the guard's reason
+const LBASE = 'export const KEYS = [\n  "a",\n];\nconst z = 1;\n';
+const LFEAT = 'export const KEYS = [\n  "a", "reviewRefusals",\n];\nconst z = 1;\n';
+const LMAIN = 'export const KEYS = [\n  "a", "refusedReviews",\n];\nconst z = 1;\n';
+function listRepo(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rlu-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const remote = path.join(dir, 'remote.git'); git(dir, 'init', '-q', '--bare', '-b', 'main', remote);
+  const seed = path.join(dir, 'seed'); git(dir, 'clone', '-q', remote, seed);
+  write(seed, 'l.mjs', LBASE); commit(seed, 'base'); git(seed, 'branch', '-M', 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  git(seed, 'checkout', '-q', '-b', 'feat'); write(seed, 'l.mjs', LFEAT); commit(seed, 'add key'); git(seed, 'push', '-q', 'origin', 'feat');
+  git(seed, 'checkout', '-q', 'main'); write(seed, 'l.mjs', LMAIN); commit(seed, 'main key'); git(seed, 'push', '-q', 'origin', 'main');
+  const agent = path.join(dir, 'agent'); git(dir, 'clone', '-q', remote, agent);
+  return { dir, remote, agent };
+}
+function resolveList(r, text) {
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  write(r.agent, 'l.mjs', text); git(r.agent, 'add', '-A');
+  execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+  return oldHead;
+}
+const cliPath = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
+const runPush = (r, oldHead) => { try { return { code: 0, out: execFileSync(process.execPath, [cliPath, 'rebase-push', '--worktree', r.agent, '--branch', 'feat', '--base', 'main', '--old', oldHead], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, out: e.stdout }; } };
+
+test('a union of both sides\' list items is not lost, and rebase-push pushes it', t => {
+  const r = listRepo(t); const oldHead = resolveList(r, 'export const KEYS = [\n  "a", "refusedReviews", "reviewRefusals",\n];\nconst z = 1;\n');
+  assert.deepEqual(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges, []);
+  const p = runPush(r, oldHead); assert.equal(p.code, 0); assert.equal(JSON.parse(p.out).pushed, true);
+});
+
+test('a resolution that really drops the PR\'s item is still refused, and rebase-push prints the reason and the lost line', t => {
+  const r = listRepo(t); const oldHead = resolveList(r, LMAIN.replace('const z = 1;', 'const z = 2;'));
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.ok(c.lostChanges.some(x => x.text.includes('reviewRefusals')), JSON.stringify(c.lostChanges));
+  const p = runPush(r, oldHead); assert.equal(p.code, 3);
+  const out = JSON.parse(p.out); assert.equal(out.pushed, false); assert.equal(out.reason, 'lost-changes'); assert.ok(out.lostChanges[0].text.includes('reviewRefusals'));
+  assert.equal(git(r.dir, '--git-dir', r.remote, 'rev-parse', 'feat'), oldHead);
+});
+
+// Review fix: taking main's line of a same-line conflict, negating a guard, or reordering arguments is not a union
+function sameLineRepo(t, feat, main) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rls-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const remote = path.join(dir, 'remote.git'); git(dir, 'init', '-q', '--bare', '-b', 'main', remote);
+  const seed = path.join(dir, 'seed'); git(dir, 'clone', '-q', remote, seed);
+  const f = x => `function go() {\n${x}\n}\nconst z = 1;\n`;
+  write(seed, 'l.mjs', f('  if (a) run(x);')); commit(seed, 'base'); git(seed, 'branch', '-M', 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  git(seed, 'checkout', '-q', '-b', 'feat'); write(seed, 'l.mjs', f(feat).replace('const z = 1;', 'const z = 3;')); commit(seed, 'fix'); git(seed, 'push', '-q', 'origin', 'feat');
+  git(seed, 'checkout', '-q', 'main'); write(seed, 'l.mjs', f(main)); commit(seed, 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  const agent = path.join(dir, 'agent'); git(dir, 'clone', '-q', remote, agent);
+  return { dir, remote, agent, f };
+}
+for (const [name, feat, main] of [
+  ['a negated guard', '  if (!a) run(x);', '  if (a) run(x, y);'],
+  ['reordered arguments', '  sub(x, ready);', '  sub(ready, x);'],
+  ['a dropped early return', '  if (!ready) return x;', '  if (ready) return x;'],
+]) {
+  test(`taking main's line drops the PR's change and is refused: ${name}`, t => {
+    const r = sameLineRepo(t, feat, main);
+    const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+    try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+    write(r.agent, 'l.mjs', r.f(main).replace('const z = 1;', 'const z = 3;')); git(r.agent, 'add', '-A');
+    execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+    const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+    assert.ok(c.lostChanges.some(x => x.text === feat.trim()), JSON.stringify(c.lostChanges));
+  });
+}
+
+test('rebase-prepare prints oldHead so the agent can pass it to rebase-push', t => {
+  const r = listRepo(t);
+  const out = execFileSync(process.execPath, [cliPath, 'rebase-prepare', '--worktree', r.agent, '--branch', 'feat'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.match(JSON.parse(out).oldHead, /^[0-9a-f]{40}$/);
+});
