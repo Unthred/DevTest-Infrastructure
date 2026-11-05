@@ -685,7 +685,12 @@ export class Team {
     const listed = new Set(this.agents().flatMap(([a]) => this.issuesOf(a)));
     return (this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)).map(i => i.number).sort((a, b) => a - b);
   }
-  candidates(agent) { return [...this.issuesOf(agent), ...this.unlisted()]; }
+  // Issue #628: the stored priority order (inbox/priority.json). It only reorders work the planner may already do; every gate still applies.
+  priorityMap() { const dir = this.inboxDir(), m = new Map(); if (dir) inboxStore.readPriority(dir).forEach((ref, i) => m.set(ref, i + 1)); return m; }
+  priorityPlace(kind, n) { return this.priorityMap().get(`${kind}:${n}`) ?? null; }
+  // Stable: items without a place keep their order after the prioritised ones.
+  byPriority(list, kind, numberOf) { const m = this.priorityMap(); return m.size ? list.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (m.get(`${kind}:${numberOf(x)}`) ?? 1e9) - (m.get(`${kind}:${numberOf(y)}`) ?? 1e9) || i - j).map(([x]) => x) : list; }
+  candidates(agent) { return this.byPriority([...this.issuesOf(agent), ...this.unlisted()], 'issue', n => n); }
   // Review independence (issue #152). The models that wrote a pull request head are the models of every implementer job the dispatcher
   // recorded for it (implement, continue, fix, cifix, rebase), by provider and model. Without a record (a PR written by hand) only the
   // branch author's provider is known, so only a reviewer on another provider counts as independent.
@@ -1306,7 +1311,7 @@ export class Team {
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
-    for (const pr of repair ? prs : []) {
+    for (const pr of repair ? this.byPriority(prs, 'pr', p => p.number) : []) {   // issue #628: a prioritised pull request first
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const checks = failingChecks(pr.statusCheckRollup, this.retried(pr));
@@ -1322,7 +1327,7 @@ export class Team {
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks, key, ...(scanOnly ? { scanOnly: true } : {}), ...(escalated ? { escalated: true } : {}) };
     }
     // fix: my PR with a CHANGES verdict on its current head
-    for (const pr of repair ? prs : []) {
+    for (const pr of repair ? this.byPriority(prs, 'pr', p => p.number) : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key)) continue;
@@ -1459,21 +1464,22 @@ export class Team {
   }
   reviewRounds(pr) { return Object.keys(this.s.verdicts).filter(k => k.startsWith(`${pr.number}:`)).length; }
   reviewQueue(agent, prs) {
-    const now = this.clock.now(), limitMs = (this.c.limits.review_starvation_hours ?? 24) * 3600000;
+    const now = this.clock.now(), limitMs = (this.c.limits.review_starvation_hours ?? 24) * 3600000, prio = this.priorityMap();
     const rows = (prs || []).filter(pr => SHA.test(pr.headRefOid) && agentOfBranch(this.c, pr.headRefName) && !pr.isDraft && pr.mergeable !== 'CONFLICTING' && this.ciState(pr) === 'green' && !this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]).map(pr => {
       const waited = this.s.reviewSince[pr.number] != null ? now - this.s.reviewSince[pr.number] : 0, starved = waited >= limitMs, key = verdictKey(pr.number, pr.headRefOid);
       const scarce = !this.agents().some(([n]) => n !== agent && !this.reviewRefusal(n, pr, `${key}:${n}`));
       const mergeable = pr.mergeable === 'MERGEABLE', rounds = this.reviewRounds(pr), behind = pr.mergeStateStatus === 'BEHIND';
-      const why = [];
+      const why = [], place = prio.get(`pr:${pr.number}`) ?? null;
+      if (place) why.push(`priority ${place}`);
       if (starved) why.push(`waited ${Math.floor(waited / 3600000)}h for a review (limit ${limitMs / 3600000}h)`);
       if (scarce) why.push(`only ${agent} can review it`);
       if (mergeable) why.push('mergeable');
       if (rounds) why.push(`${rounds} earlier review round${rounds === 1 ? '' : 's'}`);
       if (behind) why.push('behind its base');
       why.push('older first');
-      return { pr, starved, scarce, mergeable, rounds, behind, waited, reason: why.join(', ') };
+      return { pr, starved, place, scarce, mergeable, rounds, behind, waited, reason: why.join(', ') };
     });
-    rows.sort((a, b) => (b.starved - a.starved) || (a.starved && b.starved ? (b.waited - a.waited) : 0) || (b.scarce - a.scarce) || (b.mergeable - a.mergeable) || (b.rounds - a.rounds) || (a.behind - b.behind) || (a.pr.number - b.pr.number));
+    rows.sort((a, b) => (b.starved - a.starved) || (a.starved && b.starved ? (b.waited - a.waited) : 0) || ((a.place ?? 1e9) - (b.place ?? 1e9)) || (b.scarce - a.scarce) || (b.mergeable - a.mergeable) || (b.rounds - a.rounds) || (a.behind - b.behind) || (a.pr.number - b.pr.number));
     return rows.map((r, i) => ({ ...r, position: i + 1, of: rows.length }));
   }
 
@@ -1732,6 +1738,7 @@ export class Team {
     const dir = this.inboxDir(); if (!dir) return;
     const now = this.clock.now();
     inboxStore.scan(dir, now);
+    await this.applyPriorityItems(dir, report, now);
     for (const st of inboxStore.allStatuses(dir)) {
       if (!['approved', 'posting'].includes(st.state)) continue;
       try {
@@ -1739,6 +1746,20 @@ export class Team {
         if (!l.ok) { if (st.state === 'approved') inboxStore.finish(dir, st.id, { state: 'failed', reason: l.reason, result: 'nothing was done' }, now); continue; }
         if (st.kind === 'issue_draft') await this.postIssueDraft(dir, st, l.item, report);
       } catch (error) { (report.skipped ||= []).push({ what: `inbox ${st.id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
+    }
+  }
+  // Issue #628: a priority order is applied without an approval click (it cannot raise spending). Each use is audit logged by applyPriority.
+  async applyPriorityItems(dir, report, now) {
+    const waiting = inboxStore.allStatuses(dir).filter(st => st.kind === 'priority' && st.state === 'applying').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    if (!waiting.length) return;
+    let prs, issues; try { ({ prs, issues } = this.view || this.nameView || { prs: await this.gh.listPulls(), issues: await this.gh.listIssues() }); } catch (error) { (report.skipped ||= []).push({ what: 'inbox priority', reason: String(error?.message || error).slice(0, 200) }); return; }
+    const open = { pr: new Set((prs || []).map(p => p.number)), issue: new Set((issues || []).filter(i => i.state === 'OPEN').map(i => i.number)) };
+    for (const st of waiting) {
+      const l = inboxStore.loadItem(dir, st.id);
+      if (!l.ok) { inboxStore.finish(dir, st.id, { state: 'failed', reason: l.reason, result: 'nothing was done' }, now); continue; }
+      const r = inboxStore.applyPriority(dir, st.id, l.item.items, ref => open[ref.kind].has(ref.number), 'overseer (foreman-mcp inbox)', now);
+      if (r.ok) { inboxStore.finish(dir, st.id, { state: 'done', result: l.item.items.length ? `priority order set: ${l.item.items.join(', ')}` : 'priority order cleared' }, now); (report.actions ||= []).push({ type: 'inbox-priority', result: `applied priority order ${st.id.slice(0, 8)} (${r.changes.length} change${r.changes.length === 1 ? '' : 's'})` }); }
+      else inboxStore.finish(dir, st.id, { state: 'refused', reason: r.reason, result: 'nothing was changed' }, now);
     }
   }
   // Posted once only: the state is recorded as 'posting' BEFORE the effect, and the item's marker is looked for on GitHub first, so a lost

@@ -8,11 +8,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
 
-export const KINDS = ['prompt', 'issue_draft'];
-export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 10, keepDays: 14, resultChars: 4000, reasonChars: 300 };
+export const KINDS = ['prompt', 'issue_draft', 'priority'];
+export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, priorityItems: 20, pending: 10, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
-const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'] };
-const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
+const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], priority: ['kind', 'items', 'why'] };   // priority (issue #628): items is a list of "pr:N" / "issue:N"
+const LIVE = ['pending', 'approved', 'running', 'posting', 'applying'];   // states that are not final
 
 export const dirs = inboxDir => ({ items: path.join(inboxDir, 'items'), status: path.join(inboxDir, 'status'), audit: path.join(inboxDir, 'audit.jsonl') });
 export const hashOf = item => crypto.createHash('sha256').update(JSON.stringify(item)).digest('hex');
@@ -49,7 +49,13 @@ export function validateItem(raw) {
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : 'body', max = { title: LIMITS.title, [bodyKey]: LIMITS[bodyKey], why: LIMITS.title * 2 };
-  for (const k of allowed.filter(k => k !== 'kind')) {
+  if (raw.kind === 'priority') {
+    const l = raw.items;
+    if (!Array.isArray(l) || l.length > LIMITS.priorityItems) return { ok: false, reason: `items must be a list of at most ${LIMITS.priorityItems} entries like "pr:12" or "issue:34" (an empty list clears the order)` };
+    if (l.some(x => !parseRef(x))) return { ok: false, reason: 'every entry of items must look like "pr:12" or "issue:34"' };
+    if (new Set(l).size !== l.length) return { ok: false, reason: 'items names the same pull request or issue twice' };
+  }
+  for (const k of allowed.filter(k => k !== 'kind' && k !== 'items')) {
     const v = raw[k];
     if (v === undefined && k === 'why') continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
@@ -61,7 +67,7 @@ export function validateItem(raw) {
     // is refused: the card must show exactly what the job receives.
     if (displayChanges(v)) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
   }
-  if (/[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
+  if (raw.title !== undefined && /[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
   return { ok: true, item: Object.fromEntries(allowed.filter(k => raw[k] !== undefined).map(k => [k, raw[k]])) };
 }
 
@@ -104,6 +110,8 @@ export function scan(inboxDir, now = Date.now()) {
     const v = validateItem(raw), hash = hashOf(raw);
     if (!v.ok) { setStatus(inboxDir, id, { state: 'refused', reason: v.reason, kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, reason: v.reason }, now); picked++; continue; }
     if (pending >= LIMITS.pending) { setStatus(inboxDir, id, { state: 'refused', reason: `${LIMITS.pending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
+    // A priority order cannot raise spending, so it needs no approval (homeowner decision 2026-11-05, issue #628): Foreman applies it on this tick.
+    if (v.item.kind === 'priority') { setStatus(inboxDir, id, { state: 'applying', kind: 'priority', hash, createdAt: now }, now); audit(inboxDir, { id, event: 'proposed', kind: 'priority', hash }, now); picked++; continue; }
     setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now }, now);
     audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash }, now);
     pending++; picked++;
@@ -175,3 +183,26 @@ export function finish(inboxDir, id, patch, now = Date.now()) {
 // A job needs an issue number for its lease; an inbox job has none, so it gets a unique number far above any real issue (never looked up).
 export const placeholderIssue = id => 900000000 + parseInt(String(id).slice(0, 6), 16);
 export const marker = id => `<!-- devtest-inbox v1 ${id} -->`;
+
+// ---- Issue #628: the stored priority order. A list of "pr:N" / "issue:N", first is most urgent. Only Foreman writes it (the overseer proposes a
+// 'priority' item; applyPriority records the change and its audit entry). The planner reads it to order work; it never bypasses a gate.
+const REF_RE = /^(pr|issue):([1-9]\d{0,6})$/;
+export const parseRef = s => { const m = typeof s === 'string' ? REF_RE.exec(s) : null; return m ? { kind: m[1], number: Number(m[2]) } : null; };
+const priorityFile = inboxDir => path.join(inboxDir, 'priority.json');
+export function readPriority(inboxDir) {
+  const j = inboxDir ? readJson(priorityFile(inboxDir)) : null;
+  return Array.isArray(j?.items) ? j.items.filter(x => parseRef(x)).slice(0, LIMITS.priorityItems) : [];
+}
+// 1-based place of "pr:N" / "issue:N" in the stored order, or null.
+export function priorityPlace(inboxDir, kind, number) { const i = readPriority(inboxDir).indexOf(`${kind}:${number}`); return i < 0 ? null : i + 1; }
+// Replaces the order with `items`. `known(ref)` says whether an open pull request or issue by that name exists. Returns { ok, changes } or { ok:false, reason }.
+// The audit entry names who asked (`by`), the item id, every item whose place changed (old and new place) and the time; never the item's text.
+export function applyPriority(inboxDir, id, items, known, by, now = Date.now()) {
+  const unknown = items.filter(x => !known(parseRef(x)));
+  if (unknown.length) return { ok: false, reason: `not an open pull request or issue: ${unknown.slice(0, 5).join(', ')}` };
+  const old = readPriority(inboxDir);
+  const changes = [...new Set([...old, ...items])].map(ref => ({ item: ref, from: old.indexOf(ref) < 0 ? null : old.indexOf(ref) + 1, to: items.indexOf(ref) < 0 ? null : items.indexOf(ref) + 1 })).filter(c => c.from !== c.to);
+  writeAtomic(priorityFile(inboxDir), { items, updatedAt: now, by });
+  audit(inboxDir, { id, event: 'priority', by, changes }, now);
+  return { ok: true, changes };
+}

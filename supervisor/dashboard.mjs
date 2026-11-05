@@ -149,7 +149,8 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else if (v?.verdict === 'PASS' && v.carriedFrom && !team.carryOk(v, pr)) reason = `PASS carried from ${sha7(v.carriedFrom)} but its record does not match this head; not merged`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}${v.carry ? ` (${carryText(v.carry)})` : ''}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
     else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}${noReviewer.get(pr.number) ? `; no reviewer can take it: ${noReviewer.get(pr.number)}` : ''}`;
-    queues[author].push({ type: 'pr', ref: pr.number, title: titleOfPr(pr), reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
+    const prPlace = team.priorityPlace?.('pr', pr.number) ?? null;   // issue #628
+    queues[author].push({ type: 'pr', ref: pr.number, title: titleOfPr(pr), reason: prPlace ? `${reason} [priority ${prPlace}]` : reason, ...(prPlace ? { priority: prPlace } : {}), next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
     if (!pr.isDraft && checks === 'green' && !v && !team.carryPending(pr)) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
@@ -181,14 +182,15 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else if (team.held?.[agent]?.implement) reason = `waits: ${team.held[agent].implement}`;
     else if (busy(agent)) reason = 'ready; waits behind the running job';
     else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? names.issue(ahead.issue).text : names.pr(ahead.pr).text}` : 'ready; waits for a free slot'; }
-    queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason, next: planned.has(`${agent}:implement:${n}`) });
+    const place = team.priorityPlace?.('issue', n) ?? null;   // issue #628
+    queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason: place ? `${reason} [priority ${place}]` : reason, next: planned.has(`${agent}:implement:${n}`), ...(place ? { priority: place } : {}) });
   }
   // Issue #405: reviews are listed in the order the planner takes them (closest to merge, then age), with the reason.
   for (const [reviewer, q] of Object.entries(queues)) {
     const order = new Map(team.reviewQueue(reviewer, prs).map(r => [r.pr.number, r]));
     for (const e of q) { const o = e.type === 'review' ? order.get(e.ref) : null; if (o) { e.order = o.position; e.reason += ` [review order ${o.position} of ${o.of}: ${o.reason}]`; } }
   }
-  for (const q of Object.values(queues)) q.sort((x, y) => (y.next - x.next) || (x.type === 'review' && y.type === 'review' && x.order && y.order ? x.order - y.order : x.ref - y.ref));
+  for (const q of Object.values(queues)) q.sort((x, y) => (y.next - x.next) || ((x.priority ?? 1e9) - (y.priority ?? 1e9)) || (x.type === 'review' && y.type === 'review' && x.order && y.order ? x.order - y.order : x.ref - y.ref));
   return queues;
 }
 

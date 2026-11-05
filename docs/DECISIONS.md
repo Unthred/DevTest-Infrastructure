@@ -298,6 +298,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: A better forecast (issue #627: a minimum of evidence, a self-releasing latch), a forecast margin setting, and switching allowance-aware scheduling off, which would also disable the overage check.
 - Superseded-by: none
 
+## D-033 — A priority order is applied without an approval click
+- Status: agent-proposal
+- Date: 2026-11-05
+- Source: issue #628 (homeowner decision 2026-11-05, recorded in the issue text); extends D-031
+- Decision: The inbox gains a third kind, `priority`: an ordered list of open pull requests and issues. Foreman applies it on its next tick with no Approve click, because an order cannot raise total spending. It is validated (a bounded list of known open items, no duplicates, no free text beyond a short reason) and every use is audit logged with who or what asked, the item id, each item's old and new place and the time. The planner honours the order only among work it may already do; independent review (D-024), slots, caps, the circuit breaker and allowance modes still apply, and an item that cannot run does not block the others. Prompts and issue drafts still need approval.
+- Rationale: A reorder is reversible, costs nothing and is visible on the dashboard; a click for each one would make the control useless.
+- Rejected: Approval for priority changes; letting a priority skip a gate or start a job; free-form priority text.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.
