@@ -213,3 +213,26 @@ test('server-rendered stale and failed readings are dimmed by the stylesheet, an
   const js = fs.readFileSync(new URL('../supervisor/dashui/processes.js', import.meta.url), 'utf8');
   assert.match(js, /AbortController/); assert.match(js, /signal: ctl\.signal/); assert.match(js, /STALE_AFTER/); assert.match(js, /lastOk/);
 });
+
+test('issue #639: createJobReader matches readJobs, re-reads only changed records and forgets removed ones', async () => {
+  const { createJobReader } = await import('../supervisor/procsample.mjs');
+  const { readJobs } = await import('../supervisor/dashdata.mjs');
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jr-639-')), dir = path.join(root, 'jobs');
+  try {
+    const read = createJobReader(root);
+    assert.deepEqual(read(), [], 'no jobs directory yields an empty list');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify({ id: 'a', status: 'running' }));
+    fs.writeFileSync(path.join(dir, 'bad.json'), '{not json');
+    fs.writeFileSync(path.join(dir, 'arr.json'), '[1]');
+    fs.writeFileSync(path.join(dir, 'note.txt'), 'ignored');
+    const norm = l => JSON.stringify(l.map(j => (j.unreadable ? { ...j, at: 0 } : j)).sort((x, y) => String(x.file || x.id).localeCompare(String(y.file || y.id))));
+    assert.equal(norm(read()), norm(readJobs(root)));
+    assert.equal(read().filter(j => j.unreadable).length, 2, 'unparseable records are kept as unreadable');
+    fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify({ id: 'a', status: 'completed', pad: 'xx' }));
+    assert.equal(read().find(j => j.id === 'a').status, 'completed', 'a changed record is re-read');
+    fs.rmSync(path.join(dir, 'a.json'));
+    assert.equal(read().find(j => j.id === 'a'), undefined, 'a removed record is forgotten');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

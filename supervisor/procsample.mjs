@@ -124,6 +124,31 @@ function topNames(list, n = 4) {
   return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, n).map(([name, count]) => ({ name, count }));
 }
 
+// Issue #639: job records are re-read only when their size or modification time changed, so a reading costs one directory listing and
+// one stat per record instead of reading and parsing every record each time. A record that cannot be parsed is kept as `unreadable`
+// (never dropped, as readJobs does); a vanished one is forgotten. Same output as readJobs(root).
+export function createJobReader(root) {
+  const dir = path.join(root, 'jobs'), cache = new Map();   // name -> { key, job }
+  return () => {
+    let names; try { names = fs.readdirSync(dir).filter(n => n.endsWith('.json')); } catch (e) { if (e.code === 'ENOENT') { cache.clear(); return []; } throw e; }
+    const seen = new Set(), out = [];
+    for (const name of names) {
+      let st; try { st = fs.statSync(path.join(dir, name)); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+      const key = `${st.mtimeMs}:${st.size}`; let hit = cache.get(name);
+      if (!hit || hit.key !== key) {
+        const bad = { unreadable: true, status: 'unreadable', file: name, at: st.mtimeMs };
+        let job;
+        try { const j = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); job = j && typeof j === 'object' && !Array.isArray(j) ? j : bad; }
+        catch (e) { if (e instanceof SyntaxError) job = bad; else if (e.code === 'ENOENT') continue; else throw e; }
+        hit = { key, job }; cache.set(name, hit);
+      }
+      seen.add(name); out.push(hit.job);
+    }
+    for (const n of [...cache.keys()]) if (!seen.has(n)) cache.delete(n);
+    return out;
+  };
+}
+
 // Cached reader. `get()` returns the newest reading, taking a new one only when the cached one is older than the TTL.
 // A failed reading is kept as `error` with the last good one beside it, so the page can say so instead of showing old figures as current.
 export function createSampler({ readJobs, procRoot = '/proc', now = () => Date.now(), ttlMs = SAMPLE_TTL_MS, read = readTable }) {
