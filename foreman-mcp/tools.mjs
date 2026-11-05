@@ -1,6 +1,6 @@
 // The tools. Each one is read-only, bounded and derived from the dashboard's own view (which the dashboard builds with the planner's code), so
 // an answer here cannot disagree with what the planner will do. No tool writes, takes a lock, reads a transcript or calls a model.
-import { redactDeep } from './redact.mjs';
+import { redact, redactDeep } from './redact.mjs';
 
 export const MAX_TEXT = 24000;      // characters of one tool result
 export const CALLS_PER_MINUTE = 30; // rate limit for all tools together
@@ -23,7 +23,7 @@ export function bounded(value, max = MAX_TEXT) {
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : dflt; };
 
-export function createTools({ source, readHost, now = Date.now }) {
+export function createTools({ source, readHost, reports = null, now = Date.now }) {
   const calls = [];   // times of recent calls, for the rate limit
   const withView = async fn => { const r = await source.get(); return { ...fn(r.view), viewAgeSeconds: Math.round(r.ageMs / 1000), ...(r.stale ? { stale: true, staleBecause: r.error } : {}) }; };
   const reviewQueues = view => Object.fromEntries(Object.entries(view.queues || {}).map(([agent, items]) => [agent, (items || []).filter(i => i.type === 'review').sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.ref - b.ref).map(i => ({ order: i.order ?? null, pr: i.ref, next: !!i.next, title: i.title, reason: i.reason }))]));
@@ -73,6 +73,8 @@ export function createTools({ source, readHost, now = Date.now }) {
       run: () => withView(v => ({ plannedActions: v.plan || [], nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [], note: 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.' })) },
     { name: 'foreman_host', description: 'Tower load average, memory and swap, from /proc.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => ({ ...readHost(), readAt: iso(now()) }) },
+    { name: 'foreman_reports', description: 'Reports that hand-run sessions left for the overseer. With no name: the list (name, time, size), newest first. With a name: that one report as text (redacted, truncated if long). Reads one fixed folder only.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'a report name from the list, for example speedup.md' } }, additionalProperties: false },
+      run: args => { if (!reports) throw new Error('reports are not available on this server'); return args.name === undefined ? reports.list() : reports.read(args.name, MAX_TEXT - 400); } },
   ];
 
   return {
@@ -84,7 +86,7 @@ export function createTools({ source, readHost, now = Date.now }) {
       const t = now(); while (calls.length && t - calls[0] > 60000) calls.shift();
       if (calls.length >= CALLS_PER_MINUTE) return { isError: true, text: `rate limit: more than ${CALLS_PER_MINUTE} calls in a minute; try again shortly` };
       calls.push(t);
-      try { return { isError: false, text: bounded(redactDeep(await def.run(args && typeof args === 'object' ? args : {}))) }; }
+      try { const out = await def.run(args && typeof args === 'object' ? args : {}); return { isError: false, text: typeof out === 'string' ? redact(out).slice(0, MAX_TEXT) : bounded(redactDeep(out)) }; }
       catch (error) { return { isError: true, text: bounded(redactDeep({ error: String(error?.message || error).slice(0, 400) })) }; }
     },
   };

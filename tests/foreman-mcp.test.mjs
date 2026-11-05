@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { createProtocol, SUPPORTED, MAX_LINE_BYTES } from '../foreman-mcp/protocol.mjs';
 import { createTools, bounded, MAX_TEXT, CALLS_PER_MINUTE } from '../foreman-mcp/tools.mjs';
 import { createViewSource, getJson, readHost } from '../foreman-mcp/source.mjs';
+import { createReports, REPORT_MAX_BYTES } from '../foreman-mcp/reports.mjs';
 import { redact, redactDeep } from '../foreman-mcp/redact.mjs';
 import { createCallLog } from '../foreman-mcp/calllog.mjs';
 import { buildView } from '../supervisor/dashboard.mjs';
@@ -45,7 +46,7 @@ const rpc = (p, o) => p.handleLine(JSON.stringify({ jsonrpc: '2.0', ...o }));
 const call = async (p, name, args = {}) => (await rpc(p, { id: 1, method: 'tools/call', params: { name, arguments: args } }));
 
 // ---- protocol
-test('protocol: initialize negotiates the version, notifications get no reply, ping works, tools/list names six read-only tools', async () => {
+test('protocol: initialize negotiates the version, notifications get no reply, ping works, tools/list names seven read-only tools', async () => {
   const p = createProtocol({ tools: toolsFor(smallView) });
   for (const v of SUPPORTED) assert.equal((await rpc(p, { id: 1, method: 'initialize', params: { protocolVersion: v } })).result.protocolVersion, v);
   assert.equal((await rpc(p, { id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } })).result.protocolVersion, SUPPORTED[0], 'an unknown version gets the newest we support');
@@ -53,7 +54,7 @@ test('protocol: initialize negotiates the version, notifications get no reply, p
   assert.equal(p.initialized, true);
   assert.deepEqual((await rpc(p, { id: 3, method: 'ping' })).result, {});
   const list = (await rpc(p, { id: 4, method: 'tools/list' })).result.tools;
-  assert.deepEqual(list.map(x => x.name).sort(), ['foreman_host', 'foreman_jobs', 'foreman_plan', 'foreman_review_order', 'foreman_status', 'foreman_why_blocked']);
+  assert.deepEqual(list.map(x => x.name).sort(), ['foreman_host', 'foreman_jobs', 'foreman_plan', 'foreman_reports', 'foreman_review_order', 'foreman_status', 'foreman_why_blocked']);
   assert.ok(list.every(x => x.annotations.readOnlyHint === true && x.annotations.destructiveHint === false && x.inputSchema.type === 'object'));
 });
 test('protocol: a malformed line, a batch, a bad request, an unknown method and an unknown tool each get a JSON-RPC error and the server carries on', async () => {
@@ -202,4 +203,74 @@ test('secrets: nothing secret-shaped leaves any tool or reaches the call log, wh
   for (const s of secrets) for (const frag of [s, s.split(/[= ]/).pop()].filter(x => x.length > 8)) assert.ok(!all.includes(frag.split('\n')[0]), `leaked: ${frag.slice(0, 14)}…`);
   assert.equal(redact('plain text with PR #12 and head 1a2b3c4'), 'plain text with PR #12 and head 1a2b3c4');
   assert.deepEqual(redactDeep({ token: rnd(5), nested: ['ok', PW + ': ' + rnd(5)] }), { token: '[redacted]', nested: ['ok', PW + ': [redacted]'] });
+});
+
+// ---- foreman_reports (issue #612): hand-run session reports from one fixed folder
+const reportsWorld = (t, files = {}) => {
+  const dir = tmp(t, 'fmcp-rep-'), root = path.join(dir, 'reports'); fs.mkdirSync(root);
+  for (const [n, c] of Object.entries(files)) fs.writeFileSync(path.join(root, n), c);
+  return { dir, root, tools: createTools({ source: { get: async () => ({ view: smallView(), ageMs: 0, stale: false }) }, readHost: () => ({}), reports: createReports(root, { redact }) }) };
+};
+test('reports: with no name the tool lists reports newest first with name, time and size, and skips files that are not reports', async t => {
+  const w = reportsWorld(t, { 'old.md': 'old', 'new.md': 'newer text', 'notes.txt': 'n', 'secrets.env': 'x', '.hidden.md': 'h', 'noext': 'z' });
+  const now = Date.now() / 1000; fs.utimesSync(path.join(w.root, 'old.md'), now - 7200, now - 7200); fs.utimesSync(path.join(w.root, 'new.md'), now - 60, now - 60); fs.utimesSync(path.join(w.root, 'notes.txt'), now - 3600, now - 3600);
+  const r = JSON.parse((await w.tools.call('foreman_reports')).text);
+  assert.deepEqual(r.reports.map(x => x.name), ['new.md', 'notes.txt', 'old.md']);
+  assert.equal(r.reports[0].bytes, 'newer text'.length); assert.match(r.reports[0].modified, /^\d{4}-\d\d-\d\dT/);
+});
+test('reports: with a name the tool returns that report; an unknown name is an error, not a crash', async t => {
+  const w = reportsWorld(t, { 'a.md': 'hello report' });
+  const r = await w.tools.call('foreman_reports', { name: 'a.md' }); assert.equal(r.isError, false); assert.match(r.text, /^a\.md \(/); assert.match(r.text, /hello report/);
+  const missing = await w.tools.call('foreman_reports', { name: 'nope.md' }); assert.equal(missing.isError, true); assert.match(missing.text, /no such report/);
+});
+test('reports: a long report is truncated with a clear marker, within the output limit; a huge file is read only up to the byte cap', async t => {
+  const w = reportsWorld(t, { 'long.md': 'line of report text\n'.repeat(5000), 'huge.md': 'x'.repeat(REPORT_MAX_BYTES + 5000) });
+  const long = await w.tools.call('foreman_reports', { name: 'long.md' }); assert.ok(long.text.length <= MAX_TEXT, String(long.text.length)); assert.match(long.text, /\[truncated: \d+ more characters not shown\]$/);
+  const huge = await w.tools.call('foreman_reports', { name: 'huge.md' }); assert.ok(huge.text.length <= MAX_TEXT); assert.match(huge.text, /\[truncated: \d+ more characters not shown\]$/);
+  assert.match(huge.text, /^huge\.md \(.*, 267144 bytes\)/);
+});
+test('reports: secret-shaped text in a report is redacted (fixtures built at run time)', async t => {
+  const tok = 'ghp_' + 'Qw7'.repeat(12), pw = PW + '=' + rnd(8);
+  const w = reportsWorld(t, { 'r.md': `token ${tok} and ${pw} and url https://user:${rnd(6)}@example.invalid/x` });
+  const r = (await w.tools.call('foreman_reports', { name: 'r.md' })).text;
+  assert.ok(!r.includes(tok) && !r.includes(pw.split('=')[1]) && !/user:[0-9a-f]{12}@/.test(r)); assert.match(r, /\[redacted/);
+});
+test('reports: a secret that straddles the truncation cut is redacted whole, never half shown', async t => {
+  const tok = 'ghp_' + 'Qw7'.repeat(12), cut = MAX_TEXT - 400;
+  for (const offset of [2, 6, 14, 20, 30]) {
+    const w = reportsWorld(t, { 'cut.md': 'a'.repeat(cut - offset) + ' ' + tok + ' ' + 'b'.repeat(2000) });
+    const header = (await w.tools.call('foreman_reports', { name: 'cut.md' })).text;
+    assert.ok(!/ghp_/.test(header) || /\[redacted/.test(header), 'no token prefix in clear at offset ' + offset);
+    assert.ok(!header.includes('ghp_Qw'), 'offset ' + offset);
+    assert.match(header, /\[truncated: \d+ more characters not shown\]$/);
+  }
+});
+test('reports: path traversal is impossible: separators, dots, absolute paths, encodings and odd names are all refused', async t => {
+  const w = reportsWorld(t, { 'a.md': 'a' }); fs.writeFileSync(path.join(w.dir, 'outside.md'), 'outside secret');
+  for (const name of ['../outside.md', '..', '../../etc/passwd', '/etc/passwd', 'sub/a.md', 'a/../a.md', '..%2foutside.md', '%2e%2e/outside.md', '.hidden.md', 'a.md\0', 'a.md/', 'a.sh', 'a', '', ' a.md', 'a.md ', 'A'.repeat(200) + '.md', 'C:\\x.md', 42, null, {}]) {
+    const r = await w.tools.call('foreman_reports', { name }); assert.equal(r.isError, true, `refused: ${JSON.stringify(name)}`); assert.ok(!r.text.includes('outside secret'));
+  }
+});
+test('reports: a symbolic link is never followed, whether it points outside the folder, inside it, or at a directory', async t => {
+  const w = reportsWorld(t, { 'real.md': 'real report' }); fs.writeFileSync(path.join(w.dir, 'outside.md'), 'outside secret'); fs.mkdirSync(path.join(w.dir, 'adir'));
+  fs.symlinkSync(path.join(w.dir, 'outside.md'), path.join(w.root, 'link-out.md')); fs.symlinkSync(path.join(w.root, 'real.md'), path.join(w.root, 'link-in.md')); fs.symlinkSync(path.join(w.dir, 'adir'), path.join(w.root, 'link-dir.md'));
+  const listed = JSON.parse((await w.tools.call('foreman_reports')).text).reports.map(x => x.name); assert.deepEqual(listed, ['real.md'], 'links are not listed');
+  for (const name of ['link-out.md', 'link-in.md', 'link-dir.md']) { const r = await w.tools.call('foreman_reports', { name }); assert.equal(r.isError, true, name); assert.ok(!r.text.includes('outside secret') && !r.text.includes('real report'), name); }
+});
+test('reports: not configured, or a missing folder, says so; the tool never writes (the folder is unchanged by every call)', async t => {
+  const none = createTools({ source: { get: async () => ({ view: smallView(), ageMs: 0, stale: false }) }, readHost: () => ({}), reports: createReports(null) });
+  const r = await none.call('foreman_reports'); assert.equal(r.isError, true); assert.match(r.text, /no reports folder is configured/);
+  const w = reportsWorld(t, { 'a.md': 'a' }); const before = JSON.stringify(fs.readdirSync(w.root).map(n => [n, fs.statSync(path.join(w.root, n)).mtimeMs]));
+  await w.tools.call('foreman_reports'); await w.tools.call('foreman_reports', { name: 'a.md' }); await w.tools.call('foreman_reports', { name: '../x.md' });
+  assert.equal(JSON.stringify(fs.readdirSync(w.root).map(n => [n, fs.statSync(path.join(w.root, n)).mtimeMs])), before);
+});
+test('reports: through the launcher with the permission model, the configured folder is readable and nothing else is', async t => {
+  const dir = tmp(t, 'fmcp-repl-'), copy = path.join(dir, 'srv'); fs.cpSync(mcpDir, copy, { recursive: true });
+  const reports = path.join(dir, 'reports'), logs = path.join(dir, 'logs'); fs.mkdirSync(reports); fs.mkdirSync(logs); fs.writeFileSync(path.join(reports, 'speedup.md'), 'report body'); fs.writeFileSync(path.join(dir, 'other.md'), 'not a report');
+  const cfg = path.join(dir, 'config.json'); fs.writeFileSync(cfg, JSON.stringify({ viewUrl: null, logFile: path.join(logs, 'calls.log'), reportsDir: reports }));
+  fs.writeFileSync(path.join(copy, 'launcher.env'), `NODE_BIN=${process.execPath}\nCONFIG_FILE=${cfg}\nLOG_DIR=${logs}\nREPORTS_DIR=${reports}\n`);
+  const input = [{ id: 1, method: 'initialize', params: { protocolVersion: SUPPORTED[0] } }, { id: 2, method: 'tools/call', params: { name: 'foreman_reports', arguments: {} } }, { id: 3, method: 'tools/call', params: { name: 'foreman_reports', arguments: { name: 'speedup.md' } } }].map(o => JSON.stringify({ jsonrpc: '2.0', ...o })).join('\n') + '\n';
+  const r = await new Promise(resolve => { const c = spawn('sh', [path.join(copy, 'launcher.sh')], { env: { PATH: process.env.PATH }, stdio: ['pipe', 'pipe', 'pipe'] }); let out = ''; const timer = setTimeout(() => c.kill('SIGKILL'), 30000); c.stdout.on('data', d => { out += d; }); c.on('close', code => { clearTimeout(timer); resolve({ code, out }); }); c.stdin.end(input); });
+  assert.equal(r.code, 0); const replies = r.out.split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.deepEqual(JSON.parse(replies[1].result.content[0].text).reports.map(x => x.name), ['speedup.md']); assert.match(replies[2].result.content[0].text, /report body/);
 });
