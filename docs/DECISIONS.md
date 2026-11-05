@@ -271,6 +271,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Trusting Origin alone; a short-lived token (more state for the same page-reader limit).
 - Superseded-by: none
 
+## D-030 — Read-only MCP server for the overseer, reached over SSH on a restricted account
+- Status: agent-proposal
+- Date: 2026-11-04
+- Source: issue #569; the homeowner's approval comment on pull request #589: https://github.com/Unthred/DevTest-Infrastructure/pull/589#issuecomment-6644201295
+- Decision: The overseer may read Foreman's state through a separate read-only stdio MCP server on Tower. It runs as its own process, never inside the dashboard, and reads the local dashboard's existing `/api/view.json` and `/proc`; it cannot modify Foreman state and makes no model call. It is reached through a dedicated unprivileged Tower account, `foreman-mcp`, with no password login. That account has exactly one SSH key in `authorized_keys`, written with `restrict` and a forced `command=` that runs the server: no shell, no pty, no forwarding, no other command. No new listening port is opened and nothing new is exposed to the internet. It works only while the homeowner's computer and Claude desktop are running. Posting to GitHub, merges, pushes, reviews, restarts and queue changes are not exposed; the write route stays with issue #124 and needs its own decision. Revoking access means removing the one `authorized_keys` line, or locking or deleting the account.
+- Rationale: The overseer works from a cloud session that cannot see Foreman's state, so every question costs a Tower session and a paste. Claude's custom connectors connect from the provider's cloud and cannot reach the LAN, so the desktop configuration is the available route. D-009 keeps it read-only, D-008 keeps secrets out of its output, D-007 forbids the Docker socket and privileged access, and AGENTS.md requires fresh homeowner approval for remote-access changes.
+- Rejected: A public or LAN listener for the server (a new port); sharing the dashboard's process or the root account; a shell login with a command filter; exposing any write action in this entry.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.
