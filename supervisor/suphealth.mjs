@@ -192,7 +192,7 @@ function fetchedAt(repo) {
   try { return fs.statSync(path.join(dirs.gitDir, 'FETCH_HEAD')).mtimeMs; } catch { return null; }
 }
 
-// ---- the five cards
+// ---- the six cards
 // Self-upgrade step result (the `selfUpgrade` field of the last tick) -> severity and a plain explanation.
 const UPGRADE_STEP = {
   current: ['ok', 'installed version is origin/main'], 'no-supervisor-change': ['ok', 'main is ahead with no supervisor change'], verified: ['ok', 'upgrade verified by a live tick'],
