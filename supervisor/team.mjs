@@ -474,11 +474,13 @@ const noDotSegments = w => !w.split('/').some(seg => seg === '..' || seg === '.'
 const isRepoDir = w => /^(?:[\w.-]+\/)+(?:[\w-]+)?$/.test(w) && !w.includes('..') && TOP_LEVEL_DIRS.has(w.split('/')[0]) && noDotSegments(w);
 // Issue #559: a file token needs the same anchoring. With a slash it must start at a top-level directory; without one it must be a root file or carry a source/doc extension (so "fix.retry" is not a path). Tokens are lower-cased before the check.
 export const ROOT_FILES = new Set(['.gitignore', 'agents.md', 'claude.md', 'readme.md']);
-const FILE_EXT = /\.(?:mjs|cjs|js|ts|json|jsonl|md|yml|yaml|sh|cs|csproj|sln|txt|toml|html|css|ps1)$/;
+const FILE_EXT = /\.(?:mjs|cjs|js|ts|json|jsonl|md|yml|yaml|sh|cs|csproj|sln|txt|toml|html|css|ps1|patch|diff|conf|ini|cfg)$|(?:^|\/)dockerfile(?:\.[\w-]+)?$/;
 // Issue #588: the extension list applies to slashed tokens too (so "tests/fix.retry" is not a path), and ".." is refused anywhere in the token (so "docs/a..b.md" is not).
 const isRepoFile = w => /^[\w./-]*\.\w+$/.test(w) && noDotSegments(w) && !w.includes('..') && (w.includes('/') ? TOP_LEVEL_DIRS.has(w.split('/')[0]) && FILE_EXT.test(w) : ROOT_FILES.has(w) || FILE_EXT.test(w));
+// Issue #617: a path token such as ".github/workflows/ci.yml" must not trip MATERIAL_TOPIC on its "ci" segment; only whole tokens that are repo files are blanked, so wording around them is still checked.
+const withoutRepoFiles = claim => claim.split(/(\s+)/).map(t => { const w = t.toLowerCase().replace(/^[,;:()'"`]+|[,;:()'"`.]+$/g, ''); return w && isRepoFile(w) ? ' ' : t; }).join('');
 export function isTrivialSlip(claim) {
-  if (MATERIAL_TOPIC.test(claim) || !TRIVIAL_DETAIL.test(claim)) return false;
+  if (MATERIAL_TOPIC.test(withoutRepoFiles(claim)) || !TRIVIAL_DETAIL.test(claim)) return false;
   const rest = claim.replace(new RegExp(TRIVIAL_DETAIL.source, 'gi'), ' ').toLowerCase().split(/[\s,;:()'"`]+/).filter(Boolean);
   // A token may be filler, a number, or a file path; anything else (a verb, a reason) makes the claim a behaviour claim.
   return rest.every(w => SLIP_FILLER.has(w) || /^[\d.,%]+$/.test(w) || isRepoFile(w) || isRepoDir(w));

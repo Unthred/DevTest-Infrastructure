@@ -326,6 +326,16 @@ test('#592: a bare file name with a listed extension is accepted without an exis
   assert.equal(isTrivialSlip('adds 3 tests tests/fix.retry'), false);
   assert.equal(isTrivialSlip('adds 3 tests tests/fix.mjs'), true);
 });
+test('#617: more real repo file shapes count as paths; a path segment named ci is not a material topic', () => {
+  assert.equal(isTrivialSlip('adds 2 lines in docker/Dockerfile.agent'), true);
+  assert.equal(isTrivialSlip('adds 2 lines in tests/fixtures/x.patch'), true);
+  assert.equal(isTrivialSlip('adds 2 lines in .github/workflows/ci.yml'), true);
+  // Negative: wording around the path is still checked, and unanchored or unlisted tokens stay refused.
+  assert.equal(isTrivialSlip('adds 2 lines to ci'), false);
+  assert.equal(isTrivialSlip('adds 2 lines so ci passes in .github/workflows/ci.yml'), false);
+  assert.equal(isTrivialSlip('adds 2 lines in elsewhere/Dockerfile.agent'), false);
+  assert.equal(isTrivialSlip('adds 2 lines in tests/fixtures/x.bin'), false);
+});
 test('#419: the review prompt asks for one complete pass and sends far-fetched cases to follow-ups', async t => {
   const w = reqWorld(t); const { spec } = await startReview(w);
   assert.match(spec.prompt, /every blocking finding you can find in a single pass/);
