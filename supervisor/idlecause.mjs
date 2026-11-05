@@ -115,3 +115,27 @@ export function renderIdleReport(rep) {
   }
   return lines.join('\n');
 }
+
+// Issue #406: passes by trigger. A recorded tick is one pass; `trigger` says what started it (a record from before wakes existed has none and
+// was scheduled). A pass "started something" when it planned at least one action; "did nothing" when its plan was empty. `unlabelled`
+// counts the records that carried no trigger so the figure says how much of it is measured per trigger and how much is inferred.
+export const PASS_TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve'];
+export function passStats(snapshots, from, to) {
+  const by = Object.fromEntries(PASS_TRIGGERS.map(k => [k, { passes: 0, startedSomething: 0, didNothing: 0 }]));
+  let unlabelled = 0, errors = 0;
+  for (const s of snapshots || []) {
+    if (!Number.isFinite(s?.at) || s.at < from || s.at > to) continue;
+    const labelled = PASS_TRIGGERS.includes(s.trigger), key = labelled ? s.trigger : 'schedule';
+    if (!labelled) unlabelled++;
+    if (s.status === 'error') errors++;
+    const row = by[key]; row.passes++;
+    if (Array.isArray(s.plan) && s.plan.length) row.startedSomething++; else row.didNothing++;
+  }
+  const total = Object.values(by).reduce((t, r) => t + r.passes, 0), empty = Object.values(by).reduce((t, r) => t + r.didNothing, 0);
+  return { total, didNothing: empty, errors, unlabelled, byTrigger: by };
+}
+export function renderPassStats(p) {
+  const lines = [`Passes: ${p.total} recorded, ${p.didNothing} did nothing (${p.total ? Math.round(p.didNothing / p.total * 100) : 0}%); ${p.unlabelled} carried no trigger (counted as scheduled)`];
+  for (const k of PASS_TRIGGERS) { const r = p.byTrigger[k]; if (r.passes) lines.push(`  ${k}: ${r.passes} passes, ${r.startedSomething} started something, ${r.didNothing} did nothing`); }
+  return lines.join('\n');
+}

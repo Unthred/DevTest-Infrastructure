@@ -1,0 +1,151 @@
+// Issue #406: start work on events, not only on the five-minute schedule. A finished job, a finished install, a new inbox proposal and a
+// homeowner Approve or Reject each ask for one extra reconcile pass instead of leaving the free agent (or the new card) waiting for the
+// next scheduled fire. Model-free: a request only records a flag and spawns this program. The schedule stays as the safety net.
+//
+// One writer model, no waiters. Every pass (scheduled or woken) holds `team/wake-pass.lock` from start to end, upgrade step included.
+//   request  -> set the "requested" flag (merged: any number of requests are one flag), then spawn a runner.
+//   runner   -> take the pass lock. If it is held, do nothing: the holder re-checks the flag after it releases the lock, so the request
+//               cannot be lost however long the pass runs. If it is free, consume the flag, run the pass, release, then re-check the flag.
+//   follow-up-> a flag found after release starts exactly one more pass, on the installed code (an install may have happened meanwhile).
+// A scheduled fire that finds the lock held sets the same flag (uncounted: it replaces a fire, so it is bounded by the schedule itself).
+// Event requests are counted in a rolling hour and capped; past the cap a request is dropped, the drop is recorded for the dashboard and
+// the schedule is the fallback. Nothing in this file can stop a scheduled pass: every caller treats a failure here as "no wake".
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { processStart } from './core.mjs';
+
+export const TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve'];
+export const EVENT_TRIGGERS = ['job-end', 'install', 'inbox', 'approve'];
+// Priority when several requests merge into one pass: the label recorded for it. An install pass verifies new code, so it comes first.
+const PRIORITY = ['install', 'approve', 'inbox', 'job-end', 'schedule'];
+export const WAKE_MAX_PER_HOUR = 40;
+// A pass lock held this long is treated as a hung pass: a scheduled run then goes ahead without it (the tick lock and the install lock
+// still serialise the parts that must not overlap), so a hung wake pass can never stop the schedule.
+export const PASS_STALE_MS = 45 * 60 * 1000;
+const HOUR = 3600 * 1000;
+const NAMES = new Set(TRIGGERS);
+
+const wakeFile = root => path.join(root, 'team', 'wake.json');
+const clean = list => (Array.isArray(list) ? list.filter(Number.isFinite) : []);
+export function readWake(root) {
+  try {
+    const s = JSON.parse(fs.readFileSync(wakeFile(root), 'utf8'));
+    const reasons = Array.isArray(s.requested?.reasons) ? s.requested.reasons.filter(r => NAMES.has(r)) : [];
+    return { requested: reasons.length ? { reasons, at: Number.isFinite(s.requested.at) ? s.requested.at : 0 } : null, accepted: clean(s.accepted), capped: clean(s.capped) };
+  } catch { return { requested: null, accepted: [], capped: [] }; }
+}
+function writeWake(root, s) {
+  fs.mkdirSync(path.dirname(wakeFile(root)), { recursive: true, mode: 0o700 });
+  const tmp = `${wakeFile(root)}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(s), { mode: 0o600 }); fs.renameSync(tmp, wakeFile(root));
+}
+
+const ownerOf = dir => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'owner.json'), 'utf8')); } catch { return null; } };
+const live = o => !!o && Number.isFinite(o.pid) && processStart(o.pid) === o.start;
+// A directory lock owned by this process, stale when the owner is gone. The directory appears with its owner file already inside (built
+// under a private name and renamed into place), so a contender never sees a lock without an owner and mistakes it for a stale one
+// (reviewed on PR #525). Returns a release function, or null while another live process holds it.
+export function dirLock(root, name, now = Date.now()) {
+  const dir = path.join(root, 'team', name);
+  fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const mine = `${dir}.new-${process.pid}-${attempt}`;
+    fs.rmSync(mine, { recursive: true, force: true });
+    fs.mkdirSync(mine, { mode: 0o700 });
+    fs.writeFileSync(path.join(mine, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid), at: now }), { mode: 0o600 });
+    try { fs.renameSync(mine, dir); return () => fs.rmSync(dir, { recursive: true, force: true }); }
+    catch (error) {
+      fs.rmSync(mine, { recursive: true, force: true });
+      if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error;
+    }
+    const owner = ownerOf(dir);
+    if (live(owner)) return null;
+    // Take over a dead holder's lock: move it aside first, and put it back if what we moved turns out to be someone's fresh lock.
+    const aside = `${dir}.stale-${process.pid}-${attempt}`;
+    try { fs.renameSync(dir, aside); } catch { continue; }
+    const moved = ownerOf(aside);
+    if (live(moved)) { try { fs.renameSync(aside, dir); } catch { fs.rmSync(aside, { recursive: true, force: true }); } return null; }
+    fs.rmSync(aside, { recursive: true, force: true });
+  }
+  return null;
+}
+// The pass lock plus how old it is, for the scheduled run's hung-pass bypass.
+export const wakePassLock = (root, now) => dirLock(root, 'wake-pass.lock', now);
+export function passLockAge(root, now = Date.now()) {
+  const o = ownerOf(path.join(root, 'team', 'wake-pass.lock'));
+  return live(o) && Number.isFinite(o.at) ? now - o.at : 0;
+}
+// The read-modify-write of wake.json runs under a short lock, so two requesters cannot both read the same count.
+function withFileLock(root, fn) {
+  let release = null;
+  for (let i = 0; i < 300 && !(release = dirLock(root, 'wake-file.lock')); i++) { const end = Date.now() + 10; while (Date.now() < end) { /* brief spin */ } }
+  if (!release) throw new Error('wake state is locked');
+  try { return fn(); } finally { release(); }
+}
+
+export const mergeReasons = (a, b) => [...new Set([...(a || []), ...(b || [])])];
+export const labelOf = reasons => PRIORITY.find(r => (reasons || []).includes(r)) || 'schedule';
+
+// An event asks for a pass. Counted and capped. `spawnPass(reason)` starts a detached runner; its failure never propagates (the flag stays
+// set, so the next scheduled pass, or the holder of a running pass, still runs it).
+export function requestWake({ root, reason, now = Date.now(), cap = WAKE_MAX_PER_HOUR, spawnPass }) {
+  if (!EVENT_TRIGGERS.includes(reason)) throw new Error('unknown wake reason');
+  const outcome = withFileLock(root, () => {
+    const s = readWake(root), accepted = s.accepted.filter(t => now - t < HOUR), capped = s.capped.filter(t => now - t < HOUR);
+    if (accepted.length >= cap) { writeWake(root, { requested: s.requested, accepted, capped: [...capped, now] }); return { requested: false, capped: true, why: 'wake cap reached; the scheduled pass is the fallback' }; }
+    writeWake(root, { requested: { reasons: mergeReasons(s.requested?.reasons, [reason]), at: s.requested?.at || now }, accepted: [...accepted, now], capped });
+    return { requested: true, reason };
+  });
+  if (outcome.requested) { try { spawnPass(reason); } catch { /* the flag is set; the next pass runs it */ } }
+  return outcome;
+}
+// A scheduled fire that found a pass running: not counted (it replaces a fire).
+export function queueScheduled({ root }) {
+  return withFileLock(root, () => { const s = readWake(root); writeWake(root, { ...s, requested: { reasons: mergeReasons(s.requested?.reasons, ['schedule']), at: s.requested?.at || Date.now() } }); return { queued: true }; });
+}
+// The pass takes the request flag as it starts (so a request during the pass sets it again). Returns the merged reasons, or [].
+export function takeRequest(root) {
+  return withFileLock(root, () => { const s = readWake(root); if (!s.requested) return []; writeWake(root, { ...s, requested: null }); return s.requested.reasons; });
+}
+export const pendingRequest = root => readWake(root).requested;
+
+// What the dashboard and the idle report show: the rolling-hour count, the cap and whether it was hit.
+export function wakeStatus(root, now = Date.now(), cap = WAKE_MAX_PER_HOUR) {
+  const s = readWake(root), accepted = s.accepted.filter(t => now - t < HOUR).length, capped = s.capped.filter(t => now - t < HOUR);
+  return { cap, acceptedLastHour: accepted, droppedLastHour: capped.length, capHit: capped.length > 0, lastDropAt: capped.length ? Math.max(...capped) : null };
+}
+
+// The program every wake runs: the installed code, never the code of the process that asks (a worker started before an install ends after
+// it, and a pass that just installed is old code). Only when no installed copy exists (an unversioned checkout) does it fall back to `self`.
+export function wakeTarget({ root, self }) {
+  const installed = path.join(root, 'current', 'supervisor', 'cli.mjs');
+  return fs.existsSync(installed) ? installed : self;
+}
+// The command line of a pass. A registry is passed on only when the operator gave one: a default is resolved by the code that runs, so a
+// pass handed to a newer install loads that install's provider manifests, not the old version's (reviewed on PR #525).
+export const wakeArgs = ({ target, reason, root, registry }) => [target, 'reconcile', '--wake', reason, '--state-root', root, ...(registry ? ['--registry', registry] : [])];
+export const workerArgs = ({ self, id, root, registry, defaultRegistry }) => [self, 'worker', id, '--state-root', root, ...(path.resolve(registry) === path.resolve(defaultRegistry) ? [] : ['--registry', registry])];
+
+// Start one detached pass runner on the installed code. Used by the supervisor CLI and by the dashboard server (which has no listening
+// port of its own to add: the wake is a local process start).
+export function spawnDetachedPass({ root, reason, self, registry = null, spawnFn = spawn }) {
+  const child = spawnFn(process.execPath, wakeArgs({ target: wakeTarget({ root, self }), reason, root, registry }), { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+  child.on?.('error', () => {}); child.unref?.();
+}
+// A new overseer proposal arrives as a file in <inbox>/items/ (the existing write route, foreman-mcp/inbox.mjs). The dashboard server, which
+// already reads the inbox, looks at the folder's file names every few seconds (one directory listing, no reads of file content) and calls
+// `onNew` when a name appears that it has not seen. Names present when the watcher starts are not new: the schedule picks those up.
+export function inboxWatcher({ dir, onNew, intervalMs = 5000, list = d => fs.readdirSync(d), setTimer = setInterval, clearTimer = clearInterval }) {
+  let seen = null;
+  const poll = () => {
+    let names; try { names = list(path.join(dir, 'items')).filter(n => n.endsWith('.json')); } catch { return; }
+    if (seen === null) { seen = new Set(names); return; }
+    const fresh = names.filter(n => !seen.has(n));
+    for (const n of names) seen.add(n);
+    if (fresh.length) { try { onNew(fresh.length); } catch { /* the schedule is the fallback */ } }
+  };
+  poll();
+  const timer = setTimer(poll, intervalMs); timer.unref?.();
+  return { poll, stop: () => clearTimer(timer) };
+}
