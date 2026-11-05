@@ -703,7 +703,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     try { const f = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).dashboardFailure; if (f && typeof f.reason === 'string') attention.push({ id: 'dashboard-restart-failed', text: redact(`The dashboard server could not be ${f.kind === 'watchdog' ? 'brought back after it stopped answering' : 'restarted after the ' + (f.kind === 'rollback' ? 'rollback' : 'upgrade')}${/^[0-9a-f]{40}$/.test(f.target || '') ? ` on ${sha7(f.target)}` : ''}: ${f.reason}. ${f.recovered ? 'The last good version was started again and is serving now.' : 'Foreman keeps trying on later ticks with a growing delay.'}`, 500), ref: null, severity: 'action', action: 'Check supervisor/dashboard.log, then restart the dashboard server on the installed version.' }); } catch { /* none */ }
     // Issue #302: a rolled-back upgrade pauses all later upgrades (the latch); one Needs you item says why and how to clear it.
     const latch = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.latch'), 'utf8')); } catch (error) { return error.code === 'ENOENT' ? null : { reason: 'unreadable latch file' }; } })();
-    if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
+    if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then press "Clear latch" so the next tick can try again. If the cause was a network error, clear it straight away.' });
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     // Issue #362: a storage warning is a Needs you item; nothing is ever deleted automatically.
     if (history?.storage?.warnings?.length) attention.push({ id: 'history-storage', text: redact(`History storage: ${history.storage.warnings.join(' ')}`, 400), ref: null, severity: 'warn', action: 'Free space on the volume or move the history archive; Foreman never deletes history by itself.' });
@@ -822,7 +822,7 @@ const NEXT_STEP = {
   migration: 'Fix team.local.json by hand (or remove the offending key), then the next tick retries the migration. The failed attempt left the file unchanged; backups are next to it.',
   rebase: 'Restore the dropped commits on the PR branch (the old head is still reachable by its id) before it is reviewed or merged.'
 };
-const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run', 'upgrade-latched': 'ai-supervisor self-upgrade clear-latch' };
+const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run' };   // the latch is cleared by a dashboard button (issue #692)
 export function healthOf({ attention, states, teamEnabled, needsYouCount }) {
   const open = Number.isSafeInteger(needsYouCount) ? needsYouCount : attention.filter(a => a.severity === 'action').length;   // one shared count: the consolidated list's length (issue #141: the header shows how many)
   if (open) return { state: 'needs_you', label: `Needs you (${open})`, count: open, severity: 'action' };
@@ -932,7 +932,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
     const watch = a.id.startsWith('job-') && transcriptExists(root, a.id.slice(4)) ? a.id.slice(4) : null;
-    return { ...a, watch, why: a.text, decision: a.action || NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
+    return { ...a, clearLatch: a.id === 'upgrade-latched', watch, why: a.text, decision: a.action || NEXT_STEP[a.id] || NEXT_STEP[a.id.split('-')[0]] || 'Decide how to proceed.', command, overseer: attentionOverseer(a, { ...ctx, command }) };
   });
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {

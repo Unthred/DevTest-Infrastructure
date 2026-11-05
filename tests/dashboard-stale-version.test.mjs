@@ -266,7 +266,7 @@ test('issue #302: a rollback latch raises a Needs you item with the clear comman
   assert.equal(item.length, 1); assert.equal(item[0].severity, 'action');
   assert.ok(item[0].text.includes(NEW.slice(0, 7)) && item[0].text.includes('live tick failed: boom'));
   const need = v.panels.needsYou.find(a => a.id === 'upgrade-latched');
-  assert.equal(need.command, 'ai-supervisor self-upgrade clear-latch');
+  assert.equal(need.clearLatch, true, 'a Clear latch button (issue #692), no shell command'); assert.equal(need.command, null);
   assert.ok(!v.estimates.waits.some(w => /next try/.test(w.text)), 'no next try is promised while latched');
   assert.ok(v.estimates.waits.some(w => w.kind === 'upgrade-latched' && /clear-latch/.test(w.text)));
 });
