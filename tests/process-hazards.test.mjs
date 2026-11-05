@@ -101,3 +101,15 @@ test('test-slot run --max-minutes stops the run, its grandchildren and returns n
   await new Promise(r => runner.on('exit', r));
   assert.equal(alive(sleeper), false, 'SIGTERM on the runner reached the job group');
 });
+
+test('a SIGKILLed test-slot runner does not orphan the job group: the watchdog kills it', async t => {
+  const state = tmp(t), pidFile = path.join(state, 'gc'), fake = path.join(state, 'node');
+  fs.writeFileSync(fake, `#!/bin/sh\nsleep 300 &\necho $! > ${pidFile}\nwait\n`, { mode: 0o755 });
+  const runner = spawn(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, '--no-reuse', '--', fake, 'x'], { stdio: 'ignore', cwd: state });
+  t.after(() => { try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ } });
+  assert.ok(await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', 15000));
+  const gc = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.equal(alive(gc), true);
+  runner.kill('SIGKILL');
+  assert.ok(await until(() => !alive(gc), 8000), 'the job\'s child died with its runner');
+});

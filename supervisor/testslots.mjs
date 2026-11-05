@@ -87,6 +87,14 @@ export async function stopGroup(pgid, { graceMs = 5000, pollMs = 50 } = {}) {
 export async function runInGroup(cmd, { env, maxRuntimeMs = DEFAULT_MAX_RUNTIME_MS, graceMs = 5000, stdio = 'inherit', onSignalTarget = process } = {}) {
   const child = spawn(cmd[0], cmd.slice(1), { stdio, env, detached: true });
   const pgid = child.pid;
+  // The job left our group, so a detached watchdog outside it kills the job's group if this runner disappears (SIGKILL, OOM kill)
+  // or the maximum runtime passes without the runner acting on it.
+  let dog = null;
+  if (pgid) {
+    const src = 'const [r,g,d]=process.argv.slice(1).map(Number);const k=()=>{try{process.kill(-g,"SIGKILL")}catch{}process.exit(0)};setInterval(()=>{try{process.kill(r,0)}catch{k()}if(Date.now()>d)k();try{process.kill(-g,0)}catch{process.exit(0)}},200);';
+    dog = spawn(process.execPath, ['-e', src, String(process.pid), String(pgid), String(Date.now() + maxRuntimeMs + 2 * graceMs + 1000)], { detached: true, stdio: 'ignore' });
+    dog.unref(); dog.on('error', () => {});
+  }
   let timedOut = false, stopping = null;
   const stop = () => (stopping ??= stopGroup(pgid, { graceMs }));
   const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(sig => { const h = () => { stop(); }; onSignalTarget.on(sig, h); return [sig, h]; });
@@ -96,5 +104,6 @@ export async function runInGroup(cmd, { env, maxRuntimeMs = DEFAULT_MAX_RUNTIME_
   // the leader is gone; sweep any member it left behind (orphans keep the group id)
   const clean = pgid ? await stop() : true;
   for (const [sig, h] of handlers) onSignalTarget.off(sig, h);
+  if (dog) { try { dog.kill('SIGKILL'); } catch { /* already gone */ } }
   return { code: timedOut ? 124 : code, timedOut, leftover: !clean };
 }
