@@ -209,7 +209,7 @@ test('secrets: nothing secret-shaped leaves any tool or reaches the call log, wh
 const reportsWorld = (t, files = {}) => {
   const dir = tmp(t, 'fmcp-rep-'), root = path.join(dir, 'reports'); fs.mkdirSync(root);
   for (const [n, c] of Object.entries(files)) fs.writeFileSync(path.join(root, n), c);
-  return { dir, root, tools: createTools({ source: { get: async () => ({ view: smallView(), ageMs: 0, stale: false }) }, readHost: () => ({}), reports: createReports(root) }) };
+  return { dir, root, tools: createTools({ source: { get: async () => ({ view: smallView(), ageMs: 0, stale: false }) }, readHost: () => ({}), reports: createReports(root, { redact }) }) };
 };
 test('reports: with no name the tool lists reports newest first with name, time and size, and skips files that are not reports', async t => {
   const w = reportsWorld(t, { 'old.md': 'old', 'new.md': 'newer text', 'notes.txt': 'n', 'secrets.env': 'x', '.hidden.md': 'h', 'noext': 'z' });
@@ -234,6 +234,16 @@ test('reports: secret-shaped text in a report is redacted (fixtures built at run
   const w = reportsWorld(t, { 'r.md': `token ${tok} and ${pw} and url https://user:${rnd(6)}@example.invalid/x` });
   const r = (await w.tools.call('foreman_reports', { name: 'r.md' })).text;
   assert.ok(!r.includes(tok) && !r.includes(pw.split('=')[1]) && !/user:[0-9a-f]{12}@/.test(r)); assert.match(r, /\[redacted/);
+});
+test('reports: a secret that straddles the truncation cut is redacted whole, never half shown', async t => {
+  const tok = 'ghp_' + 'Qw7'.repeat(12), cut = MAX_TEXT - 400;
+  for (const offset of [2, 6, 14, 20, 30]) {
+    const w = reportsWorld(t, { 'cut.md': 'a'.repeat(cut - offset) + ' ' + tok + ' ' + 'b'.repeat(2000) });
+    const header = (await w.tools.call('foreman_reports', { name: 'cut.md' })).text;
+    assert.ok(!/ghp_/.test(header) || /\[redacted/.test(header), 'no token prefix in clear at offset ' + offset);
+    assert.ok(!header.includes('ghp_Qw'), 'offset ' + offset);
+    assert.match(header, /\[truncated: \d+ more characters not shown\]$/);
+  }
 });
 test('reports: path traversal is impossible: separators, dots, absolute paths, encodings and odd names are all refused', async t => {
   const w = reportsWorld(t, { 'a.md': 'a' }); fs.writeFileSync(path.join(w.dir, 'outside.md'), 'outside secret');

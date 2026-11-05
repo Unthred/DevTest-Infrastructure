@@ -9,6 +9,7 @@ import { createTools } from './tools.mjs';
 import { createViewSource, readHost } from './source.mjs';
 import { createCallLog } from './calllog.mjs';
 import { createReports } from './reports.mjs';
+import { redact } from './redact.mjs';
 
 function loadConfig(env = process.env) {
   let cfg = {};
@@ -18,7 +19,7 @@ function loadConfig(env = process.env) {
 
 export function buildServer(config) {
   const callLog = createCallLog(config.logFile);
-  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost, reports: createReports(config.reportsDir) });
+  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost, reports: createReports(config.reportsDir, { redact }) });
   return createProtocol({ tools, log: e => callLog.record(e) });
 }
 

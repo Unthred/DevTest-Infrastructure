@@ -1,5 +1,5 @@
 // Hand-run session reports (issue #612). A fixed folder of small text reports that sessions leave for the overseer; this module only reads it.
-// Never writes, never follows a symlink, never reads outside the folder, and returns bounded text (the caller redacts it).
+// Never writes, never follows a symlink, never reads outside the folder, and returns bounded text (redacted before it is cut).
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -9,7 +9,7 @@ export const REPORT_LIST_MAX = 100;
 
 const truncatedMarker = n => `\n\n[truncated: ${n} more characters not shown]`;
 
-export function createReports(dir, { fsApi = fs } = {}) {
+export function createReports(dir, { fsApi = fs, redact = x => x } = {}) {
   const need = () => { if (!dir) throw new Error('no reports folder is configured (reportsDir in the server configuration)'); return path.resolve(dir); };
   return {
     list() {
@@ -23,7 +23,7 @@ export function createReports(dir, { fsApi = fs } = {}) {
       rows.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
       return { folderConfigured: true, count: rows.length, shown: Math.min(rows.length, REPORT_LIST_MAX), reports: rows.slice(0, REPORT_LIST_MAX).map(({ name, modified, bytes }) => ({ name, modified, bytes })) };
     },
-    read(name, maxChars) {
+    read(name, maxChars) {   // redacts the whole buffer read from disk first, then cuts, so a secret cannot be split by the cut
       const root = need();
       if (typeof name !== 'string' || !REPORT_NAME.test(name)) throw new Error('not a valid report name (letters, digits, dot, dash and underscore, ending .md or .txt)');
       const file = path.join(root, name);
@@ -34,7 +34,7 @@ export function createReports(dir, { fsApi = fs } = {}) {
       try {
         const s = fsApi.fstatSync(fd); if (!s.isFile()) throw new Error('that report cannot be read (not a regular file)');
         const buf = Buffer.alloc(Math.min(s.size, REPORT_MAX_BYTES + 1)); const n = fsApi.readSync(fd, buf, 0, buf.length, 0);
-        let text = buf.subarray(0, Math.min(n, REPORT_MAX_BYTES)).toString('utf8'), more = s.size > REPORT_MAX_BYTES ? s.size - REPORT_MAX_BYTES : 0;
+        let text = redact(buf.subarray(0, Math.min(n, REPORT_MAX_BYTES)).toString('utf8')), more = s.size > REPORT_MAX_BYTES ? s.size - REPORT_MAX_BYTES : 0;
         if (maxChars && text.length > maxChars) { more += text.length - maxChars; text = text.slice(0, maxChars); }
         return `${name} (${new Date(s.mtimeMs).toISOString()}, ${s.size} bytes)\n\n${text}${more ? truncatedMarker(more) : ''}`;
       } finally { try { fsApi.closeSync(fd); } catch { /* closed */ } }
