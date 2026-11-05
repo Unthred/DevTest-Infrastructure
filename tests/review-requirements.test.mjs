@@ -314,7 +314,7 @@ test('#559: TOP_LEVEL_DIRS and ROOT_FILES match the real repository root', async
 test('#479: widened count slips still refuse effect claims', async t => {
   for (const claim of ['adds 3 tests that fix the retry loop', 'adds 3 new tests so the gate passes', 'removes the retry loop and 2 lines', 'touches 3 files in supervisor/ and improves retries', 'adds retry handling in 3 files',
     // Issue #513: a slash alone does not make a token a path; it must start at a top-level directory.
-    'adds 3 tests fix/retry', 'adds 3 tests fix.retry', 'adds 3 tests docs/../fix', 'adds 3 tests fix/retry.mjs', 'adds 3 tests ../tests/x.mjs', 'adds 3 tests and/or', 'removes 2 lines in disable/', 'adds 3 tests disable/auth/']) {
+    'adds 3 tests fix/retry', 'adds 3 tests fix.retry', 'adds 3 tests docs/../fix', 'adds 3 tests fix/retry.mjs', 'adds 3 tests ../tests/x.mjs', 'adds 3 tests tests/fix.retry', 'adds 3 tests docs/a..b.md', 'adds 3 tests and/or', 'removes 2 lines in disable/', 'adds 3 tests disable/auth/']) {
     const { r, w } = await err(t, { verdict: 'PASS', descriptionClaims: [{ ...count, claim }] });
     assert.equal(r.report.ingested.at(-1).error, undefined, claim);
     assert.equal(w.team.s.verdicts['77:' + H(5)].verdict, 'CHANGES', claim);
