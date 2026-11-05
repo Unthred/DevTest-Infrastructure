@@ -101,7 +101,7 @@ function validateDashboard(d) {
   if (d === undefined) return;
   if (!d || typeof d !== 'object' || Array.isArray(d) || Object.keys(d).some(k => k !== 'allowed_origins')) throw new SupervisorError('invalid team config: dashboard');
   const a = d.allowed_origins;
-  if (!Array.isArray(a) || a.length > 10 || !a.every(o => typeof o === 'string' && ORIGIN_PATTERN.test(o))) throw new SupervisorError('invalid team config: dashboard.allowed_origins must be a list of exact origins such as https://host (no path)');
+  if (!Array.isArray(a) || a.length > 10 || !a.every(o => typeof o === 'string' && ORIGIN_PATTERN.test(o) && !/^http:\/\/[^/]*:80$|^https:\/\/[^/]*:443$/.test(o))) throw new SupervisorError('invalid team config: dashboard.allowed_origins must be a list of exact origins such as https://host (no path, no default port, no IPv6 literal)');
 }
 >>>>>>> fb8ab92 (Dashboard writes: accept configured public origins and show a readable refusal page (issue #556))
 function validateSelfUpgrade(u) {
