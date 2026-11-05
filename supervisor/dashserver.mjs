@@ -198,8 +198,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // secret proof, and a short cooldown. The decision is recorded only; the next tick acts on an approval. This route is the only way to approve.
   const inbox = async (req, res, send) => {
     if (!source().inbox?.dir) return send(404, 'text/plain; charset=utf-8', 'the inbox is not configured');
-    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
-    if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+    if (req.headers.host !== allowedHost) return refuseHost(req, send);
+    if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));

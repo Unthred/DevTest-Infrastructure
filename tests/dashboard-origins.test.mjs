@@ -8,6 +8,7 @@ import path from 'node:path';
 import { handler } from '../supervisor/dashserver.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
 import { validateTeamConfig, applyLocalOverride } from '../supervisor/team.mjs';
+import * as inbox from '../supervisor/inbox.mjs';
 
 const NOW = Date.UTC(2026, 10, 3, 12, 0, 0), PUBLIC = 'https://agents.example.test';
 const base = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
@@ -84,4 +85,52 @@ test('a refused write is logged, and a wrong Host gets a readable page with the 
   assert.equal(r.status, 421); assert.match(r.body, /Back to the dashboard/); assert.match(r.body, /evil\.example/);
   assert.ok(lines.some(l => l.includes('write refused') && l.includes('"https://other.example.test"')));
   assert.ok(lines.some(l => l.includes('unexpected host') && l.includes('host="evil.example"')));
+});
+
+// The inbox write (issue #124) is a fourth dashboard write; it takes the same origin rule, and still needs the host, the proof and the cooldown (D-029).
+async function serveInbox(t, dashboard = { allowed_origins: [PUBLIC] }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inbox556-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'items')); fs.mkdirSync(path.join(dir, 'status'));
+  const id = 'ab'.repeat(16); fs.writeFileSync(path.join(dir, 'items', `${id}.json`), JSON.stringify({ kind: 'prompt', title: 'Tidy the docs index', prompt: 'Fix the broken link in docs/README.md.' })); inbox.scan(dir, NOW);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inboxroot556-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d));
+  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const port = server.address().port;
+  server.on('request', handler({ root, config: { ...base, inbox: { dir }, ...(dashboard ? { dashboard } : {}) }, host: '127.0.0.1', port, now: () => NOW }));
+  const post = ({ origin, proof = writeToken(root), host = `127.0.0.1:${port}`, decision = 'approve' }) => new Promise((resolve, reject) => {
+    const r = http.request({ host: '127.0.0.1', port, path: '/inbox', method: 'POST', headers: { host, 'content-type': 'application/x-www-form-urlencoded', ...(origin === undefined ? {} : { origin }) } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); });
+    r.on('error', reject); r.end(`id=${id}&decision=${decision}&proof=${proof}`);
+  });
+  return { dir, id, port, post, lan: `http://127.0.0.1:${port}` };
+}
+
+test('/inbox: Approve works from the listed public origin and from the LAN origin', async t => {
+  for (const which of ['public', 'lan']) {
+    const s = await serveInbox(t), r = await s.post({ origin: which === 'public' ? PUBLIC : s.lan });
+    assert.equal(r.status, 303, which); assert.equal(inbox.statusOf(s.dir, s.id).state, 'approved', which);
+  }
+});
+
+test('/inbox: an unlisted, lookalike, "null" or missing Origin is refused with a readable page and decides nothing', async t => {
+  const s = await serveInbox(t);
+  for (const origin of ['https://evil.example', `${PUBLIC}.evil.example`, `${PUBLIC}/`, 'http://agents.example.test', 'null', undefined]) {
+    const r = await s.post({ origin });
+    assert.equal(r.status, 403, String(origin)); assert.match(r.headers['content-type'], /text\/html/); assert.match(r.body, /Back to the dashboard/);
+  }
+  assert.equal(inbox.statusOf(s.dir, s.id).state, 'pending');
+  const none = await serveInbox(t, null);
+  assert.equal((await none.post({ origin: PUBLIC })).status, 403, 'no origin configured: the public origin is refused');
+  assert.equal(inbox.statusOf(none.dir, none.id).state, 'pending');
+});
+
+test('/inbox: a listed origin still needs the access proof and the expected Host, and the cooldown applies', async t => {
+  const s = await serveInbox(t);
+  assert.equal((await s.post({ origin: PUBLIC, proof: 'f'.repeat(64) })).status, 403);
+  assert.equal((await s.post({ origin: PUBLIC, proof: '' })).status, 403);
+  assert.equal((await s.post({ origin: PUBLIC, host: 'evil.example' })).status, 421);
+  assert.equal(inbox.statusOf(s.dir, s.id).state, 'pending');
+  assert.equal((await s.post({ origin: PUBLIC })).status, 303);
+  const again = await s.post({ origin: PUBLIC, decision: 'reject' });
+  assert.equal(again.status, 303); assert.match(again.headers.location, /inbox-cooldown/);
+  assert.equal(inbox.statusOf(s.dir, s.id).state, 'approved', 'the second click inside the cooldown changed nothing');
 });
