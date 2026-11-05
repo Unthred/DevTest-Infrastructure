@@ -93,7 +93,7 @@ try {
     { cards: view.supervisor.cards.map(c => `${c.id}:${c.severity}`) });
   const pkg = lock.packages['playwright-core'];
   const restore = await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] }, null);
-  check('restore', restore.result.subjectExit === 0);
+  check('restore', restore.result.subjectExit === 0, restore.result.subjectExit === 0 ? {} : { hint: `browser/vendor/playwright-core-${pkg.version}.tgz may be missing (git-ignored): run \`node browser/prepare-cache.mjs\` first` });
   for (const [name, p] of [['supervisor', '/supervisor/'], ['ticks', '/supervisor/ticks/'], ['upgrades', '/supervisor/upgrades/'], ['overview', '/']]) {
     const r = await run(name, { phase: 'test', command: ['node', '/src/browser/responsive.mjs', '--target', 'fixture', '--path', p, '--name', name, '--profiles', 'standard'] }, site);
     let summary = null; try { summary = JSON.parse(fs.readFileSync(path.join(evidence, `${name}.summary.json`), 'utf8')); } catch { /* reported below */ }
