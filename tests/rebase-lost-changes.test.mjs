@@ -188,6 +188,7 @@ function sameLineRepo(t, feat, main) {
 for (const [name, feat, main] of [
   ['a negated guard', '  if (!a) run(x);', '  if (a) run(x, y);'],
   ['reordered arguments', '  sub(x, ready);', '  sub(ready, x);'],
+  ['a dropped early return', '  if (!ready) return x;', '  if (ready) return x;'],
 ]) {
   test(`taking main's line drops the PR's change and is refused: ${name}`, t => {
     const r = sameLineRepo(t, feat, main);
@@ -199,3 +200,9 @@ for (const [name, feat, main] of [
     assert.ok(c.lostChanges.some(x => x.text === feat.trim()), JSON.stringify(c.lostChanges));
   });
 }
+
+test('rebase-prepare prints oldHead so the agent can pass it to rebase-push', t => {
+  const r = listRepo(t);
+  const out = execFileSync(process.execPath, [cliPath, 'rebase-prepare', '--worktree', r.agent, '--branch', 'feat'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.match(JSON.parse(out).oldHead, /^[0-9a-f]{40}$/);
+});
