@@ -145,3 +145,22 @@ test('a limited job dies with its runner when the runner is SIGKILLed (no orphan
   for (let i = 0; i < 60 && alive(job); i++) await new Promise(r => setTimeout(r, 100));
   assert.equal(alive(job), false, 'the watchdog killed the orphaned job');
 });
+
+test('a limited job also dies when its SIGKILLed runner stays a zombie (parent does not reap)', async t => {
+  const d = tmp(t), pidFile = path.join(d, 'job.pid'), runnerFile = path.join(d, 'runner.pid');
+  const jobSrc = `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`;
+  const drv = path.join(d, 'drv.mjs');
+  fs.writeFileSync(drv, `import { runLimited } from ${JSON.stringify(path.resolve('supervisor/resources.mjs'))};
+    runLimited([process.execPath,'-e',${JSON.stringify(jobSrc)}],{env:process.env,limits:{memory_mb:4096,cpus:1},klass:'small',id:'z'});`);
+  const { spawn } = await import('node:child_process');
+  // A shell that execs sleep never reaps its child, so the killed runner stays a zombie.
+  const parent = spawn('sh', ['-c', `${JSON.stringify(process.execPath)} ${JSON.stringify(drv)} & echo $! > ${JSON.stringify(runnerFile)}; exec sleep 60`], { stdio: 'ignore' });
+  t.after(() => { try { process.kill(parent.pid, 'SIGKILL'); } catch { /* gone */ } });
+  for (let i = 0; i < 100 && !(fs.existsSync(pidFile) && fs.existsSync(runnerFile)); i++) await new Promise(r => setTimeout(r, 50));
+  const job = Number(fs.readFileSync(pidFile, 'utf8')), runner = Number(fs.readFileSync(runnerFile, 'utf8'));
+  assert.ok(alive(job));
+  process.kill(runner, 'SIGKILL');
+  for (let i = 0; i < 60 && alive(job); i++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(alive(job), false, 'the watchdog killed the job although the runner is only a zombie');
+  assert.ok(fs.readFileSync(`/proc/${runner}/stat`, 'utf8').includes(') Z'), 'the runner really was a zombie');
+});

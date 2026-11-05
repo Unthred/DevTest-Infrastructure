@@ -103,10 +103,13 @@ export function runLimited(cmd, { env, limits, klass, id, intervalMs = 250, rss 
     // The limited job leaves our process group, so a watchdog outside it kills the job's group if this runner disappears (SIGKILL, OOM kill).
     let dog = null;
     if (limits && !spawnFn && child.pid) {
-      const src = 'const [r,g]=process.argv.slice(1).map(Number);setInterval(()=>{try{process.kill(r,0)}catch{try{process.kill(-g,"SIGKILL")}catch{}process.exit(0)}try{process.kill(-g,0)}catch{process.exit(0)}},300);';
+      // A zombie runner (killed, not yet reaped by its parent) still answers signal 0, so state Z in /proc counts as gone too.
+      // Not covered: the runner dying in the instant between spawning the job and spawning this watchdog.
+      const src = 'const fs=require("fs");const [r,g]=process.argv.slice(1).map(Number);const zombie=()=>{try{const s=fs.readFileSync("/proc/"+r+"/stat","utf8");return s[s.lastIndexOf(")")+2]==="Z"}catch{return false}};setInterval(()=>{try{process.kill(r,0);if(zombie())throw 0}catch{try{process.kill(-g,"SIGKILL")}catch{}process.exit(0)}try{process.kill(-g,0)}catch{process.exit(0)}},300);';
       dog = spawn(process.execPath, ['-e', src, String(process.pid), String(child.pid)], { detached: true, stdio: 'ignore' }); dog.unref(); dog.on('error', () => {});
     }
-    const sigs = ['SIGINT', 'SIGTERM', 'SIGHUP']; for (const s of sigs) process.on(s, forward);
+    // SIGHUP is forwarded only on the limited path; without limits the runner behaves as before (SIGHUP ends it by default).
+    const sigs = limits ? ['SIGINT', 'SIGTERM', 'SIGHUP'] : ['SIGINT', 'SIGTERM']; for (const s of sigs) process.on(s, forward);
     const done = code => { clearInterval(timer); if (dog) { try { dog.kill('SIGKILL'); } catch {} } for (const s of sigs) process.off(s, forward); if (limits) killGroup(child.pid); resolve({ code, kill }); };   // nothing left behind
     if (limits) timer = setInterval(() => {
       const used = rss(child.pid);
