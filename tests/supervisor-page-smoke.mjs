@@ -65,6 +65,7 @@ async function fixtureSite(dir) {
       const ui = path.join(sourceProject, 'supervisor', 'dashui');
       fs.mkdirSync(path.join(dir, 'static'));
       for (const [file] of Object.values(STATIC)) fs.copyFileSync(path.join(ui, file), path.join(dir, 'static', file)); // built from the server's /static/ routes, so a new asset cannot be forgotten (issue #447)
+      fs.mkdirSync(path.join(dir, 'api')); fs.writeFileSync(path.join(dir, 'api', 'next'), '<span class="muted">none</span>'); // the overdue fixture makes app.js re-read /api/next (issue #481); without it the static site answers 404 and every page logs a problem
       for (const d of fs.readdirSync(dir, { recursive: true })) { const f = path.join(dir, d); fs.chmodSync(f, fs.statSync(f).isDirectory() ? 0o755 : 0o644); }
       fs.chmodSync(dir, 0o755);
       return view;
