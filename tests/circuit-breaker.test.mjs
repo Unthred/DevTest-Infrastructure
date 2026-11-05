@@ -67,7 +67,7 @@ test('cost trip: about $5 of waste of one cause inside the window, with fewer th
 test('higher limit: waste across causes reaches $15 and every new job stops, merges continue', () => {
   const cause = i => blocked({ incompleteReason: { cause: 'cause' + i }, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 4 } });
   const s = stateWith(cause(1), cause(2), cause(3));
-  assert.deepEqual(B.evaluate(s, L, NOW).map(t => t.trippedBy), ['cost', 'cost', 'cost']);   // $12 of any kind trips each contributing cause, not yet the higher limit
+  assert.deepEqual(B.evaluate(s, L, NOW).map(t => t.trippedBy), ['any-kind-cost', 'any-kind-cost', 'any-kind-cost']);   // $12 of any kind trips each contributing cause, not yet the higher limit
   assert.equal(s.global, null);
   B.record(s, waste(cause(4)), NOW);
   assert.ok(B.evaluate(s, L, NOW).map(t => t.scope).includes('@global'));
@@ -115,9 +115,12 @@ test('resume all clears the global halt too; only a terminal can resume', () => 
   assert.equal(s.global, null);
   B.evaluate(s, L, NOW + 2);
   assert.equal(s.global, null);
-  assert.equal(B.resumeAllowed({ stdin: { isTTY: false }, stdout: { isTTY: true } }), false);
-  assert.equal(B.resumeAllowed({ stdin: { isTTY: true }, stdout: { isTTY: false } }), false);
-  assert.equal(B.resumeAllowed({ stdin: { isTTY: true }, stdout: { isTTY: true } }), true);
+  // Inject env/pid/readProc so the result does not depend on whether the suite itself runs under a supervised job.
+  const clean = { env: {}, pid: 1, readProc: () => { throw new Error('no proc'); } };
+  assert.equal(B.resumeAllowed({ ...clean, stdin: { isTTY: false }, stdout: { isTTY: true } }), false);
+  assert.equal(B.resumeAllowed({ ...clean, stdin: { isTTY: true }, stdout: { isTTY: false } }), false);
+  assert.equal(B.resumeAllowed({ ...clean, stdin: { isTTY: true }, stdout: { isTTY: true } }), true);
+  assert.equal(B.resumeAllowed({ ...clean, env: { [B.JOB_MARKER]: '1' }, stdin: { isTTY: true }, stdout: { isTTY: true } }), false, 'a supervised job cannot resume');
 });
 
 test('config: defaults, validation and a team.local.json override', () => {
@@ -269,7 +272,11 @@ test('the cause is the stop reason, not the session-resume decision', () => {
 test('a provider usage-limit stop is not waste even when a session decision is recorded', () => {
   assert.equal(waste(blocked({ lastEvent: 'usage_limit', incompleteReason: undefined, sessions: { lastDecision: 'new_job' } })), null);
   assert.equal(waste(blocked({ lastEvent: 'retry_exhausted', incompleteReason: undefined, usageLimitHits: 3 })), null);
-  assert.equal(waste(blocked({ lastEvent: 'retry_exhausted', incompleteReason: { cause: 'postcondition_not_met' }, usageLimitHits: 3 })), null);
+  assert.equal(waste(blocked({ lastEvent: 'retry_exhausted', incompleteReason: { cause: 'retry_exhausted' }, usageLimitHits: 3 })), null);
+  // an unrelated specific cause after a usage-limit hit is real waste, not hidden by the exemption
+  assert.equal(waste(blocked({ lastEvent: 'retry_exhausted', incompleteReason: { cause: 'postcondition_not_met' }, usageLimitHits: 1 })).cause, 'review:blocked:postcondition_not_met');
+  // retry_exhausted with no usage-limit hit is still waste
+  assert.ok(waste(blocked({ lastEvent: 'retry_exhausted', incompleteReason: undefined, usageLimitHits: 0 })));
 });
 
 test('resume is refused for a process under a supervised job, even with a terminal', () => {

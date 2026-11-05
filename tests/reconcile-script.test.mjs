@@ -144,13 +144,16 @@ test('issue #35 an unreadable CLI or non-executable node leaves a failing log li
 // ---- issue #40: the enable gate
 const verify = new URL('../tools/verify-reconcile-env.sh', import.meta.url).pathname;
 const installed = w => fs.existsSync(path.dirname(w.script)) || fs.readFileSync(path.join(w.plugin, 'schedule.json'), 'utf8') !== '{}';
+const PLAN = "echo '{\"actions\":[]}'";
+// Fails (bad) on the first dry-run tick of a run and gives a plan (good) on later ones; the call count is kept in <log>.n.
+const first = (log, bad, good) => `n=$(cat '${log}.n' 2>/dev/null || echo 0); echo $((n+1)) > '${log}.n'; if [ $n = 0 ]; then ${bad}; else ${good}; fi;;`;
 // A fake node that records how it was called and fails the named subcommand.
 const gateNode = (failOn, log) => [
   `[ "$1" = -e ] && exec '${process.execPath}' "$@"`,     // the gate's own plan check runs on real node
   `echo "$PWD|$HOME|$*|${'$'}{CALLER_MARK:-unset}" >> '${log}'`,
   'case "$2" in',
   'preflight) ' + (failOn === 'preflight' ? "echo '{\"ok\":false}'; exit 3;;" : "echo '{\"ok\":true}';;"),
-  'team) ' + ({ tick: 'echo boom >&2; exit 1;;', planbad: "echo '{\"actions\":[]}'; exit 1;;", stray: "echo '{\"x\":1}' >&2; echo '{\"skipped\":\"x\"}'; echo '\"actions\"' >&2;;", nested: "echo '{\"plan\":{\"actions\":[]}}';;", busy: "echo '{\"skipped\":\"another tick is running\",\"actions\":[]}';;", skip: "echo '{\"skipped\":\"another tick is running\"}';;", garbage: 'echo nope;;' }[failOn] || "echo '{\"actions\":[]}';;"),
+  'team) ' + ({ tick: 'echo boom >&2; exit 1;;', planbad: "echo '{\"actions\":[]}'; exit 1;;", stray: "echo '{\"x\":1}' >&2; echo '{\"skipped\":\"x\"}'; echo '\"actions\"' >&2;;", nested: "echo '{\"plan\":{\"actions\":[]}}';;", busy: "echo '{\"skipped\":\"another tick is running\",\"actions\":[]}';;", skip: "echo '{\"skipped\":\"another tick is running\"}';;", garbage: 'echo nope;;', flaky: first(log, 'echo boom >&2; exit 1', PLAN), flakyplan: first(log, 'echo nope', PLAN) }[failOn] || "echo '{\"actions\":[]}';;"),
   'esac'].join('\n');
 
 test('issue #40 the gate runs preflight and a dry-run tick under env -i, from a neutral directory, then installs', t => {
@@ -168,7 +171,7 @@ test('issue #40 the gate runs preflight and a dry-run tick under env -i, from a 
 for (const [failOn, why] of [['preflight', /preflight/], ['tick', /team tick --dry-run/], ['skip', /no plan returned/], ['garbage', /no plan returned/], ['planbad', /rc=1/], ['stray', /no plan returned/], ['nested', /no plan returned/], ['busy', /tick lock/]]) {
   test(`issue #40 the gate refuses to install when ${failOn} fails, and leaves no schedule behind`, t => {
     const w = cronWorld(t, { nodeBody: gateNode(failOn, os.devNull) });
-    const r = spawnSync('bash', [install], { env: { ...w.env, GATE_LOG: path.join(w.root, 'gate.log') }, encoding: 'utf8' });
+    const r = spawnSync('bash', [install], { env: { ...w.env, GATE_LOG: path.join(w.root, 'gate.log'), VERIFY_RETRY_DELAY: '0' }, encoding: 'utf8' });
     assert.equal(r.status, 2); assert.match(r.stderr, why); assert.match(r.stderr, /no schedule was installed/);
     assert.ok(!installed(w)); assert.equal(fs.readFileSync(path.join(w.plugin, 'customSchedule.cron'), 'utf8'), '# x\n');
   });
@@ -198,4 +201,37 @@ test('issue #40 real cli: preflight names a failing gh, an unreadable register a
   assert.match(out.checks.github, /^failed: gh pr list failed/); assert.match(out.checks.register, /^failed: cannot read docs\/DECISIONS\.md/);
   assert.match(out.checks.git, /^failed/);
   assert.match(out.checks['provider:claude'], /^failed/); assert.match(out.checks['provider:codex'], /^failed/);
+});
+
+test('issue #565 the gate accepts a plan when the checker exits without reading stdin (no SIGPIPE under pipefail)', t => {
+  const w = cronWorld(t, { nodeBody: ['[ "$1" = -e ] && exit 0', 'case "$2" in preflight) echo \'{"ok":true}\';; team) head -c 300000 /dev/zero | tr \'\\0\' x | sed \'s/^/{"actions":[],"pad":"/;s/$/"}/\';; esac'].join('\n') });
+  const node = path.join(w.bin, 'node'), cli = path.join(w.root, 'cli.mjs');
+  for (let i = 0; i < 5; i++) assert.equal(spawnSync('bash', [verify, '/usr/bin:/bin', w.root, node, cli], { env: process.env }).status, 0);
+});
+
+// ---- issue #581: the plan check keeps its stderr in the failure text and is retried once
+test('issue #581 a refused plan names the reason from the plan check, not just "no plan returned"', t => {
+  for (const [failOn, reason] of [['skip', /plan check: skipped: another tick is running/], ['nested', /plan check: no actions array/], ['garbage', /plan check: not JSON/]]) {
+    const w = cronWorld(t, { nodeBody: gateNode(failOn, os.devNull) });
+    const r = spawnSync('bash', [install], { env: { ...w.env, GATE_LOG: path.join(w.root, 'gate.log'), VERIFY_RETRY_DELAY: '0' }, encoding: 'utf8' });
+    assert.equal(r.status, 2, failOn); assert.match(r.stderr, reason, failOn);
+  }
+});
+for (const failOn of ['flaky', 'flakyplan']) {
+  test(`issue #581 the gate retries the dry-run tick once: a first ${failOn} failure passes, a persistent one still fails`, t => {
+    const gl = path.join(tmpDir('gatelog-'), 'gate.log');
+    const w = cronWorld(t, { nodeBody: gateNode(failOn, gl) });
+    const r = spawnSync('bash', [install], { env: { ...w.env, GATE_LOG: gl, VERIFY_RETRY_DELAY: '0' }, encoding: 'utf8', cwd: os.tmpdir() });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(fs.readFileSync(gl + '.n', 'utf8').trim(), '2', 'exactly one retry');
+    assert.ok(installed(w));
+  });
+}
+test('issue #581 a tick that always fails is attempted exactly twice', t => {
+  const gl = path.join(tmpDir('gatelog-'), 'gate.log');
+  const body = gateNode('tick', gl).replace('echo boom >&2; exit 1;;', `echo x >> '${gl}.c'; echo boom >&2; exit 1;;`);
+  const w = cronWorld(t, { nodeBody: body });
+  const r = spawnSync('bash', [install], { env: { ...w.env, GATE_LOG: gl, VERIFY_RETRY_DELAY: '0' }, encoding: 'utf8' });
+  assert.equal(r.status, 2); assert.match(r.stderr, /boom/);
+  assert.equal(fs.readFileSync(gl + '.c', 'utf8').trim().split('\n').length, 2);
 });

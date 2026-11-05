@@ -50,3 +50,20 @@ export function redactLong(value, max, marker = '') {
 export const redactAddresses = s => String(s ?? '')
   .replace(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d]|\.\d)/g, '[ip]')
   .replace(/(?<![\w:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![\w:])|(?<![\w:])(?:[0-9a-f]{1,4}:){1,6}(?::[0-9a-f]{1,4}){1,6}(?![\w:])|(?<![\w:]):(?::[0-9a-f]{1,4}){1,7}(?![\w:])|(?<![\w:])(?:[0-9a-f]{1,4}:){1,7}:(?![\w:])/gi, '[ip]');
+// Issue #584: topology (LAN addresses, bare host:port, local domains) must not reach the public repository. This is the rule for every body
+// posted to GitHub. refusalText (supervisor/upgrade.mjs) keeps its own, stricter patterns. Unlike refusal text this keeps URLs and file paths, which findings legitimately cite.
+const HOST_PORT_SKIP = /\.(?:mjs|cjs|js|json|sh|md|ya?ml|ts|txt|log|html|css|py|cs|csproj|sln|toml|lock)$/i;
+const escRe = x => x.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&');
+export const LOCAL_SUFFIXES = 'lan|local|internal|home|intranet|corp|private|localdomain|arpa';
+export const localDomainsFromEnv = () => (process.env.DEVTEST_LOCAL_DOMAINS || '').split(',');
+function topologyPart(text, localDomains) {
+  let out = redactAddresses(text).replace(new RegExp(`\\b(?:[a-z0-9-]+\\.)+(?:${LOCAL_SUFFIXES})\\b(?::\\d+)?`, 'gi'), '[host]');
+  const doms = localDomains.map(d => String(d).trim().replace(/^\.+/, '')).filter(d => /^[a-z0-9.-]+$/i.test(d));
+  if (doms.length) out = out.replace(new RegExp(`\\b(?:[a-z0-9-]+\\.)*(?:${doms.map(escRe).join('|')})\\b(?::\\d+)?`, 'gi'), '[host]');
+  // A bare host:port: the host has a letter (so 12:30 and 3:45 stay) and is not a file name (build.mjs:42).
+  return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => { const h = m.replace(/:\d+$/, ''); return !/[a-z]/i.test(h) || HOST_PORT_SKIP.test(h) ? m : '[host]'; });
+}
+// Only marker-shaped HTML comments (the dispatcher's idempotency markers) pass through untouched so a marker lookup still matches.
+const MARKER = /^<!--\s*(?:devtest-|foreman-)/;
+export const redactTopology = (value, localDomains = localDomainsFromEnv()) =>
+  String(value ?? '').split(/(<!--[\s\S]*?-->)/).map((p, i) => i % 2 && MARKER.test(p) ? p : topologyPart(p, localDomains)).join('');

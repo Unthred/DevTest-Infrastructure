@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS } from '../supervisor/upgrade.mjs';
+import { SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS, PRECHECK_RETRY_MS } from '../supervisor/upgrade.mjs';
 import { DRAIN_DEFAULT_MINUTES, applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -496,8 +496,8 @@ test('issue #69/#101: an environmental pre-check failure is retried with backoff
   w.state.now += 1; w.state.pre = { ok: true };
   assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.alerts().filter(a => /pre-check failed/.test(a)).length, 1);
   const g = world(t, { pre: { ok: false, reason: 'tests: 1 failed' } });
-  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += 10 * ENV_RETRY_MAX_MS; g.state.pre = { ok: true };
-  assert.equal(await g.up.step(), 'precheck-failed'); assert.equal(g.log.filter(x => x[0] === 'pre').length, 1);
+  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS - 1; g.state.pre = { ok: true };
+  assert.equal(await g.up.step(), 'precheck-failed'); assert.equal(g.log.filter(x => x[0] === 'pre').length, 1);   // latched inside the delay (#581 covers the delayed retry)
 });
 test('hold (issue #134): busy marks the hold, idle installs with quiet idle and clears it, a forced install records forced-after-wait', async t => {
   const w = world(t, { active: 1 });
@@ -529,7 +529,7 @@ test('a latched failed pre-check never holds dispatch, even with active jobs, an
   assert.equal(await w.up.step(), 'precheck-failed');
   w.state.active = 1; w.state.now += 5 * 60 * 1000;
   assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
-  w.state.now += 31 * 60 * 1000;
+  w.state.now += 20 * 60 * 1000;                                 // inside PRECHECK_RETRY_MS
   assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
   w.state.target = H('9'); w.state.pre = { ok: true };
   assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
@@ -697,8 +697,8 @@ test('issue #412: pre-check tests fail twice: latched as before, names and excer
   assert.equal(w.records()[0].reason, 'tests failed: alpha works; beta works');
   assert.deepEqual(w.records()[0].tests, ['alpha works', 'beta works']); assert.match(w.records()[0].excerpt, /error: boom/); assert.equal(w.records()[0].retried, true);
   assert.match(w.alerts()[0], /error: boom/);
-  w.state.now += 100 * ENV_RETRY_MAX_MS;
-  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(runs, 2); assert.equal(w.alerts().length, 1);   // latched: no third run
+  w.state.now += PRECHECK_RETRY_MS - 1;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(runs, 2); assert.equal(w.alerts().length, 1);   // latched inside the delay: no third run
 });
 
 test('issue #412: tests pass the first time: one run only, nothing recorded as flaky', async t => {
@@ -832,4 +832,17 @@ test('issue #489: the no-install path list decides per range; every other path n
   assert.equal(rangeNeedsInstall([]), false);
   const w = world(t, { files: ['tests/a.test.mjs', 'bin/ai-supervisor'] });
   assert.notEqual(await w.up.step(), 'no-supervisor-change', 'a range touching bin/ is not skipped');
+});
+
+test('issue #581: a commit refused by a failed pre-check is tried once more after PRECHECK_RETRY_MS without main moving, then stays latched', async t => {
+  const w = world(t, { pre: { ok: false, reason: 'tests: 2 failed' } });
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
+  w.state.now += PRECHECK_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1, 'inside the delay: no attempt');
+  w.state.now += 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2, 'after the delay: one more attempt');
+  w.state.now += 10 * ENV_RETRY_MAX_MS; w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2, 'the second failure latches until a newer main');
+  // positive: the delayed attempt that passes installs
+  const g = world(t, { pre: { ok: false, reason: 'tests: 2 failed' } });
+  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS; g.state.pre = { ok: true };
+  assert.equal(await g.up.step(), 'upgraded');
 });

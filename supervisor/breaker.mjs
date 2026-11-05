@@ -63,7 +63,8 @@ export function wasteOf({ id, entry, job, verdictRecorded = false, refusal = nul
   } else if (!(type === 'review' && verdictRecorded)) {
     // The cause is why the job stopped, never the session-resume decision (that is set on every attempt and says nothing about the stop).
     const why = job.incompleteReason?.cause || job.lastEvent || job.status;
-    const allowanceStop = NOT_WASTE.has(String(why)) || NOT_WASTE.has(String(job.lastEvent)) || (num(job.usageLimitHits) > 0 && (why === 'retry_exhausted' || job.lastEvent === 'retry_exhausted'));
+    const allowanceStop = NOT_WASTE.has(String(why)) || NOT_WASTE.has(String(job.lastEvent)) || (num(job.usageLimitHits) > 0 && why === 'retry_exhausted');
+    // retry_exhausted after usage-limit waits is the allowance, but only when no other specific stop reason is recorded: a job that hit the limit once and later failed for an unrelated cause is real waste.
     if (!allowanceStop) cause = `${job.status}:${String(why).slice(0, 48)}`;
   }
   if (!cause) return null;
@@ -113,7 +114,7 @@ export function evaluate(s, limits, now) {
     const held = s.halts[cause];
     if (held) { s.halts[cause] = { ...held, ...f }; continue; }
     if (!byCount && !byCost && !byTotal) continue;
-    s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : 'cost', ...f };
+    s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : byCost ? 'cost' : 'any-kind-cost', ...f };
     trips.push({ scope: cause, trippedBy: s.halts[cause].trippedBy });
   }
   const globalList = live.filter(w => w.at > (s.clearedAt['@global'] || 0));
