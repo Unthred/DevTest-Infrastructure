@@ -241,5 +241,7 @@ export function readVersion(root, { running = codeVersion(), now = Date.now() } 
   const run = SHA40.test(running || '') ? running : null;
   // Issue #331: when the upgrade is rate-limited the header says when the next try is.
   let nextTryAt = null; const l = upgradeState?.lastUpgradeAt; if (Number.isFinite(l) && l + MIN_UPGRADE_INTERVAL_MS > now) nextTryAt = l + MIN_UPGRADE_INTERVAL_MS;
-  return { installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, nextTryAt: installed === main ? null : nextTryAt, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
+  // Issue #695: when merged work is installed next, or why it waits; written by the upgrader, shown as "Next install". Merged is not installed.
+  let nextInstall = null; const ni = upgradeState?.nextInstall; if (ni && installed !== main && typeof ni.why === 'string') nextInstall = { at: Number.isFinite(ni.at) ? ni.at : null, why: ni.why.slice(0, 200), state: String(ni.state || '').slice(0, 12) };
+  return { nextInstall, installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, nextTryAt: installed === main ? null : nextTryAt, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
 }

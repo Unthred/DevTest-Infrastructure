@@ -11,7 +11,7 @@ import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
-import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES } from './team.mjs';
+import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { redact, redactLong, redactAddresses } from './redact.mjs';
 
@@ -26,6 +26,7 @@ export const refusalText = (r, localDomains = (process.env.DEVTEST_LOCAL_DOMAINS
   if (doms.length) out = out.replace(new RegExp('\\b(?:[a-z0-9-]+\\.)*(?:' + doms.map(escRe).join('|') + ')\\b(?::\\d+)?(?:\\/\\S*)?', 'gi'), '[host]');
   return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => HOST_PORT_SKIP.test(m.replace(/:\d+$/, '')) ? m : '[host]').replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
 };
+export const MIN_INSTALL_GAP_MS = MIN_INSTALL_GAP_DEFAULT_MINUTES * 60 * 1000;   // issue #695: the shipped batching window
 export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
 // A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
@@ -193,8 +194,8 @@ const defaultStart = (wrapper, args) => dashboardSpawn(wrapper, args);
 export const holdOf = (result, s) => (result === 'busy' || result === 'upgraded' ? { to: s?.holding?.to || s?.pending?.to || null } : null);
 
 export class SelfUpgrade {
-  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS }) {
-    this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs;   // issue #136: the configurable drain bound
+  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS }) {
+    this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs; this.minGapMs = minGapMs;   // issue #136: the configurable drain bound
     this.dir = path.join(root, 'team');
     this.stateFile = path.join(this.dir, 'self-upgrade.json');
     this.latchFile = path.join(this.dir, 'self-upgrade.latch');       // the homeowner clears the latch by removing this file
@@ -251,6 +252,15 @@ export class SelfUpgrade {
     try { await this.d.alert(text); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
   }
 
+  // Issue #695: when the batching window since the last finished install ends (null = no window: first install, or min_install_gap_minutes 0).
+  // It survives a restart because lastFinishedAt is in the state file; lastUpgradeAt covers state written before the field existed.
+  batchDueAt() {
+    const last = this.s.lastFinishedAt ?? this.s.lastUpgradeAt;
+    return this.minGapMs > 0 && Number.isFinite(last) ? last + this.minGapMs : null;
+  }
+  // Issue #695: the homeowner asks for the next install to skip the batching window (CLI: self-upgrade install-now).
+  requestInstallNow() { this.s.urgent = { reason: 'homeowner request', at: this.clock.now() }; this.save(); }
+
   // Returns a short result string for the tick report. `holding` (read by `team status` and the dashboard) is set only while the
   // result is 'busy': an upgrade is pending and eligible, and new jobs are held back (issue #134).
   async step() {
@@ -258,6 +268,7 @@ export class SelfUpgrade {
     if (dp && !this.s.pending) await this.restartDashboard({ from: dp.from, to: dp.to }, dp.rollingBack === true);
     const result = await this.stepInner();
     if (result !== 'busy' && this.s.holding) { delete this.s.holding; this.save(); }
+    if (result !== 'busy' && result !== 'batched' && this.s.nextInstall) { delete this.s.nextInstall; this.save(); }
     return result;
   }
   async stepInner() {
@@ -319,12 +330,28 @@ export class SelfUpgrade {
     const latched = this.s.prechecked[target];
     const retryDue = typeof latched === 'number' && !this.s.precheckRetried?.[target] && now - latched >= PRECHECK_RETRY_MS;
     if (latched && !retryDue && !(latched.environmental && now - latched.at >= envBackoffMs(latched.attempts))) return 'precheck-failed';
-    // The wait belongs to one target: a newer main starts a fresh wait instead of inheriting the old start (review of PR #162).
-    if (this.s.waitingFor !== target || this.s.waitingSince == null) { this.s.waitingSince = now; this.s.waitingFor = target; }
+    // Batching (issue #695): merged work waits to be installed until the window since the last finished install has passed, so a stream
+    // of merges does not stop all work every few minutes. Nothing running and nothing planned installs straight away (it costs no work),
+    // and an urgent install (the previous one rolled back, or the homeowner asked) skips the wait. Within the window no hold applies.
+    const running = await this.d.activeJobs();
+    const dueAt = this.batchDueAt(), urgent = this.s.urgent || null;
+    if (!urgent && dueAt != null && now < dueAt) {
+      let planned = 0; if (running === 0) { try { planned = Number(await this.d.plannedWork?.()) || 0; } catch { planned = 0; } }
+      if (running > 0 || planned > 0) {
+        const why = `batched: installs about ${Math.max(1, Math.round((dueAt - now) / 60000))} min from now at the earliest (self_upgrade.min_install_gap_minutes ${Math.round(this.minGapMs / 60000)}), sooner if nothing is running or planned`;
+        this.s.nextInstall = { to: target, at: dueAt, why, state: 'batched' }; delete this.s.waitingSince; delete this.s.waitingFor; this.save();
+        return 'batched';
+      }
+    }
+    // The drain clock runs from the first tick of a continuous hold and a newer main during the hold does not restart it (issue #695: merges
+    // every few minutes must not extend a hold without bound); a hold that ended, or a target that failed a check, starts afresh (PR #162).
+    if (this.s.waitingSince == null || (this.s.waitingFor !== target && !this.s.holding)) { this.s.waitingSince = now; this.s.waitingFor = target; } else this.s.waitingFor = target;
     // Drain (issue #136): while jobs run and the bound is not reached, no new job starts; the install happens at the first job
     // boundary. At the bound the install goes ahead without waiting further; it replaces files only and never kills a running job.
-    const running = await this.d.activeJobs();
-    if (running > 0 && now - this.s.waitingSince < this.drainMaxMs) { this.s.holding = { to: target, since: this.s.waitingSince, jobs: running }; this.save(); return 'busy'; }
+    if (running > 0 && now - this.s.waitingSince < this.drainMaxMs) {
+      this.s.holding = { to: target, since: this.s.waitingSince, jobs: running };
+      this.s.nextInstall = { to: target, at: this.s.waitingSince + this.drainMaxMs, why: 'draining: installs when running jobs finish, at the latest at this time', state: 'draining' }; this.save(); return 'busy';
+    }
     const checks = { eligibility: 'ok', quiet: running > 0 ? 'forced-after-wait' : 'idle' };
     let pre = await this.d.preChecks(target);
     // Issue #412: a failed test run is repeated once in a fresh clean copy (each installer call takes its own) before the commit is
@@ -351,7 +378,7 @@ export class SelfUpgrade {
     checks.preChecks = flaky ? 'ok-after-retry' : 'ok';
     if (flaky) await this.noteFlaky(target, flaky, 'pre-check');
     // The rate-limit stamp is written before the upgrade, so a crash mid-upgrade cannot cause an immediate second attempt.
-    this.s.lastUpgradeAt = now; delete this.s.waitingSince; delete this.s.waitingFor; this.save();
+    this.s.lastUpgradeAt = now; delete this.s.waitingSince; delete this.s.waitingFor; delete this.s.urgent; delete this.s.nextInstall; this.save();
     let up = await this.d.upgrade(target);
     if (isTestFailure(up)) {   // the same single repeat for a failure at install time, before anything was swapped
       const first = up;
@@ -405,7 +432,7 @@ export class SelfUpgrade {
       return this.rollback(p.from, p.to, 'no live tick ran under the new version within an hour', p.prs, { ...p.checks, liveTick: 'missing' });
     }
     if (!ok) return this.rollback(p.from, p.to, `live tick failed: ${String(reason || 'error').slice(0, 160)}`, p.prs, { ...p.checks, liveTick: 'failed' });
-    delete this.s.pending; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();
+    delete this.s.pending; this.s.lastFinishedAt = now; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();
     this.record({ from: p.from, to: p.to, prs: p.prs, checks: { ...p.checks, liveTick: 'ok' }, result: 'verified' });
     await this.restartDashboard(p);
     return 'verified';
@@ -479,7 +506,7 @@ export class SelfUpgrade {
   async rollback(from, to, reason, prs, checks) {
     let result = { ok: false, reason: 'rollback not attempted' };
     try { result = await this.d.rollback(from, to); } catch (error) { result = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
-    delete this.s.pending;
+    delete this.s.pending; this.s.lastFinishedAt = this.clock.now(); this.s.urgent = { reason: 'the previous install rolled back', at: this.clock.now() };
     const note = result.ok ? reason : `${reason}; ROLLBACK FAILED (${result.reason}), manual repair needed`;
     this.noteInstall({ result: result.ok ? 'rolled_back' : 'rollback_failed', sha: to, reason: note.slice(0, 200) }); this.save();
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS, PRECHECK_RETRY_MS } from '../supervisor/upgrade.mjs';
+import { MIN_INSTALL_GAP_MS, SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS, PRECHECK_RETRY_MS } from '../supervisor/upgrade.mjs';
 import { DRAIN_DEFAULT_MINUTES, applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -535,15 +535,13 @@ test('a latched failed pre-check never holds dispatch, even with active jobs, an
   assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
 });
 
-test('review of PR #162: a newer main during a wait starts a fresh wait instead of inheriting the old start', async t => {
+test('issue #695 (was PR #162): a newer main during a continuous hold keeps the drain start, so merges cannot extend the hold without bound', async t => {
   const w = world(t, { active: 1 });
   assert.equal(await w.up.step(), 'busy');
   w.state.now += 29 * 60 * 1000; w.state.target = H('9');
   assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
-  w.state.now += 2 * 60 * 1000;                                  // 31 min after the first target, 2 after the newer one
-  assert.equal(await w.up.step(), 'busy');
-  w.state.now += 28 * 60 * 1000;                                 // 30 min after the newer target
-  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records()[0].checks.quiet, 'forced-after-wait');
+  w.state.now += 60 * 1000;                                      // 30 min after the first drain start: the bound is reached
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records()[0].checks.quiet, 'forced-after-wait'); assert.equal(w.records()[0].to, H('9'));
   // the same target keeps its original start
   const s = world(t, { active: 1 });
   assert.equal(await s.up.step(), 'busy'); s.state.now += QUIET_MAX_WAIT_MS - 1;
@@ -651,7 +649,8 @@ test('issue #191: holding.since is the drain start the bound is measured from, a
   assert.equal(w.up.s.holding.since, start);
   w.state.now += 60000; assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.since, start);
   w.state.target = H('e'); w.state.now += 60000; assert.equal(await w.up.step(), 'busy');
-  assert.equal(w.up.s.holding.since, w.up.s.waitingSince); assert.equal(w.up.s.holding.since, w.state.now);
+  assert.equal(w.up.s.holding.since, start); assert.equal(w.up.s.holding.to, H('e'));   // issue #695: the same continuous hold
+  w.state.active = 0; assert.equal(await w.up.step(), 'upgraded');
 });
 
 test('issue #191: only busy and upgraded hold dispatch; rolled-back and every failure hand the team step hold=null', async t => {
@@ -870,4 +869,61 @@ test('issue #606: the install-time check failure gets one delayed retry, then st
   const g = world(t, { up: { ok: false, blocked: true, reason: 'x' } });
   assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS; g.state.up = { ok: true };
   assert.equal(await g.up.step(), 'upgraded');
+});
+
+// ---- issue #695: batch installs
+const MIN = 60000, GAP = 45 * MIN;
+const finished = async (w, steps = 1) => { for (let i = 0; i < steps; i++) { assert.equal(await w.up.step(), 'upgraded'); assert.equal(await w.up.verifyPending({ running: w.state.target, ok: true }), 'verified'); w.state.installed = w.state.target; w.state.target = H((5 + i).toString(16)); w.state.now += 3 * MIN; } };
+
+test('issue #695: within the window with jobs running, jobs start (no hold) and merged work waits; the window passing drains as before', async t => {
+  const w = world(t); await finished(w);
+  w.state.active = 1;
+  assert.equal(await w.up.step(), 'batched'); assert.equal(holdOf('batched', w.up.s), null); assert.equal(w.up.s.holding, undefined);
+  assert.equal(w.up.s.nextInstall.state, 'batched'); assert.equal(w.up.s.nextInstall.at, w.up.s.lastFinishedAt + GAP);
+  w.state.now += 20 * MIN; assert.equal(await w.up.step(), 'batched'); assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 1);
+  w.state.now = w.up.s.lastFinishedAt + GAP;                      // window over, jobs still running: drain as now
+  assert.equal(await w.up.step(), 'busy'); assert.deepEqual(holdOf('busy', w.up.s), { to: w.state.target }); assert.equal(w.up.s.nextInstall.state, 'draining');
+  w.state.now += QUIET_MAX_WAIT_MS;                               // the existing drain bound
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.nextInstall, undefined);
+});
+
+test('issue #695: nothing running or planned installs straight away inside the window; planned work or a running job waits', async t => {
+  const w = world(t); await finished(w);
+  assert.equal(await w.up.step(), 'upgraded');                    // idle, nothing planned: no wait
+  const p = world(t); await finished(p); p.deps.plannedWork = async () => 2;
+  assert.equal(await p.up.step(), 'batched');                     // idle but work is planned: it starts, the install waits
+  p.deps.plannedWork = async () => { throw new Error('unreadable'); };
+  assert.equal(await p.up.step(), 'upgraded');                    // an unreadable plan counts as none (the old behaviour)
+});
+
+test('issue #695: urgent installs skip the wait: a rollback, or the homeowner asking; the urgency is spent by the install', async t => {
+  const w = world(t); await finished(w);
+  w.state.active = 1; assert.equal(await w.up.step(), 'batched');
+  w.up.requestInstallNow();
+  assert.equal(await w.up.step(), 'busy');                        // skips the window, still drains running jobs
+  w.state.active = 0; assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.urgent, undefined);
+  // rolled back: after the latch is cleared the next install is not batched
+  const b = world(t); await finished(b);
+  b.state.dry = { ok: true }; assert.equal(await b.up.step(), 'upgraded');
+  assert.equal(await b.up.verifyPending({ running: b.state.target, ok: false, reason: 'boom' }), 'rolled-back');
+  assert.equal(b.up.s.urgent.reason, 'the previous install rolled back');
+  b.up.clearLatch(); b.state.active = 1; b.state.now += 4 * MIN; b.state.target = H('7');
+  assert.equal(await b.up.step(), 'busy');                        // inside the window, yet not batched
+});
+
+test('issue #695: the window survives a restart, and a gap of 0 disables batching', async t => {
+  const w = world(t); await finished(w); w.state.active = 1;
+  const again = w.make();                                         // a restarted process reads the same state file
+  assert.equal(await again.step(), 'batched'); assert.equal(again.s.lastFinishedAt, w.up.s.lastFinishedAt);
+  const off = w.make(); off.minGapMs = 0; assert.equal(await off.step(), 'busy');
+  const legacy = w.make(); delete legacy.s.lastFinishedAt;        // state from before this field: the install start stands in
+  assert.equal(await legacy.step(), 'batched');
+});
+
+test('issue #695: self_upgrade.min_install_gap_minutes is validated (0-1440 integers) and defaults to 45', async t => {
+  assert.equal(MIN_INSTALL_GAP_MS, 45 * MIN); assert.equal(world(t).up.minGapMs, 45 * MIN);
+  const shipped = JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
+  assert.equal(validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: { min_install_gap_minutes: 90 } })).self_upgrade.min_install_gap_minutes, 90);
+  assert.equal(validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: { min_install_gap_minutes: 0 } })).self_upgrade.min_install_gap_minutes, 0);
+  for (const bad of [-1, 1441, 1.5, '45', null]) assert.throws(() => validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: { min_install_gap_minutes: bad } })), /min_install_gap_minutes/, String(bad));
 });

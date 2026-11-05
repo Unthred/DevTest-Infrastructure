@@ -85,11 +85,14 @@ export function validateTeamConfig(input) {
 
 // Issue #136: how long a pending supervisor install drains running jobs (no new job starts) before it goes ahead.
 export const DRAIN_DEFAULT_MINUTES = 30;
+// Batching (issue #695): a new install begins draining only this long after the last install finished (0 = no wait), unless nothing is running or planned, or the install is urgent.
+export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 45;
 function validateSelfUpgrade(u) {
   if (u === undefined) return;
-  if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => !['drain_max_minutes', 'public_dashboard_url'].includes(k))) throw new SupervisorError('invalid team config: self_upgrade');
+  if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => !['drain_max_minutes', 'min_install_gap_minutes', 'public_dashboard_url'].includes(k))) throw new SupervisorError('invalid team config: self_upgrade');
   if ('public_dashboard_url' in u && !(typeof u.public_dashboard_url === 'string' && /^https?:\/\/[^\s]+$/.test(u.public_dashboard_url))) throw new SupervisorError('invalid team config: self_upgrade.public_dashboard_url');
   if ('drain_max_minutes' in u && !(Number.isSafeInteger(u.drain_max_minutes) && u.drain_max_minutes >= 1 && u.drain_max_minutes <= 720)) throw new SupervisorError('invalid team config: self_upgrade.drain_max_minutes');
+  if ('min_install_gap_minutes' in u && !(Number.isSafeInteger(u.min_install_gap_minutes) && u.min_install_gap_minutes >= 0 && u.min_install_gap_minutes <= 1440)) throw new SupervisorError('invalid team config: self_upgrade.min_install_gap_minutes');
 }
 
 // Automatic unblocks (issue #163) are budgeted: per PR (or issue) and per UTC day. A limit is only ever changed by the homeowner.

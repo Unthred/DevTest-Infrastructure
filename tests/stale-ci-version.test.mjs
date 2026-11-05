@@ -159,3 +159,19 @@ test('stuck-check attention items age from first sighting through buildView stat
   assert.equal(stuckChecks(pr.statusCheckRollup, NOW + STUCK_CHECK_MS + 1, stuckSeenFor(pr)).length, 1, 'same head keeps its clock');
   assert.equal(stuckChecks(pr.statusCheckRollup, NOW + STUCK_CHECK_MS + 2, stuckSeenFor({ ...pr, headRefOid: 'e'.repeat(40) })).length, 0, 'a new head restarts it');
 });
+
+test('issue #695: the version pill and readVersion say "Next install", and merged is not installed', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rv3-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'team')); fs.mkdirSync(path.join(dir, 'versions', H(1)), { recursive: true }); fs.symlinkSync(`versions/${H(1)}`, path.join(dir, 'current'));
+  const at = Date.parse('2026-11-05T22:00:00Z');
+  fs.writeFileSync(path.join(dir, 'team', 'self-upgrade.json'), JSON.stringify({ main: { sha: H(2), from: H(1), behind: 2 }, nextInstall: { to: H(2), at, why: 'batched: x', state: 'batched' } }));
+  const v = readVersion(dir, { running: H(1), now: at - 3600000 });
+  assert.equal(v.nextInstall.at, at);
+  const vs = versionStatus(v);
+  assert.equal(vs.label, '2 merged commits not installed. Next install: not before 2026-11-05 22:00 UTC');
+  assert.doesNotMatch(vs.label, /installed on|up to date/i);
+  assert.equal(versionStatus({ ...v, nextInstall: { at: null, why: 'batched: waiting', state: 'batched' } }).label, '2 merged commits not installed. Next install: batched: waiting');
+  // up to date: no next install is claimed
+  fs.writeFileSync(path.join(dir, 'team', 'self-upgrade.json'), JSON.stringify({ main: { sha: H(1), from: H(1), behind: 0 }, nextInstall: { to: H(2), at, why: 'old', state: 'batched' } }));
+  assert.equal(readVersion(dir, { running: H(1), now: at }).nextInstall, null);
+});

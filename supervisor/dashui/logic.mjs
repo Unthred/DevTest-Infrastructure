@@ -110,6 +110,8 @@ export function versionStatus(v) {
   if (v.latched) return { level: 'action', label: `Upgrade latched at ${s7(v.installed)}`, href };
   if (['rolled_back', 'rollback_failed'].includes(v.result)) return { level: 'action', label: `Upgrade failed (${String(v.result).replace('_', ' ')})`, href };
   if (v.running && v.running !== v.installed) return { level: 'warning', label: `Restart needed: ${s7(v.running)} running, ${s7(v.installed)} installed`, href };
+  // Issue #695: merged but not installed; the pill says when the next install is (or why it waits), never that merged means installed.
+  if (v.drift && v.nextInstall) { const n = Number.isSafeInteger(v.behind) && v.behind > 0 ? `${v.behind} merged commit${v.behind === 1 ? '' : 's'} not installed` : 'Merged, not installed'; return { level: 'warning', label: `${n}. Next install: ${Number.isFinite(v.nextInstall.at) ? `${v.nextInstall.state === 'draining' ? 'by ' : 'not before '}${tmark(v.nextInstall.at)}` : v.nextInstall.why}`, href }; }
   if (v.drift && Number.isSafeInteger(v.behind) && v.behind > 0 && Number.isFinite(v.nextTryAt)) return { level: 'warning', label: `${v.behind} commit${v.behind === 1 ? '' : 's'} behind, next try ${tmark(v.nextTryAt)}`, href };
   if (v.drift) return { level: 'warning', label: `Deploy needed: ${s7(v.installed)} → ${s7(v.main)}`, href };
   return { level: 'ok', label: `Up to date (${s7(v.installed)})`, href };

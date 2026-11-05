@@ -32,7 +32,7 @@ import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
-import { SelfUpgrade, QUIET_MAX_WAIT_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
+import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 
 const self = fileURLToPath(import.meta.url);
 function args(list) {
@@ -252,11 +252,16 @@ async function teamTick(root, registry, dryRun, hold = null) {
     }
   } finally { unlock(); }
 }
+// Issue #695: work the previous tick planned (not merges), read from its snapshot; local only, no GitHub. A stale plan can only delay an install to the end of the batching window.
+function plannedWorkOf(root) {
+  const last = readSnapshots(root).at(-1);
+  return Array.isArray(last?.plan) ? last.plan.filter(a => a && a.type !== 'merge').length : 0;
+}
 function selfUpgradeFor(root, registry) {
   const config = loadTeamConfig(teamConfigFile, root);
   const verdictFor = (pr, head) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')).verdicts?.[`${pr}:${head}`] || null; } catch { return null; } };
   const jobs = realJobs(root, registry);
-  return { config, upgrade: new SelfUpgrade({ root, drainMaxMs: config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : QUIET_MAX_WAIT_MS, deps: realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }) }) };
+  return { config, upgrade: new SelfUpgrade({ root, minGapMs: config.self_upgrade?.min_install_gap_minutes != null ? config.self_upgrade.min_install_gap_minutes * 60000 : MIN_INSTALL_GAP_MS, drainMaxMs: config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : QUIET_MAX_WAIT_MS, deps: { ...realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }), plannedWork: () => plannedWorkOf(root) } }) };
 }
 // Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so running jobs
 // can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.
@@ -304,7 +309,7 @@ async function main() {
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -526,8 +531,9 @@ async function main() {
       const out = await handInstall({ root, sha: a._[1], deps, say: line => console.log(line), ...(drain ? { drainMaxMs: drain } : {}) });
       process.exitCode = out.ok ? 0 : 1; return;
     }
+    if (a._[0] === 'install-now') { upgrade.requestInstallNow(); console.log('the next install skips the batching wait'); return; }   // issue #695
     if (a._[0] === 'clear-latch') { upgrade.clearLatch(); console.log('latch cleared'); return; }
-    if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|clear-latch|hand-install SHA');
+    if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|install-now|clear-latch|hand-install SHA');
     console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, install: upgrade.s.install || null, installed: upgrade.d.installed() }, null, 2)); return;
   }
   if (command === 'reconcile' || command === 'daemon') {
