@@ -405,7 +405,7 @@ export const EXCLUDING_LABELS = ['epic', 'tracking', 'parked', 'needs-homeowner'
 const RESUME_WINDOW_MS = 7 * 86400000;
 const TRANSIENT_STOPS = new Set(['crash', 'network_error', 'incomplete', 'transient_rate_limit', 'checkpoint_failed']);   // never usage_limit or retry_exhausted: D-019 bounds those launches, then the homeowner decides
 const redactEvent = e => String(e || 'an unknown event').replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40);
-export const CAUSE_TEXT = { split: 'the proposed split was accepted', 'secret-scan': 'the secret scanner no longer fails', job: 'the job was resumed or completed', fixlimit: 'a new head was reviewed with PASS and its CI is not red', 'cancelled-ci': 'the check is green again' };
+export const CAUSE_TEXT = { split: 'the proposed split was accepted', 'secret-scan': 'the secret scanner no longer fails', job: 'the job was resumed or completed, or a newer head overtook it with nothing of its work left unpushed', fixlimit: 'a new head was reviewed with PASS and its CI is not red', 'cancelled-ci': 'the check is green again' };
 // True when a finding repeats the homeowner-required text: any five consecutive words of it appear in the required text, or a
 // bullet or line of the required text (four words or more) appears whole inside the finding. Conservative: unsure means required.
 export function overlapsRequired(finding, required) {
@@ -2625,9 +2625,25 @@ export class Team {
       });
     }
   }
+  // Issue #583: a blocked, failed or stopped job on a PR whose head has moved on since the job started cannot be resumed to any purpose.
+  // It stops holding the label only when git proves its worktree has nothing worth keeping (no uncommitted work, no commit missing from
+  // any remote branch); anything unproven keeps the hold, so work is never discarded silently. Returns false, never throws.
+  async jobSuperseded(id, job, pr) {
+    const rec = this.s.jobs[id];
+    if (!job || !pr || !rec || rec.pr == null || rec.pr !== pr.number || !rec.head || rec.head === pr.headRefOid || !job.worktree) return false;
+    if (typeof this.git.isClean !== 'function' || typeof this.git.unpushedCommits !== 'function') return false;
+    try {
+      if ((await this.git.isClean(job.worktree)) !== true) return false;
+      return (await this.git.unpushedCommits(job.worktree)) === 0;
+    } catch { return false; }
+  }
   async causeCleared(c, pr) {
     if (c.kind === 'split') return this.s.splits[c.issue]?.status === 'accepted';
-    if (c.kind === 'job') { const job = await this.jobs.get(c.job); return !!job && !['blocked', 'failed', 'stopped'].includes(job.status); }
+    if (c.kind === 'job') {
+      const job = await this.jobs.get(c.job);
+      if (job && !['blocked', 'failed', 'stopped'].includes(job.status)) return true;
+      return this.jobSuperseded(c.job, job, pr);   // issue #583: a job overtaken by a newer head no longer holds the label
+    }
     // Fix limit: only a new head that was reviewed with PASS and is not red clears it; an unreviewed or pending head does not.
     if (c.kind === 'fixlimit') return !pr || (pr.headRefOid !== c.head && this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'PASS' && this.ciState(pr) !== 'red');
     // A head move does not clear it: the old commit stays flagged. Only a scanner that no longer fails on the current head (or a closed PR) does.
