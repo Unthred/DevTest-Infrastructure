@@ -313,3 +313,26 @@ test('#640: two call sites, main renames both and the PR adds an argument to bot
   const ok = lineRepo(t, spec); const oh = resolveLine(ok, sites('h(a, force)', 'k(b, force)'));
   assert.deepEqual(checkRebase({ repoPath: ok.agent, base: 'origin/main', oldHead: oh, newHead: head(ok) }).lostChanges, []);
 });
+
+test('#640: main made the same change next to another edit, the rebase conflicts and keeps main\'s side: the emptied commit is not missing', t => {
+  const r = lineRepo(t, { base: '  const z = 1;\n  const w = 1;', feat: '  const z = 3;\n  const w = 1;', main: '  const z = 3;\n  const w = 2;' });
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  let conflicted = false;
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { conflicted = true; }
+  assert.ok(conflicted, 'the fixture must conflict');
+  write(r.agent, 'l.mjs', r.f('  const z = 3;\n  const w = 2;')); git(r.agent, 'add', '-A');
+  try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none in progress */ }
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.missing, []); assert.deepEqual(c.lostChanges, []);
+});
+
+test('#640: the same adjacent-edit conflict where main\'s value differs from the PR\'s stays missing', t => {
+  const r = lineRepo(t, { base: '  const z = 1;\n  const w = 1;', feat: '  const z = 3;\n  const w = 1;', main: '  const z = 2;\n  const w = 2;' });
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  write(r.agent, 'l.mjs', r.f('  const z = 2;\n  const w = 2;')); git(r.agent, 'add', '-A');
+  try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none */ }
+  assert.equal(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).missing.length, 1);
+});
