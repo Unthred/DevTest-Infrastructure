@@ -612,8 +612,12 @@ test('#550 Needs you names the refused verdict file, the reason and what to do',
   assert.ok(card, 'a refused-verdict card ' + JSON.stringify(v.panels.needsYou.map(c => c.id)));
   assert.match(card.text, /verdict file was refused \(verdict has an unknown field\)/);
   assert.match(card.tried, /\/state\/team\/inbox\/t1\/verdict\.json/);
+  assert.match(card.text, /review limit of 2 attempts is reached/, 'the card names the review limit when it is hit');
   assert.match(card.action, /Read the verdict file and the review job ab12cd34/);
   assert.ok(!v.panels.needsYou.some(c => c.id === 'reviewlimit-41'), 'one card, not two');
+  const under = await needsOf(await serve(t, { cache: calmCache(), state: { reviewAttempts: { [`41:${H(1)}:codex`]: 0 }, reviewRefusals: { [`41:${H(1)}:codex`]: refusal }, verdicts: {}, jobs: {} } }));
+  const ucard = under.panels.needsYou.find(c => c.id === 'reviewrefused-41');
+  if (ucard) { assert.doesNotMatch(ucard.text, /review limit/); }
   const other = await needsOf(await serve(t, { cache: calmCache(), state: { reviewAttempts: maxed, reviewRefusals: { [`41:${H(2)}:codex`]: { ...refusal, head: H(2) } }, verdicts: {}, jobs: {} } }));
   assert.deepEqual(other.panels.needsYou.map(c => c.id), ['reviewlimit-41'], 'a refusal for another head does not apply');
 });
