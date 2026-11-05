@@ -23,7 +23,7 @@ import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { sinceView } from './since.mjs';
-import { pendingCards as inboxCards } from './inbox.mjs';
+import { pendingCards as inboxCards, recentDecided as inboxRecent } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -897,7 +897,8 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const tickAt = cache.tick?.at ?? null;
   const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
-  const needsYou = attention.filter(a => a.severity === 'action').map(a => {
+  // Issue #702: pending overseer proposals have their own panel (view.approvals); they are not Needs you items.
+  const needsYou = attention.filter(a => a.severity === 'action' && !a.inbox).map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
     const watch = a.id.startsWith('job-') && transcriptExists(root, a.id.slice(4)) ? a.id.slice(4) : null;
@@ -907,6 +908,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
+    approvals: { pending: attention.filter(a => a.inbox).map(a => a.inbox), recent: config.inbox?.dir ? inboxRecent(config.inbox.dir) : [] },
     panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, later: laterOf({ cache, state, pauseText, names, config }), warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor

@@ -307,10 +307,38 @@ function breakerCard(view) {
 }
 // Issue #124: the Approve/Reject card of one inbox item. The item's own text is shown in full (escaped), so the click is informed.
 const inboxForm = (id, decision, label, cls) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="decision" value="${decision}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
-const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div></div>`;
+// Issue #702: pending proposals have their own panel above the card grid (so a saved layout cannot hide it); Needs you no longer lists them.
+const KIND_WORD = { prompt: 'Run as a job', issue_draft: 'Post as an issue' };
+const OUTCOME = { approved: 'Approved; waiting for the next Foreman tick to act on it.', rejected: 'Rejected; nothing was done.', running: 'Approved and running as a job.', done: 'Approved and done.', failed: 'Approved but it failed.', posting: 'Approved; being posted now.', refused: 'Refused before it could be approved.' };
+function approvalCard(c, now) {
+  const head = c.broken ? 'An inbox item cannot be shown' : c.title;
+  return `<article class="approval${c.broken ? ' broken' : ''}" id="approve-${esc(c.id)}" data-inbox="${esc(c.id)}" tabindex="-1"><h3>${esc(head)}</h3>
+<p class="sub">${esc(KIND_WORD[c.kind] || 'Unknown kind')} · proposed ${Number.isFinite(c.createdAt) ? `${lt(c.createdAt)} (${esc(ago(c.createdAt, now))})` : 'at an unknown time'}</p>${c.broken ? `<p class="sev-action">Why it cannot be shown: ${esc(c.broken)}. Reject it; the overseer can propose it again.</p>` : c.why ? `<p class="why">Why: ${esc(c.why)}</p>` : ''}
+<div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div>
+${c.broken ? '' : `<details class="approval-text" data-keep="${esc(c.id)}"><summary>Full text</summary><p class="sub">${esc(c.will)}</p><pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div></details>`}</article>`;
+}
+// A decided proposal, kept hidden until a /#approve-<id> link asks for it (app.js); the text says plainly what became of it.
+const decidedCard = (r, now) => `<article class="approval decided" id="approve-${esc(r.id)}" data-decided="${esc(r.id)}" tabindex="-1" hidden><h3>This proposal is no longer waiting</h3><p>${esc(OUTCOME[r.state] || `Its state is "${r.state}".`)}${r.result ? ` ${esc(r.result)}` : ''}${r.reason ? ` Reason: ${esc(r.reason)}` : ''}</p><p class="sub">${esc(KIND_WORD[r.kind] || 'Unknown kind')} · decided ${lt(r.decidedAt)}</p></article>`;
+function approvalsNotice(query) {
+  const n = query.get('notice'), item = /^[a-f0-9]{32}$/.test(query.get('item') || '') ? query.get('item') : null;
+  if (n === 'inbox-approved') return `<p class="approval-note" role="status">Approved. Foreman acts on it at its next tick${item ? ` (<a href="#approve-${item}">see its outcome</a>)` : ''}.</p>`;
+  if (n === 'inbox-rejected') return `<p class="approval-note" role="status">Rejected. Nothing will be done with it${item ? ` (<a href="#approve-${item}">see its outcome</a>)` : ''}.</p>`;
+  if (n === 'inbox-cooldown') { const at = Number(query.get('retry')); return `<p class="approval-note warn" role="status">That click was ignored: one decision is allowed per second so a double-click cannot decide two proposals. ${Number.isFinite(at) && at > 0 ? `The next click will work from ${lt(at)}.` : 'Try again in a second.'} Nothing was decided.</p>`; }
+  return '';
+}
+// Always rendered when the inbox exists: visible when something is pending or a decision was just made, otherwise hidden (a /#approve-<id> link reveals it).
+function approvalsPanel(view, query, now) {
+  const a = view.approvals; if (!a) return '';
+  const note = approvalsNotice(query), pending = a.pending || [];
+  const shown = pending.length > 0 || note !== '';
+  const body = pending.length ? `<div class="approval-list">${pending.map(c => approvalCard(c, now)).join('')}</div>` : '<p class="approval-none">None are waiting for your approval.</p>';
+  const pendingIds = new Set(pending.map(c => c.id));
+  const decided = (a.recent || []).filter(r => !pendingIds.has(r.id)).map(r => decidedCard(r, now)).join('');
+  return `<div class="approvals" role="region" id="approvals" data-approvals="${pending.length}" aria-labelledby="h-approvals"${shown ? '' : ' hidden'}><h2 id="h-approvals">${pending.length ? `Waiting for your approval (${pending.length})` : 'Waiting for your approval'}</h2>${note}<p class="approval-missing" hidden role="status"></p>${body}${decided}</div><!--/approvals-->`;
+}
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
+  return items.length ? `${copyAllBtn(items, 'Needs you items')}<ul class="panel-list">${items.map(a => `<li class="sev-action" id="att-${esc(a.id)}"><div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}</li>`).join('')}</ul>`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 // Issue #414: parked or staged work, quieter than Needs you: what it waits for and who or what ends the wait.
@@ -360,6 +388,7 @@ function statusBar(view, route, head = '') {
   return `<header class="statusbar" role="banner"><div class="brand">${icon('pulse')} DevTest team</div>${head}
 ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
 ${agentStat(view)}
+${view.approvals?.pending?.length ? `<div class="stat" data-approvals-count="${view.approvals.pending.length}"><a class="pill" href="/#approvals" aria-label="${view.approvals.pending.length} proposal${view.approvals.pending.length === 1 ? '' : 's'} waiting for your approval" title="Open the proposals waiting for your approval"><span class="k">Waiting for approval</span> ${badge('action', String(view.approvals.pending.length))}</a></div>` : ''}
 <div class="stat"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
 ${pageDataStat(view)}
@@ -429,7 +458,7 @@ function overview(view, query) {
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
-  return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
+  return { title: 'Overview', body: `${approvalsPanel(view, query, now)}<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
 }
 
 function agentsPage(view, query, path) {

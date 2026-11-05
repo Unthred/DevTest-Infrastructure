@@ -201,6 +201,39 @@ function restoreScroll() {
   if (y) scrollTo(0, y);
 }
 history.scrollRestoration = 'manual';
+// Issue #702: the approvals panel. An open "Full text" survives the page's own refresh (kept per tab); /#approve-<id> scrolls to and
+// highlights one proposal, or says plainly what became of it; the one-time notice is dropped from the address so a refresh does not repeat it.
+{
+  const panel = $('#approvals');
+  if (panel) {
+    const KEY = 'dash.approvals.open';
+    let openIds = []; try { openIds = JSON.parse(sessionStorage.getItem(KEY)) || []; } catch { openIds = []; }
+    const open = new Set(openIds.filter(i => document.querySelector('details[data-keep="' + i + '"]')));
+    const persist = () => { try { sessionStorage.setItem(KEY, JSON.stringify([...open])); } catch { /* not remembered */ } };
+    for (const d of $$('details[data-keep]', panel)) {
+      d.open = open.has(d.dataset.keep);
+      d.addEventListener('toggle', () => { if (d.open) open.add(d.dataset.keep); else open.delete(d.dataset.keep); persist(); });
+    }
+    const baseHidden = panel.hidden;
+    const navType = performance.getEntriesByType?.('navigation')?.[0]?.type;
+    let first = true;
+    const show = () => {
+      const m = /^#approve-([a-f0-9]{32})$/.exec(location.hash), id = m && m[1];
+      for (const e of $$('.approval.hl', panel)) e.classList.toggle('hl', false);
+      for (const e of $$('.approval.decided', panel)) e.hidden = e.dataset.decided !== id;
+      const miss = $('.approval-missing', panel); miss.hidden = true; miss.textContent = '';
+      panel.hidden = id ? false : baseHidden;
+      if (!id) return;
+      const el = document.getElementById('approve-' + id);
+      if (el) { el.classList.add('hl'); } else { miss.textContent = 'No proposal with this link is known. It may have been decided more than two weeks ago, or the link is wrong.'; miss.hidden = false; }
+      // not on the page's own refresh: that keeps the reader where they were
+      if (!first || (navType !== 'reload' && navType !== 'back_forward')) (el || panel).scrollIntoView({ block: 'start' });
+    };
+    show(); first = false;
+    addEventListener('hashchange', show);
+    if (/^inbox-/.test(new URLSearchParams(location.search).get('notice') || '')) history.replaceState(null, '', location.pathname + location.hash);
+  }
+}
 // The periodic refresh is driven from here, not by a <meta refresh>: a declarative refresh keeps the address the page loaded
 // with, so it would undo an in-place table change (replaceState). Without script the <noscript> meta still refreshes.
 {

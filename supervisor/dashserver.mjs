@@ -187,10 +187,10 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
     const id = form.get('id') || '', decision = form.get('decision') || '';
     if (!INBOX_ID.test(id) || !['approve', 'reject'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
     const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
-    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: `/?notice=inbox-cooldown&retry=${slot.retryAt}#approvals`, 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
     const r = decideInbox(source().inbox.dir, id, decision, t);
     if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
-    return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
+    return send(303, 'text/plain; charset=utf-8', 'recorded', { location: `/?notice=inbox-${decision === 'approve' ? 'approved' : 'rejected'}&item=${id}#approvals` });
   };
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
