@@ -15,12 +15,13 @@ const FLAG = ['to', 'ken'].join(''), SECRET = ['zq', '9x', 'Lm4', 'Rt7'].join(''
 const BOOT = 1000000, BOOT_MS = BOOT * 1000, at = ticks => BOOT_MS + ticks * 10;   // wall-clock ms of a process started at `ticks`
 const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'procs-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 // A fake /proc entry. `start` is the clock tick the process began at; rss is in 4 KiB pages.
-function proc(root, { pid, ppid = 1, pgrp = pid, sid = pgrp, start = 100, name = 'node', rssPages = 256, swapKb = 0, state = 'S', cmdline = null }) {
+function proc(root, { pid, ppid = 1, pgrp = pid, sid = pgrp, start = 100, name = 'node', rssPages = 256, swapKb = 0, state = 'S', cmdline = null, environ = null }) {
   const dir = path.join(root, String(pid)); fs.mkdirSync(dir, { recursive: true });
   const f = new Array(22).fill('0'); f[0] = state; f[1] = ppid; f[2] = pgrp; f[3] = sid; f[19] = String(start); f[21] = String(rssPages);
   fs.writeFileSync(path.join(dir, 'stat'), `${pid} (${name}) ${f.join(' ')}\n`);
   fs.writeFileSync(path.join(dir, 'status'), `Name:\t${name}\nVmSwap:\t${String(swapKb).padStart(8)} kB\n`);
   if (cmdline) fs.writeFileSync(path.join(dir, 'cmdline'), cmdline);
+  if (environ) fs.writeFileSync(path.join(dir, 'environ'), environ);
 }
 const fakeProc = t => { const r = tmp(t); fs.writeFileSync(path.join(r, 'stat'), `cpu 1 2 3\nbtime ${BOOT}\n`); fs.writeFileSync(path.join(r, 'meminfo'), 'MemTotal: 1000000 kB\nMemAvailable: 400000 kB\nSwapTotal: 800000 kB\nSwapFree: 300000 kB\n'); return r; };
 const job = (over = {}) => ({ id: 'a'.repeat(32), provider: 'claude', kind: 'implement', issue: 7, status: 'running', createdAt: at(50), updatedAt: at(5000),
@@ -59,6 +60,31 @@ test('an ended job with a child still running is flagged as a leftover; a later 
   proc(r, { pid: 100, ppid: 1, start: 100 });
   const alive = attribute(readTable(r), [{ ...ended, status: 'running', workerPid: 100, workerStart: '100', childEndedAt: null }], NOW);
   assert.equal(alive.jobs[0].leftover, false);
+});
+
+test('a process reparented to init in its own session is still counted while the job runs and flagged as a leftover after it ends', t => {
+  const r = fakeProc(t), id = 'a'.repeat(32);
+  // What Claude Code's Bash tool does: a command in its own session leaves a runner behind, reparented to init. Only the inherited marker ties it to the job.
+  const env = ['PATH=/usr/bin', `${FLAG.toUpperCase()}=${SECRET}`, `DEVTEST_JOB_ID=${id}`, 'HOME=/root'].join('\0') + '\0';
+  proc(r, { pid: 100, ppid: 1, start: 100 }); proc(r, { pid: 200, ppid: 100, pgrp: 200, start: 110, name: 'claude' });
+  proc(r, { pid: 900, ppid: 1, pgrp: 900, sid: 900, start: 140, name: 'vitest', rssPages: 700, environ: env });
+  proc(r, { pid: 901, ppid: 900, pgrp: 900, sid: 900, start: 141, name: 'chrome', rssPages: 300, environ: env });
+  proc(r, { pid: 950, ppid: 1, start: 150, name: 'other', environ: 'PATH=/usr/bin\0DEVTEST_JOB_ID=' + 'b'.repeat(32) + '\0' });   // another (unknown) job's marker: nobody's
+  const live = attribute(readTable(r), [job()], NOW);
+  assert.equal(live.jobs[0].processes, 4); assert.equal(live.jobs[0].leftover, false); assert.equal(live.unattributed.processes, 1);
+  const ended = attribute(readTable(r), [job({ status: 'completed', workerPid: null, workerStart: null, childPid: null, childStart: null, childEndedAt: at(2000) })], NOW);
+  assert.equal(ended.jobs[0].leftover, true); assert.equal(ended.jobs[0].processes, 3); assert.equal(ended.agents[0].leftoverProcesses, 3);
+  assert.equal(ended.unattributed.processes, 2);
+  const text = JSON.stringify([readTable(r), ended]);
+  assert.ok(!text.includes(SECRET) && !text.includes('/root'), 'only the marker is taken from environ');
+  assert.equal(readProcess(r, 900).marker, id); assert.equal(readProcess(r, 100).marker, null);
+  fs.writeFileSync(path.join(r, '100', 'environ'), 'XDEVTEST_JOB_ID=' + id + '\0'); assert.equal(readProcess(r, 100).marker, null, 'must be a whole variable name');
+});
+
+test('names with markup are escaped once in the drill-down', t => {
+  const r = fakeProc(t); proc(r, { pid: 100, ppid: 1, start: 100 }); proc(r, { pid: 200, ppid: 100, pgrp: 200, start: 110, name: 'a<b>&c' });
+  const html = processesFragment({ generatedAt: NOW, refs: { issue: {}, pr: {}, job: {} } }, createSampler({ readJobs: () => [job()], procRoot: r, now: () => NOW }).get(), 'claude');
+  assert.ok(html.includes('a&lt;b&gt;&amp;c') && !html.includes('&amp;lt;'));
 });
 
 test('a process with no job is unattributed; a reused worker pid, a job without records and an unreadable record attribute nothing', t => {

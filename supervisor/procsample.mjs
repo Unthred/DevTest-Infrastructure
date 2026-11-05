@@ -4,7 +4,8 @@
 //
 // Attribution uses only what the supervisor already records on the job: the worker pid and the provider child pid (each checked
 // against its recorded start time, so a reused pid is not mistaken for it), plus the child's process group, which the supervisor
-// creates with `detached: true` and now keeps after the job ends (`childGroup`, `childEndedAt`). A process is attributed to a job
+// creates with `detached: true` and now keeps after the job ends (`childGroup`, `childEndedAt`), and the job id the supervisor puts in the provider's environment
+// (DEVTEST_JOB_ID), which every descendant inherits even after reparenting to init or starting its own session. A process is attributed to a job
 // when it is in that group or session, or descends from the verified worker or child. A process that matches no job, or matches
 // more than one, is counted as unattributed. Nothing is guessed from names or directories.
 import fs from 'node:fs';
@@ -17,6 +18,20 @@ export const HISTORY_POINTS = 120;       // 30 minutes at the client interval
 const PAGE_BYTES = 4096, CLK_TCK = 100, SLACK_MS = 3000;
 
 const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
+
+// The job marker the supervisor puts in every provider's environment (DEVTEST_JOB_ID). Descendants inherit it, so it survives a
+// process being reparented to init or moving to its own session. environ can hold secrets, so the file is only searched in memory
+// for this one 32-hex value: nothing else from it is parsed, kept, returned or shown. Unreadable (other user, exited) means no marker.
+const MARKER = Buffer.from('DEVTEST_JOB_ID=');
+function readMarker(file) {
+  let buf; try { buf = fs.readFileSync(file); } catch { return null; }
+  for (let i = buf.indexOf(MARKER); i >= 0; i = buf.indexOf(MARKER, i + 1)) {
+    if (i !== 0 && buf[i - 1] !== 0) continue;
+    const end = buf.indexOf(0, i), v = buf.toString('latin1', i + MARKER.length, end < 0 ? buf.length : end);
+    return /^[0-9a-f]{32}$/.test(v) ? v : null;
+  }
+  return null;
+}
 
 // One process: null when it vanished or could not be parsed (it exited during the read). `status` adds swap; losing it keeps the rest.
 export function readProcess(procRoot, pid) {
@@ -31,7 +46,7 @@ export function readProcess(procRoot, pid) {
   const status = readText(path.join(procRoot, String(pid), 'status'));
   const m = status && /^VmSwap:\s+(\d+) kB/m.exec(status);
   if (m) swapKb = Number(m[1]);
-  return { pid: Number(pid), name: stat.slice(open + 1, close).slice(0, 32), state: f[0], ppid, pgrp, sid, start, startTicks: Number(start), rssKb: Math.max(0, rss) * PAGE_BYTES / 1024, swapKb };
+  return { pid: Number(pid), marker: readMarker(path.join(procRoot, String(pid), 'environ')), name: stat.slice(open + 1, close).slice(0, 32), state: f[0], ppid, pgrp, sid, start, startTicks: Number(start), rssKb: Math.max(0, rss) * PAGE_BYTES / 1024, swapKb };
 }
 
 // The whole table. Entries that disappear between listing and reading are counted, not treated as errors.
@@ -48,7 +63,6 @@ export function readTable(procRoot = '/proc') {
     host: { memTotalKb: kb('MemTotal'), memAvailableKb: kb('MemAvailable'), swapUsedKb: swapTotal !== null && swapFree !== null ? swapTotal - swapFree : null, swapTotalKb: swapTotal } };
 }
 
-const LIVE_STATES = new Set(['running', 'queued']);
 const startMs = (p, bootMs) => (bootMs === null ? null : bootMs + (p.startTicks / CLK_TCK) * 1000);
 const sum = list => ({ processes: list.length, rssKb: list.reduce((a, p) => a + p.rssKb, 0), swapKb: list.reduce((a, p) => a + p.swapKb, 0) });
 
@@ -80,6 +94,8 @@ export function attribute({ procs, bootMs = null, host = null, vanished = 0 }, j
         walk(p.pid);
       }
     }
+    // Attribution that survives reparenting: the process carries its job's id in its environment.
+    for (const p of procs) if (p.marker === j.id && p.state !== 'Z') walk(p.pid);
     for (const pid of members) { if (!claims.has(pid)) claims.set(pid, []); claims.get(pid).push(j.id); }
     perJob.push({ job: j, alive, members });
   }

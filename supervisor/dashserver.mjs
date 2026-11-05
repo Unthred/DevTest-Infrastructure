@@ -227,7 +227,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
       if (!apiPath && !route) return send(404, 'text/plain; charset=utf-8', 'not found');
       const q0 = new URLSearchParams(search);
       const prepared = await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
-      const view = prepared.view;
+      const view = { ...prepared.view, pageData: pageData(prepared) };   // pages and the JSON carry the freshness of the prepared copy
       if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify({ ...view, pageData: pageData(prepared) }));
       // Issue #481: only the Next element, so a page that polls during a long tick does not re-fetch a whole page (a watch page carries its transcript).
       if (path === '/api/next') return send(200, 'text/html; charset=utf-8', nextTickHtml(view, view.generatedAt) || '<span class="muted">none</span>');
@@ -238,7 +238,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
       const diag = route.page === 'diagnostics', watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
       const routed = diag ? { ...route, data: diagnosticsData({ root, config: source(), now: now(), recorderDir }) } : route.page === 'processes' ? { ...route, sample: procs.get() } : watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
         : evidence ? { ...route, data: route.page === 'evidence' ? listRuns(evidenceRoot) : readRun(evidenceRoot, route.id) } : route;
-      const out = renderRoute({ ...view, ...(route.page === 'processes' ? { generatedAt: now() } : {}), pageData: pageData(prepared) }, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
+      const out = renderRoute(route.page === 'processes' ? { ...view, generatedAt: now() } : view, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
       // The evidence pages show same-origin screenshots, so only they may load images from 'self'; every other page keeps data: only.
       return send(out.status, 'text/html; charset=utf-8', withProof(out.html, root), evidence ? { 'content-security-policy': HEADERS['content-security-policy'].replace("img-src data:", "img-src 'self' data:") } : {});
     } catch (error) {

@@ -834,7 +834,7 @@ function procAgent(view, sample, agent, now) {
     { label: 'Job', html: j => jobLink(j.id) }, { label: 'Kind', html: j => esc(j.kind) }, { label: 'PR / issue', html: jobSubject },
     { label: 'Processes', num: true, html: j => num(j.processes) }, { label: 'Memory', num: true, html: j => mb(j.rssKb) }, { label: 'Swap', num: true, html: j => mb(j.swapKb) },
     { label: 'Age', num: true, html: j => (Number.isFinite(j.ageMs) ? esc(dur(j.ageMs)) : '–') },
-    { label: 'State', html: j => (j.leftover ? procLeft(j.processes) : badge('ok', 'Running')) }, { label: 'Largest by name', html: j => esc(nameList(j.top)) }];
+    { label: 'State', html: j => (j.leftover ? procLeft(j.processes) : badge('ok', 'Running')) }, { label: 'Largest by name', html: j => nameList(j.top) }];
   const head = `<p>${num(a.processes)} processes, ${mb(a.rssKb)} memory, ${mb(a.swapKb)} swap across ${num(a.jobs)} jobs${a.leftoverJobs ? ` (${procLeft(a.leftoverProcesses)} from ${num(a.leftoverJobs)} ended jobs)` : ''}. ${procSpark(sample, agent, colourOf(agent))}</p>`;
   return `${banner}<div class="proc-body" data-state="${st}">${head}${procTable(cols, jobs.map(j => ({ ...j, cls: j.leftover ? 'proc-left' : '' })))}</div>`;
 }
