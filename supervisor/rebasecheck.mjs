@@ -51,18 +51,19 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
   const missing = [];
   for (const c of unmatched) {
     const m = now.find(n => !used.has(n.sha) && n.ident === c.ident && n.subject === c.subject);
-    if (m) used.add(m.sha); else if (!alreadyApplied(run, c.sha, newHead)) missing.push({ sha: c.sha, subject: c.subject });
+    if (m) used.add(m.sha); else if (!alreadyApplied(run, c.sha, base)) missing.push({ sha: c.sha, subject: c.subject });
   }
   return { oldHead, newHead, commits: now.map(c => ({ sha: c.sha, subject: c.subject })), missing, lostChanges: lostChanges(run, base, oldHead, newHead), resolvedConflicts: resolvedConflicts(run, base, oldHead, newHead) };
 }
 
-// Issue #640: a commit that a resolution emptied (git drops it) is not missing when the result already holds its change: a trial
-// three-way merge of the commit onto the new head, from the commit's parent, is clean and leaves the new head's tree unchanged.
+// Issue #640: a commit that a resolution emptied (git drops it) is not missing when the new base already holds its change (a squash
+// into the result does not count: that stays reported): a trial three-way merge of the commit onto the base, from the commit's parent,
+// is clean and leaves the base's tree unchanged.
 // A change main made differently (the merge conflicts) is NOT applied, so it stays refused and a person decides.
-function alreadyApplied(run, sha, newHead) {
+function alreadyApplied(run, sha, base) {
   try {
-    const out = run(['merge-tree', '--write-tree', `--merge-base=${sha}^`, newHead, sha]).trim().split('\n')[0];
-    return SHA.test(out) && out === run(['rev-parse', newHead + '^{tree}']).trim();
+    const out = run(['merge-tree', '--write-tree', `--merge-base=${sha}^`, base, sha]).trim().split('\n')[0];
+    return SHA.test(out) && out === run(['rev-parse', base + '^{tree}']).trim();
   } catch { return false; }   // conflict, a root commit or an old git: keep the commit reported
 }
 
