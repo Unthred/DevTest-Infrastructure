@@ -370,7 +370,7 @@ function actionWorld(t, { jobStatus = 'blocked', git = {} } = {}) {
   w.jobs.states[JOB] = { id: JOB, status: jobStatus, provider: 'claude', worktree: '/p/wt' };
   w.jobs.stop = async id => { w.calls.stopped.push(id); w.jobs.states[id].status = 'stopped'; };
   w.jobs.resume = async id => { w.calls.resumed.push(id); w.jobs.states[id].status = 'running'; };
-  w.team.git.isClean = async () => true; w.team.git.unpushedCommits = async () => 0;
+  w.team.git.isClean = async () => true; w.team.git.unpushedCommits = async () => 0; w.team.git.currentBranch = async () => 'claude/issue-5-x';
   w.team.git.saveWork = async (wt, o) => { w.calls.saved.push([wt, o]); return {}; };
   Object.assign(w.team.git, git);
   w.team.s.jobs[JOB] = { kind: 'fix', agent: 'claude', pr: 5, head: HEAD, branch: 'claude/issue-5-x', ingested: true, at: 1 };
@@ -457,6 +457,16 @@ test('action close_job: work is saved first, then the job is closed and stops ho
   // not overtaken (PR still at the job's head), still running, or no PR at all
   const same = actionWorld(t); same.gh.prs[0].headRefOid = HEAD;
   assert.match((await runAction(same, act('close_job', JOB.slice(0, 8)))).reason, /not overtaken/); assert.equal(same.calls.saved.length, 0, 'nothing is saved for a job that is refused');
+  // another live job uses the same worktree, or the worktree is on another branch: nothing is saved, nothing is closed
+  const shared = actionWorld(t); const OTHER = 'd4d4d4d4' + JOB.slice(8);
+  shared.jobs.states[OTHER] = { id: OTHER, status: 'running', provider: 'claude', worktree: '/p/wt' }; shared.team.s.jobs[OTHER] = { kind: 'fix', agent: 'claude', pr: 5, head: HEAD2, branch: 'claude/issue-5-x', at: 2 };
+  assert.match((await runAction(shared, act('close_job', JOB.slice(0, 8)))).reason, /same worktree/); assert.equal(shared.calls.saved.length, 0); assert.equal(shared.team.s.jobs[JOB].closed, undefined);
+  const moved = actionWorld(t, { git: { currentBranch: async () => 'claude/other' } });
+  assert.match((await runAction(moved, act('close_job', JOB.slice(0, 8)))).reason, /no longer on the job branch/); assert.equal(moved.calls.saved.length, 0);
+  // a closed job without a worktree stops holding the PR too
+  const nowt = actionWorld(t); nowt.jobs.states[JOB].worktree = undefined;
+  assert.equal((await runAction(nowt, act('close_job', JOB.slice(0, 8)))).state, 'done');
+  assert.equal(await nowt.team.jobSuperseded(JOB, nowt.jobs.states[JOB], nowt.gh.prs[0]), true);
   const live = actionWorld(t, { jobStatus: 'running' });
   assert.match((await runAction(live, act('close_job', JOB.slice(0, 8)))).reason, /only a blocked, failed or stopped/);
 });

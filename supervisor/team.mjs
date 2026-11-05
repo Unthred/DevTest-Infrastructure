@@ -1820,6 +1820,17 @@ export class Team {
     let saved = 'nothing to save';
     if (job.worktree) {
       if (typeof this.git.saveWork !== 'function' || typeof this.git.isClean !== 'function' || typeof this.git.unpushedCommits !== 'function') throw new SupervisorError('this supervisor cannot save a worktree, so the job is not closed');
+      // The worktree may be shared (fix jobs reuse the PR branch's worktree, review worktrees are reused) and saving commits there:
+      // refuse while another live job uses it, or when it is no longer on this job's branch.
+      for (const oid of Object.keys(this.s.jobs)) {
+        if (oid === id) continue;
+        const o = await this.jobs.get(oid).catch(() => null);
+        if (o && o.worktree === job.worktree && !TERMINAL.has(o.status)) throw new SupervisorError(`job ${oid.slice(0, 8)} is using the same worktree, so job ${id.slice(0, 8)} is not closed`);
+      }
+      if (rec.branch) {
+        if (typeof this.git.currentBranch !== 'function') throw new SupervisorError('this supervisor cannot check the worktree branch, so the job is not closed');
+        if ((await this.git.currentBranch(job.worktree)) !== rec.branch) throw new SupervisorError('the job worktree is no longer on the job branch, so the job is not closed');
+      }
       const r = await this.git.saveWork(job.worktree, { branch: rec.branch, id: id.slice(0, 8) });
       if (r?.ref) saved = `saved to ${r.ref}`;
       const clean = await this.git.isClean(job.worktree);
@@ -2803,8 +2814,9 @@ export class Team {
   // any remote branch); anything unproven keeps the hold, so work is never discarded silently. Returns false, never throws.
   async jobSuperseded(id, job, pr) {
     const rec = this.s.jobs[id];
-    if (!job || !pr || !rec || rec.pr == null || rec.pr !== pr.number || !rec.head || rec.head === pr.headRefOid || !job.worktree) return false;
+    if (!job || !pr || !rec || rec.pr == null || rec.pr !== pr.number || !rec.head || rec.head === pr.headRefOid) return false;
     if (rec.closed) return true;   // issue #629: the homeowner closed it on the dashboard, after its work was saved
+    if (!job.worktree) return false;
     if (typeof this.git.isClean !== 'function' || typeof this.git.unpushedCommits !== 'function') return false;
     try {
       // Issue #610: a later job may have reused the worktree; only a worktree still on this job's branch proves anything about it.
