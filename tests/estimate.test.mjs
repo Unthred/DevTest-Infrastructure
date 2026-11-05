@@ -96,10 +96,9 @@ test('2. an allowance limit moves the estimate past the reset time and says so',
   assert.ok(e.finish.p90 > reset);
   assert.match(e.text, /\(after 17:00 reset\)$/);
   assert.ok(e.waits.some(w => w.kind === 'allowance' && /after 17:00 reset/.test(w.text)));
-  // A forecast that runs out before the step would start is treated the same way.
+  // Issue #680: a forecast that runs out never moves a step, whenever it runs out.
   const f = est({ budget: { claude: { mode: 'normal', runsOutAt: NOW - MIN, resetsAt: reset } } }).items['issue:30'];
-  assert.equal(f.finish.p50, e.finish.p50);
-  // A forecast that runs out later than the step starts does not move it.
+  assert.equal(f.finish.p50, est().items['issue:30'].finish.p50);
   const later = est({ budget: { claude: { mode: 'normal', runsOutAt: NOW + 2 * 3600000, resetsAt: reset } } }).items['issue:30'];
   assert.equal(later.finish.p50, est().items['issue:30'].finish.p50);
   assert.ok(!later.waits.some(w => w.kind === 'allowance'));
@@ -232,13 +231,10 @@ test('every step name the estimate simulates for a PR is classified by the budge
   assert.equal(conflicting.status, 'estimated');   // PASS verdict absent: waits for a review, no rebase step in the chain
 });
 
-test('a forecast gate holds every step, reviews included, to the reset', async () => {
+test('issue #680: a forecast gate no longer exists; only a mode holds a step', async () => {
   const { allowanceGates } = await import('../supervisor/estimate.mjs');
-  const g = allowanceGates({ claude: { runsOutAt: NOW, resetsAt: RESET } }, NOW).claude;
-  assert.equal(g.mode, 'forecast');
-  assert.equal(g.reviewsOnly, false);
-  const gates = allowanceGates({ codex: { runsOutAt: NOW, resetsAt: RESET } }, NOW);
+  assert.deepEqual(allowanceGates({ claude: { runsOutAt: NOW, resetsAt: RESET } }, NOW), {});
   const e = runPr(prRow(46), { codex: { runsOutAt: NOW, resetsAt: RESET } });
-  assert.ok(e.finish.p50 > RESET, 'the codex review waits for the reset under a forecast');
-  assert.equal(gates.codex.reviewsOnly, false);
+  assert.ok(e.finish.p50 < RESET, 'the codex review is not moved to the reset by a forecast');
+  assert.equal(allowanceGates({ codex: { mode: 'waiting', until: RESET, resetsAt: RESET } }, NOW).codex.mode, 'waiting');
 });

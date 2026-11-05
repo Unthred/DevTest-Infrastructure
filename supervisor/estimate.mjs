@@ -10,8 +10,8 @@
 //    re-review) when pFix >= 50%, the p90 path when pFix >= 10%.
 //  - Queue: items are placed in queue order into role slots (implementer, reviewer) and the overall cap; jobs already running
 //    hold their slot for the rest of their typical duration. Merge happens on the next tick after the last step.
-//  - Allowance: a step by an agent that is out of allowance, or whose forecast runs out before the step would start, moves to
-//    the agent's reset time and the estimate says so.
+//  - Allowance: a step by an agent that is out of allowance moves to the agent's reset time and the estimate says so. A forecast of running
+//    out never moves a step (issue #680: forecasts inform, they do not hold work back).
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 import { checksState, retriedIn, overallCap } from './team.mjs';
 import { REVIEWS_ONLY_TYPES } from './budget.mjs';
@@ -83,7 +83,6 @@ export function allowanceGates(budget = {}, now) {
     if (!b) continue;
     const reset = Number.isFinite(b.until) ? b.until : Number.isFinite(b.resetsAt) ? b.resetsAt : null;
     if (b.mode && b.mode !== 'normal' && reset > now) out[agent] = { from: now, until: reset, mode: b.mode, reviewsOnly: b.mode === 'reviews_only' };
-    else if (Number.isFinite(b.runsOutAt) && Number.isFinite(b.resetsAt) && b.runsOutAt < b.resetsAt && b.resetsAt > now) out[agent] = { from: Math.max(now, b.runsOutAt), until: b.resetsAt, mode: 'forecast', reviewsOnly: false };   // deliberate: a forecast stands for running out completely, so reviews are held to the reset too (unlike reviews_only mode)
   }
   return out;
 }

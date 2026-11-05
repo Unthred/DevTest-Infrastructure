@@ -31,7 +31,7 @@
       }
     }
   },
-  "budget": { "enabled": true, "projected_limit": 1, "high_water": 0.85, "high_water_min_hours": 24, "recent_hours": 24, "exhausted_at": 0.995, "can_take_over": ["claude", "codex"] },
+  "budget": { "enabled": true, "high_water": 0.85, "high_water_min_hours": 24, "recent_hours": 24, "exhausted_at": 0.995, "can_take_over": ["claude", "codex"] },
   "agents": {
     "claude": { "provider": "claude", "branch_prefix": "claude/", "issues": [5, 6, 7, 10, 13, 14] },
     "codex": { "provider": "codex", "branch_prefix": "codex/", "issues": [3, 4, 8, 9, 11, 12] }
