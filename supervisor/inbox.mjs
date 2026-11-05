@@ -139,12 +139,20 @@ export function loadItem(inboxDir, id) {
 export function pendingCards(inboxDir) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
     const l = loadItem(inboxDir, s.id);
-    if (!l.ok) return { id: s.id, kind: s.kind, broken: l.reason };
+    if (!l.ok) return { id: s.id, kind: s.kind, createdAt: s.createdAt ?? null, broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
-    return { id: s.id, kind: it.kind, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
+    return { id: s.id, kind: it.kind, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
       will: it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
       text: clip(it.kind === 'prompt' ? it.prompt : it.body, LIMITS.prompt) };
   });
+}
+
+// Issue #702: items decided in the last keepDays days, newest first, so a link to a proposal that is no longer pending can say what became of it.
+// Only state, kind, times and the bounded result or reason (redacted when stored) are returned; redacted again for display.
+export function recentDecided(inboxDir, limit = 40) {
+  const clip = t => (t ? redactLong(String(t).replace(/\r/g, ''), LIMITS.reasonChars, ' [cut]').trim() : null);
+  return allStatuses(inboxDir).filter(s => s.state && s.state !== 'pending').sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit)
+    .map(s => ({ id: s.id, kind: s.kind ?? null, state: String(s.state), createdAt: s.createdAt ?? null, decidedAt: s.decidedAt ?? s.updatedAt ?? null, result: clip(s.result), reason: clip(s.reason) }));
 }
 
 // The two decisions. Only a pending item can be decided, once; the hash must still match. Returns { ok, reason? }.

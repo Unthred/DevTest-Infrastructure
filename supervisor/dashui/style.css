@@ -351,3 +351,19 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .proc-table tr.proc-left td{background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent)}
 [data-procs].stale .proc-body,.proc-body[data-state=stale],.proc-body[data-state=failed]{opacity:.55}
 .proc-table .spark{width:96px;height:24px}
+
+/* Issue #702: the approvals panel sits above the card grid, outside the saved layout. */
+.approvals{border:2px solid var(--line);border-left-width:6px;border-radius:8px;padding:12px 16px;margin:0 0 16px;background:var(--panel,transparent)}
+.approvals[hidden],.approvals [hidden]{display:none}
+.approvals h2{margin:0 0 8px;font-size:1.15rem}
+.approval-list{display:grid;gap:12px}
+.approval{border:1px solid var(--line);border-radius:6px;padding:10px 12px;scroll-margin-top:80px;overflow-wrap:anywhere}
+.approval h3{margin:0 0 4px;font-size:1rem}
+.approval .acts{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.approval .acts .inbox-form{margin:0}
+.approval .btn{min-height:44px;min-width:96px}
+.approval:target,.approval.hl{outline:3px solid var(--focus,#2563eb);outline-offset:2px}
+.approval-text summary{cursor:pointer;min-height:32px}
+.approval-text pre{max-height:20em;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.approval-note{margin:0 0 8px;font-weight:600}
+@media (max-width:600px){.approvals{padding:10px}.approval .acts .inbox-form{flex:1 1 40%}.approval .acts .btn{width:100%}}
