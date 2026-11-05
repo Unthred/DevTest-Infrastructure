@@ -10,7 +10,7 @@ import { NAV, matchRoute } from '../../supervisor/dashrender.mjs';
 import { readTranscript } from '../../supervisor/transcript.mjs';
 import { listRuns, readRun } from '../../supervisor/evidence.mjs';
 import { buildDiagnostics } from '../../supervisor/diagnostics.mjs';
-import { readJobs, readSnapshots, readTeamState } from '../../supervisor/dashdata.mjs';
+import { readSnapshots, readTeamState } from '../../supervisor/dashdata.mjs';
 
 const dashui = new URL('../../supervisor/dashui/', import.meta.url).pathname;
 
