@@ -2712,6 +2712,8 @@ export class Team {
     if (!job || !pr || !rec || rec.pr == null || rec.pr !== pr.number || !rec.head || rec.head === pr.headRefOid || !job.worktree) return false;
     if (typeof this.git.isClean !== 'function' || typeof this.git.unpushedCommits !== 'function') return false;
     try {
+      // Issue #610: a later job may have reused the worktree; only a worktree still on this job's branch proves anything about it.
+      if (rec.branch && (typeof this.git.currentBranch !== 'function' || (await this.git.currentBranch(job.worktree)) !== rec.branch)) return false;
       if ((await this.git.isClean(job.worktree)) !== true) return false;
       return (await this.git.unpushedCommits(job.worktree)) === 0;
     } catch { return false; }

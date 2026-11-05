@@ -1563,10 +1563,10 @@ test('#451 the marker reset runs even when a conflicting PR makes plan() return 
 });
 
 // ---- issue #583: a blocked job overtaken by a newer head no longer holds needs-homeowner
-const heldWorld = (t, { prHead = H(2), jobHead = H(1), clean = true, unpushed = 0, status = 'blocked', worktree = '/p/wt' } = {}) => {
+const heldWorld = (t, { prHead = H(2), jobHead = H(1), clean = true, unpushed = 0, status = 'blocked', worktree = '/p/wt', branch = 'claude/issue-35-x' } = {}) => {
   const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', prHead)], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')], jobStates: { jobA: { id: 'jobA', status, worktree } } });
   w.team.s.jobs.jobA = { kind: 'rebase', agent: 'claude', pr: 38, head: jobHead, branch: 'claude/issue-35-x' };
-  w.git.isClean = async () => clean; w.git.unpushedCommits = async () => unpushed;
+  w.git.isClean = async () => clean; w.git.unpushedCommits = async () => unpushed; w.git.currentBranch = async () => branch;
   return w;
 };
 const cause = { key: 'job:jobA', kind: 'job', job: 'jobA', tk: 'pull' };
@@ -1586,5 +1586,8 @@ test('#583 a job on the current head, or with unpushed or uncommitted work, or u
   const noTree = heldWorld(t, { worktree: '' }); assert.equal(await noTree.team.causeCleared(cause, noTree.gh.pulls[0]), false);
   const throws = heldWorld(t); throws.git.isClean = async () => { throw new Error('x'); }; assert.equal(await throws.team.causeCleared(cause, throws.gh.pulls[0]), false);
   const noGit = heldWorld(t); delete noGit.git.unpushedCommits; assert.equal(await noGit.team.causeCleared(cause, noGit.gh.pulls[0]), false);
+  const reused = heldWorld(t, { branch: 'codex/issue-9-y' }); assert.equal(await reused.team.causeCleared(cause, reused.gh.pulls[0]), false, 'worktree reused by another branch');
+  const detached = heldWorld(t, { branch: null }); assert.equal(await detached.team.causeCleared(cause, detached.gh.pulls[0]), false, 'detached HEAD');
+  const noBr = heldWorld(t); delete noBr.git.currentBranch; assert.equal(await noBr.team.causeCleared(cause, noBr.gh.pulls[0]), false);
   const other = heldWorld(t); other.team.s.jobs.jobA.pr = 99; assert.equal(await other.team.causeCleared(cause, other.gh.pulls[0]), false);
 });
