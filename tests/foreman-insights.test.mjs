@@ -102,3 +102,11 @@ test('rebase stats tool: read-only, bounded, and no secret-shaped text escapes (
   const j = JSON.parse(ok.text); assert.equal(j.recent.length, 1); assert.equal(j.all.pullRequests, 2);
   for (const bad of [GH, PWVAL]) assert.ok(!ok.text.includes(bad));
 });
+
+test('rebase stats (#633): carried verdicts are not reviews; the merge entry is not the start of the timeline', () => {
+  const p = { number: 7, status: 'merged', mergedAt: 10 * H, rebaseRounds: 3, reviewRounds: 4, verdicts: [{}, { carry: { at: 1 } }, { carry: { at: 2 } }, { carry: { at: 3 } }], timeline: [{ at: 10 * H, text: 'merged' }] };
+  const s = rebaseStats({ prs: [p, { ...p, number: 8, timeline: [{ at: 4 * H, text: 'x' }, { at: 10 * H, text: 'merged' }] }] });
+  assert.equal(s.all.reviews.total, 2); assert.equal(s.all.reviews.carriedTotal, 6);
+  assert.equal(s.all.openToMergeHours.measured, 1, 'a PR whose only entry is the merge has no duration');
+  assert.equal(s.all.openToMergeHours.median, 6);
+});

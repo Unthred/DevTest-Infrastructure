@@ -100,6 +100,7 @@ test('a lowest-numbered PR whose rebase worktree is unusable does not hold the n
 
 test('the rebase is not deferred for an implement job the reserve for owed reviews refuses', async t => {
   const team = world2(t, [pr(301, H(1)), cpr(305, H(5), { mergeable: 'MERGEABLE' })]);
+  team.gh.pulls[1].statusCheckRollup = [{ status: 'IN_PROGRESS' }];   // #633: a PR whose checks are not green is not ahead in the queue
   team.budgets = () => ({ claude: mode('normal', 0.86), codex: mode('normal', 0.1) });
   team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 300, key: 'k', ingested: true, at: 100 };
   const acts = await team.plan();
@@ -191,4 +192,20 @@ test('#326 a PR refused by writeBlock does not hold the next rebase', async t =>
   const team = world(t, [qpr(301, 258), qpr(302, 259)]);
   const wb = team.writeBlock.bind(team); team.writeBlock = (p, k) => p.number === 301 ? 'refused' : wb(p, k);
   assert.deepEqual(await rebased(team), [302]);
+});
+
+// Issue #633: a conflicting PR is rebased just before review/merge, not while another PR is ahead of it.
+test('#633 a conflicting PR waits while a green unreviewed PR is ahead; a lone conflicting PR rebases', async t => {
+  const ahead = pr(302, H(2), { mergeable: 'MERGEABLE' });
+  const team = world(t, [pr(301, H(1)), ahead]);
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [], 'deferred: 302 is next to review');
+  const lone = world(t, [pr(301, H(1))]);
+  assert.deepEqual((await lone.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
+});
+test('#633 a PASS-holding green PR is ahead too; once it is gone the conflicting PR rebases', async t => {
+  const team = world(t, [pr(301, H(1)), pr(302, H(2), { mergeable: 'MERGEABLE' })]);
+  team.s.verdicts[`302:${H(2)}`] = { verdict: 'PASS', reviewer: 'codex' };
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), []);
+  team.gh.pulls = [pr(301, H(1))];
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
 });
