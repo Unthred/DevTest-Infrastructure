@@ -466,7 +466,7 @@ const TRIVIAL_DETAIL = /(?:\b(?:adds?|added|removes?|removed)\s+)?\b\d[\d,.]*\s+
 // This is an allow-list, so an effect verb that is not listed (improves, fails, reduces ...) is refused rather than slipping through.
 const SLIP_FILLER = new Set(['the', 'a', 'an', 'of', 'in', 'on', 'at', 'and', 'or', 'pr', 'pull', 'request', 'description', 'title', 'body', 'comment', 'summary', 'text', 'there', 'it', 'its', 'this', 'has', 'have', 'had', 'is', 'are', 'was', 'were', 'be', 'contains', 'contain', 'touches', 'touch', 'lists', 'list', 'reports', 'report', 'shows', 'show', 'says', 'states', 'includes', 'include', 'with', 'for', 'from', 'to', 'about', 'only', 'exactly', 'total', 'suite', 'file', 'files', 'not', 'no', 'misspelled', 'misspelt', 'spelled', 'worded']);
 // Issue #513: a directory token counts as a path only when it starts at a top-level directory of this repository.
-export const TOP_LEVEL_DIRS = new Set(['.github', 'bin', 'broker', 'browser', 'cli', 'contracts', 'docker', 'docs', 'dotnet', 'supervisor', 'tests', 'tools']);
+export const TOP_LEVEL_DIRS = new Set(['.github', 'bin', 'broker', 'browser', 'cli', 'contracts', 'docker', 'docs', 'dotnet', 'foreman-mcp', 'supervisor', 'tests', 'tools']);
 const noDotSegments = w => !w.split('/').some(seg => seg === '..' || seg === '.');
 const isRepoDir = w => /^(?:[\w.-]+\/)+(?:[\w.-]+)?$/.test(w) && TOP_LEVEL_DIRS.has(w.split('/')[0]) && noDotSegments(w);
 // Issue #559: a file token needs the same anchoring. With a slash it must start at a top-level directory; without one it must be a root file or carry a source/doc extension (so "fix.retry" is not a path). Tokens are lower-cased before the check.
