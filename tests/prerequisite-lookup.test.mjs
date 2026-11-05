@@ -63,5 +63,8 @@ test('exclusion: closed and deleted do not block; unknown is reported with the r
   const ex = team.exclusion(9, by(me, iss(1, 'UNKNOWN', { unknownReason: 'HTTP 502' })), []);
   assert.equal(ex.kind, 'prerequisite'); assert.deepEqual(ex.unknown, [1]); assert.match(ex.text, /unknown.*#1.*HTTP 502/);
   assert.match(team.exclusion(9, by(me, iss(1, 'OPEN')), []).text, /blocked by #1/);
+  const mixed = iss(9, 'OPEN', { body: 'Prerequisites: #1, #2' });
+  const mx = team.exclusion(9, by(mixed, iss(1, 'OPEN'), iss(2, 'UNKNOWN', { unknownReason: 'HTTP 502' })), []);
+  assert.match(mx.text, /blocked by #1; state unknown: #2 \(HTTP 502\)/);
   assert.equal(compactIssues([iss(1, 'UNKNOWN', { unknownReason: 'HTTP 502' })])[0].unknownReason, 'HTTP 502');
 });

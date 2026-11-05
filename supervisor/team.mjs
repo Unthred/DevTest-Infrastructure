@@ -754,7 +754,12 @@ export class Team {
     // Issue #522: a prerequisite whose lookup failed is unknown, not open: it is named with the reason, and the next tick looks it up again.
     const unknown = open.filter(d => issueByNo.get(d)?.state === 'UNKNOWN');
     if (unknown.length && unknown.length === open.length) return { kind: 'prerequisite', refs: open, unknown, text: `prerequisite state unknown: ${unknown.map(d => `#${d} (${issueByNo.get(d).unknownReason || 'lookup failed'})`).join(', ')}` };
-    if (open.length) return { kind: 'prerequisite', refs: open, text: `blocked by ${open.map(d => `#${d}`).join(', ')}` };
+    if (open.length) {
+      // Mixed: some prerequisites are open, some unknown. It stays blocked; the unknown ones are named with their reason.
+      const blocked = open.filter(d => !unknown.includes(d)).map(d => `#${d}`).join(', ');
+      const unk = unknown.map(d => `#${d} (${issueByNo.get(d).unknownReason || 'lookup failed'})`).join(', ');
+      return { kind: 'prerequisite', refs: open, ...(unknown.length ? { unknown } : {}), text: `blocked by ${blocked}${unknown.length ? `; state unknown: ${unk}` : ''}` };
+    }
     for (const p of issue.pullPrerequisites ?? pullPrerequisites(issue.title, issue.body)) {   // a cached issue has no body, only the parsed list
       const live = prs.find(x => x.number === p);
       if (live) return { kind: 'pr-wait', refs: [p], text: `waiting for PR #${p}${live.title ? ` ${live.title}` : ''} to merge` };
