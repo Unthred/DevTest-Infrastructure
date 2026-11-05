@@ -416,7 +416,7 @@ test('#550: the dashboard stall reason and Needs you card say why the verdict fi
   assert.equal(rf.head, p.headRefOid); assert.equal(rf.file, path.join(w.team.dir, 'inbox', a.rec.ticket, 'verdict.json'));
   assert.ok(fs.existsSync(rf.file), 'the refused file is kept');
   const why = w.team.stallReasons(p).find(x => x.code === 'review-verdict-refused');
-  assert.ok(why, 'the notice reason is recorded');
+  assert.ok(why, 'the stall reason is recorded');
   assert.match(why.text, /unknown field/); assert.ok(why.text.includes(rf.file));
   assert.equal(w.team.stallReasons({ ...p, headRefOid: H(6) }).some(x => x.code === 'review-verdict-refused'), false, 'a new head clears it');
 });
