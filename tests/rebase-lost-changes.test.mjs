@@ -189,6 +189,7 @@ for (const [name, feat, main] of [
   ['a negated guard', '  if (!a) run(x);', '  if (a) run(x, y);'],
   ['reordered arguments', '  sub(x, ready);', '  sub(ready, x);'],
   ['a dropped early return', '  if (!ready) return x;', '  if (ready) return x;'],
+  ['a line of main that holds the PR tokens in order', '  sub(x, ready);', '  sub(x, y, ready);'],
 ]) {
   test(`taking main's line drops the PR's change and is refused: ${name}`, t => {
     const r = sameLineRepo(t, feat, main);
