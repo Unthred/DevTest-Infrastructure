@@ -1561,3 +1561,30 @@ test('#451 the marker reset runs even when a conflicting PR makes plan() return 
   assert.equal(acts.find(x => x.agent === 'claude')?.type, 'rebase');
   assert.ok(!w.team.s.scanOnlyAnnounced[38]); assert.ok(!w.team.s.scanOnlyRounds[38]);
 });
+
+// ---- issue #583: a blocked job overtaken by a newer head no longer holds needs-homeowner
+const heldWorld = (t, { prHead = H(2), jobHead = H(1), clean = true, unpushed = 0, status = 'blocked', worktree = '/p/wt' } = {}) => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-35-x', prHead)], issues: [issue(23, 'CLOSED'), issue(5, 'OPEN')], jobStates: { jobA: { id: 'jobA', status, worktree } } });
+  w.team.s.jobs.jobA = { kind: 'rebase', agent: 'claude', pr: 38, head: jobHead, branch: 'claude/issue-35-x' };
+  w.git.isClean = async () => clean; w.git.unpushedCommits = async () => unpushed;
+  return w;
+};
+const cause = { key: 'job:jobA', kind: 'job', job: 'jobA', tk: 'pull' };
+test('#583 a job on an older head than the PR head stops holding the label once nothing of its work is unpushed', async t => {
+  const w = heldWorld(t);
+  assert.equal(await w.team.causeCleared(cause, w.gh.pulls[0]), true);
+  w.team.s.unblock.flags[38] = { [cause.key]: cause }; w.gh.removeLabel = async (n, l) => w.calls.labels.push(['removed', n, l]);
+  await w.team.clearStale({});
+  assert.deepEqual(w.calls.labels, [['removed', 38, 'needs-homeowner']]);
+  assert.match(w.calls.comments.at(-1)[1], /overtook it/);
+});
+test('#583 a job on the current head, or with unpushed or uncommitted work, or unprovable state, keeps the label', async t => {
+  assert.equal(await heldWorld(t, { jobHead: H(2) }).team.causeCleared(cause, pr(38, 'claude/issue-35-x', H(2))), false, 'same head');
+  const dirty = heldWorld(t, { clean: false }); assert.equal(await dirty.team.causeCleared(cause, dirty.gh.pulls[0]), false);
+  const ahead = heldWorld(t, { unpushed: 2 }); assert.equal(await ahead.team.causeCleared(cause, ahead.gh.pulls[0]), false);
+  const unknown = heldWorld(t, { unpushed: null }); assert.equal(await unknown.team.causeCleared(cause, unknown.gh.pulls[0]), false);
+  const noTree = heldWorld(t, { worktree: '' }); assert.equal(await noTree.team.causeCleared(cause, noTree.gh.pulls[0]), false);
+  const throws = heldWorld(t); throws.git.isClean = async () => { throw new Error('x'); }; assert.equal(await throws.team.causeCleared(cause, throws.gh.pulls[0]), false);
+  const noGit = heldWorld(t); delete noGit.git.unpushedCommits; assert.equal(await noGit.team.causeCleared(cause, noGit.gh.pulls[0]), false);
+  const other = heldWorld(t); other.team.s.jobs.jobA.pr = 99; assert.equal(await other.team.causeCleared(cause, other.gh.pulls[0]), false);
+});
