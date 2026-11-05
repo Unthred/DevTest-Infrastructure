@@ -3,7 +3,7 @@
 // DOMParser, the '[data-tick-state], .muted' selector, importNode and replaceWith are not the fakes of tests/dashboard-next-tick.test.mjs.
 // The overview page is rendered with a scheduled tick whose slot has passed, so app.js asks /api/next at once; the fragments are the
 // real nextTickHtml output (running) and the literal the server sends when no schedule exists (none). No production state is read.
-// Run `node browser/prepare-cache.mjs` first.
+// Prerequisite: `node browser/prepare-cache.mjs` (needs the network) makes browser/vendor/playwright-core-<version>.tgz; the smoke stops with a clear message when it is missing.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,7 +32,10 @@ async function buildSite(dir) {
   try {
     const view = await buildView({ config: cfg, root, jobs: [], events: [], state: { jobs: {} }, cache: { tick: { at: NOW - 2 * MIN, status: 'ok', lastOkAt: NOW - 2 * MIN }, pulls: [], issues: [] }, snapshots: [], now: NOW });
     const { html } = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(''), pathname: '/' });
-    fs.writeFileSync(path.join(dir, 'index.html'), html.replace('<meta http-equiv="refresh" content="60">', '').replace('<meta name="refresh-seconds" content="60">', '<meta name="refresh-seconds" content="3600">'));
+    // app.js reloads every meta refresh-seconds (default 60 when the tag is absent), so push it out to an hour; refreshSeconds: 0 would drop the tag and leave the 60 s default.
+    const quiet = html.replace('<meta http-equiv="refresh" content="60">', '').replace('<meta name="refresh-seconds" content="60">', '<meta name="refresh-seconds" content="3600">');
+    if (!quiet.includes('<meta name="refresh-seconds" content="3600">') || /refresh-seconds" content="60"/.test(quiet)) throw new Error('could not turn off the page reload: dashrender changed its refresh markup, update buildSite');
+    fs.writeFileSync(path.join(dir, 'index.html'), quiet);
     stageDashui(dir);
     fs.mkdirSync(path.join(dir, 'fragments'));
     fs.writeFileSync(path.join(dir, 'fragments', 'none.html'), '<span class="muted">none</span>');   // what dashserver.mjs sends for /api/next without a schedule
@@ -61,6 +64,7 @@ try {
   const html = await buildSite(site);
   check('fixture page starts with a scheduled tick element', /data-tick-state="scheduled"><span data-countdown=/.test(html));
   const pkg = lock.packages['playwright-core'];
+  if (!fs.existsSync(path.join(sourceProject, 'browser', 'vendor', `playwright-core-${pkg.version}.tgz`))) throw new Error(`browser/vendor/playwright-core-${pkg.version}.tgz is missing: run \`node browser/prepare-cache.mjs\` first (it needs the network)`);
   const restore = await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] }, null);
   check('restore', restore.result.subjectExit === 0);
   const swap = await run('swap', { phase: 'test', command: ['node', '/src/browser/next-swap.mjs', '--target', 'fixture', '--page', '/index.html',
