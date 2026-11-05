@@ -50,8 +50,8 @@ export function redactLong(value, max, marker = '') {
 export const redactAddresses = s => String(s ?? '')
   .replace(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d]|\.\d)/g, '[ip]')
   .replace(/(?<![\w:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![\w:])|(?<![\w:])(?:[0-9a-f]{1,4}:){1,6}(?::[0-9a-f]{1,4}){1,6}(?![\w:])|(?<![\w:]):(?::[0-9a-f]{1,4}){1,7}(?![\w:])|(?<![\w:])(?:[0-9a-f]{1,4}:){1,7}:(?![\w:])/gi, '[ip]');
-// Issue #584: topology (LAN addresses, bare host:port, local domains) must not reach the public repository. One shared rule for refusal text
-// and for every body posted to GitHub. Unlike refusal text it keeps URLs and file paths, which findings legitimately cite.
+// Issue #584: topology (LAN addresses, bare host:port, local domains) must not reach the public repository. This is the rule for every body
+// posted to GitHub. refusalText (supervisor/upgrade.mjs) keeps its own, stricter patterns. Unlike refusal text this keeps URLs and file paths, which findings legitimately cite.
 const HOST_PORT_SKIP = /\.(?:mjs|cjs|js|json|sh|md|ya?ml|ts|txt|log|html|css|py|cs|csproj|sln|toml|lock)$/i;
 const escRe = x => x.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&');
 export const LOCAL_SUFFIXES = 'lan|local|internal|home|intranet|corp|private|localdomain|arpa';
