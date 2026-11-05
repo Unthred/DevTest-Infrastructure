@@ -846,3 +846,28 @@ test('issue #581: a commit refused by a failed pre-check is tried once more afte
   assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS; g.state.pre = { ok: true };
   assert.equal(await g.up.step(), 'upgraded');
 });
+
+test('issue #606: an environmental outcome does not hand a commit a second delayed retry', async t => {
+  const w = world(t, { pre: { ok: false, reason: 'tests: 2 failed' } });
+  const pres = () => w.log.filter(x => x[0] === 'pre').length;
+  assert.equal(await w.up.step(), 'precheck-failed');
+  w.state.now += PRECHECK_RETRY_MS; w.state.pre = { ok: false, environmental: true, reason: 'clone failed' };
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(pres(), 2, 'the delayed retry ran and hit an environmental failure');
+  w.state.now += 10 * ENV_RETRY_MAX_MS; w.state.pre = { ok: false, reason: 'tests: 2 failed' };
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(pres(), 3, 'the environmental retry runs');
+  w.state.now += PRECHECK_RETRY_MS * 4; w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(pres(), 3, 'no further delayed retry for the same commit');
+});
+
+test('issue #606: the install-time check failure gets one delayed retry, then stays latched', async t => {
+  const w = world(t, { up: { ok: false, blocked: true, reason: 'tests: flaky-not' } });
+  const n = k => w.log.filter(x => x[0] === k).length;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(n('upgrade'), 1);
+  w.state.now += PRECHECK_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(n('upgrade'), 1, 'inside the delay: no attempt');
+  w.state.now += 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(n('upgrade'), 2, 'after the delay: one more attempt');
+  w.state.now += 10 * ENV_RETRY_MAX_MS; w.state.up = { ok: true };
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(n('upgrade'), 2, 'latched until a newer main');
+  const g = world(t, { up: { ok: false, blocked: true, reason: 'x' } });
+  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS; g.state.up = { ok: true };
+  assert.equal(await g.up.step(), 'upgraded');
+});
