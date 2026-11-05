@@ -33,7 +33,7 @@ export function classifyIdle({ states, heldAgents = null, holds = {}, plan = [] 
 }
 
 // Busy intervals of one agent (its provider's jobs), clipped to the window and merged.
-function busyIntervals(jobs, provider, from, to) {
+export function busyIntervals(jobs, provider, from, to) {
   const spans = [];
   for (const j of jobs || []) {
     if (j?.unreadable || j.provider !== provider || !Number.isFinite(j.createdAt)) continue;

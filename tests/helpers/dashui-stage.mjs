@@ -7,6 +7,8 @@ import { STATIC } from '../../supervisor/dashserver.mjs';
 import { NAV, matchRoute } from '../../supervisor/dashrender.mjs';
 import { readTranscript } from '../../supervisor/transcript.mjs';
 import { listRuns, readRun } from '../../supervisor/evidence.mjs';
+import { buildDiagnostics } from '../../supervisor/diagnostics.mjs';
+import { readJobs, readSnapshots, readTeamState } from '../../supervisor/dashdata.mjs';
 
 const dashui = new URL('../../supervisor/dashui/', import.meta.url).pathname;
 
@@ -39,7 +41,7 @@ export const readServed = (url, srcDir = dashui) => { const e = STATIC[url]; ret
 const slug = s => String(s).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 // One entry per dashboard route that the view (and the evidence folder) can fill: { name, path, route, data? }. `name` is what the
 // script's page argument selects. Detail routes use the first item the view has.
-export function pagePlan(view, { root, evidenceRoot } = {}) {
+export function pagePlan(view, { root, evidenceRoot, recorderDir = null } = {}) {
   const entries = NAV.map(([page, href]) => ({ name: page, path: href }));
   entries.push({ name: 'timeline', path: '/activity/timeline' }, { name: 'ticks', path: '/supervisor/ticks' }, { name: 'upgrades', path: '/supervisor/upgrades' }, { name: 'evidence', path: '/evidence' });
   const first = obj => Object.keys(obj || {})[0];
@@ -54,7 +56,7 @@ export function pagePlan(view, { root, evidenceRoot } = {}) {
   return entries.map(e => {
     const route = matchRoute(e.path);
     const data = route.page === 'evidence-run' ? readRun(evidenceRoot, route.id) : null;
-    const extra = route.page === 'watch' ? { transcript: readTranscript(root, route.id), job: (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'jobs', `${route.id}.json`), 'utf8')); } catch { return null; } })(), runningNow: view.generatedAt } : route.page === 'evidence' ? { data: listRuns(evidenceRoot || '/nonexistent') } : data ? { data } : {};
+    const extra = route.page === 'diagnostics' ? { data: buildDiagnostics({ jobs: root ? readJobs(root) : [], snapshots: root ? readSnapshots(root) : [], verdicts: root ? readTeamState(root)?.verdicts || {} : {}, agents: Object.fromEntries((view.agents || []).map(a => [a.name, a.provider || a.name])), now: view.generatedAt, recorderDir }) } : route.page === 'watch' ? { transcript: readTranscript(root, route.id), job: (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'jobs', `${route.id}.json`), 'utf8')); } catch { return null; } })(), runningNow: view.generatedAt } : route.page === 'evidence' ? { data: listRuns(evidenceRoot || '/nonexistent') } : data ? { data } : {};
     return { ...e, route: { ...route, ...extra } };
   });
 }

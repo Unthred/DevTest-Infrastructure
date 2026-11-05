@@ -9,6 +9,7 @@ import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.
 
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
+import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -33,7 +34,7 @@ const colourOf = (name, i = 0) => AGENT_COLOUR[name] || EXTRA_COLOURS[i % EXTRA_
 // ---- routes
 export const NAV = [
   ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
-  ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['system', '/system', 'System', 'gear']
+  ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['diagnostics', '/diagnostics', 'Diagnostics', 'clock'], ['system', '/system', 'System', 'gear']
 ];
 export function matchRoute(pathname) {
   const p = pathname.replace(/\/+$/, '') || '/';
@@ -761,7 +762,30 @@ function evidenceRunPage(view, query, path, route) {
   const shots = card({ id: 'ev-shots', title: `Screenshots (${r.shots.length})`, span: 12, movable: false, body: shotBlock });
   return { title: `Review run ${r.name}`, crumbs: [['/system', 'System'], ['/evidence', 'UI review evidence'], [null, r.name]], bodyClass: 'ev', body: grid('evidence-run', info + report + pairs + shots) };
 }
-const PAGES = { evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+// ---- Diagnostics (issue #496): where the cycle loses time, over a stated retention window. Read-only; data comes from diagnostics.mjs through route.data.
+const mins = n => (Number.isFinite(n) ? `${n} min` : '–');
+const plainTable = (head, rows, label) => `<div class="tbl-wrap"><table aria-label="${esc(label)}"><thead><tr>${head.map((h, i) => `<th scope="col"${i ? ' class="num"' : ''}>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${i ? ' class="num"' : ''} data-label="${esc(head[i])}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+const diagSpark = (hourly, key, label, unit) => {
+  const v = hourly.map(h => h[key]).filter(Number.isFinite);
+  return `<div class="diag-spark" data-diag-series="${esc(key)}"><span class="muted">${esc(label)}</span> ${sparkline(v, 'var(--s3)')}<span class="sub">highest hour ${v.length ? esc(Math.max(...v)) : '–'}${esc(unit)}</span></div>`;
+};
+function diagnosticsPage(view, query, path, route) {
+  const d = route.data;
+  if (!d) return { title: 'Diagnostics', body: `<div class="cards">${card({ id: 'diag-none', title: 'Diagnostics', span: 12, movable: false, body: empty('Diagnostics are not available here', 'This page was rendered without its data.', 'warn') })}</div>` };
+  const intro = card({ id: 'diag-about', title: 'What this shows', span: 12, movable: false, body: `<p class="sub" data-diag-retention>Read-only history of the last ${esc(d.retentionDays)} days (UTC days), then dropped from this page; the supervisor's own records are kept longer. Every figure comes from files already on the host: no model call and no GitHub call. The recorder logs are read in bounded amounts (at most ${esc(MAX_FILE_BYTES / 1048576)} MiB per file and ${esc(MAX_TOTAL_BYTES / 1048576)} MiB per page view, only the new part of a file after the first read).</p>` });
+  const t = d.ticks;
+  const ticks = card({ id: 'diag-ticks', title: 'Gaps between ticks, planned and actual', span: 12, movable: false, body: `<p class="sub">Planned: one tick every ${esc(t.plannedMinutes)} min. A gap of ${esc(t.lateAtMinutes)} min or more is a missed tick. Lost minutes are the time beyond the plan.</p>${plainTable(['Day', 'Ticks', 'Median gap', 'Longest gap', 'Missed ticks', 'Lost'], t.days.map(r => [r.day, r.ticks, mins(r.medianMinutes), mins(r.maxMinutes), r.count ? r.lateCount : '–', r.count ? mins(r.lostMinutes) : '–']), 'Gaps between ticks per day')}` });
+  const turn = card({ id: 'diag-turnaround', title: 'Job end to the next job start, per agent', span: 12, movable: false, body: d.agents.length ? `<p class="sub">Time an agent had no job between one job ending and the next starting.</p>${d.agents.map(a => `<h3 class="ev-h" data-diag-agent="${esc(a)}">${esc(a)}</h3>${plainTable(['Day', 'Gaps', 'Median', 'Longest', 'Total'], d.turnaround[a].days.map(r => [r.day, r.count, mins(r.medianMinutes), mins(r.maxMinutes), r.count ? mins(r.totalMinutes) : '–']), `${a} job gaps per day`)}`).join('')}` : empty('No agent configured', 'No agent is in the team configuration.', 'info') });
+  const lag = card({ id: 'diag-verdicts', title: 'Review end to verdict recorded', span: 12, movable: false, body: `<p class="sub">Time from a review job ending to the dispatcher recording its verdict. Carried verdicts are not counted.</p>${plainTable(['Day', 'Verdicts', 'Median', 'Longest', 'Total'], d.verdictLag.days.map(r => [r.day, r.count, mins(r.medianMinutes), mins(r.maxMinutes), r.count ? mins(r.totalMinutes) : '–']), 'Verdict recording time per day')}` });
+  const idleRows = d.idle.flatMap(r => d.agents.map(a => { const x = r.agents[a]; return x ? [r.day, a, mins(x.busyMinutes), mins(x.idleWithWorkMinutes), `${x.idleWithWorkPercent}%`, mins(x.minutes['waiting-for-tick']), mins(x.minutes['tick-run']), mins(x.minutes.upgrade), mins(x.minutes['named-hold'])] : null; })).filter(Boolean);
+  const idle = card({ id: 'diag-idle', title: 'Idle time by cause, per day', span: 12, movable: false, body: `<p class="sub">The same measure as the Agents page (idle with work available), one row per agent and day.</p>${plainTable(['Day', 'Agent', 'Busy', 'Idle with work', 'Share of day', 'Waiting for tick', 'Tick run', 'Upgrade', 'Named hold'], idleRows, 'Idle time by cause per day')}` });
+  const r = d.recorder, problem = r.status === 'missing' || r.status === 'unreadable' || r.status === 'empty';
+  const kb = n => `${Math.round(n / 1048576 * 10) / 10} GiB`;
+  const rec = card({ id: 'diag-recorder', title: 'Load, swap and disk wait from the memory flight recorder', span: 12, movable: false, body: `<p class="sub" data-diag-recorder="${esc(r.status)}">${problem ? '' : `${esc(r.samples)} samples from ${esc(r.files)} log file${r.files === 1 ? '' : 's'}. `}${r.note ? esc(r.note) : ''}</p>${problem ? empty(r.status === 'empty' ? 'No recorder samples in this window' : r.status === 'missing' ? 'Recorder logs not found' : 'Recorder logs not readable', 'The rest of this page does not depend on them.', 'warn')
+    : `<div class="diag-sparks">${diagSpark(r.hourly, 'loadMax', 'Load average (1 min), hourly peak', '')}${diagSpark(r.hourly, 'swapMaxPercent', 'Swap in use, hourly peak', ' %')}${diagSpark(r.hourly, 'iowaitAvg', 'CPU waiting on disk, hourly average', ' %')}</div>${plainTable(['Day', 'Samples', 'Load avg', 'Load peak', 'Swap peak', 'Disk wait avg', 'Disk wait peak', 'Blocked tasks peak'], r.days.map(x => (x.samples ? [x.day, x.samples, x.loadAvg, x.loadMax, `${x.swapMaxPercent}% (${kb(x.swapMaxKb)})`, `${x.iowaitAvg ?? '–'}%`, `${x.iowaitMax ?? '–'}%`, x.blockedMax] : [x.day, 0, '–', '–', '–', '–', '–', '–'])), 'Recorder figures per day')}<p class="sub">Disk I/O is the share of CPU time spent waiting on disk and the number of blocked tasks, both from the one-minute host samples.</p>`}` });
+  return { title: 'Diagnostics', body: grid('diagnostics', intro + ticks + turn + lag + idle + rec) };
+}
+const PAGES = { diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 export const PAGE_NAMES = Object.keys(PAGES);
 
