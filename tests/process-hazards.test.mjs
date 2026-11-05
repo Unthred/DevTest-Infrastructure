@@ -7,7 +7,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { raceWorkers } from './helpers/workers.mjs';
-import { runInGroup, stopGroup } from '../supervisor/testslots.mjs';
+import { runInGroup, stopGroup, formatRuntime } from '../supervisor/testslots.mjs';
+import { runnerGone } from '../supervisor/watchdog.mjs';
+import { processInfo } from '../supervisor/core.mjs';
 
 const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
 const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'hazard-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
@@ -112,4 +114,30 @@ test('a SIGKILLed test-slot runner does not orphan the job group: the watchdog k
   assert.equal(alive(gc), true);
   runner.kill('SIGKILL');
   assert.ok(await until(() => !alive(gc), 8000), 'the job\'s child died with its runner');
+});
+
+test('formatRuntime shows seconds for short limits and minutes for long ones', () => {
+  assert.equal(formatRuntime(0.05 * 60000), '3 seconds');
+  assert.equal(formatRuntime(2 * 3600000), '120 minutes');
+});
+
+test('runnerGone: a live runner with its own start time is not gone; a different start time (PID reuse) or a dead PID is', async () => {
+  const self = processInfo(process.pid).start;
+  assert.equal(runnerGone(process.pid, self), false);
+  assert.equal(runnerGone(process.pid, String(Number(self) + 1)), true, 'same PID, different start time: reused');
+  const c = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise(r => c.on('exit', r));
+  assert.equal(runnerGone(c.pid, '1'), true);
+});
+
+test('the watchdog kills the job group when the runner PID has been reused, and leaves it alone while the runner start time matches', async t => {
+  const wdPath = new URL('../supervisor/watchdog.mjs', import.meta.url).pathname;
+  const mkGroup = () => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+  const spawnDog = (g, start) => spawn(process.execPath, [wdPath, String(process.pid), start, String(g.pid), '0', '100'], { detached: true, stdio: 'ignore' });
+  const good = mkGroup(), reused = mkGroup(); const dogs = [];
+  t.after(() => { for (const p of [good, reused, ...dogs]) { try { process.kill(-p.pid, 'SIGKILL'); } catch { /* gone */ } } });
+  const self = processInfo(process.pid).start;
+  dogs.push(spawnDog(good, self), spawnDog(reused, String(Number(self) + 1)));
+  assert.ok(await until(() => !alive(reused.pid), 5000), 'the reused-PID case killed the group');
+  assert.equal(alive(good.pid), true, 'a matching start time keeps the group');
 });

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { processStart } from './core.mjs';
+import { startGroupWatchdog } from './watchdog.mjs';
 
 export const DEFAULT_TEST_SLOTS = 2;
 const dirOf = root => path.join(root, 'team', 'test-slots');
@@ -70,6 +71,8 @@ export async function withTestSlot(root, opts, fn) {
 
 // Incident 2026-11-04: test workers outlived their parent and spun for ten hours. A job now runs in its own process group,
 // has a maximum runtime, and on timeout, signal or exit the WHOLE group gets TERM, then KILL, and is checked empty.
+// Short limits show seconds, so 0.05 minutes reads as 3 seconds rather than 0 minutes.
+export const formatRuntime = ms => ms < 120000 ? `${Math.round(ms / 1000)} seconds` : `${Math.round(ms / 60000)} minutes`;
 export const DEFAULT_MAX_RUNTIME_MS = 2 * 3600 * 1000;
 const groupAlive = pgid => { try { process.kill(-pgid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 const signalGroup = (pgid, sig) => { try { process.kill(-pgid, sig); } catch { /* group already gone */ } };
@@ -91,9 +94,7 @@ export async function runInGroup(cmd, { env, maxRuntimeMs = DEFAULT_MAX_RUNTIME_
   // or the maximum runtime passes without the runner acting on it.
   let dog = null;
   if (pgid) {
-    const src = 'const [r,g,d]=process.argv.slice(1).map(Number);const k=()=>{try{process.kill(-g,"SIGKILL")}catch{}process.exit(0)};setInterval(()=>{try{process.kill(r,0)}catch{k()}if(Date.now()>d)k();try{process.kill(-g,0)}catch{process.exit(0)}},200);';
-    dog = spawn(process.execPath, ['-e', src, String(process.pid), String(pgid), String(Date.now() + maxRuntimeMs + 2 * graceMs + 1000)], { detached: true, stdio: 'ignore' });
-    dog.unref(); dog.on('error', () => {});
+    dog = startGroupWatchdog({ pgid, deadlineMs: Date.now() + maxRuntimeMs + 2 * graceMs + 1000, pollMs: 200 });
   }
   let timedOut = false, stopping = null;
   const stop = () => (stopping ??= stopGroup(pgid, { graceMs }));
