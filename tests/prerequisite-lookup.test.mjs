@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { githubClient } from '../supervisor/github.mjs';
 import { Team } from '../supervisor/team.mjs';
 import { compactIssues } from '../supervisor/dashdata.mjs';
+import { idleReason, heldIssues } from '../supervisor/dashboard.mjs';
 
 const mk = (calls, { open = [], all = [], views = {} } = {}) => githubClient({ repository: 'o/r' }, args => {
   calls.push(args.join(' '));
@@ -67,4 +68,18 @@ test('exclusion: closed and deleted do not block; unknown is reported with the r
   const mx = team.exclusion(9, by(mixed, iss(1, 'OPEN'), iss(2, 'UNKNOWN', { unknownReason: 'HTTP 502' })), []);
   assert.match(mx.text, /blocked by #1; state unknown: #2 \(HTTP 502\)/);
   assert.equal(compactIssues([iss(1, 'UNKNOWN', { unknownReason: 'HTTP 502' })])[0].unknownReason, 'HTTP 502');
+});
+
+test('dashboard views name a failed prerequisite lookup as unknown with its reason', () => {
+  const cfg = { repository: 'o/r', enabled: true, agents: { claude: { issues: [9], provider: 'claude' } }, limits: { max_fix_attempts: 3 } };
+  const names = { issue: n => ({ text: `#${n}` }), pr: n => ({ text: `PR #${n}` }) };
+  const issues = compactIssues([
+    { number: 9, title: 'T', state: 'OPEN', body: 'Prerequisites: #1', labels: [] },
+    { number: 1, title: '', state: 'UNKNOWN', body: '', labels: [], unknownReason: 'HTTP 502 bad gateway' },
+  ]);
+  const idle = idleReason({ agent: 'claude', config: cfg, team: { c: cfg }, cache: { issues, pulls: [] }, plan: [], state: 'idle', names });
+  assert.match(idle.text, /#1 \(state unknown: HTTP 502 bad gateway\)/);
+  const labelled = compactIssues([{ number: 9, title: 'T', state: 'OPEN', body: 'Prerequisites: #1', labels: ['needs-homeowner'] }, { number: 1, title: '', state: 'UNKNOWN', body: '', labels: [], unknownReason: 'HTTP 502 bad gateway' }]);
+  const held = heldIssues({ cache: { issues: labelled, pulls: [] }, config: cfg });
+  assert.match(JSON.stringify(held), /#1 \(state unknown: HTTP 502 bad gateway\)/);
 });

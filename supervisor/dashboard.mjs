@@ -53,6 +53,8 @@ const pausedAt = job => Math.min(Number.isFinite(job?.allowance?.observedAt) ? j
 
 // The last known reading in words, with its age and any expired window (issue #75, #76): "weekly 100%, 5-hour 26%
 // (expired: reset 4h 38m ago); reported 8h 17m ago".
+// Issue #522: a prerequisite whose lookup failed is named as unknown with its reason, never shown as a plain blocker.
+function unknownNote(i) { return i?.state === 'UNKNOWN' ? ` (state unknown: ${redact(i.unknownReason || 'lookup failed', 200)})` : ''; }
 export function readingText(allowance, now) {
   if (!hasReading(allowance)) return 'no reading has been reported';
   const parts = allowance.windows.map(w => {
@@ -173,7 +175,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     const running = activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n);
     let reason, waits;
     if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
-    else if (open.length) reason = `blocked by ${open.map(d => names.issue(d).text).join(', ')}`;
+    else if (open.length) reason = `blocked by ${open.map(d => names.issue(d).text + unknownNote(byNo.get(d))).join(', ')}`;
     else if ((waits = waitingOnRefs(issue, byNo, prs, S.waitingOn?.[n]?.items || [])).length) reason = `waiting on ${waits.map(d => names.issue(d).text).join(', ')}`;   // issue #1023
     else if (running) reason = 'being implemented now';
     else if (hasPr) reason = 'PR open';
@@ -249,7 +251,7 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
     const open = (c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => byNo.get(d)?.state !== 'CLOSED');
     if (open.length) open.forEach(d => blockers.add(d));
   }
-  if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => names.issue(d).text).join(', ')}` }); for (const d of blockers) links.push({ text: names.issue(d).text, url: url('issues', d) }); }
+  if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => names.issue(d).text + unknownNote(byNo.get(d))).join(', ')}` }); for (const d of blockers) links.push({ text: names.issue(d).text, url: url('issues', d) }); }
   else if (openIssues && !(m && m.mode !== 'normal')) parts.push({ rank: 3, text: 'has an open issue but nothing started it yet (limits or a lease may be holding it)' });
   if (!parts.length) return { text: 'no open issue or pull request is assigned to it', links: [] };
   parts.sort((x, y) => x.rank - y.rank);
@@ -307,7 +309,7 @@ export function heldIssues({ cache, state = {}, splitting = new Set(), pauseText
       continue;
     }
     const open = (i.prerequisites || []).filter(d => byNo.get(d)?.state !== 'CLOSED');
-    if (open.length) out.push({ number: i.number, where: 'later', waits: `waits for ${open.map(d => '#' + d).join(', ')} to close`, ends: `#${open.join(', #')} closing (a merged PR closes it); no decision is needed from you before then` });
+    if (open.length) out.push({ number: i.number, where: 'later', waits: `waits for ${open.map(d => '#' + d + unknownNote(byNo.get(d))).join(', ')} to close`, ends: `#${open.join(', #')} closing (a merged PR closes it); no decision is needed from you before then` });
     else if (pauseText) out.push({ number: i.number, where: 'later', waits: `waits for the open PR backlog to clear (${pauseText})`, ends: 'PRs merging until open PRs fall below the cap; Foreman ends the wait, no decision is needed from you before then' });
     else out.push({ number: i.number, where: 'later', waits: 'labelled needs-homeowner; no question is stated on the issue and no record shows who applied the label', ends: 'someone stating the question on the issue (a line "Question: ...?"), or the label being removed (which would make it eligible for Foreman to start)' });
   }
@@ -938,8 +940,9 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const issues = (cache.issues || []).slice().sort((a, b) => a.number - b.number).map(i => {
     const deps = i.prerequisites || [];
     return { number: i.number, name: redact(names.issue(i.number).text, 300), title: i.title, state: i.state, agent: agentNames.find(n => config.agents[n].issues.includes(i.number)) || null, needsHomeowner: (i.labels || []).includes('needs-homeowner'),
-      dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || excludedBy.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [],
-      createdAt: Number.isFinite(Date.parse(i.createdAt)) ? Date.parse(i.createdAt) : null, closedAt: Number.isFinite(Date.parse(i.closedAt)) ? Date.parse(i.closedAt) : null };
+      dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), unknownPrerequisites: deps.filter(d => byNo.get(d)?.state === 'UNKNOWN').map(d => ({ number: d, reason: redact(byNo.get(d).unknownReason || 'lookup failed', 200) })),
+      createdAt: Number.isFinite(Date.parse(i.createdAt)) ? Date.parse(i.createdAt) : null, closedAt: Number.isFinite(Date.parse(i.closedAt)) ? Date.parse(i.closedAt) : null,
+      reason: queueReason.get(i.number) || excludedBy.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [] };
   });
   const issueTimelines = issueTimelinesOf({ jobs, state, names, jobRows, cache });
   const tickAt = cache.tick?.at ?? null;
