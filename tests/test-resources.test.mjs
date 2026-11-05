@@ -129,3 +129,19 @@ test('test-slot run end to end: no budget file = runs as before; class above max
   const rec = JSON.parse(fs.readFileSync(path.join(state, 'team', 'test-job-results.jsonl'), 'utf8').trim());
   assert.equal(rec.reason, 'memory-limit'); assert.equal(rec.class, 'small'); assert.equal(rec.label, 'hog');
 });
+
+test('a limited job dies with its runner when the runner is SIGKILLed (no orphan)', async t => {
+  const d = tmp(t), pidFile = path.join(d, 'job.pid');
+  const jobSrc = `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`;
+  const drv = path.join(d, 'drv.mjs');
+  fs.writeFileSync(drv, `import { runLimited } from ${JSON.stringify(path.resolve('supervisor/resources.mjs'))};
+    runLimited([process.execPath,'-e',${JSON.stringify(jobSrc)}],{env:process.env,limits:{memory_mb:4096,cpus:1},klass:'small',id:'k'});`);
+  const { spawn } = await import('node:child_process');
+  const runner = spawn(process.execPath, [drv], { stdio: 'ignore' });
+  for (let i = 0; i < 100 && !fs.existsSync(pidFile); i++) await new Promise(r => setTimeout(r, 50));
+  const job = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.ok(alive(job));
+  process.kill(runner.pid, 'SIGKILL');
+  for (let i = 0; i < 60 && alive(job); i++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(alive(job), false, 'the watchdog killed the orphaned job');
+});
