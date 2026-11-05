@@ -1,6 +1,6 @@
 # UI/UX review: Foreman dashboard, Overview and Work pages, 2026-11-04
 
-- **Commit:** f28d175 (main) with this branch's docs only
+- **Commit:** f28d175 (main) at capture time; the branch has since been rebased onto a later main and carries this report only
 - **Data source:** copy of real supervisor state (read-only copy of `dashboard`, `jobs`, `team`, `events`, `leases`, `job-locks`; the write token and cooldown file were left out), served by the dashboard's own request handler on a host Unix socket to the network-less Playwright container. The only harness change is that the handler's Host header is pinned, because the container's loopback port is random. No application code was changed, nothing was written to production.
 - **Evidence directory:** `/mnt/cache/appdata/devtest-infrastructure/evidence/ui-review/20261104-overview-work/` (browse at `/evidence/20261104-overview-work` on the dashboard). Sub-folders: `walk/` (click-through, desktop-1440 and phone-390, PNG + page text + `walk-*.json`), `walk2/` (task paths, tablet-768, dark theme), `audit/` (layout check and axe, WCAG 2.1 A/AA, desktop-1440 and phone-390, light and dark). `manifest.json` and `report.md` are in the run folder.
 - **Scope:** Overview, Work, and every drill-down reachable from them to two or three levels: PR, issue, job, Agents, agent, Supervisor, Tick history, Activity, Timeline, System, UI review evidence, review run. Profiles `desktop-1440`, `phone-390`, `tablet-768` (Overview only), dark theme on Overview and Work.
@@ -219,7 +219,7 @@ UX-01 (squeezed page head, may be fixed under #447), UX-02 (Overview overflow), 
 
 ## Cost of this trial
 - Images opened: 7, each once (desktop-1440: Overview, Work, PR page, issue 243; phone-390: Overview, PR page; tablet-768: Overview). Images reused from an earlier run: 0 (no earlier manifest existed). Images captured: 72 PNG in the evidence folder (plus 9 JSON and the page-text files; 81 manifest entries, each resolving to a file with a matching sha256); most were judged from the page text and JSON files instead.
-- Tokens used (writer job ffc2996b511881326cb2cf8cfdd6b733, from the dispatcher job record): 5,504,484 input and 47,802 output, estimated cost USD 1.67. Review jobs on this PR are not included.
+- Tokens used (writer job ffc2996b511881326cb2cf8cfdd6b733, from the dispatcher job record): 5,504,484 input and 47,802 output, estimated cost USD 1.67. Two later writer jobs (a fix round and a CI fix) added 1,054,337 input and 8,687 output tokens, about USD 0.42, so the writer jobs total about USD 2.09. Review jobs on this PR are not included.
 - Browser runs: 8 container runs, one at a time, niced; one needed `node browser/prepare-cache.mjs` (the vendored packages were absent from this worktree; integrity-checked against the lock).
 
 ## Approval

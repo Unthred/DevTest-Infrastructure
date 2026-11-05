@@ -168,11 +168,3 @@ test('allowanceOf judges window expiry by the clock given to planningInputs, not
   assert.equal(planningInputs({ config: config(), jobs: j, now: NOW }).allowanceOf('codex'), 0.5);
   assert.equal(planningInputs({ config: config(), jobs: j, now: RESET + 1 }).allowanceOf('codex'), null);
 });
-
-// The injected clock decides whether a weekly window has reset, not the wall clock (the fixture's window resets on 4 Nov 2026).
-test('allowanceOf judges window expiry by the injected now, not the wall clock', () => {
-  const before = planningInputs({ config: config(), jobs, probes, now: RESET - 3600000 });
-  assert.equal(before.allowanceOf('codex'), 1);
-  const after = planningInputs({ config: config(), jobs, probes, now: RESET + 3600000 });
-  assert.equal(after.allowanceOf('codex'), null);
-});
