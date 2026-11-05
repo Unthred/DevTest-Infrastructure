@@ -198,3 +198,71 @@ test('a persistently failing rebuild is retried by the timer no more often than 
   assert.equal(x.builds(), before, 'no retry inside the refresh interval');
   x.advance(6000); await x.fire(); assert.equal(x.builds(), before + 1, 'retried after the interval');
 });
+
+// ---- review finding 1: a write invalidates the prepared copies
+test('invalidate: the next request waits for a build that began after the write instead of getting the earlier copy as current', async () => {
+  const x = mkTimed(); const a = await x.store.get('k', {});
+  assert.equal(a.view.n, 1);
+  x.store.invalidate();
+  const b = await x.store.get('k', {});   // inside the reuse window: without invalidate() this would be build 1 again
+  assert.equal(b.view.n, 2); assert.equal(b.stale, false);
+});
+test('invalidate: a build already running when the write happens is not accepted as fresh; another one is made', async () => {
+  const x = mkTimed(); await x.store.get('k', { slow: false });
+  x.advance(4000);
+  const g0 = x.slow.length;
+  await x.store.get('k', { slow: true });   // old copy served, a slow background rebuild starts (it began before the write)
+  x.store.invalidate();                      // the write
+  const waiter = x.store.get('k', { slow: false });
+  await settle();
+  assert.equal(x.slow.length, g0 + 1, 'the slow build began before the write');
+  for (const g of x.slow) g.open();
+  const o = await waiter;
+  assert.ok(o.view.n >= 3, `a build that began after the write was awaited (n=${o.view.n})`); assert.equal(o.stale, false);
+});
+test('invalidate: if the rebuild fails the old copy is served honestly marked stale with the reason', async () => {
+  const x = mkTimed(); await x.store.get('k', {});
+  x.store.invalidate();
+  const o = await x.store.get('k', { fail: true });
+  assert.deepEqual(o.view, { n: 1 }); assert.equal(o.stale, true); assert.match(o.failed, /disk gone/);
+});
+
+// ---- review finding 2: requests are tracked per key
+test('per key: an unwatched view stops being rebuilt while another page keeps being requested (the reviewer\x27s probe)', async () => {
+  let now = 1000, tickFn = null; const built = { timeline: 0, home: 0 };
+  const store = createViewStore({ build: async o => { built[o.key]++; return { n: built[o.key] }; }, ttlMs: 3000, staleMs: 30000, refreshMs: 15000, activeMs: 300000,
+    clock: () => now, yieldTo: fn => fn(), every: fn => { tickFn = fn; return () => { tickFn = null; }; } });
+  await store.get('timeline', { key: 'timeline' });   // opened once at t=0 and never again
+  await store.get('home', { key: 'home' });
+  for (let minute = 1; minute <= 20; minute++) {   // only the home page reloads, once a minute, for 20 minutes
+    for (let step = 0; step < 4; step++) { now += 15000; tickFn?.(); await settle(); }
+    await store.get('home', { key: 'home' });
+  }
+  assert.ok(built.timeline <= 22, `the unwatched timeline was rebuilt ${built.timeline} times (it was 81 before the fix; at most 1 + 300 s / 15 s inside its window)`);
+  assert.ok(built.home >= 75, `the watched home page kept being rebuilt (${built.home})`);
+  assert.equal(store.timerRunning(), true, 'the timer keeps running for the watched key');
+});
+test('per key: with no key requested inside the window the timer stops, and a key requested again is rebuilt again', async () => {
+  const x = mkTimed(); await x.store.get('a', {}); await x.store.get('b', {});
+  x.advance(200000); await x.store.get('b', {});   // b stays watched, a does not
+  x.advance(200000); await x.fire();                      // a is 400 s old, b 200 s: only b is rebuilt
+  const afterB = x.builds(); x.advance(16000); await x.fire(); assert.equal(x.builds(), afterB + 1, 'only the watched key is rebuilt');
+  x.advance(301000); await x.fire(); assert.equal(x.timerSet(), false, 'nobody watching: the timer stops');
+  await x.store.get('a', {}); assert.equal(x.timerSet(), true, 'a request restarts it');
+});
+
+// ---- review follow-up: a hung worker cannot stall every later rebuild
+test('worker build timeout: a build that never answers is rejected, the worker is terminated, and the next build starts a fresh one', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'viewworker-hang-')), flag = path.join(dir, 'answer');
+  const file = path.join(dir, 'hang.mjs');
+  fs.writeFileSync(file, `import fs from 'node:fs'; import { parentPort } from 'node:worker_threads';
+parentPort.on('message', ({ id }) => { if (fs.existsSync(${JSON.stringify(flag)})) parentPort.postMessage({ id, json: JSON.stringify({ ok: true }) }); });\n`);   // silent until the flag exists
+  const w = createWorkerBuild({ url: new URL(`file://${file}`).href, timeoutMs: 300 });
+  try {
+    const t0 = Date.now();
+    await assert.rejects(w.build({}), /timed out after/);
+    assert.ok(Date.now() - t0 < 5000, 'rejected at the deadline, not left hanging');
+    fs.writeFileSync(flag, '1');   // the next worker answers
+    assert.deepEqual(await w.build({}), { ok: true });
+  } finally { await w.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -138,6 +138,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     // A quick double-click lands back on the dashboard with a notice instead of a bare error page; nothing moved.
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=mark-read-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
     writeLastSeen(root, Math.max(at, prev ?? 0));
+    store.invalidate();   // issue #467: the redirect page must show this write, not the copy built before it
     return send(303, 'text/plain; charset=utf-8', 'marked', { location: '/' });
   };
   // Watch (issue #430): the third write. It changes only which changes the dashboard follows; it starts, stops and alters no work.
@@ -158,6 +159,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
     }
     const r = applyAction(root, { kind, number, action, now: now() });
     if (!r.ok) return send(409, 'text/plain; charset=utf-8', r.reason);
+    store.invalidate();   // issue #467: as for Mark as read
     return send(303, 'text/plain; charset=utf-8', 'ok', { location: back });
   };
   return async (req, res) => {
@@ -182,6 +184,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), prob
       try {
         const out = await probe({ root, registry, config: source(), agent, now: at });
         if (out.error === 'overage-risk' || out.error === 'busy') releaseCooldown(root, `probe:${agent}`, at);   // nothing was spent
+        store.invalidate();   // issue #467: the page after the probe must show its reading
         return send(303, 'text/plain; charset=utf-8', out.ok ? 'refreshed\n' : 'no reading\n', { location: `/usage?probe=${out.ok ? 'ok' : 'failed'}` });
       } catch (error) {
         releaseCooldown(root, `probe:${agent}`, at);
