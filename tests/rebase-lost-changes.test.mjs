@@ -172,3 +172,30 @@ test('a resolution that really drops the PR\'s item is still refused, and rebase
   const out = JSON.parse(p.out); assert.equal(out.pushed, false); assert.equal(out.reason, 'lost-changes'); assert.ok(out.lostChanges[0].text.includes('reviewRefusals'));
   assert.equal(git(r.dir, '--git-dir', r.remote, 'rev-parse', 'feat'), oldHead);
 });
+
+// Review fix: taking main's line of a same-line conflict, negating a guard, or reordering arguments is not a union
+function sameLineRepo(t, feat, main) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rls-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const remote = path.join(dir, 'remote.git'); git(dir, 'init', '-q', '--bare', '-b', 'main', remote);
+  const seed = path.join(dir, 'seed'); git(dir, 'clone', '-q', remote, seed);
+  const f = x => `function go() {\n${x}\n}\nconst z = 1;\n`;
+  write(seed, 'l.mjs', f('  if (a) run(x);')); commit(seed, 'base'); git(seed, 'branch', '-M', 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  git(seed, 'checkout', '-q', '-b', 'feat'); write(seed, 'l.mjs', f(feat).replace('const z = 1;', 'const z = 3;')); commit(seed, 'fix'); git(seed, 'push', '-q', 'origin', 'feat');
+  git(seed, 'checkout', '-q', 'main'); write(seed, 'l.mjs', f(main)); commit(seed, 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  const agent = path.join(dir, 'agent'); git(dir, 'clone', '-q', remote, agent);
+  return { dir, remote, agent, f };
+}
+for (const [name, feat, main] of [
+  ['a negated guard', '  if (!a) run(x);', '  if (a) run(x, y);'],
+  ['reordered arguments', '  sub(x, ready);', '  sub(ready, x);'],
+]) {
+  test(`taking main's line drops the PR's change and is refused: ${name}`, t => {
+    const r = sameLineRepo(t, feat, main);
+    const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+    try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+    write(r.agent, 'l.mjs', r.f(main).replace('const z = 1;', 'const z = 3;')); git(r.agent, 'add', '-A');
+    execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+    const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+    assert.ok(c.lostChanges.some(x => x.text === feat.trim()), JSON.stringify(c.lostChanges));
+  });
+}
