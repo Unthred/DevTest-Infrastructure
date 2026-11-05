@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { redactTopology } from '../supervisor/redact.mjs';
+import { refusalText } from '../supervisor/upgrade.mjs';
 import * as github from '../supervisor/github.mjs';
 
 // Fixtures are assembled at run time so no literal LAN address, host or domain is stored in the public repository.
@@ -22,9 +23,17 @@ test('issue #584: ordinary findings text is untouched (files, times, public URLs
   assert.equal(redactTopology(text, []), text);
 });
 
-test('issue #584: a marker inside an HTML comment is never altered even if it looks like topology', () => {
-  const marker = `<!-- note ${host} ${ip} -->`;
+test('issue #584: a Foreman marker comment is kept, any other HTML comment is redacted', () => {
+  const marker = '<!-- devtest-verdict v1 job=a-1 pr=5 head=abc -->';
   assert.equal(redactTopology(`${marker} body ${host}`, []), `${marker} body [host]`);
+  const out = redactTopology(`<!-- ${ip}:8123 ${host} -->`, []);
+  assert.ok(!out.includes(ip) && !out.includes('tower'), out);
+});
+
+test('issue #584: refusalText keeps its stricter behaviour (comments, path after host, any host:port)', () => {
+  assert.equal(refusalText(`<!-- ${host} --> x`, []), '<!-- [host] --> x');
+  assert.equal(refusalText(`probe ${lan}/api failed`, []), 'probe [host] failed');
+  assert.equal(refusalText('main.py:12', []), '[host]');
 });
 
 test('issue #584: every GitHub write (comment, issue create, issue body) is redacted before gh sees it', async () => {

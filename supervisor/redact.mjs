@@ -63,6 +63,7 @@ function topologyPart(text, localDomains) {
   // A bare host:port: the host has a letter (so 12:30 and 3:45 stay) and is not a file name (build.mjs:42).
   return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => { const h = m.replace(/:\d+$/, ''); return !/[a-z]/i.test(h) || HOST_PORT_SKIP.test(h) ? m : '[host]'; });
 }
-// HTML comments (the dispatcher's idempotency markers) pass through untouched so a marker lookup still matches.
+// Only marker-shaped HTML comments (the dispatcher's idempotency markers) pass through untouched so a marker lookup still matches.
+const MARKER = /^<!--\s*(?:devtest-|foreman-)/;
 export const redactTopology = (value, localDomains = localDomainsFromEnv()) =>
-  String(value ?? '').split(/(<!--[\s\S]*?-->)/).map((p, i) => i % 2 ? p : topologyPart(p, localDomains)).join('');
+  String(value ?? '').split(/(<!--[\s\S]*?-->)/).map((p, i) => i % 2 && MARKER.test(p) ? p : topologyPart(p, localDomains)).join('');
