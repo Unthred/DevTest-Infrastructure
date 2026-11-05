@@ -266,7 +266,7 @@ async function needsYouItem(t, w, id) {
 test('issue #560: writer-unknown action asks for a fresh review of a new head, not for recording the writer', async t => {
   const { w } = await ingestReview(t, { model: 'sonnet', evidence: null });
   const item = await needsYouItem(t, w, 'noreviewer-refused-342');
-  assert.match(item.action, /another provider/); assert.match(item.action, /fresh review of the new head/);
+  assert.match(item.action, /another provider/); assert.match(item.action, /at this head, or push a new head through a Foreman job and have that new head reviewed/);
   assert.doesNotMatch(item.action, /record who wrote/);
 });
 test('issue #560: refusedReviews entries are pruned once their head is no longer open, kept while it is', async t => {
@@ -274,4 +274,13 @@ test('issue #560: refusedReviews entries are pruned once their head is no longer
   const key = `342:${HAND.headRefOid}`; assert.ok(w.team.s.refusedReviews[key]);
   w.team.recordHeadWriters([HAND]); assert.ok(w.team.s.refusedReviews[key], 'kept while the head is open');
   w.team.recordHeadWriters([{ ...HAND, headRefOid: 'f'.repeat(40) }]); assert.equal(w.team.s.refusedReviews[key], undefined);
+});
+test('issue #591: modelFor picks the review candidate by the explicit head, not by this.view', async t => {
+  const w = world(t, { pulls: [HAND] });
+  (w.team.s.headWriters ||= {})[`342:${HAND.headRefOid}`] = { provider: 'claude', models: ['claude-opus-5-5'], sessions: ['abcd1234'] };
+  w.team.view = { prs: [{ ...HAND, headRefOid: 'f'.repeat(40) }] };
+  const act = { agent: 'claude', pr: HAND.number, branch: HAND.headRefName, key: 'k' };
+  assert.equal(w.team.modelFor({ ...act, head: HAND.headRefOid }, 'review', {}, true).model, 'sonnet');
+  const other = w.team.modelFor({ ...act, head: 'f'.repeat(40) }, 'review', {}, true);
+  assert.equal(other.model, 'opus', 'a different head with no evidence keeps the first candidate (refused later as writer unknown)');
 });

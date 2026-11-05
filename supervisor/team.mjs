@@ -808,6 +808,8 @@ export class Team {
   // Issue #316: would adding a writer on this agent's provider and 'model' to the PR leave no available independent reviewer?
   // Agent-agnostic: judged from configured review models and providers only. An agent is available when it is neither out of
   // allowance nor waiting for a reset. Returns the reason text, or null when a reviewer remains (or none could review it anyway).
+  // Issue #591: strandsReviewer judges a hypothetical writer set (the actual writers plus the one being considered) and calls independentOf
+  // directly, so it is exempt from independenceRefusal, the one check for actual-writer decisions.
   strandsReviewer(pr, agent, model) {
     const writers = this.writersOf(pr), provider = this.c.agents[agent].provider;
     const unavailable = a => this.limitedOf(a).out || this.modes?.[a]?.mode === 'waiting';
@@ -859,6 +861,8 @@ export class Team {
   }
   // Review models whose approval would unblock: models of this agent's provider known to its manifest that no writer used. Empty when
   // none is known (the dashboard has no manifests) or an unrecorded writer makes no model provably different.
+  // Issue #591: like strandsReviewer, this lists models that would be independent of the writers (a hypothetical reviewer model), not a
+  // decision about an actual review, so it calls writersOf directly instead of independenceRefusal.
   unblockModels(agent, pr) {
     const provider = this.c.agents[agent].provider, writers = this.writersOf(pr);
     if (writers.some(w => w.provider === provider && !w.model)) return [];
