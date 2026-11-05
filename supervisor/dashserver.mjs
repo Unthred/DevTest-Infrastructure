@@ -24,10 +24,20 @@ import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
+import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
+import { fileURLToPath } from 'node:url';
 import { decide as decideInbox, ID_RE as INBOX_ID } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 
 export const DEFAULT_PORT = 8731;
+// Issue #406: ask for a pass now. Only when the team loop is enabled; never throws, never blocks the answer to the homeowner.
+const cliPath = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+export function defaultWake(root, reason, config) {
+  try {
+    if (!config?.enabled) return;
+    requestWake({ root, reason, spawnPass: why => spawnDetachedPass({ root, reason: why, self: cliPath }) });
+  } catch (error) { console.error(`dashboard: wake not requested: ${error?.name || 'Error'}`); }
+}
 
 // Tower LAN address only: a private IPv4 literal. Wildcards, loopback names and public addresses are refused.
 export function validateBind(host, port) {
@@ -120,10 +130,10 @@ export const DASHBOARD_VIEW_TTL_MS = 3000;
 export function diagnosticsData({ root, config, now, recorderDir }) {
   if (typeof config === 'function') config = config();
   const cfg = validateTeamConfig(config);
-  return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir });
+  return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir, wake: (() => { try { return wakeStatus(root, now); } catch { return null; } })() });
 }
 const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, refreshing: p.refreshing, failed: p.failed });
-export function handler({ root, config, host, port, now = () => Date.now(), sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR }) {
+export function handler({ root, config, host, port, now = () => Date.now(), sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR }) {
   // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
   // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
   const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
@@ -190,6 +200,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
     const r = decideInbox(source().inbox.dir, id, decision, t);
     if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
+    try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ }   // the decision starts a pass now
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
   return async (req, res) => {
@@ -275,5 +286,10 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
 export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot }) {
   validateBind(host, port);
   const server = http.createServer(handler({ root, config, host, port, viewTtlMs: DASHBOARD_VIEW_TTL_MS, offload: true, ...(evidenceRoot ? { evidenceRoot } : {}) }));
+  // Issue #406: a new proposal file in the inbox folder starts a pass (no new port; one directory listing every few seconds).
+  const src = configSource(config);
+  const inboxDir = (() => { try { return src().inbox?.dir || null; } catch { return null; } })();
+  const watcher = inboxDir ? inboxWatcher({ dir: inboxDir, onNew: () => { try { defaultWake(root, 'inbox', src()); } catch { /* the schedule is the fallback */ } } }) : { stop() {} };
+  server.once('close', () => watcher.stop());
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
 }

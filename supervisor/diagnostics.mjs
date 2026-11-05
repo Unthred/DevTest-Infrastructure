@@ -4,7 +4,7 @@
 // cap on the recorder logs, and a file-count cap. Output holds numbers and fixed words only (no path, host name or log text).
 import fs from 'node:fs';
 import path from 'node:path';
-import { idleReport, busyIntervals } from './idlecause.mjs';
+import { idleReport, busyIntervals, passStats } from './idlecause.mjs';
 
 export const RETENTION_DAYS = 7;                       // history shown on the page; stated on it
 export const DAY_MS = 86400000;
@@ -156,11 +156,11 @@ export function readRecorder(dir, from, to) {
 }
 
 // Everything the page shows. `recorderDir` null skips the recorder (status "missing").
-export function buildDiagnostics({ jobs = [], snapshots = [], verdicts = {}, agents = {}, now = Date.now(), recorderDir = DEFAULT_RECORDER_DIR }) {
+export function buildDiagnostics({ jobs = [], snapshots = [], verdicts = {}, agents = {}, now = Date.now(), recorderDir = DEFAULT_RECORDER_DIR, wake = null }) {
   const to = now, from = now - RETENTION_DAYS * DAY_MS;
   const snaps = snapshots.filter(s => Number.isFinite(s?.at) && s.at >= from - DAY_MS);
   return { generatedAt: now, from, to, retentionDays: RETENTION_DAYS, agents: Object.keys(agents),
     ticks: tickGaps(snaps, from, to), turnaround: jobTurnaround(jobs, agents, from, to), verdictLag: verdictLag(jobs, verdicts, from, to),
-    idle: idleHistory({ jobs, snapshots: snaps, agents, from, to }),
+    idle: idleHistory({ jobs, snapshots: snaps, agents, from, to }), passes: passStats(snaps, from, to), wake,
     recorder: recorderDir ? readRecorder(recorderDir, from, to) : { status: 'missing', note: 'No recorder log folder is configured.', files: 0, samples: 0, hourly: [], days: [] } };
 }

@@ -21,7 +21,7 @@ import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
 import { advanceWatchlist, factsFromCache } from './watchlist.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, readTeamState, recordTick, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
-import { idleReport, renderIdleReport } from './idlecause.mjs';
+import { idleReport, renderIdleReport, passStats, renderPassStats } from './idlecause.mjs';
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
 import { ghRunner } from './github.mjs';
@@ -33,6 +33,8 @@ import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
+import { requestWake, spawnDetachedPass, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
+import { drivePass } from './wakepass.mjs';
 
 const self = fileURLToPath(import.meta.url);
 function args(list) {
@@ -52,7 +54,8 @@ function print(job) {
   console.log(JSON.stringify({ id, provider, issue, repository, worktree, branch, status, autoResume, attempts, resetAt, nextAttemptAt, workerPid, childPid, lastEvent, checkpoint, capabilities, allowance, kind, access, autoRestart, incompleteRetries, postcondition, model, effort, modelSource, modelReason, modelWarning, sessions }, null, 2));
 }
 function startWorker(root, id, registry) {
-  const child = spawn(process.execPath, [self, 'worker', id, '--state-root', root, '--registry', registry],
+  // The default registry is not passed on: it would be this version's path, and a wake handed to a newer install would load the old manifests.
+  const child = spawn(process.execPath, workerArgs({ self, id, root, registry, defaultRegistry }),
     { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
   child.unref();
   return child.pid;
@@ -62,6 +65,17 @@ function installRunning(root) {
   const unlock = upgradeLock(root);
   if (!unlock) return true;
   unlock(); return false;
+}
+// Issue #406: ask for one extra pass now (job-end, install). Best effort and model-free: any failure only loses the speed-up, the scheduled
+// pass is the fallback. The pass runs the installed code, never the code of this process.
+let registryOption = null;
+const wakeCap = () => { const v = process.env.AI_SUPERVISOR_WAKE_MAX_PER_HOUR; return v !== undefined && v !== '' && Number(v) >= 0 ? Number(v) : WAKE_MAX_PER_HOUR; };
+const spawnPass = (root, reason) => spawnDetachedPass({ root, reason, self, registry: registryOption });
+function wakeNextJob(root, reason) {
+  try {
+    if (!loadTeamConfig(teamConfigFile, root).enabled) return;
+    requestWake({ root, reason, cap: wakeCap(), spawnPass: why => spawnPass(root, why) });
+  } catch (error) { console.error(`ai-supervisor: wake not requested: ${error?.name || 'Error'}`); }
 }
 function reconcileOnce(root, registry, installing = false) {
   const dir = path.join(root, 'jobs');
@@ -199,7 +213,7 @@ async function gatePreflight(registry, config) {
 }
 const currentStatusFor = (root, config) => currentStatus({ root, config, register: readRegister(config) });
 const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
-async function teamTick(root, registry, dryRun, hold = null) {
+async function teamTick(root, registry, dryRun, hold = null, pass = null) {
   // One tick lock covers the whole tick, migrations included, so two concurrent ticks can neither run the same migration nor interleave.
   if (!dryRun && handInstallHold(root)) return { skipped: [{ what: 'team tick', reason: 'held for a hand-install', expected: true }] };
   // A dry run plans only and writes nothing, so it does not take the tick lock: the install's dry-run health check must run while a
@@ -234,7 +248,7 @@ async function teamTick(root, registry, dryRun, hold = null) {
       if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config);
       const report = await team.tick({ dryRun, hold });
       if (!dryRun) {
-        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds });
+        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}) });
         // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
         // Issue #430: advance the watched changes (merge commit, install, alerts, clearing). Never throws, never fails the tick.
         try {
@@ -308,6 +322,7 @@ async function main() {
   const a = args(command === 'test-slot' && cut >= 0 ? rest.slice(0, cut) : rest);   // the command after `--` is not ours to parse
   const root = stateRoot(a['state-root']);
   const registry = path.resolve(a.registry || defaultRegistry);
+  registryOption = a.registry ? registry : null;   // only an operator-given registry is passed on (issue #406)
   if (command === 'help') {
     console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
@@ -353,6 +368,7 @@ async function main() {
     const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null, async j => (await teamFor(root, registry, undefined, false)).resumeGate()(j));
     result.workerPid = null; result.workerStart = null; saveJob(root, result);
     } finally { release(); }
+    wakeNextJob(root, 'job-end');   // issue #406
     return;
   }
   if (command === 'status') {
@@ -501,8 +517,12 @@ async function main() {
       const config = loadTeamConfig(teamConfigFile, root), to = a.to ? Date.parse(a.to) : Date.now();
       const from = a.from ? Date.parse(a.from) : to - Number(a.hours ?? 24) * 3600000;
       if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new SupervisorError('usage: team idle-report [--hours N | --from ISO_TIME [--to ISO_TIME]] [--json]');
-      const rep = idleReport({ jobs: readJobs(root), snapshots: allSnapshots(root, readSnapshots(root)), agents: Object.fromEntries(Object.entries(config.agents).map(([n, x]) => [n, x.provider])), from, to });
-      console.log(a.json === true ? JSON.stringify(rep, null, 2) : renderIdleReport(rep)); return;
+      const snapshots = allSnapshots(root, readSnapshots(root));
+      const rep = idleReport({ jobs: readJobs(root), snapshots, agents: Object.fromEntries(Object.entries(config.agents).map(([n, x]) => [n, x.provider])), from, to });
+      // Issue #406: passes by trigger, and the wake cap state, from local records only.
+      rep.passes = passStats(snapshots, from, to); rep.wake = wakeStatus(root, Date.now(), wakeCap());
+      const wk = rep.wake, wakeLine = `Wakes: ${wk.acceptedLastHour} of ${wk.cap} used in the last hour${wk.capHit ? `; CAP REACHED: ${wk.droppedLastHour} request(s) dropped, the five-minute schedule is the fallback` : ''}`;
+      console.log(a.json === true ? JSON.stringify(rep, null, 2) : `${renderIdleReport(rep)}\n${renderPassStats(rep.passes)}\n${wakeLine}`); return;
     }
     if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team idle-report [--hours N | --from T --to T] [--json] | team status [--json] | team accept-split ISSUE | team request-review PR DECISION_LINK');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
@@ -538,23 +558,30 @@ async function main() {
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
-      // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
-      const unlockRecover = tickLock(root, 'reconcile.lock');
-      let result;
-      if (!unlockRecover) { result = { skippedRecovery: 'another reconcile run is recovering jobs' }; try { recordSkip(root, 'job recovery skipped: another reconcile run holds reconcile.lock'); } catch { /* best effort */ } }
-      else { try { result = reconcileOnce(root, registry, installRunning(root)); } finally { unlockRecover(); } }
-      // The upgrade check comes first (issue #134). A failure here never fails the tick.
-      let before;
-      try { before = await selfUpgradeBefore(root, registry); } catch (error) { before = { error: String(error.message).slice(0, 200), hold: null }; }
-      // The five-minute reconcile cron also runs the token-free team tick, when the team loop is enabled.
-      try {
-        result.team = await teamTick(root, registry, false, before.hold);
-        // A skipped item (lease conflict, gh error) keeps the other items running but still makes the scheduled run fail visibly.
-        if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
-      } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
-      // After the lock is released, so the new version's dry-run health check can take it. A failure here never fails the tick.
-      try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
-      console.log(JSON.stringify(result)); return;
+      // Issue #406: one pass at a time, scheduled or woken (supervisor/wakepass.mjs). A scheduled fire that finds a pass running queues one more.
+      const out = await drivePass({ root, wake: a.wake && typeof a.wake === 'string' ? a.wake : null, spawnFollowUp: why => spawnPass(root, why), runPass: async pass => {
+        // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
+        const unlockRecover = tickLock(root, 'reconcile.lock');
+        let result;
+        if (!unlockRecover) { result = { skippedRecovery: 'another reconcile run is recovering jobs' }; try { recordSkip(root, 'job recovery skipped: another reconcile run holds reconcile.lock'); } catch { /* best effort */ } }
+        else { try { result = reconcileOnce(root, registry, installRunning(root)); } finally { unlockRecover(); } }
+        // The upgrade check comes first (issue #134). A failure here never fails the tick.
+        let before;
+        try { before = await selfUpgradeBefore(root, registry); } catch (error) { before = { error: String(error.message).slice(0, 200), hold: null }; }
+        // The five-minute reconcile cron also runs the token-free team tick, when the team loop is enabled.
+        try {
+          result.team = await teamTick(root, registry, false, before.hold, pass);
+          // A skipped item (lease conflict, gh error) keeps the other items running but still makes the scheduled run fail visibly.
+          if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
+        } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
+        // After the tick lock is released, so the new version's dry-run health check can take it (the pass lock is not taken by that check). A failure here never fails the tick.
+        try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
+        // Issue #406: this process ran the old code and dispatched nothing after an install; ask for a pass on the new code now. The request is
+        // seen when this pass releases the pass lock, so the follow-up runs the installed code and verifies the install.
+        if (before.result === 'upgraded') wakeNextJob(root, 'install');
+        return result;
+      } });
+      console.log(JSON.stringify(out.ran ? out.result : { skipped: out.skipped })); return;
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.
     while (true) {
