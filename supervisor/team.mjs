@@ -1853,7 +1853,13 @@ export class Team {
       if (j.kind === 'rebase' && job.status !== 'completed') this.recordIncompleteRebase(id, j, job, report);
       if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
       // Issue #579: an implement job that ended without completing leaves no pull request; the issue's mark is surfaced at once (findStaleMarks).
-      if (j.kind === 'implement' && job.status !== 'completed') j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
+      // Issue #597: a completed ingest (a later resume of the same job) clears a stale cause, and a transient stop that resumeTransient
+      // will resume once is not surfaced for the tick before that resume; if it stops again after the resume, it is.
+      if (j.kind === 'implement' && job.status === 'completed') delete j.endedNoPr;
+      else if (j.kind === 'implement') {
+        const resumable = !!this.jobs.resume && TRANSIENT_STOPS.has(job.lastEvent) && !this.s.unblock.resumed[id] && !this.s.unblock.noResume[id] && !j.settled;
+        if (resumable) delete j.endedNoPr; else j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
+      }
       j.ingested = true; this.save();
   }
   // Issue #550: a review that ended without a recorded verdict because the validator refused its verdict file keeps the reason, the file and

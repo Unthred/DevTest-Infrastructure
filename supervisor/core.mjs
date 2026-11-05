@@ -88,10 +88,16 @@ export function event(root, job, kind, clock = realClock) {
 // Issue #579: a git call that times out under host load is retried (longer each time) before it counts as a failure, and a failure keeps
 // its real reason (timeout, spawn error, or the redacted first line of stderr) instead of a bare "Git check failed".
 const timedOut = r => r.error?.code === 'ETIMEDOUT' || (r.status === null && r.signal === 'SIGTERM');
+// Issue #597: spawnSync blocks the worker's event loop, so one checkpoint (2-3 git calls, each with retries) shares a total budget.
+// While a budget is active no attempt starts after it is spent and each attempt is cut to the time left.
+export const CHECKPOINT_BUDGET_MS = 60000;
+let gitDeadline = null;
 export function git(root, ...args) {
   let r;
   for (const timeout of GIT_TIMEOUTS) {
-    r = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout, maxBuffer: 65536 });
+    const left = gitDeadline === null ? Infinity : gitDeadline - Date.now();
+    if (left <= 0) { if (r) break; r = { error: { code: 'ETIMEDOUT' }, status: null }; break; }
+    r = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: Math.max(1, Math.min(timeout, left)), maxBuffer: 65536 });
     if (!timedOut(r)) break;
   }
   if (r.status !== 0) {
@@ -261,7 +267,11 @@ export function releaseLeases(root, job) {
   if (released) event(root, job, 'leases_released');
   return released;
 }
-export function checkpoint(root, job, clock = realClock) {
+export function checkpoint(root, job, clock = realClock, budgetMs = CHECKPOINT_BUDGET_MS) {
+  gitDeadline = Date.now() + budgetMs;
+  try { checkpointInner(root, job, clock); } finally { gitDeadline = null; }
+}
+function checkpointInner(root, job, clock) {
   const head = git(job.worktree, 'rev-parse', 'HEAD');
   const status = git(job.worktree, 'status', '--short', '--untracked-files=no').split('\n').filter(Boolean).slice(0, 80);
   let issueState = job.checkpoint?.issueState || 'unknown';

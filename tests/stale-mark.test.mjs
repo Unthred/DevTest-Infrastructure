@@ -79,3 +79,22 @@ test('dashboard: Needs you names the issue and the reopen action; the queue and 
   const merged = await buildView({ config: cfg(), root, jobs: [], events: [], state, cache: { ...cache, delivered: [23] }, snapshots: [], now: NOW });
   assert.ok(!merged.attention.some(a => a.id === 'stale-mark-23'));
 });
+
+// Issue #597: a later completed ingest clears endedNoPr; a transient stop awaiting its one resume is not surfaced before it.
+test('endedNoPr: cleared by a completed ingest; not set for a transient stop that will be resumed once', async t => {
+  const w = world(t), id = 'd'.repeat(32), states = {};
+  w.team.jobs.get = async i => states[i] || null;
+  w.team.jobs.resume = async () => {};
+  const entry = () => w.team.s.jobs[id];
+  const ingest = async job => { states[id] = { id, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
+  w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '23', issue: 23, ingested: false, at: NOW - 1000 };
+  await ingest({ status: 'failed', lastEvent: 'checkpoint_failed' });
+  assert.equal(entry().endedNoPr, undefined, 'transient stop, resume still pending: not surfaced yet');
+  w.team.s.unblock.resumed[id] = NOW;
+  await ingest({ status: 'failed', lastEvent: 'checkpoint_failed' });
+  assert.equal(entry().endedNoPr.event, 'checkpoint_failed', 'stopped again after its one resume: surfaced');
+  await ingest({ status: 'completed', lastEvent: 'completed' });
+  assert.equal(entry().endedNoPr, undefined, 'a later completed ingest clears the stale cause');
+  await ingest({ status: 'blocked', lastEvent: 'retry_exhausted' });
+  assert.equal(entry().endedNoPr.event, 'retry_exhausted', 'a non-transient stop is surfaced at once');
+});

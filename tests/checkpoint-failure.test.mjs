@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { git, GIT_TIMEOUTS, createJob, drive, stateRoot } from '../supervisor/core.mjs';
+import { git, checkpoint, GIT_TIMEOUTS, createJob, drive, stateRoot } from '../supervisor/core.mjs';
 import { runProcess } from '../supervisor/process.mjs';
 import { Team } from '../supervisor/team.mjs';
 
@@ -121,4 +121,20 @@ test('team: a job still running or completed does not raise the item before the 
   await team.ingest({ ingested: [], notified: [] });
   await team.plan();
   assert.deepEqual(Object.keys(team.stale || {}), []);
+});
+
+test('checkpoint: a total time budget stops the retries of every git call in one checkpoint (issue #597)', t => {
+  const { d, r } = repo(t), wt = path.join(d, 'wt'); realGit(r, 'worktree', 'add', '-qb', 'issue-597', wt);
+  const bin = path.join(d, 'bin'); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\nsleep 5\n', { mode: 0o755 });
+  const saved = [...GIT_TIMEOUTS], oldPath = process.env.PATH;
+  GIT_TIMEOUTS.splice(0, GIT_TIMEOUTS.length, 4000, 4000, 4000);
+  process.env.PATH = `${bin}:${oldPath}`;
+  t.after(() => { process.env.PATH = oldPath; GIT_TIMEOUTS.splice(0, GIT_TIMEOUTS.length, ...saved); });
+  const started = Date.now();
+  assert.throws(() => checkpoint(stateRoot(path.join(d, 'state')), { id: 'x', worktree: wt, issue: 597, kind: 'implement' }, undefined, 400), /Git check failed: rev-parse: timed out/);
+  assert.ok(Date.now() - started < 2500, 'bounded by the budget, not 3 x 4000 ms');
+  // the budget is released afterwards: a plain git call is no longer limited by it
+  process.env.PATH = oldPath;
+  assert.match(git(r, 'rev-parse', 'HEAD'), /^[0-9a-f]{40}$/);
 });
