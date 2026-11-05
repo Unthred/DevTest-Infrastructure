@@ -40,6 +40,9 @@ export const ENV_RETRY_MS = 10 * 60 * 1000;
 export const ENV_RETRY_MAX_MS = 4 * 60 * 60 * 1000;
 // Issue #581: a commit refused by a failed check gets one more attempt after this delay without waiting for main to move
 // (a check that fails only under load is not a defect of the commit). A second failure latches it until a newer main.
+// Issue #692: a live tick that fails only because GitHub could not be reached says nothing about the new code. It is retried with the same
+// bounded backoff and never rolls back or latches; the install stays pending until a live tick passes or fails for a real reason.
+export const isGithubConnectionError = reason => /error connecting to api\.github\.com|could not resolve host: ?(?:api\.)?github\.com|tcp connect error|\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)\b|network is unreachable|TLS handshake timeout|dial tcp .*github\.com|connection (?:timed out|reset by peer)/i.test(String(reason || ''));
 export const PRECHECK_RETRY_MS = 30 * 60 * 1000;
 // Issue #302: what a live tick says about the new version. Only a thrown error or a skipped item that is a real fault fails it.
 // A lease held by a running job is an expected wait, reported under `waiting` and never `skipped`; an item flagged `expected`
@@ -403,6 +406,16 @@ export class SelfUpgrade {
     if (running !== p.to) {
       if (now - p.at < VERIFY_MAX_WAIT_MS) return 'awaiting-verification';
       return this.rollback(p.from, p.to, 'no live tick ran under the new version within an hour', p.prs, { ...p.checks, liveTick: 'missing' });
+    }
+    if (!ok && isGithubConnectionError(reason)) {
+      // Back off like clone and fetch failures: ticks inside the window are not judged; the first passing tick verifies at once.
+      const r = p.liveRetry;
+      if (r && now < r.retryAt) return 'awaiting-verification';
+      const attempts = (r?.attempts || 0) + 1, retryAt = now + envBackoffMs(attempts), why = `GitHub unreachable during the live tick: ${String(reason).slice(0, 120)}`;
+      this.s.pending = { ...p, liveRetry: { attempts, at: now, retryAt, reason: why } };
+      this.noteInstall({ result: 'transient', sha: p.to, attempts, reason: why, nextAttemptAt: retryAt }); this.save();
+      this.record({ from: p.from, to: p.to, prs: p.prs, checks: { ...p.checks, liveTick: 'retry' }, result: 'live_tick_retry', reason: why, attempts });
+      return 'awaiting-verification';
     }
     if (!ok) return this.rollback(p.from, p.to, `live tick failed: ${String(reason || 'error').slice(0, 160)}`, p.prs, { ...p.checks, liveTick: 'failed' });
     delete this.s.pending; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();

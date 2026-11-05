@@ -871,3 +871,41 @@ test('issue #606: the install-time check failure gets one delayed retry, then st
   assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS; g.state.up = { ok: true };
   assert.equal(await g.up.step(), 'upgraded');
 });
+
+// Issue #692: GitHub unreachable during the live tick is not a fault of the new code.
+const GH_ERR = 'gh issue comment failed: error connecting to api.github.com';
+test('a GitHub connection error at the live tick backs off, keeps the install pending, and neither rolls back nor latches', async t => {
+  const w = world(t);
+  assert.equal(await w.up.step(), 'upgraded');
+  assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR }), 'awaiting-verification');
+  assert.equal(w.up.s.pending.to, TO); assert.equal(w.up.latch(), null);
+  assert.ok(!w.log.some(x => x[0] === 'rollback'), 'no rollback');
+  assert.equal(w.up.s.install.result, 'transient'); assert.equal(w.up.s.install.nextAttemptAt, w.state.now + envBackoffMs(1));
+  // inside the window another failing tick is not judged, and does not extend it
+  w.state.now += 60_000;
+  assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR }), 'awaiting-verification');
+  assert.equal(w.up.s.pending.liveRetry.attempts, 1);
+  // after the window another failure doubles the delay, up to the cap
+  w.state.now += envBackoffMs(1);
+  assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR }), 'awaiting-verification');
+  assert.equal(w.up.s.pending.liveRetry.attempts, 2); assert.equal(w.up.s.pending.liveRetry.retryAt, w.state.now + envBackoffMs(2));
+  for (let i = 0; i < 12; i++) { w.state.now += ENV_RETRY_MAX_MS; await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR }); }
+  assert.equal(w.up.s.pending.liveRetry.retryAt - w.state.now, ENV_RETRY_MAX_MS, 'bounded');
+  assert.equal(w.up.latch(), null);
+  // the first passing tick verifies at once, even inside a window
+  assert.equal(await w.up.verifyPending({ running: TO, ok: true }), 'verified');
+  assert.equal(w.up.s.pending, undefined); assert.equal(w.up.s.install.result, 'verified');
+});
+
+test('a real failure of the new code still rolls back and latches, also after a connection error', async t => {
+  const w = world(t);
+  await w.up.step();
+  await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR });
+  // still inside the backoff window: a real fault is not hidden by it
+  assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: 'TypeError: x is not a function' }), 'rolled-back');
+  assert.ok(w.up.latch()); assert.ok(w.log.some(x => x[0] === 'rollback'));
+  for (const reason of ['gh pr list failed', 'SyntaxError: Unexpected token', 'ENOENT: no such file', 'error connecting to example.org', undefined]) {
+    const v = world(t); await v.up.step();
+    assert.equal(await v.up.verifyPending({ running: TO, ok: false, reason }), 'rolled-back', String(reason));
+  }
+});

@@ -33,8 +33,9 @@ async function serve(t, { link, tick, upgrades = [], latch } = {}) {
   if (upgrades.length) fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), upgrades.map(u => JSON.stringify(u)).join('\n') + '\n');
   if (latch) fs.writeFileSync(path.join(root, 'team', 'self-upgrade.latch'), JSON.stringify(latch));
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
-  const port = server.address().port; server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => NOW }));
-  return { root, get: p => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p, headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject)) };
+  const port = server.address().port, clock = { now: NOW }; server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => clock.now }));
+  const post = (p, body, { origin = `http://127.0.0.1:${port}`, host = `127.0.0.1:${port}` } = {}) => new Promise((resolve, reject) => { const r = http.request({ host: '127.0.0.1', port, path: p, method: 'POST', headers: { host, ...(origin ? { origin } : {}), 'content-type': 'application/x-www-form-urlencoded' } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject); r.end(body); });
+  return { root, clock, post, get: p => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p, headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject)) };
 }
 
 // ---- 4. live filter: number, title, agent, status
@@ -233,4 +234,32 @@ test('the periodic refresh is script-driven so it keeps an in-place table addres
   assert.match(appJs, /setInterval\(\(\) => \{ saveScroll\(\); location\.reload\(\); \}/);
   assert.doesNotMatch(appJs, /\bscrollKey\b/);   // the key is computed from the current address at save and restore time
   assert.match(appJs, /scrollKeyNow\(\)/);
+});
+
+// ---- Issue #692: the rollback latch is cleared from the dashboard, not a shell command
+test('a latch shows one Needs you item with a Clear latch button and no shell command; no latch, no item', async t => {
+  const s = await serve(t, { link: H(5), latch: { at: NOW - 1000, from: H(5), to: H(6), reason: 'live tick failed: boom' } });
+  const view = JSON.parse((await s.get('/api/view.json')).body), item = view.panels.needsYou.filter(a => a.id === 'upgrade-latched');
+  assert.equal(item.length, 1); assert.equal(item[0].command, null); assert.match(item[0].text, /rolled back \(live tick failed: boom\)/);
+  assert.match((await s.get('/')).body, /<form method="post" action="\/clear-latch"[^>]*><input type="hidden" name="proof"[^>]*><button[^>]*>Clear latch<\/button>/);
+  const none = await serve(t, { link: H(5) });
+  assert.ok(!JSON.parse((await none.get('/api/view.json')).body).panels.needsYou.some(a => a.id === 'upgrade-latched'));
+  assert.ok(!(await none.get('/')).body.includes('/clear-latch'));
+});
+test('POST /clear-latch: wrong proof, foreign origin or wrong host change nothing; the right proof removes the latch once and records it', async t => {
+  const s = await serve(t, { link: H(5), latch: { at: NOW - 1000, from: H(5), to: H(6), reason: 'x' } });
+  const { writeToken } = await import('../supervisor/dashwrite.mjs');
+  const latchFile = path.join(s.root, 'team', 'self-upgrade.latch');
+  const post = (body, { origin, host } = {}) => s.post('/clear-latch', body, { origin, host });
+  assert.equal((await post('proof=' + 'f'.repeat(64))).status, 403);
+  assert.equal((await post('')).status, 403);
+  assert.equal((await post('proof=' + writeToken(s.root), { origin: 'http://evil.example' })).status, 403);
+  assert.equal((await post('proof=' + writeToken(s.root), { host: 'evil.example' })).status, 421);
+  assert.ok(fs.existsSync(latchFile), 'refused requests left the latch');
+  const ok = await post('proof=' + writeToken(s.root)); assert.equal(ok.status, 303);
+  assert.ok(!fs.existsSync(latchFile));
+  const lines = fs.readFileSync(path.join(s.root, 'team', 'upgrades.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(lines.at(-1).result, 'latch_cleared'); assert.equal(lines.at(-1).to, undefined);
+  s.clock.now += 6000;
+  assert.equal((await post('proof=' + writeToken(s.root))).status, 409, 'nothing left to clear');
 });

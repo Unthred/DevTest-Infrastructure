@@ -10,6 +10,7 @@ import { dashDir } from './dashdata.mjs';
 
 export const PROBE_COOLDOWN_MS = 5 * 60000;
 export const MARK_READ_COOLDOWN_MS = 5000;   // Mark as read is cheap, so its cooldown is short
+export const CLEAR_LATCH_COOLDOWN_MS = 5000;   // issue #692: one clear per few seconds
 export const INBOX_COOLDOWN_MS = 1000;   // one decision a second: a double-click cannot decide two cards
 const tokenFile = root => path.join(dashDir(root), 'write-token');
 const cooldownFile = root => path.join(dashDir(root), 'write-cooldown.json');
