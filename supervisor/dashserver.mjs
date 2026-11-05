@@ -15,6 +15,7 @@ import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
+import path from 'node:path';
 import { matchRoute, nextTickHtml, renderRoute, processesFragment } from './dashrender.mjs';
 import { createSampler } from './procsample.mjs';
 import { validateTeamConfig } from './team.mjs';
@@ -25,7 +26,7 @@ import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { decide as decideInbox, ID_RE as INBOX_ID } from './inbox.mjs';
-import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
+import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, CLEAR_LATCH_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 
 export const DEFAULT_PORT = 8731;
 
@@ -192,11 +193,30 @@ export function handler({ root, config, host, port, now = () => Date.now(), samp
     if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
+  // Clear latch (issue #692): removes team/self-upgrade.latch so automatic upgrades can resume, replacing the shell command. Same write protection
+  // as the other posts (D-029): host, origin, the secret proof and a short cooldown. It records an audit line and changes no job or repository.
+  const clearLatch = async (req, res, send) => {
+    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+    if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+    const t = now(), slot = reserveCooldown(root, 'clear-latch', t, CLEAR_LATCH_COOLDOWN_MS);
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=clear-latch-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    const file = path.join(root, 'team', 'self-upgrade.latch');
+    if (!fs.existsSync(file)) { releaseCooldown(root, 'clear-latch', t); return send(409, 'text/plain; charset=utf-8', 'there is no latch to clear'); }
+    fs.rmSync(file, { force: true });
+    try { fs.appendFileSync(path.join(root, 'team', 'upgrades.jsonl'), `${JSON.stringify({ at: t, result: 'latch_cleared', reason: 'cleared by the homeowner on the dashboard' })}\n`, { mode: 0o600 }); } catch { /* the audit line is best effort; the clear stands */ }
+    store.invalidate();
+    return send(303, 'text/plain; charset=utf-8', 'cleared', { location: '/' });
+  };
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
     if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
     if (req.method === 'POST' && reqPath === '/watch') return watch(req, res, send);
+    if (req.method === 'POST' && reqPath === '/clear-latch') return clearLatch(req, res, send);
     if (req.method === 'POST' && reqPath === '/inbox') return inbox(req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.
