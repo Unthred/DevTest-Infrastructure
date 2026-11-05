@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as inbox from '../supervisor/inbox.mjs';
-import { Team, validateTeamConfig } from '../supervisor/team.mjs';
+import { Team, validateTeamConfig, loadTeamConfig } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
@@ -343,4 +343,17 @@ test('config: inbox must be { dir: absolute path }', () => {
   assert.doesNotThrow(() => validateTeamConfig(base));
   for (const bad of [{ dir: 'rel' }, { dir: '/x', extra: 1 }, 'x', [], { dir: 5 }]) assert.throws(() => validateTeamConfig({ ...base, inbox: bad }), /invalid inbox/);
   const { inbox: _, ...none } = base; assert.doesNotThrow(() => validateTeamConfig(none));
+});
+
+test('config: inbox is allowed in team.local.json, validated, and the shipped value is kept without it (issue #642)', t => {
+  const root = tmp(t, 'inbox-local-'), shipped = path.join(here, '..', 'supervisor', 'team.json'), local = path.join(root, 'team.local.json');
+  assert.equal(loadTeamConfig(shipped, root).inbox, undefined);                       // no local file: no inbox
+  fs.writeFileSync(local, JSON.stringify({ inbox: { dir: '/x/inbox' } }));
+  assert.deepEqual(loadTeamConfig(shipped, root).inbox, { dir: '/x/inbox' });          // a valid local inbox.dir loads
+  for (const bad of [{ dir: 'rel' }, { dir: '/x', extra: 1 }, 'x', [], { dir: 5 }]) {
+    fs.writeFileSync(local, JSON.stringify({ inbox: bad }));
+    assert.throws(() => loadTeamConfig(shipped, root), /invalid inbox/, JSON.stringify(bad));   // an invalid one is refused
+  }
+  fs.writeFileSync(local, JSON.stringify({ bogus: 1 }));
+  assert.throws(() => loadTeamConfig(shipped, root), /key not overridable: bogus/);    // other unknown keys are still refused
 });

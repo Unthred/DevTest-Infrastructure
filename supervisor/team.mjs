@@ -195,12 +195,13 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
   if ('test_tmp_root' in local) { if (typeof local.test_tmp_root !== 'string' || !path.isAbsolute(local.test_tmp_root)) throw new SupervisorError('invalid team.local.json: test_tmp_root must be an absolute path'); out.test_tmp_root = local.test_tmp_root; }
   if ('test_resources' in local) out.test_resources = validateResourceConfig(local.test_resources);
+  if ('inbox' in local) out.inbox = local.inbox;   // issue #642: validated like the shipped key by validateTeamConfig, which loadTeamConfig runs on the merged result
   if ('breaker' in local) { try { out.breaker = validateBreakerConfig({ ...(out.breaker || {}), ...local.breaker }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }
   if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
   if ('alerts' in local) {
