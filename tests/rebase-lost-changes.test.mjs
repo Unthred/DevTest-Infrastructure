@@ -303,3 +303,13 @@ test('#640: a commit emptied by keeping a main fix that differs from the PR\'s i
   const p = runPush(r, oldHead); assert.equal(p.code, 3); const out = JSON.parse(p.out);
   assert.equal(out.reason, 'missing'); assert.match(out.message, /pr change/);
 });
+
+test('#640: two call sites, main renames both and the PR adds an argument to both: a change dropped at one site is refused, both kept is accepted', t => {
+  const sites = (a, b) => `  const x = ${a};\n  const y = ${b};`;
+  const spec = { base: sites('f(a)', 'g(b)'), feat: sites('f(a, force)', 'g(b, force)'), main: sites('h(a)', 'k(b)') };
+  const r = lineRepo(t, spec); const oldHead = resolveLine(r, sites('h(a)', 'k(b, force)'));   // the x change is dropped
+  const lost = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges;
+  assert.ok(lost.some(x => x.text.includes('h(a, force)') || x.text.includes('f(a, force)')), JSON.stringify(lost));
+  const ok = lineRepo(t, spec); const oh = resolveLine(ok, sites('h(a, force)', 'k(b, force)'));
+  assert.deepEqual(checkRebase({ repoPath: ok.agent, base: 'origin/main', oldHead: oh, newHead: head(ok) }).lostChanges, []);
+});
