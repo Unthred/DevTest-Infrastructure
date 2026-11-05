@@ -338,7 +338,7 @@ export class SelfUpgrade {
     if (!pre.ok) {
       const attempts = pre.environmental ? (latched?.environmental ? (latched.attempts || 1) + 1 : 1) : 0;
       this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now; delete this.s.waitingSince; delete this.s.waitingFor;
-      this.s.precheckRetried = retryDue && !pre.environmental ? { [target]: true } : {};   // one delayed retry per commit
+      this.s.precheckRetried = this.retriedFor(target, retryDue);   // one delayed retry per commit, kept across environmental outcomes
       this.noteInstall(pre.environmental
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
         : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre) });
@@ -362,6 +362,7 @@ export class SelfUpgrade {
       // The clean copy could not be taken at install time (GitHub unreachable): nothing was swapped, so retry, do not roll back.
       const attempts = (latched?.environmental ? (latched.attempts || 1) : 0) + 1;
       this.s.prechecked[target] = { at: now, environmental: true, attempts }; delete this.s.lastUpgradeAt;
+      this.s.precheckRetried = this.retriedFor(target, retryDue);
       this.noteInstall({ result: 'transient', sha: target, reason: up.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }); this.save();
       this.record({ from, to: target, prs: eligibility.prs, checks, result: 'precheck_failed', reason: up.reason });
       return 'precheck-failed';
@@ -370,7 +371,7 @@ export class SelfUpgrade {
       // The install-time validator, tests or payload check failed before anything was swapped: block only this commit until a newer
       // main, with one alert. No rollback and no global latch (#101).
       this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
-      this.s.precheckRetried = retryDue ? { [target]: true } : {};
+      this.s.precheckRetried = this.retriedFor(target, retryDue);
       this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up) }); this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`);
       this.refuse(from, target, 'install-check', up.reason);
@@ -390,6 +391,9 @@ export class SelfUpgrade {
     await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (${await this.prNames(eligibility.prs)}).`);
     return 'upgraded';
   }
+
+  // The delayed retry is spent once used or already recorded for this commit; only a different target clears it.
+  retriedFor(target, retryDue) { return retryDue || this.s.precheckRetried?.[target] ? { [target]: true } : {}; }
 
   // `ok` is false when the live tick threw or reported skipped items; `running` is the sha this process runs from.
   async verifyPending({ running, ok, reason }) {
