@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { redactLong } from './redact.mjs';
 import { SupervisorError, atomicJson } from './core.mjs';
+import { tickLock } from './team.mjs';
 
 export const SUITE = ['node', '--test', '--test-reporter=dot', 'tests/**/*.test.mjs'];
 export const MAX_MINUTES = 30, OUTER_GRACE_MS = 5 * 60 * 1000, TAIL_CHARS = 1500;
@@ -47,4 +48,29 @@ export async function cloneAndRunTests({ root, repoPath, sha, pr = null, cli, tm
       : r.code === 0 ? `exit 0 in ${seconds} s` : `failed with exit code ${r.code} after ${seconds} s`;
     return save({ ok: r.code === 0 && !r.timedOut, summary, code: r.code, seconds, tail });
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
+// Issue #637 review: the run is not done in the tick. The tick records 'running', starts this detached runner and returns; the runner holds
+// its own lock (like the install's upgrade.lock, issue #448), so a long run never stops another tick. One run at a time.
+export const INBOX_TESTS_LOCK = 'inbox-tests.lock';
+const saveRaw = (root, sha, data) => { const dir = path.join(root, 'team', 'inbox-test-runs'); fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); atomicJson(path.join(dir, `${sha}.json`), data); };
+
+export function startInboxTestRun({ root, sha, pr, cli, registry = null, spawnFn = spawn, lock = tickLock }) {
+  if (!SHA.test(sha)) throw new SupervisorError('the head is not a 40-character commit id');
+  const free = lock(root, INBOX_TESTS_LOCK);   // probe: a held lock means a run is in progress
+  if (!free) throw new SupervisorError('another inbox test run is in progress; wait for it to finish');
+  free();
+  saveRaw(root, sha, { at: Date.now(), sha, pr, ok: null, running: true, summary: 'is running' });
+  const argv = [cli, ...(registry ? ['--registry', registry] : []), 'inbox-test-run', sha, ...(pr != null ? [String(pr)] : [])];
+  const child = spawnFn(process.execPath, argv, { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+  child.unref?.();
+  return { ok: true, started: true, summary: `started; the result is saved to team/inbox-test-runs/${sha}.json` };
+}
+
+export async function runLockedInboxTests({ root, sha, pr, cli, repoPath, tmpRoot, run, lock = tickLock }) {
+  const release = lock(root, INBOX_TESTS_LOCK);
+  if (!release) { saveRaw(root, sha, { at: Date.now(), sha, pr, ok: false, summary: 'was not run: another inbox test run is in progress', code: null }); return null; }
+  try { return await cloneAndRunTests({ root, repoPath, sha, pr, cli, tmpRoot, ...(run ? { run } : {}) }); }
+  catch (error) { saveRaw(root, sha, { at: Date.now(), sha, pr, ok: false, summary: `failed to run: ${String(error?.message || error).slice(0, 200)}`, code: null }); return null; }
+  finally { release(); }
 }

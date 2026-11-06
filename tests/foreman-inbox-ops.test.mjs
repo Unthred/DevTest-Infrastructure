@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import * as inbox from '../supervisor/inbox.mjs';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
-import { cloneAndRunTests } from '../supervisor/inboxtests.mjs';
+import { cloneAndRunTests, startInboxTestRun, runLockedInboxTests } from '../supervisor/inboxtests.mjs';
 import { checkProposal } from '../foreman-mcp/inbox.mjs';
 
 const tmp = (t, p = 'ops-') => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
@@ -144,4 +144,24 @@ test('outputs: no secret-shaped text reaches the status file when an effect fail
   const st = await run(w, act('restart_dashboard', 'dashboard')); assert.equal(st.state, 'failed');
   const blob = fs.readFileSync(path.join(inbox.dirs(w.dir).status, `${st.id}.json`), 'utf8') + fs.readFileSync(inbox.dirs(w.dir).audit, 'utf8') + JSON.stringify(w.team.s.unblock.log);
   assert.ok(!blob.includes(TOKEN)); assert.ok(!inbox.secretShaped(blob.replace(/"hash":"[a-f0-9]+"/g, '')));
+});
+
+test('run_tests does not hold the tick: the action returns once the detached runner is started, and the result file says running', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inbox-start-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let spawned = null; const spawnFn = (cmd, argv, opts) => { spawned = { argv, opts }; return { unref() {} }; };
+  const w = world(t, { runTests: async (sha, pr) => startInboxTestRun({ root, sha, pr, cli: '/x/cli.mjs', spawnFn }) });
+  const r = await run(w, act('run_tests', HEAD));
+  assert.equal(r.state, 'done'); assert.match(r.result, /test run started/);
+  assert.equal(spawned.opts.detached, true); assert.deepEqual(spawned.argv.slice(0, 3), ['/x/cli.mjs', 'inbox-test-run', HEAD]);
+  const saved = JSON.parse(fs.readFileSync(path.join(root, 'team', 'inbox-test-runs', `${HEAD}.json`), 'utf8'));
+  assert.equal(saved.running, true);
+});
+
+test('only one inbox test run at a time: a held inbox-tests lock refuses a second start and the runner records why', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inbox-lock-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const held = () => null;
+  assert.throws(() => startInboxTestRun({ root, sha: HEAD, pr: 9, cli: '/x', spawnFn: () => assert.fail('must not spawn'), lock: held }), /in progress/);
+  assert.equal(await runLockedInboxTests({ root, sha: HEAD, pr: 9, cli: '/x', repoPath: root, tmpRoot: root, lock: held }), null);
+  const saved = JSON.parse(fs.readFileSync(path.join(root, 'team', 'inbox-test-runs', `${HEAD}.json`), 'utf8'));
+  assert.equal(saved.ok, false); assert.match(saved.summary, /another inbox test run/);
 });

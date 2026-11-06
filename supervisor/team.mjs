@@ -1980,6 +1980,7 @@ export class Team {
     const pr = (await this.gh.listPulls()).find(p => p.headRefOid === target);
     if (!pr || !agentOfBranch(this.c, pr.headRefName)) throw new SupervisorError('that commit is not the head of an open Foreman pull request');
     const r = await need('runTests')(target, pr.number);
+    if (r.started) { log(`started a test run on ${shortCommit(target)} of PR #${pr.number}`, 'running apart from the tick'); return `test run started on ${shortCommit(target)}; the result is saved in team/inbox-test-runs/ when it ends`; }
     log(`ran the test suite on ${shortCommit(target)} of PR #${pr.number}`, r.summary);
     if (!r.ok) throw new SupervisorError(`tests ${r.summary}`);
     return `tests passed on ${shortCommit(target)} (${r.summary})`;

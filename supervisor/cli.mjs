@@ -31,7 +31,7 @@ import { ghRunner } from './github.mjs';
 import { redact, redactLong } from './redact.mjs';
 import { saveWork } from './savework.mjs';
 import os from 'node:os';
-import { cloneAndRunTests } from './inboxtests.mjs';
+import { startInboxTestRun, runLockedInboxTests } from './inboxtests.mjs';
 import { hasProbe, refreshProvider } from './probe.mjs';
 import { probeNow } from './probenow.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
@@ -209,7 +209,8 @@ function inboxOps(root, registry, config) {
       return 'latch cleared; the next tick tries the install again without the batching wait';
     },
     probe: agent => probeNow({ root, registry, config: loadTeamConfig(teamConfigFile, root), agent }),
-    runTests: (sha, pr) => cloneAndRunTests({ root, repoPath: config.repo_path, sha, pr, cli: self, tmpRoot: config.test_tmp_root || os.tmpdir(), }),
+    // The run is slow, so it never runs in the tick (issue #448): a detached runner takes its own lock, and the result file is its record.
+    runTests: (sha, pr) => startInboxTestRun({ root, sha, pr, cli: self, registry: registryOption }),
   };
 }
 // Model-free allowance probes, one per provider that has one (issue #75), so a paused agent's reading still refreshes.
@@ -513,6 +514,11 @@ async function main() {
     const server = await serve({ root, config: () => loadTeamConfig(teamConfigFile, root), host: a.host || process.env.DASHBOARD_HOST, port: Number(a.port || process.env.DASHBOARD_PORT || DEFAULT_PORT), evidenceRoot: process.env.DASHBOARD_EVIDENCE_ROOT || undefined });
     console.log(`dashboard listening on http://${server.address().address}:${server.address().port}/ (read-only)`);
     return;   // the server keeps the process alive
+  }
+  if (command === 'inbox-test-run') {   // the detached runner for the inbox action run_tests; holds inbox-tests.lock, never the tick lock
+    const [sha, pr] = a._, config = loadTeamConfig(teamConfigFile, root);
+    await runLockedInboxTests({ root, sha, pr: pr ? Number(pr) : null, cli: self, repoPath: config.repo_path, tmpRoot: config.test_tmp_root || os.tmpdir() });
+    return;
   }
   if (command === 'probe') {
     if (!a._[0]) throw new SupervisorError('usage: probe <agent>');
