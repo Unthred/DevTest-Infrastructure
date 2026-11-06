@@ -80,15 +80,15 @@ test('higher limit: waste across causes reaches $15 and every new job stops, mer
 test('a cause halt stops only that job type: other work and the implement job that fixes the cause continue', () => {
   const s = stateWith(blocked(), blocked(), blocked());
   B.evaluate(s, L, NOW);
-  const acts = [{ type: 'review', pr: 1 }, { type: 'review', pr: 2 }, { type: 'implement', issue: 9 }, { type: 'fix', pr: 3 }, { type: 'rebase', pr: 4 }, { type: 'merge', pr: 5 }];
+  const acts = [{ type: 'review', pr: 10 }, { type: 'review', pr: 10 }, { type: 'implement', issue: 9 }, { type: 'fix', pr: 3 }, { type: 'rebase', pr: 4 }, { type: 'merge', pr: 5 }];
   const { kept, stopped } = B.filterActions(s, L, acts);
   assert.deepEqual(kept.map(a => a.type), ['implement', 'fix', 'rebase', 'merge']);
   assert.equal(stopped.length, 2);
   // an implement-type cause halts implement, except a named fix issue
   const w = stateWith(...[1, 2, 3].map(() => blocked({ kind: 'implement', sessions: {} })));
   B.evaluate(w, L, NOW);
-  assert.equal(B.filterActions(w, L, [{ type: 'implement', issue: 7 }]).kept.length, 0);
-  assert.equal(B.filterActions(w, { ...L, fix_issues: [7] }, [{ type: 'implement', issue: 7 }, { type: 'implement', issue: 8 }]).kept.length, 1);
+  assert.equal(B.filterActions(w, L, [{ type: 'implement', pr: 10, issue: 7 }]).kept.length, 0);
+  assert.equal(B.filterActions(w, { ...L, fix_issues: [7] }, [{ type: 'implement', pr: 10, issue: 7 }, { type: 'implement', pr: 10, issue: 8 }]).kept.length, 1);
 });
 
 test('a halt does not expire, is cleared only by resume, and a cleared cause does not retrip from its old jobs', () => {
@@ -164,11 +164,13 @@ test('ingest records the waste once, and three blocked reviews trip the breaker 
   assert.equal(w.team.applyBreaker([{ type: 'review', agent: 'claude', pr: 41 }], report).length, 1, 'a third failure on another pull request does not trip');
   reviewBlocked(w, 'r4', 40);
   await w.team.ingest(report);
-  const input = [{ type: 'review', agent: 'claude', pr: 41 }, { type: 'implement', agent: 'claude', issue: 5 }, { type: 'merge', agent: 'claude', pr: 40 }];
+  const input = [{ type: 'review', agent: 'claude', pr: 40 }, { type: 'implement', agent: 'claude', issue: 5 }, { type: 'merge', agent: 'claude', pr: 40 }];
   acts = w.team.applyBreaker(input, report);
   assert.deepEqual(acts.map(a => a.type), ['implement', 'merge']);
+  assert.deepEqual(w.team.s.breaker.halts['review:blocked:postcondition_not_met'].subjects, ['pr:40'], 'only the pull request that repeated is held');
   assert.equal(report.breaker.tripped[0].scope, 'review:blocked:postcondition_not_met');
-  assert.deepEqual(report.breaker.stopped.map(x => x.ref), [41]);
+  assert.deepEqual(report.breaker.stopped.map(x => x.ref), [40]);
+  assert.equal(w.team.applyBreaker([{ type: 'review', agent: 'claude', pr: 99 }], {}).length, 1, 'a review of another pull request still runs, so a success can clear the halt');
   assert.match(w.team.held.claude.review, /circuit breaker/);
   const v = (await w.team.breakerStatus()).view;
   assert.deepEqual([v.jobs, v.prs], [4, [40, 41]]);
@@ -406,4 +408,22 @@ test('the halt card has a Resume button per halt, and the output carries no secr
   assert.match(html, /<form method="post" action="\/breaker-resume"[^>]*><input type="hidden" name="scope" value="review:blocked:postcondition_not_met">/);
   assert.match(html, /Resume review:blocked:postcondition_not_met/);
   assert.ok(!html.includes(secret) && !JSON.stringify(view).includes(secret), 'a secret-shaped value never reaches the page or the view');
+});
+
+test('a review halt can clear itself through the planner: a review of another PR is allowed, and its success clears the halt', () => {
+  const s = stateWith(...[1, 2, 3].map(() => blocked()));
+  B.evaluate(s, L, NOW);
+  const h = s.halts['review:blocked:postcondition_not_met'];
+  assert.deepEqual(h.subjects, ['pr:10']);
+  assert.ok(B.blocks(s, L, { type: 'review', pr: 10 }), 'the failing pull request stays held');
+  assert.equal(B.blocks(s, L, { type: 'review', pr: 99 }), null, 'another pull request may start a review');
+  assert.equal(B.filterActions(s, L, [{ type: 'review', pr: 99 }]).kept.length, 1);
+  assert.deepEqual(B.succeeded(s, { type: 'review', createdAt: h.since + 1 }, NOW + 5), [h.cause]);
+  assert.equal(B.blocks(s, L, { type: 'review', pr: 10 }), null);
+  // a cost trip holds every contributing pull request, not the others
+  const c = stateWith(blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 3 } }), blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 3 } }));
+  c.waste[Object.keys(c.waste)[1]].pr = 11;
+  B.evaluate(c, L, NOW);
+  assert.deepEqual(Object.values(c.halts)[0].subjects, ['pr:10', 'pr:11']);
+  assert.ok(B.blocks(c, L, { type: 'review', pr: 11 })); assert.equal(B.blocks(c, L, { type: 'review', pr: 12 }), null);
 });

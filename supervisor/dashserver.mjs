@@ -216,7 +216,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
     if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
-    const scope = form.get('scope') || '', halts = readTeamState(root).breaker || {};
+    const scope = form.get('scope') || '', halts = readTeamState(root)?.breaker || {};
     const known = scope === 'all' ? !!(halts.global || Object.keys(halts.halts || {}).length) : scope === 'global' ? !!halts.global : !!(halts.halts || {})[scope];
     if (!known) return send(409, 'text/plain; charset=utf-8', 'nothing halted for that scope');
     const t = now(), slot = reserveCooldown(root, 'breaker-resume', t, BREAKER_RESUME_COOLDOWN_MS);

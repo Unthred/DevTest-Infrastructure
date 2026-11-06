@@ -105,6 +105,15 @@ export function worstSubject(list) {
   for (const w of list) n.set(subjectOf(w), (n.get(subjectOf(w)) || 0) + 1);
   return Math.max(0, ...n.values());
 }
+// The subjects a halt holds. A count trip holds only the subjects that repeated; a cost trip holds every subject that wasted. Work of the
+// halted type on any other pull request or issue still runs, so a later success can clear the halt (a halt that stopped every job of
+// the type could never be cleared by one). Waste with no subject holds the whole type.
+const heldSubjects = (list, limit, byCount) => {
+  const n = new Map();
+  for (const w of list) n.set(subjectOf(w), (n.get(subjectOf(w)) || 0) + 1);
+  return [...n].filter(([k, c]) => !byCount || c >= limit || k === 'none').map(([k]) => k).sort();
+};
+const actSubject = a => a.pr != null ? `pr:${a.pr}` : a.issue != null ? `issue:${a.issue}` : 'none';
 const clearedFor = (s, cause) => Math.max(s.clearedAt['*'] || 0, s.clearedAt[cause] || 0);
 
 // Trip any limit that is reached. Existing halts are never removed here; only their figures are refreshed from the waste still on file.
@@ -121,9 +130,9 @@ export function evaluate(s, limits, now) {
   for (const [cause, list] of byCause) {
     const f = figures(list), byCount = worstSubject(list) >= limits.same_cause_jobs, byCost = f.cost >= limits.cause_cost_usd;
     const held = s.halts[cause];
-    if (held) { s.halts[cause] = { ...held, ...f }; continue; }
+    if (held) { s.halts[cause] = { ...held, ...f, subjects: [...new Set([...(held.subjects || []), ...heldSubjects(list, limits.same_cause_jobs, held.trippedBy === 'count')])].sort() }; continue; }
     if (!byCount && !byCost && !byTotal) continue;
-    s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : byCost ? 'cost' : 'any-kind-cost', ...f };
+    s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : byCost ? 'cost' : 'any-kind-cost', ...f, subjects: heldSubjects(list, limits.same_cause_jobs, byCount) };
     trips.push({ scope: cause, trippedBy: s.halts[cause].trippedBy });
   }
   const globalList = live.filter(w => w.at > (s.clearedAt['@global'] || 0));
@@ -141,7 +150,12 @@ export function blocks(s, limits, act) {
   if (s.global) return { ...s.global, cause: '@global', scope: 'all new jobs' };
   const fixable = ['implement', 'continue'].includes(type) && (limits.fix_issues || []).includes(act.issue);
   if (fixable) return null;
-  for (const h of Object.values(s.halts || {})) if ((h.types || []).includes(type)) return h;
+  const subject = actSubject(act);
+  for (const h of Object.values(s.halts || {})) {
+    if (!(h.types || []).includes(type)) continue;
+    if (Array.isArray(h.subjects) && !h.subjects.includes('none') && subject !== 'none' && !h.subjects.includes(subject)) continue;   // another pull request or issue may run, and its success clears this halt
+    return h;
+  }
   return null;
 }
 export const filterActions = (s, limits, actions) => {
