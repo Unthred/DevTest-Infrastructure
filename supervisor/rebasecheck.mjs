@@ -91,6 +91,7 @@ function changedLinesOnBase(run, sha, base) {
     else if (line.startsWith('+')) cur.added.push(line.slice(1).trim());
   }
   if (!hunks.length) return false;
+  if (!countsHold(run, sha, base, hunks)) return false;
   for (const h of hunks) {
     if (!h.file) return false;
     const lines = fileLines(run, base, h.file);
@@ -105,6 +106,25 @@ function changedLinesOnBase(run, sha, base) {
   }
   return true;
 }
+
+// Count rule (review of PR #683): a line the commit adds may already exist in the file, so "it appears in the base" does not show the
+// commit's copy survived. Per file, each meaningful added line must appear in the base at least (times at the commit's parent +
+// times the commit adds it). Counts that cannot be read (a missing file, a git error) mean not applied, so the guard refuses.
+export function countsHold(run, sha, base, hunks) {
+  const need = new Map();   // file -> Map(line -> times the commit adds it)
+  for (const h of hunks) {
+    if (!h.file) return false;
+    const m = need.get(h.file) || need.set(h.file, new Map()).get(h.file);
+    for (const t of h.added.filter(meaningful)) m.set(t, (m.get(t) || 0) + 1);
+  }
+  for (const [file, adds] of need) {
+    let parent; let now;
+    try { parent = readLines(run, `${sha}^`, file); now = readLines(run, base, file); } catch { return false; }
+    for (const [t, n] of adds) if (countOf(now, t) < countOf(parent, t) + n) return false;
+  }
+  return true;
+}
+function readLines(run, rev, file) { return run(['show', `${rev}:${file}`]).split('\n').map(l => l.trim()); }
 
 // Issue #415: a conflict resolution can lose a change INSIDE a commit while the commit list still looks complete (PR #222 kept
 // `runDueProbes` and dropped its only call). Compares what the PR added (relative to its merge base with the base, at the old head

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
-import { checkRebase, prepareRebase, pushRebase } from '../supervisor/rebasecheck.mjs';
+import { checkRebase, prepareRebase, pushRebase, countsHold } from '../supervisor/rebasecheck.mjs';
 
 const G = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];
 const git = (cwd, ...a) => execFileSync('git', [...G, ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -311,4 +311,42 @@ test('#640: the same adjacent-edit conflict where main\'s value differs from the
   try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
   try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none */ }
   assert.equal(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).missing.length, 1);
+});
+
+// ---- review of PR #683: count rule. A commit that adds a copy of a line the file already holds must not be dropped unnoticed.
+const DUP = '  assert.ok(x);';
+function dupConflictRebase(r, resolved) {
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  let conflicted = false;
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { conflicted = true; }
+  assert.ok(conflicted, 'the fixture must conflict');
+  write(r.agent, 'l.mjs', r.f(resolved)); git(r.agent, 'add', '-A');
+  try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none in progress */ }
+  return oldHead;
+}
+
+test('count rule: a dropped commit that added a duplicate of an existing line is missing, and rebase-push refuses it', t => {
+  const r = lineRepo(t, { base: `${DUP}\n  const w = 1;`, feat: `${DUP}\n${DUP}\n  const w = 1;`, main: `${DUP}\n  const w = 2;` });
+  const oldHead = dupConflictRebase(r, `${DUP}\n  const w = 2;`);   // the duplicate is lost
+  assert.equal(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).missing.length, 1);
+  const p = runPush(r, oldHead); assert.equal(p.code, 3); assert.equal(JSON.parse(p.out).reason, 'missing');
+});
+
+test('count rule: a duplicate line that main itself gained makes the dropped commit not missing', t => {
+  const r = lineRepo(t, { base: `${DUP}\n  const w = 1;`, feat: `${DUP}\n${DUP}\n  const w = 1;`, main: `${DUP}\n${DUP}\n  const w = 2;` });
+  const oldHead = dupConflictRebase(r, `${DUP}\n${DUP}\n  const w = 2;`);
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.missing, []); assert.deepEqual(c.lostChanges, []);
+});
+
+test('count rule: counts that cannot be read mean not applied', () => {
+  const hunks = [{ file: 'l.mjs', removed: [], added: ['assert.ok(x);'] }];
+  const files = { 'p:l.mjs': 'assert.ok(x);\n', 'b:l.mjs': 'assert.ok(x);\nassert.ok(x);\n' };
+  const reader = unreadable => args => { const k = args[1]; if (k === unreadable || !(k in files)) throw new Error('unreadable'); return files[k]; };
+  assert.equal(countsHold(reader(null), 'p', 'b', hunks), false);      // `p^` is not a key: the parent cannot be read
+  const run = args => { if (args[1] === 'p^:l.mjs') return files['p:l.mjs']; if (args[1] === 'b:l.mjs') return files['b:l.mjs']; throw new Error('unreadable'); };
+  assert.equal(countsHold(run, 'p', 'b', hunks), true);                // readable, base holds 2 >= 1 + 1
+  assert.equal(countsHold((a) => { if (a[1] === 'b:l.mjs') throw new Error('unreadable'); return run(a); }, 'p', 'b', hunks), false);
+  assert.equal(countsHold(run, 'p', 'b', [{ file: null, removed: [], added: ['assert.ok(x);'] }]), false);
 });
