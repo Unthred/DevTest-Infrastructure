@@ -218,6 +218,21 @@ test('dashboard: no proof, wrong proof, a foreign origin, a bad id or decision a
 test('dashboard: without an inbox configured the route does not exist; the item files are never an approval path', async t => {
   const s = await serve(t, null); assert.equal((await s.post('a'.repeat(32), 'approve')).status, 404);
 });
+test('dashboard: a failed inbox item is one Needs you line for three days, then leaves; done and pending items add none (issue #641)', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD), b = drop(dir, { ...GOOD, prompt: 'Another job, quite different' }), c = drop(dir, { ...GOOD, prompt: 'Third job entirely' });
+  inbox.scan(dir, 1000);
+  const s = await serve(t, dir), now = s.clock.now;
+  inbox.finish(dir, a, { state: 'failed', job: 'abcdef12', result: 'the job ended failed; it left no summary' }, now - 1000);
+  inbox.finish(dir, b, { state: 'done', result: 'fine' }, now - 1000);
+  const lines = async () => JSON.parse((await s.get('/api/view.json')).body).panels.needsYou.filter(x => x.id.startsWith('inboxfail-'));
+  const found = await lines();
+  assert.equal(found.length, 1, 'only the failed item');
+  assert.equal(found[0].id, `inboxfail-${a}`); assert.match(found[0].text, /failed \(job abcdef12\).*left no summary/); assert.match(found[0].decision, /ai-supervisor status abcdef12/);
+  assert.match((await s.get('/')).body, /left no summary/);
+  s.clock.now = now + inbox.FAILED_SHOW_MS + 5000;
+  assert.equal((await lines()).length, 0, 'it leaves after three days');
+  assert.equal(inbox.statusOf(dir, c).state, 'pending');
+});
 test('dashboard: reject records a rejection and the card goes away', async t => {
   const dir = makeInbox(t), id = drop(dir, DRAFT); inbox.scan(dir, 1000); const s = await serve(t, dir);
   assert.equal((await s.post(id, 'reject')).status, 303); assert.equal(inbox.statusOf(dir, id).state, 'rejected');
@@ -476,4 +491,24 @@ test('actions: a failed outcome and the result stay redacted and bounded; no sec
   assert.equal(st.state, 'failed');
   const blob = fs.readFileSync(path.join(inbox.dirs(w.dir).status, `${st.id}.json`), 'utf8') + fs.readFileSync(inbox.dirs(w.dir).audit, 'utf8');
   assert.ok(!blob.includes(TOKEN)); assert.ok(!inbox.secretShaped(blob.replace(/"hash":"[a-f0-9]+"/g, '')), 'no secret-shaped text in status or audit');
+});
+
+test('cli: the hinted `status <8-char prefix>` resolves to the full job; unknown and ambiguous prefixes are refused (issue #641)', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'status-prefix-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'jobs'), { recursive: true });
+  const one = 'abcdef12' + '0'.repeat(24), two = 'abcdef13' + '1'.repeat(24), twin = 'abcdef12' + '2'.repeat(24);
+  for (const id of [one, two]) fs.writeFileSync(path.join(root, 'jobs', `${id}.json`), JSON.stringify({ id, status: 'failed' }));
+  const cli = fileURLToPath(new URL('../supervisor/cli.mjs', import.meta.url));
+  const status = arg => spawnSync(process.execPath, [cli, 'status', arg], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+  const hit = status('abcdef12'); assert.equal(hit.status, 0, hit.stderr); assert.equal(JSON.parse(hit.stdout).id, one);
+  assert.notEqual(status('abcdef99').status, 0);
+  fs.writeFileSync(path.join(root, 'jobs', `${twin}.json`), JSON.stringify({ id: twin }));
+  const amb = status('abcdef12'); assert.notEqual(amb.status, 0); assert.match(amb.stderr, /ambiguous/);
+});
+test('dashboard: a failed action item without a job is still one line, with no status hint (issue #641)', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD); inbox.scan(dir, 1000);
+  const s = await serve(t, dir);
+  inbox.finish(dir, a, { state: 'failed', reason: 'could not post', result: 'nothing was done' }, s.clock.now - 1000);
+  const f = JSON.parse((await s.get('/api/view.json')).body).panels.needsYou.filter(x => x.id.startsWith('inboxfail-'));
+  assert.equal(f.length, 1); assert.doesNotMatch(f[0].decision, /ai-supervisor status/);
 });

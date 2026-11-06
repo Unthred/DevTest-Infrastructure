@@ -9,6 +9,8 @@ import { Team, validateTeamConfig, applyLocalOverride } from '../supervisor/team
 import { stateRoot } from '../supervisor/core.mjs';
 import { buildView } from '../supervisor/dashboard.mjs';
 import { renderRoute, matchRoute } from '../supervisor/dashrender.mjs';
+import crypto from 'node:crypto';
+import { requestBreakerResume, takeBreakerResumeRequests } from '../supervisor/breakerresume.mjs';
 
 const NOW = 1_800_000_000_000, HOUR = 3600000;
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -78,15 +80,15 @@ test('higher limit: waste across causes reaches $15 and every new job stops, mer
 test('a cause halt stops only that job type: other work and the implement job that fixes the cause continue', () => {
   const s = stateWith(blocked(), blocked(), blocked());
   B.evaluate(s, L, NOW);
-  const acts = [{ type: 'review', pr: 1 }, { type: 'review', pr: 2 }, { type: 'implement', issue: 9 }, { type: 'fix', pr: 3 }, { type: 'rebase', pr: 4 }, { type: 'merge', pr: 5 }];
+  const acts = [{ type: 'review', pr: 10 }, { type: 'review', pr: 10 }, { type: 'implement', issue: 9 }, { type: 'fix', pr: 3 }, { type: 'rebase', pr: 4 }, { type: 'merge', pr: 5 }];
   const { kept, stopped } = B.filterActions(s, L, acts);
   assert.deepEqual(kept.map(a => a.type), ['implement', 'fix', 'rebase', 'merge']);
   assert.equal(stopped.length, 2);
   // an implement-type cause halts implement, except a named fix issue
   const w = stateWith(...[1, 2, 3].map(() => blocked({ kind: 'implement', sessions: {} })));
   B.evaluate(w, L, NOW);
-  assert.equal(B.filterActions(w, L, [{ type: 'implement', issue: 7 }]).kept.length, 0);
-  assert.equal(B.filterActions(w, { ...L, fix_issues: [7] }, [{ type: 'implement', issue: 7 }, { type: 'implement', issue: 8 }]).kept.length, 1);
+  assert.equal(B.filterActions(w, L, [{ type: 'implement', pr: 10, issue: 7 }]).kept.length, 0);
+  assert.equal(B.filterActions(w, { ...L, fix_issues: [7] }, [{ type: 'implement', pr: 10, issue: 7 }, { type: 'implement', pr: 10, issue: 8 }]).kept.length, 1);
 });
 
 test('a halt does not expire, is cleared only by resume, and a cleared cause does not retrip from its old jobs', () => {
@@ -159,14 +161,19 @@ test('ingest records the waste once, and three blocked reviews trip the breaker 
   assert.equal(acts.length, 1, 'two wasted jobs do not trip');
   reviewBlocked(w, 'r3', 41);
   await w.team.ingest(report);
-  const input = [{ type: 'review', agent: 'claude', pr: 41 }, { type: 'implement', agent: 'claude', issue: 5 }, { type: 'merge', agent: 'claude', pr: 40 }];
+  assert.equal(w.team.applyBreaker([{ type: 'review', agent: 'claude', pr: 41 }], report).length, 1, 'a third failure on another pull request does not trip');
+  reviewBlocked(w, 'r4', 40);
+  await w.team.ingest(report);
+  const input = [{ type: 'review', agent: 'claude', pr: 40 }, { type: 'implement', agent: 'claude', issue: 5 }, { type: 'merge', agent: 'claude', pr: 40 }];
   acts = w.team.applyBreaker(input, report);
   assert.deepEqual(acts.map(a => a.type), ['implement', 'merge']);
+  assert.deepEqual(w.team.s.breaker.halts['review:blocked:postcondition_not_met'].subjects, ['pr:40'], 'only the pull request that repeated is held');
   assert.equal(report.breaker.tripped[0].scope, 'review:blocked:postcondition_not_met');
-  assert.deepEqual(report.breaker.stopped.map(x => x.ref), [41]);
+  assert.deepEqual(report.breaker.stopped.map(x => x.ref), [40]);
+  assert.equal(w.team.applyBreaker([{ type: 'review', agent: 'claude', pr: 99 }], {}).length, 1, 'a review of another pull request still runs, so a success can clear the halt');
   assert.match(w.team.held.claude.review, /circuit breaker/);
   const v = (await w.team.breakerStatus()).view;
-  assert.deepEqual([v.jobs, v.prs], [3, [40, 41]]);
+  assert.deepEqual([v.jobs, v.prs], [4, [40, 41]]);
   assert.match(v.text, /usage equivalent/);
 });
 
@@ -198,7 +205,7 @@ test('a verdict refused at ingestion is waste with a stable cause, and a valid P
 
 test('restart keeps the halt; resume clears it and survives a further restart', async t => {
   const w = world(t);
-  for (const [i, id] of ['r1', 'r2', 'r3'].entries()) reviewBlocked(w, id, 40 + (i % 2));
+  for (const id of ['r1', 'r2', 'r3']) reviewBlocked(w, id, 40);
   await w.team.ingest({ ingested: [], skipped: [] });
   w.team.applyBreaker([], { });
   const restarted = w.mk();
@@ -290,4 +297,133 @@ test('resume is refused for a process under a supervised job, even with a termin
 test('trippedBy labels: every value the breaker records has display text, unknown values pass through', () => {
   for (const v of ['count', 'cost', 'any-kind-cost']) assert.notEqual(B.trippedByLabel(v), v);
   assert.equal(B.trippedByLabel('something-new'), 'something-new');
+});
+
+// ---- issue #626: judge by repeat cause and cost, clear itself, Resume
+const onPr = (pr, over = {}) => waste(blocked({ usage: { inputTokens: 10, outputTokens: 10, costUsdEstimate: 0.4 }, ...over }), { pr });
+
+test('the 5 Nov sequence: cheap failures of one cause across different pull requests do not trip; the same pull request failing repeatedly does', () => {
+  const s = B.emptyState();
+  for (const pr of [101, 102, 103]) B.record(s, onPr(pr), NOW);
+  assert.deepEqual(B.evaluate(s, L, NOW), [], 'three cheap failures on three pull requests');
+  assert.deepEqual(s.halts, {});
+  // a fourth and fifth on different pull requests still do not
+  for (const pr of [104, 105]) B.record(s, onPr(pr), NOW);
+  assert.deepEqual(B.evaluate(s, L, NOW), []);
+  // the same pull request failing three times does
+  const t = B.emptyState();
+  for (const i of [1, 2, 3]) B.record(t, onPr(101), NOW + i);
+  assert.deepEqual(B.evaluate(t, L, NOW + 5).map(x => [x.scope, x.trippedBy]), [['review:blocked:postcondition_not_met', 'count']]);
+  assert.match(B.trippedByLabel('count'), /one pull request/);
+  // two on one pull request plus one elsewhere is still not a repeat
+  const u = B.emptyState();
+  B.record(u, onPr(101), NOW); B.record(u, onPr(101), NOW + 1); B.record(u, onPr(102), NOW + 2);
+  assert.deepEqual(B.evaluate(u, L, NOW + 3), []);
+});
+
+test('a meaningful cost trips even across unrelated pull requests', () => {
+  const s = B.emptyState();
+  for (const pr of [1, 2]) B.record(s, onPr(pr, { usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 2.6 } }), NOW);
+  assert.deepEqual(B.evaluate(s, L, NOW).map(x => x.trippedBy), ['cost']);
+});
+
+test('self-clearing: a later successful job of the halted type ends the halt; an earlier or other-type job does not', () => {
+  const s = B.emptyState();
+  for (const i of [1, 2, 3]) B.record(s, onPr(7), NOW + i);
+  B.evaluate(s, L, NOW + 10);
+  const cause = 'review:blocked:postcondition_not_met', since = s.halts[cause].since;
+  assert.deepEqual(B.succeeded(s, { type: 'review', createdAt: since - 1 }, NOW + 20), [], 'a job already running when it tripped does not clear it');
+  assert.deepEqual(B.succeeded(s, { type: 'implement', createdAt: since + 1 }, NOW + 20), [], 'another type does not');
+  assert.deepEqual(B.succeeded(s, { type: 'review', createdAt: undefined }, NOW + 20), []);
+  assert.ok(s.halts[cause]);
+  assert.deepEqual(B.succeeded(s, { type: 'review', createdAt: since + 1 }, NOW + 30), [cause]);
+  assert.deepEqual(s.halts, {});
+  assert.equal(s.resumes.at(-1).by, 'success');
+  B.evaluate(s, L, NOW + 31);
+  assert.deepEqual(s.halts, {}, 'the old waste does not retrip it');
+  // the higher global limit is not cleared by a success
+  const g = stateWith(...[1, 2, 3, 4].map(i => blocked({ incompleteReason: { cause: 'c' + i }, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 4 } })));
+  B.evaluate(g, L, NOW);
+  B.succeeded(g, { type: 'review', createdAt: NOW + 5 }, NOW + 6);
+  assert.ok(g.global);
+});
+
+test('tick: a completed review after the halt clears it; one that wasted does not; a restart keeps an uncleared halt', async t => {
+  const w = world(t);
+  for (const id of ['r1', 'r2', 'r3']) reviewBlocked(w, id, 40);
+  const report = { ingested: [], skipped: [] };
+  await w.team.ingest(report); w.team.applyBreaker([], report);
+  const cause = 'review:blocked:postcondition_not_met', halted = w.team.s.breaker.halts[cause];
+  assert.ok(halted);
+  // a later review that also wastes leaves it halted
+  add(w, 'bad', { kind: 'review', pr: 41, head: H(2) }, blocked({ id: 'bad', createdAt: halted.since + 5 }));
+  await w.team.ingest(report);
+  assert.ok(w.mk().s.breaker.halts[cause], 'still halted after a restart');
+  // a later review that completes with a recorded verdict clears it
+  const ticket = 'd'.repeat(32), dir = path.join(w.team.dir, 'inbox', ticket); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'verdict.json'), JSON.stringify({ pr: 41, headSha: H(2), verdict: 'PASS', findings: [], commandsRun: ['node --test'] }));
+  add(w, 'good', { kind: 'review', pr: 41, head: H(2), ticket, model: 'opus' }, blocked({ id: 'good', status: 'completed', model: 'opus', createdAt: halted.since + 10 }));
+  await w.team.ingest(report);
+  assert.deepEqual(report.breaker.cleared, [cause]);
+  assert.equal(w.mk().applyBreaker([{ type: 'review', agent: 'claude', pr: 41 }], {}).length, 1, 'new reviews start again, also after a restart');
+});
+
+test('tick: a Resume request left by the dashboard clears the halt; an unknown scope clears nothing; the global halt survives a restart until resumed', async t => {
+  const w = world(t);
+  for (const id of ['r1', 'r2', 'r3']) reviewBlocked(w, id, 40);
+  await w.team.ingest({ ingested: [], skipped: [] }); w.team.applyBreaker([], {});
+  const cause = 'review:blocked:postcondition_not_met';
+  requestBreakerResume(w.team.root, 'no-such-cause', NOW);
+  const r1 = {}; w.team.applyBreaker([], r1);
+  assert.ok(w.team.s.breaker.halts[cause]); assert.equal(r1.breaker?.resumed, undefined);
+  requestBreakerResume(w.team.root, cause, NOW + 1);
+  const r2 = {}; w.team.applyBreaker([], r2);
+  assert.deepEqual(r2.breaker.resumed[0].cleared, [cause]);
+  assert.equal(w.mk().s.breaker.halts[cause], undefined, 'saved');
+  assert.deepEqual(takeBreakerResumeRequests(w.team.root), [], 'requests are consumed');
+  // global halt: survives a restart, is cleared by a request for global
+  w.team.s.breaker.global = { since: NOW, trippedBy: 'cost', jobs: 1, tokens: 1, cost: 16, prs: [], types: ['review'], causes: [] }; w.team.save();
+  assert.deepEqual(w.mk().applyBreaker([{ type: 'implement', agent: 'claude', issue: 5 }], {}), []);
+  requestBreakerResume(w.team.root, 'global', NOW + 2);
+  w.team.applyBreaker([], {});
+  assert.equal(w.mk().applyBreaker([{ type: 'implement', agent: 'claude', issue: 5 }], {}).length, 1);
+});
+
+test('a malformed resume request file is dropped, never applied', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bresume-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const d = path.join(root, 'dashboard', 'breaker-resume'); fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, '1-a.json'), '{not json'); fs.writeFileSync(path.join(d, '2-b.json'), JSON.stringify({ scope: 5, at: 'x' }));
+  assert.deepEqual(takeBreakerResumeRequests(root), []); assert.deepEqual(fs.readdirSync(d), []);
+});
+
+test('the halt card has a Resume button per halt, and the output carries no secret-shaped text', async t => {
+  const w = world(t);
+  const secret = 'gh' + 'p_' + crypto.randomBytes(12).toString('hex');
+  for (const id of ['r1', 'r2', 'r3']) reviewBlocked(w, id, 40);
+  await w.team.ingest({ ingested: [], skipped: [] }); w.team.applyBreaker([], {});
+  w.team.breakerFailed(new Error(`failed with ${secret}`), {});
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'breakerdash-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); fs.chmodSync(root, 0o700);
+  const view = await buildView({ config: config(), root, jobs: [], events: [], state: w.team.s, register: '', cache: { tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 }, pulls: [], issues: [] }, snapshots: [], now: NOW });
+  const html = renderRoute(view, matchRoute('/')).html;
+  assert.match(html, /<form method="post" action="\/breaker-resume"[^>]*><input type="hidden" name="scope" value="review:blocked:postcondition_not_met">/);
+  assert.match(html, /Resume review:blocked:postcondition_not_met/);
+  assert.ok(!html.includes(secret) && !JSON.stringify(view).includes(secret), 'a secret-shaped value never reaches the page or the view');
+});
+
+test('a review halt can clear itself through the planner: a review of another PR is allowed, and its success clears the halt', () => {
+  const s = stateWith(...[1, 2, 3].map(() => blocked()));
+  B.evaluate(s, L, NOW);
+  const h = s.halts['review:blocked:postcondition_not_met'];
+  assert.deepEqual(h.subjects, ['pr:10']);
+  assert.ok(B.blocks(s, L, { type: 'review', pr: 10 }), 'the failing pull request stays held');
+  assert.equal(B.blocks(s, L, { type: 'review', pr: 99 }), null, 'another pull request may start a review');
+  assert.equal(B.filterActions(s, L, [{ type: 'review', pr: 99 }]).kept.length, 1);
+  assert.deepEqual(B.succeeded(s, { type: 'review', createdAt: h.since + 1 }, NOW + 5), [h.cause]);
+  assert.equal(B.blocks(s, L, { type: 'review', pr: 10 }), null);
+  // a cost trip holds every contributing pull request, not the others
+  const c = stateWith(blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 3 } }), blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 3 } }));
+  c.waste[Object.keys(c.waste)[1]].pr = 11;
+  B.evaluate(c, L, NOW);
+  assert.deepEqual(Object.values(c.halts)[0].subjects, ['pr:10', 'pr:11']);
+  assert.ok(B.blocks(c, L, { type: 'review', pr: 11 })); assert.equal(B.blocks(c, L, { type: 'review', pr: 12 }), null);
 });

@@ -336,7 +336,10 @@ function nextPanel(view) {
 function breakerCard(view) {
   const b = view.breaker;
   if (!b || (!b.halt && !b.byCause.length && !b.error)) return '';
-  const halt = b.halt ? `<p class="sev-action"><strong>Work halted.</strong> ${escT(b.halt.text)} ${escT(b.halt.running_text)}</p><p class="sub">${escT(b.halt.action)}</p>` : '<p class="sub">Circuit breaker: no halt.</p>';
+  // Issue #626: a Resume button per halt (D-029 write protection; the form gets the access proof from withProof). Only a person's click works.
+  const resumeBtn = (scope, label) => `<form method="post" action="/breaker-resume" class="breaker-resume"><input type="hidden" name="scope" value="${esc(scope)}"><button type="submit" class="tbtn">${esc(label)}</button></form>`;
+  const buttons = b.halt ? (b.halt.entries || []).map(e => resumeBtn(e.cause === '@global' ? 'global' : e.cause, `Resume ${e.cause === '@global' ? 'all new jobs' : e.cause}`)).join('') + ((b.halt.entries || []).length > 1 ? resumeBtn('all', 'Resume everything') : '') : '';
+  const halt = b.halt ? `<p class="sev-action"><strong>Work halted.</strong> ${escT(b.halt.text)} ${escT(b.halt.running_text)}</p><p class="sub">${escT(b.halt.action)}</p>${buttons}` : '<p class="sub">Circuit breaker: no halt.</p>';
   const err = b.error ? `<p class="sev-action">The breaker failed: ${escT(b.error)}</p>` : '';
   const rows = b.byCause.slice(0, 12).map(r => `<tr><td>${escT(r.cause)}${r.halted ? ' (halted)' : ''}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>$${r.cost.toFixed(2)}</td><td>${escT(r.prs.map(n => '#' + n).join(', '))}</td></tr>`).join('');
   const table = rows ? `<table><thead><tr><th>Cause</th><th>Wasted jobs</th><th>Tokens</th><th>Cost (usage equivalent)</th><th>PRs</th></tr></thead><tbody>${rows}</tbody></table><p class="sub">Cost is ${escT(b.costLabel)}.</p>` : '';

@@ -6,7 +6,7 @@ import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
+import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, resolveJobId, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
@@ -397,7 +397,7 @@ async function main() {
     return;
   }
   if (command === 'status') {
-    if (a._[0]) print(readJob(root, a._[0]));
+    if (a._[0]) print(readJob(root, resolveJobId(root, a._[0])));
     else {
       const dir = path.join(root, 'jobs');
       for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) if (name.endsWith('.json')) {

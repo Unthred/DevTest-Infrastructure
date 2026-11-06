@@ -1,13 +1,14 @@
 // Issue #549: a circuit breaker for work that spends usage and produces nothing. Pure functions over the job records and the
-// breaker state kept in the Foreman state file (so a restart keeps a halt). Nothing here kills a job, loosens a review gate or
-// clears itself: a halt ends only by an explicit resume from the homeowner (see resume()).
+// breaker state kept in the Foreman state file (so a restart keeps a halt). Nothing here kills a job or loosens a review gate.
+// A halt ends in two ways only (issue #626): a later job of the halted type succeeds (succeeded()), or the homeowner resumes it (resume(),
+// from the terminal or the dashboard's Resume button).
 import fs from 'node:fs';
 import { typeOfKind } from './models.mjs';
 
 export const BREAKER_DEFAULTS = Object.freeze({
   enabled: true,
   window_hours: 6,          // waste older than this no longer counts toward a trip
-  same_cause_jobs: 3,       // this many wasted jobs of one cause inside the window trips that cause
+  same_cause_jobs: 3,       // this many wasted jobs of one cause on the SAME pull request (or issue) inside the window trips that cause
   cause_cost_usd: 5,        // or this much usage-equivalent waste of one cause
   global_cost_usd: 15,      // this much waste across causes stops every new job (the install path and merges are not jobs)
   fix_issues: [],           // issue numbers whose implement/continue job may still start while its job type is halted
@@ -96,6 +97,23 @@ const sum = (list, k) => list.reduce((n, x) => n + x[k], 0);
 const figures = list => ({ jobs: list.length, tokens: sum(list, 'tokens'), inputTokens: sum(list, 'inputTokens'), outputTokens: sum(list, 'outputTokens'), cost: sum(list, 'cost'),
   prs: [...new Set(list.map(x => x.pr).filter(n => n != null))].sort((a, b) => a - b), issues: [...new Set(list.map(x => x.issue).filter(n => n != null))].sort((a, b) => a - b),
   types: [...new Set(list.map(x => x.type))].sort(), jobIds: list.map(x => x.job) });
+// Issue #626: repeated failure means the same pull request (or issue) failing again, not a few failures across unrelated ones.
+// Waste with neither is counted together, since nothing tells them apart.
+const subjectOf = w => w.pr != null ? `pr:${w.pr}` : w.issue != null ? `issue:${w.issue}` : 'none';
+export function worstSubject(list) {
+  const n = new Map();
+  for (const w of list) n.set(subjectOf(w), (n.get(subjectOf(w)) || 0) + 1);
+  return Math.max(0, ...n.values());
+}
+// The subjects a halt holds. A count trip holds only the subjects that repeated; a cost trip holds every subject that wasted. Work of the
+// halted type on any other pull request or issue still runs, so a later success can clear the halt (a halt that stopped every job of
+// the type could never be cleared by one). Waste with no subject holds the whole type.
+const heldSubjects = (list, limit, byCount) => {
+  const n = new Map();
+  for (const w of list) n.set(subjectOf(w), (n.get(subjectOf(w)) || 0) + 1);
+  return [...n].filter(([k, c]) => !byCount || c >= limit || k === 'none').map(([k]) => k).sort();
+};
+const actSubject = a => a.pr != null ? `pr:${a.pr}` : a.issue != null ? `issue:${a.issue}` : 'none';
 const clearedFor = (s, cause) => Math.max(s.clearedAt['*'] || 0, s.clearedAt[cause] || 0);
 
 // Trip any limit that is reached. Existing halts are never removed here; only their figures are refreshed from the waste still on file.
@@ -110,11 +128,11 @@ export function evaluate(s, limits, now) {
   // $5 of waste of any kind: when all live waste together reaches the cost limit, every cause that contributed is halted in its own scope.
   const byTotal = sum(live, 'cost') >= limits.cause_cost_usd;
   for (const [cause, list] of byCause) {
-    const f = figures(list), byCount = list.length >= limits.same_cause_jobs, byCost = f.cost >= limits.cause_cost_usd;
+    const f = figures(list), byCount = worstSubject(list) >= limits.same_cause_jobs, byCost = f.cost >= limits.cause_cost_usd;
     const held = s.halts[cause];
-    if (held) { s.halts[cause] = { ...held, ...f }; continue; }
+    if (held) { s.halts[cause] = { ...held, ...f, subjects: [...new Set([...(held.subjects || []), ...heldSubjects(list, limits.same_cause_jobs, held.trippedBy === 'count')])].sort() }; continue; }
     if (!byCount && !byCost && !byTotal) continue;
-    s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : byCost ? 'cost' : 'any-kind-cost', ...f };
+    s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : byCost ? 'cost' : 'any-kind-cost', ...f, subjects: heldSubjects(list, limits.same_cause_jobs, byCount) };
     trips.push({ scope: cause, trippedBy: s.halts[cause].trippedBy });
   }
   const globalList = live.filter(w => w.at > (s.clearedAt['@global'] || 0));
@@ -132,7 +150,12 @@ export function blocks(s, limits, act) {
   if (s.global) return { ...s.global, cause: '@global', scope: 'all new jobs' };
   const fixable = ['implement', 'continue'].includes(type) && (limits.fix_issues || []).includes(act.issue);
   if (fixable) return null;
-  for (const h of Object.values(s.halts || {})) if ((h.types || []).includes(type)) return h;
+  const subject = actSubject(act);
+  for (const h of Object.values(s.halts || {})) {
+    if (!(h.types || []).includes(type)) continue;
+    if (Array.isArray(h.subjects) && !h.subjects.includes('none') && subject !== 'none' && !h.subjects.includes(subject)) continue;   // another pull request or issue may run, and its success clears this halt
+    return h;
+  }
   return null;
 }
 export const filterActions = (s, limits, actions) => {
@@ -141,7 +164,23 @@ export const filterActions = (s, limits, actions) => {
   return { kept, stopped };
 };
 
-// Clear one cause, the global halt, or everything. Only the homeowner's CLI calls this (see cli.mjs). Waste on file before now no
+// Issue #626: a finished, successful job of a halted type ends the halt for that cause. Only a job created after the halt began counts,
+// so a job already running when it tripped cannot clear it. The global halt is not cleared this way (it stops every type). Returns the
+// causes cleared.
+export function succeeded(s, { type, createdAt }, now) {
+  normalize(s);
+  if (!type || type === 'merge' || !Number.isFinite(createdAt)) return [];
+  const cleared = [];
+  for (const [cause, h] of Object.entries(s.halts)) {
+    if (!(h.types || []).includes(type) || !(createdAt > h.since)) continue;
+    delete s.halts[cause]; s.clearedAt[cause] = now; cleared.push(cause);
+  }
+  if (cleared.length) s.resumes = [...(s.resumes || []), { at: now, scope: `success:${type}`, cleared, by: 'success' }].slice(-50);
+  return cleared;
+}
+
+// Clear one cause, the global halt, or everything. Reached from the homeowner's CLI (see cli.mjs) or from a Resume click on the dashboard
+// (issue #626, applied by the tick). Waste on file before now no
 // longer counts, so a cleared scope does not trip again from the same old jobs.
 export function resume(s, scope, now) {
   normalize(s);
@@ -175,7 +214,7 @@ export function byCause(s, { since = 0, until = Infinity } = {}) {
 // What the Needs you item and the Overview say. `running` is the list of jobs still going: [{ id, type, ref }].
 // Display text for each trippedBy value. 'cost' is a single cause's own waste, or (with scope @global) the higher cross-cause limit.
 export const TRIPPED_BY_LABEL = {
-  count: 'same cause, job count',
+  count: 'same cause repeated on one pull request',
   cost: 'cost limit',
   'any-kind-cost': 'cost of waste of any kind',
 };
@@ -192,7 +231,7 @@ export function haltView(s, running = []) {
     running: running.map(r => ({ ...r })),
     text: `Work halted: ${top.cause === '@global' ? 'wasted usage across causes reached the higher limit' : `cause ${top.cause}`}. ${top.jobs} wasted job${top.jobs === 1 ? '' : 's'}, ${top.tokens.toLocaleString('en-GB')} tokens, ${fmt(top.cost)} ${COST_LABEL}.${top.prs.length ? ` Affected: ${top.prs.map(n => '#' + n).join(', ')}.` : ''} Stopped: ${scope}.`,
     running_text: running.length ? `Still running: ${running.map(r => `${r.type} ${r.ref ?? ''}`.trim()).join(', ')}.` : 'Nothing is still running.',
-    action: `Fix the cause, then run: ai-supervisor team breaker resume ${top.cause === '@global' ? 'global' : top.cause} (or "all"). It stays halted across restarts until you do.`,
+    action: `Fix the cause, then press Resume on the dashboard, or run: ai-supervisor team breaker resume ${top.cause === '@global' ? 'global' : top.cause} (or "all"). It clears itself when a later job of the halted type succeeds, and otherwise stays halted across restarts until you resume it.`,
     entries: entries.map(e => ({ cause: e.cause, since: e.since, jobs: e.jobs, tokens: e.tokens, cost: e.cost, prs: e.prs, types: e.types, trippedBy: e.trippedBy })),
   };
 }

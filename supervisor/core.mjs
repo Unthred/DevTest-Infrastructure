@@ -54,6 +54,15 @@ export function jobFile(root, id) {
   if (!/^[a-f0-9]{32}$/.test(id)) throw new SupervisorError('invalid job ID');
   return path.join(root, 'jobs', `${id}.json`);
 }
+// A unique hex prefix (at least 8 characters) names a job, as the dashboard shows it (issue #641).
+export function resolveJobId(root, id) {
+  if (/^[a-f0-9]{32}$/.test(id)) return id;
+  if (!/^[a-f0-9]{8,31}$/.test(String(id))) throw new SupervisorError('invalid job ID');
+  const dir = path.join(root, 'jobs');
+  const hits = (fs.existsSync(dir) ? fs.readdirSync(dir) : []).filter(n => n.endsWith('.json') && n.startsWith(id)).map(n => n.slice(0, -5)).filter(n => /^[a-f0-9]{32}$/.test(n));
+  if (hits.length !== 1) throw new SupervisorError(hits.length ? 'job ID prefix is ambiguous' : 'no such job');
+  return hits[0];
+}
 export function readJob(root, id) { return JSON.parse(fs.readFileSync(jobFile(root, id), 'utf8')); }
 export function saveJob(root, job, clock = realClock, force = false) {
   const lockDir = path.join(root, 'job-locks', job.id);
