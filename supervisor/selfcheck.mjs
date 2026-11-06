@@ -58,7 +58,11 @@ export function applySelfCheck(state, result, now = Date.now()) {
   for (const it of result.items) next[it.id] = { ...it, since: previous[it.id]?.since ?? now };
   const applied = [];
   for (const f of result.fixes) {
-    if (f.kind === 'flag-label-gone' && state.unblock?.flags?.[f.target]) { delete state.unblock.flags[f.target]; applied.push(f); }
+    if (f.kind === 'flag-label-gone' && state.unblock?.flags?.[f.target]) {
+      // Same rearm as Team.clearStale: a dropped fix-limit cause must let a later rejection be raised again.
+      if (state.notified && Object.values(state.unblock.flags[f.target] || {}).some(c => c?.kind === 'fixlimit')) { delete state.notified[`fixlimit:${f.target}`]; delete state.notified[`fixlimit-alert:${f.target}`]; }
+      delete state.unblock.flags[f.target]; applied.push(f);
+    }
   }
   sc.items = next; sc.checkedAt = now; sc.covered = result.covered;
   sc.log = [...(sc.log || []), ...applied.map(f => ({ at: now, kind: f.kind, ref: `#${f.target}`, what: short(f.what, 240) }))].slice(-CAP);

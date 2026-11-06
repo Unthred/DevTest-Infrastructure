@@ -24,6 +24,13 @@ test('records that agree with GitHub and the running jobs change nothing and rai
   assert.deepEqual(applied, []); assert.equal(JSON.stringify(s.unblock), before); assert.deepEqual(s.selfcheck.log, []);
 });
 
+test('dropping a fix-limit record re-arms its notices, as Team.clearStale does', () => {
+  const s = base();
+  s.unblock.flags[7] = { fixlimit: { kind: 'fixlimit', at: 0 } }; s.notified = { 'fixlimit:7': 1, 'fixlimit-alert:7': 1, 'fixlimit:8': 1 };
+  assert.equal(applySelfCheck(s, run(s, { prs: [{ number: 7, labels: [] }] }), NOW).length, 1);
+  assert.deepEqual(Object.keys(s.notified), ['fixlimit:8']);
+});
+
 test('a needs-homeowner record whose label is gone is fixed once and logged; a recent record or an unlisted target is left alone', () => {
   const s = base();
   s.unblock.flags[7] = { x: { kind: 'ci', at: 0 } }; s.unblock.flags[8] = { x: { kind: 'ci', at: NOW - 1000 } }; s.unblock.flags[9] = { x: { kind: 'ci', at: 0 } };
