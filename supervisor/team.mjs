@@ -801,7 +801,7 @@ export class Team {
     }
   }
   // An interim (D-021) PASS recorded earlier may merge once D-024 is approved, or while D-021 is approved; under D-021 the merge
-  // still owes a post-merge review by a reviewer on another model (recorded in execute()). Live only while D-024 is not approved.
+  // still owes a post-merge review by a reviewer on another model (recorded in execute()). That post-merge review debt exists only while D-024 is not approved; this method returns true in both cases.
   interimMergeAllowed() { return this.independenceApproved() || (decisionApproved(this.register, 'D-021') && this.c.interim_review?.enabled !== false); }
   // Why 'agent' may not review this pull request now (its review model is the model that wrote it, or cannot be told apart), or null.
   reviewRefusal(agent, pr, key) {

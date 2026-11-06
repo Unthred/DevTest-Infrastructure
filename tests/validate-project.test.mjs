@@ -172,6 +172,12 @@ test('stale wording: "opposite agent" or "opposite-agent" in AGENTS.md or a curr
   expectFinding((a) => a.write('AGENTS.md', a.read('AGENTS.md') + '\nReviewed by the opposite agent.\n'), 'stale-wording', 'AGENTS.md');
   expectFinding((a) => a.write('docs/team-loop.md', a.read('docs/team-loop.md') + '\nOpposite-agent review.\n'), 'stale-wording', 'docs/team-loop.md');
 });
+test('stale wording: a phrase split across a line break, and contracts/ and supervisor sources, are checked', () => {
+  expectFinding((a) => a.write('README.md', a.read('README.md') + '\nthe opposite\nagent reviews\n'), 'stale-wording', 'README.md');
+  expectFinding((a) => a.write('contracts/x.md', 'Opposite-Agent\n'), 'stale-wording', 'contracts/x.md');
+  expectFinding((a) => a.write('supervisor/prompt-x.mjs', "export const p = 'ask the opposite  agent';\n"), 'stale-wording', 'supervisor/prompt-x.mjs');
+  assert.ok(!checks(fixture((a) => a.write('contracts/y.md', 'independent review only\n'))).includes('stale-wording'));
+});
 test('stale wording: decision history, handover and evidence may keep the old phrase', () => {
   const api = fixture((a) => {
     a.write('docs/DECISIONS.md', a.read('docs/DECISIONS.md') + '\n<!-- the opposite agent -->\n');

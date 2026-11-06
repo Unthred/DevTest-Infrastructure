@@ -25,7 +25,7 @@ Only what the dispatcher already has, with no model call and no extra provider c
 - **Hold until the reset.** Once an agent is `reviews_only` in a weekly window it stays so until that window resets, even if the projection improves. This stops it flapping and matches "when the allowance resets, ownership goes back".
 - **Never overage or credits.** Nothing here enables overage or spends credits. Credits being available does not count as headroom. An agent with nothing left waits.
 - **Rule 4.** A job whose estimated cost would take the agent to the weekly limit is not started; the planner falls through to a smaller job type (for example a review instead of an implementation), and if none fits, nothing starts. This is stricter than "if a smaller job is available": nothing knowingly runs into the limit.
-- **Reserve for owed reviews.** Every non-review job must also leave room for the independent reviews (D-024) still owed by this agent (open, non-draft PRs of other agents without its verdict on the current head), at the estimated review cost each. Reviews draw on that reserve.
+- **Reserve for owed reviews.** Every non-review job must also leave room for the independent reviews (D-024) still to be done in this agent's reviewer role (open, non-draft PRs of other agents without its verdict on the current head), at the estimated review cost each. Reviews draw on that reserve.
 
 ## Reassignment
 - When an agent is `reviews_only` or `waiting`, its **unstarted, unblocked implementation issues** go to an agent that is `normal`, whose weekly use is **known** (no proven headroom, no takeover) and whose role allows it (`budget.can_take_over`, default: every agent). The taker's own issues come first.
