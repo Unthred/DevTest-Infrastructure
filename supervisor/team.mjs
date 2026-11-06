@@ -1,6 +1,7 @@
 // Team loop dispatcher (issue #23). It makes GitHub API calls and local file operations only: no model call is made
 // here. Models run only inside supervised jobs that the dispatcher creates through the existing supervisor.
 // Provider-agnostic (D-012): agents and their providers come from team.json; nothing here names Claude or Codex.
+import { selfCheck, applySelfCheck } from './selfcheck.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -1615,6 +1616,7 @@ export class Team {
     let actions = await this.plan();
     actions = this.applyBreaker(actions, report, dryRun);
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
+    if (!dryRun) await guard('self-check', () => this.runSelfCheck(report));
     if (!dryRun) await guard('review exceptions', () => this.endExceptions(report));
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
     if (hold) {
@@ -1638,6 +1640,18 @@ export class Team {
     return report;
   }
 
+  // Issue #630: compare Foreman's records with the lists this tick already read and with the running jobs. Reads only (no model, no extra
+  // GitHub call); the one safe fix is applied and logged, the rest become Needs you items (see selfcheck.mjs). A failure is reported, never fatal.
+  async runSelfCheck(report) {
+    if (!this.view) return;
+    const active = await this.jobs.listActive(), aliveById = {};
+    if (typeof this.jobs.alive === 'function') for (const a of active) if (a.status === 'running') { try { const job = await this.jobs.get(a.id); aliveById[a.id] = job ? !!(await this.jobs.alive(job)) : false; } catch { /* unknown: raise nothing */ } }
+    const result = selfCheck({ state: this.s, prs: this.view.prs, issues: this.view.issues, active, aliveById, stale: this.stale, maxReviewAttempts: this.c.limits.max_review_attempts, now: this.clock.now() });
+    const applied = applySelfCheck(this.s, result, this.clock.now());
+    this.save();
+    if (applied.length) report.selfChecked = applied.map(f => f.what);
+  }
+  selfCheckItems() { return Object.values(this.s.selfcheck?.items || {}); }
   // Issue #549: evaluate the breaker over the waste on file, then drop the actions a halt stops. Merges are not jobs and pass. If the
   // breaker itself throws, the failure is reported and the existing halts still apply (nothing new is halted or allowed silently).
   applyBreaker(actions, report, dryRun = false) {
