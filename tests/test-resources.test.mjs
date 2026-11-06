@@ -75,7 +75,11 @@ test('cgroup wrapper: leaf scope under the slice with limits; none when unavaila
   assert.equal(cgroupWrapper({ limits: null }, 'x', { slice: 'a.slice' }), null);
 });
 
-const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// A killed process nobody has reaped yet (no reaping init in a CI container) is a zombie: gone, not running.
+const alive = pid => {
+  try { process.kill(pid, 0); } catch { return false; }
+  try { return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8')); } catch { return true; }
+};
 
 test('an over-limit fake job is killed as a unit: children die with it and the result records why', async t => {
   const d = tmp(t), pidFile = path.join(d, 'child.pid');

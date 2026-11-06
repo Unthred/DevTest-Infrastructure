@@ -76,10 +76,22 @@ export function wasteOf({ id, entry, job, verdictRecorded = false, refusal = nul
   };
 }
 
-export const emptyState = () => ({ waste: {}, halts: {}, global: null, clearedAt: {}, error: null });
+export const emptyState = () => ({ waste: {}, halts: {}, global: null, clearedAt: {}, error: null, history: [] });
+// Issue #625: one history entry per trip (kept after the halt is cleared) so the overseer can read cause, jobs, cost, when it
+// tripped and when it cleared. Figures follow the halt while it is held and stop at the clear. Never holds job content.
+const HISTORY_MAX = 100;
+const histFields = h => ({ trippedBy: h.trippedBy, jobs: h.jobs, tokens: h.tokens, cost: h.cost, prs: h.prs, issues: h.issues, types: h.types, jobIds: (h.jobIds || []).slice(0, 10) });
+const openHistory = (s, scope, since) => (s.history || []).find(t => t.scope === scope && t.since === since && t.clearedAt == null);
+function noteTrip(s, scope, h) {
+  s.history ||= [];
+  const open = openHistory(s, scope, h.since);
+  if (open) Object.assign(open, histFields(h)); else s.history.push({ scope, since: h.since, clearedAt: null, ...histFields(h) });
+  if (s.history.length > HISTORY_MAX) s.history = s.history.slice(-HISTORY_MAX);
+}
+function noteClear(s, scope, since, now) { const open = openHistory(s, scope, since); if (open) open.clearedAt = now; }
 export function normalize(s) {
   s ||= {};
-  s.waste ||= {}; s.halts ||= {}; s.clearedAt ||= {}; if (s.global === undefined) s.global = null; if (s.error === undefined) s.error = null;
+  s.waste ||= {}; s.halts ||= {}; s.clearedAt ||= {}; s.history ||= []; if (s.global === undefined) s.global = null; if (s.error === undefined) s.error = null;
   return s;
 }
 export function record(s, w, now) {
@@ -130,15 +142,16 @@ export function evaluate(s, limits, now) {
   for (const [cause, list] of byCause) {
     const f = figures(list), byCount = worstSubject(list) >= limits.same_cause_jobs, byCost = f.cost >= limits.cause_cost_usd;
     const held = s.halts[cause];
-    if (held) { s.halts[cause] = { ...held, ...f, subjects: [...new Set([...(held.subjects || []), ...heldSubjects(list, limits.same_cause_jobs, held.trippedBy === 'count')])].sort() }; continue; }
+    if (held) { s.halts[cause] = { ...held, ...f, subjects: [...new Set([...(held.subjects || []), ...heldSubjects(list, limits.same_cause_jobs, held.trippedBy === 'count')])].sort() }; noteTrip(s, cause, s.halts[cause]); continue; }
     if (!byCount && !byCost && !byTotal) continue;
     s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : byCost ? 'cost' : 'any-kind-cost', ...f, subjects: heldSubjects(list, limits.same_cause_jobs, byCount) };
+    noteTrip(s, cause, s.halts[cause]);
     trips.push({ scope: cause, trippedBy: s.halts[cause].trippedBy });
   }
   const globalList = live.filter(w => w.at > (s.clearedAt['@global'] || 0));
   const gf = figures(globalList);
-  if (s.global) s.global = { ...s.global, ...gf, causes: [...new Set(globalList.map(w => w.cause))] };
-  else if (gf.cost >= limits.global_cost_usd) { s.global = { since: now, trippedBy: 'cost', ...gf, causes: [...new Set(globalList.map(w => w.cause))] }; trips.push({ scope: '@global', trippedBy: 'cost' }); }
+  if (s.global) { s.global = { ...s.global, ...gf, causes: [...new Set(globalList.map(w => w.cause))] }; noteTrip(s, '@global', s.global); }
+  else if (gf.cost >= limits.global_cost_usd) { s.global = { since: now, trippedBy: 'cost', ...gf, causes: [...new Set(globalList.map(w => w.cause))] }; noteTrip(s, '@global', s.global); trips.push({ scope: '@global', trippedBy: 'cost' }); }
   return trips;
 }
 
@@ -173,7 +186,7 @@ export function succeeded(s, { type, createdAt }, now) {
   const cleared = [];
   for (const [cause, h] of Object.entries(s.halts)) {
     if (!(h.types || []).includes(type) || !(createdAt > h.since)) continue;
-    delete s.halts[cause]; s.clearedAt[cause] = now; cleared.push(cause);
+    noteClear(s, cause, h.since, now); delete s.halts[cause]; s.clearedAt[cause] = now; cleared.push(cause);
   }
   if (cleared.length) s.resumes = [...(s.resumes || []), { at: now, scope: `success:${type}`, cleared, by: 'success' }].slice(-50);
   return cleared;
@@ -186,14 +199,14 @@ export function resume(s, scope, now) {
   normalize(s);
   const cleared = [];
   if (scope === 'all') {
-    for (const c of Object.keys(s.halts)) cleared.push(c);
-    if (s.global) cleared.push('@global');
+    for (const [c, h] of Object.entries(s.halts)) { cleared.push(c); noteClear(s, c, h.since, now); }
+    if (s.global) { cleared.push('@global'); noteClear(s, '@global', s.global.since, now); }
     s.halts = {}; s.global = null; s.clearedAt = { '*': now, '@global': now };
   } else if (scope === '@global' || scope === 'global') {
-    if (s.global) cleared.push('@global');
+    if (s.global) { cleared.push('@global'); noteClear(s, '@global', s.global.since, now); }
     s.global = null; s.clearedAt['@global'] = now;
   } else if (s.halts[scope]) {
-    delete s.halts[scope]; s.clearedAt[scope] = now; cleared.push(scope);
+    noteClear(s, scope, s.halts[scope].since, now); delete s.halts[scope]; s.clearedAt[scope] = now; cleared.push(scope);
   }
   if (cleared.length) s.resumes = [...(s.resumes || []), { at: now, scope, cleared }].slice(-50);
   return cleared;
