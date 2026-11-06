@@ -149,47 +149,9 @@ export function applyLayout(ids, saved, bp) {
   const collapsed = sanitizeCollapsed(saved?.collapsed, ids);
   if (bp !== 'phone') {
     for (const [k, v] of Object.entries(saved?.span || {})) if (ids.includes(k) && Number.isInteger(v) && v >= 1 && v <= 12) span[k] = v;
-    for (const [k, v] of Object.entries(saved?.h || {})) if (ids.includes(k) && Number.isInteger(v) && v >= ROW_STEP && v <= 4000) h[k] = v;
+    for (const [k, v] of Object.entries(saved?.h || {})) if (ids.includes(k) && Number.isInteger(v) && v >= 40 && v <= 4000) h[k] = v;
   }
   return { order: full, span, h, collapsed };
-}
-
-// ---- card resizing (issue #58): snap to the grid, limits per card type, never smaller than the content
-export const ROW_STEP = 40;   // px: card heights snap to this step
-export const MIN_CARD_H = 120;   // px: a resized card never gets shorter than this, even when its content is shorter
-// Width is in grid columns (12 on desktop, 6 on tablet). A saved height is a min-height, so content can never be clipped.
-// vlock: the card's height is its content (charts scale with their width, KPI tiles are one fixed shape).
-export const CARD_LIMITS = {
-  panel: { minSpan: 3, maxSpan: 12, maxH: 800 },
-  kpi: { minSpan: 2, maxSpan: 4, vlock: true },
-  chart: { minSpan: 4, maxSpan: 12, vlock: true },
-  queue: { minSpan: 3, maxSpan: 12, maxH: 800 },
-  table: { minSpan: 6, maxSpan: 12, maxH: 1200 },
-  info: { minSpan: 3, maxSpan: 12, maxH: 800 }
-};
-export const limitsOf = type => CARD_LIMITS[type] || CARD_LIMITS.info;
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-// Column limits for a breakpoint. Tablet has 6 columns, so the limits are halved (at least 2, at most 6).
-export function spanLimits(type, bp) {
-  const l = limitsOf(type);
-  if (bp === 'tablet') return { cols: 6, min: clamp(Math.ceil(l.minSpan / 2), 2, 6), max: clamp(Math.ceil(l.maxSpan / 2), 2, 6) };
-  return { cols: 12, min: l.minSpan, max: l.maxSpan };
-}
-// A drag from one of the 8 edges/corners (n s e w ne nw se sw); dx, dy are pointer movement in px. Dragging the west or north
-// edge outward (left/up) grows the card, as in a window; the grid keeps its order. natH is the content's own height at that width.
-export function resizeBox({ edge, dx, dy, span, h, natH = 0, colW, type, bp = 'desktop' }) {
-  const l = limitsOf(type), sl = spanLimits(type, bp), e = String(edge);
-  const cw = colW > 0 ? colW : 1, ddx = Number.isFinite(dx) && colW > 0 ? dx : 0, ddy = Number.isFinite(dy) ? dy : 0;   // NaN or a zero-width column resizes nothing
-  let nSpan = span;
-  if (e.includes('e')) nSpan = span + Math.round(ddx / cw);
-  if (e.includes('w')) nSpan = span - Math.round(ddx / cw);
-  nSpan = clamp(nSpan, sl.min, sl.max);
-  let nH = h;
-  if (!l.vlock && (e.includes('s') || e.includes('n'))) {
-    const floor = Math.max(MIN_CARD_H, Math.ceil(natH / ROW_STEP) * ROW_STEP);
-    nH = clamp(Math.round((h + (e.includes('s') ? ddy : -ddy)) / ROW_STEP) * ROW_STEP, floor, Math.max(floor, l.maxH));
-  }
-  return { span: nSpan, h: l.vlock ? null : nH };
 }
 
 // ---- dockable navigation (issue #58). Saved per breakpoint; a phone always keeps the fixed bottom tab bar.

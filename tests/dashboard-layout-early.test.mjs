@@ -21,14 +21,14 @@ function fakeCard(id) {
   return el;
 }
 function run({ width, saved, ids = IDS, grid = true, page = '/' }) {
-  const cards = ids.map(fakeCard), g = { children: cards, getAttribute: n => (n === 'data-layout' ? 'overview' : null), appendChild(c) { const i = this.children.indexOf(c); this.children.splice(i, 1); this.children.push(c); } };
+  let g; const cards = ids.map(fakeCard); g = { children: cards, gclasses: new Set(), gstyle: {}, classList: { add(c) { g.gclasses.add(c); } }, style: { setProperty(k, v) { g.gstyle[k] = String(v); } }, getAttribute: n => (n === 'data-layout' ? 'overview' : null), appendChild(c) { const i = this.children.indexOf(c); this.children.splice(i, 1); this.children.push(c); } };
   const store = { ...saved };
   vm.runInNewContext(code, {
     window: { innerWidth: width }, location: { pathname: page }, JSON, Number, Array,
     localStorage: { getItem: k => (k in store ? store[k] : null) },
     document: { querySelector: s => (grid && s === '.cards[data-layout]' ? g : null), querySelectorAll: s => (s === '.card[data-card]' ? cards : []) }
   });
-  return { order: g.children.map(c => c.id), cards: Object.fromEntries(cards.map(c => [c.id, c])) };
+  return { grid: g, order: g.children.map(c => c.id), cards: Object.fromEntries(cards.map(c => [c.id, c])) };
 }
 const key = bp => `dash.layout.overview.${bp}`;
 const SAVED = { order: ['c', 'a', 'zzz'], span: { a: 5, b: 99, c: 2.5, zzz: 4 }, h: { a: 240, b: 10, c: 5000, d: 'x' }, collapsed: ['b', 'nope', 7] };
@@ -96,4 +96,26 @@ test('layout-early.js sends nothing and is served; every page loads it after <ma
     const m = html.indexOf('</main>'), l = html.indexOf('<script src="/static/layout-early.js"></script>'), a = html.indexOf('/static/app.js');
     assert.ok(m > 0 && l > m && a > l, `${p}: after </main>, before app.js`);
   }
+});
+
+// ---- the free layout (v: 2): a saved place and size per card
+import { COLS, cleanRect, sanitizeLayout } from '../supervisor/dashui/grid.mjs';
+const FREE = { v: 2, pos: { a: { x: 0, y: 0, w: 12, h: 10 }, b: { x: 12, y: 0, w: 99, h: 2 }, c: { x: 'x', y: 0, w: 4, h: 4 }, zzz: { x: 0, y: 0, w: 4, h: 4 } }, hidden: ['d', 'nope'], collapsed: ['a'] };
+for (const [bp, width] of [['desktop', 1400], ['tablet', 800]]) {
+  test(`layout-early.js applies a free layout on ${bp} the same way grid.mjs reads it`, () => {
+    const r = run({ width, saved: { [key(bp)]: JSON.stringify(FREE) } }), cols = COLS[bp], want = sanitizeLayout(FREE, IDS, cols);
+    assert.ok(r.grid.gclasses.has('free')); assert.equal(r.grid.gstyle['--cols'], String(cols));
+    for (const id of IDS) {
+      const set = r.cards[id].set, pre = FREE.pos[id], rect = cleanRect(pre, cols);   // overlaps are settled later, by app.js
+      if (want.hidden.includes(id)) { assert.ok(r.cards[id].classes.has('lay-hidden')); continue; }
+      if (!rect) { assert.equal(set['--cx'], undefined, `${id}: a bad rectangle is left for app.js to place`); continue; }
+      assert.deepEqual([set['--cx'], set['--cy'], set['--cw'], set['--ch']], [rect.x, rect.y, rect.w, rect.h].map(String), id);
+    }
+    assert.ok(r.cards.a.classes.has('collapsed'), 'collapsed cards still apply');
+  });
+}
+test('layout-early.js: a free layout is ignored on a phone, a pinned card is never hidden, and bad v2 data leaves the flow', () => {
+  const ph = run({ width: 400, saved: { 'dash.layout.overview.phone': JSON.stringify(FREE) } });
+  assert.ok(!ph.grid.gclasses.has('free')); assert.deepEqual(Object.values(ph.cards).flatMap(c => Object.keys(c.set)), []);
+  for (const raw of ['{"v":2}', '{"v":2,"pos":[]}', '{"v":2,"pos":"x"}', '{"v":3,"pos":{}}']) { const r = run({ width: 1400, saved: { [key('desktop')]: raw } }); assert.ok(!r.grid.gclasses.has('free'), raw); }
 });

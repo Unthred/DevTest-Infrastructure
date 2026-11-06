@@ -142,10 +142,10 @@ test('every card has a chevron (hidden until the script runs, labelled, aria-exp
   assert.match(appJs, /closest\?\.\('\[data-collapse\]'\)/); assert.match(appJs, /setAttribute\('aria-expanded', String\(!on\)\)/);
   assert.match(css, /\.card\.collapsed>\*:not\(header\)\{display:none!important\}/); assert.match(css, /\.card\.collapsed\{min-height:0\}/);
 });
-test('"Reset layout" clears the collapsed cards too, and a pill that targets a collapsed card opens it', () => {
-  assert.match(appJs, /initResetLayout\(\{ document, store, layoutKey: key, legendKey/);
+test('a pill that targets a collapsed card opens it, and the layout editor keeps the collapsed state', () => {
   assert.match(appJs, /function revealTarget\(\)[\s\S]*?closest\?\.\('\.card\.collapsed'\)[\s\S]*?toggleCard\(c\)/); assert.match(appJs, /addEventListener\('hashchange', revealTarget\)/);
-  assert.match(appJs, /save = \(\) => store\.set\(key\(\), \{ \.\.\.lay, collapsed: readCollapsed\(\) \}\)/, 'moving or resizing a card does not lose the collapsed state');
+  assert.match(appJs, /saveFlow = \(\) => store\.set\(key\(\), \{ \.\.\.lay, collapsed: readCollapsed\(\) \}\)/, 'reordering on a phone does not lose the collapsed state');
+  assert.match(appJs, /persist = \(\) => \{ if \(st\) store\.set\(key\(\), toSaved\(st, readCollapsed\(\)\)\); \}/, 'moving or resizing a card does not lose the collapsed state');
 });
 
 // ---- 3. back to top

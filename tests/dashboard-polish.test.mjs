@@ -7,7 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { CARD_LIMITS, DOCKS, MIN_CARD_H, chooseRange, ROW_STEP, applyLayout, breakpointOf, dockFromPoint, dockOf, effectiveDock, limitsOf, resizeBox, restorableScroll, spanLimits, trail } from '../supervisor/dashui/logic.mjs';
+import { DOCKS, chooseRange, applyLayout, breakpointOf, dockFromPoint, dockOf, effectiveDock, restorableScroll, trail } from '../supervisor/dashui/logic.mjs';
 import { codeVersion, readVersion } from '../supervisor/dashdata.mjs';
 import { currentView, handler } from '../supervisor/dashserver.mjs';
 import { renderRoute } from '../supervisor/dashrender.mjs';
@@ -37,66 +37,20 @@ async function serve(t, { link } = {}) {
 }
 const PAGES = ['/', '/agents', '/agents/claude', '/work', '/work/pr/41', '/work/issue/30', '/activity', '/usage', '/reviews', '/system'];
 
-// ---- 1. resizing: pure geometry
-const box = { span: 6, h: 200, natH: 160, colW: 100, type: 'panel' };
-test('resize: every edge and corner changes the right dimension, snapped to whole columns and to the row step', () => {
-  assert.deepEqual(resizeBox({ ...box, edge: 'e', dx: 140, dy: 999 }), { span: 7, h: 200 }, 'east: width only, 1.4 columns rounds to 1');
-  assert.deepEqual(resizeBox({ ...box, edge: 'e', dx: 160, dy: 0 }), { span: 8, h: 200 }, '1.6 columns rounds to 2');
-  assert.deepEqual(resizeBox({ ...box, edge: 'w', dx: -200, dy: 50 }), { span: 8, h: 200 }, 'west: dragging left grows the card');
-  assert.deepEqual(resizeBox({ ...box, edge: 's', dx: 500, dy: 85 }), { span: 6, h: 280 }, 'south: height only, 285 snaps to 280');
-  assert.deepEqual(resizeBox({ ...box, edge: 'n', dx: 0, dy: -80 }), { span: 6, h: 280 }, 'north: dragging up grows the card');
-  assert.deepEqual(resizeBox({ ...box, edge: 'se', dx: 100, dy: 40 }), { span: 7, h: 240 });
-  assert.deepEqual(resizeBox({ ...box, edge: 'nw', dx: -100, dy: -40 }), { span: 7, h: 240 });
-  assert.deepEqual(resizeBox({ ...box, edge: 'ne', dx: 100, dy: -40 }), { span: 7, h: 240 });
-  assert.deepEqual(resizeBox({ ...box, edge: 'sw', dx: -100, dy: 40 }), { span: 7, h: 240 });
-  assert.ok(ROW_STEP > 0); for (let dy = -300; dy <= 300; dy += 7) assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy }).h % ROW_STEP, 0, `dy ${dy}`);
-});
-test('resize: limits per card type; the content height is a floor, so nothing is ever clipped', () => {
-  assert.equal(resizeBox({ ...box, edge: 'e', dx: -900, dy: 0 }).span, CARD_LIMITS.panel.minSpan, 'cannot go below the minimum width');
-  assert.equal(resizeBox({ ...box, edge: 'e', dx: 9000, dy: 0 }).span, CARD_LIMITS.panel.maxSpan);
-  assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy: -900 }).h, 160, 'shrinking stops at the content height (160 is already a multiple of the step)');
-  assert.equal(resizeBox({ ...box, natH: 175, edge: 's', dx: 0, dy: -900 }).h, 200, 'content 175 rounds the floor up to the next step');
-  assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy: 99999 }).h, CARD_LIMITS.panel.maxH);
-  assert.equal(resizeBox({ ...box, natH: 5000, edge: 's', dx: 0, dy: 10 }).h, 5000, 'a card whose content is taller than the maximum stays as tall as its content');
-  // KPI tiles and charts keep their content height; only the width changes
-  for (const type of ['kpi', 'chart']) { const r = resizeBox({ ...box, type, edge: 'se', dx: 100, dy: 400 }); assert.equal(r.h, null, type); assert.ok(r.span >= CARD_LIMITS[type].minSpan && r.span <= CARD_LIMITS[type].maxSpan); }
-  assert.equal(resizeBox({ ...box, type: 'kpi', edge: 'e', dx: 9000 }).span, 4);
-  assert.equal(resizeBox({ ...box, type: 'kpi', edge: 'e', dx: -9000 }).span, 2);
-  // an unknown type falls back to the general limits; an unknown edge changes nothing
-  assert.equal(limitsOf('nonsense'), CARD_LIMITS.info);
-  assert.deepEqual(resizeBox({ ...box, edge: 'x', dx: 300, dy: 300 }), { span: 6, h: 200 });
-});
-test('resize: tablet has six columns, so the limits are halved and stay inside the grid', () => {
-  for (const type of Object.keys(CARD_LIMITS)) { const l = spanLimits(type, 'tablet'); assert.ok(l.min >= 2 && l.max <= 6 && l.min <= l.max, type); assert.equal(spanLimits(type, 'desktop').cols, 12); }
-  assert.equal(resizeBox({ ...box, edge: 'e', dx: 9000, bp: 'tablet' }).span, 6); assert.equal(resizeBox({ ...box, edge: 'e', dx: -9000, bp: 'tablet' }).span, 2);
-});
+// ---- 1. layout: saved old-form sizes are still read (the free layout itself is tested in dashboard-layout-editor.test.mjs)
 test('layout: saved sizes are validated and kept per breakpoint; a phone applies the order only', () => {
   const ids = ['a', 'b'], saved = { order: ['b', 'a', 'gone'], span: { a: 8, b: 99, gone: 3 }, h: { a: 240, b: 7, gone: 80, c: 'x' } };
   assert.deepEqual(applyLayout(ids, saved, 'desktop'), { order: ['b', 'a'], span: { a: 8 }, h: { a: 240 }, collapsed: [] });
   assert.deepEqual(applyLayout(ids, saved, 'phone'), { order: ['b', 'a'], span: {}, h: {}, collapsed: [] });
 });
-test('every card the pages render has a default size inside its own type limits, and resize handles that match its type', async t => {
+test('every card the pages render has a type and a default width, no per-type limits and no old resize handles', async t => {
   const s = await serve(t); let seen = 0;
   for (const u of PAGES) {
     const body = (await s.get(u)).body;
-    for (const m of body.matchAll(/<(?:section|a) class="card[^"]*" data-card="([^"]+)" data-type="(\w+)" data-span="(\d+)"/g)) {
-      seen++; const [, id, type, span] = m, l = CARD_LIMITS[type]; assert.ok(l, `${u} ${id}: known type ${type}`);
-      assert.ok(Number(span) >= l.minSpan && Number(span) <= l.maxSpan, `${u} ${id}: span ${span} within ${l.minSpan}-${l.maxSpan}`);
-    }
-    for (const sec of body.split('<section ').slice(1)) {
-      const type = /data-type="(\w+)"/.exec(sec)[1], edges = [...sec.matchAll(/data-edge="(\w+)"/g)].map(x => x[1]), movable = sec.includes('data-handle');
-      if (!movable) { assert.deepEqual(edges, [], `${u} fixed card has no handles`); continue; }
-      const want = CARD_LIMITS[type].vlock ? ['e', 'w', 'ne', 'nw', 'se', 'sw'] : ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'];
-      assert.deepEqual(edges, want, `${u} ${type}`); assert.match(sec, /class="resize wide-only rz-key" tabindex="0" role="slider"/);
-    }
+    for (const m of body.matchAll(/<(?:section|a) class="card[^"]*" data-card="([^"]+)" data-type="(\w+)" data-span="(\d+)"/g)) { seen++; assert.ok(Number(m[3]) >= 1 && Number(m[3]) <= 12, `${u} ${m[1]}: span ${m[3]}`); }
+    assert.doesNotMatch(body, /data-edge=|rz-key|class="resize/, `${u}: the old resize handles are gone`);
   }
   assert.ok(seen >= 15, `looked at ${seen} cards`);
-});
-test('the resize script reflows live from the real element, snaps via the shared logic, and leaves phones alone', () => {
-  assert.match(appJs, /pointermove/); assert.match(appJs, /resizeBox\(/); assert.match(appJs, /naturalHeight/); assert.match(appJs, /bpNow\(\) === 'phone'/);
-  assert.doesNotMatch(appJs, /ghost|outline-only|cloneNode/, 'the real content is resized, not an outline');
-  assert.match(css, /\.rz-n,\.rz-s\{[^}]*cursor:ns-resize/); assert.match(css, /\.rz-ne\{[^}]*cursor:nesw-resize/); assert.match(css, /min-height:var\(--h,0\)/, 'a saved height is a minimum, never a clip');
-  assert.match(css, /\.resize,\.wide-only\{display:none!important\}/);
 });
 
 // ---- 2. card sizing: defaults fit their content, equal KPI tiles, charts fill their card
@@ -270,14 +224,6 @@ test('the visual-evidence script propagates capture failures', () => {
 });
 
 // ---- issue #140
-test('#140 resize works in both directions with a sensible minimum height', () => {
-  const box = { span: 6, h: 400, natH: 60, colW: 100, type: 'panel' };
-  assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy: 80 }).h, 480, 'taller');
-  assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy: -120 }).h, 280, 'shorter, even though the row made the card taller than its content');
-  assert.equal(resizeBox({ ...box, edge: 's', dx: 0, dy: -9999 }).h, MIN_CARD_H, 'never below the minimum');
-  assert.equal(resizeBox({ ...box, natH: 300, edge: 's', dx: 0, dy: -9999 }).h, 320, 'nor below the content');
-  assert.match(appJs, /alignSelf = 'start'/, 'a sized card is not stretched to its row, so it can shrink');
-});
 test('#140 the saved range wins only when the address names none', () => {
   assert.equal(chooseRange('30d', null), '30d'); assert.equal(chooseRange('30d', '24h'), '24h');
   assert.equal(chooseRange('bogus', null), '7d'); assert.equal(chooseRange(null, 'bogus'), '7d'); assert.equal(chooseRange(undefined, undefined), '7d');
