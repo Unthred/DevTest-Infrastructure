@@ -141,6 +141,8 @@ export async function advanceWatchlist({ root, cache = {}, state = {}, now, inst
     // Alerts: exactly once per event, and only when the delivery succeeded (a failed one is retried by the next tick).
     const alerts = { ...(item.alerts || {}) };
     if (view.installedAt && !alerts.done) { try { await alert(`Watched change installed: ${title(view.issue ?? view.pr, f)} is merged and installed (${sha7(view.installedSha)}).`); alerts.done = now; sent.push('done'); } catch { /* retried */ } }
+    // Issue #634: the other final state. The issue was closed and no pull request merged for it: nothing more will happen, so say so once.
+    if (!view.installedAt && !view.mergedAt && f.issue?.state === 'CLOSED' && !f.pr && !alerts.final) { try { await alert(`Watched change ended: ${title(view.issue ?? view.pr, f)} was closed with no merged pull request.`); alerts.final = now; sent.push('final'); } catch { /* retried */ } }
     if (d.needs) { if (alerts.needs?.reason !== d.needs) { try { await alert(`Needs the homeowner: watched change ${title(view.issue ?? view.pr, f)} has stopped: ${d.needs}.`); alerts.needs = { reason: d.needs, at: now }; sent.push('needs'); } catch { /* retried */ } } }
     else delete alerts.needs;
     patch.alerts = alerts;

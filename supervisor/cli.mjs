@@ -22,6 +22,8 @@ import { changeCheckOf, checkForChanges, ghProbeRunner, loadCache, saveCache, bu
 import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
+import { rateLimited, alertNeedsYou, dailySummary } from './alertpolicy.mjs';
+import { buildView } from './dashboard.mjs';
 import { advanceWatchlist, factsFromCache } from './watchlist.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
 import { idleReport, renderIdleReport, passStats, renderPassStats } from './idlecause.mjs';
@@ -299,8 +301,14 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
         try {
           const cache = readCache(root) || {}, state = readTeamState(root), ver = readVersion(root), now = Date.now();
           await advanceWatchlist({ root, cache, state, now, installed: ver?.installed || null, running: runningSha(self), tickOk: tickOutcome(report).status === 'ok',
-            isAncestor: (a, b) => spawnSync('git', ['-C', config.repo_path, 'merge-base', '--is-ancestor', a, b], { encoding: 'utf8' }).status === 0, alert: alertSender(root, config),
+            isAncestor: (a, b) => spawnSync('git', ['-C', config.repo_path, 'merge-base', '--is-ancestor', a, b], { encoding: 'utf8' }).status === 0, alert: rateLimited(root, alertSender(root, config)),
             factsFor: factsFromCache({ cache, state, now, checksOf: (pull, at) => checksState(pull.statusCheckRollup, retriedIn(state.cancelWatch, pull, at)) }), title: n => `#${n}` });
+          // Issue #634: Needs you alerts (one per cause group) and the quiet daily summary, both behind the same rate limit.
+          const send = rateLimited(root, alertSender(root, config)), allJobs = readJobs(root);
+          const view = await buildView({ config, root, jobs: allJobs, events: [], state, cache, snapshots: readSnapshots(root), now });
+          const needsYou = (view.panels?.needsYou || []).map(a => ({ id: a.id, ref: a.ref, text: a.text, decision: a.decision }));
+          await alertNeedsYou({ root, items: needsYou, send });
+          await dailySummary({ root, now, send, facts: { jobs: allJobs, mergeLog: state.mergeLog || [], waiting: needsYou.length } });
         } catch (error) { console.error(`ai-supervisor: watchlist step failed: ${error?.name || 'Error'}`); }
         await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
       }
