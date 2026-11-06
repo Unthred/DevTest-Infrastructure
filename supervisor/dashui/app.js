@@ -3,7 +3,7 @@
 // scroll restoration (all saved per breakpoint, in this browser only). It sends nothing; its only network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends } from './legend.mjs';
-import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved } from './grid.mjs';
+import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved } from './grid.mjs';
 import { watchLists } from './lists-ui.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -324,7 +324,7 @@ if (grid) {
   let lay = { order: [], span: {}, h: {} };
   let st = null;          // the free layout in use { pos, hidden }, or null for flow
   let editing = false;
-  const hist = history();
+  const hist = layoutHistory();
   const saveFlow = () => store.set(key(), { ...lay, collapsed: readCollapsed() });   // phone: order only
   const persist = () => { if (st) store.set(key(), toSaved(st, readCollapsed())); };
 
@@ -366,7 +366,7 @@ if (grid) {
     }
   }
   function apply() {
-    if (!editing) st = bpNow() === 'phone' ? null : sanitizeLayout(store.get(key()), ids(), colsNow());
+    if (!editing) st = bpNow() === 'phone' ? null : sanitizeLayout(store.get(key()), ids(), colsNow(), cards().filter(c => c.hasAttribute('data-pin')).map(c => c.dataset.card));
     if (st) paintFree(); else paintFlow();
     renderBar();
   }

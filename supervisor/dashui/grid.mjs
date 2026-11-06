@@ -110,11 +110,11 @@ export function edgeAt(box, px, py, m = 8) {
 // Anything else (an old order/span/h layout, a broken value, another version) returns null: the caller falls back to the default
 // flow, or converts an old layout. Cards that no longer exist are dropped, bad rectangles are dropped (such a card is placed in the
 // first free spot), a pinned card is never hidden, and overlapping rectangles are settled.
-export function sanitizeLayout(saved, ids, cols) {
+export function sanitizeLayout(saved, ids, cols, pinnedIds = []) {
   if (!isObj(saved) || saved.v !== 2 || !isObj(saved.pos)) return null;
   const pos = {};
   for (const id of ids) { const r = Object.hasOwn(saved.pos, id) ? cleanRect(saved.pos[id], cols) : null; if (r) pos[id] = r; }
-  const hidden = Array.isArray(saved.hidden) ? [...new Set(saved.hidden.filter(i => typeof i === 'string' && ids.includes(i) && canHide(i)))] : [];
+  const hidden = Array.isArray(saved.hidden) ? [...new Set(saved.hidden.filter(i => typeof i === 'string' && ids.includes(i) && canHide(i, pinnedIds.includes(i))))] : [];
   for (const id of hidden) delete pos[id];
   return { pos: settleAll(pos), hidden };
 }

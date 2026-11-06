@@ -123,6 +123,16 @@ test('sanitizeLayout never hides a pinned card or anything needing action', () =
   assert.deepEqual(out.hidden, ['a']);
   assert.equal(canHide('needs'), false); assert.equal(canHide('x', true), false, 'a card the server marks data-pin'); assert.equal(canHide('x'), true);
 });
+test('sanitizeLayout drops a hidden id for a card the server now marks data-pin', () => {
+  const out = sanitizeLayout({ v: 2, pos: {}, hidden: ['a', 'b'] }, ['a', 'b'], 24, ['a']);
+  assert.deepEqual(out.hidden, ['b']);
+});
+test('app.js does not bind the name history (it would hide window.history)', () => {
+  const src = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  const imp = src.match(/import \{([^}]*)\} from '\.\/grid\.mjs'/)[1].split(',').map(x => x.trim());
+  assert.ok(!imp.includes('history'), 'import history as layoutHistory');
+  assert.ok(!/\b(const|let|var|function)\s+history\b/.test(src));
+});
 test('isOldLayout tells the old order/span/h form from the new one', () => {
   assert.equal(isOldLayout({ order: ['a'] }), true); assert.equal(isOldLayout({ span: {} }), true); assert.equal(isOldLayout({ v: 2, order: [] }), false);
   assert.equal(isOldLayout(null), false); assert.equal(isOldLayout({ collapsed: ['a'] }), false);
