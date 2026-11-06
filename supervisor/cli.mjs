@@ -28,8 +28,10 @@ import { idleReport, renderIdleReport, passStats, renderPassStats } from './idle
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
 import { ghRunner } from './github.mjs';
-import { redact } from './redact.mjs';
+import { redact, redactLong } from './redact.mjs';
 import { saveWork } from './savework.mjs';
+import os from 'node:os';
+import { cloneAndRunTests } from './inboxtests.mjs';
 import { hasProbe, refreshProvider } from './probe.mjs';
 import { probeNow } from './probenow.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
@@ -184,12 +186,31 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   // The allowance inputs are shared with `team status` and the dashboard (issue #121), so all of them plan alike.
   const jobsNow = readJobs(root);
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs: jobsNow, probes: readCache(root)?.probes, snapshots: readSnapshots(root), hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') });
-  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
+  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage, ops: inboxOps(root, registry, config) });
 }
 // Issue #755: counts the gh processes a pass starts (for the pass record), without changing what any call does.
 function countingGh(stats) {
   const base = ghRunner();
   return stats ? (args, input, opts) => { const t = Date.now(); stats.calls++; try { return base(args, input, opts); } finally { stats.ms += Date.now() - t; } } : base;
+}
+// Issue #637: the effects behind the inbox's operation actions. Each is reached only through an approved item; none merges or approves.
+function inboxOps(root, registry, config) {
+  return {
+    restartDashboard: async () => {
+      const { upgrade } = selfUpgradeFor(root, registry), sha = upgrade.d.installed();
+      if (!sha) return { ok: false, reason: 'no installed version is recorded' };
+      const r = await upgrade.d.restartDashboard(sha, { force: true });   // stops, starts, then needs the health check and the settle probes to pass
+      return r.ok && !r.restarted ? { ok: false, reason: r.reason } : r;
+    },
+    retryInstall: async () => {
+      const { upgrade } = selfUpgradeFor(root, registry);
+      if (!upgrade.latch()) throw new SupervisorError('no self-upgrade latch is set; nothing to retry');
+      upgrade.clearLatch(); upgrade.requestInstallNow();
+      return 'latch cleared; the next tick tries the install again without the batching wait';
+    },
+    probe: agent => probeNow({ root, registry, config: loadTeamConfig(teamConfigFile, root), agent }),
+    runTests: (sha, pr) => cloneAndRunTests({ root, repoPath: config.repo_path, sha, pr, cli: self, tmpRoot: config.test_tmp_root || os.tmpdir(), }),
+  };
 }
 // Model-free allowance probes, one per provider that has one (issue #75), so a paused agent's reading still refreshes.
 // Only a local file read: never a model call. A probe failure only loses this tick's refresh.

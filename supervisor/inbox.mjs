@@ -17,8 +17,16 @@ export const ACTIONS = {
   close_job: { target: 'job', noun: 'job', will: 'Close this stopped job of a pull request that a newer head has overtaken. Unpushed work is saved to a branch on the remote first; the job is closed only once nothing local is unsaved.' },
   stop_job: { target: 'job', noun: 'job', will: 'Stop this running or paused job.' },
   resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
+  // Issue #637: operations that needed a terminal. Targets are fixed words, a 40-character head or an agent name; nothing here merges or approves.
+  pause_work: { target: 'work', noun: 'scope', will: 'Start no new implement or inbox job until work is resumed. Running jobs, reviews and fixes go on.' },
+  resume_work: { target: 'work', noun: 'scope', will: 'Lift the pause on new implement and inbox jobs.' },
+  restart_dashboard: { target: 'dashboard', noun: 'service', will: 'Restart the dashboard server and check that it answers and stays up. The action fails if it does not.' },
+  retry_install: { target: 'install', noun: 'service', will: 'Clear the self-upgrade latch and let the next tick try the install again without the batching wait. The install still runs its checks.' },
+  run_tests: { target: 'head', noun: 'head', will: 'Run the project test suite once on this head of an open Foreman pull request, in a fresh clone, under the test-slot limit and host admission, with a maximum runtime. The result is saved for the overseer. Nothing is merged or approved.' },
+  allowance_probe: { target: 'agent', noun: 'agent', will: "Read this agent's allowance once (the dashboard's Refresh allowance). It never runs while overage is in use, and an agent can be probed once per five minutes." },
 };
-const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
+const TARGET_TEXT = { job: 'the 8-character job id', pr: 'a pull request number', issue: 'an issue number', work: 'the word new', dashboard: 'the word dashboard', install: 'the word install', head: 'a 40-character commit id', agent: 'an agent name' };
+const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/, work: /^new$/, dashboard: /^dashboard$/, install: /^install$/, head: /^[0-9a-f]{40}$/, agent: /^[a-z][a-z0-9_-]{0,29}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 10, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
@@ -63,7 +71,7 @@ export function validateItem(raw) {
   if (!KINDS.includes(raw.kind)) return { ok: false, reason: `unknown kind (accepted: ${KINDS.join(', ')})` };
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
-  const bodyKey = raw.kind === 'prompt' ? 'prompt' : raw.kind === 'action' ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12 };
+  const bodyKey = raw.kind === 'prompt' ? 'prompt' : raw.kind === 'action' ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 40 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
     if (v === undefined && k === 'why') continue;
@@ -80,7 +88,7 @@ export function validateItem(raw) {
   if (raw.kind === 'action') {
     const spec = Object.hasOwn(ACTIONS, raw.action) ? ACTIONS[raw.action] : null;
     if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(ACTIONS).join(', ')})` };
-    if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
+    if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${TARGET_TEXT[spec.target]}` };
   }
   return { ok: true, item: Object.fromEntries(allowed.filter(k => raw[k] !== undefined).map(k => [k, raw[k]])) };
 }
