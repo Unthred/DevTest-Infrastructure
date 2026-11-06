@@ -521,3 +521,21 @@ test('#631: failures that are the reviewer\'s own, or an ordinary incomplete job
   assert.equal(w2.team.s.reviewAttempts[b.rec.key], 1); assert.equal(b.report.refundedAttempts, undefined);
   assert.equal(w2.team.s.attemptRefunds, undefined);
 });
+test('#631: the repair task is only for a verdict file that exists and parsed, not for a missing or truncated one', async t => {
+  const w = reqWorld(t); const { spec } = await startReview(w);
+  const job = d => ({ role: 'devtest', issue: 77, worktree: '/w', scope: 's', allowedActions: ['read'], prompt: spec.prompt, repairPrompt: spec.repairPrompt, incompleteReason: { cause: 'postcondition_not_met', detail: d, attempt: 1 } });
+  for (const d of [`${VERDICT_REFUSED} no verdict file`, `${VERDICT_REFUSED} unreadable verdict file`]) assert.ok(prompt(job(d), true).includes(spec.prompt), d);
+  assert.ok(!prompt(job(`${VERDICT_REFUSED} verdict has an unknown field`), true).includes(spec.prompt));
+});
+test('#631: findings of a verdict refused for independence or by a validator fault are kept and shown', async t => {
+  const w = reqWorld(t); await startReview(w);
+  w.team.s.jobs.w1.model = 'opus';
+  const [id, rec] = Object.entries(w.team.s.jobs).at(-1);
+  writeVerdict(w.team, rec.ticket, { pr: rec.pr, headSha: rec.head, verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'kept independence finding' }], commandsRun: ['x'], requirements: [ok], descriptionClaims: [] });
+  w.jobs.states[id].status = 'completed'; await w.team.ingest({ ingested: [] });
+  const e = w.team.s.refusedReviews[`${rec.pr}:${rec.head}`];
+  assert.equal(e.kept.findings[0].text, 'kept independence finding');
+  const w2 = reqWorld(t);
+  const a = await endReview(w2, { status: 'blocked', lastEvent: 'incomplete', incompleteReason: { cause: 'postcondition_not_met', detail: `${VALIDATOR_FAULT} TypeError`, attempt: 2 } }, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'kept fault finding' }] });
+  assert.equal(w2.team.s.reviewFaults[a.rec.key].kept.findings[0].text, 'kept fault finding');
+});

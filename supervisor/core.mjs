@@ -322,7 +322,7 @@ export function prompt(job, resume = false, seed = null) {
   head += ` Your shell may start in another directory: begin every command with cd ${JSON.stringify(job.worktree)}.`;
   if (job.access === 'full') head += ' Launch mode: full access (decision D-020, selected by the homeowner), the same as the interactive agents. Project rules still apply: no reboot of Tower, no production Home Assistant change, no secret disclosure, no purchases, no merge of your own work.';
   // Issue #631: a verdict file the validator refused is repaired with a short task (the job's own repairPrompt), not a repeat of the whole review.
-  const repair = resume && typeof job.repairPrompt === 'string' && job.repairPrompt && job.incompleteReason?.cause === 'postcondition_not_met' && String(job.incompleteReason.detail || '').startsWith('verdict refused:');
+  const repair = resume && typeof job.repairPrompt === 'string' && job.repairPrompt && job.incompleteReason?.cause === 'postcondition_not_met' && String(job.incompleteReason.detail || '').startsWith('verdict refused:') && !/^verdict refused: (no verdict file|unreadable verdict file|invalid ticket)$/.test(String(job.incompleteReason.detail).trim());
   if (repair) return head + ` Your verdict file was refused: ${job.incompleteReason.detail}\n\n${job.repairPrompt}`;
   if (job.handover) head += ` Read the handover at ${job.handover} and update it only when the approved actions permit edits.`;
   if (resume) head += ` Resume the SAME issue and worktree. Read issue, Git state and handover before changing anything. Last checkpoint HEAD: ${job.checkpoint?.head || 'unknown'}. Avoid duplicate actions.`;

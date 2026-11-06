@@ -511,6 +511,7 @@ export function readInboxVerdict(root, ticket, expect) {
 }
 // Issue #631: what can still be read from a verdict file the validator refused: its verdict word and well-formed findings, redacted and
 // bounded. Nothing here is trusted or posted as a verdict; it only lets the homeowner see what the reviewer found.
+export const keptText = k => `. Findings kept from it (${k.verdict || 'verdict unreadable'}): ${k.findings.slice(0, 5).map(f => `[${f.kind}] ${f.text.slice(0, 200)}`).join(' | ')}`;
 export function salvageFindings(root, ticket) {
   if (!/^[a-f0-9]{32}$/.test(ticket || '')) return null;
   let v; try { v = JSON.parse(fs.readFileSync(path.join(root, 'team', 'inbox', ticket, 'verdict.json'), 'utf8')); } catch { return null; }
@@ -623,7 +624,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews', 'reviewFaults']) this.s[k] ||= {};
     breaker.normalize(this.s.breaker ||= {});   // issue #549: the halt state lives in the state file, so a restart keeps it
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
@@ -760,6 +761,8 @@ export class Team {
     for (const k of Object.keys(this.s.headWriterMiss)) if (!open.has(k)) delete this.s.headWriterMiss[k];
     // Issue #560: a refused review belongs to one head; once that head is no longer open the entry is dropped too.
     for (const k of Object.keys(this.s.refusedReviews || {})) if (!open.has(k)) delete this.s.refusedReviews[k];
+    // Issue #631: refund marks and validator-fault records belong to one head too (their keys are pr:head:agent[:cause]).
+    for (const m of ['attemptRefunds', 'reviewFaults']) for (const k of Object.keys(this.s[m] || {})) if (!open.has(k.split(':').slice(0, 2).join(':'))) delete this.s[m][k];
   }
   // Inbox jobs (same provider as the branch's agent, a recorded model) whose own worktree reflog shows a commit entry for this exact head
   // inside the job's run window. The worktree is the one Foreman made for the job (recorded, or derived from the inbox id for older records).
@@ -1764,7 +1767,8 @@ export class Team {
         if ((this.s.reviewAttempts[key + ':' + agent] || 0) >= this.c.limits.max_review_attempts) add('review-attempts-' + agent, agent + ' used all its review attempts at this head');
       }
     }
-    if (!v) { const rf = Object.values(this.s.reviewRefusals || {}).find(x => x?.pr === pr.number && x.head === pr.headRefOid); if (rf) add('review-verdict-refused', `the review's verdict file was refused (${rf.error}); no verdict was recorded. The file is ${rf.file}${rf.kept ? `. Findings kept from it (${rf.kept.verdict || 'verdict unreadable'}): ${rf.kept.findings.slice(0, 5).map(f => `[${f.kind}] ${f.text.slice(0, 200)}`).join(' | ')}` : ''}`); }
+    if (!v) { const rf = Object.values(this.s.reviewRefusals || {}).find(x => x?.pr === pr.number && x.head === pr.headRefOid); if (rf) add('review-verdict-refused', `the review's verdict file was refused (${rf.error}); no verdict was recorded. The file is ${rf.file}${rf.kept ? keptText(rf.kept) : ''}`); }
+    if (!v) { const vf = Object.values(this.s.reviewFaults || {}).find(x => x?.pr === pr.number && x.head === pr.headRefOid); if (vf) add('review-validator-fault', `Foreman's own verdict check failed (${vf.error}); this is not the reviewer's fault and no verdict was recorded. The file is ${vf.file}${vf.kept ? keptText(vf.kept) : ''}`); }
     if (v?.verdict === 'PASS') {
       const exMissing = this.exceptionFor(pr.number) ? this.exceptionMissing(pr) : null;
       if (exMissing) add('exception-review', exMissing === 'commits' ? 'review exception: waiting for the review of the commits written by the other model' : 'review exception: waiting for the whole-pull-request review');
@@ -1990,7 +1994,9 @@ export class Team {
         // refusal (that is the relaxation); the commit step must run on another model than the full-review model.
         const exStage = j.exceptionStage || null, exNow = exStage ? this.exceptionFor(j.pr) : null;
         if (r.verdict && exStage && (!exNow || (exStage === 'commits' && j.model === exNow.full_review.model) || j.model !== (exStage === 'full' ? exNow.full_review : exNow.commit_review).model)) {
-          j.ingested = true; j.refusal = 'exception-model'; this.refundFaultAttempt(id, j, 'predictable-refusal', report); this.save();
+          j.ingested = true; j.refusal = 'exception-model'; this.refundFaultAttempt(id, j, 'predictable-refusal', report);
+          const exText = !exNow ? 'the review exception ended for this pull request' : 'reviewer model ' + (j.model || 'default') + ' is the wrong model for the exception step';
+          this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: 'exception-model', text: exText, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), kept: salvageFindings(this.root, j.ticket) || undefined, at: this.clock.now() }; this.save();
           report.ingested.push({ job: id, pr: j.pr, error: !exNow ? 'review exception ended for this pull request; verdict not recorded' : 'review refused: wrong model for the exception step' });
           return;
         }
@@ -1998,7 +2004,7 @@ export class Team {
         const why = r.verdict && !exStage ? this.independenceRefusal(j.agent, reviewer.model, { number: j.pr, headRefName: branch, headRefOid: j.head }) : null;
         if (why) {
           const text = why === 'writer unknown' ? `the writer of this head is unknown (no job record and no session-log or worktree evidence for this exact head), so ${reviewer.provider} model ${j.model || 'default'} cannot be shown to differ from it` : `reviewer model ${j.model || 'default'} is a model that wrote this pull request`;
-          this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: why, text, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), at: this.clock.now() };
+          this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: why, text, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), kept: salvageFindings(this.root, j.ticket) || undefined, at: this.clock.now() };
           j.ingested = true; j.refusal = 'independence'; this.refundFaultAttempt(id, j, 'predictable-refusal', report); this.save();
           report.ingested.push({ job: id, pr: j.pr, error: 'review refused: ' + text });
           return;
@@ -2035,7 +2041,11 @@ export class Team {
         this.recordRefusedReview(id, j, job, report);
         const r = job.incompleteReason, detail = String(r?.detail || '');
         if (r?.cause === 'checkpoint_failed') this.refundFaultAttempt(id, j, 'checkpoint-failure', report);
-        else if (r?.cause === 'postcondition_not_met' && detail.startsWith(VALIDATOR_FAULT)) this.refundFaultAttempt(id, j, 'validator-fault', report);
+        else if (r?.cause === 'postcondition_not_met' && detail.startsWith(VALIDATOR_FAULT)) {
+          this.refundFaultAttempt(id, j, 'validator-fault', report);
+          // Issue #631: the findings of a file Foreman's own validator could not judge are kept and shown too (never posted, never a verdict).
+          if (j.key) { this.s.reviewFaults[j.key] = { pr: j.pr, head: j.head, job: id, error: redact(detail, 120), file: path.join(this.root, 'team', 'inbox', String(j.ticket || ''), 'verdict.json'), kept: salvageFindings(this.root, j.ticket) || undefined, at: this.clock.now() }; this.save(); }
+        }
       }
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
       if (j.kind === 'inbox') this.ingestInbox(id, j, job);
