@@ -22,6 +22,7 @@ export function selfCheck({ state, prs = [], issues = [], active = [], aliveById
     const labels = labelsOf.get(Number(target));
     if (!Array.isArray(labels) || labels.includes('needs-homeowner')) continue;
     if (Object.values(causes || {}).some(c => !Number.isFinite(c?.at) || now - c.at < GRACE_MS)) continue;
+    if (Object.values(causes || {}).some(c => c?.kind === 'fixlimit')) continue;   // Team.clearStale owns it: it re-arms only once the cause has cleared
     fixes.push({ kind: 'flag-label-gone', target: Number(target), what: `dropped the record that Foreman added needs-homeowner to #${target}: the label is no longer there` });
   }
   // 2. A job recorded as running with no live process.
@@ -59,8 +60,6 @@ export function applySelfCheck(state, result, now = Date.now()) {
   const applied = [];
   for (const f of result.fixes) {
     if (f.kind === 'flag-label-gone' && state.unblock?.flags?.[f.target]) {
-      // Same rearm as Team.clearStale: a dropped fix-limit cause must let a later rejection be raised again.
-      if (state.notified && Object.values(state.unblock.flags[f.target] || {}).some(c => c?.kind === 'fixlimit')) { delete state.notified[`fixlimit:${f.target}`]; delete state.notified[`fixlimit-alert:${f.target}`]; }
       delete state.unblock.flags[f.target]; applied.push(f);
     }
   }
