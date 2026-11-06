@@ -23,7 +23,7 @@ function seed(root) {
   fs.mkdirSync(path.join(root, 'team'), { recursive: true }); fs.mkdirSync(path.join(root, 'versions', A), { recursive: true });
   fs.symlinkSync(`versions/${A}`, path.join(root, 'current'));
   fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), [
-    { at: 1000, from: A, to: B, prs: [5], result: 'precheck_failed', reason: `tests failed ${PW}=${PWVAL}`, checks: { preChecks: 'failed' } },
+    { at: 1000, from: A, to: B, prs: [5], result: 'precheck_failed', stage: 'precheck', tests: ['tests/x.test.mjs: one'], excerpt: `not ok 1 - x\n  ${PW}: ${PWVAL}`, reason: `tests failed ${PW}=${PWVAL}`, checks: { preChecks: 'failed' } },
     { at: 2000, from: A, to: C, prs: [6, 7], result: 'upgraded', checks: { preChecks: 'ok' } },
   ].map(r => JSON.stringify(r)).join('\n') + '\n');
   fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({
@@ -70,7 +70,13 @@ test('installs reports installed/main, draining, the failing test, a stale proce
   assert.equal(r.lastInstall.result, 'precheck_failed'); assert.deepEqual(r.lastInstall.failingTests, ['tests/flaky.test.mjs: waits for a socket']); assert.equal(r.lastInstall.retried, true);
   assert.deepEqual(r.processes.map(p => [p.role, p.matchesInstalled]), [['dashboard', true], ['foreman', false]]);
   assert.deepEqual(r.recent.map(x => [x.result, x.failed]), [['upgraded', false], ['precheck_failed', true]], 'newest first');
-  const text = JSON.stringify(r);
+  // the pre-check failure stays visible after a later install replaced self-upgrade.json install
+  assert.deepEqual(r.lastPrecheckFailure.failingTests, ['tests/x.test.mjs: one']); assert.match(r.lastPrecheckFailure.excerpt, /not ok 1 - x/); assert.equal(r.lastPrecheckFailure.stage, 'precheck');
+  const st = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); st.install = { result: 'verified', sha: C, at: 2500 };
+  fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify(st));
+  const later = installs(root, { now: 5000, procRoot: proc });
+  assert.equal(later.lastInstall.result, 'verified'); assert.equal(later.lastPrecheckFailure.to, B); assert.deepEqual(later.lastPrecheckFailure.failingTests, ['tests/x.test.mjs: one']);
+  const text = JSON.stringify(r) + JSON.stringify(later);
   for (const bad of [GH, PWVAL]) assert.ok(!text.includes(bad), `leaked ${bad.slice(0, 6)}`);
 });
 
@@ -150,4 +156,9 @@ test('end to end: GET-only routes, the two MCP tools, limit, redaction and an un
 test('without a dashboard address both tools fail cleanly', async () => {
   const tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}) });
   assert.equal((await tools.call('foreman_installs')).isError, true); assert.equal((await tools.call('foreman_breaker_history')).isError, true);
+});
+
+test('processVersions matches the first subcommand only', t => {
+  const proc = fakeProc(t, [[31, ['node', `/r/versions/${A}/supervisor/cli.mjs`, 'test-slot', 'run', '--', 'dashboard']]]);
+  assert.deepEqual(processVersions(proc).map(p => p.role), ['supervisor-cli']);
 });

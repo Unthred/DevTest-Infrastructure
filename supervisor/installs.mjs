@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readUpgrades, readSelfUpgrade, readInstalled, scrub } from './suphealth.mjs';
 import { readVersion, readTeamState } from './dashdata.mjs';
-import { redact } from './redact.mjs';
+import { redact, redactLong } from './redact.mjs';
 
 export const INSTALLS_KEPT = 40;
 export const BREAKER_KEPT = 100;
@@ -36,11 +36,26 @@ export function processVersions(procRoot = '/proc', { currentSha = null } = {}) 
     version ||= /\/versions\/([0-9a-f]{40})\//.exec(script)[1];
     const base = m[1], rest = args.slice(args.indexOf(script) + 1);
     const role = /^dash(server|board)$/.test(base) ? 'dashboard' : /worker/.test(base) ? 'worker'
-      : base === 'cli' ? (rest.includes('dashboard') ? 'dashboard' : rest.includes('worker') ? 'worker' : rest.includes('team') || rest.includes('reconcile') ? 'foreman' : 'supervisor-cli')
+      : base === 'cli' ? (rest[0] === 'dashboard' ? 'dashboard' : rest[0] === 'worker' ? 'worker' : rest[0] === 'team' || rest[0] === 'reconcile' ? 'foreman' : 'supervisor-cli')
       : scrub(base, 32);
     out.push({ role, pid: Number(n), version });
   }
   return out.sort((a, b) => a.role.localeCompare(b.role) || a.pid - b.pid).slice(0, 60);
+}
+
+// The failure detail upgrades.jsonl stores per record (tests, excerpt, stage) that readUpgrades drops; redacted and bounded here.
+function readFailureDetail(root) {
+  const out = new Map();
+  let text; try { text = fs.readFileSync(path.join(root, 'team', 'upgrades.jsonl'), 'utf8'); } catch { return out; }
+  for (const line of text.split('\n').slice(-600)) {
+    let r; try { r = JSON.parse(line); } catch { continue; }
+    if (!r || typeof r !== 'object' || !Number.isFinite(r.at) || typeof r.result !== 'string') continue;
+    const tests = Array.isArray(r.tests) ? r.tests.slice(0, 5).map(x => scrub(x, 200)) : [];
+    const excerpt = typeof r.excerpt === 'string' ? redactLong(r.excerpt, 1500, '[excerpt cut]') : '';
+    const stage = typeof r.stage === 'string' ? scrub(r.stage, 30) : null;
+    out.set(`${r.at}:${r.result}`, { failingTests: tests, excerpt, stage });
+  }
+  return out;
 }
 
 export function installs(root, { now = Date.now(), procRoot = '/proc', running } = {}) {
@@ -49,13 +64,20 @@ export function installs(root, { now = Date.now(), procRoot = '/proc', running }
   let state = {}; try { state = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')) || {}; } catch { /* none */ }
   const h = state.holding;
   const draining = h && typeof h.to === 'string' ? { to: SHA.test(h.to) ? h.to : null, since: iso(h.since), jobsRunning: Number.isSafeInteger(h.jobs) ? h.jobs : null } : null;
-  const records = readUpgrades(root).slice(-INSTALLS_KEPT).reverse().map(r => ({ at: iso(r.at), from: r.from, to: r.to, prs: r.prs, result: r.result, failed: FAILED.has(r.result), reason: r.reason, checks: r.checks, files: r.files }));
+  const detail = readFailureDetail(root);
+  const records = readUpgrades(root).slice(-INSTALLS_KEPT).reverse().map(r => {
+    const d = detail.get(`${r.at}:${r.result}`) || { failingTests: [], excerpt: '', stage: null };
+    return { at: iso(r.at), from: r.from, to: r.to, prs: r.prs, result: r.result, failed: FAILED.has(r.result) && r.result !== 'flaky_test', flaky: r.result === 'flaky_test', stage: d.stage, reason: r.reason, failingTests: d.failingTests, excerpt: d.excerpt, checks: r.checks, files: r.files };
+  });
+  // The newest pre-check failure survives a later successful install, which replaces self-upgrade.json `install`.
+  const lastPrecheckFailure = records.find(r => r.result === 'precheck_failed') || null;
   const f = state.refusal, i = su.install;
   return {
     note: 'Install records come from team/upgrades.jsonl and self-upgrade.json. Process versions are read from each process command line under versions/<sha>/ (the command line itself is not returned). Evidence, not a remote check.',
     installed: inst.sha, main: ver?.main && SHA.test(ver.main) ? ver.main : null, behind: ver?.behind ?? null, drift: !!ver?.drift, nextInstall: ver?.nextInstall ? { at: iso(ver.nextInstall.at), why: scrub(ver.nextInstall.why, 200), state: ver.nextInstall.state } : null,
     draining, latch: su.latch ? { at: iso(su.latch.at), from: su.latch.from, to: su.latch.to, reason: su.latch.reason } : null,
     lastInstall: i ? { result: i.result, sha: i.sha, at: iso(i.at), nextAttemptAt: iso(i.nextAttemptAt), reason: i.reason, failingTests: i.tests, retried: i.retried, excerpt: i.excerpt } : null,
+    lastPrecheckFailure,
     refusal: f && SHA.test(f.to || '') ? { kind: scrub(f.kind || '', 24), from: f.from ?? null, to: f.to, at: iso(f.at), reason: scrub(f.reason || '', 300) } : null,
     processes: processVersions(procRoot, { currentSha: inst.sha }).map(p => ({ ...p, matchesInstalled: inst.sha ? p.version === inst.sha : null })),
     recent: records,
