@@ -39,7 +39,7 @@ export function createViewStore({ build, ttlMs = VIEW_TTL_MS, staleMs = VIEW_STA
     const startedAt = clock();   // the files are read when the build starts, so the copy's age counts from here, not from when it finished
     const gen = entry.runningGen = entry.gen;   // the writes this build is guaranteed to include: those before it started
     entry.running = new Promise((resolve, reject) => yieldTo(() => {
-      Promise.resolve().then(() => build(opts)).then(view => { entry.view = view; entry.builtAt = startedAt; entry.builtGen = gen; entry.failed = null; resolve(entry); }, error => {
+      Promise.resolve().then(() => build(opts)).then(view => { entry.view = view; entry.builtAt = startedAt; entry.finishedAt = clock(); entry.builtGen = gen; entry.failed = null; resolve(entry); }, error => {
         entry.failed = String(error?.message || error).slice(0, 160); reject(error);
       });
     })).finally(() => { entry.running = null; });
@@ -55,7 +55,8 @@ export function createViewStore({ build, ttlMs = VIEW_TTL_MS, staleMs = VIEW_STA
     }
   };
   // stale also covers a copy older than the last write (rebuildAfterWrite gave up after 3 rounds): it is never shown as current.
-  // Returns { view, builtAt, ageMs, stale, refreshing, failed }.
+  // Reuse (ttlMs) counts from when the build finished, so a slow build does not shorten how long its copy is reused; the displayed age counts from the build start.
+  // behindWrite: the copy is older than the last write (as distinct from merely old). Returns { view, builtAt, ageMs, stale, behindWrite, refreshing, failed }.
   async function get(key, opts) {
     let entry = entries.get(key);
     if (!entry) entries.set(key, entry = { view: null, builtAt: 0, failed: null, running: null, opts, requestedAt: -Infinity, gen: 0, builtGen: 0 });
@@ -64,9 +65,9 @@ export function createViewStore({ build, ttlMs = VIEW_TTL_MS, staleMs = VIEW_STA
     const now = clock();
     if (ttlMs <= 0 || !entry.view) await startBuild(key, opts, entry);   // no copy yet (or reuse disabled): wait, shared with concurrent requests
     else if (entry.builtGen !== entry.gen) await rebuildAfterWrite(key, opts, entry);   // a write happened since this copy's build began: never serve it as current
-    else if (now - entry.builtAt >= ttlMs) startBuild(key, opts, entry).catch(() => {});   // old copy: serve it, rebuild in the background
+    else if (now - (entry.finishedAt ?? entry.builtAt) >= ttlMs) startBuild(key, opts, entry).catch(() => {});   // old copy: serve it, rebuild in the background
     const at = clock(), ageMs = Math.max(0, at - entry.builtAt);
-    return { view: entry.view, builtAt: entry.builtAt, ageMs, stale: ageMs >= staleMs || !!entry.failed || entry.builtGen !== entry.gen, refreshing: !!entry.running, failed: entry.failed };
+    return { view: entry.view, builtAt: entry.builtAt, ageMs, stale: ageMs >= staleMs || !!entry.failed || entry.builtGen !== entry.gen, behindWrite: entry.builtGen !== entry.gen, refreshing: !!entry.running, failed: entry.failed };
   }
   // A dashboard write calls this before it redirects: every copy built before the write stops counting as current.
   const invalidate = () => { for (const entry of entries.values()) entry.gen++; return entries.size; };

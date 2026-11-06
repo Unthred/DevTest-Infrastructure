@@ -387,10 +387,10 @@ export function nextTickHtml(view, now) {
 }
 const agentStat = view => `<div class="stat agent-lines" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
 // Issue #467: how old the prepared copy behind this page is. Never shown as current once it is old or its rebuild failed.
-function pageDataStat(view) {
+export function pageDataStat(view) {
   const d = view.pageData; if (!d || !Number.isFinite(d.ageMs)) return '';
   const secs = Math.round(d.ageMs / 1000), age = secs < 60 ? `${secs} s` : `${Math.round(secs / 60)} min`;
-  const why = d.failed ? `The last rebuild failed (${d.failed}); this is the last good copy.` : d.stale ? 'This copy is older than expected and is being rebuilt.' : 'Pages are served from a copy prepared in the background.';
+  const why = d.failed ? `The last rebuild failed (${d.failed}); this is the last good copy.` : d.behindWrite ? 'This copy was prepared before the latest change and does not show it yet; a new copy is built on the next request.' : d.stale ? (d.refreshing ? 'This copy is older than expected and is being rebuilt.' : 'This copy is older than expected.') : 'Pages are served from a copy prepared in the background.';
   return `<div class="stat" data-page-data="${d.stale ? 'stale' : 'ok'}" title="${esc(why)}"><span class="k">Page data</span>${d.stale ? badge('warning', `Stale · ${age} old`) : `<span>${esc(age)} old</span>`}</div>`;
 }
 function statusBar(view, route, head = '') {
