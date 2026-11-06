@@ -11,6 +11,13 @@ export const IDLE_CAUSES = ['waiting-for-tick', 'upgrade', 'tick-run', 'named-ho
 export const WORK_CAUSES = ['waiting-for-tick', 'upgrade', 'tick-run', 'named-hold'];
 export const CAUSE_LABEL = { 'waiting-for-tick': 'waiting for the next tick', upgrade: 'upgrade pending or draining', 'tick-run': 'tick run time before the job started',
   'named-hold': 'a named hold', 'no-eligible-work': 'no eligible work', unrecorded: 'no tick record' };
+// Issue #530: a hold is grouped by its cause, not its display text. The live figures in a text (weekly %, projected %, days or hours
+// left, a reset time, the rate source) change on every reading, so they are masked to form the key; identifiers such as "PR #9" stay,
+// because a different PR is a different cause. The report shows the latest text of each cause once, with the total time.
+export const holdCause = text => String(text ?? '')
+  .replace(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/g, '~').replace(/\b\d{1,2}:\d{2}\b/g, '~')
+  .replace(/\d+(?:\.\d+)?\s*(?:%|days?|hours?|hrs?|h|min(?:ute)?s?)(?![A-Za-z])/g, '~')
+  .replace(/\((?:~[^()]*)?(?:window average|recent)[^()]*\)/g, '(~)').replace(/\s+/g, ' ').trim();
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
 const MIN = 60000;
 
@@ -60,7 +67,8 @@ export function idleBreakdown({ jobs, snapshots, agents, from, to }) {
   const out = {};
   for (const [agent, provider] of Object.entries(agents)) {
     const row = { windowMinutes: (to - from) / MIN, busyMinutes: 0, minutes: Object.fromEntries(IDLE_CAUSES.map(k => [k, 0])), holds: {} };
-    const add = (cause, ms, hold) => { row.minutes[cause] += ms / MIN; if (cause === 'named-hold' && hold) row.holds[hold] = (row.holds[hold] || 0) + ms / MIN; };
+    const latest = {};   // cause key -> the newest text seen (intervals are visited in time order)
+    const add = (cause, ms, hold) => { row.minutes[cause] += ms / MIN; if (cause === 'named-hold' && hold) { const k = holdCause(hold); latest[k] = hold; row.holds[k] = (row.holds[k] || 0) + ms / MIN; } };
     const busy = busyIntervals(jobs, provider, from, to);
     let cursor = from;
     const idleSpans = [];
@@ -89,6 +97,7 @@ export function idleBreakdown({ jobs, snapshots, agents, from, to }) {
         add(cause, y - x, hold);
       }
     }
+    row.holds = Object.fromEntries(Object.entries(row.holds).map(([k, m]) => [latest[k], m]));
     out[agent] = row;
   }
   return out;
