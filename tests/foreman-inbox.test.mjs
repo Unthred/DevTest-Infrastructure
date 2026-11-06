@@ -492,3 +492,23 @@ test('actions: a failed outcome and the result stay redacted and bounded; no sec
   const blob = fs.readFileSync(path.join(inbox.dirs(w.dir).status, `${st.id}.json`), 'utf8') + fs.readFileSync(inbox.dirs(w.dir).audit, 'utf8');
   assert.ok(!blob.includes(TOKEN)); assert.ok(!inbox.secretShaped(blob.replace(/"hash":"[a-f0-9]+"/g, '')), 'no secret-shaped text in status or audit');
 });
+
+test('cli: the hinted `status <8-char prefix>` resolves to the full job; unknown and ambiguous prefixes are refused (issue #641)', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'status-prefix-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'jobs'), { recursive: true });
+  const one = 'abcdef12' + '0'.repeat(24), two = 'abcdef13' + '1'.repeat(24), twin = 'abcdef12' + '2'.repeat(24);
+  for (const id of [one, two]) fs.writeFileSync(path.join(root, 'jobs', `${id}.json`), JSON.stringify({ id, status: 'failed' }));
+  const cli = fileURLToPath(new URL('../supervisor/cli.mjs', import.meta.url));
+  const status = arg => spawnSync(process.execPath, [cli, 'status', arg], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+  const hit = status('abcdef12'); assert.equal(hit.status, 0, hit.stderr); assert.equal(JSON.parse(hit.stdout).id, one);
+  assert.notEqual(status('abcdef99').status, 0);
+  fs.writeFileSync(path.join(root, 'jobs', `${twin}.json`), JSON.stringify({ id: twin }));
+  const amb = status('abcdef12'); assert.notEqual(amb.status, 0); assert.match(amb.stderr, /ambiguous/);
+});
+test('dashboard: a failed action item without a job is still one line, with no status hint (issue #641)', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD); inbox.scan(dir, 1000);
+  const s = await serve(t, dir);
+  inbox.finish(dir, a, { state: 'failed', reason: 'could not post', result: 'nothing was done' }, s.clock.now - 1000);
+  const f = JSON.parse((await s.get('/api/view.json')).body).panels.needsYou.filter(x => x.id.startsWith('inboxfail-'));
+  assert.equal(f.length, 1); assert.doesNotMatch(f[0].decision, /ai-supervisor status/);
+});
