@@ -539,3 +539,13 @@ test('#631: findings of a verdict refused for independence or by a validator fau
   const a = await endReview(w2, { status: 'blocked', lastEvent: 'incomplete', incompleteReason: { cause: 'postcondition_not_met', detail: `${VALIDATOR_FAULT} TypeError`, attempt: 2 } }, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'kept fault finding' }] });
   assert.equal(w2.team.s.reviewFaults[a.rec.key].kept.findings[0].text, 'kept fault finding');
 });
+test('#678: a Dockerfile suffix needs a slashed path; root Dockerfile fails safe and a sentence-final full stop are handled', () => {
+  assert.equal(isTrivialSlip('adds 2 lines in dockerfile.retry'), false);
+  assert.equal(isTrivialSlip('adds 2 lines in docker/Dockerfile.retry'), true);
+  assert.equal(isTrivialSlip('adds 2 lines in Dockerfile'), false);
+  assert.equal(isTrivialSlip('adds 2 lines in .github/workflows/ci.yml.'), true);
+  // Negative: a full stop does not hide a verb, and an unlisted slashed suffix stays refused.
+  assert.equal(isTrivialSlip('adds 2 lines and improves ci.'), false);
+  assert.equal(isTrivialSlip('adds 2 lines in tests/fix.retry.'), false);
+  assert.equal(isTrivialSlip('adds 2 lines in notdockerfile'), false);
+});
