@@ -110,3 +110,26 @@ test('no secret-shaped output escapes an alert (fixtures built at run time)', as
   for (const bad of [token, bearer]) assert.ok(!r.texts[0].includes(bad), 'redacted');
   assert.ok(!fs.readFileSync(path.join(root, 'team', 'alert-policy.json'), 'utf8').includes(token), 'the state file holds no secret text');
 });
+
+test('policySender: Team and self-upgrade alerts send only actionable text, under the shared rate limit', async t => {
+  const { policySender, classifyAlert } = await import('../supervisor/alertpolicy.mjs');
+  const root = tmp(t), r = recorder(), send = policySender(root, r.send, { limit: { max: 2, windowMs: 3600000 } });
+  const informational = ['Allowance: codex normal', 'Supervisor upgraded to abc1234 (PR #1).', 'Supervisor upgrade to abc1234: tests failed once (flaky: x). The install went ahead.', 'Supervisor self-upgrade skipped: installed a is not an ancestor of main b.', 'Supervisor upgrade to abc1234 not done: pre-check failed (x).'];
+  const covered = ['Needs the homeowner: PR #5 is still rejected after 3 fix rounds', 'Supervisor upgrade to abc: needs the homeowner: changes the bootstrap installer'];
+  for (const x of [...informational, ...covered]) { assert.notEqual(classifyAlert(x), 'actionable', x); await send(x); }
+  assert.equal(r.texts.length, 0, 'work Foreman handles itself, and items already in Needs you, send nothing here');
+  for (const x of ['Upgrade to abc rolled back: x.', 'Dashboard server was not answering: y', 'Dashboard server was not restarted: z']) { assert.equal(classifyAlert(x), 'actionable'); }
+  await send('Upgrade to abc rolled back: x.'); await send('Dashboard server was not answering: y');
+  await assert.rejects(send('Dashboard server was not restarted: z'), /rate limit/);
+  assert.equal(r.texts.length, 2);
+});
+
+test('the tick builds Needs you with the main decision register, so it matches the dashboard', async () => {
+  const { pendingProposals } = await import('../supervisor/dashboard.mjs');
+  const e = (id, st) => `## ${id} — title ${id}\n- Status: ${st}\n- Date: 2026-11-02\n- Source: issue #1\n- Decision: Something. More.\n\n`, main = e('D-001', 'homeowner-approved') + e('D-002', 'agent-proposal');
+  const pulls = [{ number: 311, isDraft: false }];
+  assert.deepEqual(pendingProposals({}, pulls, main, () => main), [], 'a PR that adds nothing proposes nothing');
+  assert.ok(pendingProposals({}, pulls, '', () => main).length > 0, 'the empty register is the bug');
+  const cli = fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8');
+  assert.match(cli, /buildView\(\{[^}]*register, registerUnreadable: !register \}\)/, 'the tick passes the register');
+});

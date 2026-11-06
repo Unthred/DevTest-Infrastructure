@@ -22,7 +22,7 @@ import { changeCheckOf, checkForChanges, ghProbeRunner, loadCache, saveCache, bu
 import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
-import { rateLimited, alertNeedsYou, dailySummary } from './alertpolicy.mjs';
+import { rateLimited, policySender, alertNeedsYou, dailySummary } from './alertpolicy.mjs';
 import { buildView } from './dashboard.mjs';
 import { advanceWatchlist, factsFromCache } from './watchlist.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
@@ -186,7 +186,7 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   // The allowance inputs are shared with `team status` and the dashboard (issue #121), so all of them plan alike.
   const jobsNow = readJobs(root);
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs: jobsNow, probes: readCache(root)?.probes, snapshots: readSnapshots(root), hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') });
-  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
+  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: policySender(root, alertSender(root, config)), providerModels, allowanceOf, limitedOf, usage });
 }
 // Issue #755: counts the gh processes a pass starts (for the pass record), without changing what any call does.
 function countingGh(stats) {
@@ -303,13 +303,18 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
           await advanceWatchlist({ root, cache, state, now, installed: ver?.installed || null, running: runningSha(self), tickOk: tickOutcome(report).status === 'ok',
             isAncestor: (a, b) => spawnSync('git', ['-C', config.repo_path, 'merge-base', '--is-ancestor', a, b], { encoding: 'utf8' }).status === 0, alert: rateLimited(root, alertSender(root, config)),
             factsFor: factsFromCache({ cache, state, now, checksOf: (pull, at) => checksState(pull.statusCheckRollup, retriedIn(state.cancelWatch, pull, at)) }), title: n => `#${n}` });
-          // Issue #634: Needs you alerts (one per cause group) and the quiet daily summary, both behind the same rate limit.
+        } catch (error) { console.error(`ai-supervisor: watchlist step failed: ${error?.name || 'Error'}`); }
+        // Issue #634: Needs you alerts (one per cause group) and the quiet daily summary, both behind the same rate limit.
+        try {
+          const cache = readCache(root) || {}, state = readTeamState(root), now = Date.now();
           const send = rateLimited(root, alertSender(root, config)), allJobs = readJobs(root);
-          const view = await buildView({ config, root, jobs: allJobs, events: [], state, cache, snapshots: readSnapshots(root), now });
+          // The same decision register as the dashboard, so the tick and the dashboard agree on Needs you.
+          const register = readRegister(config) || '';
+          const view = await buildView({ config, root, jobs: allJobs, events: [], state, cache, snapshots: readSnapshots(root), now, register, registerUnreadable: !register });
           const needsYou = (view.panels?.needsYou || []).map(a => ({ id: a.id, ref: a.ref, text: a.text, decision: a.decision }));
           await alertNeedsYou({ root, items: needsYou, send });
           await dailySummary({ root, now, send, facts: { jobs: allJobs, mergeLog: state.mergeLog || [], waiting: needsYou.length } });
-        } catch (error) { console.error(`ai-supervisor: watchlist step failed: ${error?.name || 'Error'}`); }
+        } catch (error) { console.error(`ai-supervisor: needs-you alert or daily summary step failed: ${error?.name || 'Error'}`); }
         await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
       }
       return report;
@@ -328,7 +333,7 @@ function selfUpgradeFor(root, registry) {
   const config = loadTeamConfig(teamConfigFile, root);
   const verdictFor = (pr, head) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')).verdicts?.[`${pr}:${head}`] || null; } catch { return null; } };
   const jobs = realJobs(root, registry);
-  return { config, upgrade: new SelfUpgrade({ root, minGapMs: config.self_upgrade?.min_install_gap_minutes != null ? config.self_upgrade.min_install_gap_minutes * 60000 : MIN_INSTALL_GAP_MS, drainMaxMs: config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : QUIET_MAX_WAIT_MS, deps: { ...realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }), plannedWork: () => plannedWorkOf(root) } }) };
+  return { config, upgrade: new SelfUpgrade({ root, minGapMs: config.self_upgrade?.min_install_gap_minutes != null ? config.self_upgrade.min_install_gap_minutes * 60000 : MIN_INSTALL_GAP_MS, drainMaxMs: config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : QUIET_MAX_WAIT_MS, deps: { ...realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: policySender(root, alertSender(root, config)) }), plannedWork: () => plannedWorkOf(root) } }) };
 }
 // Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so running jobs
 // can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.
