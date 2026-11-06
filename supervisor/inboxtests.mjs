@@ -71,6 +71,6 @@ export async function runLockedInboxTests({ root, sha, pr, cli, repoPath, tmpRoo
   const release = lock(root, INBOX_TESTS_LOCK);
   if (!release) { saveRaw(root, sha, { at: Date.now(), sha, pr, ok: false, summary: 'was not run: another inbox test run is in progress', code: null }); return null; }
   try { return await cloneAndRunTests({ root, repoPath, sha, pr, cli, tmpRoot, ...(run ? { run } : {}) }); }
-  catch (error) { saveRaw(root, sha, { at: Date.now(), sha, pr, ok: false, summary: `failed to run: ${String(error?.message || error).slice(0, 200)}`, code: null }); return null; }
+  catch (error) { saveRaw(root, sha, { at: Date.now(), sha, pr, ok: false, summary: `failed to run: ${redactLong(String(error?.message || error), 200, "")}`, code: null }); return null; }
   finally { release(); }
 }
