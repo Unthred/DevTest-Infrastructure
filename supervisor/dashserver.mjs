@@ -20,6 +20,7 @@ import { createSampler, createJobReader } from './procsample.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
+import { installs, breakerHistory } from './installs.mjs';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
@@ -274,6 +275,9 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       // Issue #623: two bounded, redacted, read-only records for the Foreman MCP tools (the account there cannot read the state root).
       if ((m = /^\/api\/jobs\/([a-f0-9]{32})\/outcome\.json$/.exec(path))) { const out = jobOutcome(root, m[1]); return out ? send(200, 'application/json; charset=utf-8', JSON.stringify(out)) : send(404, 'text/plain; charset=utf-8', 'not found'); }
       if (path === '/api/discarded.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(discarded(readTeamState(root), 200)));
+      // Issue #625: install history (with the version each process runs) and the circuit breaker's trip history, for the Foreman MCP tools.
+      if (path === '/api/installs.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(installs(root, { now: now() })));
+      if (path === '/api/breaker.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(breakerHistory(readTeamState(root), 100)));
       // UI review evidence (issue #455): read-only files from <evidence root>/ui-review, png, json and md only, no symlink followed.
       const fileRequest = /^\/evidence\/files\/(.+)$/.exec(path);
       if (fileRequest) {
