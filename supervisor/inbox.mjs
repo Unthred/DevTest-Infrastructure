@@ -22,6 +22,14 @@ const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 10, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'] };
+// Decision D-035 (proposed): what may run without a click. A code constant, not configuration: nothing in an item, in team.local.json or from
+// the overseer can add to it. `prompt` is never here (it runs on Tower with wide access); close_job, stop_job and anything that pauses work,
+// restarts a service, retries an install or runs anything else always wait for a click. The numbers are the daily limits (a rolling 24 h).
+export const AUTO_ACTIONS = Object.freeze({ new_review_attempt: 5, reopen: 5, resume_job: 5 });
+export const AUTO_DRAFT_LIMIT = 10;
+export const AUTO_WINDOW_MS = 24 * 3600000;
+// The switch and the draft limit live in team.local.json: { inbox: { dir, auto: false, auto_draft_limit: 10 } }. Anything but `false` means on.
+export const autoSettings = (cfg, hold = null) => ({ enabled: cfg?.auto !== false, draftLimit: Number.isInteger(cfg?.auto_draft_limit) ? cfg.auto_draft_limit : AUTO_DRAFT_LIMIT, hold });
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 
 export const dirs = inboxDir => ({ items: path.join(inboxDir, 'items'), status: path.join(inboxDir, 'status'), audit: path.join(inboxDir, 'audit.jsonl') });
@@ -100,13 +108,32 @@ function setStatus(inboxDir, id, patch, now) {
 // Picks up new item files. A file is read only if it is a regular file (never a symlink), small, and has a well-formed name; an item
 // that fails any check is recorded as refused with a reason and never becomes a card. At most LIMITS.pending items wait at once.
 // Items finished more than keepDays ago are removed from both directories.
-export function scan(inboxDir, now = Date.now()) {
+// Automatic handling is counted from the status files (each records autoAt and autoKey), so the daily limits survive a restart.
+export function autoUse(inboxDir, now = Date.now()) {
+  const used = {};
+  for (const s of allStatuses(inboxDir)) if (Number.isFinite(s.autoAt) && now - s.autoAt < AUTO_WINDOW_MS && s.autoKey) used[s.autoKey] = (used[s.autoKey] || 0) + 1;
+  return used;
+}
+// null: not eligible (always a card, no remark). { allow:true, key }: runs without a click. { allow:false, note }: eligible but held, so a card that says why.
+function autoDecision(item, used, auto) {
+  if (!auto?.enabled) return null;
+  let key, limit, label;
+  if (item.kind === 'issue_draft') { key = 'issue_draft'; limit = auto.draftLimit; label = 'issue drafts'; }
+  else if (item.kind === 'action' && Object.hasOwn(AUTO_ACTIONS, item.action)) { key = item.action; limit = AUTO_ACTIONS[key]; label = `${key} actions`; }
+  else return null;
+  if (auto.hold) return { allow: false, note: `not run automatically: ${auto.hold}; it needs a click` };
+  if ((used[key] || 0) >= limit) return { allow: false, note: `not run automatically: the daily limit of ${limit} automatic ${label} is used up; it needs a click` };
+  used[key] = (used[key] || 0) + 1;
+  return { allow: true, key };
+}
+export function scan(inboxDir, now = Date.now(), auto = null) {
   const d = dirs(inboxDir);
   fs.mkdirSync(d.status, { recursive: true, mode: 0o755 });
   let names = [];
   try { names = fs.readdirSync(d.items); } catch { return { picked: 0 }; }
   let picked = 0;
   let pending = allStatuses(inboxDir).filter(s => s.state === 'pending').length;
+  const used = auto?.enabled ? autoUse(inboxDir, now) : {};
   for (const name of names.sort()) {
     const m = /^([a-f0-9]{32})\.json$/.exec(name);
     if (!m || statusOf(inboxDir, m[1])) continue;
@@ -118,9 +145,14 @@ export function scan(inboxDir, now = Date.now()) {
     let raw; try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { refuse('not valid JSON'); continue; }
     const v = validateItem(raw), hash = hashOf(raw);
     if (!v.ok) { setStatus(inboxDir, id, { state: 'refused', reason: v.reason, kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, reason: v.reason }, now); picked++; continue; }
+    const ad = autoDecision(v.item, used, auto);
+    if (ad?.allow) {   // D-035: no click; every check above and loadItem's re-check at use still apply, and the audit event differs from a human approval
+      setStatus(inboxDir, id, { state: 'approved', kind: v.item.kind, hash, createdAt: now, decidedAt: now, decidedBy: 'auto', autoAt: now, autoKey: ad.key }, now);
+      audit(inboxDir, { id, event: 'auto_approved', kind: v.item.kind, hash, limit_key: ad.key }, now); picked++; continue;
+    }
     if (pending >= LIMITS.pending) { setStatus(inboxDir, id, { state: 'refused', reason: `${LIMITS.pending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
-    setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now }, now);
-    audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash }, now);
+    setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now, ...(ad?.note ? { autoNote: ad.note } : {}) }, now);
+    audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash, ...(ad?.note ? { held: ad.note } : {}) }, now);
     pending++; picked++;
   }
   prune(inboxDir, now);
@@ -157,7 +189,7 @@ export function pendingCards(inboxDir) {
     if (!l.ok) return { id: s.id, kind: s.kind, broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
     return { id: s.id, kind: it.kind, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
-      will: it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
+      will: (it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It runs on Tower with wide access, so it always needs a click. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.') + (s.autoNote ? ` (${s.autoNote[0].toUpperCase()}${s.autoNote.slice(1)}.)` : ''),
       text: clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
   });
 }
@@ -174,17 +206,22 @@ export function failedCards(inboxDir, now = Date.now()) {
 }
 
 // The two decisions. Only a pending item can be decided, once; the hash must still match. Returns { ok, reason? }.
-export function decide(inboxDir, id, decision, now = Date.now()) {
+// `expect` (Approve all, D-035): the 12-character hash that was on screen. A mismatch, or an item that no longer loads, changes nothing: it stays waiting.
+export function decide(inboxDir, id, decision, now = Date.now(), expect = null) {
   if (!['approve', 'reject'].includes(decision)) return { ok: false, reason: 'unknown decision' };
   const s = statusOf(inboxDir, id);
   if (!s) return { ok: false, reason: 'unknown item' };
   if (s.state !== 'pending') return { ok: false, reason: `the item is already ${s.state}` };
+  if (expect !== null) {
+    if (typeof expect !== 'string' || !expect || s.hash.slice(0, 12) !== expect) return { ok: false, reason: 'the item is not the one that was on screen' };
+    if (!loadItem(inboxDir, id).ok) return { ok: false, reason: 'the item cannot be approved as shown' };
+  }
   if (decision === 'approve') {
     const l = loadItem(inboxDir, id);
     if (!l.ok) { setStatus(inboxDir, id, { state: 'refused', reason: l.reason }, now); audit(inboxDir, { id, event: 'refused', kind: s.kind, hash: s.hash, reason: l.reason }, now); return { ok: false, reason: l.reason }; }
   }
-  setStatus(inboxDir, id, decision === 'approve' ? { state: 'approved', decidedAt: now } : { state: 'rejected', decidedAt: now, result: 'rejected by the homeowner; nothing was done' }, now);
-  audit(inboxDir, { id, event: decision === 'approve' ? 'approved' : 'rejected', kind: s.kind, hash: s.hash }, now);
+  setStatus(inboxDir, id, decision === 'approve' ? { state: 'approved', decidedAt: now, decidedBy: 'homeowner' } : { state: 'rejected', decidedAt: now, result: 'rejected by the homeowner; nothing was done' }, now);
+  audit(inboxDir, { id, event: decision === 'approve' ? 'approved' : 'rejected', kind: s.kind, hash: s.hash, ...(expect !== null ? { via: 'approve_all' } : {}) }, now);
   return { ok: true };
 }
 export function approvedItems(inboxDir, kind) {
@@ -196,8 +233,22 @@ export function finish(inboxDir, id, patch, now = Date.now()) {
   if (clean.result !== undefined) clean.result = redactLong(String(clean.result), LIMITS.resultChars, ' [cut]');
   if (clean.reason !== undefined) clean.reason = redactLong(String(clean.reason), LIMITS.reasonChars, ' [cut]');
   setStatus(inboxDir, id, clean, now);
-  audit(inboxDir, { id, event: clean.state || 'update', kind: statusOf(inboxDir, id)?.kind, hash: statusOf(inboxDir, id)?.hash }, now);
+  const cur = statusOf(inboxDir, id);
+  audit(inboxDir, { id, event: clean.state || 'update', kind: cur?.kind, hash: cur?.hash, ...(cur?.decidedBy === 'auto' ? { by: 'auto' } : {}) }, now);
 }
 // A job needs an issue number for its lease; an inbox job has none, so it gets a unique number far above any real issue (never looked up).
 export const placeholderIssue = id => 900000000 + parseInt(String(id).slice(0, 6), 16);
 export const marker = id => `<!-- devtest-inbox v1 ${id} -->`;
+
+// D-035: what ran without a click in the last 24 hours, against the daily limits. Display only; it adds nothing to Needs you. Names are the ones
+// GitHub and the dashboard use (pull request, issue, job); no item text beyond a redacted, bounded title.
+export function autoRecent(inboxDir, auto, now = Date.now()) {
+  const clip = t => redactLong(String(t ?? '').replace(/\s+/g, ' '), 80, ' [cut]').trim();
+  const used = autoUse(inboxDir, now);
+  const rows = allStatuses(inboxDir).filter(s => Number.isFinite(s.autoAt) && now - s.autoAt < AUTO_WINDOW_MS).sort((a, b) => b.autoAt - a.autoAt).map(s => {
+    const l = loadItem(inboxDir, s.id), it = l.ok ? l.item : null;
+    const what = it?.kind === 'action' ? `${s.autoKey} on ${ACTIONS[it.action].noun} ${it.target}` : it ? `issue draft: ${clip(it.title)}` : s.autoKey;
+    return { id: s.id, what, at: s.autoAt, state: s.state, result: s.result ? clip(s.result) : (s.reason ? clip(s.reason) : null), issue: Number.isInteger(s.issue) ? s.issue : null };
+  });
+  return { enabled: !!auto?.enabled, window: 'last 24 hours', drafts: { used: used.issue_draft || 0, limit: auto?.draftLimit ?? AUTO_DRAFT_LIMIT }, actions: Object.entries(AUTO_ACTIONS).map(([name, limit]) => ({ name, used: used[name] || 0, limit })), rows };
+}

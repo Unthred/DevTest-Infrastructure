@@ -348,10 +348,35 @@ function breakerCard(view) {
 // Issue #124: the Approve/Reject card of one inbox item. The item's own text is shown in full (escaped), so the click is informed.
 const inboxForm = (id, decision, label, cls) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="decision" value="${decision}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
 const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div></div>`;
+// D-035: Approve all. The form carries exactly the ids and 12-character hashes on screen; the route approves those only, each re-checked.
+// It says how many of them are prompts, which run on Tower with wide access and always need a click (this is that click).
+export function approveAllForm(cards) {
+  const shown = (cards || []).filter(c => c && !c.broken && /^[a-f0-9]{32}$/.test(c.id || '') && /^[a-f0-9]{12}$/.test(c.hash || ''));
+  if (!shown.length) return '';
+  const prompts = shown.filter(c => c.kind === 'prompt').length;
+  const label = `Approve all (${shown.length} item${shown.length === 1 ? '' : 's'}, ${prompts} of them prompt${prompts === 1 ? '' : 's'})`;
+  const warn = prompts ? `${prompts} prompt${prompts === 1 ? '' : 's'} will start Foreman job${prompts === 1 ? '' : 's'} on Tower with wide access.` : 'None of them is a prompt.';
+  return `<form method="post" action="/inbox-all" class="inbox-form inbox-all">${shown.map(c => `<input type="hidden" name="item" value="${esc(c.id)}:${esc(c.hash)}">`).join('')}<button class="btn inbox-approve" type="submit">${esc(label)}</button> <span class="sub">${esc(warn)} Only the items shown now are approved; each is checked again, and anything that arrives or changes later stays waiting.</span></form>`;
+}
+function inboxAllNote(query) {
+  if (query?.get('notice') !== 'inbox-all') return '';
+  const n = k => { const v = Number(query.get(k)); return Number.isInteger(v) && v >= 0 && v < 1000 ? v : 0; };
+  return `<p class="approval-note" role="status">Approve all: ${n('approved')} approved, ${n('left')} left waiting.</p>`;
+}
+// D-035: what ran without a click in the last 24 hours, against the daily limits. It is information: it is not a Needs you item and is not counted there.
+function autoRunsCard(view) {
+  const a = view.autoRuns;
+  if (!a) return '';
+  const counts = [`issue drafts ${a.drafts.used} of ${a.drafts.limit}`, ...a.actions.map(x => `${x.name} ${x.used} of ${x.limit}`)].join(' · ');
+  const rows = a.rows.map(r => dli({ cls: 'sev-info', id: `auto-${r.id}`, key: `auto-${r.id}`, sev: 'info', name: r.what, age: Number.isFinite(r.at) ? view.generatedAt - r.at : null, inner: `<div class="t">${esc(r.what)}${r.issue ? ` → issue #${r.issue}` : ''} <span class="muted">${esc(r.state)}${Number.isFinite(r.at) ? ', ' + esc(ago(r.at, view.generatedAt)) : ''}</span></div>${r.result ? `<div class="sub">${esc(r.result)}</div>` : ''}` }));
+  const body = `<p class="sub">${a.enabled ? 'Automatic handling is on.' : 'Automatic handling is off: every item waits for a click.'} Last 24 hours: ${esc(counts)}. Prompts and every other action always wait for a click.</p>${rows.length ? dlist({ id: 'autoruns', label: 'Ran without a click', noun: 'items', rows, sorts: ['age', 'name'], defaultLabel: 'Newest first' }) : '<p class="muted">Nothing ran without a click in the last 24 hours.</p>'}`;
+  return card({ id: 'autoruns', title: `Ran without a click (${a.rows.length})`, span: 6, body, cls: 'panel', type: 'info' });
+}
 function needsPanel(view) {
   const items = view.panels.needsYou;
   const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
-  return items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
+  const allBtn = approveAllForm(items.filter(a => a.inbox).map(a => a.inbox));
+  return items.length ? `${copyAllBtn(items, 'Needs you items')}${allBtn}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check');
 }
 // Issue #414: parked or staged work, quieter than Needs you: what it waits for and who or what ends the wait.
@@ -454,6 +479,7 @@ function overview(view, query) {
     card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view, { list: 'now' }), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
+    autoRunsCard(view),
     card({ id: 'later', title: `Later${(view.panels.later || []).length ? ` (${view.panels.later.length})` : ''}`, span: 3, body: laterPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'warnings', title: `Warnings${warnCount ? ` (${warnCount})` : ''}`, span: 3, body: warningsPanel(view), href: '/system', cls: 'panel', type: 'panel' })
   ].join('');
@@ -470,7 +496,7 @@ function overview(view, query) {
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
-  return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
+  return { title: 'Overview', body: `${inboxAllNote(query)}<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
 }
 
 function agentsPage(view, query, path) {

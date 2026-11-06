@@ -24,7 +24,7 @@ import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { sinceView } from './since.mjs';
-import { pendingCards as inboxCards, failedCards as failedInboxCards } from './inbox.mjs';
+import { pendingCards as inboxCards, failedCards as failedInboxCards, autoRecent, autoSettings } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -907,6 +907,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
     panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
+    autoRuns: config.inbox?.dir ? autoRecent(config.inbox.dir, autoSettings(config.inbox), now) : null,   // D-035: display only; never part of Needs you
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };
 }
