@@ -85,6 +85,19 @@ test('protocol: the real server prints nothing but protocol on stdout and surviv
 });
 
 // ---- tools
+test('foreman_plan breakerHalt: built from the real haltView, lists every halted cause, and surfaces a breaker error (issue #675)', async () => {
+  const { haltView, normalize } = await import('../supervisor/breaker.mjs');
+  const st = normalize({}); const ent = (cause, since, types) => ({ cause, since, types, jobs: 2, tokens: 10, cost: 0.1, prs: [], trippedBy: 'x' });
+  st.halts = { 'ci-fail': ent('ci-fail', 1, ['implement']), 'review-loop': ent('review-loop', 2, ['review']) };
+  const view = (breaker) => ({ ...smallView(), breaker });
+  const run = async (breaker) => JSON.parse((await call(createProtocol({ tools: toolsFor(() => view(breaker)) }), 'foreman_plan')).result.content[0].text).breakerHalt;
+  const h = await run({ halt: haltView(st, []) });
+  assert.equal(h.halted, true); assert.equal(h.scope, 'new implement jobs'); assert.equal(h.cause, 'ci-fail'); assert.equal(h.count, 2);
+  assert.deepEqual(h.entries.map(e => e.cause), ['ci-fail', 'review-loop']); assert.deepEqual(h.entries[1].types, ['review']);
+  assert.deepEqual(await run({ halt: null, error: 'boom' }), { halted: false, error: 'boom', note: 'Breaker evaluation failed; existing halts stay in force.' });
+  assert.deepEqual(await run({ halt: null, error: null }), { halted: false });
+});
+
 test('tools: each tool answers from the view, with the planner\'s queue, reasons and cost', async () => {
   const p = createProtocol({ tools: toolsFor(smallView) });
   const j = async (name, args) => JSON.parse((await call(p, name, args)).result.content[0].text);
