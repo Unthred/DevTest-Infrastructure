@@ -55,11 +55,12 @@ export async function alertNeedsYou({ root, items = [], send }) {
   return { sent, waiting: items.length };
 }
 
-// What a free-text alert from Team or SelfUpgrade is. 'covered': a per-item "Needs the homeowner" text; the item is a Needs you card, so
+// What a free-text alert from Team or SelfUpgrade is. 'covered': a per-item "Needs the homeowner" text, a rollback or a dashboard failure; the item is a Needs you card, so
 // alertNeedsYou sends it once per cause group. 'informational': Foreman handles it itself (allowance mode, upgrades, skipped or retried
 // upgrades). Both are dropped (reported as delivered, so callers do not retry). Everything else is an actionable alert.
 export const INFORMATIONAL = /^Allowance:|^Supervisor upgraded to |flaky:|^Supervisor self-upgrade skipped|^Supervisor upgrade to \S+ not done:/;
-export const classifyAlert = text => /needs the homeowner/i.test(text) ? 'covered' : INFORMATIONAL.test(text) ? 'informational' : 'actionable';
+export const COVERED = /needs the homeowner|^Upgrade to \S+ rolled back|^Dashboard server was not (restarted|answering)/i;   // rollback -> upgrade-latched card; dashboard -> dashboard-restart-failed card
+export const classifyAlert = text => COVERED.test(text) ? 'covered' : INFORMATIONAL.test(text) ? 'informational' : 'actionable';
 // The one sender for Team and SelfUpgrade: only actionable alerts get through, and they share the rate limit.
 export function policySender(root, send, opts) {
   const limited = rateLimited(root, send, opts);

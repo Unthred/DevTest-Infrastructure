@@ -112,16 +112,23 @@ test('no secret-shaped output escapes an alert (fixtures built at run time)', as
 });
 
 test('policySender: Team and self-upgrade alerts send only actionable text, under the shared rate limit', async t => {
-  const { policySender, classifyAlert } = await import('../supervisor/alertpolicy.mjs');
+  const { policySender, classifyAlert, alertNeedsYou } = await import('../supervisor/alertpolicy.mjs');
   const root = tmp(t), r = recorder(), send = policySender(root, r.send, { limit: { max: 2, windowMs: 3600000 } });
   const informational = ['Allowance: codex normal', 'Supervisor upgraded to abc1234 (PR #1).', 'Supervisor upgrade to abc1234: tests failed once (flaky: x). The install went ahead.', 'Supervisor self-upgrade skipped: installed a is not an ancestor of main b.', 'Supervisor upgrade to abc1234 not done: pre-check failed (x).'];
   const covered = ['Needs the homeowner: PR #5 is still rejected after 3 fix rounds', 'Supervisor upgrade to abc: needs the homeowner: changes the bootstrap installer'];
   for (const x of [...informational, ...covered]) { assert.notEqual(classifyAlert(x), 'actionable', x); await send(x); }
   assert.equal(r.texts.length, 0, 'work Foreman handles itself, and items already in Needs you, send nothing here');
-  for (const x of ['Upgrade to abc rolled back: x.', 'Dashboard server was not answering: y', 'Dashboard server was not restarted: z']) { assert.equal(classifyAlert(x), 'actionable'); }
-  await send('Upgrade to abc rolled back: x.'); await send('Dashboard server was not answering: y');
-  await assert.rejects(send('Dashboard server was not restarted: z'), /rate limit/);
+  const cards = ['Upgrade to abc rolled back: x.', 'Dashboard server was not answering: y', 'Dashboard server was not restarted: z'];
+  for (const x of cards) { assert.equal(classifyAlert(x), 'covered', x); await send(x); }
+  assert.equal(r.texts.length, 0, 'their Needs you cards alert once through alertNeedsYou');
+  await send('Some other actionable alert'); await send('Another actionable alert');
+  await assert.rejects(send('A third actionable alert'), /rate limit/);
   assert.equal(r.texts.length, 2);
+  // One rollback is one alert: the self-upgrade text is dropped and the Needs you card alerts once.
+  const r2 = recorder(), root2 = tmp(t), send2 = policySender(root2, r2.send);
+  await send2('Upgrade to abc rolled back: x.');
+  await alertNeedsYou({ root: root2, items: [{ id: 'upgrade-latched', text: 'rolled back' }], send: r2.send });
+  assert.equal(r2.texts.length, 1);
 });
 
 test('the tick builds Needs you with the main decision register, so it matches the dashboard', async () => {
