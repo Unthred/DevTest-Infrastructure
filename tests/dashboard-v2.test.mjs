@@ -625,12 +625,16 @@ test('#550 Needs you names the refused verdict file, the reason and what to do',
 });
 test('#583 the PR card names the job holding needs-homeowner and the command that clears it', async t => {
   const state = { fixAttempts: {}, verdicts: {}, jobs: {}, unblock: { flags: { 41: { 'job:cb82e026aaaa0123456789abcdef0123': { key: 'job:cb82e026aaaa0123456789abcdef0123', kind: 'job', job: 'cb82e026aaaa0123456789abcdef0123', tk: 'pull' } } } } };
-  const v = await needsOf(await serve(t, { cache: calmCache({ labels: ['needs-homeowner'] }), state }));
+  const v = await needsOf(await serve(t, { jobs: [jb({ id: 'cb82e026aaaa0123456789abcdef0123', kind: 'rebase', issue: 41, status: 'failed' })], cache: calmCache({ labels: ['needs-homeowner'] }), state }));
   const card = v.panels.needsYou.find(c => c.id === 'homeowner-pr-41');
   assert.match(card.tried, /job cb82e026/); assert.match(card.action, /ai-agent --supervisor resume cb82e026aaaa0123456789abcdef0123 /); assert.match(card.action, /unpushed/);
   const stopped = await needsOf(await serve(t, { jobs: [jb({ id: 'cb82e026aaaa0123456789abcdef0123', kind: 'rebase', issue: 41, status: 'stopped' })], cache: calmCache({ labels: ['needs-homeowner'] }), state }));
   const sc = stopped.panels.needsYou.find(c => c.id === 'homeowner-pr-41');
-  assert.doesNotMatch(sc.action, /supervisor resume/, 'a stopped job cannot be resumed'); assert.match(sc.action, /stopped job cannot be resumed/); assert.match(sc.action, /inspect the job's worktree/);
+  assert.doesNotMatch(sc.action, /supervisor resume/, 'a stopped job cannot be resumed'); assert.match(sc.action, /No held job can be resumed/); assert.match(sc.action, /inspect the job's worktree/);
+  const unlisted = await needsOf(await serve(t, { cache: calmCache({ labels: ['needs-homeowner'] }), state }));   // issue #676: a held job missing from the list gets no command
+  assert.doesNotMatch(unlisted.panels.needsYou.find(c => c.id === 'homeowner-pr-41').action, /supervisor resume/);
+  const done = await needsOf(await serve(t, { jobs: [jb({ id: 'cb82e026aaaa0123456789abcdef0123', kind: 'rebase', issue: 41, status: 'succeeded' })], cache: calmCache({ labels: ['needs-homeowner'] }), state }));
+  assert.doesNotMatch(done.panels.needsYou.find(c => c.id === 'homeowner-pr-41').action, /supervisor resume/);
   const plain = await needsOf(await serve(t, { cache: calmCache({ labels: ['needs-homeowner'] }), state: { fixAttempts: {}, verdicts: {}, jobs: {} } }));
   assert.doesNotMatch(plain.panels.needsYou.find(c => c.id === 'homeowner-pr-41').action, /supervisor resume/);
 });

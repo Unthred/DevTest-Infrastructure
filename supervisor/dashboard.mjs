@@ -304,8 +304,9 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
   const heldJobs = n => Object.values(state.unblock?.flags?.[n] || {}).filter(x => x.kind === 'job').map(x => x.job);   // issue #583: jobs holding the label
-  // Issue #610: `resume` refuses a stopped job, so the card offers the command only for held jobs that can be resumed (an unknown job keeps it).
-  const resumeHint = n => { const ids = heldJobs(n).filter(id => ![...jobs].find(j => j.id === id && j.status === 'stopped')); return ids.length ? `To clear it now: ${ids.map(id => `ai-agent --supervisor resume ${id}`).join(' or ')} (uses allowance), or ` : 'A stopped job cannot be resumed. To clear it now: '; };
+  // Issues #610, #676: `resume` takes only these statuses, so the card offers the command only for held jobs the list shows in one of them (a stopped, finished or unlisted job gets none).
+  const RESUMABLE = ['paused_manual', 'paused_limit', 'blocked', 'failed'];
+  const resumeHint = n => { const ids = heldJobs(n).filter(id => [...jobs].some(j => j.id === id && RESUMABLE.includes(j.status))); return ids.length ? `To clear it now: ${ids.map(id => `ai-agent --supervisor resume ${id}`).join(' or ')} (uses allowance), or ` : 'No held job can be resumed. To clear it now: '; };
   const prCarded = new Set();   // PRs that already have a limit or needs-homeowner card; a failed job on one folds into it
   const openPulls = new Set((cache?.pulls || []).map(p => p.number));
   const fixLimited = new Set();
