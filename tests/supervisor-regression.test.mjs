@@ -20,7 +20,8 @@ const caps = ['launch', 'resume', 'session_status', 'usage_limit_detection', 're
 
 function fixture(t, autoResume = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-regress-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // reconcile spawns detached workers that may still be writing state as the test ends; retry the removal (ENOTEMPTY race)
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
   const repo = path.join(dir, 'repo'), worktree = path.join(dir, 'wt');
   fs.mkdirSync(repo); git(repo, 'init', '-q', '-b', 'main');
   git(repo, 'config', 'user.email', 'test@example.invalid'); git(repo, 'config', 'user.name', 'Test');
