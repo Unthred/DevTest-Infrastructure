@@ -7,10 +7,11 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import { createHash } from 'node:crypto';
 import { handler } from '../supervisor/dashserver.mjs';
-import { renderRoute } from '../supervisor/dashrender.mjs';
+import { STYLE_GUARD, STYLE_GUARD_HASH } from '../supervisor/dashrender.mjs';
 
-const guardSrc = fs.readFileSync(new URL('../supervisor/dashui/style-guard.js', import.meta.url), 'utf8');
+const guardSrc = STYLE_GUARD;
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [1] } } };
 
@@ -31,7 +32,7 @@ async function restartable(t, { fail503 = 0 } = {}) {
 }
 
 // Fake page: the stylesheet counts as applied only after a link was fetched successfully (HTTP 200 text/css) from the live server.
-function page(srv, { styled = false } = {}) {
+function page(srv, { styled = false, src = guardSrc } = {}) {
   const timers = [], delays = [], links = [], listeners = {}, docListeners = {};
   let applied = styled, reloads = 0;
   const mkLink = href => { const l = { rel: 'stylesheet', href, ls: {}, parentNode: null, addEventListener(e, f) { this.ls[e] = f; } }; return l; };
@@ -47,23 +48,44 @@ function page(srv, { styled = false } = {}) {
     window: { addEventListener: (e, f) => { listeners[e] = f; } }, getComputedStyle: () => ({ getPropertyValue: n => (applied && n === '--nav-h' ? '52px' : '') }),
     setTimeout: (f, ms) => { timers.push(f); delays.push(ms); return timers.length; }, clearTimeout: n => { timers[n - 1] = null; }, location: { reload: () => { reloads += 1; } }
   };
-  vm.runInNewContext(guardSrc, sandbox);
+  vm.runInNewContext(src, sandbox);
   const settle = () => new Promise(r => setTimeout(r, 60));
   return { links, delays, listeners, docListeners, first, get styled() { return applied; }, get reloads() { return reloads; }, get pending() { return timers.filter(Boolean).length; },
     async fire() { const f = timers.find(Boolean); timers[timers.indexOf(f)] = null; f(); await settle(); }, settle, fetchSheet };
 }
 
-test('the page links the guard, sizes every icon, and keeps the skip link out of view without the stylesheet', async t => {
+// GET a path from the live server: status, headers and body.
+const get = (srv, p) => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: srv.port, path: p, headers: { host: `127.0.0.1:${srv.port}` } }, r => { let b = ''; r.on('data', d => (b += d)); r.on('end', () => resolve({ status: r.statusCode, headers: r.headers, body: b })); }).on('error', reject));
+
+test('the page carries the guard inline, the CSP allows exactly that script by hash, every icon is sized, and the skip link stays out of view', async t => {
   const srv = await restartable(t);
-  const res = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: srv.port, path: '/', headers: { host: `127.0.0.1:${srv.port}` } }, r => { let b = ''; r.on('data', d => (b += d)); r.on('end', () => resolve(b)); }).on('error', reject));
-  assert.match(res, /<script src="\/static\/style-guard\.js"><\/script>/);
-  assert.match(res, /<style>\.skip:not\(:focus\)\{position:absolute;left:-9999px\}<\/style><link rel="stylesheet"/, 'inline rule comes before the stylesheet so the stylesheet still wins');
-  const icons = res.match(/<svg class="icon [^>]*>/g) || [];
+  const res = await get(srv, '/');
+  const inline = res.body.match(/<script>([^<]*)<\/script>/);
+  assert.ok(inline, 'the guard is an inline script in the page itself, not a request that can fail with the stylesheet');
+  assert.equal(inline[1], guardSrc);
+  assert.match(res.headers['content-security-policy'], new RegExp(`script-src 'self' ${STYLE_GUARD_HASH.replace(/[+/=]/g, '.')};`));
+  assert.equal(STYLE_GUARD_HASH, `'sha256-${createHash('sha256').update(inline[1]).digest('base64')}'`, 'the hash is of the exact text in the page');
+  assert.doesNotMatch(res.body, /style-guard\.js/);
+  assert.ok(res.body.indexOf('rel="stylesheet"') < res.body.indexOf('<script>'), 'the guard runs after the stylesheet link exists');
+  assert.match(res.body, /<style>\.skip:not\(:focus\)\{position:absolute;left:-9999px\}<\/style><link rel="stylesheet"/, 'inline rule comes before the stylesheet so the stylesheet still wins');
+  const icons = res.body.match(/<svg class="icon [^>]*>/g) || [];
   assert.ok(icons.length > 0);
   for (const i of icons) assert.match(i, /width="18" height="18"/, i);
-  assert.equal(renderRoute === undefined, false);
-  const g = await fetch(`http://127.0.0.1:${srv.port}/static/style-guard.js`, { headers: { host: `127.0.0.1:${srv.port}` } });
-  assert.equal(g.status, 200);
+});
+
+test('a tab opened before a restart recovers: the guard came with the page, the server is stopped, then returns', async t => {
+  const srv = await restartable(t);
+  const html = (await get(srv, '/')).body;               // the tab loads the page while the server is up
+  const src = html.match(/<script>([^<]*)<\/script>/)[1];
+  await srv.stop();                                      // install restart: style.css, app.js and any script file now fail
+  await assert.rejects(get(srv, '/static/style.css'));
+  await assert.rejects(get(srv, '/static/app.js'));
+  const p = page(srv, { src });                          // the only script that still runs is the one inside the page
+  p.first.ls.error();
+  await p.fire(); assert.equal(p.styled, false);
+  await srv.start();
+  await p.fire();
+  assert.equal(p.styled, true); assert.equal(p.reloads, 0);
 });
 
 test('stylesheet request fails (server down at a restart), then succeeds: the page is styled without a reload', async t => {

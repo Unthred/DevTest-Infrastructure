@@ -272,7 +272,7 @@ test('charts: a time-range selector, expand, legend toggles per series, tooltips
   assert.match(week, /data-expand/); assert.match(week, /stroke="var\(--claude\)"/); assert.match(week, /stroke="var\(--codex\)"/);
   assert.match(week, /<svg viewBox="0 0 900 320" role="img" aria-label="allowance used over time">/, 'larger viewBox than the 520x170 of v1');
   assert.match((await s.get('/?range=24h')).body, /Allowance used \(24h\)/);
-  assert.doesNotMatch((await s.get('/usage?range=%3Cscript%3E')).body, /<script>/);
+  assert.doesNotMatch((await s.get('/usage?range=%3Cscript%3E')).body.replace(/<script>\/\/ Issue #552[^<]*<\/script>/, ''), /<script>/);
 });
 test('charts: empty data gives a designed empty state instead of a blank or bare line', async t => {
   const s = await serve(t, { cache: cache() });

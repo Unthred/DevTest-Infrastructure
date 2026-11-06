@@ -178,7 +178,7 @@ test('timeline page: reaches back to the first job, paginates, sorts, filters, l
   assert.match(f, /\(1 of 60\)/); assert.match(f, /merged PR #105/); assert.doesNotMatch(f, /issue #200/);
   assert.match((await get('/activity/timeline?from=2099-01-01')).body, /No activity matches/);
   assert.match((await get('/activity/timeline?kind=%3Cscript%3E')).body, /0 of 60|No activity matches/);
-  assert.doesNotMatch((await get('/activity/timeline?ref=%3Cscript%3E&kind=%22%3E')).body, /<script>/);
+  assert.doesNotMatch((await get('/activity/timeline?ref=%3Cscript%3E&kind=%22%3E')).body.replace(/<script>\/\/ Issue #552[^<]*<\/script>/, ''), /<script>/);
 });
 
 test('all-time range reads the archive; the other ranges do not', async t => {

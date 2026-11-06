@@ -15,7 +15,7 @@ import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
-import { matchRoute, nextTickHtml, renderRoute, processesFragment } from './dashrender.mjs';
+import { matchRoute, nextTickHtml, renderRoute, processesFragment, STYLE_GUARD_HASH } from './dashrender.mjs';
 import { createSampler, createJobReader } from './procsample.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
@@ -87,12 +87,12 @@ export async function currentView({ root, config, now = Date.now(), tz = default
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
-export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/style-guard.js': ['style-guard.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
+export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
   '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
-  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" };
+  'content-security-policy': `default-src 'none'; script-src 'self' ${STYLE_GUARD_HASH}; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` };
 
 const LIVE = ['queued', 'running'];
 export const SSE_POLL_MS = 250, SSE_HEARTBEAT_MS = 15000, SSE_MAX_STREAMS = 12, SSE_MAX_MS = 6 * 3600000;
