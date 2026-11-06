@@ -208,7 +208,7 @@ test('Overview: four labelled panels, KPI tiles and charts all link to detail pa
   for (const h of ['>Now<', '>Next<', '>Needs you', '>Warnings']) assert.ok(body.includes(h), h);
   assert.match(body, /<body class="overview">/);
   for (const href of ['/agents', '/work', '/reviews', '/usage', '/system', '/activity']) assert.ok(body.includes(`href="${href}"`), href);
-  assert.match(body, /data-reset-layout/); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 3, 'the early dock script, the early layout script and the module');
+  assert.match(body, /data-reset-layout/); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 4, 'the style guard, the early dock script, the early layout script and the module');
   assert.match(body, /data-tick-state="(scheduled|starting|overdue)"/);
 });
 test('Needs you lists every needs-homeowner item with what, why, the decision needed, a link and the exact command; Warnings holds the rest', async t => {
@@ -272,7 +272,7 @@ test('charts: a time-range selector, expand, legend toggles per series, tooltips
   assert.match(week, /data-expand/); assert.match(week, /stroke="var\(--claude\)"/); assert.match(week, /stroke="var\(--codex\)"/);
   assert.match(week, /<svg viewBox="0 0 900 320" role="img" aria-label="allowance used over time">/, 'larger viewBox than the 520x170 of v1');
   assert.match((await s.get('/?range=24h')).body, /Allowance used \(24h\)/);
-  assert.doesNotMatch((await s.get('/usage?range=%3Cscript%3E')).body, /<script>/);
+  assert.doesNotMatch((await s.get('/usage?range=%3Cscript%3E')).body.replace(/<script>\/\/ Issue #552[^<]*<\/script>/, ''), /<script>/);
 });
 test('charts: empty data gives a designed empty state instead of a blank or bare line', async t => {
   const s = await serve(t, { cache: cache() });

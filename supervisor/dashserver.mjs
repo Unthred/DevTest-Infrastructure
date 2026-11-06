@@ -15,7 +15,7 @@ import { buildView } from './dashboard.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
-import { matchRoute, nextTickHtml, renderRoute, processesFragment } from './dashrender.mjs';
+import { matchRoute, nextTickHtml, renderRoute, processesFragment, STYLE_GUARD_HASH } from './dashrender.mjs';
 import { createSampler, createJobReader } from './procsample.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
@@ -94,7 +94,7 @@ export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=ut
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
-  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" };
+  'content-security-policy': `default-src 'none'; script-src 'self' ${STYLE_GUARD_HASH}; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` };
 
 const LIVE = ['queued', 'running'];
 export const SSE_POLL_MS = 250, SSE_HEARTBEAT_MS = 15000, SSE_MAX_STREAMS = 12, SSE_MAX_MS = 6 * 3600000;
