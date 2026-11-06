@@ -33,7 +33,9 @@ async function buildSite(dir) {
     const view = await buildView({ config: cfg, root, jobs: [], events: [], state: { jobs: {} }, cache: { tick: { at: NOW - 2 * MIN, status: 'ok', lastOkAt: NOW - 2 * MIN }, pulls: [], issues: [] }, snapshots: [], now: NOW });
     const { html } = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(''), pathname: '/' });
     // app.js reloads every meta refresh-seconds (default 60 when the tag is absent), so push it out to an hour; refreshSeconds: 0 would drop the tag and leave the 60 s default.
-    const quiet = html.replace('<meta http-equiv="refresh" content="60">', '').replace('<meta name="refresh-seconds" content="60">', '<meta name="refresh-seconds" content="3600">');
+    // The http-equiv refresh tag is relied on to sit inside <noscript> (Chromium with script on ignores it), so that is asserted rather than the tag removed.
+    if (/<meta http-equiv="refresh"/.test(html.replace(/<noscript>[\s\S]*?<\/noscript>/g, ''))) throw new Error('a meta http-equiv refresh tag is outside <noscript>: it would reload the page under test, update buildSite');
+    const quiet = html.replace('<meta name="refresh-seconds" content="60">', '<meta name="refresh-seconds" content="3600">');
     if (!quiet.includes('<meta name="refresh-seconds" content="3600">') || /refresh-seconds" content="60"/.test(quiet)) throw new Error('could not turn off the page reload: dashrender changed its refresh markup, update buildSite');
     fs.writeFileSync(path.join(dir, 'index.html'), quiet);
     stageDashui(dir);
@@ -61,10 +63,10 @@ async function run(name, spec, site) {
 const site = path.join(storageRoot, 'site');
 try {
   fs.mkdirSync(site, { recursive: true, mode: 0o755 }); fs.chmodSync(storageRoot, 0o711);
-  const html = await buildSite(site);
-  check('fixture page starts with a scheduled tick element', /data-tick-state="scheduled"><span data-countdown=/.test(html));
   const pkg = lock.packages['playwright-core'];
   if (!fs.existsSync(path.join(sourceProject, 'browser', 'vendor', `playwright-core-${pkg.version}.tgz`))) throw new Error(`browser/vendor/playwright-core-${pkg.version}.tgz is missing: run \`node browser/prepare-cache.mjs\` first (it needs the network)`);
+  const html = await buildSite(site);
+  check('fixture page starts with a scheduled tick element', /data-tick-state="scheduled"><span data-countdown=/.test(html));
   const restore = await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] }, null);
   check('restore', restore.result.subjectExit === 0);
   const swap = await run('swap', { phase: 'test', command: ['node', '/src/browser/next-swap.mjs', '--target', 'fixture', '--page', '/index.html',
