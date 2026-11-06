@@ -496,15 +496,28 @@ export function isTrivialSlip(claim) {
 const materialFalse = claims => claims.filter(c => c.status === 'false' && c.materiality !== 'immaterial');
 const checklistText = v => (v.requirements ? `\n\nRequirements:\n${v.requirements.map(r => `- **${r.status}**: ${r.requirement} — ${r.evidence}`).join('\n') || '_none_'}\n\nPull request description claims:\n${v.descriptionClaims.map(c => `- **${c.status}**: ${c.claim} — ${c.evidence}`).join('\n') || '_none_'}\n\n` : '');
 export const VERDICT_REFUSED = 'verdict refused:';
+export const VALIDATOR_FAULT = 'validator fault:';
 export function readInboxVerdict(root, ticket, expect) {
   if (!/^[a-f0-9]{32}$/.test(ticket || '')) return { error: 'invalid ticket' };
   const file = path.join(root, 'team', 'inbox', ticket, 'verdict.json');
   let v;
   try { v = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) { return { error: error.code === 'ENOENT' ? 'no verdict file' : 'unreadable verdict file' }; }
-  v = reclassifyFalseClaims(v);
-  const error = validateVerdict(v, expect);
+  // Issue #631: an exception inside the validator is Foreman's own fault, not the reviewer's; it is named so it is not charged to the pull request.
+  let error;
+  try { v = reclassifyFalseClaims(v); error = validateVerdict(v, expect); }
+  catch (e) { return { error: VALIDATOR_FAULT + ' ' + String(e?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48), fault: true }; }
   return error ? { error } : { verdict: v };
+}
+// Issue #631: what can still be read from a verdict file the validator refused: its verdict word and well-formed findings, redacted and
+// bounded. Nothing here is trusted or posted as a verdict; it only lets the homeowner see what the reviewer found.
+export const keptText = k => `. Findings kept from it (${k.verdict || 'verdict unreadable'}): ${k.findings.slice(0, 5).map(f => `[${f.kind}] ${f.text.slice(0, 200)}`).join(' | ')}`;
+export function salvageFindings(root, ticket) {
+  if (!/^[a-f0-9]{32}$/.test(ticket || '')) return null;
+  let v; try { v = JSON.parse(fs.readFileSync(path.join(root, 'team', 'inbox', ticket, 'verdict.json'), 'utf8')); } catch { return null; }
+  if (!v || typeof v !== 'object' || !Array.isArray(v.findings)) return null;
+  const findings = v.findings.filter(f => f && typeof f === 'object' && ['blocking', 'follow-up'].includes(f.kind) && typeof f.text === 'string' && f.text.trim()).slice(0, 20).map(f => ({ kind: f.kind, text: redact(f.text, 400) }));
+  return findings.length ? { verdict: ['PASS', 'CHANGES'].includes(v.verdict) ? v.verdict : null, findings } : null;
 }
 // Issue #550: a false description claim marked immaterial that is not a count or wording slip (isTrivialSlip) is not a malformed file: the
 // reviewer found a real false claim and misjudged its weight. Discarding the whole review loses that finding, so the claim is made material
@@ -611,7 +624,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews', 'reviewFaults']) this.s[k] ||= {};
     breaker.normalize(this.s.breaker ||= {});   // issue #549: the halt state lives in the state file, so a restart keeps it
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
@@ -748,6 +761,8 @@ export class Team {
     for (const k of Object.keys(this.s.headWriterMiss)) if (!open.has(k)) delete this.s.headWriterMiss[k];
     // Issue #560: a refused review belongs to one head; once that head is no longer open the entry is dropped too.
     for (const k of Object.keys(this.s.refusedReviews || {})) if (!open.has(k)) delete this.s.refusedReviews[k];
+    // Issue #631: refund marks and validator-fault records belong to one head too (their keys are pr:head:agent[:cause]).
+    for (const m of ['attemptRefunds', 'reviewFaults']) for (const k of Object.keys(this.s[m] || {})) if (!open.has(k.split(':').slice(0, 2).join(':'))) delete this.s[m][k];
   }
   // Inbox jobs (same provider as the branch's agent, a recorded model) whose own worktree reflog shows a commit entry for this exact head
   // inside the job's run window. The worktree is the one Foreman made for the job (recorded, or derived from the inbox id for older records).
@@ -1752,7 +1767,8 @@ export class Team {
         if ((this.s.reviewAttempts[key + ':' + agent] || 0) >= this.c.limits.max_review_attempts) add('review-attempts-' + agent, agent + ' used all its review attempts at this head');
       }
     }
-    if (!v) { const rf = Object.values(this.s.reviewRefusals || {}).find(x => x?.pr === pr.number && x.head === pr.headRefOid); if (rf) add('review-verdict-refused', `the review's verdict file was refused (${rf.error}); no verdict was recorded. The file is ${rf.file}`); }
+    if (!v) { const rf = Object.values(this.s.reviewRefusals || {}).find(x => x?.pr === pr.number && x.head === pr.headRefOid); if (rf) add('review-verdict-refused', `the review's verdict file was refused (${rf.error}); no verdict was recorded. The file is ${rf.file}${rf.kept ? keptText(rf.kept) : ''}`); }
+    if (!v) { const vf = Object.values(this.s.reviewFaults || {}).find(x => x?.pr === pr.number && x.head === pr.headRefOid); if (vf) add('review-validator-fault', `Foreman's own verdict check failed (${vf.error}); this is not the reviewer's fault and no verdict was recorded. The file is ${vf.file}${vf.kept ? keptText(vf.kept) : ''}`); }
     if (v?.verdict === 'PASS') {
       const exMissing = this.exceptionFor(pr.number) ? this.exceptionMissing(pr) : null;
       if (exMissing) add('exception-review', exMissing === 'commits' ? 'review exception: waiting for the review of the commits written by the other model' : 'review exception: waiting for the whole-pull-request review');
@@ -1978,7 +1994,9 @@ export class Team {
         // refusal (that is the relaxation); the commit step must run on another model than the full-review model.
         const exStage = j.exceptionStage || null, exNow = exStage ? this.exceptionFor(j.pr) : null;
         if (r.verdict && exStage && (!exNow || (exStage === 'commits' && j.model === exNow.full_review.model) || j.model !== (exStage === 'full' ? exNow.full_review : exNow.commit_review).model)) {
-          j.ingested = true; j.refusal = 'exception-model'; this.save();
+          j.ingested = true; j.refusal = 'exception-model'; this.refundFaultAttempt(id, j, 'predictable-refusal', report);
+          const exText = !exNow ? 'the review exception ended for this pull request' : 'reviewer model ' + (j.model || 'default') + ' is the wrong model for the exception step';
+          this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: 'exception-model', text: exText, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), kept: salvageFindings(this.root, j.ticket) || undefined, at: this.clock.now() }; this.save();
           report.ingested.push({ job: id, pr: j.pr, error: !exNow ? 'review exception ended for this pull request; verdict not recorded' : 'review refused: wrong model for the exception step' });
           return;
         }
@@ -1986,8 +2004,8 @@ export class Team {
         const why = r.verdict && !exStage ? this.independenceRefusal(j.agent, reviewer.model, { number: j.pr, headRefName: branch, headRefOid: j.head }) : null;
         if (why) {
           const text = why === 'writer unknown' ? `the writer of this head is unknown (no job record and no session-log or worktree evidence for this exact head), so ${reviewer.provider} model ${j.model || 'default'} cannot be shown to differ from it` : `reviewer model ${j.model || 'default'} is a model that wrote this pull request`;
-          this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: why, text, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), at: this.clock.now() };
-          j.ingested = true; j.refusal = 'independence'; this.save();
+          this.s.refusedReviews[verdictKey(j.pr, j.head)] = { job: id, head: j.head, agent: j.agent, model: j.model ?? null, reason: why, text, file: path.join(this.dir, 'inbox', j.ticket, 'verdict.json'), kept: salvageFindings(this.root, j.ticket) || undefined, at: this.clock.now() };
+          j.ingested = true; j.refusal = 'independence'; this.refundFaultAttempt(id, j, 'predictable-refusal', report); this.save();
           report.ingested.push({ job: id, pr: j.pr, error: 'review refused: ' + text });
           return;
         }
@@ -2019,7 +2037,16 @@ export class Team {
           return;
         } else { j.refusal = breaker.verdictErrorCode(r.error); report.ingested.push({ job: id, pr: j.pr, error: r.error }); }
       }
-      if (j.kind === 'review' && job.status !== 'completed') this.recordRefusedReview(id, j, job, report);
+      if (j.kind === 'review' && job.status !== 'completed') {
+        this.recordRefusedReview(id, j, job, report);
+        const r = job.incompleteReason, detail = String(r?.detail || '');
+        if (r?.cause === 'checkpoint_failed') this.refundFaultAttempt(id, j, 'checkpoint-failure', report);
+        else if (r?.cause === 'postcondition_not_met' && detail.startsWith(VALIDATOR_FAULT)) {
+          this.refundFaultAttempt(id, j, 'validator-fault', report);
+          // Issue #631: the findings of a file Foreman's own validator could not judge are kept and shown too (never posted, never a verdict).
+          if (j.key) { this.s.reviewFaults[j.key] = { pr: j.pr, head: j.head, job: id, error: redact(detail, 120), file: path.join(this.root, 'team', 'inbox', String(j.ticket || ''), 'verdict.json'), kept: salvageFindings(this.root, j.ticket) || undefined, at: this.clock.now() }; this.save(); }
+        }
+      }
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
       if (j.kind === 'inbox') this.ingestInbox(id, j, job);
       if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
@@ -2045,10 +2072,23 @@ export class Team {
     const rec = (this.s.reviewRefusals[j.key] ||= { count: 0 });
     rec.count++; rec.error = redact(String(r.detail).slice(VERDICT_REFUSED.length).trim(), 300); rec.job = id; rec.pr = j.pr; rec.head = j.head;
     rec.file = path.join(this.root, 'team', 'inbox', String(j.ticket || ''), 'verdict.json'); rec.at = this.clock.now();
+    // Issue #631: the findings of the refused file are kept (redacted, bounded) and shown, so a verdict that cannot be recorded loses nothing.
+    const kept = salvageFindings(this.root, j.ticket); if (kept) rec.kept = kept; else delete rec.kept;
     const refunded = rec.count <= this.c.limits.max_review_attempts && (this.s.reviewAttempts[j.key] || 0) > 0;
     if (refunded) this.s.reviewAttempts[j.key]--;
     this.save();
     (report.refusedReviews ||= []).push({ pr: j.pr, job: id, error: rec.error, refunded });
+  }
+  // Issue #631: an attempt lost to Foreman's own fault (a checkpoint failure, a refusal the dispatcher could have predicted, a validator
+  // fault) is not charged to the pull request. Once per head, reviewer and cause: a real second failure of the same kind still counts.
+  refundFaultAttempt(id, j, cause, report) {
+    if (!j.key || !(this.s.reviewAttempts[j.key] > 0)) return false;
+    const marks = (this.s.attemptRefunds ||= {}), mark = `${j.key}:${cause}`;
+    if (marks[mark]) return false;
+    marks[mark] = { job: id, at: this.clock.now() };
+    this.s.reviewAttempts[j.key]--; j.attemptRefunded = cause; this.save();
+    (report.refundedAttempts ||= []).push({ pr: j.pr, job: id, cause });
+    return true;
   }
   // Issue #460: a rebase job that ended without completing records why on the dispatcher's job record (cause, detail, attempts), so the
   // dashboard and `team status` can show it. The wording comes from the post-condition or the run event, never from model output.
@@ -3001,7 +3041,8 @@ export class Team {
       const rq = act.postMerge ? null : await this.writeRequirements(act.branch, inbox);
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review-${act.pr}`), branch: `${a.branch_prefix}review-${act.pr}`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.exceptionStage ? 'Review-exception review (D-027)' : act.legacyPostMerge ? 'Post-merge review (D-021)' : act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
-        prompt: reviewPrompt({ decision, exceptionStage: act.exceptionStage, exceptionNote, pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, legacyPostMerge: !!act.legacyPostMerge, splitOut: this.splitOut(act.pr, inbox), requirementsFile: rq?.file }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head, ...(rq ? { checklist: true } : {}) } };
+        prompt: reviewPrompt({ decision, exceptionStage: act.exceptionStage, exceptionNote, pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, legacyPostMerge: !!act.legacyPostMerge, splitOut: this.splitOut(act.pr, inbox), requirementsFile: rq?.file }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head, ...(rq ? { checklist: true } : {}) },
+        repairPrompt: `Task: repair the verdict file ${inbox}/verdict.json and stop. Do not review the pull request again, do not read the diff, do not run tests or any other command. Open that file, change only what the error above names, keep every finding and the verdict you reached (unless the error forces CHANGES), and write it back to the same path. Rules: JSON with exactly the fields pr (${act.pr}), headSha (${act.head}), verdict (PASS or CHANGES), findings (each {kind: blocking|follow-up, text}), commandsRun (strings; at least one for PASS)${rq ? ', requirements and descriptionClaims as in your original instructions' : ''}. Do not touch anything else.` };
       meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.secondOpinion ? { secondOpinion: true } : {}), ...(act.exceptionStage ? { exceptionStage: act.exceptionStage } : {}), ...(act.postMerge ? { postMerge: true } : {}), ...(act.legacyPostMerge ? { legacyPostMerge: true } : {}), ...(rq ? { checklist: true, requirementsHash: rq.hash } : {}) };
       bump = () => { this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1; };
     } else if (act.type === 'fix') {
@@ -3104,7 +3145,7 @@ export class Team {
       if (p.kind === 'verdict') {
         const r = readInboxVerdict(this.root, p.ticket, { pr: p.pr, head: p.head, checklist: p.checklist === true });
         // Issue #550: name the exact validation error, so the retry (core.prompt) and the job record can say why the verdict was refused.
-        if (r.error) job.postconditionDetail = `${VERDICT_REFUSED} ${r.error}`;
+        if (r.error) job.postconditionDetail = r.fault ? r.error : `${VERDICT_REFUSED} ${r.error}`;
         return !r.error;
       }
       if (p.kind === 'new_head') { const pr = await this.gh.getPull(p.pr); return !!pr && SHA.test(pr.headRefOid) && pr.headRefOid !== p.baseHead; }
