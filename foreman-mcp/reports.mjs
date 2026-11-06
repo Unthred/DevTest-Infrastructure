@@ -8,6 +8,14 @@ export const REPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.(md|txt)$/;   // o
 export const REPORT_MAX_BYTES = 256 * 1024;   // most of a report ever read from disk
 export const REPORT_LIST_MAX = 100;
 
+// Issue #636: the standard report format. A report is a markdown file whose LAST non-blank line is this marker; the writer adds it only when the
+// report is complete, so a half-written report (no marker) is shown as unfinished and not read as complete. A marker anywhere else does not count.
+export const FINISHED_MARKER = '<!-- foreman-report: finished -->';
+const TAIL_BYTES = 512;
+function finishedAt(fsApi, fd, size) {   // reads only the tail of the file, so it works for a report larger than the read cap
+  const len = Math.min(size, TAIL_BYTES), buf = Buffer.alloc(len);
+  try { const n = fsApi.readSync(fd, buf, 0, len, size - len); return buf.subarray(0, n).toString('utf8').trimEnd().split('\n').pop().trim() === FINISHED_MARKER; } catch { return false; }
+}
 const truncatedMarker = n => `\n\n[truncated: ${n} more characters not shown]`;
 
 export function createReports(dir, { fsApi = fs, redact: redactText = redact } = {}) {
@@ -19,10 +27,14 @@ export function createReports(dir, { fsApi = fs, redact: redactText = redact } =
       const rows = [];
       for (const e of entries) {
         if (!e.isFile() || !REPORT_NAME.test(e.name)) continue;   // a symlink is not a file here, and odd names are skipped
-        try { const s = fsApi.lstatSync(path.join(root, e.name)); if (s.isFile()) rows.push({ name: e.name, modified: new Date(s.mtimeMs).toISOString(), bytes: s.size, mtimeMs: s.mtimeMs }); } catch { /* vanished */ }
+        try {
+          const file = path.join(root, e.name), s = fsApi.lstatSync(file); if (!s.isFile()) continue;
+          let finished = false, fd; try { fd = fsApi.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); finished = finishedAt(fsApi, fd, fsApi.fstatSync(fd).size); } catch { /* unreadable: not finished */ } finally { if (fd !== undefined) try { fsApi.closeSync(fd); } catch { /* closed */ } }
+          rows.push({ name: e.name, modified: new Date(s.mtimeMs).toISOString(), bytes: s.size, finished, mtimeMs: s.mtimeMs });
+        } catch { /* vanished */ }
       }
       rows.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
-      return { folderConfigured: true, count: rows.length, shown: Math.min(rows.length, REPORT_LIST_MAX), reports: rows.slice(0, REPORT_LIST_MAX).map(({ name, modified, bytes }) => ({ name, modified, bytes })) };
+      return { folderConfigured: true, count: rows.length, shown: Math.min(rows.length, REPORT_LIST_MAX), unfinished: rows.filter(r => !r.finished).length, finishedMarker: FINISHED_MARKER, reports: rows.slice(0, REPORT_LIST_MAX).map(({ name, modified, bytes, finished }) => ({ name, modified, bytes, finished })) };
     },
     read(name, maxChars) {   // redacts the whole buffer read from disk first, then cuts, so a secret cannot be split by the cut
       const root = need();
@@ -37,7 +49,8 @@ export function createReports(dir, { fsApi = fs, redact: redactText = redact } =
         const buf = Buffer.alloc(Math.min(s.size, REPORT_MAX_BYTES + 1)); const n = fsApi.readSync(fd, buf, 0, buf.length, 0);
         let text = redactText(buf.subarray(0, Math.min(n, REPORT_MAX_BYTES)).toString('utf8')), more = s.size > REPORT_MAX_BYTES ? s.size - REPORT_MAX_BYTES : 0;
         if (maxChars && text.length > maxChars) { more += text.length - maxChars; text = text.slice(0, maxChars); }
-        return `${name} (${new Date(s.mtimeMs).toISOString()}, ${s.size} bytes)\n\n${text}${more ? truncatedMarker(more) : ''}`;
+        const done = finishedAt(fsApi, fd, s.size);
+        return `${name} (${new Date(s.mtimeMs).toISOString()}, ${s.size} bytes)\n${done ? 'STATUS: finished' : 'STATUS: UNFINISHED - the finished marker is missing, so this report may be half written; do not treat it as complete'}\n\n${text}${more ? truncatedMarker(more) : ''}`;
       } finally { try { fsApi.closeSync(fd); } catch { /* closed */ } }
     },
   };

@@ -153,6 +153,8 @@ Light by construction: tick, job and verdict figures come from files the dashboa
 
 Restart diagnostics and load tolerance (issue #632): after the new server first answers, it must stay running and answer three health probes in a row; a probe that fails while the process is still running is retried until 60 seconds have passed in total (a probe still pending then is cut off, so the wait never runs longer) (a dashboard view can take seconds to build under load), so a slow but healthy server is not rolled back. A process that has exited fails at once. A failed restart records a `cause` (`exited` or `unresponsive`) and `output`, the new process's own lines from `dashboard.log` written since it was started (redacted, at most 600 characters; a detached server's exit code cannot be observed), in `team/upgrades.jsonl` and in `dashboardFailure`. Retrying a commit whose pre-check was refused for an environmental reason is issue #581, not this change.
 
+Issue #636 adds `GET /api/tests.json` (test-slot use and refused, timed-out, killed and orphaned runs, from `team/test-events.jsonl`) and `GET /api/ticks.json` (recent ticks and skipped ticks), read-only, for `foreman_tests` and `foreman_ticks`.
+
 The same data is read through `foreman_diagnostics` (issue #635, `docs/foreman-mcp.md`) from `GET /api/diagnostics.json`.
 
 ## Foreman's self-check (issue #630)
