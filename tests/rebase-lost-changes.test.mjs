@@ -202,6 +202,17 @@ for (const [name, feat, main] of [
   });
 }
 
+// Positive control for the main-line exclusion (issue #677): keeping the PR's own line next to main's line is not a loss
+test('keeping both main\'s line and the PR\'s line is not reported as lost', t => {
+  const feat = '  sub(x, ready);', main = '  sub(x, y, ready);';
+  const r = sameLineRepo(t, feat, main);
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  write(r.agent, 'l.mjs', r.f(main + '\n' + feat).replace('const z = 1;', 'const z = 3;')); git(r.agent, 'add', '-A');
+  execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+  assert.deepEqual(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges, []);
+});
+
 test('rebase-prepare prints oldHead so the agent can pass it to rebase-push', t => {
   const r = listRepo(t);
   const out = execFileSync(process.execPath, [cliPath, 'rebase-prepare', '--worktree', r.agent, '--branch', 'feat'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] });
