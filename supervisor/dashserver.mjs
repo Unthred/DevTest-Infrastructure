@@ -21,6 +21,8 @@ import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
 import { installs, breakerHistory } from './installs.mjs';
+import { wasteByCause, configView } from './mcpreads.mjs';
+import nodePath from 'node:path';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
@@ -35,6 +37,7 @@ import { underSupervisedJob } from './breaker.mjs';
 export const DEFAULT_PORT = 8731;
 // Issue #406: ask for a pass now. Only when the team loop is enabled; never throws, never blocks the answer to the homeowner.
 const cliPath = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+const SHIPPED_CONFIG = fileURLToPath(new URL('./team.json', import.meta.url));
 export function defaultWake(root, reason, config) {
   try {
     if (!config?.enabled) return;
@@ -278,6 +281,10 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       // Issue #625: install history (with the version each process runs) and the circuit breaker's trip history, for the Foreman MCP tools.
       if (path === '/api/installs.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(installs(root, { now: now() })));
       if (path === '/api/breaker.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(breakerHistory(readTeamState(root), 100)));
+      // Issue #635: the Diagnostics data, the failure cost by cause, and the effective configuration, for the Foreman MCP tools.
+      if (path === '/api/diagnostics.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(diagnosticsData({ root, config: source(), now: now(), recorderDir })));
+      if (path === '/api/waste.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(wasteByCause(readTeamState(root), { now: now(), days: new URLSearchParams(search).get('days') })));
+      if (path === '/api/config.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(configView({ effective: source(), shippedFile: SHIPPED_CONFIG, localOverridePresent: fs.existsSync(nodePath.join(root, 'team.local.json')), configError: source.invalid })));
       // UI review evidence (issue #455): read-only files from <evidence root>/ui-review, png, json and md only, no symlink followed.
       const fileRequest = /^\/evidence\/files\/(.+)$/.exec(path);
       if (fileRequest) {
