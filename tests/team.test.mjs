@@ -290,7 +290,7 @@ test('a conflicting PR is not reviewed, merged or counted green; after the rebas
   assert.deepEqual(after.filter(a => a.agent === 'codex' && a.type === 'review').map(a => [a.type, a.head]), [['review', H(6)]]);
 });
 
-test('priority per agent: CI fix > review fix > review > rebase (deferred until next, #633) > implement', async t => {
+test('order per agent: CI fix, review fix, review, then the rebase once nothing is ahead of it (#633 deferral), then implement', async t => {
   const pulls = [pr(10, 'codex/issue-2-x', H(1)), pr(11, 'claude/issue-23-a', H(2)), pr(12, 'claude/issue-24-b', H(3), { statusCheckRollup: red }), pr(13, 'claude/issue-25-c', H(4), { mergeable: 'CONFLICTING' })];
   const w = world(t, { pulls, issues: [issue(23), issue(5)] });
   w.team.s.verdicts[`11:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex' };

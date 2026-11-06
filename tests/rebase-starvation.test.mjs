@@ -228,3 +228,9 @@ test('#633 an unreviewed PR no agent can review does not defer the rebase', asyn
   team.otherReviewers = () => [];
   assert.deepEqual(await rebasesOf(team), [301]);
 });
+test('#633 a PASS held on the independence decision does not defer the rebase', async t => {
+  const team = world(t, [pr(301, H(1)), pr(302, H(2), { mergeable: 'MERGEABLE' })]);
+  team.s.verdicts[`302:${H(2)}`] = { verdict: 'PASS', reviewer: 'claude', independent: true };   // self-review PASS while D-024 is not homeowner-approved
+  assert.equal(team.waitingOnDecision(team.gh.pulls).length, 1, 'fixture is decision-held');
+  assert.deepEqual(await rebasesOf(team), [301]);
+});
