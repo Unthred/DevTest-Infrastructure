@@ -173,7 +173,7 @@ export function tickOutcome(report) {
 }
 
 // Written by the tick (never by the dashboard server). `error` is the failure of this tick, if any.
-export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0, startedAt = null, heldAgents = null, holds = {}, trigger = null, merged = null }) {
+export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0, startedAt = null, heldAgents = null, holds = {}, trigger = null, merged = null, noop = false, ghCalls = null, ghMs = null, check = null }) {
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
@@ -194,6 +194,9 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     // Issue #406: what started this pass (schedule, job-end, install, inbox, approve); `merged` lists the other requests it absorbed. A snapshot
     // without `trigger` is from before wakes existed and was a scheduled pass.
     ...(typeof trigger === 'string' ? { trigger, ...(Array.isArray(merged) && merged.length ? { merged: merged.filter(x => typeof x === 'string').slice(0, 5) } : {}) } : {}),
+    // Issue #755: a pass that GitHub's conditional requests proved unchanged and that did nothing; the gh processes the pass started; what the change check said.
+    ...(noop === true ? { noop: true } : {}), ...(Number.isSafeInteger(ghCalls) ? { ghCalls } : {}), ...(Number.isFinite(ghMs) ? { ghMs: Math.round(ghMs) } : {}),
+    ...(check && typeof check.result === 'string' ? { check: { result: check.result.slice(0, 20), reason: redact(String(check.reason || ''), 160), probes: Number.isSafeInteger(check.probes) ? check.probes : 0, served: Number.isSafeInteger(check.served) ? check.served : 0 } } : {}),
     redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };
   // Issue #362: keep a compact, allowlisted timeline of everything the live records hold now, before any of it can expire.
   try { recordTimeline(root, { config: team.c, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), incidents: readIncidents(root) }); } catch (error) { console.error(`ai-supervisor: timeline record failed: ${error?.name || 'Error'}`); }

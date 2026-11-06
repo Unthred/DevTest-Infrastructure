@@ -16,6 +16,7 @@ import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFA
 import { upgradeLock } from './team.mjs';
 import { Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
+import { changeCheckOf, checkForChanges, ghProbeRunner, loadCache, saveCache, buildCache, cachedGithub } from './ghchange.mjs';
 import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
@@ -184,7 +185,7 @@ function realGit(repoPath) {
     }
   };
 }
-async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true) {
+async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, root), needRegister = true, { wrapGh = g => g, ghStats = null } = {}) {
   // The decision register that counts is the one merged into main, not a working copy.
   // A dry run needs it too: the enable gate (issue #40) must fail exactly where a live tick would.
   const register = readRegister(config);
@@ -195,7 +196,12 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   // The allowance inputs are shared with `team status` and the dashboard (issue #121), so all of them plan alike.
   const jobsNow = readJobs(root);
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs: jobsNow, probes: readCache(root)?.probes, snapshots: readSnapshots(root), hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') });
-  return new Team({ config, root, gh: githubClient(config), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
+  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
+}
+// Issue #755: counts the gh processes a pass starts (for the pass record), without changing what any call does.
+function countingGh(stats) {
+  const base = ghRunner();
+  return stats ? (args, input, opts) => { const t = Date.now(); stats.calls++; try { return base(args, input, opts); } finally { stats.ms += Date.now() - t; } } : base;
 }
 // Model-free allowance probes, one per provider that has one (issue #75), so a paused agent's reading still refreshes.
 // Only a local file read: never a model call. A probe failure only loses this tick's refresh.
@@ -266,14 +272,30 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
     const found = {};
     const record = args => { try { recordTick(root, { now: Date.now(), jobs: readJobs(root), probes: mergeProbes(probeAllowances(config), found), ...args }); } catch (error) { console.error(`ai-supervisor: dashboard record failed: ${error?.name || 'Error'}`); } };
     if (!config.enabled && !dryRun) { record({ status: 'disabled' }); return { skipped: 'team loop is not enabled (set "enabled": true in <state root>/team.local.json)' }; }
+    // Issue #755: a scheduled pass first asks GitHub, with conditional requests, whether anything the planner reads has changed. A wake (job end,
+    // install, inbox, approve) is never checked: it always runs the full pass. Dry runs touch nothing here.
+    const ghStats = { calls: 0, ms: 0 };
+    let check = null, wrapper = null, mode = 'plain', prevCache = null, checkedAt = Date.now();
+    if (!dryRun) {
+      const cc = changeCheckOf(config), scheduledOnly = !pass || (pass.trigger === 'schedule' && (pass.merged || []).every(r => r === 'schedule'));
+      prevCache = loadCache(root, config.repository); checkedAt = Date.now();
+      if (cc.enabled && pass && scheduledOnly) {
+        try { check = await checkForChanges({ repository: config.repository, prev: prevCache, config: cc, run: ghProbeRunner({ timeoutMs: cc.timeout_seconds * 1000 }) }); }
+        catch (error) { check = { replay: false, baseline: null, probes: 0, reason: `the change check failed (${String(error?.message || error).slice(0, 80)}): full pass` }; }   // never a tick failure
+        mode = check.replay ? 'replay' : check.baseline ? 'record' : 'memo';
+      } else mode = 'memo';
+    }
+    const wrapGh = raw => (mode === 'plain' ? raw : (wrapper ||= cachedGithub(raw, { mode, cache: prevCache })).gh);
     try {
-      let team = await teamFor(root, registry, config);
+      let team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
       // Issue #110: refresh the allowance of a held agent whose reading is stale (or whose reset time has just passed) before
       // planning, so a fresh reading can release the reviews-only latch in this very tick. A dry run or a hold never spends a run.
-      if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config);
-      const report = await team.tick({ dryRun, hold });
+      if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
+      const report = await team.tick({ dryRun, hold, replay: mode === 'replay', beforeChain: () => wrapper?.endReplay() });
       if (!dryRun) {
-        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}) });
+        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}), noop: report.noop === true, ghCalls: ghStats.calls, ghMs: ghStats.ms, ...(check ? { check: { result: check.replay ? 'unchanged' : 'full', reason: check.reason, probes: check.probes, served: wrapper?.stats.served ?? 0 } } : {}) });
+        // The baseline is stored only after a full pass that read everything without error, and never after a replay (so the forced-full clock keeps running).
+        if (mode === 'record' && tickOutcome(report).status === 'ok') { try { const next = buildCache({ repository: config.repository, baseline: check.baseline, wrapper, now: checkedAt }); if (next) saveCache(root, next); } catch { /* the next pass is a full one */ } }
         // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
         // Issue #430: advance the watched changes (merge commit, install, alerts, clearing). Never throws, never fails the tick.
         try {
