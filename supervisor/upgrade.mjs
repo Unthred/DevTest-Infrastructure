@@ -112,7 +112,7 @@ export function findDashboards(procRoot = '/proc', self = process.pid) {
 // not running at all, and `force` restarts one that is on the right version but does not answer. Without them nothing running means
 // nothing to do (the upgrade path never starts a dashboard that was not there). A start that fails or does not answer is tried once
 // more, then the last good command line is started again, so the dashboard is not left down.
-export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500, settleProbes = 3, settleProbeMs = 2000, settleMaxMs = 60000, logMark = defaultLogMark, logTail = defaultLogTail, revive = null, force = false } = {}) {
+export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500, settleProbes = 3, settleProbeMs = 2000, settleMaxMs = 60000, now = Date.now, logMark = defaultLogMark, logTail = defaultLogTail, revive = null, force = false } = {}) {
   const found = findDashboards(procRoot);
   if (!found.length && !revive) return { ok: true, restarted: false, reason: 'no dashboard server was running' };
   if (found.length && !force && found.every(d => d.version === sha)) return { ok: true, restarted: false, reason: 'already on the new version' };
@@ -147,11 +147,16 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
     await sleep(settleMs);
     if (!alive()) return { cause: 'exited' };
     if (!health) return { ok: true };
+    // Bounded by elapsed time, probe duration included: each probe is cut off when the deadline arrives.
+    const deadline = now() + settleMaxMs;
     let streak = 0;
     for (let i = 0, rounds = Math.max(settleProbes, Math.ceil(settleMaxMs / Math.max(1, settleProbeMs))); i < rounds; i++) {
-      if (i) await sleep(settleProbeMs);
+      if (i) { if (now() >= deadline) break; await sleep(settleProbeMs); }
       if (!alive()) return { cause: 'exited' };
-      streak = (await health(old.host, healthPort)) ? streak + 1 : 0;
+      const left = deadline - now(); if (left <= 0) break;
+      let timer; const cut = new Promise(r => { timer = setTimeout(() => r(false), left); });
+      const ok = await Promise.race([Promise.resolve().then(() => health(old.host, healthPort)).catch(() => false), cut]); clearTimeout(timer);
+      streak = ok ? streak + 1 : 0;
       if (streak >= settleProbes) return { ok: true };
     }
     return { cause: 'unresponsive' };

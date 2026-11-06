@@ -548,3 +548,28 @@ test('issue #632: a running server that never answers is "unresponsive" after th
   const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start, startOld: () => {}, sleep: async () => {}, tries: 3, settleMaxMs: 10000, settleProbeMs: 1000, health: async () => (++n === 1), logTail: () => '' });
   assert.equal(r.ok, false); assert.equal(r.cause, 'unresponsive'); assert.match(r.reason, /stopped answering/);
 });
+
+function fakeStartKit(t) {
+  const proc = fakeProc(t, { 100: ['node', cli(OLD), 'dashboard', 'serve', '--host', '192.168.1.5', '--port', '8731'] });
+  const kill = (pid, sig) => { if (sig === 0) { if (!fs.existsSync(path.join(proc, String(pid)))) throw Object.assign(new Error(), { code: 'ESRCH' }); return; } fs.rmSync(path.join(proc, String(pid)), { recursive: true }); };
+  const start = (w, args) => { fs.mkdirSync(path.join(proc, '200')); fs.writeFileSync(path.join(proc, '200', 'cmdline'), ['node', cli(NEW), ...args].join('\0') + '\0'); };
+  return { proc, kill, start };
+}
+
+test('issue #632: the settle wait is bounded by elapsed time even when every probe hangs', async t => {
+  const { proc, kill, start } = fakeStartKit(t);
+  let answered = false;
+  const t0 = Date.now();
+  // the first probe after each start answers; later ones hang for 2 s (longer than the whole bounded wait)
+  const health = () => { if (!fs.existsSync(path.join(proc, "200"))) return Promise.resolve(true); if (!answered) { answered = true; return Promise.resolve(true); } return new Promise(r => setTimeout(r, 2000, false)); };
+  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start: (...a) => { answered = false; start(...a); }, startOld: () => {}, sleep: async () => {}, tries: 3, settleMs: 0, settleMaxMs: 300, settleProbeMs: 50, health, logTail: () => '' });
+  assert.equal(r.ok, false); assert.equal(r.cause, 'unresponsive');
+  assert.ok(Date.now() - t0 < 1900, `took ${Date.now() - t0} ms`);
+});
+
+test('issue #632: the 5 Nov shape (answers once, fails probes while alive, then recovers) passes with one start', async t => {
+  const { proc, kill, start } = fakeStartKit(t);
+  const seq = [true, false, false, true, true, true]; let n = 0, starts = 0;
+  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start: (...a) => { starts++; start(...a); }, startOld: () => {}, sleep: async () => {}, tries: 3, settleMs: 0, settleMaxMs: 10000, settleProbeMs: 1000, health: async () => seq[Math.min(n++, seq.length - 1)], logTail: () => '' });
+  assert.equal(r.ok, true); assert.equal(starts, 1);
+});
