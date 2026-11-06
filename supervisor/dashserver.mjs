@@ -26,7 +26,7 @@ import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_RO
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
 import { fileURLToPath } from 'node:url';
-import { decide as decideInbox, ID_RE as INBOX_ID } from './inbox.mjs';
+import { decide as decideInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
@@ -205,6 +205,28 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ }   // the decision starts a pass now
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
+  // Approve all (D-036): the same protections as one approval (host, origin, the secret proof, one cooldown slot for the whole click). The form lists the
+  // ids and 12-character hashes that were on screen; each is decided on its own and re-checked, and one that changed, was decided elsewhere or is gone is
+  // left waiting. Items that arrived after the page was drawn are not in the list and stay waiting. Prompts are approved here only because this is a click.
+  const inboxAll = async (req, res, send) => {
+    if (!source().inbox?.dir) return send(404, 'text/plain; charset=utf-8', 'the inbox is not configured');
+    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
+    if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > 4096) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+    const wanted = [...new Set(form.getAll('item'))];
+    if (!wanted.length || wanted.length > 20 || !wanted.every(v => /^[a-f0-9]{32}:[a-f0-9]{12}$/.test(v))) return send(400, 'text/plain; charset=utf-8', 'bad request');
+    const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    const dir = source().inbox.dir; let approved = 0;
+    for (const v of wanted) { const [id, hash] = v.split(':'); if (decideInbox(dir, id, 'approve', t, hash).ok) approved++; }
+    const left = inboxStatuses(dir).filter(s => s.state === 'pending').length;
+    if (!approved) releaseCooldown(root, 'inbox', t);
+    else { try { wake(root, 'approve', source()); } catch { /* the decisions are recorded; the schedule is the fallback */ } }
+    return send(303, 'text/plain; charset=utf-8', 'recorded', { location: `/?notice=inbox-all&approved=${approved}&left=${left}` });
+  };
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
   // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
@@ -232,6 +254,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
     if (req.method === 'POST' && reqPath === '/watch') return watch(req, res, send);
     if (req.method === 'POST' && reqPath === '/inbox') return inbox(req, res, send);
+    if (req.method === 'POST' && reqPath === '/inbox-all') return inboxAll(req, res, send);
     if (req.method === 'POST' && reqPath === '/breaker-resume') return breakerResume(req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.

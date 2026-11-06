@@ -241,10 +241,10 @@ test('dashboard: reject records a rejection and the card goes away', async t => 
 
 // ---- the team: running an approved prompt and posting an approved draft
 const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n';
-const teamCfg = (dir, extra = {}) => ({ schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, inbox: { dir },
+const teamCfg = (dir, extra = {}) => ({ schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, inbox: { dir, auto: false, ...(extra.__inbox || {}) },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] } },
-  board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } }, ...extra });
-function world(t, extra) {
+  board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } }, ...(({ __inbox, ...rest }) => rest)(extra) });
+function world(t, extra = {}) {
   const dir = makeInbox(t), state = tmp(t, 'state-'), calls = { created: [], issues: [], comments: [] };
   const gh = { issues: [], listPulls: async () => [], getPull: async () => null, listIssues: async () => [], board: async () => {}, listMergedPulls: async () => [], comment: async (n, b) => calls.comments.push([n, b]), addLabel: async () => {},
     findIssueByMarker: async m => gh.issues.find(i => i.body.includes(m))?.number || null,

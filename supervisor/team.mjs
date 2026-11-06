@@ -64,7 +64,7 @@ export function validateTeamConfig(input) {
   try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
-  if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir'))) throw new SupervisorError('invalid inbox: { dir: absolute path }');   // issue #124
+  if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => ['dir', 'auto', 'auto_draft_limit'].includes(k)) && (c.inbox.auto === undefined || typeof c.inbox.auto === 'boolean') && (c.inbox.auto_draft_limit === undefined || (Number.isInteger(c.inbox.auto_draft_limit) && c.inbox.auto_draft_limit >= 0 && c.inbox.auto_draft_limit <= 50)))) throw new SupervisorError('invalid inbox: { dir: absolute path, auto?: boolean, auto_draft_limit?: 0-50 }');   // issue #124
   if (c.owner_comment_review !== undefined) {
     const o = c.owner_comment_review, login = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(x);
     if (!o || typeof o !== 'object' || typeof o.enabled !== 'boolean' || ('owner' in o && !login(o.owner)) || ('agent_logins' in o && !(Array.isArray(o.agent_logins) && o.agent_logins.every(login))))
@@ -1814,11 +1814,17 @@ export class Team {
     }
     return null;
   }
+  // D-036: automatic handling is on unless team.local.json says inbox.auto is false. While any circuit-breaker halt is in force nothing is approved
+  // automatically (every item is a card); the allowance rules stay with the action itself (resume_job refuses an agent that is out of allowance).
+  inboxAuto() {
+    const b = this.s.breaker, halted = !!(b && (b.global || Object.keys(b.halts || {}).length));
+    return inboxStore.autoSettings(this.c.inbox, halted ? 'the circuit breaker has halted work' : null);
+  }
   // Each tick: pick up new items (validate, cap, refuse), fail approved items that changed on disk, and post approved issue drafts once.
   async processInbox(report) {
     const dir = this.inboxDir(); if (!dir) return;
     const now = this.clock.now();
-    inboxStore.scan(dir, now);
+    inboxStore.scan(dir, now, this.inboxAuto());   // D-036: items that may run without a click are approved here, as 'auto'
     for (const st of inboxStore.allStatuses(dir)) {
       if (!['approved', 'posting'].includes(st.state)) continue;
       try {

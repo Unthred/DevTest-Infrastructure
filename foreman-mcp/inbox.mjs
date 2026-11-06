@@ -61,7 +61,7 @@ export function createInbox({ dir }) {
         if (!fs.existsSync(path.join(items, `${id}.json`))) throw new Error('no such item');
         return { id, state: 'waiting', note: 'Foreman has not picked this item up yet (it does so on its next tick).' };
       }
-      return { id, state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null, decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null, updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null, issue: s.issue ?? null, job: s.job ?? null };
+      return { id, state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null, decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null, decidedBy: s.decidedBy === 'auto' ? 'automatic (no click)' : s.decidedBy === 'homeowner' ? 'the homeowner' : null, note: s.autoNote ?? null, updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null, issue: s.issue ?? null, job: s.job ?? null };
     },
   };
 }
