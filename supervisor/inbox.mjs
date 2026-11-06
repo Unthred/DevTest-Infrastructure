@@ -22,7 +22,7 @@ const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 10, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'] };
-// Decision D-036 (proposed): what may run without a click. A code constant, not configuration: nothing in an item, in team.local.json or from
+// Decision D-035 (proposed): what may run without a click. A code constant, not configuration: nothing in an item, in team.local.json or from
 // the overseer can add to it. `prompt` is never here (it runs on Tower with wide access); close_job, stop_job and anything that pauses work,
 // restarts a service, retries an install or runs anything else always wait for a click. The numbers are the daily limits (a rolling 24 h).
 export const AUTO_ACTIONS = Object.freeze({ new_review_attempt: 5, reopen: 5, resume_job: 5 });
@@ -146,7 +146,7 @@ export function scan(inboxDir, now = Date.now(), auto = null) {
     const v = validateItem(raw), hash = hashOf(raw);
     if (!v.ok) { setStatus(inboxDir, id, { state: 'refused', reason: v.reason, kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, reason: v.reason }, now); picked++; continue; }
     const ad = autoDecision(v.item, used, auto);
-    if (ad?.allow) {   // D-036: no click; every check above and loadItem's re-check at use still apply, and the audit event differs from a human approval
+    if (ad?.allow) {   // D-035: no click; every check above and loadItem's re-check at use still apply, and the audit event differs from a human approval
       setStatus(inboxDir, id, { state: 'approved', kind: v.item.kind, hash, createdAt: now, decidedAt: now, decidedBy: 'auto', autoAt: now, autoKey: ad.key }, now);
       audit(inboxDir, { id, event: 'auto_approved', kind: v.item.kind, hash, limit_key: ad.key }, now); picked++; continue;
     }
@@ -206,7 +206,7 @@ export function failedCards(inboxDir, now = Date.now()) {
 }
 
 // The two decisions. Only a pending item can be decided, once; the hash must still match. Returns { ok, reason? }.
-// `expect` (Approve all, D-036): the 12-character hash that was on screen. A mismatch, or an item that no longer loads, changes nothing: it stays waiting.
+// `expect` (Approve all, D-035): the 12-character hash that was on screen. A mismatch, or an item that no longer loads, changes nothing: it stays waiting.
 export function decide(inboxDir, id, decision, now = Date.now(), expect = null) {
   if (!['approve', 'reject'].includes(decision)) return { ok: false, reason: 'unknown decision' };
   const s = statusOf(inboxDir, id);
@@ -240,7 +240,7 @@ export function finish(inboxDir, id, patch, now = Date.now()) {
 export const placeholderIssue = id => 900000000 + parseInt(String(id).slice(0, 6), 16);
 export const marker = id => `<!-- devtest-inbox v1 ${id} -->`;
 
-// D-036: what ran without a click in the last 24 hours, against the daily limits. Display only; it adds nothing to Needs you. Names are the ones
+// D-035: what ran without a click in the last 24 hours, against the daily limits. Display only; it adds nothing to Needs you. Names are the ones
 // GitHub and the dashboard use (pull request, issue, job); no item text beyond a redacted, bounded title.
 export function autoRecent(inboxDir, auto, now = Date.now()) {
   const clip = t => redactLong(String(t ?? '').replace(/\s+/g, ' '), 80, ' [cut]').trim();

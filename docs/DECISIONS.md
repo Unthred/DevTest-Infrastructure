@@ -316,7 +316,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Expiring a halt by time (a halt would end without evidence); letting a job already running at the trip clear it; letting the dashboard edit Foreman's state file directly (two writers); an agent-callable resume.
 - Superseded-by: none
 
-## D-036 — Fewer approvals: issue drafts and three named actions run without a click, within daily limits
+## D-035 — Fewer approvals: issue drafts and three named actions run without a click, within daily limits
 - Status: agent-proposal
 - Date: 2026-11-06
 - Source: the homeowner's approval in chat on 2026-11-06, as stated in the approved overseer task 9a2f5341 ("fewer approvals"); extends D-031 and D-033

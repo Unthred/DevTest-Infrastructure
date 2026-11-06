@@ -348,7 +348,7 @@ function breakerCard(view) {
 // Issue #124: the Approve/Reject card of one inbox item. The item's own text is shown in full (escaped), so the click is informed.
 const inboxForm = (id, decision, label, cls) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="decision" value="${decision}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
 const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div></div>`;
-// D-036: Approve all. The form carries exactly the ids and 12-character hashes on screen; the route approves those only, each re-checked.
+// D-035: Approve all. The form carries exactly the ids and 12-character hashes on screen; the route approves those only, each re-checked.
 // It says how many of them are prompts, which run on Tower with wide access and always need a click (this is that click).
 export function approveAllForm(cards) {
   const shown = (cards || []).filter(c => c && !c.broken && /^[a-f0-9]{32}$/.test(c.id || '') && /^[a-f0-9]{12}$/.test(c.hash || ''));
@@ -363,7 +363,7 @@ function inboxAllNote(query) {
   const n = k => { const v = Number(query.get(k)); return Number.isInteger(v) && v >= 0 && v < 1000 ? v : 0; };
   return `<p class="approval-note" role="status">Approve all: ${n('approved')} approved, ${n('left')} left waiting.</p>`;
 }
-// D-036: what ran without a click in the last 24 hours, against the daily limits. It is information: it is not a Needs you item and is not counted there.
+// D-035: what ran without a click in the last 24 hours, against the daily limits. It is information: it is not a Needs you item and is not counted there.
 function autoRunsCard(view) {
   const a = view.autoRuns;
   if (!a) return '';

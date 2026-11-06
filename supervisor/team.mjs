@@ -1814,7 +1814,7 @@ export class Team {
     }
     return null;
   }
-  // D-036: automatic handling is on unless team.local.json says inbox.auto is false. While any circuit-breaker halt is in force nothing is approved
+  // D-035: automatic handling is on unless team.local.json says inbox.auto is false. While any circuit-breaker halt is in force nothing is approved
   // automatically (every item is a card); the allowance rules stay with the action itself (resume_job refuses an agent that is out of allowance).
   inboxAuto() {
     const b = this.s.breaker, halted = !!(b && (b.global || Object.keys(b.halts || {}).length));
@@ -1824,7 +1824,7 @@ export class Team {
   async processInbox(report) {
     const dir = this.inboxDir(); if (!dir) return;
     const now = this.clock.now();
-    inboxStore.scan(dir, now, this.inboxAuto());   // D-036: items that may run without a click are approved here, as 'auto'
+    inboxStore.scan(dir, now, this.inboxAuto());   // D-035: items that may run without a click are approved here, as 'auto'
     for (const st of inboxStore.allStatuses(dir)) {
       if (!['approved', 'posting'].includes(st.state)) continue;
       try {

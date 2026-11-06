@@ -205,7 +205,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ }   // the decision starts a pass now
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
-  // Approve all (D-036): the same protections as one approval (host, origin, the secret proof, one cooldown slot for the whole click). The form lists the
+  // Approve all (D-035): the same protections as one approval (host, origin, the secret proof, one cooldown slot for the whole click). The form lists the
   // ids and 12-character hashes that were on screen; each is decided on its own and re-checked, and one that changed, was decided elsewhere or is gone is
   // left waiting. Items that arrived after the page was drawn are not in the list and stay waiting. Prompts are approved here only because this is a click.
   const inboxAll = async (req, res, send) => {

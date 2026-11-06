@@ -1,4 +1,4 @@
-// Decision D-036 (proposed): fewer approvals. Issue drafts and a fixed list of named actions run without a click up to a daily limit; prompts
+// Decision D-035 (proposed): fewer approvals. Issue drafts and a fixed list of named actions run without a click up to a daily limit; prompts
 // never do; one switch in team.local.json turns it all off; Approve all approves only what was on screen. No model, GitHub or real state is used;
 // secret-shaped text is assembled at run time.
 import test from 'node:test';
