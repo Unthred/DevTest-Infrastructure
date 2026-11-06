@@ -436,3 +436,88 @@ test('#550: the dashboard stall reason and Needs you card say why the verdict fi
   assert.match(why.text, /unknown field/); assert.ok(why.text.includes(rf.file));
   assert.equal(w.team.stallReasons({ ...p, headRefOid: H(6) }).some(x => x.code === 'review-verdict-refused'), false, 'a new head clears it');
 });
+
+// ---- Issue #631: a review result is never silently lost; Foreman's own faults are not charged to the pull request.
+import { salvageFindings, VALIDATOR_FAULT, readInboxVerdict } from '../supervisor/team.mjs';
+const jobWith = (w, id, fields) => { w.jobs.states[id] = { id, provider: 'claude', ...fields }; };
+const endReview = async (w, fields, verdict) => {
+  await startReview(w);
+  const [id, rec] = Object.entries(w.team.s.jobs).at(-1);
+  if (verdict) writeVerdict(w.team, rec.ticket, { pr: rec.pr, headSha: rec.head, findings: [], commandsRun: ['node --test'], ...verdict });
+  jobWith(w, id, fields); const report = { ingested: [] }; await w.team.ingest(report); return { id, rec, report };
+};
+const checkpointFailed = { status: 'failed', lastEvent: 'checkpoint_failed', incompleteReason: { cause: 'checkpoint_failed', detail: 'the run ended with checkpoint_failed (exit 1)', attempt: 3 } };
+test('#631: the review job carries a short repair task, and the retry of a refused verdict uses it instead of the whole review', async t => {
+  const w = reqWorld(t); const { spec } = await startReview(w);
+  assert.match(spec.repairPrompt, /repair the verdict file/); assert.match(spec.repairPrompt, /do not run tests/);
+  assert.ok(spec.repairPrompt.includes(spec.postcondition.ticket), 'it names the verdict file of this review');
+  assert.ok(spec.repairPrompt.length < spec.prompt.length / 2, 'much shorter than the review');
+  const job = { role: 'devtest', issue: 77, worktree: '/w', scope: 's', allowedActions: ['read'], prompt: spec.prompt, repairPrompt: spec.repairPrompt, incompleteReason: { cause: 'postcondition_not_met', detail: `${VERDICT_REFUSED} verdict has an unknown field`, attempt: 1 } };
+  const retry = prompt(job, true);
+  assert.match(retry, /verdict has an unknown field/); assert.match(retry, /repair the verdict file/);
+  assert.ok(!retry.includes(spec.prompt), 'the whole review is not repeated');
+  // negatives: a first attempt, a different incomplete cause, and a job with no repair task keep the full prompt
+  assert.ok(prompt(job, false).includes(spec.prompt));
+  assert.ok(prompt({ ...job, incompleteReason: { cause: 'postcondition_not_met', detail: 'the post-condition did not hold', attempt: 1 } }, true).includes(spec.prompt));
+  assert.ok(prompt({ ...job, repairPrompt: undefined }, true).includes(spec.prompt));
+  // other job kinds never get one
+  const impl = Object.values(w.calls.created).filter(s => s.kind !== 'review');
+  assert.ok(impl.every(s => s.repairPrompt === undefined));
+});
+test('#631: the findings of a verdict that cannot be recorded are kept, redacted, bounded and shown', async t => {
+  const w = reqWorld(t); const secret = ['gh', 'p_'].join('') + 'A'.repeat(36);
+  const bad = { verdict: 'PASS', extra: 1, findings: [{ kind: 'blocking', text: `Race in the queue; token ${secret} leaked in log` }, { kind: 'follow-up', text: 'x'.repeat(900) }, { kind: 'nonsense', text: 'dropped' }, 7] };
+  const a = await endReview(w, { status: 'blocked', lastEvent: 'incomplete', incompleteReason: { cause: 'postcondition_not_met', detail: `${VERDICT_REFUSED} verdict has an unknown field`, attempt: 2 } }, bad);
+  const rec = w.team.s.reviewRefusals[a.rec.key];
+  assert.equal(rec.kept.findings.length, 2); assert.equal(rec.kept.verdict, 'PASS');
+  assert.ok(rec.kept.findings.every(f => f.text.length <= 400));
+  const why = w.team.stallReasons(w.gh.pulls[0]).find(x => x.code === 'review-verdict-refused');
+  assert.match(why.text, /Findings kept from it/); assert.match(why.text, /Race in the queue/);
+  for (const text of [why.text, JSON.stringify(w.team.s.reviewRefusals), JSON.stringify(w.team.s)]) assert.ok(!text.includes(secret), 'no secret-shaped value escapes');
+  // negatives: unreadable JSON and a file without findings keep nothing
+  assert.equal(salvageFindings(w.team.dir, 'not-a-ticket'), null);
+  fs.writeFileSync(path.join(w.team.dir, 'inbox', a.rec.ticket, 'verdict.json'), '{ not json');
+  assert.equal(salvageFindings(w.team.dir, a.rec.ticket), null);
+  fs.writeFileSync(path.join(w.team.dir, 'inbox', a.rec.ticket, 'verdict.json'), JSON.stringify({ verdict: 'PASS' }));
+  assert.equal(salvageFindings(w.team.dir, a.rec.ticket), null);
+});
+test('#631: an attempt lost to a checkpoint failure is not charged; a second checkpoint failure on the same head is', async t => {
+  const w = reqWorld(t);
+  const a = await endReview(w, checkpointFailed);
+  const k = a.rec.key; assert.equal(w.team.s.reviewAttempts[k], 0, 'handed back');
+  assert.deepEqual(a.report.refundedAttempts, [{ pr: 77, job: a.id, cause: 'checkpoint-failure' }]);
+  const b = await endReview(w, checkpointFailed);
+  assert.equal(w.team.s.reviewAttempts[k], 1, 'a real second failure counts');
+  assert.equal(b.report.refundedAttempts, undefined);
+});
+test('#631: an attempt lost to a validator fault is not charged, and the fault is named, not blamed on the reviewer', async t => {
+  const w = reqWorld(t); const { rec } = await startReview(w);
+  writeVerdict(w.team, rec.ticket, { pr: rec.pr, headSha: rec.head, verdict: 'PASS', findings: [], commandsRun: ['x'] });
+  const r = readInboxVerdict(w.team.root, rec.ticket, null);   // a null expectation makes the validator itself throw
+  assert.equal(r.fault, true); assert.match(r.error, new RegExp('^' + VALIDATOR_FAULT));
+  assert.equal(readInboxVerdict(w.team.root, rec.ticket, { pr: rec.pr, head: H(9) }).fault, undefined, 'an ordinary refusal is not a fault');
+  const w2 = reqWorld(t);
+  const a = await endReview(w2, { status: 'blocked', lastEvent: 'incomplete', incompleteReason: { cause: 'postcondition_not_met', detail: `${VALIDATOR_FAULT} TypeError`, attempt: 2 } });
+  assert.equal(w2.team.s.reviewAttempts[a.rec.key], 0);
+  assert.equal(a.report.refundedAttempts[0].cause, 'validator-fault');
+  assert.equal(w2.team.s.reviewRefusals[a.rec.key], undefined, 'it is not recorded as a refused verdict file');
+});
+test('#631: a refusal Foreman could have predicted (reviewer model wrote the head) is not charged, once', async t => {
+  const w = reqWorld(t); await startReview(w);
+  w.team.s.jobs.w1.model = 'opus';   // the head was written on the review model, so the verdict is refused at ingestion
+  const [id, rec] = Object.entries(w.team.s.jobs).at(-1);
+  writeVerdict(w.team, rec.ticket, { pr: rec.pr, headSha: rec.head, verdict: 'PASS', findings: [], commandsRun: ['x'], requirements: [ok], descriptionClaims: [] });
+  w.jobs.states[id].status = 'completed'; const report = { ingested: [] }; await w.team.ingest(report);
+  assert.match(report.ingested.at(-1).error, /review refused/);
+  assert.equal(w.team.s.reviewAttempts[rec.key], 0);
+  assert.equal(report.refundedAttempts[0].cause, 'predictable-refusal');
+});
+test('#631: failures that are the reviewer\'s own, or an ordinary incomplete job, still count', async t => {
+  const w = reqWorld(t);
+  const a = await endReview(w, { status: 'blocked', lastEvent: 'incomplete', incompleteReason: { cause: 'postcondition_not_met', detail: 'the post-condition did not hold', attempt: 2 } });
+  assert.equal(w.team.s.reviewAttempts[a.rec.key], 1); assert.equal(a.report.refundedAttempts, undefined);
+  const w2 = reqWorld(t);
+  const b = await endReview(w2, { status: 'failed', lastEvent: 'crash', incompleteReason: { cause: 'crash', detail: 'the run ended with crash (exit 1)', attempt: 3 } });
+  assert.equal(w2.team.s.reviewAttempts[b.rec.key], 1); assert.equal(b.report.refundedAttempts, undefined);
+  assert.equal(w2.team.s.attemptRefunds, undefined);
+});
