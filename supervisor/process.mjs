@@ -112,7 +112,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     const errorClass = String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48);
     checkpointFails++;
     event(root, job, `checkpoint_failed:${errorClass}:${checkpointFails}:${redact(String(error?.message || error), 200)}`, clock);
-    if (checkpointFails >= (options.checkpointLimit || 5)) { checkpointFailed = true; signalChild('SIGINT'); }
+    if (checkpointFails >= (options.checkpointLimit || 5)) { checkpointFailed = true; clearInterval(interval); signalChild('SIGINT'); }
   } }, options.checkpointMs || 60000);
   try {
     const result = await new Promise(resolve => {

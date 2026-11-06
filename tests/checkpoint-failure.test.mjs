@@ -138,3 +138,13 @@ test('checkpoint: a total time budget stops the retries of every git call in one
   process.env.PATH = oldPath;
   assert.match(git(r, 'rev-parse', 'HEAD'), /^[0-9a-f]{40}$/);
 });
+
+test('worker: no further checkpoint is attempted after the limit, even when the child is slow to exit', async t => {
+  const f = await broken(t);
+  const job = { id: '3'.repeat(32), kind: 'implement', worktree: path.join(f.d, 'not-a-repo'), issue: 579, attempts: 1, status: 'running', provider: 'codex', role: 'devtest', scope: 's', allowedActions: ['read'], prompt: 'p' };
+  fs.mkdirSync(job.worktree); fs.mkdirSync(path.join(f.root, 'jobs'), { recursive: true });
+  const slow = { command: () => [process.execPath, '-e', "process.on('SIGINT',()=>setTimeout(()=>process.exit(0),600));setTimeout(()=>{},20000)"], observe: () => ({}), preflight: () => true };
+  const result = await runProcess(f.root, job, cfg, slow, clock, { checkpointMs: 60, checkpointLimit: 3 });
+  assert.equal(result.event, 'checkpoint_failed');
+  assert.equal(events(f.root, job.id).filter(k => k.startsWith('checkpoint_failed:')).length, 3);
+});

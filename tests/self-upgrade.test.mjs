@@ -871,6 +871,26 @@ test('issue #606: the install-time check failure gets one delayed retry, then st
   assert.equal(await g.up.step(), 'upgraded');
 });
 
+test('issue #668: an install-time environmental failure on the delayed retry does not hand a commit a second delayed retry', async t => {
+  const w = world(t, { pre: { ok: false, reason: 'tests: 2 failed' } });
+  const n = k => w.log.filter(x => x[0] === k).length;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(n('pre'), 1);
+  w.state.now += PRECHECK_RETRY_MS; w.state.pre = { ok: true }; w.state.up = { ok: false, environmental: true, reason: 'clean copy failed' };
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(n('upgrade'), 1, 'the delayed retry passed the check and hit an install-time environmental failure');
+  w.state.now += 10 * ENV_RETRY_MAX_MS; w.state.up = { ok: false, blocked: true, reason: 'tests: 2 failed' };
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(n('upgrade'), 2, 'the environmental retry runs and is blocked');
+  w.state.now += PRECHECK_RETRY_MS * 4; w.state.up = { ok: true };
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(n('upgrade'), 2, 'no further delayed retry for the same commit');
+  assert.equal(n('pre'), 3, 'pre-check ran once per attempt, never a further delayed one');
+  // positive: a commit that never used its delayed retry still gets it after an install-time environmental failure then a block
+  const g = world(t, { up: { ok: false, environmental: true, reason: 'clean copy failed' } });
+  assert.equal(await g.up.step(), 'precheck-failed');
+  g.state.now += 10 * ENV_RETRY_MAX_MS; g.state.up = { ok: false, blocked: true, reason: 'x' };
+  assert.equal(await g.up.step(), 'precheck-failed');
+  g.state.now += PRECHECK_RETRY_MS; g.state.up = { ok: true };
+  assert.equal(await g.up.step(), 'upgraded');
+});
+
 // ---- issue #695: batch installs
 const MIN = 60000, GAP = 45 * MIN;
 const finished = async (w, steps = 1) => { for (let i = 0; i < steps; i++) { assert.equal(await w.up.step(), 'upgraded'); assert.equal(await w.up.verifyPending({ running: w.state.target, ok: true }), 'verified'); w.state.installed = w.state.target; w.state.target = H((5 + i).toString(16)); w.state.now += 3 * MIN; } };
