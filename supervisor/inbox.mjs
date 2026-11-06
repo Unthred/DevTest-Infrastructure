@@ -162,6 +162,17 @@ export function pendingCards(inboxDir) {
   });
 }
 
+// Issue #641: a failed item (an approved prompt whose job stopped, a failed action or post) has no GitHub notice, so the dashboard shows it as
+// one Needs you line for FAILED_SHOW_MS after it failed. Text is redacted and bounded again for display; no item content is shown.
+export const FAILED_SHOW_MS = 3 * 86400000;
+export function failedCards(inboxDir, now = Date.now()) {
+  return allStatuses(inboxDir).filter(s => s.state === 'failed' && Number.isFinite(s.updatedAt) && now - s.updatedAt >= 0 && now - s.updatedAt <= FAILED_SHOW_MS)
+    .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0)).map(s => {
+      const clip = t => redactLong(String(t ?? '').replace(/\s+/g, ' '), 200, ' [cut]').trim();
+      return { id: s.id, kind: s.kind || null, job: /^[a-f0-9]{8}$/.test(s.job || '') ? s.job : null, why: clip(s.reason || s.result || 'no reason recorded') };
+    });
+}
+
 // The two decisions. Only a pending item can be decided, once; the hash must still match. Returns { ok, reason? }.
 export function decide(inboxDir, id, decision, now = Date.now()) {
   if (!['approve', 'reject'].includes(decision)) return { ok: false, reason: 'unknown decision' };

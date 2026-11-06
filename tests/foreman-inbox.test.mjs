@@ -218,6 +218,21 @@ test('dashboard: no proof, wrong proof, a foreign origin, a bad id or decision a
 test('dashboard: without an inbox configured the route does not exist; the item files are never an approval path', async t => {
   const s = await serve(t, null); assert.equal((await s.post('a'.repeat(32), 'approve')).status, 404);
 });
+test('dashboard: a failed inbox item is one Needs you line for three days, then leaves; done and pending items add none (issue #641)', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD), b = drop(dir, { ...GOOD, prompt: 'Another job, quite different' }), c = drop(dir, { ...GOOD, prompt: 'Third job entirely' });
+  inbox.scan(dir, 1000);
+  const s = await serve(t, dir), now = s.clock.now;
+  inbox.finish(dir, a, { state: 'failed', job: 'abcdef12', result: 'the job ended failed; it left no summary' }, now - 1000);
+  inbox.finish(dir, b, { state: 'done', result: 'fine' }, now - 1000);
+  const lines = async () => JSON.parse((await s.get('/api/view.json')).body).panels.needsYou.filter(x => x.id.startsWith('inboxfail-'));
+  const found = await lines();
+  assert.equal(found.length, 1, 'only the failed item');
+  assert.equal(found[0].id, `inboxfail-${a}`); assert.match(found[0].text, /failed \(job abcdef12\).*left no summary/); assert.match(found[0].decision, /ai-supervisor status abcdef12/);
+  assert.match((await s.get('/')).body, /left no summary/);
+  s.clock.now = now + inbox.FAILED_SHOW_MS + 5000;
+  assert.equal((await lines()).length, 0, 'it leaves after three days');
+  assert.equal(inbox.statusOf(dir, c).state, 'pending');
+});
 test('dashboard: reject records a rejection and the card goes away', async t => {
   const dir = makeInbox(t), id = drop(dir, DRAFT); inbox.scan(dir, 1000); const s = await serve(t, dir);
   assert.equal((await s.post(id, 'reject')).status, 303); assert.equal(inbox.statusOf(dir, id).state, 'rejected');
