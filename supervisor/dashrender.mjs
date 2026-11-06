@@ -274,7 +274,18 @@ function nowPanel(view, { describe = true, list = null } = {}) {
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
     return dli({ cls: `sev-${level}`, extra: `data-job-card="${esc(j.id)}"`, key: `job-${j.id}`, sev: level, name: a.name, age: j.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div>` });
   };
-  const ic = view.idleCauses, idleLine = ic ? Object.entries(ic.agents).map(([n, r]) => `<div class="sub" data-idle-causes="${esc(n)}">${esc(n)}, last 24 h: idle with work available ${esc(r.idleWithWorkPercent)}% (${Object.entries(r.minutes).filter(([k, v]) => v > 0 && k !== 'no-eligible-work' && k !== 'unrecorded').map(([k, v]) => `${esc(CAUSE_LABEL[k])} ${esc(Math.round(v))} min`).join(', ') || 'none'})${Object.keys(r.holds).length ? `; holds: ${Object.entries(r.holds).map(([h, m]) => `${esc(h)} ${esc(Math.round(m))} min`).join(' | ')}` : ''}</div>`).join('') : '';
+  // Issue #530: the Now card on the Overview carries the state and one short idle line per agent (the share of the last 24 h and the biggest
+  // cause); the full breakdown, every cause and each hold with its time, is on the agent's own page, one click away.
+  const ic = view.idleCauses, shown = new Set(view.agents.map(a => a.name));
+  const idleLine = ic ? Object.entries(ic.agents).filter(([n]) => shown.has(n)).map(([n, r]) => {
+    const causes = Object.entries(r.minutes).filter(([k, v]) => v > 0 && k !== 'no-eligible-work' && k !== 'unrecorded').sort((x, y) => y[1] - x[1]);
+    if (list) {
+      const top = causes[0] ? `, mostly ${esc(CAUSE_LABEL[causes[0][0]])}` : '';
+      return `<div class="sub" data-idle-causes="${esc(n)}">${esc(n)}, last 24 h: idle with work available ${esc(r.idleWithWorkPercent)}%${top} <a href="/agents/${esc(encodeURIComponent(n))}">Breakdown</a></div>`;
+    }
+    const holds = Object.entries(r.holds).sort((x, y) => y[1] - x[1]);
+    return `<div class="sub" data-idle-causes="${esc(n)}">${esc(n)}, last 24 h: idle with work available ${esc(r.idleWithWorkPercent)}% (${causes.map(([k, v]) => `${esc(CAUSE_LABEL[k])} ${esc(Math.round(v))} min`).join(', ') || 'none'})${holds.length ? `; holds: ${holds.map(([h, m]) => `${esc(h)} ${esc(Math.round(m))} min`).join(' | ')}` : ''}</div>`;
+  }).join('') : '';
   const rows = view.agents.flatMap(a => {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j));
     const j = a.job, level = stateSev[a.state] || 'info';

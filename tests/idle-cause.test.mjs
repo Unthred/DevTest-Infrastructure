@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { classifyIdle, idleBreakdown, idleReport, renderIdleReport } from '../supervisor/idlecause.mjs';
+import { holdCause, classifyIdle, idleBreakdown, idleReport, renderIdleReport } from '../supervisor/idlecause.mjs';
 import { idleReason } from '../supervisor/dashboard.mjs';
 import { recordTick, readSnapshots } from '../supervisor/dashdata.mjs';
 
@@ -109,4 +109,41 @@ test('the report command reads local records only and prints the range it was as
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'idle-cli-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const r = spawnSync(process.execPath, ['supervisor/cli.mjs', 'team', 'idle-report', '--from', 'not-a-time'], { env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root }, encoding: 'utf8' });
   assert.notEqual(r.status, 0); assert.match(r.stderr, /idle-report/);
+});
+
+// Issue #530: a hold whose figures change on every tick is one cause; two different causes stay separate.
+test('a hold whose figures change on every tick is one cause with the latest text and the total time; different causes stay apart', () => {
+  const rev = (w, p, d) => ({ cause: 'named-hold', hold: `reviews only: weekly ${w}%, projected ${p}% at reset (${d} days left, window average)` });
+  const slot = { cause: 'named-hold', hold: 'review slot full: PR #9' };
+  const snaps = [
+    { at: at(10), startedAt: at(9.9), idle: { claude: rev(90, 180, 3.5), codex: slot } },
+    { at: at(20), startedAt: at(19.9), idle: { claude: rev(91, 181, 3.4), codex: slot } },
+    { at: at(30), startedAt: at(29.9), idle: { claude: rev(92, 184, 3.3), codex: slot } },
+    { at: at(40), startedAt: at(39.9), idle: { claude: { cause: 'named-hold', hold: 'implement slot full: #3' }, codex: slot } },
+  ];
+  const r = idleBreakdown({ jobs: [], snapshots: snaps, agents, from: at(0), to: at(50) });
+  // claude: 0-40 is the reviews-only hold (read at 10, 20, 30), 40-50 follows the tick at 40 and is the slot hold
+  assert.deepEqual(r.claude.holds, { 'reviews only: weekly 92%, projected 184% at reset (3.3 days left, window average)': 40, 'implement slot full: #3': 10 });
+  assert.deepEqual(r.codex.holds, { 'review slot full: PR #9': 50 });
+  assert.notEqual(holdCause('review slot full: PR #9'), holdCause('review slot full: PR #10'));
+  assert.notEqual(holdCause(rev(1, 2, 3).hold), holdCause('implement slot full: #3'));
+  assert.equal(holdCause(rev(90, 180, 3.5).hold), holdCause(rev(12, 99, 0.5).hold));
+});
+
+test('the Now card shows one short idle line per agent with a link to the breakdown; the agent page keeps the full holds', async () => {
+  const { renderRoute } = await import('../supervisor/dashrender.mjs');
+  const { overviewView } = await import('./helpers/lists-fixture.mjs');
+  const base = await overviewView();
+  const names = base.agents.map(a => a.name), name = names[0];
+  const hold = 'reviews only: weekly 92%, projected 184% at reset (3.3 days left, window average)';
+  const idleCauses = { agents: { [name]: { idleWithWorkPercent: 40, minutes: { 'named-hold': 300, upgrade: 20, 'waiting-for-tick': 0 }, holds: { [hold]: 300 } } } };
+  const view = { ...base, idleCauses };
+  const overview = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(), pathname: '/' }).html;
+  const line = overview.match(/<div class="sub" data-idle-causes="[^"]*">[^]*?<\/div>/)?.[0] || '';
+  assert.match(line, /idle with work available 40%, mostly a named hold/);
+  assert.match(line, new RegExp('href="/agents/' + encodeURIComponent(name) + '"'));
+  assert.ok(!line.includes('reviews only'), 'no hold text on the Now card');
+  assert.ok(line.length < 400);
+  const agentPage = renderRoute(view, { page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }).html;
+  assert.match(agentPage, /holds: reviews only: weekly 92%[^<]*300 min/);
 });
