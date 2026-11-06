@@ -70,3 +70,10 @@ test('issue #607: recorded trade-off, a dotless host with a 2-digit port is kept
   assert.equal(redactTopology('myhost:22 myhost:80', []), 'myhost:22 myhost:80');
   assert.equal(redactTopology('api.example.org:80', []), '[host]');
 });
+
+test('issue #679: a dotted host:port is redacted even when .digit follows; a dotless host:port.version is kept', () => {
+  assert.equal(redactTopology('api.example.org:8000.5', []), '[host].5');
+  assert.equal(redactTopology('api.example.org:8000.', []), '[host].');
+  assert.equal(redactTopology('myhost:8000.5', []), 'myhost:8000.5');
+  assert.equal(redactTopology('ubuntu:22.04 redis:7000', []), 'ubuntu:22.04 [host]');
+});
