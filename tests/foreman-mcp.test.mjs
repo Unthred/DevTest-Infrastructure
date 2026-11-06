@@ -33,7 +33,7 @@ function viewServer(t, view) {
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => { t.after(() => server.close()); resolve({ url: `http://127.0.0.1:${server.address().port}/api/view.json`, hits }); }));
 }
 const smallView = () => ({
-  health: { state: 'ok', label: 'ok', count: 0, severity: 'ok' }, freshness: { ageMs: 5, level: 'ok', label: 'fresh' }, tick: { at: 1000, status: 'ok', lastOkAt: 1000 }, nextTick: { state: 'scheduled' },
+  health: { state: 'ok', label: 'ok', count: 1, severity: 'ok' }, freshness: { ageMs: 5, level: 'ok', label: 'fresh' }, tick: { at: 1000, status: 'ok', lastOkAt: 1000 }, nextTick: { state: 'scheduled' },
   version: { installed: 'aaaaaaa', main: 'aaaaaaa', behind: 0 }, teamEnabled: true, slots: [{ text: 'Reviewer: idle' }], capNotes: [], breaker: { halt: null, byCause: [] },
   agents: [{ name: 'claude', state: 'idle', idleReason: { text: 'nothing to do' } }], budget: { claude: { mode: 'normal', reason: 'ok', used: 0.1, projected: 0.2 } }, plan: [{ type: 'review', agent: 'claude', pr: 7, why: 'only claude can review' }],
   jobs: [{ id: 'abc', fullId: 'a'.repeat(32), kind: 'review', ref: 7, agent: 'claude', model: 'opus', status: 'completed', attempts: 1, startedAt: 1000, elapsedMs: 5000, tokens: 100, inTokens: 90, outTokens: 10, cost: 0.5, desc: 'Reviewer approved PR #7', hasTranscript: true }],
