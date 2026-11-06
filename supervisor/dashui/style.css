@@ -291,7 +291,7 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 @media(max-width:639px){.tr{padding:var(--sp2)}}
 
 /* issue #76 */
-/* issues #76, #421: compact agent badges; the bar stays on one row at desktop and has its own layout on a phone */
+/* issues #76, #421: compact agent badges; at 1100px and wider the status bar wraps (the page heading takes its own row), below 1100px the badge list wraps, and a phone has its own layout */
 .agent-lines ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:nowrap;gap:var(--sp1) var(--sp2)}
 .agent-badge{display:inline-flex;align-items:center;gap:var(--sp1);min-height:24px;padding:2px var(--sp2);border-radius:999px;border:1px solid currentColor;font-size:var(--fs-xs);white-space:nowrap;text-decoration:none}
 .agent-badge b{font-weight:700}.agent-badge .ab-role,.agent-badge .ab-state{font-weight:500}
