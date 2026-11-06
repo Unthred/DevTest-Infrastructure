@@ -45,3 +45,4 @@ export function releaseCooldown(root, key, now) {
   const all = readCooldowns(root); if (all[key] !== now) return;
   delete all[key]; atomicJson(cooldownFile(root), all);
 }
+

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
+import { takeBreakerResumeRequests } from './breakerresume.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as breaker from './breaker.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
@@ -1641,6 +1642,7 @@ export class Team {
   applyBreaker(actions, report, dryRun = false) {
     const limits = this.c.breaker;
     try {
+      if (!dryRun) this.applyResumeRequests(report);
       if (!dryRun) { const trips = breaker.evaluate(this.s.breaker, limits, this.clock.now()); this.s.breaker.error = null; if (trips.length) { (report.breaker ||= {}).tripped = trips; this.save(); } }
     } catch (error) { this.breakerFailed(error, report); }
     try {
@@ -1649,6 +1651,15 @@ export class Team {
       for (const x of stopped) this.hold(x.action.agent, x.action.type, `circuit breaker: ${x.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + x.cause} halted new ${x.action.type} jobs until the homeowner resumes`);
       return kept;
     } catch (error) { this.breakerFailed(error, report); return actions; }
+  }
+  // Issue #626: apply the Resume clicks the dashboard left (it never edits this state itself). Scopes that no longer exist are ignored.
+  applyResumeRequests(report) {
+    const reqs = takeBreakerResumeRequests(this.root);
+    for (const r of reqs) {
+      const cleared = breaker.resume(this.s.breaker, r.scope, this.clock.now());
+      if (cleared.length) (report.breaker ||= {}).resumed = [...((report.breaker || {}).resumed || []), { scope: r.scope, cleared, by: 'dashboard' }];
+    }
+    if (reqs.length) this.save();
   }
   // Issue #549: clear one cause, 'global' or 'all'. Reached only from the homeowner's CLI (see cli.mjs), never from a job.
   breakerResume(scope) {
@@ -1923,6 +1934,8 @@ export class Team {
       const b = this.s.breaker, recorded = [this.s.verdicts, this.s.secondOpinions, this.s.exceptionReviews].some(m => Object.values(m || {}).some(v => v?.job === id));
       const w = breaker.wasteOf({ id, entry: j, job, verdictRecorded: recorded, refusal: j.refusal || null });
       j.wasteChecked = true;
+      // Issue #626: a completed job that was not waste is a success; it ends the halt of its type if it began after the halt.
+      if (!w && job.status === 'completed' && !j.refusal) { const cleared = breaker.succeeded(b, { type: typeOfKind(j.kind || job.kind || ''), createdAt: job.createdAt }, this.clock.now()); if (cleared.length) (report.breaker ||= {}).cleared = cleared; }
       if (w && breaker.record(b, w, this.clock.now())) (report.wasted ||= []).push({ job: id.slice(0, 8), cause: w.cause, cost: w.cost });
       this.save();
     } catch (error) { this.breakerFailed(error, report); }
