@@ -112,7 +112,7 @@ export function findDashboards(procRoot = '/proc', self = process.pid) {
 // not running at all, and `force` restarts one that is on the right version but does not answer. Without them nothing running means
 // nothing to do (the upgrade path never starts a dashboard that was not there). A start that fails or does not answer is tried once
 // more, then the last good command line is started again, so the dashboard is not left down.
-export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500, revive = null, force = false } = {}) {
+export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500, settleProbes = 3, settleProbeMs = 2000, settleMaxMs = 60000, now = Date.now, logMark = defaultLogMark, logTail = defaultLogTail, revive = null, force = false } = {}) {
   const found = findDashboards(procRoot);
   if (!found.length && !revive) return { ok: true, restarted: false, reason: 'no dashboard server was running' };
   if (found.length && !force && found.every(d => d.version === sha)) return { ok: true, restarted: false, reason: 'already on the new version' };
@@ -139,20 +139,49 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
   };
   // Issue #193: a process that exists (or answered once) may still exit straight away, e.g. EADDRINUSE or a bad --host. After it
   // looks up, wait a short grace period and require it to still be running (and, with a health check, still answering).
+  // Issue #632: under heavy load a healthy server can take seconds to build its first view, so one failed probe is not a failure.
+  // After the grace period the process must still exist, and (with a health check) answer `settleProbes` probes in a row; a probe
+  // that fails while the process is still running is retried until `settleMaxMs`. A process that has exited fails at once.
+  const alive = () => findDashboards(procRoot).some(d => d.version === sha);
   const settled = async () => {
     await sleep(settleMs);
-    if (!findDashboards(procRoot).some(d => d.version === sha)) return false;
-    return health ? Boolean(await health(old.host, healthPort)) : true;
+    if (!alive()) return { cause: 'exited' };
+    if (!health) return { ok: true };
+    // Bounded by elapsed time, probe duration included: each probe is cut off when the deadline arrives.
+    const deadline = now() + settleMaxMs;
+    let streak = 0;
+    for (let i = 0, rounds = Math.max(settleProbes, Math.ceil(settleMaxMs / Math.max(1, settleProbeMs))); i < rounds; i++) {
+      if (i) { if (now() >= deadline) break; await sleep(settleProbeMs); }
+      if (!alive()) return { cause: 'exited' };
+      const left = deadline - now(); if (left <= 0) break;
+      let timer; const cut = new Promise(r => { timer = setTimeout(() => r(false), left); });
+      const ok = await Promise.race([Promise.resolve().then(() => health(old.host, healthPort)).catch(() => false), cut]); clearTimeout(timer);
+      streak = ok ? streak + 1 : 0;
+      if (streak >= settleProbes) return { ok: true };
+    }
+    return { cause: 'unresponsive' };
+  };
+  const failWith = async (cause, text, mark) => {
+    let said = ''; try { said = redactAddresses(redact((await logTail(mark)) || '', 600)).trim(); } catch { said = ''; }
+    return { fail: text, cause, ...(said ? { output: said } : {}) };
+  };
+  const afterSettle = async mark => {
+    const r = await settled();
+    if (r.ok) return up;
+    return r.cause === 'exited'
+      ? failWith('exited', `the dashboard server on ${short(sha)} ${health ? 'answered but did not stay up (the process exited after start)' : 'did not stay running'}`, mark)
+      : failWith('unresponsive', `the dashboard server on ${short(sha)} is running but stopped answering its health check for ${Math.round(settleMaxMs / 1000)} s`, mark);
   };
   const up = { ok: true, restarted: true, host: old.host, port: old.port };
   const attempt = async () => {
+    let mark = null; try { mark = await logMark(); } catch { mark = null; }
     try { (start || defaultStart)(wrapper, args); } catch (error) { return { fail: `could not start the dashboard server: ${String(error?.message || error).slice(0, 120)}` }; }
     for (let i = 0; i < tries; i++) {
       if (findDashboards(procRoot).some(d => d.version === sha)) {
         // Health check (issue #135): the new process must answer, not merely exist. Retried while it binds its port.
-        if (!health) return (await settled()) ? up : { fail: `the dashboard server on ${short(sha)} did not stay running` };
-        for (let j = 0; j < tries; j++) { if (await health(old.host, healthPort)) return (await settled()) ? up : { fail: `the dashboard server on ${short(sha)} answered but did not stay up` }; await sleep(200); }
-        return { fail: `the dashboard server started on ${short(sha)} but did not answer its health check` };
+        if (!health) return afterSettle(mark);
+        for (let j = 0; j < tries; j++) { if (await health(old.host, healthPort)) return afterSettle(mark); if (!alive()) return failWith('exited', `the dashboard server on ${short(sha)} exited before it answered its health check`, mark); await sleep(200); }
+        return failWith('unresponsive', `the dashboard server started on ${short(sha)} but did not answer its health check`, mark);
       }
       await sleep(200);
     }
@@ -165,10 +194,28 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
     for (const d of findDashboards(procRoot).filter(x => x.version === sha)) { try { kill(d.pid, 'SIGTERM'); } catch { /* already gone */ } }
     for (let i = 0; i < tries && findDashboards(procRoot).some(d => d.version === sha); i++) await sleep(200);
   };
-  const first = res.fail;
+  const first = res.fail, firstCause = res.cause, firstOutput = res.output;
   await stopNew();
   res = await attempt();
-  return res.fail ? recover(`${res.fail} (tried twice; first: ${first})`) : res;
+  if (!res.fail) return res;
+  const out = res.output || firstOutput;
+  const r = await recover(`${res.fail} (tried twice; first: ${first})${out ? `; the new process said: ${out.slice(0, 200)}` : ''}`);
+  return { ...r, cause: res.cause || firstCause, ...(out ? { output: out } : {}) };
+}
+// Issue #632: why a failed restart failed, kept in the record: a cause ('exited' or 'unresponsive') and what the new process wrote to
+// the dashboard log since it was started (redacted, at most 600 characters). A detached server's exit code is not observable, so the
+// output is the evidence of why it exited.
+const failDetail = r => (r && !r.ok ? { ...(r.cause ? { cause: r.cause } : {}), ...(r.output ? { output: redact(r.output, 600) } : {}) } : {});
+const dashboardLogFile = () => (process.env.NODE_TEST_CONTEXT && !process.env.DASHBOARD_LOG ? null : (process.env.DASHBOARD_LOG || DASHBOARD_LOG));
+function defaultLogMark() { try { const f = dashboardLogFile(); return f ? fs.statSync(f).size : 0; } catch { return 0; } }
+function defaultLogTail(mark) {
+  const f = dashboardLogFile(); if (!f) return '';
+  let fd; try {
+    fd = fs.openSync(f, 'r'); const size = fs.fstatSync(fd).size, from = Math.max(Number(mark) || 0, size - 4096);
+    if (size <= from) return '';
+    const buf = Buffer.alloc(size - from); fs.readSync(fd, buf, 0, buf.length, from);
+    return buf.toString('utf8').trim().split('\n').slice(-8).join(' | ');
+  } catch { return ''; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 // GET /api/view.json must answer 200 (it needs the supervisor state, so this proves more than an open port).
 export const httpHealth = (host, port) => new Promise(resolve => {
@@ -449,10 +496,10 @@ export class SelfUpgrade {
     let r;
     try { r = await this.d.restartDashboard(target); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
     // The outcome is recorded first and the intent cleared after it, so a loss between the two re-runs the restart (a duplicate record at worst) instead of leaving nothing.
-    this.record({ from: p.from, to: p.to, result: r.ok ? 'dashboard_restarted' : 'dashboard_restart_failed', reason: r.ok ? (r.restarted ? null : r.reason) : r.reason, ...(r.ok && r.restarted ? { restarted: true } : {}) });
+    this.record({ from: p.from, to: p.to, result: r.ok ? 'dashboard_restarted' : 'dashboard_restart_failed', reason: r.ok ? (r.restarted ? null : r.reason) : r.reason, ...(r.ok && r.restarted ? { restarted: true } : {}), ...failDetail(r) });
     delete this.s.dashboardPending;
     // Issue #209: a failed restart (or a fall back to the last good version) is a Needs you item; a later good restart clears it.
-    if (!r.ok) this.s.dashboardFailure = { at: this.clock.now(), kind: rollingBack ? 'rollback' : 'upgrade', target: target, reason: String(r.reason || 'unknown').slice(0, 300), recovered: r.recovered === true };
+    if (!r.ok) this.s.dashboardFailure = { at: this.clock.now(), kind: rollingBack ? 'rollback' : 'upgrade', target: target, reason: String(r.reason || 'unknown').slice(0, 300), recovered: r.recovered === true, ...failDetail(r) };
     else if (r.restarted) delete this.s.dashboardFailure;
     this.save();
     if (!r.ok) await this.alert(`${p.to}:dashboard${rollingBack ? ':rollback' : ''}`, `Dashboard server was not restarted on ${short(target)} after the ${rollingBack ? 'rollback' : 'upgrade'}: ${r.reason}. Check the dashboard and restart it by hand if needed (the page shows "restart pending" until then).`);
@@ -492,12 +539,12 @@ export class SelfUpgrade {
     this.save();
     let r;
     try { r = await this.d.restartDashboard(sha, { revive, force: true }); } catch (error) { r = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
-    this.record({ from: sha, to: sha, result: r.ok ? 'dashboard_revived' : 'dashboard_revive_failed', reason: r.ok ? null : r.reason, attempt: attempts + 1 });
+    this.record({ from: sha, to: sha, result: r.ok ? 'dashboard_revived' : 'dashboard_revive_failed', reason: r.ok ? null : r.reason, attempt: attempts + 1, ...failDetail(r) });
     // A successful revive ends the outage episode: the next failure is a new outage with its own alert key (throttle counters stay).
     if (r.ok) this.s.dashboardWatch = { ...this.s.dashboardWatch, episodeAt: undefined };
     if (r.ok && r.restarted) { if (this.s.dashboardFailure?.kind === 'watchdog') delete this.s.dashboardFailure; this.save(); return 'revived'; }
     if (r.ok) { this.save(); return 'ok'; }
-    this.s.dashboardFailure = { at: now, kind: 'watchdog', target: sha, reason: String(r.reason || 'unknown').slice(0, 300), recovered: r.recovered === true };
+    this.s.dashboardFailure = { at: now, kind: 'watchdog', target: sha, reason: String(r.reason || 'unknown').slice(0, 300), recovered: r.recovered === true, ...failDetail(r) };
     this.save();
     await this.alert(`dashboard-down:${episodeAt}`, `Dashboard server was not answering and could not be restarted on ${short(sha)}: ${r.reason}. Foreman retries on later ticks with a growing delay; check the dashboard if it stays down.`);
     return 'revive-failed';
