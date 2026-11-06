@@ -22,6 +22,7 @@ import { probeDue } from './probe.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
+import { validateChangeCheck } from './ghchange.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
@@ -59,6 +60,7 @@ export function validateTeamConfig(input) {
   if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
   validateUnblockLimits(L.unblock);
   validateSelfUpgrade(c.self_upgrade);
+  try { validateChangeCheck(c.change_check); } catch (error) { throw new SupervisorError(error.message); }   // issue #755
   try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
@@ -202,12 +204,13 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox', 'change_check'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
   if ('test_tmp_root' in local) { if (typeof local.test_tmp_root !== 'string' || !path.isAbsolute(local.test_tmp_root)) throw new SupervisorError('invalid team.local.json: test_tmp_root must be an absolute path'); out.test_tmp_root = local.test_tmp_root; }
   if ('test_resources' in local) out.test_resources = validateResourceConfig(local.test_resources);
+  if ('change_check' in local) { try { validateChangeCheck(local.change_check); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } out.change_check = { ...(out.change_check || {}), ...local.change_check }; }   // issue #755
   if ('inbox' in local) out.inbox = local.inbox;   // issue #642: validated like the shipped key by validateTeamConfig, which loadTeamConfig runs on the merged result
   if ('breaker' in local) { try { out.breaker = validateBreakerConfig({ ...(out.breaker || {}), ...local.breaker }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }
   if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
@@ -1578,8 +1581,11 @@ export class Team {
   // Issue #338: after a pass, while jobs run, wait (bounded) for one to finish and run another full pass, so a freed slot refills
   // within seconds, not at the next five-minute tick. Every later pass is a complete tickPass (ingest, budgets, plan, all gates,
   // the same hold); nothing here starts a job. Off unless limits.chain_seconds is set; limits.chain_passes bounds the extra passes.
-  async tick({ dryRun = false, hold = null } = {}) {
+  async tick({ dryRun = false, hold = null, replay = false } = {}) {
     const report = await this.tickPass({ dryRun, hold });
+    // Issue #755: a replay pass (GitHub proved unchanged by conditional requests) that planned and did nothing ends here, without the chain window
+    // that would wait for a running job to end. A job end asks for its own pass (issue #406); a request past its cap falls back to the schedule.
+    if (replay && !dryRun && !report.actions.length && !report.ingested.length && !report.notified.length && !report.skipped.length) { report.noop = true; return report; }
     const L = this.c.limits || {}, windowMs = (L.chain_seconds || 0) * 1000, maxPasses = L.chain_passes ?? 3, pollMs = (L.chain_poll_seconds || 10) * 1000;
     if (dryRun || !(windowMs > 0) || maxPasses < 1) return report;
     const deadline = this.clock.now() + windowMs;

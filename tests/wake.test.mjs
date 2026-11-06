@@ -198,8 +198,8 @@ test('passStats: counts passes, did-nothing passes and unlabelled records by tri
   const snaps = [{ at: 10, plan: [] }, { at: 20, plan: [{ type: 'implement' }] }, { at: 30, trigger: 'job-end', plan: [{}] }, { at: 40, trigger: 'job-end', plan: [] }, { at: 50, trigger: 'approve', plan: [{}], status: 'error' }, { at: 999, plan: [] }];
   const p = passStats(snaps, 0, 100);
   assert.equal(p.total, 5); assert.equal(p.didNothing, 2); assert.equal(p.unlabelled, 2); assert.equal(p.errors, 1);
-  assert.deepEqual(p.byTrigger['job-end'], { passes: 2, startedSomething: 1, didNothing: 1 });
-  assert.deepEqual(p.byTrigger.schedule, { passes: 2, startedSomething: 1, didNothing: 1 });
+  assert.deepEqual(p.byTrigger['job-end'], { passes: 2, startedSomething: 1, didNothing: 1, noop: 0 });
+  assert.deepEqual(p.byTrigger.schedule, { passes: 2, startedSomething: 1, didNothing: 1, noop: 0 });
 });
 
 // ---- real processes

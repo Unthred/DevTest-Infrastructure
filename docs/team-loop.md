@@ -239,3 +239,38 @@ The five-minute schedule stays as the safety net. On top of it, four local event
 **Measurement.** Each recorded tick carries `trigger` (`schedule`, `job-end`, `install`, `inbox`, `approve`) and any other requests it absorbed (`merged`). A pass "did nothing" when its plan was empty. `team idle-report` and the Diagnostics page ("Passes by trigger") show passes, passes that started something and passes that did nothing per trigger, and the wake count and cap for the last hour. Records from before triggers existed carry none and are counted as scheduled; the report says how many.
 
 **Not covered.** The install pass: the code that requests the install wake runs only after a real install, so its request is tested through the pass driver, not through a real upgrade. An install by batched installs (issues #692 and #632) is unaffected: the wake is asked after any pass whose upgrade step returned `upgraded`, whatever the batch.
+
+## A cheap GitHub check, and a pass that ends early when nothing changed (issue #755)
+
+**Baseline (measured on Tower, 48 hours to 6 Nov 2026 from `snapshots.jsonl` and one instrumented dry-run tick; the dry run read live GitHub and wrote nothing).** 357 recorded passes, 132 (37 %) planned nothing. Those 132 split in two: 89 had no job running and took a median 44 s (p90 143 s); 43 had a job running and took a median 284 s, because the chain window (`limits.chain_seconds` 240) waits for the running job to end. A pass that planned something took a median 301 s. One dry-run tick made 52 `gh` processes in 77 s of wall time, 71 s of it inside `gh` (3 `pr list`, 2 `issue list`, 47 `pr view`: one file list per open PR plus one lookup per prerequisite PR outside the merged window). A live pass adds one comment read per open PR (inferred from the code, not counted). Local work (ingest, retries, the state files) was not separately timed; the figures above bound it to a few seconds (inferred).
+
+**The check.** At the start of a **scheduled** pass (never a wake) Foreman sends REST conditional requests, `If-None-Match` with the stored ETag, through `gh api -i`; a 304 is the unchanged answer and does not count against the rate limit (observed: the remaining count did not move on 304s). It covers:
+
+| What the planner reads | Endpoint watched |
+|---|---|
+| issues, their bodies, labels, state, comment counts; PR state, merge, closure | issue list sorted by update time, first 100 (every comment, label, push, review and merge moves an item to the top, so the page changes) |
+| open PRs: heads, drafts, titles, base | open pull list |
+| label names | label list |
+| comment text, including an edit | newest 5 issue comments by update time |
+| review line comments | newest 5 PR review comments by update time |
+| what is mergeable | tip of `main` and of every other base branch of an open PR |
+| check state of each open PR head | `check-runs` and combined `status` of each head |
+
+**Not covered by an ETag, and treated as changed, never guessed:** more than 99 open PRs or more than `max_open_prs` (40) heads (paged); a stored PR whose mergeability is `UNKNOWN` (GitHub computes it lazily, with no change to anything above); a missing, corrupt, foreign or future-dated state file; any error, timeout, odd status, missing ETag or a 304 without a stored ETag. Not covered at all, and left to the forced full pass: a deleted old comment or issue outside the newest page, a repository setting change. PR reviews are not read by the planner (verdicts are comments), and a review submission moves the PR in the issue list; the exact GitHub behaviour for an edited review is assumed, not verified.
+
+**An unchanged pass is a replay, not a skip.** The pass runs exactly as before, ingest, retries, breaker, allowance, stuck-check timers, self-check, status record and the upgrade step included, but its read-only GitHub calls are served from the data the last full pass stored (`team/gh-cache.json`), which the 304s just proved identical. A GitHub write during the pass turns the cache off for the rest of that pass. If the replay planned nothing, ingested nothing, notified nothing and skipped nothing, it ends there, without entering the chain window, and is recorded `noop` (a job end asks for its own pass, issue #406; past the wake cap the schedule is the fallback). If it did anything it is an ordinary pass. Nothing local is skipped, so nothing time-based can be lost:
+
+| Work on the pass | On an unchanged pass |
+|---|---|
+| job timeouts, dead-worker detection, lease release, recovery, due restarts (`reconcileOnce`) | runs first, before the check, always |
+| self-upgrade step, `min_install_gap_minutes` batching, hand-install hold, watchdog | runs, untouched (it does not use the cache) |
+| ingest of finished job results, retries that came due, owner-comment scan, inbox proposals, Approve/Reject | run on the local files; their GitHub reads come from the cache, their writes are real |
+| allowance and budget readings, due probes, breaker evaluation and clearing, self-check, idle tracking, stall and stuck-check timers | run against the current clock and local state; stuck-check age is computed from the current time on the cached rollup |
+| dashboard record, snapshot, status issue | written as usual; the data was verified a moment ago |
+| the chain window (waiting for a running job to end) | skipped only when the replay did nothing |
+
+**Fail safe.** Any doubt gives the full pass, as before. A failed check is never a failed tick: it is recorded as the reason, and a connection failure during it cannot be counted against an install (it never reaches the install verification). The baseline ETags are taken before the full pass reads anything and stored only after it read everything without error, so a change that lands mid-pass can only make the next check say "changed". Every `change_check.force_full_minutes` (default **30**) a full pass runs whatever the check says: it bounds how long a change the ETags cannot see (above) stays hidden to six scheduled passes at five minutes and two at fifteen, and costs one full pass in six. It also keeps `getMergedPull` and file-list lookups cheap on full passes: a merged PR and a PR's file list at a given head cannot change, so they are remembered (`memo`) across passes.
+
+**Config** (`change_check` in `team.json`, overridable in `team.local.json`): `enabled` (true), `force_full_minutes` (30), `max_open_prs` (40), `timeout_seconds` (30).
+
+**Measurement.** A pass record carries `noop`, `ghCalls`, `ghMs` and `check` (`result`, `reason`, `probes`, `served`). Diagnostics ("Passes by trigger") and `team idle-report` show no-op passes per trigger, the median duration of a no-op against a full pass that did nothing, and the median `gh` processes per pass. Compare before and after install with `ai-supervisor team idle-report --hours 48`.

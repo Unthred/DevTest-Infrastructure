@@ -130,21 +130,32 @@ export function renderIdleReport(rep) {
 // counts the records that carried no trigger so the figure says how much of it is measured per trigger and how much is inferred.
 export const PASS_TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve'];
 export function passStats(snapshots, from, to) {
-  const by = Object.fromEntries(PASS_TRIGGERS.map(k => [k, { passes: 0, startedSomething: 0, didNothing: 0 }]));
+  const by = Object.fromEntries(PASS_TRIGGERS.map(k => [k, { passes: 0, startedSomething: 0, didNothing: 0, noop: 0 }]));
   let unlabelled = 0, errors = 0;
+  const secs = { all: [], noop: [], didNothingFull: [] }, calls = { noop: [], other: [] };   // issue #755
   for (const s of snapshots || []) {
     if (!Number.isFinite(s?.at) || s.at < from || s.at > to) continue;
     const labelled = PASS_TRIGGERS.includes(s.trigger), key = labelled ? s.trigger : 'schedule';
     if (!labelled) unlabelled++;
     if (s.status === 'error') errors++;
     const row = by[key]; row.passes++;
-    if (Array.isArray(s.plan) && s.plan.length) row.startedSomething++; else row.didNothing++;
+    const nothing = !(Array.isArray(s.plan) && s.plan.length);
+    if (!nothing) row.startedSomething++; else row.didNothing++;
+    if (s.noop === true) row.noop++;
+    if (Number.isFinite(s.startedAt) && s.at >= s.startedAt) { const d = (s.at - s.startedAt) / 1000; secs.all.push(d); if (s.noop === true) secs.noop.push(d); else if (nothing) secs.didNothingFull.push(d); }
+    if (Number.isSafeInteger(s.ghCalls)) (s.noop === true ? calls.noop : calls.other).push(s.ghCalls);
   }
+  const median = a => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); return b[Math.floor((b.length - 1) / 2)]; };
   const total = Object.values(by).reduce((t, r) => t + r.passes, 0), empty = Object.values(by).reduce((t, r) => t + r.didNothing, 0);
-  return { total, didNothing: empty, errors, unlabelled, byTrigger: by };
+  const noop = Object.values(by).reduce((t, r) => t + r.noop, 0);
+  // noop = ended early because GitHub was proved unchanged (issue #755). Durations run from the start of the team step to its record; gh figures only from records that carry them.
+  return { total, didNothing: empty, noop, errors, unlabelled, byTrigger: by, seconds: { median: median(secs.all), medianNoop: median(secs.noop), medianDidNothingFull: median(secs.didNothingFull) }, ghCalls: { medianNoop: median(calls.noop), medianOther: median(calls.other), recorded: calls.noop.length + calls.other.length } };
 }
 export function renderPassStats(p) {
   const lines = [`Passes: ${p.total} recorded, ${p.didNothing} did nothing (${p.total ? Math.round(p.didNothing / p.total * 100) : 0}%); ${p.unlabelled} carried no trigger (counted as scheduled)`];
-  for (const k of PASS_TRIGGERS) { const r = p.byTrigger[k]; if (r.passes) lines.push(`  ${k}: ${r.passes} passes, ${r.startedSomething} started something, ${r.didNothing} did nothing`); }
+  for (const k of PASS_TRIGGERS) { const r = p.byTrigger[k]; if (r.passes) lines.push(`  ${k}: ${r.passes} passes, ${r.startedSomething} started something, ${r.didNothing} did nothing${r.noop ? `, ${r.noop} ended early as unchanged` : ''}`); }
+  const sec = x => (x == null ? 'n/a' : `${Math.round(x)} s`), q = p.seconds || {}, g = p.ghCalls || {};
+  lines.push(`Ended early as unchanged (no-op): ${p.noop || 0} passes; median ${sec(q.medianNoop)} (a full pass that did nothing: ${sec(q.medianDidNothingFull)}; any pass: ${sec(q.median)})`);
+  if (g.recorded) lines.push(`gh processes per pass (median, from ${g.recorded} records that carry the count): no-op ${g.medianNoop ?? 'n/a'}, other ${g.medianOther ?? 'n/a'}`);
   return lines.join('\n');
 }
