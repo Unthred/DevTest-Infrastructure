@@ -370,7 +370,6 @@ if (grid) {
     if (st) paintFree(); else paintFlow();
     renderBar();
   }
-  apply(); let last = bpNow(); addEventListener('resize', () => { if (bpNow() !== last) { last = bpNow(); if (editing) stopEditing(); apply(); } });
 
   // phone (and anyone without the editor): move a card earlier or later in the order
   for (const b of $$('[data-move]', grid)) b.addEventListener('click', () => {
@@ -409,7 +408,6 @@ if (grid) {
       const li = document.createElement('li'), name = cardById(id) ? titleOf(cardById(id)) : id, b = document.createElement('button');
       b.type = 'button'; b.className = 'btn'; b.textContent = 'Show'; b.setAttribute('aria-label', `Show ${name}`); b.addEventListener('click', () => showCard(id));
       li.append(Object.assign(document.createElement('span'), { textContent: name }), b); ul.append(li);
-      det.open = true;
     }
     if (!hidden.length) det.open = false;
   }
@@ -538,6 +536,7 @@ if (grid) {
     ({ edit: startEditing, done: stopEditing, undo: () => undoRedo(false), redo: () => undoRedo(true), reset: resetDefault,
       tidy: () => { const next = compact(st.pos); if (!same(next, st.pos)) change({ pos: next, hidden: st.hidden }, 'Gaps closed.'); } })[b.dataset.lay]?.();
   });
+  apply(); let last = bpNow(); addEventListener('resize', () => { if (bpNow() !== last) { last = bpNow(); if (editing) stopEditing(); apply(); } });
 }
 requestAnimationFrame(() => requestAnimationFrame(restoreScroll));
 

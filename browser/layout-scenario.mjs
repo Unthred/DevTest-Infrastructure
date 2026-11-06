@@ -27,7 +27,7 @@ const PAGES = [['overview', '/overview.html'], ['usage', '/usage.html'], ['revie
 const geo = page => page.evaluate(() => {
   const g = document.querySelector('.cards[data-layout]'), gr = g.getBoundingClientRect(), o = {};
   for (const c of g.querySelectorAll(':scope > .card[data-card]')) { const r = c.getBoundingClientRect(); o[c.dataset.card] = { x: r.left - gr.left, y: r.top + scrollY - gr.top - scrollY, w: r.width, h: r.height, shown: r.width > 0 && getComputedStyle(c).display !== 'none' }; }
-  return { cards: o, pageW: document.documentElement.scrollWidth, winW: innerWidth, pitch: (gr.width + 12) / g.__cols };
+  return { cards: o, pageW: document.documentElement.scrollWidth, winW: innerWidth, pitch: (gr.width + 12) / g.__cols, gridW: gr.width };
 });
 const overlapAny = cards => { const v = Object.entries(cards).filter(([, r]) => r.shown); for (let i = 0; i < v.length; i++) for (let j = i + 1; j < v.length; j++) { const a = v[i][1], b = v[j][1]; if (a.x + 1 < b.x + b.w && b.x + 1 < a.x + a.w && a.y + 1 < b.y + b.h && b.y + 1 < a.y + a.h) return `${v[i][0]}/${v[j][0]}`; } return ''; };
 const saved = (page, p) => page.evaluate(k => JSON.parse(localStorage.getItem(k)), `dash.layout.${p}.${bp}`);
@@ -36,21 +36,22 @@ const noHScroll = async (page, label) => { const g = await page.evaluate(() => (
 async function scenario(p, file) {
   const ctx = await newCtx(); await guard(ctx);
   const page = await ctx.newPage(), errors = [];
-  page.on('pageerror', e => errors.push(String(e.message).slice(0, 200)));
+  page.on('pageerror', e => errors.push(String(e.message).slice(0, 200))); page.on('console', m => { if (m.type() === 'error' && !/404/.test(m.text())) errors.push('console: ' + m.text().slice(0, 200)); }); page.on('requestfailed', r => errors.push('failed: ' + r.url().slice(-40)));
   const L = `${p}`;
   await page.goto(url(file), { waitUntil: 'networkidle' });
   await page.evaluate(n => { document.querySelector('.cards[data-layout]').__cols = n; window.__same = 1; }, COLS);
   const layoutName = await page.evaluate(() => document.querySelector('.cards[data-layout]').dataset.layout);
   const before = await geo(page); const ids = Object.keys(before.cards);
   const bar = page.locator('.layoutbar');
-  check(`${L}: the Edit layout control is on the page`, await bar.locator('[data-lay=edit]').isVisible());
+  check(`${L}: the Edit layout control is on the page`, await bar.locator('[data-lay=edit]').isVisible({ timeout: 3000 }), errors.join('; '));
   check(`${L}: not in layout mode the cards have no drag handles or edit chrome`, (await page.locator('.cards.editing').count()) === 0 && (await page.locator('.lay-hide').count()) === 0);
   await noHScroll(page, `${L} default`);
 
   // outside layout mode a drag moves nothing
   const movable = await page.evaluate(() => [...document.querySelectorAll('.cards[data-layout] > .card[data-card]')].filter(c => c.querySelector('[data-move]') && !c.hasAttribute('data-pin')).map(c => c.dataset.card));
   const pinned = await page.evaluate(() => [...document.querySelectorAll('.cards[data-layout] > .card[data-pin]')].map(c => c.dataset.card));
-  const first = movable[0], card = id => page.locator(`#c-${id}`);
+  const narrow = await page.evaluate(() => { const g = document.querySelector('.cards[data-layout]').getBoundingClientRect().width; return [...document.querySelectorAll('.cards[data-layout] > .card[data-card]')].filter(c => c.querySelector('[data-move]') && !c.hasAttribute('data-pin') && c.getBoundingClientRect().width < g * 0.6).map(c => c.dataset.card); });
+  const first = narrow[0] || movable[0], card = id => page.locator(`#c-${id}`);
   await card(first).scrollIntoViewIfNeeded();
   let bb = await card(first).boundingBox();
   await page.mouse.move(bb.x + bb.width / 2, bb.y + 8); await page.mouse.down(); await page.mouse.move(bb.x + bb.width / 2 + 60, bb.y + 90, { steps: 6 }); await page.mouse.up();
@@ -79,7 +80,8 @@ async function scenario(p, file) {
   await page.mouse.up();
   const dragged = (await geo(page));
   const d = dragged.cards[first];
-  check(`${L}: dragging by the card body moved it about 2 columns and 120 px`, Math.abs((d.x - g0.x) - 2 * pitch) <= pitch && Math.abs((d.y - g0.y) - 120) <= 30 && Math.abs(d.w - g0.w) < 2, `${(d.x - g0.x).toFixed(0)},${(d.y - g0.y).toFixed(0)}`);
+  const room = dragged.gridW - (g0.x + g0.w), wantDx = Math.min(2 * pitch, Math.max(0, room));   // a card that already spans the grid cannot move sideways
+  check(`${L}: dragging by the card body moved it about 2 columns (as far as there is room) and 120 px`, Math.abs((d.x - g0.x) - wantDx) <= pitch && Math.abs((d.y - g0.y) - 120) <= 30 && Math.abs(d.w - g0.w) < 2, `${(d.x - g0.x).toFixed(0)},${(d.y - g0.y).toFixed(0)} want ${wantDx.toFixed(0)}`);
   check(`${L}: no card overlaps another after the move`, overlapAny(dragged.cards) === '', overlapAny(dragged.cards));
   check(`${L}: the change is saved immediately as a free layout`, (await saved(page, layoutName))?.v === 2);
   await noHScroll(page, `${L} after drag`);
@@ -88,9 +90,9 @@ async function scenario(p, file) {
   // resize from the south-east corner and from the west edge
   await card(first).scrollIntoViewIfNeeded();
   bb = await card(first).boundingBox(); const g1 = (await geo(page)).cards[first];
-  await page.mouse.move(bb.x + bb.width - 3, bb.y + bb.height - 3); await page.mouse.down(); await page.mouse.move(bb.x + bb.width + 2 * pitch, bb.y + bb.height + 60, { steps: 6 }); await page.mouse.up();
+  await page.mouse.move(bb.x + bb.width - 6, bb.y + bb.height - 6); await page.mouse.down(); await page.mouse.move(bb.x + bb.width + 2 * pitch, bb.y + bb.height + 60, { steps: 6 }); await page.mouse.up();
   const rs = await geo(page); const r1 = rs.cards[first];
-  check(`${L}: dragging the corner makes the card wider and taller (any size, no per-type limit)`, r1.w > g1.w + pitch && r1.h > g1.h + 30 && Math.abs(r1.x - g1.x) < 2, `${g1.w.toFixed(0)}x${g1.h.toFixed(0)} -> ${r1.w.toFixed(0)}x${r1.h.toFixed(0)}`);
+  check(`${L}: dragging the corner makes the card wider (as far as there is room) and taller (any size, no per-type limit)`, (r1.w > g1.w + pitch || g1.x + g1.w >= rs.gridW - pitch) && r1.h > g1.h + 30 && Math.abs(r1.x - g1.x) < 2, `${g1.w.toFixed(0)}x${g1.h.toFixed(0)} -> ${r1.w.toFixed(0)}x${r1.h.toFixed(0)}`);
   check(`${L}: no overlap after the resize`, overlapAny(rs.cards) === '');
   await card(first).scrollIntoViewIfNeeded();
   bb = await card(first).boundingBox();
@@ -98,37 +100,44 @@ async function scenario(p, file) {
   const rw = (await geo(page)).cards[first];
   check(`${L}: dragging the west edge inward narrows it and keeps the east edge`, rw.w < r1.w - pitch && Math.abs((rw.x + rw.w) - (r1.x + r1.w)) < 2);
   // very small: content is reachable, header usable
-  await card(first).scrollIntoViewIfNeeded();
-  bb = await card(first).boundingBox();
-  await page.mouse.move(bb.x + bb.width - 3, bb.y + bb.height - 3); await page.mouse.down(); await page.mouse.move(bb.x + 5, bb.y + 5, { steps: 8 }); await page.mouse.up();
-  const small = await page.evaluate(id => { const c = document.getElementById('c-' + id), r = c.getBoundingClientRect(), h = c.querySelector(':scope > header'), hr = h?.getBoundingClientRect(); return { w: r.width, h: r.height, hdr: h ? hr.height > 10 && hr.top >= r.top - 1 && hr.bottom <= r.bottom + 40 : true }; }, first);
-  check(`${L}: a card can be made small (${small.w.toFixed(0)}x${small.h.toFixed(0)} px) and keeps a usable header`, small.h <= 100 && small.hdr, JSON.stringify(small));
+  const sizes = [];
+  for (let i = 0; i < 4; i++) {   // shrink with the corner until the card is as small as it goes
+    await card(first).evaluate(c => c.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    bb = await card(first).boundingBox(); sizes.push(`${bb.width.toFixed(0)}x${bb.height.toFixed(0)}@${bb.x.toFixed(0)},${bb.y.toFixed(0)}`); if (bb.height < 90 && bb.width < 200) break;
+    sizes.push(await page.evaluate(([x, y, first]) => { const e = document.elementFromPoint(x, y); return `at(${x.toFixed(0)},${y.toFixed(0)})=${document.elementsFromPoint(x, y).map(n => n.id || n.className || n.tagName).join(">").slice(0, 200)} card=${first}`; }, [bb.x + bb.width - 6, bb.y + bb.height - 6, first]));
+    await page.mouse.move(bb.x + bb.width - 6, bb.y + bb.height - 6); await page.mouse.down(); await page.mouse.move(Math.max(bb.x + 5, 2), Math.max(bb.y + 5, 60), { steps: 8 }); await page.mouse.up();
+  }
+  const small = await page.evaluate(id => { const c = document.getElementById('c-' + id), r = c.getBoundingClientRect(), h = c.querySelector(':scope > header'), hr = h?.getBoundingClientRect(); return { w: r.width, h: r.height, hdr: (() => { const t = c.querySelector(':scope > header h2'); if (!t) return true; const tr = t.getBoundingClientRect(); return tr.height > 8 && tr.top >= r.top - 1 && tr.top + 16 <= r.bottom + 1; })() }; }, first);
+  check(`${L}: a card can be made small (${small.w.toFixed(0)}x${small.h.toFixed(0)} px) and the start of its title stays visible`, small.h <= 100 && small.hdr, JSON.stringify(small) + ' ' + sizes.join(' '));
   await page.locator('[data-lay=done]').click();
   const reach = await page.evaluate(() => [...document.querySelectorAll('.cards.free > .card')].filter(c => c.scrollHeight > c.clientHeight + 2 && !['auto', 'scroll'].includes(getComputedStyle(c).overflowY)).map(c => c.dataset.card));
   check(`${L}: every card whose content does not fit can scroll (nothing is cut off with no way to reach it)`, reach.length === 0, reach.join(','));
   await bar.locator('[data-lay=edit]').click();
 
-  // undo / redo
-  const beforeUndo = (await geo(page)).cards[first];
+  // keyboard, undo, redo
+  await card(first).focus();
+  const u0 = (await geo(page)).cards[first];
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown');
+  const u1 = (await geo(page)).cards[first];
+  check(`${L}: the keyboard moves a focused card (Arrow Down twice = 2 rows)`, Math.abs((u1.y - u0.y) - 48) < 3, `${(u1.y - u0.y).toFixed(1)}`);
   await page.keyboard.press('Control+z');
-  const afterUndo = (await geo(page)).cards[first];
-  check(`${L}: Ctrl+Z undoes the last change`, Math.abs(afterUndo.w - beforeUndo.w) > 5 || Math.abs(afterUndo.h - beforeUndo.h) > 5);
+  const u2 = (await geo(page)).cards[first];
+  check(`${L}: Ctrl+Z undoes the last change (one row back)`, Math.abs((u2.y - u0.y) - 24) < 3, `${(u2.y - u0.y).toFixed(1)}`);
   await bar.locator('[data-lay=redo]').click();
-  const afterRedo = (await geo(page)).cards[first];
-  check(`${L}: Redo restores it`, Math.abs(afterRedo.w - beforeUndo.w) < 2 && Math.abs(afterRedo.h - beforeUndo.h) < 2);
-
+  const u3 = (await geo(page)).cards[first];
+  check(`${L}: Redo restores it`, Math.abs(u3.y - u1.y) < 2);
   // keyboard
   await card(first).focus();
   const k0 = (await geo(page)).cards[first];
   await page.keyboard.press('ArrowRight');
   const k1 = (await geo(page)).cards[first];
-  check(`${L}: the keyboard moves a focused card one column`, Math.abs((k1.x - k0.x) - pitch) < 3 || k0.x + k0.w >= (await geo(page)).cards[first].x + k0.w, `${(k1.x - k0.x).toFixed(1)} vs ${pitch.toFixed(1)}`);
+  check(`${L}: Arrow Right moves a focused card one column`, Math.abs((k1.x - k0.x) - pitch) < 3 || (k1.x + k1.w >= (await geo(page)).pageW - 20), `${(k1.x - k0.x).toFixed(1)} vs ${pitch.toFixed(1)}`);
   await page.keyboard.press('Shift+ArrowDown');
   const k2 = (await geo(page)).cards[first];
   check(`${L}: Shift with an arrow resizes`, k2.h > k1.h + 10, `${k1.h.toFixed(0)} -> ${k2.h.toFixed(0)}`);
 
   // hide and show
-  const hideId = movable[1] || first;
+  const hideId = narrow[1] || movable.find(i => i !== first) || first;
   await card(hideId).scrollIntoViewIfNeeded();
   await card(hideId).locator('.lay-hide').click();
   check(`${L}: Hide removes the card`, !(await card(hideId).isVisible()));
@@ -149,7 +158,7 @@ async function scenario(p, file) {
   // bring it back from the list
   check(`${L}: the hidden list is available outside layout mode`, await bar.locator('.lay-hiddens').isVisible());
   await bar.locator('.lay-hiddens summary').click();
-  await bar.locator('.lay-hiddens button').first().click();
+  await bar.locator('.lay-hiddens button').first().click({ timeout: 5000 });
   check(`${L}: Show brings the card back, not overlapping`, (await card(hideId).isVisible()) && overlapAny((await geo(page)).cards) === '');
 
   // tidy
@@ -205,8 +214,9 @@ async function refreshDuringDrag(file) {
   await page.goto(url(file), { waitUntil: 'networkidle' });   // this copy refreshes every 2 s
   await page.evaluate(() => { window.__same = 1; });
   await page.locator('[data-lay=edit]').click();
-  const id = await page.evaluate(() => [...document.querySelectorAll('.cards[data-layout] > .card[data-card]')].find(c => c.querySelector('[data-move]') && !c.hasAttribute('data-pin')).dataset.card);
-  const bb = await page.locator(`#c-${id}`).boundingBox();
+  const id = await page.evaluate(() => { const g = document.querySelector('.cards[data-layout]').getBoundingClientRect().width; return [...document.querySelectorAll('.cards[data-layout] > .card[data-card]')].find(c => c.querySelector('[data-move]') && !c.hasAttribute('data-pin') && c.getBoundingClientRect().width < g * 0.6).dataset.card; });
+  await page.locator(`#c-${id}`).evaluate(c => c.scrollIntoView({ block: 'start', behavior: 'instant' })); await page.evaluate(() => scrollBy(0, -100));
+  const bb = await page.locator(`#c-${id}`).boundingBox(); bb.y = Math.max(bb.y, 70); bb.height = Math.min(bb.height, 200);
   await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2); await page.mouse.down(); await page.mouse.move(bb.x + bb.width / 2 + 40, bb.y + bb.height / 2 + 40, { steps: 4 });
   await page.waitForTimeout(4500);   // two refresh ticks pass while the button is held
   check('a refresh timer firing during a drag does not reload the page', (await page.evaluate(() => window.__same)) === 1);
@@ -244,7 +254,7 @@ try {
   await legacy('overview', '/overview.html'); await legacy('usage', '/usage.html');
   if (bp === 'desktop') await refreshDuringDrag('/overview-fast.html'); else await refreshDuringDrag('/overview-fast.html');
   if (bp === 'desktop') await phone();
-} finally { await browser.close(); server.close(); }
+} catch (e) { check(`the scenario ran to the end (${String(e.stack).slice(0, 600)})`, false); } finally { await browser.close(); server.close(); }
 const result = { profile, ok: checks.every(c => c.ok), failed: checks.filter(c => !c.ok), checks };
 fs.writeFileSync(path.join(out, `${name}.json`), JSON.stringify(result, null, 2));
 console.log(JSON.stringify({ profile, ok: result.ok, passed: checks.filter(c => c.ok).length, failed: result.failed }, null, 1));

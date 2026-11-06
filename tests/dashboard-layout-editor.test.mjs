@@ -143,8 +143,12 @@ test('fromBoxes converts a flow layout (an old saved arrangement, as drawn) into
     { id: 'c', left: 0, top: 152, width: wpx(12), height: 300 }
   ];
   const pos = fromBoxes(boxes, { colPitch, cols: 24 });
-  assert.deepEqual(pos.a, R(0, 0, 12, 7), '140 px needs 7 rows (6 would be 132 px)'); assert.deepEqual(pos.b, R(12, 0, 12, 7)); assert.deepEqual(pos.c, R(0, 7, 24, 13), 'c was drawn at row 6.3; it cannot overlap a, so it sits just below');
-  assert.ok(pos.c.h * ROW_PITCH - ROW_GAP >= 300, 'never shorter than it looked'); assert.ok(noOverlap(pos));
+  assert.deepEqual(pos.a, R(0, 0, 12, 7), '140 px snaps to 7 rows (156 px)'); assert.deepEqual(pos.b, R(12, 0, 12, 7)); assert.deepEqual(pos.c, R(0, 7, 24, 13), 'c was drawn at 152 px, row 6.3, which snaps to 7: right under a, as before');
+  assert.ok(pos.c.h * ROW_PITCH - ROW_GAP >= 290, 'about as tall as it looked'); assert.ok(noOverlap(pos));
+  // a column of cards that touched in the flow still touch, and the error does not add up down the column
+  const col = fromBoxes(Array.from({ length: 8 }, (_, i) => ({ id: 'c' + i, left: 0, top: i * (141 + 12), width: 400, height: 141 })), { colPitch, cols: 24 });
+  for (let i = 1; i < 8; i++) assert.equal(col['c' + i].y, col['c' + (i - 1)].y + col['c' + (i - 1)].h, 'touching');
+  assert.ok(Math.abs(col.c7.y * ROW_PITCH - 7 * 153) <= 20, 'no drift down the column ' + col.c7.y);
   // tablet: 12 columns, the same widths in cells
   const tp = fromBoxes([{ id: 'a', left: 0, top: 0, width: 3 * 2 * 55 - 12, height: 100 }, { id: 'b', left: 6 * 55, top: 0, width: 3 * 2 * 55 - 12, height: 100 }], { colPitch: 55, cols: 12 });
   assert.deepEqual([tp.a.x, tp.a.w, tp.b.x, tp.b.w], [0, 6, 6, 6]);
@@ -184,7 +188,7 @@ test('the stylesheet and grid.mjs agree on the grid; desktop 24 columns, tablet 
 });
 test('free layout content adapts and is never cut off: cards scroll, charts and KPI tiles scale', () => {
   assert.match(css, /\.cards\.free>\.card\{[^}]*overflow:auto/, 'a small card scrolls its content');
-  assert.match(css, /\.cards\.free>\.card:not\(\.kpi\)>header\{position:sticky/, 'the header stays reachable');
+  assert.doesNotMatch(css, /header\{position:sticky/, 'a sticky header could cover a whole small card');
   assert.match(css, /\.cards\.free>\.card figure\.chart svg\{flex:1 1 0;min-height:0;height:100%\}/, 'a chart fills the card height');
   assert.match(css, /\.cards\.free \.dl-scroll\{max-height:none/, 'a list uses the card scroll, not a second one');
   assert.match(css, /@container \(max-height:100px\)/); assert.match(css, /\.cards\.free>\.card\.kpi\{[^}]*overflow:auto/);

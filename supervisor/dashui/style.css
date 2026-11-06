@@ -363,6 +363,7 @@ html:not(.js) .dl-bar{display:none}
 .dl-none{margin:var(--sp2) 0}
 .dl-foot{margin-top:var(--sp2);display:flex;flex-wrap:wrap;gap:var(--sp2);min-height:1.4em}
 /* a card the viewer resized, or expanded, gives its list the extra room (the list then scrolls inside the card's own height) */
+.card[style*="--h:"] .dlist{--dl-max:max(8rem,calc(var(--h) - 11rem))}   /* an old saved height (flow layout) gives the list the extra room */
 .card.expanded .dlist{--dl-max:calc(94vh - 13rem)}
 .card.expanded .dlist.compact{--dl-max:calc(94vh - 13rem)}
 @media(max-width:639px){
@@ -381,8 +382,6 @@ html:not(.js) .dl-bar{display:none}
   .cards.free>.card.measuring{align-self:start;grid-row:auto;overflow:visible}
   .cards.free>.card.collapsed{align-self:start;overflow:hidden}
   .cards.free>.card.expanded{grid-column:auto;grid-row:auto;overflow:auto}
-  /* the header stays reachable while a small card scrolls its content */
-  .cards.free>.card:not(.kpi)>header{position:sticky;top:calc(-1 * var(--sp4));z-index:1;background:var(--surface);margin-top:calc(-1 * var(--sp4));padding-top:var(--sp4);margin-bottom:var(--sp2)}
   /* content adapts: lists and tables scroll with the card, charts scale to the card, KPI tiles reflow */
   .cards.free .dlist{--dl-max:none}
   .cards.free .dl-scroll{max-height:none;overflow:visible}
@@ -422,3 +421,5 @@ html:not(.js) .dl-bar{display:none}
 .lay-ghost{grid-column:calc(var(--cx) + 1) / span var(--cw);grid-row:calc(var(--cy) + 1) / span var(--ch);border:2px dashed var(--link);background:color-mix(in srgb,var(--link) 14%,transparent);border-radius:var(--r);pointer-events:none;z-index:1}
 body.layout-editing{overscroll-behavior:contain}
 @media(prefers-reduced-motion:no-preference){.cards.editing>.card{transition:none}}
+.lay-live{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.cards.editing .tools{visibility:hidden}

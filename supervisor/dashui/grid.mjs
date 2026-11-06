@@ -122,13 +122,17 @@ export const isOldLayout = saved => isObj(saved) && saved.v !== 2 && (Array.isAr
 export const toSaved = (st, collapsed = []) => ({ v: 2, pos: st.pos, hidden: st.hidden, collapsed });
 
 // From the cards as currently drawn (any old order/span/h layout included) to cells. `boxes` are { id, left, top, width, height }
-// in px relative to the grid; colPitch is one column plus its gap. Heights round up so a card is never made shorter than it looked.
+// in px relative to the grid; colPitch is one column plus its gap. Both edges of a card snap with the same rule (a little upward, so a
+// card is rarely cut short and two cards that touched in the flow still touch), which keeps the error to under one row for every
+// card and stops it adding up down a column.
+const snapRow = px => Math.floor(px / ROW_PITCH + 0.7);
 export function fromBoxes(boxes, { colPitch, cols, gap = ROW_GAP }) {
   const pos = {};
   if (!(colPitch > 0)) return pos;
   for (const b of boxes) {
     if (![b.left, b.top, b.width, b.height].every(Number.isFinite)) continue;
-    const r = cleanRect({ x: Math.round(b.left / colPitch), y: Math.round(b.top / ROW_PITCH), w: Math.round((b.width + gap) / colPitch), h: Math.ceil((b.height + ROW_GAP) / ROW_PITCH - 0.05) }, cols);
+    const y = snapRow(b.top), end = snapRow(b.top + b.height + ROW_GAP);
+    const r = cleanRect({ x: Math.round(b.left / colPitch), y, w: Math.round((b.width + gap) / colPitch), h: end - y }, cols);
     if (r) pos[b.id] = r;
   }
   return settleAll(pos);
