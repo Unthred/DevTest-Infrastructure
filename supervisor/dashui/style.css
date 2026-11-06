@@ -61,18 +61,7 @@ main{width:100%;max-width:1500px;margin:0 auto;padding:var(--sp4)}   /* width:10
 .tbtn{background:none;border:1px solid transparent;color:var(--mut);border-radius:var(--r-sm);min-width:32px;min-height:32px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .tbtn:hover{border-color:var(--line);color:var(--fg)}
 .card.dragging{opacity:.5}.card.dropping{outline:2px dashed var(--link)}
-/* resize handles on every edge and corner (issue #58); the SE corner also carries the visible grip and the keyboard slider */
-.resize{position:absolute;touch-action:none;z-index:2}
-.rz-n,.rz-s{left:12px;right:12px;height:8px;cursor:ns-resize}.rz-e,.rz-w{top:12px;bottom:12px;width:8px;cursor:ew-resize}
-.rz-n{top:-4px}.rz-s{bottom:-4px}.rz-e{right:-4px}.rz-w{left:-4px}
-.rz-ne,.rz-nw,.rz-se,.rz-sw{width:16px;height:16px}
-.rz-ne{top:-4px;right:-4px;cursor:nesw-resize}.rz-sw{bottom:-4px;left:-4px;cursor:nesw-resize}.rz-nw{top:-4px;left:-4px;cursor:nwse-resize}.rz-se{bottom:-4px;right:-4px;cursor:nwse-resize}
-.rz-key{right:2px;bottom:2px;width:24px;height:24px;align-items:center;justify-content:center;cursor:nwse-resize;color:var(--mut);display:inline-flex}
-.card.resizing .resize.active{background:color-mix(in srgb,var(--link) 35%,transparent);border-radius:4px}
-@media(min-width:1100px){.resize:hover:not(.rz-key){background:color-mix(in srgb,var(--link) 35%,transparent);border-radius:4px}}
-.card.resizing{user-select:none;outline:2px solid var(--link);z-index:3}
 body.resizing{user-select:none;cursor:grabbing}
-.card.resizing .scroll,.card.resizing figure{pointer-events:none}
 .link-card{color:inherit;text-decoration:none}
 .panel-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(0,1fr);gap:var(--sp2)}
 .panel-list li{padding:var(--sp2) var(--sp3);border-radius:var(--r-sm);background:var(--surface2);border-left:4px solid var(--line)}
@@ -140,7 +129,7 @@ dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px var(--sp4);marg
 @media(max-width:639px){
   main{padding:var(--sp3);padding-bottom:calc(var(--nav-h) + var(--sp5))}
   .cards{grid-template-columns:1fr}.card{grid-column:1/-1}
-  .resize,.wide-only{display:none!important}
+  .wide-only,.layoutbar{display:none!important}
   .nav{position:fixed;bottom:0;left:0;right:0;z-index:30;justify-content:space-between;padding:0;border-top:1px solid var(--line);border-bottom:0;box-shadow:0 -2px 8px rgba(0,0,0,.1)}
   .nav a{flex:1 0 auto;flex-direction:column;justify-content:center;gap:2px;padding:0 var(--sp1);font-size:11px;min-width:44px;min-height:var(--nav-h);border-bottom:0;border-top:3px solid transparent}
   .nav a[aria-current=page]{border-top-color:var(--link)}
@@ -374,7 +363,7 @@ html:not(.js) .dl-bar{display:none}
 .dl-none{margin:var(--sp2) 0}
 .dl-foot{margin-top:var(--sp2);display:flex;flex-wrap:wrap;gap:var(--sp2);min-height:1.4em}
 /* a card the viewer resized, or expanded, gives its list the extra room (the list then scrolls inside the card's own height) */
-.card[style*="--h:"] .dlist{--dl-max:max(8rem,calc(var(--h) - 11rem))}
+.card[style*="--h:"] .dlist{--dl-max:max(8rem,calc(var(--h) - 11rem))}   /* an old saved height (flow layout) gives the list the extra room */
 .card.expanded .dlist{--dl-max:calc(94vh - 13rem)}
 .card.expanded .dlist.compact{--dl-max:calc(94vh - 13rem)}
 @media(max-width:639px){
@@ -382,3 +371,55 @@ html:not(.js) .dl-bar{display:none}
   .dlist.compact{--dl-max:clamp(5rem,20vh,9rem)}
   .dl-bar input[type=search],.dl-bar select,.dl-dir,.dl-clear{min-height:44px}
 }
+
+/* ---- free card layout (issue: dashboard layout editor). Desktop 24 columns, tablet 12; rows of var(--row) with var(--row-gap) between,
+   so a card h rows tall is h*(row+gap)-gap high. grid.mjs holds the same numbers (a test compares them). A card's place is --cx/--cy,
+   its size --cw/--ch (cells). Without a saved layout the grid keeps flowing as before; .free is added when one is saved or being edited. */
+.cards{--row:12px;--row-gap:12px}
+@media(min-width:640px){
+  .cards.free{grid-template-columns:repeat(12,minmax(0,1fr));grid-auto-rows:var(--row);row-gap:var(--row-gap);grid-auto-flow:row;align-items:stretch}
+  .cards.free>.card{grid-column:calc(var(--cx) + 1) / span var(--cw);grid-row:calc(var(--cy) + 1) / span var(--ch);min-height:0;overflow:auto;align-self:stretch}
+  .cards.free>.card.measuring{align-self:start;grid-row:auto;overflow:visible}
+  .cards.free>.card.collapsed{align-self:start;overflow:hidden}
+  .cards.free>.card.expanded{grid-column:auto;grid-row:auto;overflow:auto}
+  /* content adapts: lists and tables scroll with the card, charts scale to the card, KPI tiles reflow */
+  .cards.free .dlist{--dl-max:none}
+  .cards.free .dl-scroll{max-height:none;overflow:visible}
+  .cards.free>.card figure.chart{min-height:3rem}
+  .cards.free>.card figure.chart svg{flex:1 1 0;min-height:0;height:100%}
+  .cards.free>.card.kpi{container-type:size;display:flex;flex-direction:column;overflow:auto;padding:var(--sp2) var(--sp3)}
+  .cards.free>.card.kpi .spark-slot{flex:1;min-height:0;overflow:hidden}
+  .cards.free>.card.kpi svg.spark{height:100%;min-height:8px}
+  @container (max-height:100px){.spark-slot{display:none}}
+  @container (max-width:130px){.kpi .v{font-size:var(--fs-lg)}}
+}
+@media(min-width:640px) and (max-width:1099px){.cards.free{grid-template-columns:repeat(12,minmax(0,1fr))}}
+@media(min-width:1100px){.cards.free{grid-template-columns:repeat(24,minmax(0,1fr))}}
+.cards.free>.card.lay-hidden,.cards>.card.lay-hidden{display:none!important}
+/* old drag handle, resize and move controls: only the phone reorders with buttons; the rest is the layout editor */
+[data-handle]{display:none}
+@media(min-width:640px){[data-move]{display:none}}
+/* the layout bar */
+.layoutbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2);margin-bottom:var(--sp3)}
+.layoutbar .lay-spacer{flex:1}
+.layoutbar .lay-hint{color:var(--mut);font-size:var(--fs-sm)}
+.layoutbar details{position:relative}
+.layoutbar summary{cursor:pointer;list-style:none;padding:4px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);min-height:32px;display:inline-flex;align-items:center}
+.layoutbar details[open]>ul{position:absolute;z-index:40;margin:var(--sp1) 0 0;padding:var(--sp2);list-style:none;min-width:16rem;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-lg)}
+.layoutbar details li{display:flex;align-items:center;justify-content:space-between;gap:var(--sp3);padding:var(--sp1) 0}
+.layoutbar .btn[aria-pressed=true]{border-color:var(--link);color:var(--link)}
+/* layout mode: the whole card is a handle, its contents are inert, the grid is drawn */
+.cards.editing{position:relative;background-image:linear-gradient(to right,color-mix(in srgb,var(--line) 70%,transparent) 1px,transparent 1px),linear-gradient(to bottom,color-mix(in srgb,var(--line) 70%,transparent) 1px,transparent 1px);background-size:calc((100% + var(--sp3)) / var(--cols,24)) calc(var(--row) + var(--row-gap));padding-bottom:calc(10 * (var(--row) + var(--row-gap)));touch-action:none}
+.cards.editing>.card{cursor:grab;user-select:none;overflow:hidden;touch-action:none;outline:1px dashed var(--mut);outline-offset:-1px}
+.cards.editing>.card>*{pointer-events:none}
+.cards.editing>.card>.lay-hide{pointer-events:auto}
+.cards.editing>.card:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.cards.editing>.card.lay-active{z-index:5;box-shadow:var(--shadow-lg);outline:2px solid var(--link);cursor:grabbing;opacity:.92}
+.cards.editing [data-handle]{display:inline-flex}
+.cards.editing a.card{pointer-events:auto}
+.lay-hide{position:absolute;top:var(--sp2);right:var(--sp2);z-index:3;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);color:var(--fg);padding:2px 8px;font:inherit;font-size:var(--fs-sm);cursor:pointer;min-height:28px}
+.lay-ghost{grid-column:calc(var(--cx) + 1) / span var(--cw);grid-row:calc(var(--cy) + 1) / span var(--ch);border:2px dashed var(--link);background:color-mix(in srgb,var(--link) 14%,transparent);border-radius:var(--r);pointer-events:none;z-index:1}
+body.layout-editing{overscroll-behavior:contain}
+@media(prefers-reduced-motion:no-preference){.cards.editing>.card{transition:none}}
+.lay-live{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.cards.editing .tools{visibility:hidden}

@@ -142,10 +142,10 @@ test('every card has a chevron (hidden until the script runs, labelled, aria-exp
   assert.match(appJs, /closest\?\.\('\[data-collapse\]'\)/); assert.match(appJs, /setAttribute\('aria-expanded', String\(!on\)\)/);
   assert.match(css, /\.card\.collapsed>\*:not\(header\)\{display:none!important\}/); assert.match(css, /\.card\.collapsed\{min-height:0\}/);
 });
-test('"Reset layout" clears the collapsed cards too, and a pill that targets a collapsed card opens it', () => {
-  assert.match(appJs, /initResetLayout\(\{ document, store, layoutKey: key, legendKey/);
+test('a pill that targets a collapsed card opens it, and the layout editor keeps the collapsed state', () => {
   assert.match(appJs, /function revealTarget\(\)[\s\S]*?closest\?\.\('\.card\.collapsed'\)[\s\S]*?toggleCard\(c\)/); assert.match(appJs, /addEventListener\('hashchange', revealTarget\)/);
-  assert.match(appJs, /save = \(\) => store\.set\(key\(\), \{ \.\.\.lay, collapsed: readCollapsed\(\) \}\)/, 'moving or resizing a card does not lose the collapsed state');
+  assert.match(appJs, /saveFlow = \(\) => store\.set\(key\(\), \{ \.\.\.lay, collapsed: readCollapsed\(\) \}\)/, 'reordering on a phone does not lose the collapsed state');
+  assert.match(appJs, /persist = \(\) => \{ if \(st\) store\.set\(key\(\), toSaved\(st, readCollapsed\(\)\)\); \}/, 'moving or resizing a card does not lose the collapsed state');
 });
 
 // ---- 3. back to top
@@ -230,7 +230,7 @@ test('the periodic refresh is script-driven so it keeps an in-place table addres
   const html = (await (await serve(t)).get('/work')).body;
   assert.match(html, /<noscript><meta http-equiv="refresh" content="60"><\/noscript>/);
   assert.doesNotMatch(html.replace(/<noscript>.*?<\/noscript>/s, ''), /http-equiv="refresh"/);
-  assert.match(appJs, /setInterval\(\(\) => \{ saveScroll\(\); location\.reload\(\); \}/);
+  assert.match(appJs, /setInterval\(\(\) => \{ if \(document\.body\.classList\.contains\('layout-editing'\)\) return; saveScroll\(\); location\.reload\(\); \}/);
   assert.doesNotMatch(appJs, /\bscrollKey\b/);   // the key is computed from the current address at save and restore time
   assert.match(appJs, /scrollKeyNow\(\)/);
 });

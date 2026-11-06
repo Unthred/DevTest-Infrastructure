@@ -1,4 +1,4 @@
-// Issue #159: redaction rules, resizeBox guards, the dotnet filter, local-date Codex scan, early-window projection.
+// Issue #159: redaction rules, resizeRect guards, the dotnet filter, local-date Codex scan, early-window projection.
 // Secret-shaped fixtures are assembled at run time so no scanner sees a literal.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { redact } from '../supervisor/redact.mjs';
 import { scrub } from '../supervisor/suphealth.mjs';
-import { resizeBox } from '../supervisor/dashui/logic.mjs';
+import { resizeRect } from '../supervisor/dashui/grid.mjs';
 import { buildCommand, DotnetCommandError } from '../dotnet/commands.mjs';
 import { assessAgent, HOUR } from '../supervisor/budget.mjs';
 import { codexAllowanceProbe } from '../supervisor/allowance.mjs';
@@ -46,11 +46,10 @@ test('scrub hides IPv4 and IPv6 addresses but not a 5-part dotted number', () =>
   assert.equal(scrub('version 1.2.3.4.5 built'), 'version 1.2.3.4.5 built');
 });
 
-test('resizeBox ignores a NaN delta and a zero column width', () => {
-  const base = { edge: 'e', dy: 0, span: 4, h: 120, colW: 50, type: 'card' };
-  assert.equal(resizeBox({ ...base, dx: NaN }).span, resizeBox({ ...base, dx: 0 }).span);
-  assert.ok(Number.isFinite(resizeBox({ ...base, dx: 100, colW: 0 }).span));
-  assert.ok(Number.isFinite(resizeBox({ ...base, dx: 0, dy: NaN, edge: 's' }).span));
+test('resizeRect ignores a NaN delta', () => {
+  const r = { x: 2, y: 2, w: 6, h: 8 };
+  assert.deepEqual(resizeRect(r, 'e', NaN, 0, 24), r);
+  assert.deepEqual(resizeRect(r, 'se', Infinity, NaN, 24), r);
 });
 
 test('dotnet test filter may not start with a dash', () => {

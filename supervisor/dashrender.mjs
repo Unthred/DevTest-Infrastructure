@@ -1,7 +1,8 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
-import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, limitsOf, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
+import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
+import { PINNED } from './dashui/grid.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
 import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
@@ -251,13 +252,11 @@ const allResets = (view, range) => Object.values(view.graphs.allowance).flatMap(
 const allExpected = view => Object.entries(view.graphs.allowance).flatMap(([agent, g]) => (g.expected || []).map(r => ({ ...r, window: `${agent} ${r.window}` })));
 
 // ---- card shell
-const EDGES = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'];
 function card({ id, title, span = 6, body, href, tools = '', cls = '', movable = true, expandable = false, type = 'info' }) {
   if (expandable) { type = 'chart'; cls = `${cls} chart-card`; }
-  const lim = limitsOf(type);
-  const handles = movable ? EDGES.filter(e => !(lim.vlock && /[ns]/.test(e) && e.length === 1)).map(e => `<span class="resize wide-only rz-${e}" data-edge="${e}" aria-hidden="true"></span>`).join('') : '';
-  return `<section class="card ${cls}" data-card="${esc(id)}" data-type="${esc(type)}" data-span="${span}" style="--span:${span}" id="c-${esc(id)}" aria-labelledby="h-${esc(id)}"><header>${movable ? `<span class="tbtn" data-handle title="Drag to move" aria-hidden="true">${icon('drag')}</span>` : ''}<h2 id="h-${esc(id)}">${esc(title)}</h2>
-<span class="tools">${tools}<button class="tbtn" type="button" data-collapse aria-expanded="true" aria-label="Collapse ${esc(title)}" title="Collapse or expand (or double-click the header)" hidden>${icon('down')}</button>${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}${movable ? `${handles}<span class="resize wide-only rz-key" tabindex="0" role="slider" aria-label="Resize ${esc(title)} (arrow keys: left and right for width${lim.vlock ? '' : ', up and down for height'})" aria-valuemin="${lim.minSpan}" aria-valuemax="${lim.maxSpan}" aria-valuenow="${span}">${icon('resize')}</span>` : ''}</section>`;
+  const pin = PINNED.includes(id) || /\bhc-action\b/.test(cls);   // a card that needs action can never be hidden in layout mode
+  return `<section class="card ${cls}" data-card="${esc(id)}" data-type="${esc(type)}" data-span="${span}"${pin ? ' data-pin="1"' : ''} style="--span:${span}" id="c-${esc(id)}" aria-labelledby="h-${esc(id)}"><header>${movable ? `<span class="tbtn" data-handle title="Drag to move" aria-hidden="true">${icon('drag')}</span>` : ''}<h2 id="h-${esc(id)}">${esc(title)}</h2>
+<span class="tools">${tools}<button class="tbtn" type="button" data-collapse aria-expanded="true" aria-label="Collapse ${esc(title)}" title="Collapse or expand (or double-click the header)" hidden>${icon('down')}</button>${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}</section>`;
 }
 const grid = (layout, cards, cls = '') => `<div class="cards ${cls}" data-layout="${esc(layout)}">${cards}</div>`;
 const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div><div class="spark-slot">${spark}</div></a>`;
@@ -470,7 +469,7 @@ function overview(view, query) {
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
-  return { title: 'Overview', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('overview', watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
+  return { title: 'Overview', body: `${grid('overview', watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
 }
 
 function agentsPage(view, query, path) {
@@ -663,7 +662,7 @@ function usagePage(view, query, path) {
     { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
   const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
     emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
-  return { title: 'Usage & cost', body: `<div class="toolrow"><button class="btn" type="button" data-reset-layout>Reset layout</button></div>${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
+  return { title: 'Usage & cost', body: `${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
 }
 function reviewsPage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;

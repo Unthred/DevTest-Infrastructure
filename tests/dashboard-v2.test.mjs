@@ -208,7 +208,7 @@ test('Overview: four labelled panels, KPI tiles and charts all link to detail pa
   for (const h of ['>Now<', '>Next<', '>Needs you', '>Warnings']) assert.ok(body.includes(h), h);
   assert.match(body, /<body class="overview">/);
   for (const href of ['/agents', '/work', '/reviews', '/usage', '/system', '/activity']) assert.ok(body.includes(`href="${href}"`), href);
-  assert.match(body, /data-reset-layout/); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 3, 'the early dock script, the early layout script and the module');
+  assert.doesNotMatch(body, /data-reset-layout/, 'Reset to default is in the layout bar the script adds'); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 3, 'the early dock script, the early layout script and the module');
   assert.match(body, /data-tick-state="(scheduled|starting|overdue)"/);
 });
 test('Needs you lists every needs-homeowner item with what, why, the decision needed, a link and the exact command; Warnings holds the rest', async t => {
@@ -294,7 +294,7 @@ test('phone design: tables carry labels for card layout, tap-to-expand rows, bot
   assert.match((await s.get('/work')).body, /<tr tabindex="0">/);
   const css = (await s.get('/static/style.css')).body;
   assert.match(css, /@media\(max-width:639px\)[\s\S]*\.nav\{position:fixed;bottom:0/); assert.match(css, /min-height:44px;min-width:44px/); assert.match(css, /td::before\{content:attr\(data-label\)/);
-  assert.match(css, /\.resize,\.wide-only\{display:none!important\}/, 'no free resizing on a phone');
+  assert.match(css, /\.wide-only,\.layoutbar\{display:none!important\}/, 'no layout editor on a phone');
   for (const bp of ['@media(min-width:1100px)', '@media(max-width:1099px)', '@media(max-width:639px)', 'prefers-reduced-motion:reduce', 'prefers-color-scheme:dark', ':root[data-theme=dark]', ':focus-visible']) assert.ok(css.includes(bp), bp);
   assert.doesNotMatch(css, /@import|url\(|https?:\/\//);
 });
@@ -502,29 +502,13 @@ test('legend (issue #190): stored state is re-applied, and a tampered list canno
   const bad = legendPage({ allowance: ['claude', 'codex', 'codex', 'reset'] }); initLegends({ document: bad.doc, store: bad.store, legendKey: 'k' });
   assert.ok(!bad.shape('codex').classes.has('off') && bad.shape('claude').classes.has('off'), 'duplicate-padded list still leaves a data series visible');
 });
-test('legend (issue #190): Reset layout exists on Overview and Usage, markers are flagged in the rendered legend', async () => {
+test('legend (issue #190): markers are flagged in the rendered legend', async () => {
   const src = fs.readFileSync(new URL('../supervisor/dashrender.mjs', import.meta.url), 'utf8');
-  assert.equal((src.match(/data-reset-layout/g) || []).length, 2, 'both chart pages offer Reset layout');
   assert.match(src, /data-marker="true"/); assert.equal((src.match(/marker: true/g) || []).length, 2);
 });
-test('legend (issue #190): clicking Reset layout clears the layout and legend state on /usage and /, then reloads', async () => {
-  const { initLegends, initResetLayout } = await import('../supervisor/dashui/legend.mjs');
-  for (const [path, layout] of [['/usage', 'dash.layout.usage.desktop'], ['/', 'dash.layout.overview.desktop']]) {
-    const pg = legendPage(); const legendKey = 'dash.legend.' + path;
-    const reset = fakeEl('button', { 'data-reset-layout': '' }); pg.doc.append(reset);
-    initLegends({ document: pg.doc, store: pg.store, legendKey });
-    pg.btn('claude').click(); pg.store.set(layout, { a: 1 }); pg.store.set('dash.layout.other', { b: 1 });
-    assert.ok(pg.mem.has(legendKey) && pg.mem.has(layout));
-    let reloads = 0; initResetLayout({ document: pg.doc, store: pg.store, layoutKey: () => layout, legendKey, reload: () => reloads++ });
-    reset.click();
-    assert.equal(pg.mem.has(legendKey), false, path + ': legend state cleared'); assert.equal(pg.mem.has(layout), false, path + ': layout cleared');
-    assert.ok(pg.mem.has('dash.layout.other'), 'unrelated keys untouched'); assert.equal(reloads, 1);
-  }
-});
-test('legend (issue #160): app.js uses the shared handler, never hides the legend itself, persists safely and clears on Reset layout', () => {
+test('legend (issue #160): app.js uses the shared handler, never hides the legend itself, persists safely', () => {
   const js = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
   assert.match(js, /initLegends\(\{ document, store, legendKey \}\)/, 'app.js delegates to the tested legend module');
-  assert.match(js, /initResetLayout\(\{ document, store, layoutKey: key, legendKey, reload/, 'app.js delegates Reset layout to the tested module');
   assert.match(js, /try \{ return JSON\.parse\(localStorage/, 'storage access is wrapped in try/catch');
 });
 

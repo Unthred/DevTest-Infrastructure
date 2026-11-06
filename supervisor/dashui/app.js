@@ -1,8 +1,9 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
 // scroll restoration (all saved per breakpoint, in this browser only). It sends nothing; its only network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
-import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, ROW_STEP, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, resizeBox, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
-import { initLegends, initResetLayout } from './legend.mjs';
+import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
+import { initLegends } from './legend.mjs';
+import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved } from './grid.mjs';
 import { watchLists } from './lists-ui.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -209,7 +210,7 @@ history.scrollRestoration = 'manual';
 // with, so it would undo an in-place table change (replaceState). Without script the <noscript> meta still refreshes.
 {
   const secs = Number($('meta[name=refresh-seconds]')?.content) || 60;
-  setInterval(() => { saveScroll(); location.reload(); }, secs * 1000);
+  setInterval(() => { if (document.body.classList.contains('layout-editing')) return; saveScroll(); location.reload(); }, secs * 1000);   // never while the layout is being edited: that would drop a drag in progress
 }
 
 // movable and resizable cards
@@ -313,73 +314,229 @@ if (grid) {
   const key = () => `dash.layout.${page}.${bpNow()}`;
   const cards = () => $$(':scope > .card[data-card]', grid);
   const ids = () => cards().map(c => c.dataset.card);
-  let lay = { order: [], span: {}, h: {} };
-  const save = () => store.set(key(), { ...lay, collapsed: readCollapsed() });
+  const cardById = id => cards().find(c => c.dataset.card === id);
+  const colsNow = () => COLS[bpNow()] || 0;
+  const gap = () => parseFloat(getComputedStyle(grid).columnGap) || 0;
+  const titleOf = c => ($(':scope > header h2', c) || $('.l', c))?.textContent.trim() || c.dataset.card;
   const spanProp = () => (bpNow() === 'tablet' ? '--tspan' : '--span');
-  function apply() {
+  // Two forms. Flow (phone always; desktop and tablet until the viewer edits): the server order with the old saved order, widths and
+  // heights. Free: a saved place and size for every card (grid.mjs), written the first time the viewer changes the layout.
+  let lay = { order: [], span: {}, h: {} };
+  let st = null;          // the free layout in use { pos, hidden }, or null for flow
+  let editing = false;
+  const hist = layoutHistory();
+  const saveFlow = () => store.set(key(), { ...lay, collapsed: readCollapsed() });   // phone: order only
+  const persist = () => { if (st) store.set(key(), toSaved(st, readCollapsed())); };
+
+  const VARS = ['--cx', '--cy', '--cw', '--ch'];
+  function setBox(c, r) { c.style.setProperty('--cx', r.x); c.style.setProperty('--cy', r.y); c.style.setProperty('--cw', r.w); c.style.setProperty('--ch', r.h); }
+  function paintFlow() {
     const bp = bpNow();
+    grid.classList.remove('free'); grid.style.removeProperty('--cols');
     lay = applyLayout(ids(), store.get(key()), bp);
     const byId = new Map(cards().map(c => [c.dataset.card, c]));
     for (const id of lay.order) grid.append(byId.get(id));
     for (const c of cards()) {
       const id = c.dataset.card;
+      for (const v of VARS) c.style.removeProperty(v);
+      c.classList.remove('lay-hidden');
       c.style.setProperty('--span', bp === 'desktop' && lay.span[id] ? lay.span[id] : c.dataset.span);   // the server-rendered span is the default
       if (bp === 'tablet' && lay.span[id]) c.style.setProperty('--tspan', lay.span[id]); else c.style.removeProperty('--tspan');
       if (lay.h[id]) { c.style.setProperty('--h', lay.h[id] + 'px'); c.style.alignSelf = 'start'; } else { c.style.removeProperty('--h'); c.style.alignSelf = ''; }   // a sized card is its own height, not the row's
-      const k = $('.rz-key', c); if (k) k.setAttribute('aria-valuenow', lay.span[id] || c.dataset.span);
     }
   }
-  apply(); let last = bpNow(); addEventListener('resize', () => { if (bpNow() !== last) { last = bpNow(); apply(); } });
-  // keyboard / touch reorder
+  // Rows a card needs to show all its content at width w (a card with no saved place, or one brought back from the hidden list).
+  function naturalRows(c, w) {
+    const wasCollapsed = c.classList.contains('collapsed'), wasHidden = c.classList.contains('lay-hidden');
+    c.classList.remove('collapsed', 'lay-hidden'); setBox(c, { x: 0, y: 0, w, h: 1 }); c.classList.add('measuring');
+    const px = c.offsetHeight;
+    c.classList.remove('measuring'); if (wasCollapsed) c.classList.add('collapsed'); if (wasHidden) c.classList.add('lay-hidden');
+    return rowsFor(px);
+  }
+  const defaultW = c => Math.min(colsNow(), Math.max(MIN_W, (Number(c.dataset.span) || 6) * 2));
+  function paintFree() {
+    const cols = colsNow();
+    grid.classList.add('free'); grid.style.setProperty('--cols', cols);
+    for (const c of cards()) {
+      const id = c.dataset.card, hidden = st.hidden.includes(id);
+      if (!hidden && !st.pos[id]) { const w = defaultW(c); st.pos[id] = firstFit(st.pos, w, naturalRows(c, w), cols); }
+      c.style.removeProperty('--h'); c.style.alignSelf = '';
+      c.classList.toggle('lay-hidden', hidden);
+      if (st.pos[id]) setBox(c, st.pos[id]);
+    }
+  }
+  function apply() {
+    if (!editing) st = bpNow() === 'phone' ? null : sanitizeLayout(store.get(key()), ids(), colsNow(), cards().filter(c => c.hasAttribute('data-pin')).map(c => c.dataset.card));
+    if (st) paintFree(); else paintFlow();
+    renderBar();
+  }
+
+  // phone (and anyone without the editor): move a card earlier or later in the order
   for (const b of $$('[data-move]', grid)) b.addEventListener('click', () => {
-    const c = b.closest('.card'); lay.order = moveItem(lay.order, c.dataset.card, Number(b.dataset.move)); save(); apply(); b.focus();
+    if (bpNow() !== 'phone') return;
+    const c = b.closest('.card'); lay.order = moveItem(lay.order, c.dataset.card, Number(b.dataset.move)); saveFlow(); paintFlow(); b.focus();
   });
-  // geometry helpers for snapping: one grid column pitch, and the card's size in columns
-  const gap = () => parseFloat(getComputedStyle(grid).columnGap) || 0;
-  const cols = () => (bpNow() === 'tablet' ? 6 : 12);
-  const pitch = () => (grid.getBoundingClientRect().width + gap()) / cols();
-  const spanOf = c => Number(c.style.getPropertyValue(spanProp())) || Math.round((c.getBoundingClientRect().width + gap()) / pitch());
-  // The content's own height at the current width: the card with its minimum height removed. A saved height is a min-height,
-  // so the content can never be clipped; it can only make the card taller than asked.
-  function naturalHeight(c) {
-    const prev = c.style.getPropertyValue('--h'), prevAlign = c.style.alignSelf; c.style.setProperty('--h', '0px'); c.style.alignSelf = 'start';   // not stretched to the row, or a card could never get shorter
-    const h = c.offsetHeight; if (prev) c.style.setProperty('--h', prev); else c.style.removeProperty('--h'); c.style.alignSelf = prevAlign; return h;
+
+  // ---- the layout editor (desktop and tablet)
+  const bar = document.createElement('div');
+  bar.className = 'layoutbar'; bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'Page layout');
+  const mk = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+  const tool = (name, text, title) => { const e = mk('button', { type: 'button', className: 'btn', textContent: text, title: title || '' }); e.dataset.lay = name; return e; };
+  const editBtn = tool('edit', 'Edit layout'); editBtn.setAttribute('aria-pressed', 'false');
+  const tools = mk('span', { className: 'lay-tools', hidden: true }, tool('done', 'Done'), tool('undo', 'Undo', 'Undo (Ctrl+Z)'), tool('redo', 'Redo', 'Redo (Ctrl+Shift+Z)'), tool('tidy', 'Tidy up', 'Slide cards up to close gaps'), tool('reset', 'Reset to default', 'Back to the standard arrangement for this page'));
+  const hiddenBox = mk('details', { className: 'lay-hiddens', hidden: true }, mk('summary', {}, 'Hidden cards (', mk('span', { textContent: '0' }), ')'), mk('ul'));
+  hiddenBox.querySelector('span').dataset.n = '';
+  const hint = mk('span', { className: 'lay-hint', id: 'lay-help', hidden: true, textContent: 'Drag a card anywhere to move it; drag an edge or corner to resize. With the keyboard, focus a card and use the arrow keys to move it and Shift with the arrow keys to resize. Live refresh is paused while you edit.' });
+  hint.dataset.hint = '';
+  bar.append(editBtn, tools, hiddenBox, hint, mk('span', { className: 'lay-live' }));
+  $('.lay-live', bar).setAttribute('role', 'status'); $('.lay-live', bar).setAttribute('aria-live', 'polite');
+  if (grid.querySelector('[data-move]')) grid.before(bar);   // only grids that have movable cards
+  const live = $('.lay-live', bar);
+  const say = t => { live.textContent = ''; setTimeout(() => { live.textContent = t; }, 30); };
+  const btn = n => $(`[data-lay=${n}]`, bar);
+  function renderBar() {
+    if (!bar.isConnected) return;
+    const hidden = st ? st.hidden : [];
+    $('[data-lay=edit]', bar).setAttribute('aria-pressed', String(editing));
+    $('[data-lay=edit]', bar).hidden = editing;
+    $('.lay-tools', bar).hidden = !editing; $('[data-hint]', bar).hidden = !editing;
+    if (btn('undo')) { btn('undo').disabled = !hist.canUndo; btn('redo').disabled = !hist.canRedo; }
+    const det = $('.lay-hiddens', bar); det.hidden = !hidden.length;
+    $('[data-n]', det).textContent = hidden.length;
+    const ul = $('ul', det); ul.textContent = '';
+    for (const id of hidden) {
+      const li = document.createElement('li'), name = cardById(id) ? titleOf(cardById(id)) : id, b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn'; b.textContent = 'Show'; b.setAttribute('aria-label', `Show ${name}`); b.addEventListener('click', () => showCard(id));
+      li.append(Object.assign(document.createElement('span'), { textContent: name }), b); ul.append(li);
+    }
+    if (!hidden.length) det.open = false;
   }
-  function setSize(c, edge, dx, dy, from) {
-    const r = resizeBox({ edge, dx, dy, span: from.span, h: from.h, natH: naturalHeight(c), colW: pitch(), type: c.dataset.type, bp: bpNow() });
-    c.style.setProperty(spanProp(), r.span); lay.span[c.dataset.card] = r.span;
-    if (r.h) { c.style.setProperty('--h', r.h + 'px'); c.style.alignSelf = 'start'; lay.h[c.dataset.card] = r.h; }   // live: the real content reflows at every step
-    $('.rz-key', c)?.setAttribute('aria-valuenow', r.span);
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function change(next, note) {
+    hist.push(st); st = next; persist(); paintFree(); renderBar(); if (note) say(note);
   }
-  let drag = null;
-  for (const c of cards()) {
-    const h = $('[data-handle]', c); if (!h) continue;
-    // drag the header handle to reorder (pointer devices)
-    h.draggable = true;
-    h.addEventListener('dragstart', e => { drag = c; c.classList.add('dragging'); e.dataTransfer.setData('text/plain', c.dataset.card); e.dataTransfer.effectAllowed = 'move'; });
-    h.addEventListener('dragend', () => { c.classList.remove('dragging'); $$('.dropping', grid).forEach(x => x.classList.remove('dropping')); drag = null; });
-    c.addEventListener('dragover', e => { if (drag && drag !== c) { e.preventDefault(); c.classList.add('dropping'); } });
-    c.addEventListener('dragleave', () => c.classList.remove('dropping'));
-    c.addEventListener('drop', e => { e.preventDefault(); if (!drag || drag === c) return; const from = lay.order.indexOf(drag.dataset.card); lay.order.splice(from, 1); lay.order.splice(lay.order.indexOf(c.dataset.card), 0, drag.dataset.card); save(); apply(); });
-    // resize from any edge or corner (not offered on a phone)
-    for (const rz of $$('.resize[data-edge]', c)) rz.addEventListener('pointerdown', e => {
-      if (bpNow() === 'phone' || e.button > 0) return;
-      e.preventDefault(); rz.setPointerCapture(e.pointerId); rz.classList.add('active'); c.classList.add('resizing'); document.body.classList.add('resizing');
-      const from = { span: spanOf(c), h: c.offsetHeight }, x0 = e.clientX, y0 = e.clientY, edge = rz.dataset.edge;
-      const move = ev => setSize(c, edge, ev.clientX - x0, ev.clientY - y0, from);
-      const up = () => {
-        rz.removeEventListener('pointermove', move); rz.removeEventListener('pointerup', up); rz.removeEventListener('pointercancel', up);
-        rz.classList.remove('active'); c.classList.remove('resizing'); document.body.classList.remove('resizing'); save();
-      };
-      rz.addEventListener('pointermove', move); rz.addEventListener('pointerup', up); rz.addEventListener('pointercancel', up);
-    });
-    // keyboard: arrows resize one grid step; the same limits and snapping as the pointer
-    $('.rz-key', c)?.addEventListener('keydown', e => {
-      const d = { ArrowRight: ['e', 1, 0], ArrowLeft: ['e', -1, 0], ArrowDown: ['s', 0, 1], ArrowUp: ['s', 0, -1] }[e.key]; if (!d || bpNow() === 'phone') return;
-      e.preventDefault(); setSize(c, d[0], d[1] * pitch(), d[2] * ROW_STEP, { span: spanOf(c), h: c.offsetHeight }); save();
-    });
+  // The cards as drawn right now (flow, with any old saved layout), in cells. Collapsed cards count at their full size.
+  function convertFlow() {
+    const cols = colsNow(), shut = cards().filter(c => c.classList.contains('collapsed'));
+    for (const c of shut) c.classList.remove('collapsed');
+    const g = grid.getBoundingClientRect(), colPitch = (g.width + gap()) / cols;
+    const boxes = cards().filter(c => c.offsetParent).map(c => { const r = c.getBoundingClientRect(); return { id: c.dataset.card, left: r.left - g.left, top: r.top - g.top, width: r.width, height: r.height }; });
+    for (const c of shut) c.classList.add('collapsed');
+    return { pos: fromBoxes(boxes, { colPitch, cols }), hidden: [] };
   }
-  initResetLayout({ document, store, layoutKey: key, legendKey, reload: () => location.reload() });
+  const CURSORS = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
+  function decorate(on) {
+    for (const c of cards()) {
+      if (on) {
+        c.tabIndex = 0; c.setAttribute('aria-roledescription', 'movable card'); c.setAttribute('aria-describedby', 'lay-help');
+        for (const f of $$('a,button,input,select,textarea,summary,[tabindex]', c)) if (f !== c) { f.dataset.layTi = f.getAttribute('tabindex') ?? ''; f.tabIndex = -1; }
+        if (canHide(c.dataset.card, c.hasAttribute('data-pin'))) {
+          const h = document.createElement('button'); h.type = 'button'; h.className = 'lay-hide'; h.textContent = 'Hide'; h.setAttribute('aria-label', `Hide ${titleOf(c)}`); h.addEventListener('click', () => hideCard(c.dataset.card)); c.append(h);
+        }
+      } else {
+        $('.lay-hide', c)?.remove(); c.style.cursor = '';
+        c.removeAttribute('aria-roledescription'); c.removeAttribute('aria-describedby');
+        if (c.tagName !== 'A') c.removeAttribute('tabindex');
+        for (const f of $$('[data-lay-ti]', c)) { if (f.dataset.layTi === '') f.removeAttribute('tabindex'); else f.setAttribute('tabindex', f.dataset.layTi); delete f.dataset.layTi; }
+      }
+    }
+  }
+  function startEditing() {
+    if (editing || bpNow() === 'phone') return;
+    if (!st) { st = convertFlow(); }
+    editing = true; hist.clear();
+    document.body.classList.add('layout-editing'); grid.classList.add('editing');
+    paintFree(); decorate(true); renderBar(); say('Layout mode on. Drag cards to move them and their edges to resize.');
+    $('[data-lay=done]', bar).focus({ preventScroll: true });
+  }
+  function stopEditing() {
+    if (!editing) return;
+    finishAct(false); editing = false; decorate(false);
+    document.body.classList.remove('layout-editing'); grid.classList.remove('editing');
+    apply(); say('Layout mode off.'); $('[data-lay=edit]', bar).focus({ preventScroll: true });
+  }
+  function hideCard(id) {
+    const c = cardById(id); if (!st || !c || !canHide(id, c.hasAttribute('data-pin')) || st.hidden.includes(id)) return;
+    const pos = { ...st.pos }; delete pos[id];
+    change({ pos, hidden: [...st.hidden, id] }, `${titleOf(c)} hidden. Use Hidden cards to bring it back.`);
+    if (editing) { c.classList.add('lay-hidden'); $('[data-lay=done]', bar).focus({ preventScroll: true }); }
+  }
+  function showCard(id) {
+    const c = cardById(id); if (!st || !c) return;
+    const w = defaultW(c), pos = { ...st.pos }; pos[id] = firstFit(pos, w, naturalRows(c, w), colsNow());
+    change({ pos, hidden: st.hidden.filter(i => i !== id) }, `${titleOf(c)} is back.`);
+    c.scrollIntoView({ block: 'nearest' });
+  }
+  function undoRedo(redo) {
+    const prev = redo ? hist.redo(st) : hist.undo(st); if (!prev) return;
+    st = prev; persist(); paintFree(); renderBar(); say(redo ? 'Redone.' : 'Undone.');
+  }
+  function resetDefault() {
+    hist.push(st);
+    const keep = readCollapsed(); if (keep.length) store.set(key(), { collapsed: keep }); else store.del(key());
+    paintFlow(); st = convertFlow(); paintFree(); renderBar(); say('Back to the default layout for this page.');
+  }
+
+  // ---- drag and resize with the pointer
+  let act = null, scrollTimer = 0;
+  function showPreview() {
+    const cols = colsNow(), g = grid.getBoundingClientRect(), colPitch = (g.width + gap()) / cols;
+    const dx = act.x - act.x0, dy = act.y - act.y0 + (scrollY - act.scroll0);
+    const target = act.edge ? resizeRect(act.from, act.edge, Math.round(dx / colPitch), Math.round(dy / ROW_PITCH), cols) : dragRect(act.from, Math.round(dx / colPitch), Math.round(dy / ROW_PITCH), cols);
+    act.target = target; act.preview = placeCard(act.base.pos, act.id, target, cols);
+    for (const c of cards()) { const r = act.preview[c.dataset.card]; if (r && c !== act.c) setBox(c, r); }
+    if (act.edge) { setBox(act.c, target); act.ghost.hidden = true; }
+    else { setBox(act.c, act.from); act.c.style.transform = `translate(${dx}px,${dy}px)`; setBox(act.ghost, target); act.ghost.hidden = false; }
+  }
+  function finishAct(commit) {
+    if (!act) return;
+    const a = act; act = null; clearInterval(scrollTimer);
+    a.ghost.remove(); a.c.classList.remove('lay-active'); a.c.style.transform = '';
+    try { a.c.releasePointerCapture(a.pid); } catch { /* already released */ }
+    if (commit && a.preview && !same(a.preview, a.base.pos)) {
+      change({ pos: a.preview, hidden: a.base.hidden }, `${titleOf(a.c)}: column ${a.target.x + 1}, row ${a.target.y + 1}, ${a.target.w} wide, ${a.target.h} high.`);
+    } else paintFree();
+  }
+  grid.addEventListener('pointerdown', e => {
+    if (!editing || e.button > 0 || act || e.target.closest('.lay-hide')) return;
+    const c = e.target.closest('.card[data-card]'); if (!c || !st.pos[c.dataset.card]) return;
+    e.preventDefault(); c.focus({ preventScroll: true });
+    try { c.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    const ghost = document.createElement('div'); ghost.className = 'lay-ghost'; ghost.hidden = true; grid.append(ghost);
+    act = { c, id: c.dataset.card, edge: edgeAt(c.getBoundingClientRect(), e.clientX, e.clientY, 10), x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, scroll0: scrollY, pid: e.pointerId, base: JSON.parse(JSON.stringify(st)), from: { ...st.pos[c.dataset.card] }, ghost };
+    c.classList.add('lay-active');
+    scrollTimer = setInterval(() => { if (!act) return; const d = act.y > innerHeight - 48 ? 18 : act.y < 48 ? -18 : 0; if (d) { scrollBy(0, d); showPreview(); } }, 40);
+  });
+  grid.addEventListener('pointermove', e => {
+    if (!editing) return;
+    if (act) { act.x = e.clientX; act.y = e.clientY; showPreview(); return; }
+    const c = e.target.closest?.('.card[data-card]'); if (c) c.style.cursor = CURSORS[edgeAt(c.getBoundingClientRect(), e.clientX, e.clientY, 10)] || '';
+  });
+  grid.addEventListener('pointerup', () => finishAct(true));
+  grid.addEventListener('pointercancel', () => finishAct(false));
+  grid.addEventListener('dragstart', e => { if (editing) e.preventDefault(); });
+  grid.addEventListener('click', e => { if (editing && !e.target.closest('.lay-hide')) e.preventDefault(); }, true);
+  // keyboard: arrows move the focused card one cell, Shift+arrows resize it from its east and south edges
+  grid.addEventListener('keydown', e => {
+    if (!editing || e.target.closest('.lay-hide') || !e.target.matches?.('.card[data-card]')) return;
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]; if (!d) return;
+    e.preventDefault();
+    const id = e.target.dataset.card, r = st.pos[id]; if (!r) return;
+    const t = e.shiftKey ? resizeRect(r, d[0] ? 'e' : 's', d[0], d[1], colsNow()) : dragRect(r, d[0], d[1], colsNow()), next = placeCard(st.pos, id, t, colsNow());
+    if (!same(next, st.pos)) { change({ pos: next, hidden: st.hidden }, `${titleOf(e.target)}: column ${t.x + 1}, row ${t.y + 1}, ${t.w} wide, ${t.h} high.`); cardById(id)?.focus({ preventScroll: false }); }
+  });
+  addEventListener('keydown', e => {
+    if (!editing) return;
+    if (e.key === 'Escape' && act) { finishAct(false); return; }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'z' && !e.target.closest?.('input,textarea,select')) { e.preventDefault(); undoRedo(e.shiftKey); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y' && !e.target.closest?.('input,textarea,select')) { e.preventDefault(); undoRedo(true); }
+  });
+  bar.addEventListener('click', e => {
+    const b = e.target.closest('[data-lay]'); if (!b) return;
+    ({ edit: startEditing, done: stopEditing, undo: () => undoRedo(false), redo: () => undoRedo(true), reset: resetDefault,
+      tidy: () => { const next = compact(st.pos); if (!same(next, st.pos)) change({ pos: next, hidden: st.hidden }, 'Gaps closed.'); } })[b.dataset.lay]?.();
+  });
+  apply(); let last = bpNow(); addEventListener('resize', () => { if (bpNow() !== last) { last = bpNow(); if (editing) stopEditing(); apply(); } });
 }
 requestAnimationFrame(() => requestAnimationFrame(restoreScroll));
 
