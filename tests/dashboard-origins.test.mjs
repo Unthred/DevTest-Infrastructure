@@ -24,11 +24,11 @@ async function serve(t, dashboard = { allowed_origins: [PUBLIC] }) {
   server.on('request', handler({ root, config: cfg, host: '127.0.0.1', port, now: () => NOW, probe: async o => { probes.push(o.agent); return { ok: true }; } }));
   const proof = `proof=${writeToken(root)}`;
   // The Host is always the listen address, as a reverse proxy that forwards the upstream Host presents it.
-  const call = (p, origin, body) => new Promise((resolve, reject) => {
-    const headers = { host: `127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...(origin === undefined ? {} : { origin }) };
+  const call = (p, origin, body, extra = {}) => new Promise((resolve, reject) => {
+    const headers = { host: `127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...(origin === undefined ? {} : { origin }), ...extra };
     const r = http.request({ host: '127.0.0.1', port, path: p, method: 'POST', headers }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }); r.on('error', reject); r.end(body);
   });
-  const writes = { watch: o => call('/watch', o, `kind=issue&number=10&action=watch&${proof}`), markRead: o => call('/mark-read', o, `at=${NOW - 1000}&${proof}`), probe: o => call('/probe/claude', o, proof) };
+  const writes = { call, proof, watch: o => call('/watch', o, `kind=issue&number=10&action=watch&${proof}`), markRead: o => call('/mark-read', o, `at=${NOW - 1000}&${proof}`), probe: o => call('/probe/claude', o, proof) };
   return { root, port, probes, writes, lan: `http://127.0.0.1:${port}` };
 }
 
@@ -133,4 +133,14 @@ test('/inbox: a listed origin still needs the access proof and the expected Host
   const again = await s.post({ origin: PUBLIC, decision: 'reject' });
   assert.equal(again.status, 303); assert.match(again.headers.location, /inbox-cooldown/);
   assert.equal(inbox.statusOf(s.dir, s.id).state, 'approved', 'the second click inside the cooldown changed nothing');
+});
+
+// Behind a reverse proxy: forwarding headers are not trusted. Acceptance depends only on Origin (exact match) and the upstream Host.
+test('X-Forwarded-Host and X-Forwarded-Proto neither grant nor remove acceptance', async t => {
+  const s = await serve(t), fwd = { 'x-forwarded-host': 'agents.example.test', 'x-forwarded-proto': 'https' };
+  const body = `kind=issue&number=10&action=watch&${s.writes.proof}`;
+  assert.equal((await s.writes.call('/watch', PUBLIC, body, fwd)).status, 303, 'listed public origin with proxy headers');
+  assert.equal((await s.writes.call('/watch', 'https://evil.example', body, fwd)).status, 403, 'forwarded headers do not legitimise an unlisted origin');
+  assert.equal((await s.writes.call('/watch', undefined, body, fwd)).status, 403, 'no Origin is refused even with forwarded headers');
+  assert.equal((await s.writes.call('/watch', PUBLIC, body, { host: 'agents.example.test' })).status, 421, 'a proxy that forwards the public Host is refused at the Host check');
 });

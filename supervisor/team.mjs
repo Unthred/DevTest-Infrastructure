@@ -90,10 +90,8 @@ export function validateTeamConfig(input) {
 
 // Issue #136: how long a pending supervisor install drains running jobs (no new job starts) before it goes ahead.
 export const DRAIN_DEFAULT_MINUTES = 30;
-<<<<<<< HEAD
 // Batching (issue #695): a new install begins draining only this long after the last install finished (0 = no wait), unless nothing is running or planned, or the install is urgent.
 export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 45;
-=======
 // Issue #556: origins other than the listen address that may POST to the dashboard (a reverse proxy at a public address). Exact
 // lowercase scheme://host[:port] only (browsers send a lowercase Origin), no path, wildcard or credentials; anything not listed is still refused.
 export const ORIGIN_PATTERN = /^https?:\/\/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:\d{1,5})?$/;
@@ -103,7 +101,6 @@ function validateDashboard(d) {
   const a = d.allowed_origins;
   if (!Array.isArray(a) || a.length > 10 || !a.every(o => typeof o === 'string' && ORIGIN_PATTERN.test(o) && !/^http:\/\/[^/]*:80$|^https:\/\/[^/]*:443$/.test(o))) throw new SupervisorError('invalid team config: dashboard.allowed_origins must be a list of exact origins such as https://host (no path, no default port, no IPv6 literal)');
 }
->>>>>>> fb8ab92 (Dashboard writes: accept configured public origins and show a readable refusal page (issue #556))
 function validateSelfUpgrade(u) {
   if (u === undefined) return;
   if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => !['drain_max_minutes', 'min_install_gap_minutes', 'public_dashboard_url'].includes(k))) throw new SupervisorError('invalid team config: self_upgrade');
@@ -217,11 +214,7 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-<<<<<<< HEAD
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox', 'change_check'].includes(k));
-=======
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox', 'dashboard'].includes(k));
->>>>>>> fb8ab92 (Dashboard writes: accept configured public origins and show a readable refusal page (issue #556))
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox', 'change_check', 'dashboard'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
