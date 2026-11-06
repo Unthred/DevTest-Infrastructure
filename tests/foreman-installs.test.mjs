@@ -49,6 +49,18 @@ test('processVersions reads the version per role from command lines only, and ig
   assert.deepEqual(processVersions('/nonexistent-proc'), []);
 });
 
+test('processVersions recognises the real host command lines: dashboard via cli.mjs, Foreman via current/ reconcile', t => {
+  const root = tmp(t); fs.mkdirSync(path.join(root, 'versions', A, 'supervisor'), { recursive: true }); fs.writeFileSync(path.join(root, 'versions', A, 'supervisor', 'cli.mjs'), '');
+  fs.symlinkSync('versions/' + A, path.join(root, 'current'));
+  const proc = fakeProc(t, [
+    [21, ['node', `${root}/versions/${B}/supervisor/cli.mjs`, 'dashboard', 'serve', '--host', 'h', '--port', '8731']],
+    [22, ['node', `${root}/current/supervisor/cli.mjs`, 'reconcile', '--wake', 'x']],
+  ]);
+  assert.deepEqual(processVersions(proc).map(p => [p.role, p.version]).sort(), [['dashboard', B], ['foreman', A]]);
+  fs.rmSync(path.join(root, 'versions', A), { recursive: true }); // symlink target gone: fall back to the installed version
+  assert.deepEqual(processVersions(proc, { currentSha: C }).map(p => [p.role, p.version]).sort(), [['dashboard', B], ['foreman', C]]);
+});
+
 test('installs reports installed/main, draining, the failing test, a stale process version and redacts', t => {
   const root = tmp(t); seed(root);
   const proc = fakeProc(t, [[1, ['node', `/r/versions/${A}/supervisor/dashserver.mjs`]], [2, ['node', `/r/versions/${B}/supervisor/cli.mjs`, 'team', 'tick']]]);
@@ -83,6 +95,15 @@ test('the breaker records each trip with cause, jobs, cost and when it cleared; 
   for (let i = 3; i < 6; i++) breaker.record(s, waste(`j${i}`, T + 200 + i, 0.5), T + 200 + i);
   breaker.evaluate(s, limits, T + 300);
   h = breakerHistory({ breaker: s }); assert.equal(h.count, 2); assert.equal(h.trips[0].stillHalted, true); assert.equal(h.trips[1].stillHalted, false, 'newest first');
+});
+
+test('a halt ended by a later success of its job type is marked cleared in the history', () => {
+  const s = breaker.emptyState(); const T = 1e12;
+  for (let i = 0; i < 3; i++) breaker.record(s, waste(`j${i}`, T + i, 0.5), T + i);
+  breaker.evaluate(s, limits, T + 10);
+  assert.deepEqual(breaker.succeeded(s, { type: 'review', createdAt: T + 50 }, T + 60), ['review:refused:x']);
+  const h = breakerHistory({ breaker: s });
+  assert.equal(h.halted, false); assert.equal(h.trips[0].stillHalted, false); assert.equal(h.trips[0].clearedAt, new Date(T + 60).toISOString());
 });
 
 test('breaker history: old state without history shows the halt in force; limit and corrupt rows are handled; nothing secret escapes', () => {

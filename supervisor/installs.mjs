@@ -16,19 +16,29 @@ const FAILED = new Set(['precheck_failed', 'flaky_test', 'rolled_back', 'rollbac
 
 // The version each Foreman process was started from, read from its command line only: a path under `versions/<40 hex>/`.
 // The command line itself is never returned (it can hold anything); only the role, pid, version and start tick are.
-export function processVersions(procRoot = '/proc') {
+export function processVersions(procRoot = '/proc', { currentSha = null } = {}) {
   let names; try { names = fs.readdirSync(procRoot).filter(n => /^[1-9]\d*$/.test(n)); } catch { return []; }
   const out = [];
   for (const n of names) {
     let raw; try { raw = fs.readFileSync(path.join(procRoot, n, 'cmdline'), 'latin1'); } catch { continue; }
     const args = raw.split('\0').filter(Boolean).slice(0, 12);
-    const script = args.find(a => /\/versions\/[0-9a-f]{40}\/.*\.mjs$/.test(a));
-    if (!script) continue;
-    const m = /\/versions\/([0-9a-f]{40})\/(?:.*\/)?([\w.-]+)\.mjs$/.exec(script);
+    let script = args.find(a => /\/versions\/[0-9a-f]{40}\/.*\.mjs$/.test(a)), version = null;
+    if (!script) {
+      // The Foreman tick runs from the current symlink: resolve it to the version it points at, else the installed version.
+      script = args.find(a => /\/current\/.*\.mjs$/.test(a));
+      if (!script) continue;
+      try { version = /\/versions\/([0-9a-f]{40})(?:\/|$)/.exec(fs.realpathSync(script))?.[1] || null; } catch { /* not on this host */ }
+      version ||= currentSha;
+      if (!version) continue;
+    }
+    const m = /\/(?:versions\/[0-9a-f]{40}|current)\/(?:.*\/)?([\w.-]+)\.mjs$/.exec(script);
     if (!m) continue;
-    const base = m[2], rest = args.slice(args.indexOf(script) + 1);
-    const role = /^dash(server|board)$/.test(base) ? 'dashboard' : /worker/.test(base) ? 'worker' : base === 'cli' && rest.includes('team') ? 'foreman' : base === 'cli' && rest.includes('worker') ? 'worker' : base === 'cli' ? 'supervisor-cli' : scrub(base, 32);
-    out.push({ role, pid: Number(n), version: m[1] });
+    version ||= /\/versions\/([0-9a-f]{40})\//.exec(script)[1];
+    const base = m[1], rest = args.slice(args.indexOf(script) + 1);
+    const role = /^dash(server|board)$/.test(base) ? 'dashboard' : /worker/.test(base) ? 'worker'
+      : base === 'cli' ? (rest.includes('dashboard') ? 'dashboard' : rest.includes('worker') ? 'worker' : rest.includes('team') || rest.includes('reconcile') ? 'foreman' : 'supervisor-cli')
+      : scrub(base, 32);
+    out.push({ role, pid: Number(n), version });
   }
   return out.sort((a, b) => a.role.localeCompare(b.role) || a.pid - b.pid).slice(0, 60);
 }
@@ -47,7 +57,7 @@ export function installs(root, { now = Date.now(), procRoot = '/proc', running }
     draining, latch: su.latch ? { at: iso(su.latch.at), from: su.latch.from, to: su.latch.to, reason: su.latch.reason } : null,
     lastInstall: i ? { result: i.result, sha: i.sha, at: iso(i.at), nextAttemptAt: iso(i.nextAttemptAt), reason: i.reason, failingTests: i.tests, retried: i.retried, excerpt: i.excerpt } : null,
     refusal: f && SHA.test(f.to || '') ? { kind: scrub(f.kind || '', 24), from: f.from ?? null, to: f.to, at: iso(f.at), reason: scrub(f.reason || '', 300) } : null,
-    processes: processVersions(procRoot).map(p => ({ ...p, matchesInstalled: inst.sha ? p.version === inst.sha : null })),
+    processes: processVersions(procRoot, { currentSha: inst.sha }).map(p => ({ ...p, matchesInstalled: inst.sha ? p.version === inst.sha : null })),
     recent: records,
   };
 }

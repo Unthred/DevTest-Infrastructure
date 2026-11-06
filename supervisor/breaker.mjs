@@ -186,7 +186,7 @@ export function succeeded(s, { type, createdAt }, now) {
   const cleared = [];
   for (const [cause, h] of Object.entries(s.halts)) {
     if (!(h.types || []).includes(type) || !(createdAt > h.since)) continue;
-    delete s.halts[cause]; s.clearedAt[cause] = now; cleared.push(cause);
+    noteClear(s, cause, h.since, now); delete s.halts[cause]; s.clearedAt[cause] = now; cleared.push(cause);
   }
   if (cleared.length) s.resumes = [...(s.resumes || []), { at: now, scope: `success:${type}`, cleared, by: 'success' }].slice(-50);
   return cleared;
