@@ -98,3 +98,23 @@ test('endedNoPr: cleared by a completed ingest; not set for a transient stop tha
   await ingest({ status: 'blocked', lastEvent: 'retry_exhausted' });
   assert.equal(entry().endedNoPr.event, 'retry_exhausted', 'a non-transient stop is surfaced at once');
 });
+
+// Issue #660: the ingest-time resumable test matches resumeTransient (7-day window), and a recorded noResume sets the stale cause.
+test('endedNoPr: set at ingest for a job outside the resume window; set when resumeTransient records noResume', async t => {
+  const w = world(t), id = 'e'.repeat(32), states = {};
+  w.team.jobs.get = async i => states[i] || null;
+  w.team.jobs.resume = async () => {};
+  const entry = () => w.team.s.jobs[id];
+  const ingest = async job => { states[id] = { id, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
+  w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '24', issue: 24, ingested: false, at: NOW - 8 * 86400000 };
+  await ingest({ status: 'failed', lastEvent: 'checkpoint_failed' });
+  assert.equal(entry().endedNoPr.event, 'checkpoint_failed', 'older than the window: never resumed, surfaced at once');
+  entry().at = NOW - 1000; delete entry().endedNoPr;
+  await ingest({ status: 'failed', lastEvent: 'checkpoint_failed' });
+  assert.equal(entry().endedNoPr, undefined, 'inside the window: awaits its resume');
+  w.team.gh.listIssues = async () => [];   // the issue is no longer open
+  states[id].updatedAt = 0;
+  await w.team.resumeTransient({ ingested: [] });
+  assert.match(w.team.s.unblock.noResume[id].why, /no longer open/);
+  assert.equal(entry().endedNoPr.event, 'checkpoint_failed', 'noResume recorded: stale cause set');
+});

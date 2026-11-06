@@ -91,6 +91,9 @@ const timedOut = r => r.error?.code === 'ETIMEDOUT' || (r.status === null && r.s
 // Issue #597: spawnSync blocks the worker's event loop, so one checkpoint (2-3 git calls, each with retries) shares a total budget.
 // While a budget is active no attempt starts after it is spent and each attempt is cut to the time left.
 export const CHECKPOINT_BUDGET_MS = 60000;
+// The budget is module-global state read implicitly by git(). That is only correct while checkpointInner and every git() call in it are
+// synchronous (no await, so nothing unrelated can call git() meanwhile). checkpoint() refuses to nest; keep checkpointInner synchronous,
+// or pass the deadline to git() explicitly, before making it async. A synchronous checkpoint still blocks the event loop up to the budget.
 let gitDeadline = null;
 export function git(root, ...args) {
   let r;
@@ -268,6 +271,7 @@ export function releaseLeases(root, job) {
   return released;
 }
 export function checkpoint(root, job, clock = realClock, budgetMs = CHECKPOINT_BUDGET_MS) {
+  if (gitDeadline !== null) throw new SupervisorError('checkpoint budget already active (checkpoint must stay synchronous and not nest)');
   gitDeadline = Date.now() + budgetMs;
   try { checkpointInner(root, job, clock); } finally { gitDeadline = null; }
 }

@@ -2003,7 +2003,8 @@ export class Team {
       // will resume once is not surfaced for the tick before that resume; if it stops again after the resume, it is.
       if (j.kind === 'implement' && job.status === 'completed') delete j.endedNoPr;
       else if (j.kind === 'implement') {
-        const resumable = !!this.jobs.resume && TRANSIENT_STOPS.has(job.lastEvent) && !this.s.unblock.resumed[id] && !this.s.unblock.noResume[id] && !j.settled;
+        // Issue #660: the same conditions as resumeTransient's candidate test (RESUME_WINDOW_MS included); a job it will never look at is surfaced now.
+        const resumable = !!this.jobs.resume && TRANSIENT_STOPS.has(job.lastEvent) && !this.s.unblock.resumed[id] && !this.s.unblock.noResume[id] && !j.settled && this.inResumeWindow(j);
         if (resumable) delete j.endedNoPr; else j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
       }
       j.ingested = true; this.save();
@@ -2668,6 +2669,7 @@ export class Team {
     if (!this.jobs.resume || this.s.unblock.resumed[id] || this.s.unblock.noResume[id] || !TRANSIENT_STOPS.has(job.lastEvent)) return false;
     return !this.unblockRoom(j.issue ?? j.pr);
   }
+  inResumeWindow(j) { return !(j.at && this.clock.now() - j.at > RESUME_WINDOW_MS); }
   reported(id) { return Object.keys(this.s.notified).some(k => k.startsWith(`${id}:`)); }
   async staleResume(id, j, open) {
     if (this.reported(id)) return 'it was already reported to the homeowner';
@@ -2688,13 +2690,18 @@ export class Team {
     const open = {};   // the open PRs and issues, read at most once per tick and only when a job is a candidate
     for (const [id, j] of Object.entries(this.s.jobs)) {
       if (this.s.unblock.resumed[id] || this.s.unblock.noResume[id] || j.settled) continue;
-      if (j.at && this.clock.now() - j.at > RESUME_WINDOW_MS) continue;   // (a blocked job is already `ingested`; resuming makes it ingestible again)
+      if (!this.inResumeWindow(j)) continue;   // (a blocked job is already `ingested`; resuming makes it ingestible again)
       await guard(`resume ${id}`, async () => {
         const job = await this.jobs.get(id);
         if (job && ['completed', 'stopped'].includes(job.status)) { j.settled = true; this.save(); return; }   // never transient again
         if (!job || !['blocked', 'failed'].includes(job.status) || !TRANSIENT_STOPS.has(job.lastEvent)) return;
         const stale = await this.staleResume(id, j, open);
-        if (stale) { this.s.unblock.noResume[id] = { at: this.clock.now(), why: stale }; this.save(); return; }   // notifyOne handles it as before
+        if (stale) {
+          this.s.unblock.noResume[id] = { at: this.clock.now(), why: stale };
+          // Issue #660: ingest cleared endedNoPr expecting a resume; none will come, so the immediate #579 stale-mark cause is recorded now.
+          if (j.kind === 'implement' && !j.endedNoPr) j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
+          this.save(); return;
+        }   // notifyOne handles it as before
         if (this.limitedOf(j.agent)?.out) return;   // out of allowance: wait for the reset rather than burn the one resume
         if (breaker.blocks(this.s.breaker, this.c.breaker, { type: j.kind, issue: j.issue ?? null })) return;   // issue #549: a halted job type does not restart either
         if (await this.providerRoleFull(job.provider ?? this.c.agents[j.agent]?.provider, roleOfType(j.kind))) return;   // issue #402: the provider's own role count is full; wait, keeping the one resume
