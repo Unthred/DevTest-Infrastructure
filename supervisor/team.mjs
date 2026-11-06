@@ -1509,8 +1509,22 @@ export class Team {
   reviewInFlight(pr) {
     return Object.values(this.s.jobs).some(j => j.kind === 'review' && !j.ingested && j.pr === pr.number && j.head === pr.headRefOid && this.c.agents[j.agent] && !this.reviewRefusal(j.agent, pr, j.key));
   }
+  // Issue #633: a conflicting PR is rebased just before its review or merge, not on every main move. It waits while another open, non-conflicting
+  // agent PR is ahead of it in the review/merge queue (green and unreviewed on its head, or holding a PASS on a green head). A PR with nothing
+  // ahead is next, so it rebases at once. A behind-with-PASS rebase (right before merge) is never deferred here.
+  rebaseNotNext(pr, prs) {
+    if (pr.mergeable !== 'CONFLICTING') return false;
+    return (prs || []).some(o => {
+      if (o.number === pr.number || o.isDraft || !SHA.test(o.headRefOid) || !agentOfBranch(this.c, o.headRefName) || o.mergeable === 'CONFLICTING' || this.ciState(o) !== 'green') return false;
+      if (this.parkedReason(o, null, prs)) return false;   // needs-homeowner or a PASS held on a decision cannot move, so it is not ahead
+      const v = this.s.verdicts[verdictKey(o.number, o.headRefOid)];
+      if (!v) return this.otherReviewers('', o).length > 0;   // unreviewed: ahead only if some agent can review it now
+      return v.verdict === 'PASS' && o.mergeStateStatus !== 'BLOCKED';   // a PASS GitHub reports blocked cannot merge next
+    });
+  }
   rebaseDeferred(pr, prs, issueByNo, busy) {
     const L = this.c.limits;
+    if (this.rebaseNotNext(pr, prs)) return true;
     // Candidates are PRs whose author could start the rebase now: same conditions as choose() (not busy or unusable, attempts left,
     // author not at a usage limit, mode admits a rebase with the reserve and planned use choose() applies). A PR nobody can rebase
     // now never holds the others back.
@@ -1521,6 +1535,7 @@ export class Team {
       const behind = p.mergeable !== 'CONFLICTING' && p.mergeStateStatus === 'BEHIND' && this.s.verdicts[k]?.verdict === 'PASS' && this.ciState(p) === 'green';
       if (p.mergeable !== 'CONFLICTING' && !behind) return false;
       if (busy('rebase', k) || (this.s.rebaseAttempts[k] || 0) >= L.max_fix_attempts) return false;
+      if (this.rebaseNotNext(p, prs)) return false;   // issue #633: deferred until next to review or merge, so it never holds the others back
       if (this.limitedOf(author).out) return false;
       if (this.writeBlock(p, 'rebase')) return false;   // choose() skips such a PR, so it must not hold the others back
       return this.admitsNow(author, 'rebase', prs).ok;
