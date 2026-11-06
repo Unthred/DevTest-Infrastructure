@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { measure } from '../tools/measure-implementer.mjs';
+import fs from 'node:fs';
+import { measure, END } from '../tools/measure-implementer.mjs';
 const M = 60000;
 const ev = (job, kind, m) => ({ job, kind, at: m * M });
 
@@ -65,4 +66,23 @@ test('a re-queued job not restarted by the window end is queued only when its cu
   const events = [ev('a', 'created', 0), ev('a', 'started', 0), ev('a', 'incomplete', 10)];
   assert.equal(measure([{ id: 'a', kind: 'fix', status: 'queued' }], events, 0, 30 * M).before.idleWithWorkQueuedMinutes, 20);
   assert.equal(measure([{ id: 'a', kind: 'fix', status: 'failed' }], events, 0, 30 * M).before.idleWithWorkQueuedMinutes, 0);
+});
+
+test('END covers every run-ending kind supervisor/core.mjs transitions to (issue #672)', () => {
+  const src = fs.readFileSync(new URL('../supervisor/core.mjs', import.meta.url), 'utf8');
+  // Kinds written before a run starts (or not at all by a run) do not end a run.
+  const preStart = new Set(['started', 'issue_closed', 'stale_handover', 'head_moved', 'completed_before_resume']);
+  const kinds = new Set();
+  for (const m of src.matchAll(/transition\(root, \w+, '(?:blocked|failed|queued|paused_limit|completed|stopped)', '([a-z_]+)'/g)) kinds.add(m[1]);
+  for (const m of src.matchAll(/\['([a-z_]+(?:', '[a-z_]+)*)'\]\.includes\(result\.event\)/g)) for (const k of m[1].split("', '")) kinds.add(k);
+  for (const k of ['context_too_large', 'preflight_failed', 'context_limit', 'orphaned_worker', 'completed_before_limit']) assert.ok(kinds.has(k) || k === 'preflight_failed', `scan found ${k}`);
+  assert.ok(kinds.size > 10);
+  for (const k of kinds) if (!preStart.has(k)) assert.ok(END.has(k), `END is missing core.mjs kind ${k}`);
+});
+
+test('context_too_large and preflight_failed end an open run', () => {
+  for (const kind of ['context_too_large', 'preflight_failed', 'completed_before_limit', 'orphaned_worker']) {
+    const m = measure([{ id: 'a', kind: 'fix' }], [ev('a', 'created', 0), ev('a', 'started', 0), ev('a', kind, 10)], 0, 60 * M);
+    assert.equal(m.before.busyMinutes, 10, kind);
+  }
 });

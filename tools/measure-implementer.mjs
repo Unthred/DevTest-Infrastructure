@@ -7,7 +7,7 @@
 // Idle with work queued = minutes when no job of that view runs while at least one is queued. Busy shares are of the window.
 import fs from 'node:fs';
 import path from 'node:path';
-const END = new Set(['completed', 'incomplete', 'usage_limit', 'manual_stop', 'manual_pause', 'approval_required', 'retry_exhausted', 'auth_error', 'leases_released', 'recovered', 'obsolete_pr_merged', 'crash', 'network_error', 'transient_rate_limit', 'checkpoint_failed', 'context_fresh_session']);
+export const END = new Set(['completed', 'incomplete', 'usage_limit', 'manual_stop', 'manual_pause', 'approval_required', 'retry_exhausted', 'auth_error', 'leases_released', 'recovered', 'obsolete_pr_merged', 'crash', 'network_error', 'transient_rate_limit', 'checkpoint_failed', 'context_fresh_session', 'completed_before_limit', 'context_too_large', 'context_limit', 'preflight_failed', 'orphaned_worker']);
 // A job waits again after an attempt that ended without finishing it: it is queued from that end to its next `started` (an attempt never restarted leaves no queue time unless the job's current status is 'queued': then it is waiting now).
 const REQUEUE = new Set(['incomplete', 'recovered', 'crash', 'network_error', 'checkpoint_failed', 'context_fresh_session']);
 const BEFORE = new Set(['implement', 'continue', 'fix', 'cifix', 'rebase']);
