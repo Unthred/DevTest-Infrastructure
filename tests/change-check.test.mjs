@@ -337,3 +337,18 @@ test('real process, what a no-op pass still does: dead-worker detection, dashboa
   assert.ok(!fs.existsSync(path.join(w.root, 'team', 'wake-pass.lock')) && !fs.existsSync(path.join(w.root, 'team', 'tick.lock')), 'locks released');
   const y = w.pass(); assert.equal(y.snap.noop, true); assert.ok(y.snap.at > x.snap.at);
 });
+test('replay pass that did something enters the chain window; once a job ends the chained pass reads GitHub live, not the replayed cache', async t => {
+  const pr = h => ({ number: 10, title: 't', headRefName: 'codex/issue-2-x', headRefOid: H(h), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] });
+  const pulls = [pr(1)], issues = [{ number: 23, title: 'a', state: 'CLOSED', body: '', labels: [] }, { number: 5, title: 'b', state: 'CLOSED', body: '', labels: [] }, { number: 2, title: 'c', state: 'OPEN', body: '', labels: [] }];
+  const w = teamWorld(t, { pulls, issues });
+  const rec = cachedGithub(w.base, { mode: 'record' }); await w.make(rec.gh).plan();
+  const cache = buildCache({ repository: 'o/r', baseline: { etags: {}, heads: [H(1)] }, wrapper: rec, now: 1 }); assert.ok(cache);
+  w.jobs.active = [{ id: 'j9', provider: 'claude', status: 'running' }];
+  const rep = cachedGithub(w.base, { mode: 'replay', cache }), team = w.make(rep.gh);
+  let slept = 0; team.sleep = async () => { slept++; w.jobs.active = []; pulls[0] = pr(2); };   // the running job ends and the PR head moves
+  let liveHead = null, passes = 0; const orig = team.tickPass.bind(team);
+  team.tickPass = async o => { passes++; if (passes === 2) liveHead = (await team.gh.listPulls())[0].headRefOid; return orig(o); };
+  const report = await team.tick({ dryRun: false, replay: true, beforeChain: () => rep.endReplay() });
+  assert.notEqual(report.noop, true); assert.equal(slept, 1, 'the chain window was entered'); assert.equal(passes, 2, 'a chained pass ran');
+  assert.equal(liveHead, H(2), 'the chained pass reads GitHub live');
+});

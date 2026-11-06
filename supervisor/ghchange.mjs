@@ -208,7 +208,7 @@ export function cachedGithub(gh, { mode, cache = null }) {
     if (typeof gh[name] !== 'function') continue;
     wrapped[name] = async (...args) => { stats.writes++; live = false; return gh[name](...args); };   // after a write, GitHub is no longer what the 304s proved
   }
-  return { gh: wrapped, stats, reads, memo, openHeads: () => ({ ...heads }) };
+  return { gh: wrapped, stats, reads, memo, openHeads: () => ({ ...heads }), endReplay: () => { live = false; } };   // chained passes must read GitHub live
 }
 
 // The cache to store after a full pass that read everything without error. Returns null when nothing may be stored.

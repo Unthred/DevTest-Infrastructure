@@ -291,7 +291,7 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
       // Issue #110: refresh the allowance of a held agent whose reading is stale (or whose reset time has just passed) before
       // planning, so a fresh reading can release the reviews-only latch in this very tick. A dry run or a hold never spends a run.
       if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
-      const report = await team.tick({ dryRun, hold, replay: mode === 'replay' });
+      const report = await team.tick({ dryRun, hold, replay: mode === 'replay', beforeChain: () => wrapper?.endReplay() });
       if (!dryRun) {
         record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}), noop: report.noop === true, ghCalls: ghStats.calls, ghMs: ghStats.ms, ...(check ? { check: { result: check.replay ? 'unchanged' : 'full', reason: check.reason, probes: check.probes, served: wrapper?.stats.served ?? 0 } } : {}) });
         // The baseline is stored only after a full pass that read everything without error, and never after a replay (so the forced-full clock keeps running).

@@ -1581,7 +1581,7 @@ export class Team {
   // Issue #338: after a pass, while jobs run, wait (bounded) for one to finish and run another full pass, so a freed slot refills
   // within seconds, not at the next five-minute tick. Every later pass is a complete tickPass (ingest, budgets, plan, all gates,
   // the same hold); nothing here starts a job. Off unless limits.chain_seconds is set; limits.chain_passes bounds the extra passes.
-  async tick({ dryRun = false, hold = null, replay = false } = {}) {
+  async tick({ dryRun = false, hold = null, replay = false, beforeChain = null } = {}) {
     const report = await this.tickPass({ dryRun, hold });
     // Issue #755: a replay pass (GitHub proved unchanged by conditional requests) that planned and did nothing ends here, without the chain window
     // that would wait for a running job to end. A job end asks for its own pass (issue #406); a request past its cap falls back to the schedule.
@@ -1599,6 +1599,7 @@ export class Team {
         try { const now = new Set((await this.jobs.listActive()).map(j => j.id)); ended = [...before].some(id => !now.has(id)); } catch { break; }
       }
       if (!ended) break;
+      if (typeof beforeChain === 'function') beforeChain();   // a job ended: GitHub moved on, so a replayed cache must not feed this pass
       const next = await this.tickPass({ dryRun: false, hold });
       for (const [k, v] of Object.entries(next)) report[k] = Array.isArray(v) && Array.isArray(report[k]) ? report[k].concat(v) : (k in report && !Array.isArray(v) ? report[k] : v);
       (report.chained ||= []).push({ pass: n + 2, actions: next.actions.map(a => `${a.type} ${a.pr ?? a.issue}`) });
