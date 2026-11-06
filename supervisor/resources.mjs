@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { SupervisorError } from './core.mjs';
-import { startGroupWatchdog } from './watchdog.mjs';
+import { startGroupWatchdog, gateJob } from './watchdog.mjs';
 
 export const CLASS_ORDER = ['small', 'suite', 'build'];
 export const DEFAULT_CLASSES = {
@@ -97,19 +97,22 @@ export const killRecord = ({ klass, limitMb, observedMb, id }) => ({
 export function runLimited(cmd, { env, limits, klass, id, intervalMs = 250, rss = groupRss, spawnFn, wrapper } = {}) {
   return new Promise(async resolve => {
     const { spawn } = await import('node:child_process');
-    const argv = wrapper ? [...wrapper, ...cmd] : cmd;
+    const inner = wrapper ? [...wrapper, ...cmd] : cmd;
+    const gate = limits && !spawnFn ? gateJob(inner) : null;   // the job waits until its watchdog exists (issue #659)
+    const argv = gate ? gate.argv : inner;
     const child = (spawnFn || spawn)(argv[0], argv.slice(1), { stdio: 'inherit', env, detached: Boolean(limits) });
     let kill = null, timer = null;
     const forward = sig => (limits ? killGroup(child.pid, sig) : child.kill(sig));   // without limits the child shares our group, as before
     // The limited job leaves our process group, so a watchdog outside it kills the job's group if this runner disappears (SIGKILL, OOM kill).
     let dog = null;
     if (limits && !spawnFn && child.pid) {
-      // Not covered: the runner dying in the instant between spawning the job and spawning this watchdog.
+      // The job is gated, so a runner dying before the watchdog exists leaves no running job.
       dog = startGroupWatchdog({ pgid: child.pid, pollMs: 300 });
+      gate.open();
     }
     // SIGHUP is forwarded only on the limited path; without limits the runner behaves as before (SIGHUP ends it by default).
     const sigs = limits ? ['SIGINT', 'SIGTERM', 'SIGHUP'] : ['SIGINT', 'SIGTERM']; for (const s of sigs) process.on(s, forward);
-    const done = code => { clearInterval(timer); if (dog) { try { dog.kill('SIGKILL'); } catch {} } for (const s of sigs) process.off(s, forward); if (limits) killGroup(child.pid); resolve({ code, kill }); };   // nothing left behind
+    const done = code => { clearInterval(timer); if (gate) gate.cleanup(); if (dog) { try { dog.kill('SIGKILL'); } catch {} } for (const s of sigs) process.off(s, forward); if (limits) killGroup(child.pid); resolve({ code, kill }); };   // nothing left behind
     if (limits) timer = setInterval(() => {
       const used = rss(child.pid);
       if (!kill && used > limits.memory_mb * MB) { kill = killRecord({ klass, limitMb: limits.memory_mb, observedMb: Math.round(used / MB), id }); killGroup(child.pid); }
