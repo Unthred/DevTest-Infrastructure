@@ -26,6 +26,13 @@ export function bounded(value, max = MAX_TEXT) {
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : dflt; };
 
+const PLAN_CAUTION = 'The circuit breaker is applied by a real tick, not to this plan: plannedActions may include actions a tick would drop.';
+// Issue #675: reports every halted cause (count and entries, not only the oldest) and a failed breaker evaluation.
+export function breakerHaltOf(b) {
+  const h = b?.halt, error = b?.error ?? null;
+  if (!h) return error ? { halted: false, error, note: 'Breaker evaluation failed; existing halts stay in force.' } : { halted: false };
+  return { halted: true, scope: h.scope ?? null, cause: h.cause ?? null, count: h.count ?? 1, entries: (h.entries || []).slice(0, 8).map(e => ({ cause: e.cause ?? null, types: e.types ?? null, since: e.since ?? null })), error, caution: PLAN_CAUTION };
+}
 export function createTools({ source, readHost, getPath = null, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
   const calls = [];   // times of recent calls, for the rate limit
   const withView = async fn => { const r = await source.get(); return { ...fn(r.view), viewAgeSeconds: Math.round(r.ageMs / 1000), ...(r.stale ? { stale: true, staleBecause: r.error } : {}) }; };
@@ -73,7 +80,7 @@ export function createTools({ source, readHost, getPath = null, reports = null, 
         return { matching: total, shown: rows.length, totalTokens: tokens, totalCostUsdEquivalent: Math.round(cost * 100) / 100, note: 'Cost is the provider CLI\'s own usage estimate, not a cash charge. Transcripts are not available through this server.', jobs: rows };
       }) },
     { name: 'foreman_plan', description: 'What the planner would do, as the dashboard recomputes it per request from the last tick\'s cached GitHub data (not a live dry run, and before the circuit breaker is applied): planned actions, why work waits, the open-PR cap and the next tick time. breakerHalt says when the breaker has halted jobs, in which case plannedActions may list actions a real tick would drop.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      run: () => withView(v => ({ plannedActions: v.plan || [], breakerHalt: v.breaker?.halt ? { halted: true, scope: v.breaker.halt.scope ?? null, cause: v.breaker.halt.cause ?? null, caution: 'The circuit breaker is applied by a real tick, not to this plan: plannedActions may include actions a tick would drop.' } : { halted: false }, nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [], note: 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.' })) },
+      run: () => withView(v => ({ plannedActions: v.plan || [], breakerHalt: breakerHaltOf(v.breaker), nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [], note: 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.' })) },
     { name: 'foreman_host', description: 'Tower load average, memory and swap, from /proc.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => ({ ...readHost(), readAt: iso(now()) }) },
     { name: 'foreman_reports', description: 'Reports that hand-run sessions left for the overseer. With no name: the list (name, time, size), newest first. With a name: that one report as text (redacted, truncated if long). Reads one fixed folder only.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'a report name from the list, for example speedup.md' } }, additionalProperties: false },
