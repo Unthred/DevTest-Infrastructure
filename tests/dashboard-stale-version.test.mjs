@@ -513,3 +513,38 @@ test('issue #488: the dashboard shows the refusal item only while installed comm
   fs.unlinkSync(path.join(root, 'current')); install(root, NEW);
   v = await view(root, { running: NEW }); assert.ok(!v.attention.some(a => a.id === 'upgrade-refused'), 'installed commit moved');
 });
+
+// ---- issue #632: a slow healthy server passes; an immediate exit fails with its output kept, redacted
+test('issue #632: a slow-to-answer but healthy server passes; a process that exits straight away fails with cause and output', async t => {
+  const mk = () => {
+    const proc = fakeProc(t, { 100: ['node', cli(OLD), 'dashboard', 'serve', '--host', '192.168.1.5', '--port', '8731'] });
+    const kill = (pid, sig) => { if (sig === 0) { if (!fs.existsSync(path.join(proc, String(pid)))) throw Object.assign(new Error(), { code: 'ESRCH' }); return; } fs.rmSync(path.join(proc, String(pid)), { recursive: true }); };
+    const start = (w, args) => { fs.mkdirSync(path.join(proc, '200')); fs.writeFileSync(path.join(proc, '200', 'cmdline'), ['node', cli(NEW), ...args].join('\0') + '\0'); };
+    return { proc, kill, start };
+  };
+  // Slow: the first probes time out under load, then it answers steadily. No failure, no second attempt.
+  const a = mk(); let probes = 0, starts = 0;
+  const slow = await restartDashboardServer(NEW, { procRoot: a.proc, kill: a.kill, start: (w, x) => { starts++; a.start(w, x); }, sleep: async () => {}, health: async () => ++probes > 5 });
+  assert.equal(slow.ok, true); assert.equal(starts, 1); assert.ok(probes >= 8, 'several probes, not one');
+
+  // Exits right after it first answered: fails with cause "exited" and the redacted output the process wrote.
+  const fakeKey = ['sk', 'x'.repeat(24)].join('-'), fakeBearer = ['Bearer', 'a1b2c3d4e5f6a7b8c9d0'].join(' ');
+  const b = mk(); let answered = 0;
+  const gone = await restartDashboardServer(NEW, {
+    procRoot: b.proc, kill: b.kill, start: b.start, startOld: () => {}, sleep: async () => {}, tries: 3,
+    health: async () => { if (++answered === 1) return true; fs.rmSync(path.join(b.proc, '200'), { recursive: true, force: true }); return false; },
+    logMark: () => 0, logTail: () => `Error: listen EADDRINUSE 192.168.1.5:8731 token=${fakeKey} ${fakeBearer}`
+  });
+  assert.equal(gone.ok, false); assert.equal(gone.cause, 'exited');
+  assert.match(gone.output, /EADDRINUSE/);
+  assert.doesNotMatch(JSON.stringify(gone), new RegExp(fakeKey.slice(3, 15))); assert.doesNotMatch(JSON.stringify(gone), /a1b2c3d4e5f6/);
+});
+
+test('issue #632: a running server that never answers is "unresponsive" after the bounded wait, not "exited"', async t => {
+  const proc = fakeProc(t, { 100: ['node', cli(OLD), 'dashboard', 'serve', '--host', '192.168.1.5', '--port', '8731'] });
+  const kill = (pid, sig) => { if (sig === 0) { if (!fs.existsSync(path.join(proc, String(pid)))) throw Object.assign(new Error(), { code: 'ESRCH' }); return; } fs.rmSync(path.join(proc, String(pid)), { recursive: true }); };
+  const start = (w, args) => { fs.mkdirSync(path.join(proc, '200')); fs.writeFileSync(path.join(proc, '200', 'cmdline'), ['node', cli(NEW), ...args].join('\0') + '\0'); };
+  let n = 0;
+  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start, startOld: () => {}, sleep: async () => {}, tries: 3, settleMaxMs: 10000, settleProbeMs: 1000, health: async () => (++n === 1), logTail: () => '' });
+  assert.equal(r.ok, false); assert.equal(r.cause, 'unresponsive'); assert.match(r.reason, /stopped answering/);
+});
