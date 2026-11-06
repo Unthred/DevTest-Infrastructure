@@ -237,8 +237,8 @@ export const TRIPPED_BY_LABEL = {
   cost: 'cost limit',
   'any-kind-cost': 'cost of waste of any kind',
 };
-export const trippedByLabel = (v) => TRIPPED_BY_LABEL[v] || String(v);
-export const COST_LABEL ='usage equivalent (the CLI\'s own estimate; plan usage is not a cash charge)';
+export const trippedByLabel = (v) => (Object.hasOwn(TRIPPED_BY_LABEL, v) ? TRIPPED_BY_LABEL[v] : String(v));
+export const COST_LABEL = 'usage equivalent (the CLI\'s own estimate; plan usage is not a cash charge)';
 export function haltView(s, running = []) {
   normalize(s);
   const entries = [...(s.global ? [{ ...s.global, cause: '@global' }] : []), ...Object.values(s.halts)].sort((a, b) => a.since - b.since);
@@ -246,12 +246,12 @@ export function haltView(s, running = []) {
   const top = entries[0], scope = top.cause === '@global' ? 'every new job (merges and the install path continue)' : `new ${top.types.join('/')} jobs`;
   const fmt = n => `$${n.toFixed(2)}`;
   return {
-    halted: true, count: entries.length, cause: top.cause, since: top.since, scope, jobs: top.jobs, tokens: top.tokens, cost: top.cost, costLabel: COST_LABEL, prs: top.prs, trippedBy: top.trippedBy,
+    halted: true, count: entries.length, cause: top.cause, since: top.since, scope, jobs: top.jobs, tokens: top.tokens, cost: top.cost, costLabel: COST_LABEL, prs: top.prs, trippedBy: top.trippedBy, trippedByLabel: trippedByLabel(top.trippedBy),
     running: running.map(r => ({ ...r })),
     text: `Work halted: ${top.cause === '@global' ? 'wasted usage across causes reached the higher limit' : `cause ${top.cause}`}. ${top.jobs} wasted job${top.jobs === 1 ? '' : 's'}, ${top.tokens.toLocaleString('en-GB')} tokens, ${fmt(top.cost)} ${COST_LABEL}.${top.prs.length ? ` Affected: ${top.prs.map(n => '#' + n).join(', ')}.` : ''} Stopped: ${scope}.`,
     running_text: running.length ? `Still running: ${running.map(r => `${r.type} ${r.ref ?? ''}`.trim()).join(', ')}.` : 'Nothing is still running.',
     action: `Fix the cause, then press Resume on the dashboard, or run: ai-supervisor team breaker resume ${top.cause === '@global' ? 'global' : top.cause} (or "all"). It clears itself when a later job of the halted type succeeds, and otherwise stays halted across restarts until you resume it.`,
-    entries: entries.map(e => ({ cause: e.cause, since: e.since, jobs: e.jobs, tokens: e.tokens, cost: e.cost, prs: e.prs, types: e.types, trippedBy: e.trippedBy })),
+    entries: entries.map(e => ({ cause: e.cause, since: e.since, jobs: e.jobs, tokens: e.tokens, cost: e.cost, prs: e.prs, types: e.types, trippedBy: e.trippedBy, trippedByLabel: trippedByLabel(e.trippedBy) })),
   };
 }
 
