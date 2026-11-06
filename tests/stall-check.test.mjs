@@ -29,7 +29,9 @@ function world(t, { pulls, limits, active = [], stateDir } = {}) {
 const tick = async w => { const r = await w.team.tick(); return r; };
 const view = (w, extra = {}) => buildView({ config: config(), root: w.dir, jobs: [], events: [], state: { ...w.team.s, ...extra }, register: REGISTER,
   cache: { tick: { at: w.clock.t - 60000, status: 'ok', error: null, lastOkAt: w.clock.t - 60000 }, pulls: w.gh.pulls, issues: [] }, snapshots: [], now: w.clock.t });
-const stalled = v => v.panels.needsYou.filter(a => /^stall/.test(a.id));
+// A stall only asks the homeowner when a reason names them; every other stall is a notice (overseer job 211f3615).
+const v0 = v => v.panels.needsYou.filter(a => /^stall/.test(a.id));
+const stalled = v => [...v.panels.needsYou, ...v.panels.warnings].filter(a => /^stall/.test(a.id));
 
 test('no progress past the limit raises one item with the required facts; just inside the limit raises none', async t => {
   const w = world(t, { pulls: [pr(7, 'claude/issue-1-a', H(1), { statusCheckRollup: [{ status: 'IN_PROGRESS' }] })] });
@@ -40,8 +42,8 @@ test('no progress past the limit raises one item with the required facts; just i
   const r = await tick(w); assert.deepEqual(r.stalled, [7]);
   const items = stalled(await view(w)); assert.equal(items.length, 1);
   const [it] = items;
-  assert.match(it.text, /PR #7 "Exact title 7"/); assert.match(it.text, /head 1111111/); assert.match(it.text, /stalled 3h 1m/); assert.match(it.text, /last: first seen/);
-  assert.match(it.tried, /CI has not finished/); assert.equal(it.severity, 'action');
+  assert.match(it.text, /PR #7/); assert.match(it.text, /head 1111111/); assert.match(it.text, /no progress for 3h 1m/); assert.match(it.text, /last: first seen/);
+  assert.match(it.tried, /CI has not finished/); assert.equal(it.severity, 'info', 'Foreman waits for CI itself: a notice, not Needs you'); assert.equal(v0(await view(w)).length, 0);
 });
 
 test('a running job holds off the item; a job that ends without a new head or verdict does not reset the timer', async t => {
@@ -60,7 +62,7 @@ test('a running job holds off the item; a job that ends without a new head or ve
 test('a new head or a review verdict resets the timer and clears the item', async t => {
   const w = world(t, { pulls: [pr(7, 'claude/issue-1-a', H(1)), pr(8, 'claude/issue-2-b', H(2))] });
   await tick(w); w.clock.t += 4 * HOUR; await tick(w);
-  assert.equal(stalled(await view(w)).length, 1);   // both share one item (same reason)
+  assert.equal(stalled(await view(w)).length, 2);   // one item per PR
   w.gh.pulls = [pr(7, 'claude/issue-1-a', H(3)), pr(8, 'claude/issue-2-b', H(2))];
   w.team.s.verdicts[`8:${H(2)}`] = { verdict: 'CHANGES', reviewer: 'codex', at: w.clock.t, head: H(2), pr: 8, findings: [] };
   await tick(w); const v = await view(w);
@@ -91,9 +93,9 @@ test('PRs with the same reasons share one item; different reasons get another; a
   const v = await view(w);
   const own = v.panels.needsYou.filter(a => a.ref?.n === 3 && !/^stall/.test(a.id)); assert.equal(own.length, 1, 'PR 3 has its own homeowner item');
   const items = stalled(v);
-  assert.ok(items.some(i => /2 open PRs/.test(i.text) && /PR #1 / .test(i.text) && /PR #2 /.test(i.text)), 'PRs 1 and 2 share one item');
+  assert.ok(['stalled-1', 'stalled-2'].every(id => items.some(i => i.id === id && i.severity === 'action')), 'PRs 1 and 2 each have their own homeowner item');
   assert.ok(!items.some(i => /PR #3 /.test(i.text)), 'PR 3 gets no second item');
-  assert.equal(items.length, 1); assert.ok(!items.some(i => /PR #4 /.test(i.text)), 'PR 4 already has its CI item');
+  assert.equal(items.length, 2); assert.ok(!items.some(i => /PR #4 /.test(i.text)), 'PR 4 already has its CI item');
 });
 
 test('a PR with no known reason says so plainly', async t => {

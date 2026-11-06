@@ -15,6 +15,7 @@ import { proposalsAdded } from './decisions.mjs';
 import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
+import { consolidateNeedsYou } from './needsyou.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
@@ -145,7 +146,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (!v && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'pending') reason = `re-review requested by the homeowner (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}); waiting for a reviewer on a different model for ${sha7(pr.headRefOid)}`;
     else if (v?.verdict === 'CHANGES' && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'done') reason = `the requested re-review (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}) also gave CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; waiting for the homeowner`;
-    else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`;
+    else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; ${team.fixCount(pr.number) >= c.limits.max_fix_attempts && !planned.has(`${author}:fix:${pr.number}`) ? `fix limit reached (${c.limits.max_fix_attempts} rounds): Foreman has stopped fixing this PR and needs the homeowner` : `fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`}`;
     else if (v?.verdict === 'PASS' && v.carriedFrom && !team.carryOk(v, pr)) reason = `PASS carried from ${sha7(v.carriedFrom)} but its record does not match this head; not merged`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}${v.carry ? ` (${carryText(v.carry)})` : ''}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
     else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}${noReviewer.get(pr.number) ? `; no reviewer can take it: ${noReviewer.get(pr.number)}` : ''}`;
@@ -301,7 +302,7 @@ export function heldIssues({ cache, state = {}, splitting = new Set(), pauseText
 }
 function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [], fixCount, excluded = [], pauseText = null }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
-  const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}) });
+  const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}), ...(Number.isFinite(x.since) ? { since: x.since } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
   const heldJobs = n => Object.values(state.unblock?.flags?.[n] || {}).filter(x => x.kind === 'job').map(x => x.job);   // issue #583: jobs holding the label
   // Issue #610: `resume` refuses a stopped job, so the card offers the command only for held jobs that can be resumed (an unknown job keeps it).
@@ -394,7 +395,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     // Issue #186: the PR's own limit card already links this job, so it is not a second card for the same event.
     if (kind === 'pull' && prCarded.has(j.issue)) continue;
     add(`job-${j.id}`, `${names.job(j).text} (${j.provider}) is ${j.status}: ${redact(j.lastEvent || 'unknown reason', 60)}.`, { kind, n: j.issue },
-      { tried: `The ${j.kind || 'job'} job ran ${j.attempts || 1} attempt${(j.attempts || 1) === 1 ? '' : 's'} and ended ${j.status}; Foreman starts no new job for it.`, action: 'Read the job record, then retry it or close the issue.', links: [{ text: (kind === 'pull' ? names.pr(j.issue) : names.issue(j.issue)).text, url: web(kind, j.issue) }, { text: names.job(j).text, url: names.job(j).url }] });
+      { tried: `The ${j.kind || 'job'} job ran ${j.attempts || 1} attempt${(j.attempts || 1) === 1 ? '' : 's'} and ended ${j.status}; Foreman starts no new job for it.`, action: 'Read the job record, then retry it or close the issue.', since: j.updatedAt, links: [{ text: (kind === 'pull' ? names.pr(j.issue) : names.issue(j.issue)).text, url: web(kind, j.issue) }, { text: names.job(j).text, url: names.job(j).url }] });
   }
   // issue #158: a rebase that dropped commits, while the PR still sits on that rebased head
   for (const [id, tj] of Object.entries(state.jobs || {})) {
@@ -440,27 +441,19 @@ function stallItems({ items, state, cache, gated, names, now, web, limits }) {
   if (st.error) items.push({ id: 'stall-check-error', text: redact(`The stalled-PR check failed: ${st.error}. PRs that stopped making progress may not be reported; this is a bug in Foreman.`, 400), ref: null });
   const open = new Map((cache?.pulls || []).filter(p => !p.isDraft).map(p => [p.number, p]));
   const covered = new Set([...items.filter(i => i.ref?.kind === 'pull').map(i => i.ref.n), ...(gated?.prs || []).map(p => p.number)]);
-  const groups = new Map();
-  for (const it of st.items || []) {
-    const pr = open.get(it.pr);
-    if (!pr || pr.headRefOid !== it.head || covered.has(it.pr)) continue;
-    const codes = (it.reasons || []).map(r => r.code).sort(), key = codes.join('|') || 'unknown';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(it);
-  }
   const span = ms => { const m = Math.round(ms / 60000), h = Math.floor(m / 60); return h ? `${h}h ${m % 60}m` : `${m}m`; };
   const hours = Number.isFinite(limits?.stall_hours) ? limits.stall_hours : STALL_DEFAULT_HOURS;
-  for (const [key, list] of groups) {
-    list.sort((a, b) => a.pr - b.pr);
-    const reasons = list[0].reasons?.length ? list[0].reasons : null;
-    const homeowner = key.split('|').includes('homeowner');
-    const lines = list.map(it => `PR #${it.pr} "${it.title}" (head ${String(it.head).slice(0, 7)}, stalled ${span(now - it.since)}; last: ${it.last})`);
+  // One item per PR. Only a reason that names the homeowner asks anything of them; a PR Foreman itself will move on (allowance, a rebase,
+  // a reviewer becoming free) is a notice, and a PR with no known reason is a Foreman bug the homeowner can only report.
+  for (const it of [...(st.items || [])].sort((a, b) => a.pr - b.pr)) {
+    const pr = open.get(it.pr);
+    if (!pr || pr.headRefOid !== it.head || covered.has(it.pr)) continue;
+    const reasons = it.reasons?.length ? it.reasons : null, homeowner = (reasons || []).some(r => r.code === 'homeowner');
     const why = reasons ? reasons.map(r => r.text).join('; ') : 'Foreman knows no reason it is waiting. That is a bug in Foreman; please report it';
-    const id = 'stalled-' + (key.replace(/[^a-z0-9]+/gi, '-').slice(0, 60) || 'unknown');
-    items.push({ id, text: redact(`${list.length} open PR${list.length === 1 ? ' has' : 's have'} made no progress for over ${hours} hours: ${lines.join('; ')}`, 1200), ref: list.length === 1 ? { kind: 'pull', n: list[0].pr } : null,
+    items.push({ id: `stalled-${it.pr}`, text: redact(`${names.pr(it.pr).text} (head ${String(it.head).slice(0, 7)}) has made no progress for ${span(now - it.since)} (limit ${hours} hours); last: ${it.last}`, 400), ref: { kind: 'pull', n: it.pr }, since: it.since, homeowner: homeowner || !reasons,
       tried: redact(`No new head, no new review verdict and no running job. Current reason${reasons?.length > 1 ? 's' : ''}: ${why}.`, 800),
-      action: homeowner ? 'Merge it, or decide what to do with it; Foreman will not act on this branch.' : reasons ? 'Open the PR and clear what holds it, or tell Foreman what to change; the item clears as soon as the PR gets a new head or review verdict, merges or closes.' : 'Open the PR and decide; report the missing reason as a Foreman bug.',
-      links: list.slice(0, 6).map(it => ({ text: names.pr(it.pr).text, url: web('pull', it.pr) })).map(l => ({ text: redact(l.text, 140), url: l.url })) });
+      action: homeowner ? 'Merge it, or decide what to do with it; Foreman will not act on this branch.' : reasons ? 'Nothing is needed from you: Foreman moves it on when the reason clears.' : 'Open the PR and decide; report the missing reason as a Foreman bug.',
+      links: [{ text: redact(names.pr(it.pr).text, 140), url: web('pull', it.pr) }] });
   }
 }
 
@@ -705,9 +698,9 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       const dl = team.capDeadlock(c.pulls || [], c.issues || []);
       if (dl) attention.push({ id: 'cap-deadlock', text: `New work is stuck at the open-PR cap (${dl.cap}) and none of these ${dl.prs.length} open PRs can move on its own: ${dl.prs.map(n => '#' + n).join(', ')}.`, ref: null, severity: 'action', action: 'Choose one: merge or close one of these PRs, resolve what each is waiting on, or raise limits.max_open_prs in team.local.json.' }); }
     // Issue #521: an issue marked implemented whose pull request was closed unmerged (or never opened) cannot start by itself.
-    for (const e of Object.values(team.stale || {})) attention.push({ id: `stale-mark-${e.issue}`, text: redact(`Issue #${e.issue}: ${team.staleText(e.issue).replace(/^stuck: /, '')}.`, 300), ref: e.issue, severity: 'action', action: `If it should be implemented again, run: team reopen ${e.issue}. Otherwise close the issue or leave it.` });
+    for (const e of Object.values(team.stale || {})) attention.push({ id: `stale-mark-${e.issue}`, text: redact(`Issue #${e.issue}: ${team.staleText(e.issue).replace(/^stuck: /, '')}.`, 300), ref: { kind: 'issue', n: e.issue }, since: e.markedAt, severity: 'action', action: `If it should be implemented again, run: team reopen ${e.issue}. Otherwise close the issue or leave it.` });
     // Issue #630: mismatches between Foreman's records and GitHub or the running jobs that it cannot fix safely; one item each while it lasts.
-    for (const it of team.selfCheckItems?.() || []) attention.push({ id: it.id, text: redact(it.text, 400), ref: it.ref, severity: 'action', action: it.action });
+    for (const it of team.selfCheckItems?.() || []) attention.push({ id: it.id, text: redact(it.text, 400), ref: Number.isSafeInteger(it.ref) ? { kind: 'pull', n: it.ref } : it.ref, since: it.since, severity: 'action', action: it.action });
     // Issue #547: a finished review whose verdict was refused at ingestion (writer unknown, or the reviewer's model wrote the head).
     for (const r of team.refusedVerdicts(c.pulls || [])) attention.push({ id: `noreviewer-refused-${r.pr}`, text: redact(`The review of PR #${r.pr} at ${String(r.head).slice(0, 7)} (job ${String(r.job).slice(0, 8)}, ${r.agent} on ${r.model || 'its default model'}) finished but its verdict was not recorded: ${r.text}. Verdict file: ${r.file}${r.kept ? keptText(r.kept) : ''}`, 1400), ref: r.pr, severity: 'action', action: r.reason === 'writer unknown' ? `Have a reviewer on another provider review PR #${r.pr} at this head, or push a new head through a Foreman job and have that new head reviewed; this refused verdict is not recorded.` : `Have a different model review PR #${r.pr} at this head (the refused verdict in the file above is not recorded and is not trusted).` });
     // Issue #326: queued or conflicting work, but nothing planned or started for idle_minutes; clears when a job starts.
@@ -806,8 +799,8 @@ const NEXT_STEP = {
   rebase: 'Restore the dropped commits on the PR branch (the old head is still reachable by its id) before it is reviewed or merged.'
 };
 const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run', 'upgrade-latched': 'ai-supervisor self-upgrade clear-latch' };
-export function healthOf({ attention, states, teamEnabled }) {
-  const open = attention.filter(a => a.severity === 'action').length;   // issue #141: the header shows how many
+export function healthOf({ attention, states, teamEnabled, needsYouCount }) {
+  const open = Number.isSafeInteger(needsYouCount) ? needsYouCount : attention.filter(a => a.severity === 'action').length;   // one shared count: the consolidated list's length   // issue #141: the header shows how many
   if (open) return { state: 'needs_you', label: `Needs you (${open})`, count: open, severity: 'action' };
   if (attention.some(a => /^(tick-stale|idle)/.test(a.id))) return { state: 'stuck', label: 'Stuck', severity: 'warning' };
   if (Object.values(states).some(s => s.state === 'unknown')) return { state: 'unknown', label: 'Unknown', severity: 'warning' };
@@ -901,7 +894,8 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const tickAt = cache.tick?.at ?? null;
   const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
-  const needsYou = attention.filter(a => a.severity === 'action').map(a => {
+  const consolidated = consolidateNeedsYou(attention, { cache, now });
+  const needsYou = consolidated.needsYou.map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
     const watch = a.id.startsWith('job-') && transcriptExists(root, a.id.slice(4)) ? a.id.slice(4) : null;
@@ -909,9 +903,9 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   });
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {
-    health: healthOf({ attention, states, teamEnabled }), freshness: freshness(tickAt, now),
+    health: healthOf({ attention, states, teamEnabled, needsYouCount: needsYou.length }), freshness: freshness(tickAt, now),
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, later: laterOf({ cache, state, pauseText, names, config }), warnings: attention.filter(a => a.severity !== 'action').map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };
