@@ -147,8 +147,10 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (out.used >= settings.high_water && out.hoursLeft > settings.high_water_min_hours) return { ...out, rule: 'high-water', mode: 'reviews_only', until: weekly.resetsAt, reason: `weekly ${pct(out.used)}: at or above ${pct(settings.high_water)} with more than ${settings.high_water_min_hours}h to go` };
   // Hysteresis, for the high-water rule only: once reviews-only for that reason in a weekly window, stay so until that window resets.
   // Issue #110: a fresh probe reading taken after the latch was set is new evidence; the check above found the agent below the high-water mark, so the latch is released.
-  // A latch recorded without that rule (an older forecast latch) is ignored: it clears on the first tick.
-  const held = latched?.mode === 'reviews_only' && latched.rule === 'high-water' && sameReset(latched.until, weekly.resetsAt);
+  // A latch recorded without a rule is an older one: a forecast latch is ignored (it clears on the first tick), but a genuine high-water latch
+  // (its reason names the mark, not a projection) keeps holding to the reset, also in the last day of the window where the live rule no longer applies.
+  const legacyHighWater = latched?.rule == null && /^weekly \d+%: at or above \d+% with more than/.test(String(latched?.reason ?? '')) && !/projected/.test(String(latched?.reason ?? ''));
+  const held = latched?.mode === 'reviews_only' && (latched.rule === 'high-water' || legacyHighWater) && sameReset(latched.until, weekly.resetsAt);
   const probed = allowance.source === 'probe' && Number.isFinite(allowance.observedAt) && Number.isFinite(latched?.since) && allowance.observedAt > latched.since;
   if (held && probed) return { ...out, reason: `${est}; the reviews-only latch was released by a fresh allowance probe` };
   if (held) return { ...out, rule: 'high-water', mode: 'reviews_only', until: weekly.resetsAt, reason: `${redact(latched.reason, 300)}; held until the weekly reset` };

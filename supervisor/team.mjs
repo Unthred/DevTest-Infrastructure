@@ -1186,7 +1186,7 @@ export class Team {
   reviewWhy(agent, act, prs) {
     if (act.secondOpinion || act.postMerge || act.exceptionStage) return null;
     const pr = prs.find(p => p.number === act.pr); if (!pr) return null;
-    const fig = n => { const m = this.modes?.[n]; return m?.known && Number.isFinite(m.projected) ? `${n} projected ${Math.round(m.projected * 100)}% at its reset` : `${n} reading unknown`; };
+    const fig = n => { const m = this.modes?.[n]; return m?.known && Number.isFinite(m.projected) ? `${n} estimate ${Math.round(m.projected * 100)}% at its reset` : `${n} reading unknown`; };
     const others = this.otherReviewers(agent, pr);
     if (!others.length) {
       const rest = this.agents().map(([n]) => n).filter(n => n !== agent).map(n => `${n}: ${this.reviewRefusal(n, pr, `${verdictKey(pr.number, pr.headRefOid)}:${n}`) ? 'it wrote this head' : this.limitedOf(n).out ? 'out of allowance' : 'cannot review now'}`);

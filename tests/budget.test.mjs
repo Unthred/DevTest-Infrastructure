@@ -515,6 +515,15 @@ test('budget #680: 85% used with days left gives reviews_only, and that latch ho
   const short = claudeAl(0.1, { at: now, resetsAt: R1 }); short.windows[0].utilization = 0.999;
   assert.equal(assessAgent({ allowance: short, now }).mode, 'waiting');
 });
+test('budget #682: a genuine old high-water latch (no rule field) keeps holding to the reset in the last day; an old forecast latch does not', () => {
+  const now = R1 - 10 * HOUR;
+  const old = { mode: 'reviews_only', since: now - 30 * HOUR, until: R1, reason: 'weekly 86%: at or above 85% with more than 24h to go' };
+  const a = assessAgent({ allowance: claudeAt(now, 0.9), now, latched: old });
+  assert.equal(a.mode, 'reviews_only'); assert.equal(a.rule, 'high-water'); assert.match(a.reason, /held until the weekly reset/);
+  const fc = { mode: 'reviews_only', since: now - 30 * HOUR, until: R1, reason: 'weekly 5%, projected 280% at reset' };
+  assert.equal(assessAgent({ allowance: claudeAt(now, 0.9), now, latched: fc }).mode, 'normal');
+  assert.equal(assessAgent({ allowance: claudeAt(now, 0.9), now, latched: { ...old, until: R1 - 7 * 24 * HOUR } }).mode, 'normal', 'another window');
+});
 test('budget #680: a token-shaped value in a latched reason does not reach the reason or the mode line', () => {
   const secret = ['gh', 'p_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('');   // assembled at run time
   const now = R0 + 40 * HOUR;
