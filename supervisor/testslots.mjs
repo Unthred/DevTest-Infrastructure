@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { processStart } from './core.mjs';
-import { startGroupWatchdog } from './watchdog.mjs';
+import { startGroupWatchdog, gateJob } from './watchdog.mjs';
 
 export const DEFAULT_TEST_SLOTS = 2;
 const dirOf = root => path.join(root, 'team', 'test-slots');
@@ -88,7 +88,8 @@ export async function stopGroup(pgid, { graceMs = 5000, pollMs = 50 } = {}) {
 }
 // Runs cmd in its own session; resolves { code, timedOut, leftover } (leftover = group members that survived KILL).
 export async function runInGroup(cmd, { env, maxRuntimeMs = DEFAULT_MAX_RUNTIME_MS, graceMs = 5000, stdio = 'inherit', onSignalTarget = process } = {}) {
-  const child = spawn(cmd[0], cmd.slice(1), { stdio, env, detached: true });
+  const gate = gateJob(cmd);   // the job waits until its watchdog exists (issue #659)
+  const child = spawn(gate.argv[0], gate.argv.slice(1), { stdio, env, detached: true });
   const pgid = child.pid;
   // The job left our group, so a detached watchdog outside it kills the job's group if this runner disappears (SIGKILL, OOM kill)
   // or the maximum runtime passes without the runner acting on it.
@@ -96,6 +97,7 @@ export async function runInGroup(cmd, { env, maxRuntimeMs = DEFAULT_MAX_RUNTIME_
   if (pgid) {
     dog = startGroupWatchdog({ pgid, deadlineMs: Date.now() + maxRuntimeMs + 2 * graceMs + 1000, pollMs: 200 });
   }
+  gate.open();
   let timedOut = false, stopping = null;
   const stop = () => (stopping ??= stopGroup(pgid, { graceMs }));
   const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(sig => { const h = () => { stop(); }; onSignalTarget.on(sig, h); return [sig, h]; });
@@ -106,5 +108,6 @@ export async function runInGroup(cmd, { env, maxRuntimeMs = DEFAULT_MAX_RUNTIME_
   const clean = pgid ? await stop() : true;
   for (const [sig, h] of handlers) onSignalTarget.off(sig, h);
   if (dog) { try { dog.kill('SIGKILL'); } catch { /* already gone */ } }
+  gate.cleanup();
   return { code: timedOut ? 124 : code, timedOut, leftover: !clean };
 }

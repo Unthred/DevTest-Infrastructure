@@ -142,3 +142,24 @@ test('the watchdog kills the job group when the runner PID has been reused, and 
   assert.ok(await until(() => !alive(reused.pid), 5000), 'the reused-PID case killed the group');
   assert.equal(alive(good.pid), true, 'a matching start time keeps the group');
 });
+
+test('gateJob (issue #659): the job runs only after the gate opens, and never when the runner is gone or the gate stays shut', async () => {
+  const { gateJob } = await import('../supervisor/watchdog.mjs');
+  const { spawnSync, spawn } = await import('node:child_process');
+  const os = await import('node:os'); const fsm = await import('node:fs'); const pth = await import('node:path');
+  const dir = fsm.mkdtempSync(pth.join(os.tmpdir(), 'gate-test-'));
+  const marker = pth.join(dir, 'ran');
+  const cmd = ['sh', '-c', `echo ok > ${marker}; exit 7`];
+  // 1. positive: opened gate -> command runs, exit code and PID preserved through exec
+  const g1 = gateJob(cmd); const c1 = spawn(g1.argv[0], g1.argv.slice(1), { stdio: 'ignore' });
+  const done1 = new Promise(r => c1.on('exit', r)); g1.open();
+  assert.equal(await done1, 7); assert.ok(fsm.existsSync(marker)); fsm.rmSync(marker); g1.cleanup();
+  // 2. negative: runner already gone -> exits 125, command never runs even if the gate opens later
+  const dead = spawnSync('true'); const g2 = gateJob(cmd, { runnerPid: dead.pid ?? 2 ** 22 - 1 });
+  const c2 = spawnSync(g2.argv[0], g2.argv.slice(1)); g2.open();
+  assert.equal(c2.status, 125); assert.equal(fsm.existsSync(marker), false); g2.cleanup();
+  // 3. negative: gate never opens -> gives up after the bound
+  const g3 = gateJob(cmd, { maxWaitS: 0.2 }); const c3 = spawnSync(g3.argv[0], g3.argv.slice(1));
+  assert.equal(c3.status, 125); assert.equal(fsm.existsSync(marker), false); g3.cleanup();
+  fsm.rmSync(dir, { recursive: true, force: true });
+});
