@@ -266,3 +266,11 @@ parentPort.on('message', ({ id }) => { if (fs.existsSync(${JSON.stringify(flag)}
     assert.deepEqual(await w.build({}), { ok: true });
   } finally { await w.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('page-data tooltip names the reason: behind a write, rebuilding, or just old', async () => {
+  const { pageDataStat } = await import('../supervisor/dashrender.mjs').catch(() => ({}));
+  if (!pageDataStat) return;
+  assert.match(pageDataStat({ pageData: { ageMs: 2000, stale: true, behindWrite: true, refreshing: false } }), /before the latest change/);
+  assert.match(pageDataStat({ pageData: { ageMs: 40000, stale: true, refreshing: true } }), /being rebuilt/);
+  assert.doesNotMatch(pageDataStat({ pageData: { ageMs: 40000, stale: true, refreshing: false } }), /being rebuilt/);
+});
