@@ -145,7 +145,8 @@ test('the Now card shows one short idle line per agent with a link to the breakd
   assert.ok(!line.includes('reviews only'), 'no hold text on the Now card');
   assert.ok(line.length < 400);
   const agentPage = renderRoute(view, { page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }).html;
-  assert.match(agentPage, /holds: reviews only: weekly 92%[^<]*300 min/);
+  assert.match(agentPage, /<span class="hold-label">reviews only<\/span>: <span class="hold-fig">5 h<\/span>/);   // grouped row, 300 min
+  assert.match(agentPage, /<details class="long-text"><summary>details<\/summary>reviews only: weekly 92%/);
 });
 
 // Issue #719: other changing counts, joined holds, and the cut position.
@@ -221,3 +222,49 @@ test('issue #813: the key cut stays well below the raw per-reason cut', () => {
   assert.equal(key.length, HOLD_KEY_CHARS);
 });
 function shortKeyAbsent() { return !('holdKey' in classifyIdle({ states: { codex: 'idle' }, holds: { codex: { a: 'one | two' } } }).codex); }
+
+// ---- issue #950: cards carry structure, not a wall of joined text
+const textBlocks = html => html.replace(/<details[^>]*>[^]*?<\/details>/g, '').replace(/<(script|style)[^]*?<\/\1>/g, '')
+  .split(/<\/?(?:div|p|li|ul|section|header|h\d|span class="badge|tr|td|th|summary|form|a class="tbtn)[^>]*>/).map(t => t.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/g, 'x').trim()).filter(Boolean);
+export const MAX_BLOCK = 240;
+
+test('hold history is grouped by reason with a count and total time, newest first, detail behind a click', () => {
+  const reason = pct => `review held: codex is out of allowance (codex weekly use ${pct}% >= 95%)`, other = 'file overlap: waits for PR #7';
+  const snaps = [
+    { at: at(10), idle: { codex: { cause: 'named-hold', hold: reason(97) } } },
+    { at: at(20), idle: { codex: { cause: 'named-hold', hold: reason(97) + ' | ' + other } } },
+    { at: at(30), idle: { codex: NO } },
+    { at: at(40), idle: { codex: { cause: 'named-hold', hold: reason(98) } } },
+    { at: at(50), idle: { codex: NO } },
+  ];
+  const g = idleReport({ jobs: [], snapshots: snaps, agents: { codex: 'codex' }, from: at(0), to: at(50) }).agents.codex.holdGroups;
+  assert.equal(g.length, 2);
+  assert.deepEqual(g.map(x => x.label), ['review held: codex is out of allowance', 'file overlap: waits for PR #7'].sort((x, y) => (g.find(z => z.label === x).last < g.find(z => z.label === y).last ? 1 : -1)));
+  const rev = g.find(x => x.label.startsWith('review held')), ov = g.find(x => x.label.startsWith('file overlap'));
+  assert.equal(rev.count, 2, 'two separate stretches'); assert.equal(rev.minutes, 40);
+  assert.equal(ov.count, 1); assert.equal(ov.minutes, 10);
+  assert.ok(g[0].last >= g[1].last, 'newest first');
+  assert.equal(g[0], rev, 'the review hold ended last (at 50), the overlap at 30');
+});
+
+test('a card never renders one long block of text, and nothing is cut mid-word', async () => {
+  const { renderRoute } = await import('../supervisor/dashrender.mjs');
+  const { overviewView } = await import('./helpers/lists-fixture.mjs');
+  const base = await overviewView(), name = base.agents[0].name;
+  const reason = 'review held: codex is out of allowance (codex weekly use 97% >= 95%, resets in a few days and then some more words to make it very long indeed)';
+  const holds = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`${reason} | file overlap ${i}`, 12]));
+  const holdGroups = Array.from({ length: 30 }, (_, i) => ({ label: `review held: codex is out of allowance ${i}`, detail: reason, minutes: 1164, count: 14, last: i }));
+  const long = 'Paused new work: ' + 'twelve open PRs (cap 12) and nothing may start until a few of them merge, '.repeat(6);
+  const view = { ...base, capNotes: [long], idleCauses: { agents: { [name]: { idleWithWorkPercent: 40, minutes: { 'named-hold': 300 }, holds, holdGroups } } } };
+  const q = { query: new URLSearchParams(), pathname: '/' };
+  for (const [route, extra] of [[{ page: 'overview' }, q], [{ page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }]]) {
+    const html = renderRoute(view, route, extra).html;
+    for (const t of textBlocks(html)) assert.ok(t.length <= MAX_BLOCK, `block of ${t.length} characters: ${t.slice(0, 80)}`);
+    assert.ok(!/\|/.test(html.replace(/<details[^]*?<\/details>/g, '').replace(/<(script|style)[^]*?<\/\1>/g, '').replace(/<[^>]+>/g, ' ')), 'no joined " | " text outside an expand');
+  }
+  const html = renderRoute(view, { page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }).html;
+  assert.match(html, /1164 min|19\.4 h, 14 times/);
+  assert.match(html, /<summary>Paused new work: [^<]*…<\/summary>/, 'a long note is clipped at a word, the whole text behind it');
+  // negative: the guard itself fails on a wall of text
+  assert.ok(textBlocks('<div>' + 'word '.repeat(80) + '</div>').some(t => t.length > MAX_BLOCK));
+});

@@ -11,7 +11,7 @@ import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.
 import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
 
 import { agentLine } from './agentline.mjs';
-import { CAUSE_LABEL } from './idlecause.mjs';
+import { CAUSE_LABEL, holdLabel } from './idlecause.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
@@ -285,6 +285,16 @@ function allowanceSeries(view, range) {
 const allResets = (view, range) => Object.values(view.graphs.allowance).flatMap(g => g.resets).filter(r => inRange(r.at, view.generatedAt, range));
 const allExpected = view => Object.entries(view.graphs.allowance).flatMap(([agent, g]) => (g.expected || []).map(r => ({ ...r, window: `${agent} ${r.window}` })));
 
+// Issue #950: a long text is cut at a word boundary with the whole text behind an expand; a short one is shown whole.
+const clipWords = (t, max) => { t = String(t); if (t.length <= max) return t; const cut = t.slice(0, max), sp = cut.lastIndexOf(' '); return `${(sp > max / 2 ? cut.slice(0, sp) : cut).replace(/[\s,;:|(]+$/, '')}…`; };
+const longText = (t, max = 120) => (String(t).length <= max ? esc(t) : `<details class="long-text"><summary>${esc(clipWords(t, max))}</summary>${esc(t)}</details>`);
+const spent = m => (m >= 60 ? `${Math.round(m / 6) / 10} h` : `${Math.round(m)} min`);
+// Hold history for one agent: one row per reason, newest first, with total time and how many separate times, the detail behind a click.
+const holdRows = r => {
+  const groups = r.holdGroups || Object.entries(r.holds || {}).map(([detail, minutes]) => ({ label: holdLabel(detail), detail, minutes }));
+  return groups.map(g => `<div class="hold-row"><span class="hold-label">${esc(g.label)}</span>: <span class="hold-fig">${esc(spent(g.minutes))}${Number.isFinite(g.count) ? `, ${esc(g.count)} ${g.count === 1 ? 'time' : 'times'}` : ''}</span>${g.detail && g.detail !== g.label ? ` <details class="long-text"><summary>details</summary>${esc(g.detail)}</details>` : ''}</div>`).join('');
+};
+
 // ---- card shell
 function card({ id, title, span = 6, body, href, tools = '', cls = '', movable = true, expandable = false, type = 'info' }) {
   if (expandable) { type = 'chart'; cls = `${cls} chart-card`; }
@@ -298,7 +308,7 @@ const kpi = ({ id, label, value, href, spark = '', span = 2, sub = '' }) => `<a 
 // ---- the four panels (Overview top) and the status bar
 function nowPanel(view, { describe = true, list = null } = {}) {
   const now = view.generatedAt;
-  const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${esc(x.text)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}${(view.capNotes || []).map(n => `<div class="cap-note">Held down: ${esc(n)}</div>`).join('')}${Object.entries(view.budget || {}).filter(([, b]) => b.known).map(([n, b]) => `<div class="rate-note">${esc(n)}: ${Number.isFinite(b.ratePerHour) ? `${(b.ratePerHour * 100).toFixed(2)}% of the week per hour, ` : ''}estimate ${Number.isFinite(b.projected) ? `${Math.round(b.projected * 100)}%` : 'unknown'} at reset</div>`).join('')}</div>`;
+  const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${esc(x.text)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}${(view.capNotes || []).map(n => `<div class="cap-note">Held down: ${longText(n)}</div>`).join('')}${Object.entries(view.budget || {}).filter(([, b]) => b.known).map(([n, b]) => `<div class="rate-note">${esc(n)}: ${Number.isFinite(b.ratePerHour) ? `${(b.ratePerHour * 100).toFixed(2)}% of the week per hour, ` : ''}estimate ${Number.isFinite(b.projected) ? `${Math.round(b.projected * 100)}%` : 'unknown'} at reset</div>`).join('')}</div>`;
   // Issue #213: one card per running or paused job (role, model, item, elapsed); an agent with none gets one idle/blocked/unknown card.
   // The description is the link text, once; the agent card passes describe:false and gets a plain id link (issue #421).
   const jobRef = (id, name) => (describe ? named(jobPath(id), REFS.job[String(id).slice(0, 8)], name || `job ${String(id).slice(0, 8)}`) : named(jobPath(id), null, `job ${String(id).slice(0, 8)}`));
@@ -316,14 +326,14 @@ function nowPanel(view, { describe = true, list = null } = {}) {
       const top = causes[0] ? `, mostly ${esc(CAUSE_LABEL[causes[0][0]])}` : '';
       return `<div class="sub" data-idle-causes="${esc(n)}">${esc(n)}, last 24 h: idle with work available ${esc(r.idleWithWorkPercent)}%${top} <a href="/agents/${esc(encodeURIComponent(n))}">Breakdown</a></div>`;
     }
-    const holds = Object.entries(r.holds).sort((x, y) => y[1] - x[1]);
-    return `<div class="sub" data-idle-causes="${esc(n)}">${esc(n)}, last 24 h: idle with work available ${esc(r.idleWithWorkPercent)}% (${causes.map(([k, v]) => `${esc(CAUSE_LABEL[k])} ${esc(Math.round(v))} min`).join(', ') || 'none'})${holds.length ? `; holds: ${holds.map(([h, m]) => `${esc(h)} ${esc(Math.round(m))} min`).join(' | ')}` : ''}</div>`;
+    const hr = holdRows(r);
+    return `<div class="sub" data-idle-causes="${esc(n)}"><div>${esc(n)}, last 24 h: idle with work available ${esc(r.idleWithWorkPercent)}%</div>${causes.map(([k, v]) => `<div class="idle-cause">${esc(CAUSE_LABEL[k])}: ${esc(Math.round(v))} min</div>`).join('')}${hr ? `<div class="hold-list"><div>Holds, newest first</div>${hr}</div>` : ''}</div>`;
   }).join('') : '';
   const rows = view.agents.flatMap(a => {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j));
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${jobRef(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
-      : `<span>Idle: ${a.idleReason ? esc(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
+      : `<span>Idle: ${a.idleReason ? longText(a.idleReason.text, 160) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
     return [dli({ cls: `sev-${level}`, key: `agent-${a.name}`, sev: level, name: a.name, age: j?.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div>` })];
   });
   return `${slots}${idleLine}${list ? dlist({ id: list, label: 'Now', noun: 'agents and jobs', rows, sorts: ['default', 'severity', 'age', 'name'], defaultLabel: 'Agent order', compact: false }) : `<ul class="panel-list">${rows.map(r => r.html).join('')}</ul>`}`;

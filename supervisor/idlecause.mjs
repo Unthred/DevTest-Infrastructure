@@ -31,6 +31,8 @@ const maskHold = part => String(part)
   .replace(/(?<![#\w.~])\d+(?:\.\d+)?(?!\w)/g, '~')
   .replace(/\s+/g, ' ').trim().slice(0, HOLD_KEY_CHARS);
 export const holdCause = text => [...new Set(String(text ?? '').split(' | ').map(maskHold).filter(Boolean))].sort().join(' | ');
+// Issue #950: the short name of one hold part, without the live figures or the bracketed detail ("review held: codex is out of allowance").
+export const holdLabel = part => String(part).split(' (')[0].replace(/:\s.*\d+(?:\.\d+)?\s*%.*$/, '').trim().slice(0, 120);
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
 const MIN = 60000;
 
@@ -86,9 +88,13 @@ export function idleBreakdown({ jobs, snapshots, agents, from, to }) {
   const snaps = (snapshots || []).filter(s => Number.isFinite(s?.at)).sort((x, y) => x.at - y.at);
   const out = {};
   for (const [agent, provider] of Object.entries(agents)) {
-    const row = { windowMinutes: (to - from) / MIN, busyMinutes: 0, minutes: Object.fromEntries(IDLE_CAUSES.map(k => [k, 0])), holds: {} };
+    const row = { windowMinutes: (to - from) / MIN, busyMinutes: 0, minutes: Object.fromEntries(IDLE_CAUSES.map(k => [k, 0])), holds: {}, groups: {} };
     const latest = {};   // cause key -> the newest text seen (intervals are visited in time order)
-    const add = (cause, ms, hold, key) => { row.minutes[cause] += ms / MIN; if (cause === 'named-hold' && hold) { const k = key ?? holdCause(hold); latest[k] = hold; row.holds[k] = (row.holds[k] || 0) + ms / MIN; } };
+    const add = (cause, ms, hold, key, x, y) => { row.minutes[cause] += ms / MIN;
+      if (cause === 'named-hold' && hold) for (const part of String(hold).split(' | ').map(t => t.trim()).filter(Boolean)) {   // issue #950: per reason, with a count of separate stretches
+        const g = row.groups[maskHold(part)] ||= { label: holdLabel(part), detail: part, minutes: 0, count: 0, last: 0, lastEnd: null };
+        g.minutes += ms / MIN; if (g.lastEnd !== x) g.count++; g.lastEnd = y; g.last = y; g.detail = part;
+      } if (cause === 'named-hold' && hold) { const k = key ?? holdCause(hold); latest[k] = hold; row.holds[k] = (row.holds[k] || 0) + ms / MIN; } };
     const busy = busyIntervals(jobs, provider, from, to);
     let cursor = from;
     const idleSpans = [];
@@ -114,7 +120,7 @@ export function idleBreakdown({ jobs, snapshots, agents, from, to }) {
           if (!prev && !e) cause = 'unrecorded';
         }
         if (cause === 'no-eligible-work' && end && end === startSnap) cause = 'waiting-for-tick';
-        add(cause, y - x, hold, key);
+        add(cause, y - x, hold, key, x, y);
       }
     }
     row.holds = Object.fromEntries(Object.entries(row.holds).map(([k, m]) => [latest[k], m]));
@@ -130,7 +136,8 @@ export function idleReport({ jobs, snapshots, agents, from, to }) {
   for (const [n, r] of Object.entries(raw)) {
     const withWork = WORK_CAUSES.reduce((t, k) => t + r.minutes[k], 0);
     out[n] = { windowMinutes: round1(r.windowMinutes), busyMinutes: round1(r.busyMinutes), minutes: Object.fromEntries(IDLE_CAUSES.map(k => [k, round1(r.minutes[k])])),
-      holds: Object.fromEntries(Object.entries(r.holds).map(([k, v]) => [k, round1(v)])), idleWithWorkMinutes: round1(withWork), idleWithWorkPercent: r.windowMinutes > 0 ? round1(withWork / r.windowMinutes * 100) : 0 };
+      holds: Object.fromEntries(Object.entries(r.holds).map(([k, v]) => [k, round1(v)])),
+      holdGroups: Object.values(r.groups).sort((a, b) => b.last - a.last).map(g => ({ label: g.label, detail: g.detail, minutes: round1(g.minutes), count: g.count, last: g.last })), idleWithWorkMinutes: round1(withWork), idleWithWorkPercent: r.windowMinutes > 0 ? round1(withWork / r.windowMinutes * 100) : 0 };
   }
   return { from, to, agents: out };
 }
