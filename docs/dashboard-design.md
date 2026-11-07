@@ -32,3 +32,38 @@ Every list on the Overview is one shared component: `dli()` builds a row and `dl
 - **Search and sort** need the script (without it the bar is hidden and the list still shows and scrolls). The search box appears from 6 rows. The sort controls name the current sort and direction in words.
 - **State** (search text, sort, scroll inside the list, open details) is kept per page and list in `sessionStorage` and re-applied to any list that appears, including one swapped in by an in-place refresh.
 - Browser check: `node tests/lists-browser.mjs <dir>` (Tower, pinned Chromium; `LISTS_SRC=<checkout>` measures another checkout's page heights).
+
+## Page purposes (issue #935, proposal awaiting homeowner agreement)
+Status: **proposal**. No content has moved yet. The moves in "Moves to make" are done in follow-up work after the homeowner agrees this section in an issue #935 comment. This section describes the pages as they are today and what each should become.
+
+**Rule.** The Overview is a summary only. Every number or item on it is a link to the page where all the relevant detail can be inspected. A fact has one home page; any other page shows at most a count or one line that links to the home.
+
+| Page | The one question it answers | Holds | Overview items drill down here |
+|---|---|---|---|
+| Overview `/` | Is anything wrong, and is work moving? | Health strip, Now, Next, Needs you, Later, Warnings, Watching, Since you were last here, KPI tiles, two charts. Counts and one-line items only. | each item links to its detail page |
+| Agents `/agents` | Who can work right now, and what are they doing? | One card per agent: state, provider, current job, allowance/budget, queue length. `/agents/<name>` has current job, queue and job history. | Jobs running, Agents available, Now |
+| Work `/work` | What work exists, and where is each item in its life? | Queues (by role, see below), Issues, Pull requests, Excluded issues. `/work/pr/<n>`, `/work/issue/<n>` hold timelines, verdict history, dependencies. | Open pull requests, Queued items, Next, Needs you, Later |
+| Activity `/activity` | What happened, and when? | Jobs-per-day chart, event timeline, per-issue activity. | Jobs per day |
+| Usage and cost `/usage` | What is the work costing, against the allowance? | Allowance over time, tokens per merged PR / job / model, failed attempts. | Allowance used, Tokens recorded |
+| Reviews `/reviews` | Is review catching things, and how fast does work merge? | Verdicts per agent, issue start to merge, verdict history. | Reviews recorded |
+| Supervisor `/supervisor` | Is the dispatcher itself healthy? | Health cards (tick, errors, drift, test slots, leases summary), Recent ticks, Leases table. `/supervisor/ticks`, `/supervisor/upgrades`. | the health strip |
+| Diagnostics `/diagnostics` | Where does time go between steps? | Tick gaps, job-to-job turnaround, review-to-verdict, idle time by cause, passes by trigger, recorder load. | none (opened from Supervisor and System) |
+| System `/system` | What is installed and how fresh is its data? | Dispatcher facts (repository, Team loop state, data freshness, page built), Version, All attention items, links to processes and UI review evidence. | Warnings, Data age |
+
+### Questions settled
+- **Queues: by role, not by agent.** The system is agent-agnostic, so a queue per agent name ("claude", "codex") ties the page to today's staffing. Work shows queues by role: implementer, reviewer, rebaser (and fixer if the dispatcher keeps it as its own role). Each row says which agent holds it. The Agents page stops showing a per-agent queue list; an agent card shows only "N queued for this agent" linking to `/agents/<name>`, where that agent's queue stays. Work is the one place to see a whole queue. Needs from the dispatcher view: queue items tagged with a role (today they are keyed by agent name in `view.queues`), so this is a data-shape change plus a render change.
+- **Supervisor Leases.** Two cards show the same data: the Leases health card (count and "needs recovery") and the Leases table. Keep one: the health card becomes a one-line summary ("3 held, 0 need recovery") that scrolls to the table, and the table card carries an explanation: "A lease is the lock a running job holds on its slot, stored under `leases/*`. It is released when the job ends. A stale lease means the job is gone but the lock was not released and needs recovery." The table's empty state keeps the same wording.
+- **App bar: Data and Team loop.** Already out of the bar since #924. Data (age of the cached GitHub data) and Team loop (whether the dispatcher is allowed to start team work, from `docs/team-loop.md`) are system facts for an operator, not things to scan on every page. They live on System; Overview keeps only the Data age tile, linking to System. Homeowner to confirm they do not want either back in the bar.
+- **Version** is on System only (done in #924). Supervisor's Version health card is the upgrade history and stays on Supervisor, because it answers "did the self-upgrade work", not "what is installed"; it links to `/supervisor/upgrades` and shows no commit already shown on System. Homeowner to confirm.
+
+### Moves to make (after agreement)
+1. Overview: Needs you and Later show a count and the top few one-line items, each linking to its item or to `/work`; remove job detail (commands, branches, timings) from the Now panel and link to `/agents/<name>`.
+2. Work: replace "Queue: claude" / "Queue: codex" with Queue: implementer / reviewer / rebaser.
+3. Agents: drop duplicated queue text from agent cards beyond the count and link.
+4. Supervisor: collapse the Leases health card to a summary, add the lease explanation to the table card.
+5. Remove any card whose data also appears as a full list on another page, keeping the page named as its home in the table above. Add a test that lists each card id with its home page, so a card cannot appear on two pages.
+
+### Not decided here
+Role names beyond implementer, reviewer and rebaser, and whether Diagnostics should be linked from the menu or only from Supervisor/System.
+
+Done means (from the issue): this section agreed by the homeowner in a comment; then the moves above installed on Tower and checked on the live dashboard.
