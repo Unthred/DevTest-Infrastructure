@@ -98,6 +98,8 @@ test('foreman_plan breakerHalt: built from the real haltView, lists every halted
   const gst = normalize({}); gst.global = { since: 1, trippedBy: 'cost', jobs: 3, tokens: 30, cost: 5, prs: [], causes: ['ci-fail'] };
   const g = await run({ halt: haltView(gst, []) });
   assert.equal(g.entries[0].cause, '@global'); assert.deepEqual(g.entries[0].types, ['every new job']); assert.match(g.scope, /every new job/);
+  // A hand-written '@global' entry carrying a narrower types list still reports every new job.
+  assert.deepEqual((await run({ halt: { scope: 'every new job', cause: '@global', entries: [{ cause: '@global', types: ['review'] }] } })).entries[0].types, ['every new job']);
   assert.deepEqual(await run({ halt: null, error: 'boom' }), { halted: false, error: 'boom', note: 'Breaker evaluation failed; existing halts stay in force.' });
   assert.deepEqual(await run({ halt: null, error: null }), { halted: false });
 });

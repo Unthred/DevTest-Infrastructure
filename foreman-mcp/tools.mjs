@@ -57,7 +57,7 @@ const GLOBAL_TYPES = ['every new job'];
 export function breakerHaltOf(b) {
   const h = b?.halt, error = b?.error ?? null;
   if (!h) return error ? { halted: false, error, note: 'Breaker evaluation failed; existing halts stay in force.' } : { halted: false };
-  return { halted: true, scope: h.scope ?? null, cause: h.cause ?? null, count: h.count ?? 1, entries: (h.entries || []).slice(0, 8).map(e => ({ cause: e.cause ?? null, types: e.types ?? (e.cause === '@global' ? GLOBAL_TYPES : null), since: e.since ?? null })), error, caution: PLAN_CAUTION };
+  return { halted: true, scope: h.scope ?? null, cause: h.cause ?? null, count: h.count ?? 1, entries: (h.entries || []).slice(0, 8).map(e => ({ cause: e.cause ?? null, types: e.cause === '@global' ? GLOBAL_TYPES : (e.types ?? null), since: e.since ?? null })), error, caution: PLAN_CAUTION };
 }
 export function createTools({ source, readHost, readActivity = hostActivity, getPath = null, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
   const calls = [];   // times of recent calls, for the rate limit
