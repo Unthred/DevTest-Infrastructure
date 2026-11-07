@@ -503,6 +503,7 @@ const FILE_EXT = /\.(?:mjs|cjs|js|ts|json|jsonl|md|yml|yaml|sh|cs|csproj|sln|txt
 // Issue #650: known, accepted limit. The check is lexical and never looks at the file system, so a bare name with a listed extension ("disable.sh") passes even when no such file exists. tests/review-requirements.test.mjs pins this (#592); tightening it means inverting that test on purpose.
 const isRepoFile = w => /^[\w./-]*\.\w+$/.test(w) && noDotSegments(w) && !w.includes('..') && (w.includes('/') ? TOP_LEVEL_DIRS.has(w.split('/')[0]) && FILE_EXT.test(w) : ROOT_FILES.has(w) || FILE_EXT.test(w));
 // Issue #617: a path token such as ".github/workflows/ci.yml" must not trip MATERIAL_TOPIC on its "ci" segment; only whole tokens that are repo files are blanked, so wording around them is still checked.
+// Issue #854: deliberately not aligned with the single-'.' strip in isTrivialSlip below. Here a whole run of trailing punctuation (including repeated '.') is removed so a path token never trips MATERIAL_TOPIC; isTrivialSlip strips one '.' only, so 'docs/x.md..' is blanked here but then rejected there as a non-path token. The gap is fail-safe: it never makes a claim trivial (pinned by the #769 test).
 const withoutRepoFiles = claim => claim.split(/(\s+)/).map(t => { const w = t.toLowerCase().replace(/^[,;:()'"`]+|[,;:()'"`.]+$/g, ''); return w && isRepoFile(w) ? ' ' : t; }).join('');
 export function isTrivialSlip(claim) {
   if (MATERIAL_TOPIC.test(withoutRepoFiles(claim)) || !TRIVIAL_DETAIL.test(claim)) return false;
