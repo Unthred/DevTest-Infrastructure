@@ -594,7 +594,7 @@ function workPage(view, query, path) {
     totals: { number: 'count', reviewRounds: 'avg', fixRounds: 'avg', tokens: 'sum' }, emptyState: empty('No pull requests yet', 'Pull requests appear once an agent opens one.', 'list') }) });
   const ex = view.excluded || [];
   const excluded = card({ id: 'excluded', title: `Excluded issues (${ex.length})`, span: 12, movable: false, body: ex.length ? `<ul class="panel-list">${ex.map(e => `<li class="sev-${e.kind === 'pr-closed' ? 'action' : 'info'}"><div class="t">${issueLink(e.number)}</div><div class="sub">${esc(e.reason)}</div></li>`).join('')}</ul>` : empty('Nothing is excluded', 'Every open issue is eligible.', 'check') });
-  return { title: 'Work', body: `${grid('work', queues, 'fit')}<div class="cards fit">${issues}${excluded}${prs}</div>` };
+  return { title: 'Work', body: grid('work', queues + issues + excluded + prs, 'fit') };
 }
 function prDetail(view, query, path, route) {
   const p = view.prs.find(x => x.number === route.id);
@@ -798,7 +798,7 @@ function supervisorPage(view, query, path) {
   const recent = s.ticks.slice(-5).reverse();
   const ticks = card({ id: 'h-recent', title: 'Recent ticks', span: 12, movable: false, href: '/supervisor/ticks', body: recent.length ? `<ul class="panel-list">${recent.map(t => `<li class="sev-${({ ok: 'ok', partial: 'warning', error: 'action' })[t.status] || 'info'}"><div class="t">${tickStatusBadge(t.status)} ${lt(t.at)} <span class="sub">${esc(ago(t.at, view.generatedAt))}</span></div><div class="sub">${t.ingested.length} verdict(s), ${t.actions.length} action(s), ${t.skipped.length} skipped${t.errors.length ? `, ${t.errors.length} error(s)` : ''}${t.selfUpgrade ? `, self-upgrade ${esc(t.selfUpgrade)}` : ''}</div></li>`).join('')}</ul><p class="sub"><a href="/supervisor/ticks">Full tick history</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>`
     : empty('No tick in the reconcile log', 'The reconcile cron writes one entry every five minutes.', 'clock') });
-  return { title: 'Supervisor', body: `${grid('supervisor', cards)}<div class="cards stacked">${ticks}${leases}</div>` };
+  return { title: 'Supervisor', body: grid('supervisor', cards + ticks + leases) };
 }
 function ticksPage(view, query, path) {
   // A row expands through the URL (ticks.open=<time>), like the rest of the table state: bookmarkable, works without script,
@@ -834,7 +834,7 @@ function watchPage(view, query, path, route) {
   const none = entries.length ? '' : `<p class="sub">${live ? 'Waiting for the first output…' : 'No transcript is stored for this job (it ran before transcripts existed, or it is older than 7 days).'}</p>`;
   const seed = entries.map(e => ({ kind: e.kind, tokens: e.tokens, evidence: e.evidence ? 1 : 0 }));
   const panel = `<section class="card watch" data-watch data-job="${esc(route.id)}" data-live="${live}" data-last="${last}" data-started="${Number.isFinite(started) ? started : ''}" data-seed="${esc(JSON.stringify(seed))}"><div class="card-body">${head}${none}<div class="tr-log" role="log" aria-live="polite">${renderEntries(entries)}</div><p class="sub">Read-only. Known secret shapes and OpenBao paths are redacted before storage, but redaction is pattern-based and cannot catch every secret (for example a bare password in prose); transcripts are kept 7 days.</p></div></section>`;
-  return { title: `Job ${route.id.slice(0, 8)}`, crumbs: [['/work', 'Work'], [null, `Job ${route.id.slice(0, 8)}`]], body: `<div class="cards">${panel}</div><script type="module" src="/static/watch.js"></script>` };
+  return { title: `Job ${route.id.slice(0, 8)}`, crumbs: [['/work', 'Work'], [null, `Job ${route.id.slice(0, 8)}`]], body: `${grid('watch', panel)}<script type="module" src="/static/watch.js"></script>` };
 }
 // ---- UI review evidence (issue #455): read-only browsing of <evidence root>/ui-review. Data comes from evidence.mjs through route.data.
 const evUrl = parts => `/evidence/files/${parts.map(encodeURIComponent).join('/')}`;
@@ -871,7 +871,7 @@ const diagSpark = (hourly, key, label, unit) => {
 };
 function diagnosticsPage(view, query, path, route) {
   const d = route.data;
-  if (!d) return { title: 'Diagnostics', body: `<div class="cards">${card({ id: 'diag-none', title: 'Diagnostics', span: 12, movable: false, body: empty('Diagnostics are not available here', 'This page was rendered without its data.', 'warn') })}</div>` };
+  if (!d) return { title: 'Diagnostics', body: `${grid('diagnostics', card({ id: 'diag-none', title: 'Diagnostics', span: 12, movable: false, body: empty('Diagnostics are not available here', 'This page was rendered without its data.', 'warn') }))}` };
   const intro = card({ id: 'diag-about', title: 'What this shows', span: 12, movable: false, body: `<p class="sub" data-diag-retention>Read-only history of the last ${esc(d.retentionDays)} days (UTC days), then dropped from this page; the supervisor's own records are kept longer. Every figure comes from files already on the host: no model call and no GitHub call. The recorder logs are read in bounded amounts (at most ${esc(MAX_FILE_BYTES / 1048576)} MiB per file and ${esc(MAX_TOTAL_BYTES / 1048576)} MiB per page view, only the new part of a file after the first read).</p>` });
   const t = d.ticks;
   const ticks = card({ id: 'diag-ticks', title: 'Gaps between ticks, planned and actual', span: 12, movable: false, body: `<p class="sub">Planned: one tick every ${esc(t.plannedMinutes)} min. A gap of ${esc(t.lateAtMinutes)} min or more is a missed tick. Lost minutes are the time beyond the plan.</p>${plainTable(['Day', 'Ticks', 'Median gap', 'Longest gap', 'Missed ticks', 'Lost'], t.days.map(r => [r.day, r.ticks, mins(r.medianMinutes), mins(r.maxMinutes), r.count ? r.lateCount : '–', r.count ? mins(r.lostMinutes) : '–']), 'Gaps between ticks per day')}` });
@@ -964,7 +964,7 @@ export function renderRoute(view, route, opts = {}) {
 function renderRouteWith(view, route, { query = new URLSearchParams(), pathname = '/', refreshSeconds = 60 } = {}) {
   const fn = PAGES[route.page];
   const page = fn ? fn(view, query, pathname.replace(/\/+$/, '') || '/', route) : null;
-  const res = page || { title: 'Not found', body: `<div class="cards">${card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') })}</div>`, crumbs: [['/work', 'Work'], [null, 'Not found']] };
+  const res = page || { title: 'Not found', body: `${grid('notfound', card({ id: 'nf', title: 'Not found', span: 12, movable: false, body: empty('This item is not in the dashboard data', 'It may be closed and no longer cached, or the number is wrong.', 'warn') }))}`, crumbs: [['/work', 'Work'], [null, 'Not found']] };
   const steps = trail(route.page, res.crumbs || []), parent = [...steps].reverse().find(([h]) => h)?.[0];
   const crumbs = steps.length ? `<a class="btn back" href="${esc(parent || '/')}" data-back>${icon('back')}Back</a><nav class="crumbs" aria-label="Breadcrumb"><ol>${steps.map(([h, t], i) => `<li>${h ? `<a href="${esc(h)}">${esc(t)}</a>` : `<span aria-current="page">${esc(t)}</span>`}${i < steps.length - 1 ? '<span class="sep" aria-hidden="true">›</span>' : ''}</li>`).join('')}</ol></nav>` : '';
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${refreshSeconds > 0 ? `<noscript><meta http-equiv="refresh" content="${refreshSeconds}"></noscript><meta name="refresh-seconds" content="${refreshSeconds}">` : ''}<title>${esc(res.title)} · DevTest team</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head>
