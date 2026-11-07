@@ -151,3 +151,15 @@ test('plan: a change under foreman-mcp/ on this branch is in the upgrade plan', 
   const changed = g(['diff', '--name-only', base, 'HEAD']).stdout.split('\n').filter(f => f.startsWith('foreman-mcp/'));
   if (changed.length) { assert.equal(rangeNeedsInstall(changed), true); assert.equal(mcpNeedsInstall(changed), true); }
 });
+
+test('install: keeps launcher.env at 0640 and sets the other modes when the caller runs under umask 077 (#993)', () => {
+  const old = process.umask(0o077);
+  try {
+    const w = world();
+    const r = install(w.src, SH2, w.state);
+    assert.equal(r.status, 0, r.err);
+    assert.equal(fs.statSync(path.join(w.inst, 'foreman-mcp/launcher.env')).mode & 0o777, 0o640);
+    assert.equal(fs.statSync(path.join(w.inst, 'foreman-mcp/server.mjs')).mode & 0o777, 0o644);
+    assert.equal(fs.statSync(path.join(w.inst, 'foreman-mcp/launcher.sh')).mode & 0o777, 0o755);
+  } finally { process.umask(old); }
+});
