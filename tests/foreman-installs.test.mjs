@@ -151,3 +151,20 @@ test('without a dashboard address both tools fail cleanly', async () => {
   const tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}) });
   assert.equal((await tools.call('foreman_installs')).isError, true); assert.equal((await tools.call('foreman_breaker_history')).isError, true);
 });
+
+test('processVersions takes the cli role from the subcommand position, not a later argument', t => {
+  const proc = fakeProc(t, [
+    [31, ['node', `/r/versions/${A}/supervisor/cli.mjs`, 'status', 'dashboard']],
+    [32, ['node', `/r/versions/${A}/supervisor/cli.mjs`, 'worker', 'run', 'dashboard']],
+  ]);
+  assert.deepEqual(processVersions(proc).map(p => [p.pid, p.role]), [[31, 'supervisor-cli'], [32, 'worker']].sort((a, b) => a[1].localeCompare(b[1])));
+});
+
+test('installs validates refusal.from as a commit SHA, like to', t => {
+  const root = tmp(t); seed(root);
+  const file = path.join(root, 'team', 'self-upgrade.json'), su = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const refusal = from => { fs.writeFileSync(file, JSON.stringify({ ...su, refusal: { kind: 'x', from, to: C, at: 1, reason: 'r' } })); return installs(root, { procRoot: '/nonexistent-proc' }).refusal; };
+  assert.equal(refusal(A).from, A);
+  assert.equal(refusal(`${GH}`).from, null);
+  assert.equal(refusal(undefined).from, null);
+});
