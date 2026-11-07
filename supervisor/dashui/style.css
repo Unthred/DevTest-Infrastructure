@@ -524,5 +524,5 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .card.expanded>.panel-list{max-height:calc(94vh - 8rem)}
 /* a list card wide enough for two columns shows its rows in two, and back to one when narrowed (by the card's own width) */
 @container card (min-width:46rem){
-  .dl-scroll{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--sp4);align-content:start}
+  .dl-scroll,.card>.panel-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--sp4);align-content:start}
 }

@@ -40,6 +40,6 @@ test('the summary shows only while rolled up; lists scroll inside the card; wide
   assert.match(css, /\.cards\.free \.dl-scroll\{max-height:none;flex:1 1 0;[^}]*overflow-y:auto\}/);
   assert.match(css, /\.card>\.panel-list\{max-height:[^;]+;overflow-y:auto/);
   assert.match(css, /\.card\{container:card\/inline-size\}/);
-  assert.match(css, /@container card \(min-width:46rem\)\{\s*\.dl-scroll\{display:grid;grid-template-columns:repeat\(2,/);
+  assert.match(css, /@container card \(min-width:46rem\)\{\s*\.dl-scroll,\.card>\.panel-list\{display:grid;grid-template-columns:repeat\(2,/);
   assert.doesNotMatch(css, /@container card \(max-width[^)]*\)\{[^}]*grid-template-columns:repeat\(2/, 'narrow cards stay single-column');
 });
