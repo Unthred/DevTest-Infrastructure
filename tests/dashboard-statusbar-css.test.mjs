@@ -34,7 +34,7 @@ function mediaBlock(query, text = css) {
 function desktopWrapValues(text) {
   const values = [];
   for (const block of mediaBlocks(text, (q) => q.includes('min-width:1100px'))) {
-    for (const m of block.matchAll(/(?:^|[{}])\.statusbar\{([^}]*)\}/g)) {
+    for (const m of block.matchAll(/(?<=^|[{}])\.statusbar\{([^}]*)\}/g)) {
       for (const d of m[1].matchAll(/flex-wrap:([^;}]+)/g)) values.push(d[1]);
     }
   }
@@ -64,10 +64,14 @@ test('the agent-badge comment does not claim a single desktop row', () => {
 test('guard detects regressions in mutated copies of the real CSS (negative cases)', () => {
   const same = rawCss + '\n@media(min-width:1100px){.statusbar{flex-wrap:nowrap}}';
   const compound = rawCss + '\n@media (min-width:1100px) and (max-width:1900px){.statusbar{ flex-wrap: nowrap }}';
+  const adjacent = rawCss.replace('.statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}', (m) => m + '\n  .statusbar{flex-wrap:nowrap}');
+  const adjacentCompound = rawCss.replace('(max-width:1439px){.statusbar{gap:var(--sp2)}', (m) => m + '\n.statusbar{flex-wrap:nowrap}');
+  assert.notEqual(adjacent, rawCss, 'mutation did not apply');
+  assert.notEqual(adjacentCompound, rawCss, 'mutation did not apply');
   const removed = rawCss.replace('.statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}', '.statusbar{gap:var(--sp2) var(--sp3)}');
   assert.notEqual(removed, rawCss, 'mutation did not apply');
   assert.equal(desktopWrapValues(css).at(-1), 'wrap');
-  for (const mutated of [same, compound]) assert.equal(desktopWrapValues(normalise(mutated)).at(-1), 'nowrap');
+  for (const mutated of [same, compound, adjacent, adjacentCompound]) assert.equal(desktopWrapValues(normalise(mutated)).at(-1), 'nowrap');
   assert.equal(desktopWrapValues(normalise(removed)).length, 0);
   assert.throws(() => mediaBlock('min-width:1'));
 });
