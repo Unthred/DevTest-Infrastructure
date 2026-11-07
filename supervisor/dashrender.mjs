@@ -1,7 +1,7 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
-import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
+import { DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, collapseIdle, columnWidths, countText, decodeFacet, encodeFacet, facetChips, facetsActive, formatLocal, inRange, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { PINNED } from './dashui/grid.mjs';
 import { CARD_IDS, CARD_TITLES, WINDOWS } from './headline.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
@@ -127,20 +127,27 @@ const empty = (title, hint, ic = 'info') => `<div class="empty">${icon(ic)}<b>${
 // dashui/lists-ui.mjs adds the search box, the sort controls and keeps their state across the page's refresh.
 // A row carries what the controls sort and search on: severity (data-sev), a number, a short name and the age in ms.
 const plain = h => String(h ?? '').replace(/<[^>]*>/g, ' ').replace(/&(amp|lt|gt|quot|#39);/g, (m, c) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[c]).replace(/\s+/g, ' ').trim();
-export function dli({ cls = '', id = '', extra = '', key = '', sev = null, num = null, name = '', age = null, inner = '' }) {
+// `facets` are the values this row has for the list's declared filters ({ filterKey: value }); the severity is always one of them (key 'sev').
+export const SEV_FILTER = { key: 'sev', label: 'Severity', order: ['action', 'warning', 'info', 'ok'] };
+export function dli({ cls = '', id = '', extra = '', key = '', sev = null, num = null, name = '', age = null, inner = '', facets = {} }) {
+  const fac = { ...(sev ? { sev } : {}), ...facets };
   const attrs = [cls ? `class="${esc(cls)}"` : '', id ? `id="${esc(id)}"` : '', key ? `data-key="${esc(key)}"` : '', sev ? `data-sev="${esc(sev)}"` : '',
-    Number.isFinite(num) ? `data-num="${num}"` : '', name ? `data-name="${esc(String(name).slice(0, 120))}"` : '', Number.isFinite(age) ? `data-age="${Math.round(age)}"` : '', extra].filter(Boolean).join(' ');
-  return { html: `<li ${attrs}>${inner}</li>`, sev, num: Number.isFinite(num) ? num : null, name, age: Number.isFinite(age) ? age : null };
+    Number.isFinite(num) ? `data-num="${num}"` : '', name ? `data-name="${esc(String(name).slice(0, 120))}"` : '', Number.isFinite(age) ? `data-age="${Math.round(age)}"` : '', Object.keys(fac).length ? `data-facets="${esc(JSON.stringify(fac))}"` : '', extra].filter(Boolean).join(' ');
+  return { html: `<li ${attrs}>${inner}</li>`, facets: fac, sev, num: Number.isFinite(num) ? num : null, name, age: Number.isFinite(age) ? age : null };
 }
 // `sorts` are the sort keys that make sense for these rows (lists.mjs SORT_KEYS); `defaultSort` is what the list is rendered in.
 // `compact` is for small lists inside a card that has other content (a shorter fixed height).
-export function dlist({ id, label, noun = 'items', rows, sorts = ['default'], defaultSort = { key: 'default', dir: 'asc' }, defaultLabel = 'Original order', compact = false, listCls = 'panel-list' }) {
+// A list of rows that have only a severity: items are { sev, inner, key?, id?, name?, num? }. Filters: severity.
+export const sevList = (id, label, noun, items, opts = {}) => dlist({ id, label, noun, filters: [SEV_FILTER], compact: true, ...opts, rows: items.map((it, n) => dli({ cls: `sev-${it.sev}`, key: it.key || `${id}-${n}`, id: it.id || '', sev: it.sev, name: it.name || '', num: it.num ?? null, inner: it.inner })) });
+// `filters` ([{ key, label, order? }], see logic.mjs) are REQUIRED: every list declares the filters that fit its data (issue #939).
+export function dlist({ id, label, noun = 'items', rows, filters, sorts = ['default'], defaultSort = { key: 'default', dir: 'asc' }, defaultLabel = 'Original order', compact = false, listCls = 'panel-list' }) {
+  if (!Array.isArray(filters) || !filters.length) throw new Error(`list "${id}" declares no filters`);
   const ordered = sortListRows(rows.map((r, i) => ({ ...r, i })), defaultSort.key, defaultSort.dir);
   const words = k => (k === 'default' ? [defaultLabel, 'Reversed'] : DIRECTION_WORDS[k]);
   const search = searchVisible(rows.length), sort = sortsVisible(sorts) && rows.length > 1;
   const word = words(defaultSort.key)[defaultSort.dir === 'desc' ? 1 : 0];
-  const bar = search || sort ? `<div class="dl-bar">${search ? `<div class="dl-search"><input type="search" class="dl-q" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Search ${esc(label)}" maxlength="200"><button type="button" class="tbtn dl-clear" aria-label="Clear search" title="Clear search" hidden>${icon('stop')}</button></div>` : ''}${sort ? `<label class="dl-sort"><span class="vh">Sort ${esc(label)} by</span><select class="dl-key">${sorts.map(k => `<option value="${k}"${k === defaultSort.key ? ' selected' : ''}>${esc(k === 'default' ? defaultLabel : SORT_LABELS[k])}</option>`).join('')}</select></label><button type="button" class="btn dl-dir" aria-label="Sort direction: ${esc(word)}. Press to reverse." title="Reverse the order" ${sorts.length ? '' : 'hidden'}>${icon(defaultSort.dir === 'desc' ? 'down' : 'up')}<span>${esc(word)}</span></button>` : ''}</div>` : '';
-  return `<div class="dlist${compact ? ' compact' : ''}" data-dlist="${esc(id)}" data-sorts="${esc(sorts.join(','))}" data-default-key="${esc(defaultSort.key)}" data-default-dir="${defaultSort.dir === 'desc' ? 'desc' : 'asc'}" data-default-label="${esc(defaultLabel)}" data-noun="${esc(noun)}">${bar}<ul class="${esc(listCls)} dl-scroll" tabindex="0" aria-label="${esc(label)}">${ordered.map(r => r.html.replace('<li ', `<li data-i="${r.i}" `)).join('')}</ul><p class="dl-none sub" role="status" hidden></p><div class="dl-foot sub" data-dl-foot aria-live="polite">${esc(footerText(rows, rows, noun))}</div></div>`;
+  const bar = search || sort || rows.length ? `<div class="dl-bar">${search ? `<div class="dl-search"><input type="search" class="dl-q" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Search ${esc(label)}" maxlength="200"><button type="button" class="tbtn dl-clear" aria-label="Clear search" title="Clear search" hidden>${icon('stop')}</button></div>` : ''}${sort ? `<label class="dl-sort"><span class="vh">Sort ${esc(label)} by</span><select class="dl-key">${sorts.map(k => `<option value="${k}"${k === defaultSort.key ? ' selected' : ''}>${esc(k === 'default' ? defaultLabel : SORT_LABELS[k])}</option>`).join('')}</select></label><button type="button" class="btn dl-dir" aria-label="Sort direction: ${esc(word)}. Press to reverse." title="Reverse the order" ${sorts.length ? '' : 'hidden'}>${icon(defaultSort.dir === 'desc' ? 'down' : 'up')}<span>${esc(word)}</span></button>` : ''}</div><div class="dl-filters" role="group" aria-label="Filter ${esc(label)}"></div>` : '';
+  return `<div class="dlist${compact ? ' compact' : ''}" data-dlist="${esc(id)}" data-sorts="${esc(sorts.join(','))}" data-default-key="${esc(defaultSort.key)}" data-default-dir="${defaultSort.dir === 'desc' ? 'desc' : 'asc'}" data-default-label="${esc(defaultLabel)}" data-noun="${esc(noun)}" data-filters="${esc(JSON.stringify(filters.map(({ key, label, order }) => ({ key, label, order }))))}">${bar}<ul class="${esc(listCls)} dl-scroll" tabindex="0" aria-label="${esc(label)}">${ordered.map(r => r.html.replace('<li ', `<li data-i="${r.i}" `)).join('')}</ul><p class="dl-none sub" role="status" hidden></p><div class="dl-foot sub" data-dl-foot aria-live="polite">${esc(footerText(rows, rows, noun))}</div></div>`;
 }
 
 // ---- tables: server-side sort, filter, pagination, footer. State lives in the URL, namespaced by table id.
@@ -149,26 +156,37 @@ const withQuery = (path, query, set) => {
   for (const [k, v] of Object.entries(set)) { if (v === null || v === undefined || v === '') q.delete(k); else q.set(k, String(v)); }
   const s = q.toString(); return s ? `${path}?${s}` : path;
 };
-export function table({ id, path, query, cols, rows, searchKeys = [], totals = {}, noun = 'rows', emptyState }) {
+// `filters` ([{ key, label, order?, value? }], logic.mjs) are REQUIRED: every table declares the filters that fit its data (issue #939).
+// Chip choices live in the URL as `<id>.f.<key>=a,b`; the columns carry data-col so dashui/tables-ui.mjs can resize and hide them.
+export function table({ id, path, query, cols, rows, filters, searchKeys = [], totals = {}, noun = 'rows', emptyState }) {
+  if (!Array.isArray(filters) || !filters.length) throw new Error(`table "${id}" declares no filters`);
   const q = (k, d) => query.get(`${id}.${k}`) ?? d;
+  const sel = Object.fromEntries(filters.map(f => [f.key, decodeFacet(q(`f.${f.key}`, ''))]).filter(([, v]) => v.length));
   const sortKey = cols.some(c => c.key === q('sort') && c.sortable !== false) ? q('sort') : null;
-  const st = tableState(rows, { sort: sortKey, dir: q('dir') === 'desc' ? 'desc' : 'asc', q: q('q', ''), page: Number(q('page', 1)), pageSize: Number(q('size', DEFAULT_PAGE_SIZE)), searchKeys, totals });
+  const st = tableState(rows, { sort: sortKey, dir: q('dir') === 'desc' ? 'desc' : 'asc', q: q('q', ''), page: Number(q('page', 1)), pageSize: Number(q('size', DEFAULT_PAGE_SIZE)), searchKeys, totals, filters, sel });
   const dir = q('dir') === 'desc' ? 'desc' : 'asc';
   const href = set => esc(withQuery(path, query, Object.fromEntries(Object.entries(set).map(([k, v]) => [`${id}.${k}`, v]))));
   const head = cols.map(c => {
-    if (c.sortable === false) return `<th scope="col"${c.num ? ' class="num"' : ''}>${esc(c.label)}</th>`;
+    if (c.sortable === false) return `<th scope="col" data-col="${esc(c.key)}"${c.num ? ' class="num"' : ''}>${esc(c.label)}</th>`;
     const active = sortKey === c.key, next = active && dir === 'asc' ? 'desc' : 'asc';
-    return `<th scope="col"${c.num ? ' class="num"' : ''}${active ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}><a href="${href({ sort: c.key, dir: next, page: 1 })}" title="Sort by ${esc(c.label)}">${esc(c.label)}${icon(active ? (dir === 'asc' ? 'up' : 'down') : 'sort')}</a></th>`;
+    return `<th scope="col" data-col="${esc(c.key)}"${c.num ? ' class="num"' : ''}${active ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}><a href="${href({ sort: c.key, dir: next, page: 1 })}" title="Sort by ${esc(c.label)}">${esc(c.label)}${icon(active ? (dir === 'asc' ? 'up' : 'down') : 'sort')}</a></th>`;
   }).join('');
   const expandable = cols.some(c => c.more);
-  const body = st.rows.map(r => `<tr${expandable ? ' tabindex="0"' : ''}>${cols.map(c => `<td data-label="${esc(c.label)}" class="${c.num ? 'num ' : ''}${c.more ? 'more' : ''}">${c.html ? c.html(r) : esc(r[c.key] ?? '–')}</td>`).join('')}</tr>`).join('');
+  const body = st.rows.map(r => `<tr${expandable ? ' tabindex="0"' : ''}>${cols.map(c => `<td data-label="${esc(c.label)}" data-col="${esc(c.key)}" class="${c.num ? 'num ' : ''}${c.more ? 'more' : ''}">${c.html ? c.html(r) : esc(r[c.key] ?? '–')}</td>`).join('')}</tr>`).join('');
   const foot = Object.keys(totals).length ? `<tfoot><tr>${cols.map((c, i) => {
     const op = totals[c.key]; let v = '';
     if (op === 'sum') v = c.fmt ? c.fmt(st.footer[c.key]) : num(st.footer[c.key]); else if (op === 'avg') v = `avg ${c.fmt ? c.fmt(st.footer[c.key]) : dec1(st.footer[c.key])}`; else if (op === 'count') v = countText(st.footer[c.key], st.all, noun);
-    return `<td data-label="${esc(c.label)}"${c.num ? ' class="num"' : ''}>${i === 0 && !op ? 'Total' : esc(v)}</td>`;
+    return `<td data-label="${esc(c.label)}" data-col="${esc(c.key)}"${c.num ? ' class="num"' : ''}>${i === 0 && !op ? 'Total' : esc(v)}</td>`;
   }).join('')}</tr></tfoot>` : '';
+  const widths = columnWidths(cols, st.rows.slice(0, 40).map(r => cols.map(c => plain(c.html ? c.html(r) : r[c.key]))));
+  const colgroup = `<colgroup>${cols.map((c, i) => `<col data-col="${esc(c.key)}"${widths[i] ? ` style="width:${widths[i]}ch"` : ''}>`).join('')}</colgroup>`;
+  const chips = facetChips(rows, filters, sel), anyOn = facetsActive(sel);
+  const chipBar = chips.length ? `<div class="chipbar tfilters" role="group" aria-label="Filter ${esc(noun)}">${chips.map(g => `<div class="chipgroup"><span class="k">${esc(g.label)}</span> ${g.options.map(o => {
+    const next = o.on ? (sel[g.key] || []).filter(v => v !== o.value) : [...(sel[g.key] || []), o.value];
+    return `<a class="chip${o.on ? ' on' : ''}" href="${href({ [`f.${g.key}`]: encodeFacet(next) || null, page: 1 })}" aria-pressed="${o.on}">${esc(o.value)} <span class="n">${o.count}</span></a>`;
+  }).join(' ')}</div>`).join('')}${anyOn ? `<a class="btn" href="${href(Object.fromEntries([...filters.map(f => [`f.${f.key}`, null]), ['page', 1]]))}">Clear all</a>` : ''}</div>` : '';
   const needle = q('q', '');
-  const bar = `<form class="tbar" method="get" action="${esc(path)}" role="search">${[...query].filter(([k]) => !k.startsWith(`${id}.`)).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join('')}${sortKey ? `<input type="hidden" name="${id}.sort" value="${esc(sortKey)}"><input type="hidden" name="${id}.dir" value="${dir}">` : ''}
+  const bar = `<form class="tbar" method="get" action="${esc(path)}" role="search">${[...query].filter(([k]) => !k.startsWith(`${id}.`)).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join('')}${filters.filter(f => sel[f.key]).map(f => `<input type="hidden" name="${id}.f.${esc(f.key)}" value="${esc(encodeFacet(sel[f.key]))}">`).join('')}${sortKey ? `<input type="hidden" name="${id}.sort" value="${esc(sortKey)}"><input type="hidden" name="${id}.dir" value="${dir}">` : ''}
 <label class="sr"><span class="muted">Filter ${esc(noun)}</span> <input type="search" name="${id}.q" value="${esc(needle)}" placeholder="Filter ${esc(noun)}" aria-label="Filter ${esc(noun)}"></label>
 <label><span class="muted">Per page</span> <select name="${id}.size" aria-label="Rows per page">${PAGE_SIZES.map(s => `<option${s === st.pageSize ? ' selected' : ''}>${s}</option>`).join('')}</select></label>
 <span data-tclear>${needle ? `<a class="btn" href="${href({ q: null, page: 1 })}">Clear</a>` : ''}</span></form>`;
@@ -177,7 +195,7 @@ ${st.page > 1 ? `<a href="${href({ page: st.page - 1 })}" rel="prev">Previous</a
 ${st.page < st.pages ? `<a href="${href({ page: st.page + 1 })}" rel="next">Next</a>` : '<span class="dis">Next</span>'}</nav>`;
   if (!rows.length) return emptyState || empty(`No ${noun} yet`, 'Nothing has been recorded.');
   // data-tregion: the script replaces [data-tdata] (and the Clear slot) in place when a control or link of this table is used (issue #61).
-  return `<div class="tregion" data-tregion="${esc(id)}">${bar}<div data-tdata><div class="tbl-wrap"><table data-table="${esc(id)}"><thead><tr>${head}</tr></thead><tbody>${body || `<tr><td colspan="${cols.length}">${esc(`No ${noun} match the filter.`)}</td></tr>`}</tbody>${foot}</table></div>${pager}</div></div>`;
+  return `<div class="tregion" data-tregion="${esc(id)}">${bar}<div data-tdata>${chipBar}<div class="tbl-wrap"><table data-table="${esc(id)}">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body || `<tr><td colspan="${cols.length}">${esc(`No ${noun} match the filter.`)}</td></tr>`}</tbody>${foot}</table></div>${pager}</div></div>`;
 }
 
 // ---- charts: inline SVG, hover tooltips (<title>), per-series toggles (script), colours per agent
@@ -305,7 +323,7 @@ function nowPanel(view, { describe = true, list = null } = {}) {
   const jobItem = (a, j) => {
     const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : j.role === 'rebaser' ? 'Rebaser' : 'Implementer';
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
-    return dli({ cls: `sev-${level}`, extra: `data-job-card="${esc(j.id)}"`, key: `job-${j.id}`, sev: level, name: a.name, age: j.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div>` });
+    return dli({ cls: `sev-${level}`, extra: `data-job-card="${esc(j.id)}"`, key: `job-${j.id}`, sev: level, name: a.name, age: j.elapsedMs, facets: { agent: a.name, role: j.role || 'implementer' }, inner: `<div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div>` });
   };
   // Issue #530: the Now card on the Overview carries the state and one short idle line per agent (the share of the last 24 h and the biggest
   // cause); the full breakdown, every cause and each hold with its time, is on the agent's own page, one click away.
@@ -324,9 +342,9 @@ function nowPanel(view, { describe = true, list = null } = {}) {
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${jobRef(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
       : `<span>Idle: ${a.idleReason ? esc(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
-    return [dli({ cls: `sev-${level}`, key: `agent-${a.name}`, sev: level, name: a.name, age: j?.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div>` })];
+    return [dli({ cls: `sev-${level}`, key: `agent-${a.name}`, sev: level, name: a.name, age: j?.elapsedMs, facets: { agent: a.name, role: 'idle' }, inner: `<div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div>` })];
   });
-  return `${slots}${idleLine}${list ? dlist({ id: list, label: 'Now', noun: 'agents and jobs', rows, sorts: ['default', 'severity', 'age', 'name'], defaultLabel: 'Agent order', compact: false }) : `<ul class="panel-list">${rows.map(r => r.html).join('')}</ul>`}`;
+  return `${slots}${idleLine}${list ? dlist({ id: list, label: 'Now', noun: 'agents and jobs', rows, filters: [{ key: 'agent', label: 'Agent' }, { key: 'role', label: 'Role', order: ['implementer', 'reviewer', 'rebaser', 'idle'] }, SEV_FILTER], sorts: ['default', 'severity', 'age', 'name'], defaultLabel: 'Agent order', compact: false }) : dlist({ id: `now-${view.agents[0]?.name || 'agent'}`, label: 'Now', noun: 'agents and jobs', rows, filters: [{ key: 'agent', label: 'Agent' }, { key: 'role', label: 'Role', order: ['implementer', 'reviewer', 'rebaser', 'idle'] }, SEV_FILTER], sorts: ['default', 'severity', 'age'], defaultLabel: 'Agent order', compact: true })}`;
 }
 // Allowance mode and weekly projection for one agent (issue #56).
 function budgetBlock(view, name) {
@@ -355,15 +373,15 @@ function nextWhyHtml(view) {
   for (const p of w.paused) li.push(dli({ key: `paused-${p.agent}`, name: p.agent, sev: 'warning', inner: `${agentTag(p.agent, view)} is paused${p.resumeAt ? `, resumes about ${lt(p.resumeAt)}` : ''}` }));
   if (w.blocked) li.push(dli({ key: 'blocked', name: 'blocked by dependencies', sev: 'info', inner: `<a href="/work?issues.show=blocked">${w.blocked} queued item${w.blocked === 1 ? '' : 's'} blocked by dependencies</a>` }));
   if (w.waitingReview) li.push(dli({ key: 'review', name: 'waiting for review', sev: 'info', inner: `<a href="/work?prs.show=awaiting-review">${w.waitingReview} waiting for review</a>` }));
-  return `<div class="why" data-why><p class="sub">Nothing is planned because:</p>${li.length ? dlist({ id: 'next-why', label: 'Why nothing is planned', noun: 'reasons', rows: li, sorts: ['default', 'severity', 'name'], defaultLabel: 'As listed', compact: true }) : '<p class="sub">no agent has work waiting.</p>'}</div>`;
+  return `<div class="why" data-why><p class="sub">Nothing is planned because:</p>${li.length ? dlist({ id: 'next-why', label: 'Why nothing is planned', noun: 'reasons', rows: li, filters: [SEV_FILTER], sorts: ['default', 'severity', 'name'], defaultLabel: 'As listed', compact: true }) : '<p class="sub">no agent has work waiting.</p>'}</div>`;
 }
 function nextPanel(view) {
   const now = view.generatedAt, plan = view.panels.next;
   const rows = plan.map(p => {
     const issueLike = ['implement', 'continue'].includes(p.type), kind = issueLike ? 'issue' : 'pr', what = p.type === 'cifix' ? 'fix CI' : p.type;
-    return dli({ cls: 'sev-info', key: `next-${p.agent || ''}-${p.type}-${p.ref}`, sev: 'info', num: Number(p.ref), name: `${p.agent || ''} ${what}`, inner: `<div class="t">${agentTag(p.agent, view)}: ${esc(what)}</div><div>${issueLike ? issueLink(p.ref) : prLink(p.ref)} ${watchBtn(view, kind, p.ref, '/')}</div>${estHtml(estFor(view, kind, p.ref), view.tz, now)}${p.reassignedFrom || p.why ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}` });
+    return dli({ cls: 'sev-info', key: `next-${p.agent || ''}-${p.type}-${p.ref}`, sev: 'info', num: Number(p.ref), name: `${p.agent || ''} ${what}`, facets: { agent: p.agent || 'none', type: what }, inner: `<div class="t">${agentTag(p.agent, view)}: ${esc(what)}</div><div>${issueLike ? issueLink(p.ref) : prLink(p.ref)} ${watchBtn(view, kind, p.ref, '/')}</div>${estHtml(estFor(view, kind, p.ref), view.tz, now)}${p.reassignedFrom || p.why ? `<div class="sub">${esc(p.why || `reassigned for allowance from ${p.reassignedFrom}`)}</div>` : ''}` });
   });
-  return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? dlist({ id: 'next', label: 'Next', noun: 'planned items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Run order' }) : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
+  return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? dlist({ id: 'next', label: 'Next', noun: 'planned items', rows, filters: [{ key: 'agent', label: 'Agent' }, { key: 'type', label: 'Type' }], sorts: ['default', 'number', 'name'], defaultLabel: 'Run order' }) : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 // Issue #549: the circuit breaker's status on the Overview, and the wasted usage by cause. Cost is the CLI's own estimate, not a cash charge.
 function breakerCard(view) {
@@ -411,21 +429,31 @@ function decidedBlock(view) {
   const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state)} ${undoForm(c)}</li>`).join('');
   return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary><ul class="inbox-decided-list">${rows}</ul></details>`;
 }
+// Needs you filter kinds (issue #939): proposals waiting for Approve or Reject come first, then the rest by what they wait on.
+export const NEEDS_KINDS = ['Approvals', 'Blocked', 'Limits', 'CI', 'Other'];
+export function needsKind(a) {
+  if (a.inbox) return 'Approvals';
+  const t = `${a.id || ''} ${a.text || ''}`;
+  if (/limit|\bcap\b|allowance|quota|budget/i.test(t)) return 'Limits';
+  if (/\bCI\b|checks?\b|red build/i.test(t)) return 'CI';
+  if (/block|halt|stuck|stall|depend/i.test(t)) return 'Blocked';
+  return 'Other';
+}
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
-  return (items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
+  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, facets: { kind: needsKind(a) }, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
+  return (items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, filters: [{ key: 'kind', label: 'Kind', order: NEEDS_KINDS }], sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check')) + decidedBlock(view);
 }
 // Issue #414: parked or staged work, quieter than Needs you: what it waits for and who or what ends the wait.
 function laterPanel(view) {
   const items = view.panels.later || [];
-  return items.length ? dlist({ id: 'later', label: 'Later', noun: 'items', rows: items.map(a => dli({ cls: 'sev-info', id: `later-${a.number}`, key: `later-${a.number}`, sev: 'info', num: Number(a.number), name: a.name, inner: `<div class="t">${ext(a.url, a.name)}</div><div class="sub">Waits: ${esc(a.waits)}</div><div class="sub">Ends: ${esc(a.ends)}</div>` })), sorts: ['default', 'number', 'name'], defaultLabel: 'As parked' }) : empty('Nothing later', 'No parked or staged work is waiting.', 'check');
+  return items.length ? dlist({ id: 'later', label: 'Later', noun: 'items', filters: [SEV_FILTER], rows: items.map(a => dli({ cls: 'sev-info', id: `later-${a.number}`, key: `later-${a.number}`, sev: 'info', num: Number(a.number), name: a.name, inner: `<div class="t">${ext(a.url, a.name)}</div><div class="sub">Waits: ${esc(a.waits)}</div><div class="sub">Ends: ${esc(a.ends)}</div>` })), sorts: ['default', 'number', 'name'], defaultLabel: 'As parked' }) : empty('Nothing later', 'No parked or staged work is waiting.', 'check');
 }
 function warningsPanel(view) {
   const unknown = view.agents.filter(a => a.state === 'unknown');
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
-  return items.length ? `${copyAllBtn(items, 'warnings')}${dlist({ id: 'warnings', label: 'Warnings', noun: 'warnings', rows: items.map((a, n) => dli({ cls: `sev-${a.severity}`, key: `warn-${a.id || n}`, sev: a.severity, num: a.ref?.n, name: a.text, inner: `<div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` })), sorts: ['severity', 'default', 'number', 'name'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'As reported' })}` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
+  return items.length ? `${copyAllBtn(items, 'warnings')}${dlist({ id: 'warnings', label: 'Warnings', noun: 'warnings', filters: [SEV_FILTER], rows: items.map((a, n) => dli({ cls: `sev-${a.severity}`, key: `warn-${a.id || n}`, sev: a.severity, num: a.ref?.n, name: a.text, inner: `<div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` })), sorts: ['severity', 'default', 'number', 'name'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'As reported' })}` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
 // Issues #76, #421: one compact badge per agent: name, role, state, linking to the agent's page. The job description is NOT here
 // (it lives once, on the Now card); several jobs show a count instead of a role.
@@ -478,8 +506,9 @@ function sincePanel(view, query) {
   const picker = `<div class="ranges" role="group" aria-label="Summary range">${Object.entries(SINCE_RANGES).map(([k, label]) => `<a href="${esc(withQuery('/', query, { since: k === DEFAULT_SINCE ? null : k }))}"${k === range ? ' aria-current="true"' : ''}>${esc(label)}</a>`).join('')}</div>`;
   const when = sv.lastSeen === null ? 'never marked as read' : lt(sv.lastSeen);
   const total = SECTIONS.slice(0, 5).reduce((n, [k]) => n + r[k].length, 0);
-  const item = (k, i, n) => dli({ key: `since-${k}-${n}`, name: i.text, age: Number.isFinite(i.at) ? now - i.at : null, inner: `${i.url ? `<a href="${esc(i.url)}">${esc(i.text)}</a>` : esc(i.text)}${Number.isFinite(i.at) ? ` <span class="muted">${esc(ago(i.at, now))}</span>` : ''}` });
-  const sections = SECTIONS.map(([k, label]) => `<div class="since-sec"><h3>${esc(label)} <span class="muted">(${r[k].length})</span></h3>${r[k].length ? dlist({ id: `since-${k}`, label, noun: 'entries', rows: r[k].slice(0, 30).map((i, n) => item(k, i, n)), listCls: 'since-list', sorts: ['age', 'name', 'default'], defaultSort: { key: 'default', dir: 'asc' }, defaultLabel: 'As listed', compact: true }) + (r[k].length > 30 ? `<p class="muted">and ${r[k].length - 30} more</p>` : '') : '<p class="muted">None</p>'}</div>`).join('');
+  const sinceWhen = i => (Number.isFinite(i.at) ? (now - i.at < 3600000 ? 'Last hour' : now - i.at < 86400000 ? 'Today' : 'Older') : 'Unknown');
+  const item = (k, i, n) => dli({ key: `since-${k}-${n}`, name: i.text, facets: { when: sinceWhen(i) }, age: Number.isFinite(i.at) ? now - i.at : null, inner: `${i.url ? `<a href="${esc(i.url)}">${esc(i.text)}</a>` : esc(i.text)}${Number.isFinite(i.at) ? ` <span class="muted">${esc(ago(i.at, now))}</span>` : ''}` });
+  const sections = SECTIONS.map(([k, label]) => `<div class="since-sec"><h3>${esc(label)} <span class="muted">(${r[k].length})</span></h3>${r[k].length ? dlist({ id: `since-${k}`, label, noun: 'entries', filters: [{ key: 'when', label: 'When', order: ['Last hour', 'Today', 'Older', 'Unknown'] }], rows: r[k].slice(0, 30).map((i, n) => item(k, i, n)), listCls: 'since-list', sorts: ['age', 'name', 'default'], defaultSort: { key: 'default', dir: 'asc' }, defaultLabel: 'As listed', compact: true }) + (r[k].length > 30 ? `<p class="muted">and ${r[k].length - 30} more</p>` : '') : '<p class="muted">None</p>'}</div>`).join('');
   const note = query.get('notice') === 'mark-read-cooldown' ? '<p class="muted" role="status">Marked as read a moment ago, so that click was ignored. Try again in a few seconds.</p>' : '';
   const body = `${note}<div class="since-head"><span>Last marked as read: ${when}. Showing ${esc(r.label.toLowerCase())}, from ${lt(r.from)}${r.fallback ? ' (you have not marked anything as read yet, so this is the last 24 h)' : ''}.</span>${copyBtn(r.text, 'the summary', { label: 'Copy summary' })}<form method="post" action="/mark-read" class="since-mark"><input type="hidden" name="at" value="${esc(now)}"><button class="btn" type="submit">Mark as read</button></form></div>
 <p class="since-tokens">Tokens used: <b>${r.tokens === null ? 'unknown' : esc(num(r.tokens))}</b> <span class="muted">across ${r.tokenJobs} job${r.tokenJobs === 1 ? '' : 's'}</span></p>${total || r.needsYou.length ? '' : '<p class="muted">Nothing has happened in this range.</p>'}<div class="since-grid">${sections}</div>`;
@@ -496,9 +525,9 @@ function watchingCard(view) {
     const steps = w.steps.map(st => { const h = w.history[st.key] || []; return `<li class="wstep st-${esc(st.status)}${w.current === st.key ? ' cur' : ''}" data-step="${esc(st.key)}" data-status="${esc(st.status)}"><details><summary><span class="wlabel">${esc(st.label)}</span><span class="wstate">${esc(STEP_WORD[st.status] || st.status)}</span></summary>${h.length ? `<ul class="whist">${h.map(r => `<li><b>${lt(r.at)}</b> ${esc(r.text)}</li>`).join('')}</ul>` : '<p class="sub">Nothing recorded yet.</p>'}</details></li>`; }).join('');
     const issueTag = w.pr !== null && w.issue !== null ? ` <span class="sub">for ${issueLink(w.issue)}</span>` : '';
     const est = w.done ? '' : estHtml(estFor(view, w.pr !== null ? 'pr' : 'issue', w.pr !== null ? w.pr : w.issue), view.tz, now);
-    return dli({ cls: `watch-item${w.needs ? ' needs' : ''}`, extra: `data-watch="${esc(w.id)}"`, key: `watch-${w.id}`, sev: w.needs ? 'action' : w.done ? 'ok' : 'info', num: Number(w.number), name: w.pr !== null ? `PR ${w.pr}` : `issue ${w.issue}`, age: Number.isFinite(w.since) ? now - w.since : null, inner: `<div class="watch-head"><b>${ref}</b>${issueTag}${w.pinned ? ' <span class="badge sev-info">Pinned</span>' : ''}<span class="watch-acts">${watchForm(w.kind, w.number, w.pinned ? 'unpin' : 'pin', w.pinned ? 'Unpin' : 'Pin', back)}${watchForm(w.kind, w.number, 'unwatch', 'Stop watching', back, 'watch-on')}</span></div><ol class="wsteps" aria-label="Steps from implement to verified">${steps}</ol><p class="watch-sentence">${esc(w.sentence)}</p>${est}` });
+    return dli({ cls: `watch-item${w.needs ? ' needs' : ''}`, extra: `data-watch="${esc(w.id)}"`, key: `watch-${w.id}`, sev: w.needs ? 'action' : w.done ? 'ok' : 'info', facets: { type: w.pr !== null ? 'Pull request' : 'Issue' }, num: Number(w.number), name: w.pr !== null ? `PR ${w.pr}` : `issue ${w.issue}`, age: Number.isFinite(w.since) ? now - w.since : null, inner: `<div class="watch-head"><b>${ref}</b>${issueTag}${w.pinned ? ' <span class="badge sev-info">Pinned</span>' : ''}<span class="watch-acts">${watchForm(w.kind, w.number, w.pinned ? 'unpin' : 'pin', w.pinned ? 'Unpin' : 'Pin', back)}${watchForm(w.kind, w.number, 'unwatch', 'Stop watching', back, 'watch-on')}</span></div><ol class="wsteps" aria-label="Steps from implement to verified">${steps}</ol><p class="watch-sentence">${esc(w.sentence)}</p>${est}` });
   };
-  const body = list.length ? dlist({ id: 'watching', label: 'Watching', noun: 'watched items', rows: list.map(item), listCls: 'watch-list', sorts: ['severity', 'age', 'number', 'name', 'default'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'Order added' }) : empty('Nothing watched', 'Press Watch on any issue or pull request to follow it from start to installed.', 'info');
+  const body = list.length ? dlist({ id: 'watching', label: 'Watching', noun: 'watched items', filters: [{ key: 'type', label: 'Type' }, SEV_FILTER], rows: list.map(item), listCls: 'watch-list', sorts: ['severity', 'age', 'number', 'name', 'default'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'Order added' }) : empty('Nothing watched', 'Press Watch on any issue or pull request to follow it from start to installed.', 'info');
   return card({ id: 'watching', title: `Watching${list.length ? ` (${list.length})` : ''}`, span: 12, movable: false, body, cls: 'panel watching', type: 'panel' });
 }
 // ---- Issue #866: headline progress numbers (top of the Overview) and the drill-down behind each.
@@ -538,7 +567,7 @@ function headlinePage(view, query, path, route) {
     body: `<p class="hl-v-big">${esc(t.big)}</p><p class="sub">${esc(t.sub)}. ${esc(trendText(c, name === '24h' ? '24 hours' : '7 days'))}.</p><p class="sub">${esc(h.note)}</p>${c.count > c.shown ? `<p class="sub">The table shows the newest ${c.shown} of ${c.count}.</p>` : ''}` });
   const link = r => (r.kind === 'pr' ? prLink(r.ref) : r.kind === 'issue' ? issueLink(r.ref) : r.kind === 'job' ? esc(`job ${r.ref}`) : esc(String(r.ref)));
   const rows = c.items.map(r => ({ ...r, item: `${r.kind} ${r.ref}` }));
-  const t2 = card({ id: 'hl-items', title: 'Items behind the number', span: 12, movable: false, body: table({ id: 'hl', path, query, noun: 'items', rows, searchKeys: ['item', 'title', 'detail'], totals: { item: 'count', tokens: 'sum' },
+  const t2 = card({ id: 'hl-items', title: 'Items behind the number', span: 12, movable: false, body: table({ id: 'hl', path, query, noun: 'items', rows, searchKeys: ['item', 'title', 'detail'], filters: [{ key: 'kind', label: 'Kind' }], totals: { item: 'count', tokens: 'sum' },
     cols: [{ key: 'item', label: 'Item', html: link }, { key: 'title', label: 'What' }, { key: 'detail', label: 'Detail' }, { key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'tokens', label: 'Tokens (usage equivalent)', num: true, html: r => (Number.isFinite(r.tokens) ? num(r.tokens) : '<span class="muted">unknown</span>') }],
     emptyState: empty('Nothing in this period', 'No items behind this number.') }) });
   return { title: CARD_TITLES[id], crumbs: [['/', 'Overview'], [null, CARD_TITLES[id]]], body: grid('headline', summary + t2) };
@@ -611,6 +640,7 @@ function jobCols(view, { agent = true } = {}) {
     { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true, total: 'sum' }
   ];
 }
+const JOB_FILTERS = [{ key: 'agent', label: 'Agent' }, { key: 'kind', label: 'Kind' }, { key: 'model', label: 'Model' }, { key: 'status', label: 'Outcome' }];
 const jobTotals = { id: 'count', attempts: 'avg', tokens: 'sum' };
 function agentDetail(view, query, path, route) {
   const a = view.agents.find(x => x.name === route.id);
@@ -618,10 +648,10 @@ function agentDetail(view, query, path, route) {
   const q = view.queues[a.name] || [], jobs = view.jobs.filter(j => j.agent === a.name);
   const queueRows = q.map(i => ({ ...i, next: i.next ? 'next' : '' }));
   const cur = a.job ? card({ id: 'cur', title: 'Current job', span: 12, movable: false, body: nowPanel({ ...view, agents: [a] }) }) : card({ id: 'cur', title: 'Current job', span: 12, movable: false, body: nowPanel({ ...view, agents: [a] }) });
-  const queue = card({ id: 'queue', title: `Queue (${q.length})`, span: 12, movable: false, body: table({ id: 'q', path, query, noun: 'queue items', rows: queueRows, searchKeys: ['title', 'reason', 'type'],
+  const queue = card({ id: 'queue', title: `Queue (${q.length})`, span: 12, movable: false, body: table({ id: 'q', path, query, noun: 'queue items', rows: queueRows, searchKeys: ['title', 'reason', 'type'], filters: [{ key: 'type', label: 'Type' }, { key: 'next', label: 'Position', value: r => (r.next ? 'Next' : 'Later') }],
     cols: [{ key: 'next', label: 'Next', html: r => (r.next ? badge('info', 'Next') : '') }, { key: 'type', label: 'Type' }, { key: 'ref', label: 'Item', num: true, html: r => (r.type === 'issue' ? issueLink(r.ref) : prLink(r.ref)) }, { key: 'est', label: 'Est. finish', html: r => { const e = r.type === 'review' ? null : estFor(view, r.type === 'issue' ? 'issue' : 'pr', r.ref); return e && !(e.status === 'estimated' && !meaningfulRange(e, view.generatedAt)) ? `<span title="${esc((e.basis || []).join('\n'))}" data-est="${esc(e.status)}">${esc(e.text)}</span>` : ''; } }, { key: 'reason', label: 'Reason', more: true }],
     totals: { next: 'count' }, emptyState: empty('Queue is empty', 'No work is waiting for this agent.', 'check') }) });
-  const hist = card({ id: 'hist', title: `Job history (${jobs.length})`, span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: jobs, searchKeys: ['id', 'kind', 'status', 'branch', 'desc'], cols: jobCols(view, { agent: false }).map(c => ({ ...c, total: undefined })), totals: jobTotals,
+  const hist = card({ id: 'hist', title: `Job history (${jobs.length})`, span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: jobs, searchKeys: ['id', 'kind', 'status', 'branch', 'desc'], filters: JOB_FILTERS, cols: jobCols(view, { agent: false }).map(c => ({ ...c, total: undefined })), totals: jobTotals,
     emptyState: empty('No jobs yet', 'This agent has not run a job.', 'list') }) });
   return { title: `Agent ${a.name}`, crumbs: [['/agents', 'Agents'], [null, a.name]], body: grid('agent', cur + queue + hist, 'fit') };
 }
@@ -634,8 +664,8 @@ function jobDetail(view, query, path, route) {
   const exact = hits.filter(x => x.fullId === route.id);
   if (!hits.length) return null;
   if (!exact.length && hits.length > 1) {
-    const list = hits.map(x => `<li><a href="/work/job/${esc(encodeURIComponent(x.fullId))}">${esc(x.fullId)}</a> ${esc(x.kind)} ${esc(x.status)}</li>`).join('');
-    return { title: `Job ${route.id}`, crumbs: [['/work', 'Work'], [null, `Job ${route.id}`]], body: grid('job', card({ id: 'facts', title: 'More than one job starts with this id', span: 12, movable: false, body: `<ul class="panel-list">${list}</ul>` }), 'fit') };
+    const list = hits.map(x => ({ sev: 'info', name: x.fullId, inner: `<a href="/work/job/${esc(encodeURIComponent(x.fullId))}">${esc(x.fullId)}</a> ${esc(x.kind)} ${esc(x.status)}` }));
+    return { title: `Job ${route.id}`, crumbs: [['/work', 'Work'], [null, `Job ${route.id}`]], body: grid('job', card({ id: 'facts', title: 'More than one job starts with this id', span: 12, movable: false, body: sevList('job-matches', 'Jobs with this id', 'jobs', list) }), 'fit') };
   }
   const j = exact[0] || hits[0];
   const ref = REFS.job[j.id];
@@ -646,18 +676,18 @@ function jobDetail(view, query, path, route) {
 }
 const showChip = (path, query, key, value, text) => (query.get(key) === value ? `<p class="chips"><span class="chip on">${esc(text)}</span> <a class="btn" href="${esc(withQuery(path, query, { [key]: null }))}">Show all</a></p>` : '');
 function workPage(view, query, path) {
-  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)} ${watchBtn(view, i.type === 'issue' ? 'issue' : 'pr', i.ref, '/work')}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz, view.generatedAt)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
-  const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: showChip(path, query, 'issues.show', 'blocked', 'Showing only open issues blocked by dependencies') + table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.filter(i => query.get('issues.show') !== 'blocked' || (i.state === 'OPEN' && i.blockedBy.length)).map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'],
+  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `${dlist({ id: `wq-${name}`, label: `Queue: ${name}`, noun: 'queued items', filters: [{ key: 'type', label: 'Type', order: ['issue', 'pr', 'review'] }, { key: 'position', label: 'Position', order: ['Next', 'Later'] }, SEV_FILTER], sorts: ['default', 'number'], defaultLabel: 'Queue order', compact: true, rows: items.map((i, n) => dli({ cls: `sev-${i.next ? 'info' : 'ok'}`, key: `wq-${name}-${i.type}-${i.ref}`, sev: i.next ? 'info' : 'ok', num: Number(i.ref), name: `${i.type} ${i.ref}`, facets: { type: i.type, position: i.next ? 'Next' : 'Later' }, inner: `<div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)} ${watchBtn(view, i.type === 'issue' ? 'issue' : 'pr', i.ref, '/work')}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz, view.generatedAt)}` })) })}<p class="sub"><a href="/agents/${encodeURIComponent(name)}">The agent page</a> has the full queue as a table.</p>` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
+  const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: showChip(path, query, 'issues.show', 'blocked', 'Showing only open issues blocked by dependencies') + table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.filter(i => query.get('issues.show') !== 'blocked' || (i.state === 'OPEN' && i.blockedBy.length)).map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'], filters: [{ key: 'state', label: 'State' }, { key: 'agent', label: 'Agent' }, { key: 'need', label: 'Needs you', value: r => (r.need ? 'Yes' : 'No') }, { key: 'blockers', label: 'Blocked', value: r => (r.blockers ? 'Blocked' : 'Not blocked') }],
     cols: [{ key: 'number', label: 'Issue', num: true, html: r => `${issueLink(r.number)} ${watchBtn(view, 'issue', r.number, path)}` }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
     totals: { number: 'count', blockers: 'sum' }, emptyState: empty('No issues cached', 'The first tick fills the cache.', 'list') }) });
-  const prs = card({ id: 'prs', title: 'Pull requests', span: 12, movable: false, body: showChip(path, query, 'prs.show', 'awaiting-review', 'Showing only pull requests waiting for review') + table({ id: 'prs', path, query, noun: 'pull requests', rows: view.prs.filter(p => query.get('prs.show') !== 'awaiting-review' || p.awaitingReview), searchKeys: ['name', 'title', 'agent', 'status', 'number', 'verdict'],
+  const prs = card({ id: 'prs', title: 'Pull requests', span: 12, movable: false, body: showChip(path, query, 'prs.show', 'awaiting-review', 'Showing only pull requests waiting for review') + table({ id: 'prs', path, query, noun: 'pull requests', rows: view.prs.filter(p => query.get('prs.show') !== 'awaiting-review' || p.awaitingReview), searchKeys: ['name', 'title', 'agent', 'status', 'number', 'verdict'], filters: [{ key: 'status', label: 'State' }, { key: 'verdict', label: 'Verdict' }, { key: 'checks', label: 'CI' }, { key: 'rebaseRounds', label: 'Rebased', value: r => (r.rebaseRounds > 0 ? 'Rebased before' : 'Never rebased') }, { key: 'agent', label: 'Author' }],
     cols: [{ key: 'number', label: 'Pull request', num: true, html: r => `${prLink(r.number)} ${watchBtn(view, 'pr', r.number, path)}` }, { key: 'agent', label: 'Author', html: r => agentTag(r.agent, view) }, { key: 'status', label: 'State' },
       { key: 'checks', label: 'CI', html: r => checksBadge(r.checks) }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'reviewRounds', label: 'Review rounds', num: true, more: true },
       { key: 'fixRounds', label: 'Fix rounds', num: true, more: true }, { key: 'rebaseRounds', label: 'Rebase rounds', num: true, more: true }, { key: 'tokens', label: 'Tokens', num: true, html: r => esc(num(r.tokens)), more: true }],
     totals: { number: 'count', reviewRounds: 'avg', fixRounds: 'avg', tokens: 'sum' }, emptyState: empty('No pull requests yet', 'Pull requests appear once an agent opens one.', 'list') }) });
   const ex = view.excluded || [];
-  const excluded = card({ id: 'excluded', title: `Excluded issues (${ex.length})`, span: 12, movable: false, body: ex.length ? `<ul class="panel-list">${ex.map(e => `<li class="sev-${e.kind === 'pr-closed' ? 'action' : 'info'}"><div class="t">${issueLink(e.number)}</div><div class="sub">${esc(e.reason)}</div></li>`).join('')}</ul>` : empty('Nothing is excluded', 'Every open issue is eligible.', 'check') });
+  const excluded = card({ id: 'excluded', title: `Excluded issues (${ex.length})`, span: 12, movable: false, body: ex.length ? sevList('excluded', 'Excluded issues', 'issues', ex.map(e => ({ sev: e.kind === 'pr-closed' ? 'action' : 'info', num: e.number, name: `issue ${e.number}`, inner: `<div class="t">${issueLink(e.number)}</div><div class="sub">${esc(e.reason)}</div>` }))) : empty('Nothing is excluded', 'Every open issue is eligible.', 'check') });
   return { title: 'Work', body: grid('work', queues + issues + excluded + prs, 'fit') };
 }
 function prDetail(view, query, path, route) {
@@ -667,18 +697,18 @@ function prDetail(view, query, path, route) {
 <dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd><dt>Watch</dt><dd>${watchBtn(view, 'pr', p.number, path)}</dd></dl>` });
   const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${lt(r.at)}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
   const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)}${v.model ? ` <span class="sub">(${esc(v.model)})</span>` : ''} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${lt(v.at)}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'No independent reviewer has reviewed this pull request.', 'review') });
-  const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
+  const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], filters: JOB_FILTERS, cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
   return { title: p.name || `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, p.name || `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs, 'fit') };
 }
 function issueDetail(view, query, path, route) {
   const i = view.issues.find(x => x.number === route.id);
   if (!i) return null;
   const dependents = view.issues.filter(o => o.dependsOn.includes(i.number));
-  const deps = i.dependsOn.length ? `<ul class="panel-list">${i.dependsOn.map(d => { const di = view.issues.find(x => x.number === d); const blocked = i.blockedBy.includes(d); return `<li class="sev-${blocked ? 'warning' : 'ok'}"><div class="t">${blocked ? badge('warning', 'Blocking') : badge('ok', 'Done')} ${issueLink(d)}</div></li>`; }).join('')}</ul>` : empty('No prerequisites', 'This issue does not wait on another one.', 'check');
+  const deps = i.dependsOn.length ? sevList('prereqs', 'Prerequisites', 'prerequisites', i.dependsOn.map(d => { const blocked = i.blockedBy.includes(d); return { sev: blocked ? 'warning' : 'ok', num: d, name: `issue ${d}`, inner: `<div class="t">${blocked ? badge('warning', 'Blocking') : badge('ok', 'Done')} ${issueLink(d)}</div>` }; })) : empty('No prerequisites', 'This issue does not wait on another one.', 'check');
   const facts = card({ id: 'facts', title: i.name || `#${i.number}`, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(i.state)}</dd><dt>Assigned to</dt><dd>${agentTag(i.agent, view)}</dd><dt>Status</dt><dd>${esc(i.reason || '–')}</dd>
 <dt>Needs homeowner</dt><dd>${i.needsHomeowner ? badge('action', 'Yes') : 'No'}</dd><dt>On GitHub</dt><dd>${ext(i.url, i.name || `#${i.number}`)}</dd><dt>Watch</dt><dd>${watchBtn(view, 'issue', i.number, path)}</dd></dl>` });
   return { title: i.name || `#${i.number}`, crumbs: [['/work', 'Work'], [null, i.name || `#${i.number}`]], body: grid('issue', facts + card({ id: 'deps', title: 'Dependencies and blockers', span: 6, movable: false, body: deps })
-    + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? `<ul class="panel-list">${dependents.map(d => `<li class="sev-info"><div class="t">${issueLink(d.number)}</div></li>`).join('')}</ul>` : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') }), 'fit') };
+    + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? sevList('dependents', 'Waiting on this issue', 'issues', dependents.map(d => ({ sev: 'info', num: d.number, name: `issue ${d.number}`, inner: `<div class="t">${issueLink(d.number)}</div>` }))) : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') }), 'fit') };
 }
 
 // Issue #362: the whole retained history, from the first job. Read from files only (no GitHub, no model); every field was allowlisted
@@ -688,7 +718,7 @@ const SOURCE_LABEL = { live: 'recorded live', 'job-record': 'from the job record
 const mib = n => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GiB` : n >= 1024 ** 2 ? `${(n / 1024 ** 2).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`);
 function storageCard(view) {
   const h = view.history, st = h?.storage; if (!st) return '';
-  const warn = st.warnings.length ? `<ul class="panel-list">${st.warnings.map(w => `<li class="sev-warning"><div class="t">${esc(w)}</div></li>`).join('')}</ul>` : '';
+  const warn = st.warnings.length ? sevList('hist-warnings', 'History storage warnings', 'warnings', st.warnings.map(w => ({ sev: 'warning', name: String(w).slice(0, 60), inner: `<div class="t">${esc(w)}</div>` }))) : '';
   return card({ id: 'hist-storage', title: 'History storage', span: 12, movable: false, body: `${warn}<dl class="kv"><dt>Used</dt><dd>${esc(mib(st.used))} (archive ${esc(mib(st.parts.archive))}, recent ticks ${esc(mib(st.parts.snapshots))}, events ${esc(mib(st.parts.events))}, job records ${esc(mib(st.parts.jobs))})</dd><dt>Growth</dt><dd>${st.perDay === null ? 'unknown (no history yet)' : `about ${esc(mib(st.perDay))} per day`}</dd><dt>Free on the volume</dt><dd>${st.free === null ? 'unknown' : `${esc(mib(st.free))}${st.daysLeft !== null ? `, about ${st.daysLeft} days at this rate` : ''}`}</dd></dl><p class="sub">Foreman never deletes history by itself.</p>` });
 }
 function timelinePage(view, query, path) {
@@ -702,24 +732,16 @@ function timelinePage(view, query, path) {
   const form = `<form class="tbl-bar" method="get" action="${esc(path)}" aria-label="Timeline filters"><label>Type <select name="kind">${opt('', f.kind, 'All')}${Object.entries(KIND_LABEL).map(([k, v]) => opt(k, f.kind, v)).join('')}</select></label> <label>Agent <select name="agent">${opt('', f.agent, 'All')}${agents.map(a => opt(a, f.agent, a)).join('')}</select></label> <label>Issue or PR <input name="ref" value="${esc(f.ref)}" size="6" inputmode="numeric"></label> <label>From <input type="date" name="from" value="${esc(f.from)}"></label> <label>To <input type="date" name="to" value="${esc(f.to)}"></label> <button type="submit" class="btn">Filter</button> <a class="btn" href="${esc(path)}">Clear</a></form>`;
   const first = h.timeline[0]?.at;
   const gaps = h.gaps || [];
-  const gapBody = gaps.length ? `<p class="sub">Foreman shows only what it stored; these periods have no stored tick-level data and are not filled in.</p><ul class="panel-list">${gaps.slice(-50).reverse().map(g => `<li class="sev-info"><div class="t">${lt(g.from)} to ${lt(g.to)}: ${esc(g.reason)}</div></li>`).join('')}</ul>${gaps.length > 50 ? `<p class="sub">${gaps.length - 50} older gaps not listed.</p>` : ''}` : empty('No known gaps', 'Every period since the first record has tick data.', 'check');
-  const tbl = table({ id: 'tl', path, query, noun: 'events', rows, searchKeys: ['text'],
+  const gapBody = gaps.length ? `<p class="sub">Foreman shows only what it stored; these periods have no stored tick-level data and are not filled in.</p>${sevList('gaps', 'Known gaps', 'gaps', gaps.slice(-50).reverse().map(g => ({ sev: 'info', name: g.reason || '', inner: `<div class="t">${lt(g.from)} to ${lt(g.to)}: ${esc(g.reason)}</div>` })))}${gaps.length > 50 ? `<p class="sub">${gaps.length - 50} older gaps not listed.</p>` : ''}` : empty('No known gaps', 'Every period since the first record has tick data.', 'check');
+  const tbl = table({ id: 'tl', path, query, noun: 'events', rows, searchKeys: ['text'], filters: [{ key: 'kind', label: 'Type' }, { key: 'agent', label: 'Agent' }, { key: 'source', label: 'Source' }],
     cols: [{ key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'kind', label: 'Type', html: r => esc(r.kind) }, { key: 'agent', label: 'Agent', html: r => esc(r.agent || '–') }, { key: 'text', label: 'What', html: r => trunc(r.text) }, { key: 'source', label: 'Source', html: r => esc(r.source) }, { key: 'link', label: 'On GitHub', sortable: false, html: r => (r.link ? ext(r.link.url, r.link.text) : '') }],
     totals: { text: 'count' }, emptyState: empty('No activity matches', 'Nothing in the retained history matches these filters.', 'pulse') });
   return { title: 'Activity timeline', crumbs, body: grid('activity', storageCard(view) + card({ id: 'tl-gaps', title: `Known gaps (${gaps.length})`, span: 12, movable: false, body: gapBody })
     + card({ id: 'tl', title: `Activity timeline${first ? ` since ${utc(first)}` : ''} (${shown.length} of ${h.timeline.length})`, span: 12, movable: false, body: form + tbl })) };
 }
-// Issue #76: idle ticks collapse into one row (expand with act.open=<time>, no script needed); filter chips by agent, outcome and job
-// kind combine and live in the URL (act.agent, act.outcome, act.kind). Collapsing happens before filtering, so a busy tick that a
-// filter hides still separates two idle runs.
-function activityChips(view, rows, query, path) {
-  const groups = [['agent', 'Agent', r => r.agent], ['outcome', 'Outcome', r => r.outcome], ['kind', 'Job kind', r => r.jobKind]];
-  return `<div class="chipbar" role="group" aria-label="Activity filters">${groups.map(([key, label, get]) => {
-    const values = [...new Set(rows.map(get).filter(Boolean))].sort(), on = query.get(`act.${key}`);
-    if (on && !values.includes(on)) values.push(on);
-    return `<div class="chipgroup"><span class="k">${label}</span> ${values.map(v => `<a class="chip${on === v ? ' on' : ''}" href="${esc(withQuery(path, query, { [`act.${key}`]: on === v ? null : v, 'act.page': null, 'act.open': null }))}" aria-pressed="${on === v}">${esc(v)}</a>`).join(' ')}</div>`;
-  }).join('')}${ACTIVITY_FILTERS.some(k => query.get(`act.${k}`)) ? `<a class="btn" href="${esc(withQuery(path, query, { 'act.agent': null, 'act.outcome': null, 'act.kind': null, 'act.page': null }))}">Clear filters</a>` : ''}</div>`;
-}
+// Issue #76: idle ticks collapse into one row (expand with act.open=<time>, no script needed). Issue #939: the agent, job kind, outcome and
+// issue-or-PR chips are the table's own filters (act.f.<key>), applied after the idle runs are collapsed so a busy tick that a filter hides
+// still separates two idle runs.
 function activityPage(view, query, path) {
   const grouped = query.get('group') === 'issue';
   const toggle = `<p class="sub"><a href="/activity/timeline">Full activity timeline since the first job</a> · View: ${grouped ? `<a href="${esc(withQuery(path, query, { group: null }))}">Timeline</a> · <b>Group by issue</b>` : `<b>Timeline</b> · <a href="${esc(withQuery(path, query, { group: 'issue' }))}">Group by issue</a>`}</p>`;
@@ -730,7 +752,7 @@ function activityPage(view, query, path) {
   }
   const collapsed = collapseIdle(view.activity.map(r => ({ ...r })));
   const open = Number(query.get('act.open'));
-  const rows = filterActivity(collapsed, activityFilters(query)).flatMap(r => (r.kind === 'idle-run' && r.at === open ? [r, ...r.ticks.map(t => ({ ...t, child: true }))] : [r]));
+  const rows = collapsed.map(r => ({ ...r, refKind: /\/work\/pr\//.test(r.link?.url || '') ? 'Pull request' : /\/work\/issue\//.test(r.link?.url || '') ? 'Issue' : '' })).flatMap(r => (r.kind === 'idle-run' && r.at === open ? [r, ...r.ticks.map(t => ({ ...t, child: true }))] : [r]));
   const what = r => {
     if (r.kind !== 'idle-run') return `${r.child ? '<span class="muted">↳</span> ' : ''}${esc(r.text)}`;
     const o = r.at === open;
@@ -741,7 +763,7 @@ function activityPage(view, query, path) {
     { key: 'durationMs', label: 'Duration', num: true, html: r => esc(Number.isFinite(r.durationMs) ? dur(r.durationMs) : '–') },
     { key: 'tokens', label: 'Tokens', num: true, html: r => esc(Number.isFinite(r.tokens) ? num(r.tokens) : '–') },
     { key: 'text', label: 'What', html: what }, { key: 'link', label: 'Link', sortable: false, html: r => (r.link ? ext(r.link.url, r.link.text) : '') + (r.transcript ? ` <a href="/jobs/${esc(r.transcript)}">transcript</a>` : '') }];
-  const body = toggle + activityChips(view, collapsed, query, path) + table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text', 'agent', 'outcome', 'jobKind'], cols, totals: { text: 'count', tokens: 'sum' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') });
+  const body = toggle + table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text', 'agent', 'outcome', 'jobKind'], filters: [{ key: 'agent', label: 'Agent' }, { key: 'jobKind', label: 'Job kind' }, { key: 'outcome', label: 'Outcome' }, { key: 'refKind', label: 'Issue or PR' }], cols, totals: { text: 'count', tokens: 'sum' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') });
   return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (${rows.filter(r => !r.child).length} rows from ${view.activity.length} events)`, span: 12, movable: false, body })) };
 }
 // One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
@@ -768,28 +790,43 @@ function usagePage(view, query, path) {
   const ucols = [jobCols(view)[0], jobCols(view)[1], jobCols(view)[2], jobCols(view)[3], jobCols(view)[4],
     { key: 'inTokens', label: 'Input tokens', num: true, html: r => esc(num(r.inTokens)) }, { key: 'outTokens', label: 'Output tokens', num: true, html: r => esc(num(r.outTokens)) },
     { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd, more: true }];
-  const table_ = card({ id: 'u-jobs', title: 'Tokens per job', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: view.jobs, searchKeys: ['id', 'agent', 'kind', 'status'], totals: { id: 'count', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: ucols,
+  const table_ = card({ id: 'u-jobs', title: 'Tokens per job', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: view.jobs, searchKeys: ['id', 'agent', 'kind', 'status'], filters: JOB_FILTERS, totals: { id: 'count', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: ucols,
     emptyState: empty('No jobs recorded', 'Token counts appear after a job finishes.', 'chart') }) + '<p class="sub">*Token counts and the CLI cost estimate are what the CLI reported, not billing. Subscription use is not billed per token.</p>' });
   const mcols = [{ key: 'kind', label: 'Job type' }, { key: 'model', label: 'Model' }, { key: 'effort', label: 'Effort' }, { key: 'jobs', label: 'Jobs', num: true },
     { key: 'inTokens', label: 'Input tokens', num: true, html: r => esc(num(r.inTokens)) }, { key: 'outTokens', label: 'Output tokens', num: true, html: r => esc(num(r.outTokens)) },
     { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd }];
-  const byModel = card({ id: 'u-models', title: 'Tokens per job type and model', span: 12, movable: false, body: table({ id: 'models', path, query, noun: 'groups', rows: view.modelUsage || [], searchKeys: ['kind', 'model', 'effort'], totals: { jobs: 'sum', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: mcols,
+  const byModel = card({ id: 'u-models', title: 'Tokens per job type and model', span: 12, movable: false, body: table({ id: 'models', path, query, noun: 'groups', rows: view.modelUsage || [], searchKeys: ['kind', 'model', 'effort'], filters: [{ key: 'kind', label: 'Job type' }, { key: 'model', label: 'Model' }, { key: 'effort', label: 'Effort' }], totals: { jobs: 'sum', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: mcols,
     emptyState: empty('No model usage recorded', 'Token counts appear per job type and model after jobs finish.', 'chart') }) });
   const fs_ = view.failedSpend || { jobs: 0, rows: [] };
   const fcols = [{ key: 'name', label: 'Job' }, { key: 'status', label: 'Status' }, { key: 'attempts', label: 'Attempts', num: true },
     { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
-  const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
+  const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], filters: [{ key: 'kind', label: 'Kind' }, { key: 'status', label: 'Status' }], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
     emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
   return { title: 'Usage & cost', body: `${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
 }
+const VERDICT_GROUPS = [['agent', 'Agent'], ['model', 'Model'], ['both', 'Both']];
 function reviewsPage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
-  const verdictRows = Object.entries(view.graphs.verdicts).flatMap(([a, v]) => [{ label: `${a} PASS`, value: v.PASS, series: `${a} PASS`, colour: 'var(--s3)' }, { label: `${a} CHANGES`, value: v.CHANGES, series: `${a} CHANGES`, colour: 'var(--claude)' }]);
   const merges = view.graphs.merges.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.hours, text: Number.isFinite(m.hours) ? `${dec1(m.hours)} h` : null, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
-  const v = card({ id: 'r-v', title: 'Verdicts per agent', span: 6, expandable: true, body: barChart({ rows: verdictRows, title: 'review verdicts', emptyTitle: 'No verdicts recorded' }) });
+  // Issue #939: Verdicts per agent is a table that fills its card and groups by agent, by model or by both (rv.group in the URL).
+  const group = VERDICT_GROUPS.some(([k]) => k === query.get('rv.group')) ? query.get('rv.group') : 'agent';
+  const groupOf = r => (group === 'agent' ? r.reviewer : group === 'model' ? (r.model || 'unknown') : `${r.reviewer} · ${r.model || 'unknown'}`);
+  const agg = new Map();
+  for (const r of view.verdicts) {
+    const g = groupOf(r), o = agg.get(g) || { group: g, reviewer: r.reviewer, model: r.model || 'unknown', pass: 0, changes: 0, other: 0 };
+    if (r.verdict === 'PASS') o.pass++; else if (r.verdict === 'CHANGES') o.changes++; else o.other++;
+    agg.set(g, o);
+  }
+  const grouped = [...agg.values()].map(o => ({ ...o, total: o.pass + o.changes + o.other, share: o.pass + o.changes + o.other ? Math.round((o.pass / (o.pass + o.changes + o.other)) * 100) : null }));
+  const switcher = `<div class="ranges" role="group" aria-label="Group verdicts by">${VERDICT_GROUPS.map(([k, label]) => `<a href="${esc(withQuery(path, query, { 'rv.group': k === 'agent' ? null : k, 'rvg.page': null }))}"${k === group ? ' aria-current="true"' : ''}>${esc(label)}</a>`).join('')}</div>`;
+  const v = card({ id: 'r-v', title: 'Verdicts per agent', span: 6, expandable: true, tools: switcher, body: table({ id: 'rvg', path, query, noun: 'groups', rows: grouped, searchKeys: ['group'], totals: { group: 'count', pass: 'sum', changes: 'sum', total: 'sum' },
+    filters: [{ key: 'reviewer', label: 'Agent' }, { key: 'model', label: 'Model' }],
+    cols: [{ key: 'group', label: group === 'agent' ? 'Agent' : group === 'model' ? 'Model' : 'Agent · model' }, { key: 'pass', label: 'Pass', num: true }, { key: 'changes', label: 'Changes', num: true }, { key: 'total', label: 'Total', num: true },
+      { key: 'share', label: 'Pass share', num: true, html: r => (r.share === null ? '–' : `<span class="vbar" role="img" aria-label="${r.share}% pass"><i style="width:${r.share}%"></i></span> ${r.share}%`) }],
+    emptyState: empty('No verdicts recorded', 'Verdicts appear after the first review.', 'review') }) });
   const m = card({ id: 'r-m', title: 'Issue start to merge (hours)', span: 6, expandable: true, body: barChart({ rows: merges, title: 'time from issue start to merge', emptyTitle: 'No merges recorded' }) });
   const rows = view.verdicts.map(r => ({ ...r, findingCount: r.findings.length }));
-  const t = card({ id: 'r-t', title: 'Verdict history', span: 12, movable: false, body: table({ id: 'rev', path, query, noun: 'verdicts', rows, searchKeys: ['pr', 'reviewer', 'verdict', 'head'], totals: { pr: 'count', findingCount: 'avg' },
+  const t = card({ id: 'r-t', title: 'Verdict history', span: 12, movable: false, body: table({ id: 'rev', path, query, noun: 'verdicts', rows, searchKeys: ['pr', 'reviewer', 'verdict', 'head'], filters: [{ key: 'reviewer', label: 'Reviewer' }, { key: 'model', label: 'Model' }, { key: 'verdict', label: 'Verdict' }], totals: { pr: 'count', findingCount: 'avg' },
     cols: [{ key: 'pr', label: 'PR', num: true, html: r => prLink(r.pr) }, { key: 'reviewer', label: 'Reviewer', html: r => agentTag(r.reviewer, view) }, { key: 'model', label: 'Model', html: r => (r.model ? esc(r.model) : '<span class="muted">unknown</span>') }, { key: 'verdict', label: 'Verdict', html: r => verdictBadge(r.verdict) }, { key: 'head', label: 'Head', html: r => (r.fullHead ? shaCopy(r.fullHead) : `<span class="mono">${sha7(r.head)}</span>`), more: true },
       { key: 'findingCount', label: 'Findings', num: true }, { key: 'at', label: 'When', num: true, html: r => lt(r.at), more: true }], emptyState: empty('No reviews yet', 'Verdicts appear after the first review.', 'review') }) });
   return { title: 'Reviews', body: grid('reviews', v + m + t) };
@@ -801,7 +838,7 @@ function systemPage(view) {
 <dt>Last good tick</dt><dd>${t?.lastOkAt ? esc(ago(t.lastOkAt, now)) : 'never'}</dd>${t?.error ? `<dt>Error</dt><dd>${errCopy(t.error)}</dd>` : ''}<dt>Next tick</dt><dd>${nextTickHtml(view, now) || 'none'}</dd>
 <dt>Data freshness</dt><dd>${badge(view.freshness.level, view.freshness.label)} GitHub data cached ${esc(ago(view.cacheFetchedAt, now))}</dd><dt>Page built</dt><dd>${lt(now)}</dd><dt>Processes</dt><dd><a href="/system/processes">Live processes per agent</a></dd><dt>UI review evidence</dt><dd><a href="/evidence">Browse review runs</a></dd></dl>` });
   const ver = card({ id: 'ver', title: 'Version', span: 6, movable: false, body: v ? `<dl class="kv"><dt>Installed</dt><dd>${shaCopy(v.installed)}</dd><dt>Main</dt><dd>${shaCopy(v.main)}</dd>${v.mcp ? `<dt>MCP server</dt><dd>${v.mcp.installed ? shaCopy(v.mcp.installed) : 'not installed'} ${v.mcp.drift ? badge('action', 'differs from Foreman') : badge('ok', 'same as Foreman')}${v.mcp.last?.result === 'failed' ? ` ${badge('action', 'last install failed')} ${esc(v.mcp.last.reason)}` : ''}</dd>` : ''}<dt>State</dt><dd>${(vs => badge(vs.level, escT(vs.label), '', true))(versionStatus(v))}</dd><dt>Last upgrade result</dt><dd>${esc(v.result)}</dd></dl><p class="sub"><a href="/supervisor">Supervisor health</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>` : empty('No version record', 'The self-upgrade step has not recorded anything yet.', 'info') });
-  const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? `<ul class="panel-list">${view.attention.map(a => `<li class="sev-${esc(a.severity)}" id="att-${esc(a.id)}"><div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div></li>`).join('')}</ul>` : empty('All clear', 'Nothing needs attention.', 'check') });
+  const all = card({ id: 'all', title: 'All attention items', span: 12, movable: false, body: view.attention.length ? sevList('attention-all', 'All attention items', 'items', view.attention.map(a => ({ sev: a.severity, id: `att-${a.id}`, key: `att-${a.id}`, num: a.ref?.n, name: a.text, inner: `<div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>` })), { compact: false }) : empty('All clear', 'Nothing needs attention.', 'check') });
   return { title: 'System', body: grid('system', facts + ver + all) };
 }
 
@@ -854,13 +891,13 @@ function supervisorPage(view, query, path) {
   const s = view.supervisor;
   const cards = s.cards.map(c => card({ id: `h-${c.id}`, title: c.title, span: c.id === 'version' || c.id === 'tick' ? 6 : 4, href: DRILL[c.id], cls: `health hc-${c.severity}`, body: healthBody(c, view) })).join('');
   const lc = s.cards.find(c => c.id === 'leases');
-  const leases = card({ id: 'h-leases-table', title: `Leases (${lc.leases.length})`, span: 12, movable: false, body: table({ id: 'leases', path, query, noun: 'leases', rows: lc.leases, searchKeys: ['job', 'agent', 'kind', 'status', 'state', 'reason'],
+  const leases = card({ id: 'h-leases-table', title: `Leases (${lc.leases.length})`, span: 12, movable: false, body: table({ id: 'leases', path, query, noun: 'leases', rows: lc.leases, searchKeys: ['job', 'agent', 'kind', 'status', 'state', 'reason'], filters: [{ key: 'agent', label: 'Agent' }, { key: 'kind', label: 'Kind' }, { key: 'status', label: 'Status' }, { key: 'state', label: 'State' }],
     cols: [{ key: 'job', label: 'Job', html: r => jobIdCell(r.job) }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) }, { key: 'kind', label: 'Kind' }, { key: 'ref', label: 'Ref', num: true, html: r => (r.ref ? (['implement', 'continue'].includes(r.kind) ? issueLink(r.ref) : prLink(r.ref)) : '–') },
       { key: 'ageMs', label: 'Age', num: true, html: r => esc(dur(r.ageMs)) }, { key: 'state', label: 'State', html: r => badge(r.state === 'stale' ? 'action' : r.state === 'held' ? 'warning' : 'ok', r.state) }, { key: 'status', label: 'Job status', more: true },
       { key: 'reason', label: 'Why', more: true, html: r => `${esc(r.reason)}${r.command ? cmdBlock(r.command) : ''}` }],
     totals: { job: 'count' }, emptyState: empty('No lease held', 'Leases appear while a supervised job owns an issue or worktree.', 'check') }) });
   const recent = s.ticks.slice(-5).reverse();
-  const ticks = card({ id: 'h-recent', title: 'Recent ticks', span: 12, movable: false, href: '/supervisor/ticks', body: recent.length ? `<ul class="panel-list">${recent.map(t => `<li class="sev-${({ ok: 'ok', partial: 'warning', error: 'action' })[t.status] || 'info'}"><div class="t">${tickStatusBadge(t.status)} ${lt(t.at)} <span class="sub">${esc(ago(t.at, view.generatedAt))}</span></div><div class="sub">${t.ingested.length} verdict(s), ${t.actions.length} action(s), ${t.skipped.length} skipped${t.errors.length ? `, ${t.errors.length} error(s)` : ''}${t.selfUpgrade ? `, self-upgrade ${esc(t.selfUpgrade)}` : ''}</div></li>`).join('')}</ul><p class="sub"><a href="/supervisor/ticks">Full tick history</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>`
+  const ticks = card({ id: 'h-recent', title: 'Recent ticks', span: 12, movable: false, href: '/supervisor/ticks', body: recent.length ? `${sevList('recent-ticks', 'Recent ticks', 'ticks', recent.map(t => ({ sev: ({ ok: 'ok', partial: 'warning', error: 'action' })[t.status] || 'info', age: undefined, name: lt(t.at), inner: `<div class="t">${tickStatusBadge(t.status)} ${lt(t.at)} <span class="sub">${esc(ago(t.at, view.generatedAt))}</span></div><div class="sub">${t.ingested.length} verdict(s), ${t.actions.length} action(s), ${t.skipped.length} skipped${t.errors.length ? `, ${t.errors.length} error(s)` : ''}${t.selfUpgrade ? `, self-upgrade ${esc(t.selfUpgrade)}` : ''}</div>` })), { compact: false })}<p class="sub"><a href="/supervisor/ticks">Full tick history</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>`
     : empty('No tick in the reconcile log', 'The reconcile cron writes one entry every five minutes.', 'clock') });
   return { title: 'Supervisor', body: grid('supervisor', cards + ticks + leases) };
 }
@@ -870,7 +907,7 @@ function ticksPage(view, query, path) {
   const open = Number(query.get('ticks.open'));
   const rows = view.supervisor.ticks.slice().reverse().map((t, i) => ({ ...t, n: i, nIngested: t.ingested.length, nActions: t.actions.length, nSkipped: t.skipped.length, nErrors: t.errors.length, flags: t.errors.length ? 'error' : '',
     text: [...t.actions.map(a => `${a.agent} ${a.type} ${a.ref}`), ...t.skipped.map(s => `${s.what} ${s.reason}`), ...t.errors, t.note || ''].join(' ') }));
-  return { title: 'Tick history', crumbs: [['/supervisor', 'Supervisor'], [null, 'Tick history']], body: grid('ticks', card({ id: 't-all', title: `Ticks in the reconcile log (${rows.length})`, span: 12, movable: false, body: table({ id: 'ticks', path, query, noun: 'ticks', rows, searchKeys: ['status', 'selfUpgrade', 'flags', 'text'],
+  return { title: 'Tick history', crumbs: [['/supervisor', 'Supervisor'], [null, 'Tick history']], body: grid('ticks', card({ id: 't-all', title: `Ticks in the reconcile log (${rows.length})`, span: 12, movable: false, body: table({ id: 'ticks', path, query, noun: 'ticks', rows, searchKeys: ['status', 'selfUpgrade', 'flags', 'text'], filters: [{ key: 'status', label: 'Status' }, { key: 'flags', label: 'Errors', value: r => (r.flags ? 'With errors' : 'No errors') }],
     cols: [{ key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'status', label: 'Status', html: r => tickStatusBadge(r.status) }, { key: 'nIngested', label: 'Verdicts', num: true }, { key: 'nActions', label: 'Actions', num: true },
       { key: 'nSkipped', label: 'Skipped', num: true }, { key: 'nErrors', label: 'Errors', num: true }, { key: 'selfUpgrade', label: 'Self-upgrade', more: true },
       { key: 'detail', label: 'Detail', sortable: false, html: r => (r.at === open && Number.isFinite(r.at)
@@ -880,7 +917,7 @@ function ticksPage(view, query, path) {
 }
 function upgradesPage(view, query, path) {
   const rows = view.supervisor.upgrades.slice().reverse().map(u => ({ ...u, prText: u.prs.join(' '), checkText: Object.entries(u.checks).map(([k, v]) => `${k} ${v}`).join(', ') }));
-  return { title: 'Upgrade history', crumbs: [['/supervisor', 'Supervisor'], [null, 'Upgrade history']], body: grid('upgrades', card({ id: 'u-all', title: `Self-upgrade records (${rows.length})`, span: 12, movable: false, body: table({ id: 'upg', path, query, noun: 'records', rows, searchKeys: ['result', 'reason', 'from', 'to', 'prText'],
+  return { title: 'Upgrade history', crumbs: [['/supervisor', 'Supervisor'], [null, 'Upgrade history']], body: grid('upgrades', card({ id: 'u-all', title: `Self-upgrade records (${rows.length})`, span: 12, movable: false, body: table({ id: 'upg', path, query, noun: 'records', rows, searchKeys: ['result', 'reason', 'from', 'to', 'prText'], filters: [{ key: 'result', label: 'Result' }],
     cols: [{ key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'result', label: 'Result', html: r => badge(resultSeverity(r.result), r.result) }, { key: 'from', label: 'From', html: r => shaCopy(r.from) }, { key: 'to', label: 'To', html: r => shaCopy(r.to) },
       { key: 'prText', label: 'PRs', html: r => (r.prs.length ? r.prs.map(prLink).join(', ') : '–') }, { key: 'reason', label: 'Reason', html: r => (r.reason ? errCopy(r.reason) : '–') }, { key: 'checkText', label: 'Checks', more: true }],
     totals: { at: 'count' }, emptyState: empty('No self-upgrade record', 'Records appear in team/upgrades.jsonl when the supervisor upgrades itself.', 'info') }) })) };

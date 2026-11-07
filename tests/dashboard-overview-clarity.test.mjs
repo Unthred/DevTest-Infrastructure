@@ -171,11 +171,11 @@ test('filters combine, drop rows that do not match every filter, and live in the
   const v = await build(t, { jobs: [j1, j2], events: [{ at: NOW - 9 * MIN, job: j1.id, kind: 'completed' }, { at: NOW - 8 * MIN, job: j2.id, kind: 'completed' }] });
   const all = tbl(page(v, { page: 'activity' }), 'act');
   assert.match(all, /claude: Implementer fix of PR #27 completed/); assert.match(all, /codex: Reviewer reviewed PR #28/);
-  const one = page(v, { page: 'activity' }, 'act.agent=codex&act.outcome=completed');
+  const one = page(v, { page: 'activity' }, 'act.f.agent=codex&act.f.outcome=completed');
   assert.doesNotMatch(tbl(one, 'act'), /claude: Implementer fix of PR #27 completed/); assert.match(tbl(one, 'act'), /codex: Reviewer reviewed PR #28/);
-  assert.match(one, /class="chip on" href="\/activity\?act\.outcome=completed"[^>]*>codex</, 'the active chip links to its own removal and keeps the other filter');
-  assert.match(one, /class="chip" href="\/activity\?act\.agent=codex&amp;act\.outcome=completed&amp;act\.kind=review"/, 'an inactive chip adds its filter to the others');
-  assert.match(one, /Clear filters/);
+  assert.match(one, /class="chip on" href="\/activity\?act\.f\.outcome=completed[^"]*"[^>]*>codex /, 'the active chip links to its own removal and keeps the other filter');
+  assert.match(one, /class="chip" href="\/activity\?act\.f\.agent=codex&amp;act\.f\.outcome=completed&amp;act\.f\.jobKind=review[^"]*"/, 'an inactive chip adds its filter to the others');
+  assert.match(one, /Clear all/);
 });
 test('filters: a filter that hides a busy tick does not merge two idle runs', async t => {
   const snapshots = [[1, 0], [2, 0], [3, 1], [4, 0], [5, 0]].map(([i, ing]) => ({ at: NOW - i * 5 * MIN, status: 'ok', plan: [], ingested: ing }));

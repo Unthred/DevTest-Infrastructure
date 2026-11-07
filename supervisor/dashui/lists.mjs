@@ -2,10 +2,10 @@
 // Imported by the server-side renderer (dashrender.mjs, to render the default order and the footer) and served as-is to the browser
 // (lists-ui.mjs), so the tests exercise exactly the code the page runs. Designed so the Work and System pages can adopt it later:
 // a page only has to render its rows through dlist() in dashrender.mjs.
-import { SEVERITIES, compareValues, countText } from './logic.mjs';
+import { SEVERITIES, applyFacets, compareValues, countText, facetsActive, sanitizeFacets } from './logic.mjs';
 
 // A list with fewer rows than this has no search box (it returns on the next refresh once the list grows).
-export const LIST_MIN_SEARCH = 6;
+export const LIST_MIN_SEARCH = 1;
 
 // One row, as the renderer and the browser both see it: { i: original position, sev, num, name, age, text }.
 //   sev  'action' | 'warning' | 'info' | 'ok' (missing sorts last)
@@ -40,17 +40,17 @@ export function filterListRows(rows, query) {
   if (!words.length) return rows.slice();
   return rows.filter(r => { const hay = foldPunctuation(`${String(r.text || '').toLowerCase()} ${r.num ?? ''}`); return words.every(w => hay.includes(w)); });
 }
-export function sanitizeListState(raw, { sorts = ['default'], defaultSort = { key: 'default', dir: 'asc' }, searchable = true } = {}) {
+export function sanitizeListState(raw, { sorts = ['default'], defaultSort = { key: 'default', dir: 'asc' }, searchable = true, filters = [] } = {}) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const key = sorts.includes(r.key) ? r.key : defaultSort.key;
   const dir = sorts.includes(r.key) ? (r.dir === 'desc' ? 'desc' : 'asc') : defaultSort.dir;
   const open = Array.isArray(r.open) ? r.open.filter(x => typeof x === 'string').slice(0, 200) : [];
-  return { q: searchable && typeof r.q === 'string' ? r.q.slice(0, 200) : '', key, dir, top: Number.isFinite(r.top) && r.top > 0 ? Math.round(r.top) : 0, open };
+  return { q: searchable && typeof r.q === 'string' ? r.q.slice(0, 200) : '', key, dir, top: Number.isFinite(r.top) && r.top > 0 ? Math.round(r.top) : 0, open, f: sanitizeFacets(r.f, filters) };
 }
 // The view of a list for a state: the visible rows in order, plus the counts the footer and the "nothing matches" message need.
-export function listView(rows, { q = '', key = 'default', dir = 'asc' } = {}) {
-  const matched = filterListRows(rows, q), shown = sortListRows(matched, key, dir);
-  return { order: sortListRows(rows, key, dir), shown, total: rows.length, count: shown.length, filtered: String(q).trim() !== '', none: rows.length > 0 && shown.length === 0 };
+export function listView(rows, { q = '', key = 'default', dir = 'asc', f = {}, filters = [] } = {}) {
+  const matched = filterListRows(applyFacets(rows, filters, f), q), shown = sortListRows(matched, key, dir);
+  return { order: sortListRows(rows, key, dir), shown, total: rows.length, count: shown.length, filtered: String(q).trim() !== '' || facetsActive(f), none: rows.length > 0 && shown.length === 0 };
 }
 // "7 items · 3 action · 2 warning" or, while filtered, "2 of 7 items · 1 action".
 export function footerText(rows, shownRows, noun = 'items', filtered = false) {
@@ -58,6 +58,6 @@ export function footerText(rows, shownRows, noun = 'items', filtered = false) {
   const parts = ['action', 'warning'].map(s => [s, shownRows.filter(r => r.sev === s).length]).filter(([, c]) => c > 0).map(([s, c]) => `${c} ${s}`);
   return [head, ...parts].join(' · ');
 }
-export const noMatchText = q => `Nothing matches “${String(q).trim().slice(0, 60)}”.`;
+export const noMatchText = q => (String(q).trim() ? `Nothing matches “${String(q).trim().slice(0, 60)}”.` : 'Nothing matches the chosen filters.');
 export const searchVisible = total => total >= LIST_MIN_SEARCH;
 export const sortsVisible = sorts => sorts.length > 1;

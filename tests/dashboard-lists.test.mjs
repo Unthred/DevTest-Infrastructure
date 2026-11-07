@@ -66,7 +66,7 @@ test('the search box returns as soon as the list reaches the minimum', () => {
 });
 test('saved state is sanitised: unknown sort, bad types, search without a box', () => {
   const opt = { sorts: ['default', 'number'], defaultSort: { key: 'default', dir: 'asc' } };
-  assert.deepEqual(sanitizeListState({ key: 'evil', dir: 'desc', q: 5, top: -3, open: 'x' }, opt), { q: '', key: 'default', dir: 'asc', top: 0, open: [] });
+  assert.deepEqual(sanitizeListState({ key: 'evil', dir: 'desc', q: 5, top: -3, open: 'x' }, opt), { q: '', key: 'default', dir: 'asc', top: 0, open: [], f: {} });
   assert.equal(sanitizeListState({ q: 'abc', key: 'number', dir: 'desc', top: 40.4 }, opt).q, 'abc');
   assert.equal(sanitizeListState({ q: 'abc' }, { ...opt, searchable: false }).q, '');
   assert.deepEqual(DIRECTION_WORDS.severity, ['Least urgent first', 'Most urgent first']);
@@ -105,9 +105,9 @@ test('Overview with 0 rows: no list box at all, only the empty states', async ()
 test('a short list has no search box but keeps its sort and footer; sort controls need two rows', async () => {
   const html = page(await overviewView({ needs: 3 }));
   const block = /<div class="dlist[^"]*" data-dlist="needs"[\s\S]*?<div class="dl-foot/.exec(html)[0];
-  assert.doesNotMatch(block, /dl-q/); assert.match(block, /dl-key/);
+  assert.match(block, /dl-q/, 'every list has search (issue #939)'); assert.match(block, /dl-key/);
   const one = /<div class="dlist[^"]*" data-dlist="needs"[\s\S]*?<div class="dl-foot/.exec(page(await overviewView({ needs: 1 })))[0];
-  assert.doesNotMatch(one, /dl-key|dl-bar/);
+  assert.doesNotMatch(one, /dl-key/); assert.match(one, /dl-q/);
 });
 test('defaults: Needs you keeps the planner order (most urgent first); Warnings are rendered most urgent first', async () => {
   const html = page(await overviewView({ needs: 3, warnings: 8 }));

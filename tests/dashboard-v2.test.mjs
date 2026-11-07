@@ -111,7 +111,7 @@ test('the browser script keys the saved layout by breakpoint and never reads or 
 });
 
 // ---- rendered tables
-const T = (over = {}) => table({ id: 't', path: '/x', query: new URLSearchParams(over.query || ''), noun: 'things', rows: over.rows || rows, searchKeys: ['n'], totals: { n: 'count', v: 'sum' },
+const T = (over = {}) => table({ id: 't', path: '/x', query: new URLSearchParams(over.query || ''), noun: 'things', rows: over.rows || rows, searchKeys: ['n'], filters: [{ key: 'n', label: 'Name' }], totals: { n: 'count', v: 'sum' },
   cols: [{ key: 'n', label: 'Name' }, { key: 'v', label: 'Value', num: true }] });
 test('table: header links sort, the active column is aria-sorted and toggles direction, other state is preserved', () => {
   const html = T({ query: 't.sort=v&t.dir=asc&range=30d' });
@@ -133,7 +133,7 @@ test('table: footer shows count and sum over all matching rows; pagination links
   assert.doesNotMatch(T({ query: 't.size=7' }), /<option selected>7/, 'unoffered size ignored');
 });
 test('table: empty data renders a designed empty state, values are escaped, phone cards carry data-label', () => {
-  assert.match(table({ id: 't', path: '/x', query: new URLSearchParams(), rows: [], cols: [{ key: 'n', label: 'Name' }], noun: 'things' }), /class="empty"/);
+  assert.match(table({ id: 't', path: '/x', query: new URLSearchParams(), rows: [], filters: [{ key: 'n', label: 'Name' }], cols: [{ key: 'n', label: 'Name' }], noun: 'things' }), /class="empty"/);
   const evil = T({ rows: [{ n: '<img src=x onerror=alert(1)>', v: 1 }] });
   assert.doesNotMatch(evil, /<img/); assert.match(evil, /&lt;img/); assert.match(T(), /<td data-label="Name"/);
 });

@@ -508,3 +508,24 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .bar-picker summary{cursor:pointer;padding:4px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);min-height:36px;display:inline-flex;align-items:center}
 .bar-picker[open]>ul{position:absolute;right:0;z-index:50;margin:var(--sp1) 0 0;padding:var(--sp2);list-style:none;min-width:14rem;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-lg)}
 .bar-picker li{display:flex;align-items:center;justify-content:space-between;gap:var(--sp3);padding:var(--sp1) 0}
+/* ---- shared lists and tables (issue #939): filter chips, column resize and show/hide */
+.dl-filters{display:flex;flex-wrap:wrap;gap:var(--sp1) var(--sp3);align-items:center;margin-bottom:var(--sp2)}
+.dl-filters[hidden],html:not(.js) .dl-filters{display:none}
+.dl-fgroup{display:inline-flex;flex-wrap:wrap;gap:.3rem;align-items:center}
+.dl-flabel{color:var(--mut);font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.03em}
+button.chip{font:inherit;font-size:var(--fs-sm);background:var(--surface);color:var(--fg);cursor:pointer}
+button.chip[aria-pressed="true"]{background:var(--accent,#2b6cb0);color:#fff;font-weight:600}
+.chip .n{opacity:.8;font-variant-numeric:tabular-nums}
+.tfilters{margin-bottom:var(--sp2)}
+table.tfixed{table-layout:fixed}
+table.tfixed td{overflow-wrap:anywhere}
+th[data-col]{position:relative}
+.col-grip{position:absolute;right:0;top:0;bottom:0;width:8px;cursor:col-resize;touch-action:none}
+.col-grip:hover,.col-grip:focus-visible{background:var(--accent,#2b6cb0);opacity:.5}
+html:not(.js) .col-grip,html:not(.js) .tcols{display:none}
+.tcols{position:relative}
+.tcols>summary{list-style:none;cursor:pointer}
+.tcols-box{position:absolute;z-index:5;margin-top:4px;padding:var(--sp2);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);display:flex;flex-direction:column;gap:var(--sp1);min-width:12rem}
+@media (max-width:640px){.col-grip,.tcols{display:none}}
+.vbar{display:inline-block;width:6rem;height:.6rem;background:var(--surface2);border:1px solid var(--line);border-radius:999px;vertical-align:middle;overflow:hidden}
+.vbar i{display:block;height:100%;background:var(--s3,#2f855a)}

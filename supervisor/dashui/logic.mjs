@@ -57,8 +57,51 @@ export function footer(rows, spec) {
   }
   return out;
 }
-export function tableState(rows, { sort, dir = 'asc', q = '', page = 1, pageSize = DEFAULT_PAGE_SIZE, searchKeys = [], totals = {} } = {}) {
-  const filtered = sortRows(filterRows(rows, q, searchKeys), sort, dir);
+// ---- filters (issue #939): declared with each list or table as [{ key, label, order?, value? }]. A row's value for a filter is
+// value(row), else row.facets[key] (lists), else row[key] (tables). Chips of one filter combine with OR, different filters with AND.
+// `sel` is { key: [values] }; a missing or empty entry means "no restriction".
+export const FACET_NONE = 'Unknown';
+export const facetValue = (row, f) => { const v = typeof f.value === 'function' ? f.value(row) : (row.facets ? row.facets[f.key] : row[f.key]); return v === undefined || v === null || v === '' ? FACET_NONE : String(v); };
+export function sanitizeFacets(raw, filters) {
+  const out = {};
+  for (const f of filters || []) { const v = raw && Array.isArray(raw[f.key]) ? raw[f.key].filter(x => typeof x === 'string').slice(0, 50) : []; if (v.length) out[f.key] = v; }
+  return out;
+}
+export function applyFacets(rows, filters, sel, except = null) {
+  const active = (filters || []).filter(f => f.key !== except && sel?.[f.key]?.length);
+  return active.length ? rows.filter(r => active.every(f => sel[f.key].includes(facetValue(r, f)))) : rows.slice();
+}
+// Chips with counts. A chip's count is the rows it would show given the OTHER filters' choices, so counts never lie about what a click gives.
+// Values named in `order` come first (in that order), then the rest by count, most first, then by name.
+export function facetChips(rows, filters, sel) {
+  return (filters || []).map(f => {
+    const base = applyFacets(rows, filters, sel, f.key), counts = new Map();
+    for (const r of base) { const v = facetValue(r, f); counts.set(v, (counts.get(v) || 0) + 1); }
+    for (const v of sel?.[f.key] || []) if (!counts.has(v)) counts.set(v, 0);   // a chosen value with no rows stays visible so it can be unchosen
+    const order = f.order || [];
+    const rank = v => { const i = order.indexOf(v); return i < 0 ? order.length : i; };
+    const options = [...counts].map(([value, count]) => ({ value, count, on: !!sel?.[f.key]?.includes(value) })).sort((a, b) => rank(a.value) - rank(b.value) || b.count - a.count || a.value.localeCompare(b.value));
+    return { key: f.key, label: f.label, options };
+  }).filter(g => g.options.length);
+}
+export const facetsActive = sel => Object.values(sel || {}).some(v => v?.length);
+// URL form for a table: `<id>.f.<key>=a,b` (a comma inside a value is replaced by a space).
+export const encodeFacet = vals => vals.map(v => v.replace(/,/g, ' ')).join(',');
+export const decodeFacet = str => (str ? String(str).split(',').filter(Boolean).slice(0, 50) : []);
+export function toggleFacet(sel, key, value) {
+  const cur = sel?.[key] || [], next = cur.includes(value) ? cur.filter(v => v !== value) : [...cur, value];
+  return { ...sel, [key]: next };
+}
+// Default column widths from content (issue #939): each column gets the width of its longest cell (header included, sampled), in ch,
+// clamped; the one widest text column (over GROW) is left unset so it takes the remaining space. Pure: `sample` is rows of plain strings.
+export function columnWidths(cols, sample) {
+  const lens = cols.map((c, i) => Math.max(String(c.label || '').length + 3, ...sample.map(r => String(r[i] ?? '').length)));
+  const MIN = 6, MAX = 28, GROW = 36;
+  const widest = lens.reduce((best, l, i) => (l > GROW && (best < 0 || l > lens[best]) ? i : best), -1);
+  return lens.map((l, i) => (i === widest ? null : Math.min(MAX, Math.max(MIN, l))));
+}
+export function tableState(rows, { sort, dir = 'asc', q = '', page = 1, pageSize = DEFAULT_PAGE_SIZE, searchKeys = [], totals = {}, filters = [], sel = {} } = {}) {
+  const filtered = sortRows(filterRows(applyFacets(rows, filters, sel), q, searchKeys), sort, dir);
   return { ...paginate(filtered, page, pageSize), footer: footer(filtered, totals), all: rows.length };
 }
 

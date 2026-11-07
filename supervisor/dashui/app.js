@@ -7,6 +7,7 @@ import { initChartOptions } from './chartopts.mjs';
 import { BAR_KEY, FIXED, addBarItem, barToSaved, moveBarItem, removeBarItem, sanitizeBar } from './appbar.mjs';
 import { COLS, MIN_W, ROW_PITCH, addGroup, canHide, compactGroups, dragRect, groupOf, placeGroup, removeGroups, withoutCard, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { saveLists, watchLists } from './lists-ui.mjs';
+import { initTables } from './tables-ui.mjs';
 import { postDecision, runDecision, lowerCount, OUTCOME_TEMPLATE } from './inbox-ui.mjs';
 import { readRegions, startRefresh } from './refresh.mjs';
 
@@ -339,7 +340,7 @@ async function loadTable(region, qs, { syncInput = false } = {}) {
     if (hadFocus && !document.contains(hadFocus) && focusTitle) $$('[title]', region).find(a => a.getAttribute('title') === focusTitle)?.focus({ preventScroll: true });
   } catch { if (tableSeq.get(id) === seq) fallbackNavigate(url); }
 }
-function bindTables(scope = document) { for (const region of $$('[data-tregion]', scope)) bindTable(region); }
+function bindTables(scope = document) { for (const region of $$('[data-tregion]', scope)) bindTable(region); initTables(scope); }
 function bindTable(region) {
   if (region.dataset.tbound) return; region.dataset.tbound = '1';
   const id = region.dataset.tregion, form = $('form.tbar', region);

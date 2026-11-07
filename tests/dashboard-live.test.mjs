@@ -105,7 +105,7 @@ test('the script updates tables in place: one same-origin fetch, no navigation u
 });
 test('the table markup is replaceable: data-tregion wraps the bar and data-tdata holds the rows, footer and pager', async t => {
   const s = await serve(t); const body = (await s.get('/work')).body;
-  for (const id of ['prs', 'issues']) assert.match(body, new RegExp(`<div class="tregion" data-tregion="${id}"><form class="tbar"[^>]*>[\\s\\S]*?</form><div data-tdata><div class="tbl-wrap"><table data-table="${id}">[\\s\\S]*?<nav class="pager"[\\s\\S]*?</nav></div></div>`));
+  for (const id of ['prs', 'issues']) assert.match(body, new RegExp(`<div class="tregion" data-tregion="${id}"><form class="tbar"[^>]*>[\\s\\S]*?</form><div data-tdata>(?:<div class="chipbar[^>]*>[\\s\\S]*?</div></div>)?<div class="tbl-wrap"><table data-table="${id}">[\\s\\S]*?<nav class="pager"[\\s\\S]*?</nav></div></div>`));
   assert.match(body, /<span data-tclear>/);
 });
 test('debounce: a burst of keystrokes causes one update after the pause, and cancel drops it', () => {
@@ -212,7 +212,7 @@ test('every header pill is a link, and each link lands on an element that exists
   const needs = (await s.get('/')).body.match(/Needs you \(\d+\)/);
   const view = await currentView({ root: s.root, config, now: NOW });
   const first = view.attention.find(a => a.severity === 'action');
-  if (needs && first) { const link = /<a class="pill" href="([^"]+)"[^>]*><span class="badge sev-action[^>]*>[^]*?Needs you/.exec(bar)[1]; assert.equal(link, `/system#att-${first.id}`); assert.match((await s.get('/system')).body, new RegExp(`<li class="sev-action" id="att-${first.id}"`)); }
+  if (needs && first) { const link = /<a class="pill" href="([^"]+)"[^>]*><span class="badge sev-action[^>]*>[^]*?Needs you/.exec(bar)[1]; assert.equal(link, `/system#att-${first.id}`); assert.match((await s.get('/system')).body, new RegExp(`<li [^>]*class="sev-action" id="att-${first.id}"`)); }
   assert.ok(needs && first, 'the tick error produced a Needs you item');
 });
 test('pills are keyboard reachable links with a visible focus ring and an explanatory title', async t => {

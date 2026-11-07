@@ -3,6 +3,7 @@
 // State (search text, sort, direction, scroll position inside the list, open <details>) is kept per page and list in sessionStorage
 // and is re-applied to any list that appears, including one swapped in by an in-place refresh (PR #531), before the browser paints.
 import { DIRECTION_WORDS, footerText, listView, noMatchText, sanitizeListState } from './lists.mjs';
+import { facetChips, facetsActive, toggleFacet } from './logic.mjs';
 
 const keyOf = id => `dash.dl.${location.pathname}.${id}`;
 const num = v => (v === undefined || v === '' ? null : Number(v));
@@ -28,22 +29,40 @@ export function initList(el, store = sessionStorage) {
   if (el.dataset.dlReady) return;
   el.dataset.dlReady = '1';
   const id = el.dataset.dlist, ul = el.querySelector(':scope > .dl-scroll'), foot = el.querySelector('[data-dl-foot]'), none = el.querySelector('.dl-none');
-  const input = el.querySelector('.dl-q'), clear = el.querySelector('.dl-clear'), select = el.querySelector('.dl-key'), dirBtn = el.querySelector('.dl-dir');
+  const chipsEl = el.querySelector('.dl-filters'), input = el.querySelector('.dl-q'), clear = el.querySelector('.dl-clear'), select = el.querySelector('.dl-key'), dirBtn = el.querySelector('.dl-dir');
   const sorts = el.dataset.sorts.split(','), noun = el.dataset.noun || 'items', defaultLabel = el.dataset.defaultLabel || 'Original order';
   const defaultSort = { key: el.dataset.defaultKey, dir: el.dataset.defaultDir };
+  let filters = []; try { filters = JSON.parse(el.dataset.filters || '[]'); } catch { /* no chips */ }
   const lis = [...ul.children].filter(n => n.tagName === 'LI');
-  const rows = lis.map((li, n) => ({ i: num(li.dataset.i) ?? n, li, sev: li.dataset.sev || null, num: num(li.dataset.num), name: li.dataset.name || null, age: num(li.dataset.age), text: li.textContent.replace(/\s+/g, ' ') }));
-  const st = sanitizeListState(readStore(store, id), { sorts, defaultSort, searchable: !!input });
+  const rows = lis.map((li, n) => ({ i: num(li.dataset.i) ?? n, li, sev: li.dataset.sev || null, num: num(li.dataset.num), name: li.dataset.name || null, age: num(li.dataset.age), facets: (() => { try { return JSON.parse(li.dataset.facets || '{}'); } catch { return {}; } })(), text: li.textContent.replace(/\s+/g, ' ') }));
+  const st = sanitizeListState(readStore(store, id), { sorts, defaultSort, searchable: !!input, filters });
   const words = k => (k === 'default' ? [defaultLabel, 'Reversed'] : DIRECTION_WORDS[k]);
   let saveTimer = 0;
-  const save = () => writeStore(store, id, { q: st.q, key: st.key, dir: st.dir, top: ul.scrollTop, open: openKeys() });
+  const save = () => writeStore(store, id, { q: st.q, key: st.key, dir: st.dir, f: st.f, top: ul.scrollTop, open: openKeys() });
   const saveSoon = () => { clearTimeout(saveTimer); saveTimer = setTimeout(save, 150); };
   const detailKey = d => { const li = d.closest('.dl-scroll > li'); /* the row, not a step's nested li.wstep (no data-key) */ return li ? `${li.dataset.key || ''}|${d.closest('[data-step]')?.dataset.step || ''}` : ''; };
   const openKeys = () => [...ul.querySelectorAll('details[open]')].map(detailKey).filter(Boolean).slice(0, 200);
 
+  // Chips with counts (logic.mjs facetChips), one group per declared filter, plus Clear all while any is on. Rebuilt on every change.
+  function renderChips() {
+    const groups = facetChips(rows, filters, st.f), any = facetsActive(st.f);
+    chipsEl.replaceChildren();
+    for (const g of groups) {
+      const grp = document.createElement('span'); grp.className = 'dl-fgroup'; grp.setAttribute('role', 'group'); grp.setAttribute('aria-label', g.label);
+      const lab = document.createElement('span'); lab.className = 'dl-flabel'; lab.textContent = g.label; grp.append(lab);
+      for (const o of g.options) {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'chip dl-chip'; b.dataset.fkey = g.key; b.dataset.fval = o.value;
+        b.setAttribute('aria-pressed', o.on ? 'true' : 'false'); b.textContent = `${o.value} ${o.count}`;
+        grp.append(b);
+      }
+      chipsEl.append(grp);
+    }
+    if (any) { const c = document.createElement('button'); c.type = 'button'; c.className = 'chip dl-fclear'; c.textContent = 'Clear all'; chipsEl.append(c); }
+    chipsEl.hidden = !groups.length;
+  }
   function apply({ keepScroll = true } = {}) {
     const top = ul.scrollTop;
-    const v = listView(rows, st);
+    const v = listView(rows, { ...st, filters });
     // Reorder only when the order changed, so the browser keeps focus, scroll and open details of rows that stay.
     const want = v.order.map(r => r.li), have = [...ul.children];
     if (want.some((n, i) => n !== have[i])) { const frag = document.createDocumentFragment(); for (const n of want) frag.append(n); ul.append(frag); }
@@ -60,6 +79,7 @@ export function initList(el, store = sessionStorage) {
       dirBtn.hidden = false;
       const use = dirBtn.querySelector('use'); if (use) use.setAttribute('href', st.dir === 'desc' ? '#i-down' : '#i-up');
     }
+    if (chipsEl) renderChips();
     if (foot) foot.textContent = footerText(rows, v.shown, noun, v.filtered);
     if (none) { none.hidden = !v.none; none.textContent = v.none ? noMatchText(st.q) : ''; }
     if (keepScroll) ul.scrollTop = top;
@@ -75,6 +95,12 @@ export function initList(el, store = sessionStorage) {
   putBack(); if (typeof requestAnimationFrame === 'function') { requestAnimationFrame(() => { putBack(); requestAnimationFrame(putBack); }); }
   if (typeof addEventListener === 'function') addEventListener('load', putBack, { once: true });
 
+  chipsEl?.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.classList.contains('dl-fclear')) st.f = {}; else if (b.dataset.fkey) st.f = toggleFacet(st.f, b.dataset.fkey, b.dataset.fval);
+    ul.scrollTop = 0; apply(); save();
+    const again = b.dataset.fkey ? [...chipsEl.querySelectorAll('.dl-chip')].find(x => x.dataset.fkey === b.dataset.fkey && x.dataset.fval === b.dataset.fval) : null; again?.focus();
+  });
   input?.addEventListener('input', () => { st.q = input.value.slice(0, 200); ul.scrollTop = 0; apply(); save(); });
   input?.addEventListener('keydown', e => { if (e.key === 'Escape' && st.q) { e.preventDefault(); st.q = ''; apply(); save(); } });
   clear?.addEventListener('click', () => { st.q = ''; apply(); save(); input?.focus(); });
