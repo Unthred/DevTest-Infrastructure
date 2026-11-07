@@ -128,9 +128,10 @@ function topNames(list, n = 4) {
 // one stat per record instead of reading and parsing every record each time. A record that cannot be parsed is kept as `unreadable`
 // (never dropped, as readJobs does); a vanished one is forgotten. Same output as readJobs(root).
 // The same job objects are returned on every reading, so they are deeply frozen: a consumer that tries to mutate one throws in strict
-// mode (ES modules) instead of silently corrupting the cache. Copy a job before changing it.
-function deepFreeze(v) {
-  if (v && typeof v === 'object' && !Object.isFrozen(v)) { Object.freeze(v); for (const k of Object.keys(v)) deepFreeze(v[k]); }
+// mode (ES modules); sloppy-mode code (e.g. CommonJS) fails silently instead. Either way the cache is not corrupted. Copy a job before changing it.
+export function deepFreeze(v, seen = new WeakSet()) {
+  // Descends into every object, also one that is already frozen (its children may not be); `seen` stops a cycle.
+  if (v && typeof v === 'object' && !seen.has(v)) { seen.add(v); Object.freeze(v); for (const k of Object.keys(v)) deepFreeze(v[k], seen); }
   return v;
 }
 export function createJobReader(root) {
