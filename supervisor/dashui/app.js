@@ -366,7 +366,9 @@ if (grid) {
     }
   }
   function apply() {
-    if (!editing) st = bpNow() === 'phone' ? null : sanitizeLayout(store.get(key()), ids(), colsNow(), cards().filter(c => c.hasAttribute('data-pin')).map(c => c.dataset.card));
+    const pinnedIds = cards().filter(c => c.hasAttribute('data-pin')).map(c => c.dataset.card);   // read each time: a refresh in place may add or remove pinned cards
+    if (!editing) st = bpNow() === 'phone' ? null : sanitizeLayout(store.get(key()), ids(), colsNow(), pinnedIds);
+    else if (st) st.hidden = st.hidden.filter(id => !pinnedIds.includes(id));
     if (st) paintFree(); else paintFlow();
     renderBar();
   }
