@@ -3,9 +3,10 @@
 // (and shows in Needs you); anything else that defers work to the homeowner after deploy draws CHANGES.
 export const HEADING = /^#{1,6}\s*homeowner steps\b.*$/im;
 const DEFERRAL = [
-  /\b(?:for|to be done by|left (?:to|for)|up to) the homeowner\b(?:[^.\n]|\.(?=\S)){0,60}\b(?:after|once|when)\b(?:[^.\n]|\.(?=\S)){0,30}\b(?:deploy|deployment|install|installed|merge|merged|release)/i,
-  /\bhomeowner\b(?:[^.\n]|\.(?=\S)){0,40}\b(?:can|should|must|needs? to|will need to|has to|may want to|will have to)\b(?:[^.\n]|\.(?=\S)){0,100}\b(?:after|once|when)\b(?:[^.\n]|\.(?=\S)){0,30}\b(?:deploy|deployment|install|installed|merge|merged|release)/i,
-  /\b(?:after|once|when)\b(?:[^.\n]|\.(?=\S)){0,20}\b(?:deploy|deployment|install|installed|merge|merged|release)\b(?:[^.\n]|\.(?=\S)){0,60}\b(?:the )?homeowner\b(?:[^.\n]|\.(?=\S)){0,40}\b(?:can|should|must|needs? to|has to|sets?|adds?|edits?|runs?|clicks?|configures?|restarts?)\b/i,
+  /\b(?:for|to be done by|left (?:to|for)|up to) the homeowner\b(?:[^.\n]|\.(?=\S)){0,60}\b(?:after|once|when)\b(?:[^.\n]|\.(?=\S)){0,30}\b(?:deploy|deployed|deployment|install|installed|merge|merged|release|released)/i,
+  /\bhomeowner\b(?:[^.\n]|\.(?=\S)){0,40}\b(?:can|should|must|needs? to|will need to|has to|may want to|will have to)\b(?:[^.\n]|\.(?=\S)){0,100}\b(?:after|once|when)\b(?:[^.\n]|\.(?=\S)){0,30}\b(?:deploy|deployed|deployment|install|installed|merge|merged|release|released)/i,
+  /\b(?:after|once|when)\b(?:[^.\n]|\.(?=\S)){0,20}\b(?:deploy|deployed|deployment|install|installed|merge|merged|release|released)\b(?:[^.\n]|\.(?=\S)){0,60}\b(?:the )?homeowner\b(?:[^.\n]|\.(?=\S)){0,40}\b(?:can|should|must|needs? to|has to|sets?|adds?|edits?|runs?|clicks?|configures?|restarts?)\b/i,
+  /\bhomeowner\b(?:[^.\n]|\.(?=\S)){0,40}\b(?:can|should|must|needs? to|will need to|has to|will|to)\b(?:[^.\n]|\.(?=\S)){0,100}\bpost-?(?:deploy|deployment|install|merge)/i,
   /\bmanual (?:step|setting|action)s?\b(?:[^.\n]|\.(?=\S)){0,60}\bafter (?:deploy|deployment|install|merge)/i,
 ];
 // Splits the body into the "Homeowner steps" section (to the next heading) and the rest.
@@ -18,7 +19,13 @@ export function splitSteps(body) {
   return { steps, rest: text.slice(0, m.index) + (next ? after.slice(next.index) : '') };
 }
 // Lines outside the Homeowner steps section that defer a step to the homeowner after deploy.
-export const deferredSteps = body => splitSteps(body).rest.split('\n').map(l => l.trim()).filter(l => l && DEFERRAL.some(re => re.test(l))).map(l => l.slice(0, 300));
+// A sentence that says the opposite ("Nothing is left for the homeowner after deploy", "No step for the homeowner") or only quotes the phrase
+// is not a deferral: quoted text is dropped, and a negated sentence is skipped. Matching is per sentence so one negation does not hide another.
+const NEGATED = /\b(?:no|nothing|none|never|without|not|isn'?t|aren'?t|doesn'?t|don'?t|won'?t|zero)\b/i;
+const stripQuoted = l => l.replace(/`[^`]*`|"[^"]*"|\u201c[^\u201d]*\u201d/g, ' ');
+const sentences = l => stripQuoted(l).split(/(?<=[.!?;])\s+/);
+const defers = l => sentences(l).some(x => DEFERRAL.some(re => re.test(x)) && !NEGATED.test(x));
+export const deferredSteps = body => splitSteps(body).rest.split('\n').map(l => l.trim()).filter(l => l && defers(l)).map(l => l.slice(0, 300));
 export const homeownerSteps = body => splitSteps(body).steps.map(s => s.slice(0, 300));
 
 const MARK = 'Deferred homeowner step (issue #855):';

@@ -172,3 +172,16 @@ test('team: a review verdict is tightened from the PR body at ingestion and Home
   assert.equal(v.verdict, 'CHANGES'); assert.deepEqual(w.team.s.homeownerSteps[1].steps, ['Plug in the cable.']);
   w.team.gh.pullBody = async () => 'Fine.'; assert.equal(await w.team.applyDoneRule(1, SHA, PASS), PASS); assert.equal(w.team.s.homeownerSteps[1], undefined);
 });
+
+test('the deferral gate ignores negated and quoted sentences and still catches real deferrals', () => {
+  for (const ok of ['Nothing is left for the homeowner after deploy.', 'No step for the homeowner after install; the migration applies it.', 'A deferred "homeowner can do X after deploy" turns the verdict into CHANGES.'])
+    assert.deepEqual(deferredSteps(ok), [], ok);
+  for (const bad of ['Once deployed, the homeowner must restart the dashboard.', 'The homeowner will add the key post-deploy.', 'The homeowner can set the origin after deploy.'])
+    assert.equal(deferredSteps(bad).length, 1, bad);
+});
+
+test('the dashboard shows a merged pull request as merged, installed or verified', () => {
+  assert.equal(stageOf({ merged: true, installed: true }), 'installed');
+  const src = fs.readFileSync(path.join(path.dirname(shippedFile), 'dashboard.mjs'), 'utf8'), rend = fs.readFileSync(path.join(path.dirname(shippedFile), 'dashrender.mjs'), 'utf8');
+  assert.match(src, /stage: m \? stageOf\(/); assert.match(rend, /p\.status\} \(\$\{p\.stage\}\)/);
+});
