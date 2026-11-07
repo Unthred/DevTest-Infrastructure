@@ -217,7 +217,7 @@ async function cleanupWhenQuiet(root, remove) {
   await sleepMs(300);
   // A late writer (a worker's last write after the quiet check) can still race rmSync into ENOTEMPTY: retry the removal, and never let a temp-dir cleanup fail the suite.
   for (let i = 0; i < 6; i++) { try { remove(); return; } catch { await sleepMs(500); for (const pid of runningInState(root)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } } }
-  try { remove(); } catch { /* the OS temp directory is reaped later; a leftover must not fail the run */ }
+  try { remove(); } catch (e) { console.error(`wake test cleanup left ${root}: ${e && e.code}`); /* the OS temp directory is reaped later; a leftover must not fail the run */ }
 }
 // A state root, a product repository with a real origin, a copy of the supervisor code whose team.json points at it, a fake gh that returns one
 // open issue (and can be made slow), and fake agents. The planner is the real planner.
