@@ -29,7 +29,8 @@ import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
-import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
+import { wakeView, requestWake, spawnDetachedPass, inboxWatcher, scanInboxNow } from './wake.mjs';
+import * as inboxStore from './inbox.mjs';
 import { fileURLToPath } from 'node:url';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
@@ -139,7 +140,7 @@ export const DASHBOARD_VIEW_TTL_MS = 3000;
 export function diagnosticsData({ root, config, now, recorderDir }) {
   if (typeof config === 'function') config = config();
   const cfg = validateTeamConfig(config);
-  return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir, wake: (() => { try { return wakeStatus(root, now); } catch { return null; } })() });
+  return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir, wake: (() => { try { return wakeView(root, now); } catch { return null; } })() });
 }
 const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, behindWrite: p.behindWrite, refreshing: p.refreshing, failed: p.failed });
 export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
@@ -383,7 +384,11 @@ export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot })
   // Issue #406: a new proposal file in the inbox folder starts a pass (no new port; one directory listing every few seconds).
   const src = configSource(config);
   const inboxDir = (() => { try { return src().inbox?.dir || null; } catch { return null; } })();
-  const watcher = inboxDir ? inboxWatcher({ dir: inboxDir, onNew: () => { try { defaultWake(root, 'inbox', src()); } catch { /* the schedule is the fallback */ } } }) : { stop() {} };
+  const watcher = inboxDir ? inboxWatcher({ dir: inboxDir, onNew: () => {
+    // Issue #985: validate the new proposal here and now (waiting -> pending), even while a pass runs. A scan that cannot run falls back to the wake.
+    try { const c = src(), r = scanInboxNow({ root, inboxDir: c.inbox.dir, scan: inboxStore.scan, maxPending: c.inbox.max_pending }); if (r.scanned) return; } catch { /* fall back to a pass */ }
+    try { defaultWake(root, 'inbox', src()); } catch { /* the schedule is the fallback */ }
+  } }) : { stop() {} };
   server.once('close', () => watcher.stop());
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
 }

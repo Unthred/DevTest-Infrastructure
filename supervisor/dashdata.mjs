@@ -189,9 +189,12 @@ export function tickOutcome(report) {
 }
 
 // Written by the tick (never by the dashboard server). `error` is the failure of this tick, if any.
-export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0, startedAt = null, heldAgents = null, holds = {}, trigger = null, merged = null, noop = false, ghCalls = null, ghMs = null, check = null }) {
+export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0, startedAt = null, heldAgents = null, holds = {}, trigger = null, merged = null, noop = false, ghCalls = null, ghMs = null, check = null, durationMs = null, phases = null }) {
+  // Issue #985: how long the pass took and where (phase name -> milliseconds), kept with the tick so the dashboard and foreman_status can show it.
+  const phaseMs = phases && typeof phases === 'object' ? Object.fromEntries(Object.entries(phases).filter(([k, v]) => /^[a-z][a-z0-9 -]{0,30}$/.test(k) && Number.isFinite(v) && v >= 0).slice(0, 20).map(([k, v]) => [k, Math.round(v)])) : null;
+  const passTiming = { ...(Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {}), ...(phaseMs && Object.keys(phaseMs).length ? { phases: phaseMs } : {}) };
   const prev = readCache(root) || {};
-  const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
+  const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null), ...passTiming },
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
   if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.mergedNumbers = (team.merged || []).map(x => x.number).filter(Number.isSafeInteger); cache.fetchedAt = now;
     // file lists the tick read for the second-opinion hold (null = unreadable), so the page shows the same hold as the tick
@@ -211,7 +214,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     // without `trigger` is from before wakes existed and was a scheduled pass.
     ...(typeof trigger === 'string' ? { trigger, ...(Array.isArray(merged) && merged.length ? { merged: merged.filter(x => typeof x === 'string').slice(0, 5) } : {}) } : {}),
     // Issue #755: a pass that GitHub's conditional requests proved unchanged and that did nothing; the gh processes the pass started; what the change check said.
-    ...(noop === true ? { noop: true } : {}), ...(Number.isSafeInteger(ghCalls) ? { ghCalls } : {}), ...(Number.isFinite(ghMs) ? { ghMs: Math.round(ghMs) } : {}),
+    ...passTiming, ...(noop === true ? { noop: true } : {}), ...(Number.isSafeInteger(ghCalls) ? { ghCalls } : {}), ...(Number.isFinite(ghMs) ? { ghMs: Math.round(ghMs) } : {}),
     ...(check && typeof check.result === 'string' ? { check: { result: check.result.slice(0, 20), reason: redact(String(check.reason || ''), 160), probes: Number.isSafeInteger(check.probes) ? check.probes : 0, served: Number.isSafeInteger(check.served) ? check.served : 0 } } : {}),
     redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };
   // Issue #362: keep a compact, allowlisted timeline of everything the live records hold now, before any of it can expire.

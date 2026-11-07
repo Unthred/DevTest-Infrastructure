@@ -24,6 +24,7 @@ import { probeDue } from './probe.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
+import { scanInboxNow } from './wake.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 
@@ -1675,14 +1676,19 @@ export class Team {
     const report = { ingested: [], notified: [], actions: [], skipped: [] };
     for (const w of this.c.deprecations || []) (report.warnings ||= []).push({ warning: w });
     // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).
-    const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
+    // Issue #985: time spent per phase of the pass (milliseconds, summed per name), so a slow pass can be traced to the phase that made it slow.
+    const phases = report.phases = {}, t0 = Date.now();
+    const lap = (name, since) => { phases[name] = (phases[name] || 0) + (Date.now() - since); };
+    const guard = async (what, fn) => { const since = Date.now(); try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } finally { lap(what.replace(/ \d.*$/, ''), since); } };
     if (!dryRun) {
-      await this.loadNames();
+      { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
       await guard('inbox', () => this.processInbox(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
+    const planSince = Date.now();
     let actions = await this.plan();
+    lap('plan', planSince);
     if (!dryRun) await guard('breaker successes', () => this.backfillSuccesses());
     actions = this.applyBreaker(actions, report, dryRun);
     if (!dryRun) await this.rearmOnRecovery(report);
@@ -1707,9 +1713,12 @@ export class Team {
       // an earlier job was starting holds the rest until the next tick (merges are not jobs).
       const l = act.type !== 'merge' ? this.limitedOf(act.agent) : null;
       if (l?.out) { (report.skipped ||= []).push({ what: `${act.type} ${act.pr ?? act.issue} (${act.agent})`, reason: `not started: ${act.agent} reached its usage limit (${String(l.reason || 'usage limit').slice(0, 120)}); it is retried when allowance returns` }); continue; }
+      const startSince = Date.now();
       await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
+      lap('job launches', startSince);
     }
     this.save();
+    phases.total = Date.now() - t0;
     return report;
   }
 
@@ -1986,7 +1995,7 @@ export class Team {
   async processInbox(report) {
     const dir = this.inboxDir(); if (!dir) return;
     const now = this.clock.now();
-    inboxStore.scan(dir, now, { maxPending: this.c.inbox.max_pending });
+    scanInboxNow({ root: this.root, inboxDir: dir, scan: inboxStore.scan, maxPending: this.c.inbox.max_pending, now });   // issue #985: the dashboard's watcher may have scanned already
     for (const st of inboxStore.allStatuses(dir)) {
       if (!['approved', 'posting'].includes(st.state)) continue;
       try {

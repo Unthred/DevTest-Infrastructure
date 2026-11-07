@@ -183,3 +183,19 @@ export function inboxWatcher({ dir, onNew, intervalMs = 5000, list = d => fs.rea
   const timer = setTimer(poll, intervalMs); timer.unref?.();
   return { poll, stop: () => clearTimer(timer) };
 }
+
+// Issue #985: what the dashboard and foreman_status show about wakes: the rolling-hour use against the cap, the requests waiting for the
+// running pass (reasons and how long they have waited) and how long the running pass has held the lock. Local files only.
+export function wakeView(root, now = Date.now(), cap = WAKE_MAX_PER_HOUR) {
+  const st = wakeStatus(root, now, cap), req = readWake(root).requested;
+  return { ...st, pending: req ? { reasons: req.reasons, since: req.at || null, ageSeconds: req.at ? Math.max(0, Math.round((now - req.at) / 1000)) : null } : null, passRunningSeconds: Math.round(passLockAge(root, now) / 1000) || null };
+}
+
+// Issue #985: a new proposal is validated (waiting -> pending) at once, by whoever sees it first, even while a pass runs: the scan only
+// writes inbox status files, never Foreman's team state. A small lock keeps two scanners (the dashboard's watcher and the pass) from
+// writing the same status; a scanner that finds it held does nothing, because the holder is already scanning the same folder.
+export function scanInboxNow({ root, inboxDir, scan, maxPending, now = Date.now() }) {
+  let release; try { release = dirLock(root, 'inbox-scan.lock', now); } catch { release = null; }
+  if (!release) return { scanned: false };
+  try { return { scanned: true, ...scan(inboxDir, now, { maxPending }) }; } finally { release(); }
+}
