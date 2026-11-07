@@ -242,7 +242,7 @@ export function claim(inboxDir, id, from, patch, now = Date.now()) {
 export function decidedCards(inboxDir, now = Date.now()) {
   const day = new Date(now); day.setHours(0, 0, 0, 0);
   return allStatuses(inboxDir).filter(s => s.decision && Number.isFinite(s.decidedAt) && s.decidedAt >= day.getTime() && s.decidedAt <= now + 60000)
-    .sort((x, y) => y.decidedAt - x.decidedAt).map(s => ({ id: s.id, kind: s.kind || null, title: s.title || null, decision: s.decision, decidedAt: s.decidedAt,
+    .sort((x, y) => y.decidedAt - x.decidedAt).map(s => ({ id: s.id, kind: s.kind || null, title: s.title || null, decision: s.decision, state: s.state || null, decidedAt: s.decidedAt,
       undoUntil: ['approved', 'rejected'].includes(s.state) && now - s.decidedAt <= UNDO_MS ? s.decidedAt + UNDO_MS : null }));
 }
 export function approvedItems(inboxDir, kind) {

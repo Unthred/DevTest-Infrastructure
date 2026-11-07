@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import * as inbox from '../supervisor/inbox.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
-import { postDecision, runDecision, lowerCount, PRESSED } from '../supervisor/dashui/inbox-ui.mjs';
+import { postDecision, runDecision, lowerCount, PRESSED, OUTCOME_TEMPLATE } from '../supervisor/dashui/inbox-ui.mjs';
 
 const tmp = (t, p) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 const hex = n => crypto.randomBytes(n).toString('hex');
@@ -92,7 +92,7 @@ test('route: a JSON decision answers with the state and undo time; the card leav
   const page = (await s.get('/')).body;
   assert.ok(!page.includes(`data-inbox="${a}"`), 'the decided card is gone from the pending list');
   assert.match(page, /<summary>Decided today \(<span class="inbox-decided-n">1<\/span>\)<\/summary>/);
-  assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}" data-tonly>Approved \\d\\d:\\d\\d UTC</span>`));
+  assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, waiting for a free slot" data-tonly>Approved \\d\\d:\\d\\d UTC, waiting for a free slot</span>`));
   assert.match(page, /name="decision" value="undo"/);
   assert.match(page, /Needs you \(1\)/, 'the count dropped');
 });
@@ -161,10 +161,27 @@ test('script: Approve locks both buttons and labels the pressed one before the a
 });
 test('script: a refusal enables the buttons again and shows the reason inline', async () => {
   const { log, ui } = fakeUi();
-  const r = await runDecision({ decision: 'reject', ui, post: async () => ({ ok: false, reason: 'the item is already approved' }) });
+  const r = await runDecision({ decision: 'reject', ui, post: async () => ({ ok: false, reason: 'the dashboard could not be reached' }) });
   assert.equal(r.ok, false);
-  assert.deepEqual(log, [['error', null], ['lock', 'Rejected ✗'], ['unlock'], ['error', 'Not recorded: the item is already approved']]);
+  assert.deepEqual(log, [['error', null], ['lock', 'Rejected ✗'], ['unlock'], ['error', 'Not recorded: the dashboard could not be reached']]);
   await assert.rejects(runDecision({ decision: 'maybe', ui, post: async () => ({}) }));
+});
+test('script: a refusal saying the item is already decided keeps the buttons off and says so; a second decision does nothing', async () => {
+  const log = []; const ui = { lock: l => log.push(['lock', l]), unlock: () => log.push(['unlock']), error: e => log.push(['error', e]), decided: () => log.push(['decided']), settled: t => log.push(['settled', t]) };
+  const r = await runDecision({ decision: 'approve', ui, post: async () => ({ ok: false, reason: 'the item is already approved' }) });
+  assert.equal(r.ok, false);
+  assert.deepEqual(log, [['error', null], ['lock', 'Approved ✓'], ['settled', 'Already decided: it is already approved. Nothing was changed.']]);
+  assert.ok(!log.some(x => x[0] === 'unlock' || x[0] === 'decided'));
+  assert.ok(OUTCOME_TEMPLATE.approve.endsWith('waiting for a free slot') && OUTCOME_TEMPLATE.reject === 'Rejected {t}');
+});
+test('route: a second click on an approved item is refused and changes nothing; once the tick took it the row reads plain Approved', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD(1)); inbox.scan(dir, 1000); const s = await serve(t, dir);
+  assert.equal((await s.post(a, 'approve')).status, 200);
+  s.clock.now += 5000; const again = await s.post(a, 'reject'); assert.equal(again.status, 409); assert.match(JSON.parse(again.body).reason, /^the item is already approved/);
+  assert.equal(inbox.statusOf(dir, a).decision, 'approve');
+  inbox.finish(dir, a, { state: 'running' });
+  const page = (await s.get('/')).body; assert.match(page, new RegExp(`data-decided="${a}">[^]*?>Approved \\d\\d:\\d\\d UTC</span>`));
+  assert.ok(!page.includes('waiting for a free slot'));
 });
 test('script: postDecision turns a server refusal, a non-JSON page and a network failure into a reason, never a success', async () => {
   const res = (status, body) => async () => ({ status, json: async () => JSON.parse(body) });
