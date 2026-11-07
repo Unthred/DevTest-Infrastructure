@@ -202,13 +202,26 @@ for (const [name, feat, main] of [
   });
 }
 
-// Positive control for the main-line exclusion (issue #677): keeping the PR's own line next to main's line is not a loss
+// End-to-end guard (issue #677): keeping the PR's own line verbatim next to main's line is not a loss. It short-circuits at the exact-count
+// check, so it does not exercise unionSurvives; the next test is the control for that.
 test('keeping both main\'s line and the PR\'s line is not reported as lost', t => {
   const feat = '  sub(x, ready);', main = '  sub(x, y, ready);';
   const r = sameLineRepo(t, feat, main);
   const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
   try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
   write(r.agent, 'l.mjs', r.f(main + '\n' + feat).replace('const z = 1;', 'const z = 3;')); git(r.agent, 'add', '-A');
+  execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+  assert.deepEqual(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges, []);
+});
+
+// Positive control for unionSurvives and its main-line exclusion (issue #762): the resolution is a merged line that is neither verbatim
+// nor a substring of anything, so only the ordered-token union check can keep it.
+test('a merged line that is new in the resolution and holds the PR\'s tokens in order is not reported as lost', t => {
+  const feat = '  sub(x, ready);', main = '  sub(x, y, ready);', merged = '  sub(x, y, z, ready);';
+  const r = sameLineRepo(t, feat, main);
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  write(r.agent, 'l.mjs', r.f(merged).replace('const z = 1;', 'const z = 3;')); git(r.agent, 'add', '-A');
   execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
   assert.deepEqual(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges, []);
 });
