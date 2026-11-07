@@ -143,8 +143,14 @@ test('worker: no further checkpoint is attempted after the limit, even when the 
   const f = await broken(t);
   const job = { id: '3'.repeat(32), kind: 'implement', worktree: path.join(f.d, 'not-a-repo'), issue: 579, attempts: 1, status: 'running', provider: 'codex', role: 'devtest', scope: 's', allowedActions: ['read'], prompt: 'p' };
   fs.mkdirSync(job.worktree); fs.mkdirSync(path.join(f.root, 'jobs'), { recursive: true });
-  const slow = { command: () => [process.execPath, '-e', "process.on('SIGINT',()=>setTimeout(()=>process.exit(0),600));setTimeout(()=>{},20000)"], observe: () => ({}), preflight: () => true };
-  const result = await runProcess(f.root, job, cfg, slow, clock, { checkpointMs: 60, checkpointLimit: 3 });
+  const slow = { command: () => [process.execPath, '-e', "process.on('SIGINT',()=>setTimeout(()=>process.exit(0),300));setTimeout(()=>{},20000)"], observe: () => ({}), preflight: () => true };
+  // Deterministic: the checkpoint timer is driven by hand, so no real-time race decides the outcome (issue #748).
+  let tick = null, cleared = 0;
+  const timers = { setInterval: fn => { tick = fn; return 1; }, clearInterval: () => { cleared++; } };
+  const run = runProcess(f.root, job, cfg, slow, clock, { checkpointLimit: 3, timers });
+  for (let i = 0; i < 3; i++) tick();
+  assert.ok(cleared >= 1, 'the timer is cleared as soon as the limit is reached, while the child is still running');
+  const result = await run;
   assert.equal(result.event, 'checkpoint_failed');
   assert.equal(events(f.root, job.id).filter(k => k.startsWith('checkpoint_failed:')).length, 3);
 });
