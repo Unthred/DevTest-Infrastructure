@@ -11,7 +11,8 @@ import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
-import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
+import { checksState, agentOfBranch, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
+import { pruneVersions, jobVersions } from './versions.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { redact, redactLong, redactAddresses } from './redact.mjs';
 
@@ -27,8 +28,7 @@ export const refusalText = (r, localDomains = (process.env.DEVTEST_LOCAL_DOMAINS
   return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => HOST_PORT_SKIP.test(m.replace(/:\d+$/, '')) ? m : '[host]').replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
 };
 export const URGENT_REQUEST_MAX_MS = 24 * 3600 * 1000;   // issue #708: an install-now request nobody spent lapses after a day
-export const MIN_INSTALL_GAP_MS = MIN_INSTALL_GAP_DEFAULT_MINUTES * 60 * 1000;   // issue #695: the shipped batching window
-export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
+export const MIN_INSTALL_GAP_MS = MIN_INSTALL_GAP_DEFAULT_MINUTES * 60 * 1000;   // issue #695: the batching window; issue #846: 0 by default (opt-in)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
 // A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
 export const MIN_UPGRADE_INTERVAL_MS = 2 * 60 * 1000;
@@ -255,9 +255,9 @@ const defaultStart = (wrapper, args) => dashboardSpawn(wrapper, args);
 export const holdOf = (result, s) => (result === 'busy' || result === 'upgraded' ? { to: s?.holding?.to || s?.pending?.to || null } : null);
 
 export class SelfUpgrade {
-  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
+  constructor({ root, deps, clock = { now: () => Date.now() }, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
     this.lock = lock; this.lockWaitMs = lockWaitMs; this.lockSleep = lockSleep;   // issue #798: lock() returns an unlock function, or null while another process holds upgrade.lock
-    this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs; this.minGapMs = minGapMs;   // issue #136: the configurable drain bound; issue #695: minGapMs is the batching window between installs (0 = off)
+    this.root = root; this.d = deps; this.clock = clock; this.minGapMs = minGapMs;   // issue #695: minGapMs is the batching window between installs (0 = off, the default since issue #846; there is no drain)
     this.dir = path.join(root, 'team');
     this.stateFile = path.join(this.dir, 'self-upgrade.json');
     this.latchFile = path.join(this.dir, 'self-upgrade.latch');       // the homeowner clears the latch by removing this file
@@ -381,9 +381,43 @@ export class SelfUpgrade {
     const dp = this.s.dashboardPending;
     if (dp && !this.s.pending) await this.restartDashboard({ from: dp.from, to: dp.to }, dp.rollingBack === true);
     const result = await this.stepInner();
-    if (result !== 'busy' && this.s.holding) { delete this.s.holding; this.save(); }
-    if (result !== 'busy' && result !== 'batched' && this.s.nextInstall) { delete this.s.nextInstall; this.save(); }
+    if (this.s.holding) { delete this.s.holding; this.save(); }   // issue #846: no drain, so nothing is ever held (state written by an older version)
+    const wait = this.waitView(result);
+    if (wait) { const old = this.s.nextInstall; if (!old || old.state !== wait.state || old.why !== wait.why || old.to !== wait.to) { this.s.nextInstall = wait; this.save(); } }
+    else if (result !== 'batched' && this.s.nextInstall) { delete this.s.nextInstall; this.save(); }
+    try { this.prune(); } catch { /* cleanup is best effort; the next tick tries again */ }
     return result;
+  }
+  // Issue #846: why merged work is not installed yet, in terms of the install rule (never a fixed time). null = nothing waits.
+  waitView(result) {
+    const to = this.s.main?.sha; if (!SHA.test(to || '')) return null;
+    const why = {
+      'awaiting-verification': 'the previous install is not verified yet: the next live tick on it verifies it, then this installs',
+      'not-eligible': 'a merged pull request has no independent PASS review with green CI yet: installs at the first tick after it has',
+      'precheck-failed': 'the checks for this commit failed: installs at the first tick after a newer main passes them',
+      'github-unreachable': 'GitHub could not be reached: retried at the next tick after the backoff',
+      'upgrader-changed': 'the change touches the bootstrap installer: needs the hand-install command',
+      latched: 'the last install was rolled back: waits until a person clears the rollback latch'
+    }[result];
+    return why ? { to, at: null, why, state: 'waiting' } : null;
+  }
+  // Issue #846: remove side-by-side installs nothing names any more. Runs every tick; logs what it removed. Keeps the current version, the
+  // last good version (the rollback target), a pending install's two versions, any dashboard server's version and every version a live
+  // job record names. It does nothing while the rollback target is not known yet or a live job has no recorded version.
+  prune() {
+    if (typeof this.d.referencedVersions !== 'function') return null;
+    const cur = this.d.installed(); if (!cur) return null;
+    const refs = this.d.referencedVersions();
+    const why = !SHA.test(this.s.lastGood || '') ? 'the rollback target is not recorded yet (set by the next verified install)' : refs.unknown ? 'a live job has no recorded version' : null;
+    if (why) { if (this.s.versionCleanup?.skipped !== why) { this.s.versionCleanup = { at: this.clock.now(), skipped: why }; this.save(); } return { removed: [], skipped: why }; }
+    const keep = new Set([cur, this.s.lastGood, this.s.pending?.from, this.s.pending?.to, this.s.dashboardGood?.version, ...refs.versions].filter(v => SHA.test(v || '')));
+    const out = pruneVersions({ root: this.root, keep, now: this.clock.now() });
+    if (out.removed.length) {
+      this.record({ result: 'versions_removed', removed: out.removed, kept: out.kept });
+      this.s.versionCleanup = { at: this.clock.now(), removed: out.removed.length, kept: out.kept.length };
+      this.save();
+    } else if (this.s.versionCleanup?.skipped) { delete this.s.versionCleanup; this.save(); }
+    return out;
   }
   async stepInner() {
     if (this.latch()) return 'latched';
@@ -457,16 +491,10 @@ export class SelfUpgrade {
         return 'batched';
       }
     }
-    // The drain clock runs from the first tick of a continuous hold and a newer main during the hold does not restart it (issue #695: merges
-    // every few minutes must not extend a hold without bound); a hold that ended, or a target that failed a check, starts afresh (PR #162).
-    if (this.s.waitingSince == null || (this.s.waitingFor !== target && !this.s.holding)) { this.s.waitingSince = now; this.s.waitingFor = target; } else this.s.waitingFor = target;
-    // Drain (issue #136): while jobs run and the bound is not reached, no new job starts; the install happens at the first job
-    // boundary. At the bound the install goes ahead without waiting further; it replaces files only and never kills a running job.
-    if (running > 0 && now - this.s.waitingSince < this.drainMaxMs) {
-      this.s.holding = { to: target, since: this.s.waitingSince, jobs: running };
-      this.s.nextInstall = { to: target, at: this.s.waitingSince + this.drainMaxMs, why: 'draining: installs when running jobs finish, at the latest at this time', state: 'draining' }; this.save(); return 'busy';
-    }
-    const checks = { eligibility: 'ok', quiet: running > 0 ? 'forced-after-wait' : 'idle' };
+    // Issue #846: no drain. The install is side by side (its own versions/<sha> directory, `current` switched atomically), a running job
+    // finishes from the directory it started on, and cleanup keeps that directory while any job record names it. So the install goes ahead
+    // at once, with jobs running, and nothing is held back.
+    const checks = { eligibility: 'ok', quiet: running > 0 ? 'jobs-continue-on-their-version' : 'idle' };
     let pre = await this.d.preChecks(target);
     // Issue #412: a failed test run is repeated once in a fresh clean copy (each installer call takes its own) before the commit is
     // latched. It runs here, in this tick, after the drain and before dispatch, so no job can be starting while it runs.
@@ -546,7 +574,7 @@ export class SelfUpgrade {
       return this.rollback(p.from, p.to, 'no live tick ran under the new version within an hour', p.prs, { ...p.checks, liveTick: 'missing' });
     }
     if (!ok) return this.rollback(p.from, p.to, `live tick failed: ${String(reason || 'error').slice(0, 160)}`, p.prs, { ...p.checks, liveTick: 'failed' });
-    delete this.s.pending; this.s.lastFinishedAt = now; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();
+    delete this.s.pending; this.s.lastFinishedAt = now; this.s.lastGood = p.from; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();
     this.record({ from: p.from, to: p.to, prs: p.prs, checks: { ...p.checks, liveTick: 'ok' }, result: 'verified' });
     await this.restartDashboard(p);
     return 'verified';
@@ -704,6 +732,8 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
   return {
     config,
     installed: () => installedSha(root),
+    // Issue #846: the versions something still uses: live job records, and every running dashboard server.
+    referencedVersions: () => { const j = jobVersions(root); for (const d of findDashboards()) { if (d.version) j.versions.add(d.version); else j.unknown++; } return j; },
     fetchMain: () => { git('fetch', '--quiet', 'origin', 'main'); return git('rev-parse', 'origin/main'); },
     isAncestor: (a, b) => run('git', ['-C', repo, 'merge-base', '--is-ancestor', a, b]).status === 0,
     remoteUrl,

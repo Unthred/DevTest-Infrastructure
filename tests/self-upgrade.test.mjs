@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { MIN_INSTALL_GAP_MS, SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS, PRECHECK_RETRY_MS } from '../supervisor/upgrade.mjs';
-import { DRAIN_DEFAULT_MINUTES, applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
+import { MIN_INSTALL_GAP_MS, SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS, PRECHECK_RETRY_MS } from '../supervisor/upgrade.mjs';
+import { applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
@@ -30,7 +30,7 @@ function world(t, over = {}) {
     rollback: async (from, to) => { log.push(['rollback', from, to]); return state.rb; },
     alert: async text => { log.push(['alert', text]); }
   };
-  const make = () => new SelfUpgrade({ root: path.join(dir, 'root'), deps, clock: { now: () => state.now } });
+  const make = () => new SelfUpgrade({ root: path.join(dir, 'root'), deps, clock: { now: () => state.now }, minGapMs: state.gap ?? 0 });
   const records = () => { try { return fs.readFileSync(path.join(dir, 'root/team/upgrades.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)); } catch { return []; } };
   return { dir, state, deps, log, make, up: make(), records, alerts: () => log.filter(x => x[0] === 'alert').map(x => x[1]) };
 }
@@ -112,404 +112,21 @@ test('CI red, pending or absent on the merged head refuses; one bad PR among sev
   assert.equal(await w.up.step(), 'upgraded'); assert.match(w.alerts().at(-1), /\(PR #7, PR #8\)/);
 });
 
-test('busy: waits while a job runs, upgrades after 30 minutes or when idle', async t => {
-  const w = world(t, { active: 1 });
-  assert.equal(await w.up.step(), 'busy');
-  w.state.now += QUIET_MAX_WAIT_MS - 1;
-  assert.equal(await w.up.step(), 'busy'); assert.equal(w.log.length, 0);
-  w.state.now += 1;
-  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records()[0].checks.quiet, 'forced-after-wait');
-  const idle = world(t, { active: 1 });
-  assert.equal(await idle.up.step(), 'busy'); idle.state.active = 0;
+test('issue #846: running jobs never delay an install: it goes ahead at once and the record says the jobs continue on their version', async t => {
+  const w = world(t, { active: 2 });
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records()[0].checks.quiet, 'jobs-continue-on-their-version');
+  assert.equal(w.up.s.holding, undefined); assert.equal(w.up.s.nextInstall, undefined);
+  assert.deepEqual(w.log.map(x => x[0]), ['pre', 'upgrade', 'dry', 'alert']);
+  const idle = world(t, { active: 0 });
   assert.equal(await idle.up.step(), 'upgraded'); assert.equal(idle.records()[0].checks.quiet, 'idle');
 });
 
-test('pre-check failure: no upgrade, one alert, no repeat of the heavy checks for the same commit, retried for a newer main', async t => {
-  const w = world(t, { pre: { ok: false, reason: 'tests: 3 failed' } });
-  assert.equal(await w.up.step(), 'precheck-failed');
-  assert.match(w.alerts()[0], /pre-check failed \(tests: 3 failed\)/);
-  assert.equal(w.log.some(x => x[0] === 'upgrade'), false);
-  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
-  assert.equal(w.records()[0].result, 'precheck_failed');
-  w.state.target = H('9'); w.state.pre = { ok: true };
-  assert.equal(await w.up.step(), 'upgraded');
-});
-
-test('issue #101: a change to the bootstrap installer is refused as needs-homeowner, whatever else the range contains', async t => {
-  assert.deepEqual(BOOTSTRAP_PATHS, ['tools/bootstrap-install.sh']);
-  const w = world(t, { files: ['supervisor/team.mjs', 'tools/bootstrap-install.sh'] });
-  assert.equal(await w.up.step(), 'upgrader-changed');
-  assert.match(w.alerts()[0], /needs the homeowner: changes the bootstrap installer/);
-  assert.equal(w.log.some(x => ['pre', 'upgrade', 'rollback'].includes(x[0])), false);
-  assert.equal(await w.up.step(), 'upgrader-changed'); assert.equal(w.alerts().length, 1);
-  assert.equal(w.records()[0].result, 'refused');
-  assert.equal(w.up.s.install.result, 'needs-homeowner');
-  assert.equal(w.up.latch(), null, 'a refusal is not a rollback and must not latch');
-});
-
-test('issue #265: the bootstrap refusal is recorded once per target, raises one hand-deploy item and clears when the install moves', async t => {
-  const w = world(t, { files: ['supervisor/team.mjs', 'tools/bootstrap-install.sh'] });
-  w.deps.remoteUrl = () => 'https://example.invalid/r.git'; w.deps.commitsBehind = () => 4;
-  for (let i = 0; i < 5; i++) assert.equal(await w.up.step(), 'upgrader-changed');
-  assert.equal(w.records().filter(r => r.result === 'refused').length, 1, 'one record, not one per tick');
-  assert.deepEqual(w.up.s.handDeploy, { from: FROM, to: TO, files: ['tools/bootstrap-install.sh'], command: `/root/bin/ai-supervisor self-upgrade hand-install ${TO}`, at: w.up.s.handDeploy.at });
-  assert.equal(w.up.s.main.sha, TO); assert.equal(w.up.s.main.behind, 4);
-  // survives a restart of the process
-  const again = w.make(); assert.equal(await again.step(), 'upgrader-changed'); assert.equal(w.records().length, 1);
-  // a newer main is a new target: a new record and a new item
-  w.state.target = H('e'); assert.equal(await again.step(), 'upgrader-changed');
-  assert.equal(w.records().length, 2); assert.equal(again.s.handDeploy.to, H('e'));
-  // the homeowner installs by hand: the installed commit moves and the item clears
-  w.state.installed = H('e'); w.state.files = ['docs/x.md'];
-  assert.equal(await again.step(), 'current');
-  assert.equal(again.s.handDeploy, undefined); assert.equal(again.s.main.behind, 0);
-  assert.equal(w.records().length, 2);
-});
-
-test('issue #101: a change to the upgrader itself self-installs like any other reviewed change', async t => {
-  const w = world(t, { files: ['supervisor/upgrade.mjs', 'tools/upgrade-supervisor.sh', 'tools/rollback-supervisor.sh'] });
-  assert.equal(await w.up.step(), 'upgraded');
-  assert.deepEqual(w.log.map(x => x[0]), ['pre', 'upgrade', 'dry', 'alert']);
-  assert.equal(await w.up.verifyPending({ running: TO, ok: true }), 'verified');
-  assert.equal(w.up.s.install.result, 'verified'); assert.equal(w.up.s.install.sha, TO);
-  // negative: the same range without a reviewed PASS is still refused (the review gate applies to upgrader changes too)
-  const bad = world(t, { files: ['supervisor/upgrade.mjs'], verdicts: {} });
-  assert.equal(await bad.up.step(), 'not-eligible'); assert.equal(bad.log.some(x => x[0] === 'upgrade'), false);
-});
-
-test('issue #101: a failed post-swap health check of an upgrader change rolls back automatically and records the result', async t => {
-  const w = world(t, { files: ['supervisor/upgrade.mjs'], dry: { ok: false, reason: 'dry-run did not run a plan' } });
-  assert.equal(await w.up.step(), 'rolled-back');
-  assert.deepEqual(w.log.filter(x => x[0] === 'rollback'), [['rollback', FROM, TO]]);
-  assert.equal(w.up.s.install.result, 'rolled_back'); assert.ok(w.up.latch());
-  // and a live tick that fails after a good dry run also rolls back
-  const v = world(t, { files: ['supervisor/upgrade.mjs'] });
-  assert.equal(await v.up.step(), 'upgraded');
-  assert.equal(await v.up.verifyPending({ running: TO, ok: false, reason: 'boom' }), 'rolled-back');
-  assert.equal(v.up.s.install.result, 'rolled_back');
-});
-
-test('issue #101: GitHub unreachable is transient: backoff, no latch, one install record, recovers by itself', async t => {
-  const w = world(t);
-  let down = true; w.deps.fetchMain = () => { if (down) throw new Error('git fetch failed'); return w.state.target; };
-  assert.equal(await w.up.step(), 'github-unreachable');
-  assert.equal(w.up.s.install.result, 'transient'); assert.equal(w.up.s.install.nextAttemptAt, w.state.now + ENV_RETRY_MS);
-  assert.equal(w.up.latch(), null); assert.deepEqual(w.up.s.prechecked, {});
-  w.state.now += ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'github-unreachable'); assert.equal(w.up.s.fetchFailures, 1, 'no new attempt before the backoff ends');
-  w.state.now += 1; assert.equal(await w.up.step(), 'github-unreachable'); assert.equal(w.up.s.fetchFailures, 2);
-  assert.equal(w.up.s.install.nextAttemptAt, w.state.now + 2 * ENV_RETRY_MS, 'the backoff doubles');
-  down = false; w.state.now += 2 * ENV_RETRY_MS;
-  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.fetchFailures, undefined);
-  assert.equal(w.alerts().filter(a => /unreachable/i.test(a)).length, 0, 'a transient outage raises no alert');
-  assert.equal(envBackoffMs(1), ENV_RETRY_MS); assert.equal(envBackoffMs(99), ENV_RETRY_MAX_MS);
-});
-
-test('issue #101: a clone failure at install time is retried with backoff, not rolled back and not latched', async t => {
-  const w = world(t, { up: { ok: false, environmental: true, reason: 'clone failed' } });
-  assert.equal(await w.up.step(), 'precheck-failed');
-  assert.equal(w.log.some(x => x[0] === 'rollback'), false); assert.equal(w.up.latch(), null);
-  assert.equal(w.up.s.install.result, 'transient'); assert.equal(w.up.s.install.attempts, 1);
-  w.state.now += ENV_RETRY_MS; w.state.up = { ok: true };
-  w.deps.upgrade = async sha => { w.log.push(['upgrade', sha]); return w.state.up; };
-  assert.equal(await w.up.step(), 'upgraded');
-});
-
-test('issue #101: a failed validator or test run blocks only that commit, with one alert, until a newer main', async t => {
-  const w = world(t, { pre: { ok: false, reason: 'validator: bad' } });
-  assert.equal(await w.up.step(), 'precheck-failed'); w.state.now += 100 * ENV_RETRY_MAX_MS;
-  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.alerts().length, 1);
-  assert.equal(w.up.s.install.result, 'blocked');
-  w.state.target = H('9'); w.state.pre = { ok: true };
-  assert.equal(await w.up.step(), 'upgraded');
-});
-test('health check failure at the dry run rolls back, alerts, records and latches', async t => {
-  const w = world(t, { dry: { ok: false, reason: 'exit 2' } });
-  assert.equal(await w.up.step(), 'rolled-back');
-  assert.deepEqual(w.log.map(x => x[0]), ['pre', 'upgrade', 'dry', 'rollback', 'alert']);
-  assert.deepEqual(w.log[3], ['rollback', FROM, TO]);
-  assert.match(w.alerts()[0], new RegExp(`^Upgrade to ${TO.slice(0, 7)} rolled back: team tick --dry-run failed: exit 2`));
-  assert.equal(w.up.s.pending, undefined);
-  assert.deepEqual(w.records().map(r => r.result), ['rolled_back']); assert.equal(w.records()[0].checks.dryRun, 'failed');
-  assert.ok(w.up.latch());
-  // latched: no further automatic upgrade, even for a newer eligible main and after the hour
-  w.state.target = H('9'); w.state.now += 10 * MIN_UPGRADE_INTERVAL_MS; w.log.length = 0;
-  assert.equal(await w.up.step(), 'latched'); assert.deepEqual(w.log, []);
-  assert.equal(await w.make().step(), 'latched', 'the latch survives a restart');
-  w.up.clearLatch(); w.state.dry = { ok: true };
-  assert.equal(await w.make().step(), 'upgraded');
-});
-
-test('upgrade script failure rolls back too', async t => {
-  const w = world(t, { up: { ok: false, reason: 'unsafe supervisor directory symlink' } });
-  assert.equal(await w.up.step(), 'rolled-back'); assert.match(w.alerts()[0], /upgrade script failed: unsafe supervisor directory symlink/);
-  assert.ok(w.up.latch());
-});
-
-test('the next live tick failing rolls back; a missing live tick rolls back after an hour', async t => {
-  const w = world(t);
-  assert.equal(await w.up.step(), 'upgraded');
-  assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: 'gh pr list failed' }), 'rolled-back');
-  assert.deepEqual(w.log.slice(-2).map(x => x[0]), ['rollback', 'alert']);
-  assert.match(w.alerts().at(-1), /rolled back: live tick failed: gh pr list failed/);
-  assert.deepEqual(w.records().map(r => r.result), ['upgraded', 'rolled_back']); assert.equal(w.records()[1].checks.liveTick, 'failed');
-  assert.ok(w.up.latch());
-  const slow = world(t);
-  await slow.up.step();
-  slow.state.now += VERIFY_MAX_WAIT_MS - 1;
-  assert.equal(await slow.up.verifyPending({ running: FROM, ok: true }), 'awaiting-verification');
-  slow.state.now += 1;
-  assert.equal(await slow.up.verifyPending({ running: FROM, ok: true }), 'rolled-back');
-  assert.match(slow.alerts().at(-1), /no live tick ran under the new version/);
-});
-
-test('a failing rollback is reported as such and still latches', async t => {
-  const w = world(t, { dry: { ok: false, reason: 'x' }, rb: { ok: false, reason: 'wrapper backup missing' } });
-  assert.equal(await w.up.step(), 'rollback-failed');
-  assert.match(w.alerts()[0], /ROLLBACK FAILED \(wrapper backup missing\), manual repair needed/);
-  assert.equal(w.records()[0].result, 'rollback_failed'); assert.ok(w.up.latch());
-});
-
-test('rate limit: a short cooldown (2 minutes) after an install, not an hour (issue #353)', async t => {
-  const w = world(t);
-  assert.equal(await w.up.step(), 'upgraded');
-  await w.up.verifyPending({ running: TO, ok: true });
-  w.state.installed = TO; w.state.target = H('9'); w.log.length = 0;
-  w.state.now += MIN_UPGRADE_INTERVAL_MS - 1;
-  assert.equal(await w.up.step(), 'rate-limited'); assert.deepEqual(w.log, []);
-  w.state.now += 1;
-  assert.equal(await w.make().step(), 'upgraded');
-});
-
-test('issue #353: a second merge installs within minutes of the first verified install, not after an hour', async t => {
-  assert.ok(MIN_UPGRADE_INTERVAL_MS <= 5 * 60 * 1000);
-  const w = world(t);
-  assert.equal(await w.up.step(), 'upgraded');
-  await w.up.verifyPending({ running: TO, ok: true });
-  w.state.installed = TO; w.state.target = H('9');
-  w.state.now += 5 * 60 * 1000;
-  assert.equal(await w.make().step(), 'upgraded');
-});
-
-test('issue #353: the short cooldown does not bypass verification of an unverified install, or the busy wait', async t => {
-  const w = world(t);
-  assert.equal(await w.up.step(), 'upgraded');
-  w.state.installed = TO; w.state.target = H('9'); w.state.now += 10 * 60 * 1000; w.log.length = 0;
-  assert.equal(await w.make().step(), 'awaiting-verification'); assert.deepEqual(w.log, []);
-});
-
-test('an alert channel that throws never breaks the upgrade decision, and is not retried every tick', async t => {
-  const w = world(t);
-  w.deps.alert = async () => { throw new Error('channel down'); };
-  assert.equal(await w.up.step(), 'upgraded');
-  assert.ok(w.up.s.alerted[`${TO}:upgraded`]);
-});
-
-test('install helpers read the version from the current symlink and the running path', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-sym-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  assert.equal(installedSha(dir), null);
-  fs.symlinkSync(`versions/${TO}`, path.join(dir, 'current')); assert.equal(installedSha(dir), TO);
-  fs.rmSync(path.join(dir, 'current')); fs.symlinkSync('versions/../../etc', path.join(dir, 'current')); assert.equal(installedSha(dir), null);
-  assert.equal(runningSha(`/mnt/cache/ai-supervisor/versions/${TO}/supervisor/cli.mjs`), TO);
-  assert.equal(runningSha('/mnt/user/projects/x/supervisor/cli.mjs'), null);
-});
-
-test('alerts.command is a validated, local-only override', () => {
-  const shipped = { enabled: false, limits: {}, agents: {}, depends_on_overrides: {} };
-  assert.deepEqual(applyLocalOverride(shipped, { alerts: { command: ['/root/bin/notify', '--channel', 'ai'] } }).alerts, { command: ['/root/bin/notify', '--channel', 'ai'] });
-  for (const bad of [{ command: 'notify' }, { command: [] }, { command: ['notify'] }, { command: ['/x', 1] }, { command: ['/x'], webhook: 'u' }, null])
-    assert.throws(() => applyLocalOverride(shipped, { alerts: bad }), /alerts\.command/);
-});
-
-// ---- real git: range detection, merge/PR parsing, ancestry, clean-checkout pre-checks
-function repo(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-git-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const git = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' } }).trim();
-  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
-  const write = (f, c) => { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), c); };
-  return { dir, git, write };
-}
-test('real git: PR merges, direct commits, changed files and ancestry are read correctly', t => {
-  const r = repo(t);
-  r.write('supervisor/a.mjs', '1'); r.write('tools/validate-project.mjs', 'process.exit(0)'); r.git('add', '-A'); r.git('commit', '-qm', 'base');
-  const base = r.git('rev-parse', 'HEAD');
-  r.git('checkout', '-qb', 'claude/issue-1-x'); r.write('supervisor/a.mjs', '2'); r.git('commit', '-qam', 'work');
-  const head = r.git('rev-parse', 'HEAD');
-  r.git('checkout', '-q', 'main'); r.git('merge', '--no-ff', '-qm', 'Merge pull request #12 from o/claude/issue-1-x', 'claude/issue-1-x');
-  r.write('docs/direct.md', 'x'); r.git('add', '-A'); r.git('commit', '-qm', 'direct push');
-  const tip = r.git('rev-parse', 'HEAD');
-  const deps = realDeps({ root: '/nonexistent', config: { repo_path: r.dir }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
-  const commits = deps.mainCommits(base, tip);
-  assert.equal(commits.length, 2);
-  assert.equal(commits[0].pr, 12); assert.equal(commits[0].head, head);
-  assert.equal(commits[1].pr, null); assert.equal(commits[1].head, null);
-  assert.deepEqual(deps.changedFiles(base, tip).sort(), ['docs/direct.md', 'supervisor/a.mjs']);
-  assert.equal(deps.isAncestor(base, tip), true); assert.equal(deps.isAncestor(tip, base), false);
-  // the injected-text subject cannot fake a PR number on a non-merge commit
-  r.write('docs/e.md', 'x'); r.git('add', '-A'); r.git('commit', '-qm', 'Merge pull request #99 from o/x'); const fake = r.git('rev-parse', 'HEAD');
-  assert.equal(deps.mainCommits(tip, fake)[0].pr, null);
-});
-
-// A real bootstrap installer run against a bare "GitHub" repository (a file URL), with fixture validator, tests and swap script.
-const BOOT = new URL('../tools/bootstrap-install.sh', import.meta.url).pathname;
-function remote(t, { validator = 'process.exit(0)', test_ = 'import t from "node:test"; t("a",()=>{});', swap = 'echo swapped > "$SWAP_MARK"' } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boot-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' };
-  const g = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', env }).trim();
-  const origin = path.join(dir, 'origin.git'), work = path.join(dir, 'work');
-  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]); execFileSync('git', ['clone', '-q', origin, work], { stdio: 'ignore' });
-  const write = (f, c) => { fs.mkdirSync(path.dirname(path.join(work, f)), { recursive: true }); fs.writeFileSync(path.join(work, f), c); };
-  write('tools/validate-project.mjs', validator); write('tests/x.test.mjs', test_); write('tools/upgrade-supervisor.sh', swap + '\n'); write('tools/bootstrap-install.sh', fs.readFileSync(BOOT));
-  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'c'); g(work, 'push', '-q', 'origin', 'HEAD:main');
-  return { dir, origin, work, g, write, sha: g(work, 'rev-parse', 'HEAD'), mark: path.join(dir, 'swap.mark') };
-}
-const boot = (r, mode, url, sha) => spawnSync('bash', [BOOT, mode, url, sha], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME, SWAP_MARK: r.mark } });
-
-test('issue #101: bootstrap check/install from a clean remote copy: passes, swaps only on install, ignores local edits', t => {
-  const r = remote(t);
-  r.write('tests/untracked-local-change.txt', 'dirty'); fs.writeFileSync(path.join(r.work, 'tools/validate-project.mjs'), 'process.exit(9)');   // a dirty local checkout must not matter
-  const c = boot(r, 'check', r.origin, r.sha); assert.equal(c.status, 0, c.stderr);
-  assert.equal(fs.existsSync(r.mark), false, 'check never swaps');
-  const i = boot(r, 'install', r.origin, r.sha); assert.equal(i.status, 0, i.stderr);
-  assert.equal(fs.readFileSync(r.mark, 'utf8').trim(), 'swapped');
-});
-
-test('issue #101: bootstrap exit codes: failing validator or test = 11, bad usage = 2, swap failure = 13, no swap on failure', t => {
-  for (const over of [{ validator: 'process.exit(3)' }, { test_: 'import t from "node:test"; import a from "node:assert"; t("a",()=>a.fail("boom"));' }]) {
-    const r = remote(t, over);
-    for (const mode of ['check', 'install']) { const x = boot(r, mode, r.origin, r.sha); assert.equal(x.status, 11, x.stderr); }
-    assert.equal(fs.existsSync(r.mark), false);
-  }
-  const r = remote(t);
-  assert.equal(boot(r, 'check', r.origin, 'abc').status, 2); assert.equal(boot(r, 'bogus', r.origin, r.sha).status, 2); assert.equal(boot(r, 'check', '', r.sha).status, 2);
-  const f = remote(t, { swap: 'exit 5' }); assert.equal(boot(f, 'install', f.origin, f.sha).status, 13);
-});
-
-test('issue #101: bootstrap treats an unreachable remote or a missing commit as transient (10)', t => {
-  const r = remote(t);
-  assert.equal(boot(r, 'check', path.join(r.dir, 'nonexistent.git'), r.sha).status, 10);
-  assert.equal(boot(r, 'install', r.origin, 'f'.repeat(40)).status, 10);
-  assert.equal(fs.existsSync(r.mark), false);
-});
-
-test('issue #101: bootstrap refuses a payload that differs from the reviewed commit (a check that alters the copy)', t => {
-  const r = remote(t, { validator: 'import fs from "node:fs"; fs.appendFileSync("tools/upgrade-supervisor.sh", ' + JSON.stringify('echo evil > "$SWAP_MARK"\n') + ');' });
-  const x = boot(r, 'install', r.origin, r.sha);
-  assert.equal(x.status, 12, x.stderr); assert.match(x.stderr, /differs from the reviewed commit/);
-  assert.equal(fs.existsSync(r.mark), false, 'nothing is swapped');
-  // positive control for the same shape of repo: an untouched copy installs
-  const ok = remote(t); assert.equal(boot(ok, 'install', ok.origin, ok.sha).status, 0);
-});
-
-test('issue #101: realDeps runs the bootstrap installer taken from the installed commit against the origin URL and maps its exit codes', async t => {
-  const r = remote(t);
-  const clone = path.join(r.dir, 'repo'); execFileSync('git', ['clone', '-q', r.origin, clone], { stdio: 'ignore' });
-  const root = path.join(r.dir, 'state'); fs.mkdirSync(path.join(root, 'versions'), { recursive: true }); fs.symlinkSync(`versions/${r.sha}`, path.join(root, 'current'));
-  const deps = realDeps({ root, config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, run: (cmd, args, o = {}) => {
-    const x = spawnSync(cmd, args, { cwd: o.cwd, encoding: 'utf8', env: { ...process.env, SWAP_MARK: r.mark } }); return { status: x.status ?? 1, stdout: x.stdout || '', stderr: x.stderr || '' }; } });
-  assert.deepEqual(await deps.preChecks(r.sha), { ok: true });
-  const missing = await deps.preChecks('f'.repeat(40)); assert.equal(missing.ok, false); assert.equal(missing.environmental, true);
-  assert.deepEqual(await deps.upgrade(r.sha), { ok: true }); assert.equal(fs.existsSync(r.mark), true);
-  const bad = remote(t, { validator: 'process.exit(3)' }); const badClone = path.join(bad.dir, 'repo'); execFileSync('git', ['clone', '-q', bad.origin, badClone], { stdio: 'ignore' });
-  fs.mkdirSync(path.join(bad.dir, 'state/versions'), { recursive: true }); fs.symlinkSync(`versions/${bad.sha}`, path.join(bad.dir, 'state/current'));
-  const d2 = realDeps({ root: path.join(bad.dir, 'state'), config: { repo_path: badClone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
-  const res = await d2.preChecks(bad.sha); assert.equal(res.ok, false); assert.equal(res.environmental, undefined); assert.match(res.reason, /^validator:/);
-  // no installed version: nothing to take the bootstrap from, so it refuses rather than guess
-  const none = realDeps({ root: path.join(r.dir, 'no-state'), config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
-  assert.equal((await none.preChecks(r.sha)).ok, false);
-});
-test('dry-run health check: only a real plan counts, not a lock skip, bad JSON or a non-zero exit', async t => {
-  const mk = out => realDeps({ root: '/x', config: { repo_path: '/x' }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, wrapper: '/w', run: () => out });
-  assert.equal((await mk({ status: 0, stdout: JSON.stringify({ actions: [], skipped: [] }), stderr: '' }).dryRunTick()).ok, true);
-  assert.equal((await mk({ status: 0, stdout: JSON.stringify({ skipped: 'another tick is running' }), stderr: '' }).dryRunTick()).ok, false);
-  assert.equal((await mk({ status: 0, stdout: 'not json', stderr: '' }).dryRunTick()).ok, false);
-  assert.equal((await mk({ status: 2, stdout: '', stderr: 'boom' }).dryRunTick()).ok, false);
-});
-
-test('dry-run health check retries a failed register read, but not other failures', async () => {
-  const seq = outs => { const calls = []; const sleeps = []; const deps = realDeps({ root: '/x', config: { repo_path: '/x' }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, wrapper: '/w', sleep: async ms => sleeps.push(ms), run: () => { calls.push(1); return outs[Math.min(calls.length - 1, outs.length - 1)]; } }); return { deps, calls, sleeps }; };
-  const regFail = { status: 1, stdout: '', stderr: 'cannot read docs/DECISIONS.md from origin/main' };
-  const plan = { status: 0, stdout: JSON.stringify({ actions: [] }), stderr: '' };
-  let w = seq([regFail, plan]); assert.equal((await w.deps.dryRunTick()).ok, true); assert.equal(w.calls.length, 2); assert.equal(w.sleeps.length, 1);
-  w = seq([regFail]); const bad = await w.deps.dryRunTick(); assert.equal(bad.ok, false); assert.equal(w.calls.length, 3); assert.match(bad.reason, /cannot read docs/);
-  w = seq([{ status: 1, stdout: '', stderr: 'boom' }, plan]); assert.equal((await w.deps.dryRunTick()).ok, false); assert.equal(w.calls.length, 1);
-});
-
-// ---- the real rollback script against temporary directories
-function install(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-rb-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const bin = path.join(dir, 'bin'), state = path.join(dir, 'state');
-  fs.mkdirSync(bin); fs.mkdirSync(path.join(state, 'versions', FROM), { recursive: true }); fs.mkdirSync(path.join(state, 'versions', TO), { recursive: true });
-  fs.symlinkSync(`versions/${TO}`, path.join(state, 'current'));
-  fs.writeFileSync(path.join(bin, 'ai-supervisor'), '#!/usr/bin/env bash\necho new\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, `ai-supervisor.before-${TO}`), '#!/usr/bin/env bash\necho old\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(state, 'team.local.json'), '{"enabled":true}');
-  const run = (...args) => spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname, ...args], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_BIN_DIR: bin, AI_SUPERVISOR_STATE_DIR: state } });
-  return { bin, state, run };
-}
-test('rollback script --supervisor restores the previous wrapper and version and keeps local configuration', t => {
-  const i = install(t);
-  const r = i.run('--supervisor', TO, FROM);
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(fs.readlinkSync(path.join(i.state, 'current')), `versions/${FROM}`);
-  assert.match(fs.readFileSync(path.join(i.bin, 'ai-supervisor'), 'utf8'), /echo old/);
-  assert.equal(fs.readFileSync(path.join(i.state, 'team.local.json'), 'utf8'), '{"enabled":true}');
-  assert.ok(fs.existsSync(path.join(i.state, 'versions', TO)), 'the new version stays for inspection');
-});
-test('rollback script --supervisor refuses bad input without changing anything', t => {
-  const i = install(t);
-  for (const args of [['--supervisor'], ['--supervisor', TO], ['--supervisor', 'zz', FROM], ['--supervisor', TO, '../etc'], ['--supervisor', H('3'), FROM], ['--supervisor', TO, H('4')]]) {
-    const r = i.run(...args); assert.notEqual(r.status, 0, args.join(' '));
-  }
-  assert.equal(fs.readlinkSync(path.join(i.state, 'current')), `versions/${TO}`);
-  assert.match(fs.readFileSync(path.join(i.bin, 'ai-supervisor'), 'utf8'), /echo new/);
-  fs.writeFileSync(path.join(i.bin, `ai-supervisor.before-${TO}`), 'if then\n');   // a corrupt backup must not be installed
-  assert.notEqual(i.run('--supervisor', TO, FROM).status, 0);
-  assert.match(fs.readFileSync(path.join(i.bin, 'ai-supervisor'), 'utf8'), /echo new/);
-  assert.equal(fs.readlinkSync(path.join(i.state, 'current')), `versions/${TO}`);
-});
-test('rollback script keeps the original single-argument launcher behaviour', t => {
-  assert.notEqual(spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname], { encoding: 'utf8' }).status, 0);
-  assert.notEqual(spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname, 'nothex'], { encoding: 'utf8' }).status, 0);
-});
-
-test('a PASS from the author\'s provider counts when it was recorded as independent (a different model, issue #152), and so does an earlier interim PASS', async t => {
-  for (const flag of [{ independent: true }, { interim: true }]) {
-    const w = world(t, { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude', ...flag } } });
-    assert.notEqual(await w.up.step(), 'not-eligible', JSON.stringify(flag));
-    assert.ok(w.log.some(x => x[0] === 'pre'));
-  }
-});
-
-test('review fix (PR #168): an independent same-provider PASS counts only once D-024 is approved; an earlier interim PASS always counts', async t => {
-  const v = { verdict: 'PASS', reviewer: 'claude' };
-  assert.equal(await world(t, { d024: false, verdicts: { [`7:${H('d')}`]: { ...v, independent: true } } }).up.step(), 'not-eligible');
-  assert.notEqual(await world(t, { d024: false, verdicts: { [`7:${H('d')}`]: { ...v, interim: true } } }).up.step(), 'not-eligible');
-});
-
-test('issue #69/#101: an environmental pre-check failure is retried with backoff and one alert; a failed check stays latched', async t => {
-  const w = world(t, { pre: { ok: false, environmental: true, reason: 'checkout failed: unable to read tree' } });
-  assert.equal(await w.up.step(), 'precheck-failed');
-  w.state.now += ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
-  w.state.now += 1;   // second failure doubles the wait
-  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
-  w.state.now += 2 * ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
-  w.state.now += 1; w.state.pre = { ok: true };
-  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.alerts().filter(a => /pre-check failed/.test(a)).length, 1);
-  const g = world(t, { pre: { ok: false, reason: 'tests: 1 failed' } });
-  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS - 1; g.state.pre = { ok: true };
-  assert.equal(await g.up.step(), 'precheck-failed'); assert.equal(g.log.filter(x => x[0] === 'pre').length, 1);   // latched inside the delay (#581 covers the delayed retry)
-});
-test('hold (issue #134): busy marks the hold, idle installs with quiet idle and clears it, a forced install records forced-after-wait', async t => {
+test('issue #846: an install never reports a hold: dispatch is never held for it, and a hold left by an older version is cleared', async t => {
   const w = world(t, { active: 1 });
-  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, TO); const since = w.up.s.holding.since;
-  w.state.now += 1000; assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.since, since);
-  w.state.active = 0;
+  w.up.s.holding = { to: TO, since: 1, jobs: 1 }; w.up.s.nextInstall = { to: TO, at: 5, why: 'draining', state: 'draining' };
   assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.holding, undefined);
-  assert.equal(w.records()[0].checks.quiet, 'idle');
   assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'root/team/self-upgrade.json'), 'utf8')).holding, undefined);
-  const forced = world(t, { active: 1 });
-  assert.equal(await forced.up.step(), 'busy'); forced.state.now += QUIET_MAX_WAIT_MS;
-  assert.equal(await forced.up.step(), 'upgraded'); assert.equal(forced.records()[0].checks.quiet, 'forced-after-wait'); assert.equal(forced.up.s.holding, undefined);
+  assert.deepEqual(holdOf('upgraded', w.up.s), { to: TO });   // only the tick that installs holds, because it still runs the old code
 });
 
 test('hold (issue #134): a failed pre-check, an ineligible range, an upgrader change and nothing pending never hold', async t => {
@@ -519,9 +136,6 @@ test('hold (issue #134): a failed pre-check, an ineligible range, an upgrader ch
     const w = world(t, over);
     assert.equal(await w.up.step(), want, name); assert.equal(w.up.s.holding, undefined, name);
   }
-  const w = world(t, { active: 1 });
-  assert.equal(await w.up.step(), 'busy'); w.state.target = FROM;     // main moved back / upgraded by hand: the hold ends
-  assert.equal(await w.up.step(), 'current'); assert.equal(w.up.s.holding, undefined);
 });
 
 test('a latched failed pre-check never holds dispatch, even with active jobs, and a newer main waits afresh (#134)', async t => {
@@ -532,57 +146,13 @@ test('a latched failed pre-check never holds dispatch, even with active jobs, an
   w.state.now += 20 * 60 * 1000;                                 // inside PRECHECK_RETRY_MS
   assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
   w.state.target = H('9'); w.state.pre = { ok: true };
-  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records().at(-1).to, H('9'));
 });
 
-test('issue #695 (was PR #162): a newer main during a continuous hold keeps the drain start, so merges cannot extend the hold without bound', async t => {
-  const w = world(t, { active: 1 });
-  assert.equal(await w.up.step(), 'busy');
-  w.state.now += 29 * 60 * 1000; w.state.target = H('9');
-  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.to, H('9'));
-  w.state.now += 60 * 1000;                                      // 30 min after the first drain start: the bound is reached
-  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records()[0].checks.quiet, 'forced-after-wait'); assert.equal(w.records()[0].to, H('9'));
-  // the same target keeps its original start
-  const s = world(t, { active: 1 });
-  assert.equal(await s.up.step(), 'busy'); s.state.now += QUIET_MAX_WAIT_MS - 1;
-  assert.equal(await s.up.step(), 'busy'); s.state.now += 1;
-  assert.equal(await s.up.step(), 'upgraded');
-});
-
-test('review of PR #162: an environmental pre-check retry with active jobs holds dispatch again for the drain bound, then retries the check', async t => {
-  const w = world(t, { active: 1, pre: { ok: false, environmental: true, reason: 'checkout failed' } });
-  assert.equal(await w.up.step(), 'busy');
-  w.state.now += QUIET_MAX_WAIT_MS;
-  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
-  w.state.now += ENV_RETRY_MS - 1;                               // latched inside the retry window: no hold
-  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.up.s.holding, undefined);
-  w.state.now += 1;                                              // window over: held again for the full bound
-  assert.equal(await w.up.step(), 'busy'); assert.ok(w.up.s.holding);
-  w.state.now += QUIET_MAX_WAIT_MS - 1;
-  assert.equal(await w.up.step(), 'busy'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
-  w.state.now += 1; w.state.pre = { ok: true };
-  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
-});
-
-test('drain (issue #136): the bound is configurable and honoured, the hold records the running count, an install never touches running jobs', async t => {
-  const w = world(t, { active: 3 });
-  w.up.drainMaxMs = 5 * 60000;
-  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.jobs, 3);
-  w.state.active = 2; w.state.now += 5 * 60000 - 1;
-  assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.jobs, 2); assert.equal(w.log.length, 0);
-  w.state.now += 1;
-  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.records()[0].checks.quiet, 'forced-after-wait');
-  assert.equal(w.up.s.holding, undefined); assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 1);
-  assert.equal(w.log.some(x => x[0] === 'kill' || x[0] === 'stop'), false);   // the dependency set offers no way to stop a job
-  // the default bound is the shipped 30 minutes
-  assert.equal(world(t).up.drainMaxMs, QUIET_MAX_WAIT_MS);
-});
-
-test('drain (issue #136): dispatch resumes after an install failure or rollback (no hold is reported)', async t => {
+test('issue #846: a failing install with jobs running rolls back at once and reports no hold', async t => {
   for (const over of [{ up: { ok: false, reason: 'x' } }, { dry: { ok: false, reason: 'y' } }]) {
     const w = world(t, { active: 1, ...over });
-    assert.equal(await w.up.step(), 'busy'); w.state.active = 0;
-    const r = await w.up.step(); assert.equal(r, 'rolled-back'); assert.equal(w.up.s.holding, undefined);
+    assert.equal(await w.up.step(), 'rolled-back'); assert.equal(w.up.s.holding, undefined);
   }
 });
 
@@ -614,22 +184,9 @@ test('issue #101: realDeps maps install exit codes 11 and 12 to blocked (no roll
 });
 
 import { liveTickOutcome } from '../supervisor/upgrade.mjs';
-test('issue #302: a verifying tick with only a live job\'s lease wait verifies; real faults still fail it', async t => {
-  assert.deepEqual(liveTickOutcome({ actions: [], skipped: [], waiting: [{ what: 'review 5 (claude)', reason: 'waiting for job abababab (running)' }] }), { ok: true, reason: null });
-  assert.equal(liveTickOutcome({ skipped: [{ what: 'x', reason: 'r', expected: true }] }).ok, true);
-  assert.deepEqual(liveTickOutcome({ skipped: [{ what: 'x', reason: 'gh failed' }] }), { ok: false, reason: 'gh failed' });
-  assert.deepEqual(liveTickOutcome({ error: 'boom' }), { ok: false, reason: 'boom' });
-  const w = world(t);
-  await w.up.step();
-  assert.equal(await w.up.verifyPending({ running: TO, ...liveTickOutcome({ skipped: [], waiting: [{ what: 'review', reason: 'waiting' }] }) }), 'verified');
-  assert.equal(w.up.latch(), null);
-});
-
-test('issue #302: an upgrade during a running job holds, installs once the job ends, and a repeated rollback is never attempted while latched', async t => {
+test('issue #302 / #846: an upgrade during a running job installs at once, and a repeated rollback is never attempted while latched', async t => {
   const w = world(t, { active: 1 });
-  assert.notEqual(await w.up.step(), 'upgraded'); assert.ok(!w.log.some(x => x[0] === 'upgrade'), 'nothing installs while a job runs');
-  w.state.active = 0;
-  assert.equal(await w.up.step(), 'upgraded');
+  assert.equal(await w.up.step(), 'upgraded'); assert.ok(w.log.some(x => x[0] === 'upgrade'), 'the install does not wait for the job');
   assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: 'boom' }), 'rolled-back');
   assert.ok(w.up.latch());
   const before = w.log.length; w.state.now += 3 * MIN_UPGRADE_INTERVAL_MS;
@@ -637,25 +194,8 @@ test('issue #302: an upgrade during a running job holds, installs once the job e
   assert.equal(w.log.length, before, 'no upgrade, no second rollback and no new alert while latched');
 });
 
-test('issue #191: the default drain bound has one source (the team default) and the CLI derives from it', () => {
-  assert.equal(QUIET_MAX_WAIT_MS, DRAIN_DEFAULT_MINUTES * 60000);
-  assert.match(fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8'), /: QUIET_MAX_WAIT_MS/);
-  assert.doesNotMatch(fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8'), /DRAIN_DEFAULT_MINUTES/);
-});
-
-test('issue #191: holding.since is the drain start the bound is measured from, and survives a newer target only as a new drain', async t => {
+test('issue #191 / #846: only an install just made holds dispatch; rolled-back and every failure hand the team step hold=null', async t => {
   const w = world(t, { active: 1 });
-  assert.equal(await w.up.step(), 'busy'); const start = w.up.s.waitingSince;
-  assert.equal(w.up.s.holding.since, start);
-  w.state.now += 60000; assert.equal(await w.up.step(), 'busy'); assert.equal(w.up.s.holding.since, start);
-  w.state.target = H('e'); w.state.now += 60000; assert.equal(await w.up.step(), 'busy');
-  assert.equal(w.up.s.holding.since, start); assert.equal(w.up.s.holding.to, H('e'));   // issue #695: the same continuous hold
-  w.state.active = 0; assert.equal(await w.up.step(), 'upgraded');
-});
-
-test('issue #191: only busy and upgraded hold dispatch; rolled-back and every failure hand the team step hold=null', async t => {
-  const w = world(t, { active: 1 });
-  assert.equal(await w.up.step(), 'busy'); assert.deepEqual(holdOf('busy', w.up.s), { to: TO });
   for (const r of ['rolled-back', 'precheck-failed', 'not-eligible', 'current', 'awaiting-verification', 'team-loop-disabled', 'rollback-failed', undefined]) assert.equal(holdOf(r, w.up.s), null, String(r));
   assert.deepEqual(holdOf('upgraded', { pending: { to: TO } }), { to: TO });
 });
@@ -895,53 +435,51 @@ test('issue #668: an install-time environmental failure on the delayed retry doe
 const MIN = 60000, GAP = 45 * MIN;
 const finished = async (w, steps = 1) => { for (let i = 0; i < steps; i++) { assert.equal(await w.up.step(), 'upgraded'); assert.equal(await w.up.verifyPending({ running: w.state.target, ok: true }), 'verified'); w.state.installed = w.state.target; w.state.target = H((5 + i).toString(16)); w.state.now += 3 * MIN; } };
 
-test('issue #695: within the window with jobs running, jobs start (no hold) and merged work waits; the window passing drains as before', async t => {
-  const w = world(t); await finished(w);
+test('issue #695: within the window with jobs running, jobs start (no hold) and merged work waits; the window passing installs', async t => {
+  const w = world(t, { gap: GAP }); await finished(w);
   w.state.active = 1;
   assert.equal(await w.up.step(), 'batched'); assert.equal(holdOf('batched', w.up.s), null); assert.equal(w.up.s.holding, undefined);
   assert.equal(w.up.s.nextInstall.state, 'batched'); assert.equal(w.up.s.nextInstall.at, w.up.s.lastFinishedAt + GAP);
   w.state.now += 20 * MIN; assert.equal(await w.up.step(), 'batched'); assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 1);
-  w.state.now = w.up.s.lastFinishedAt + GAP;                      // window over, jobs still running: drain as now
-  assert.equal(await w.up.step(), 'busy'); assert.deepEqual(holdOf('busy', w.up.s), { to: w.state.target }); assert.equal(w.up.s.nextInstall.state, 'draining');
-  w.state.now += QUIET_MAX_WAIT_MS;                               // the existing drain bound
+  w.state.now = w.up.s.lastFinishedAt + GAP;                      // window over, jobs still running: it installs, nothing drains
   assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.nextInstall, undefined);
 });
 
 test('issue #695: nothing running or planned installs straight away inside the window; planned work or a running job waits', async t => {
-  const w = world(t); await finished(w);
+  const w = world(t, { gap: GAP }); await finished(w);
   assert.equal(await w.up.step(), 'upgraded');                    // idle, nothing planned: no wait
-  const p = world(t); await finished(p); p.deps.plannedWork = async () => 2;
+  const p = world(t, { gap: GAP }); await finished(p); p.deps.plannedWork = async () => 2;
   assert.equal(await p.up.step(), 'batched');                     // idle but work is planned: it starts, the install waits
   p.deps.plannedWork = async () => { throw new Error('unreadable'); };
   assert.equal(await p.up.step(), 'upgraded');                    // an unreadable plan counts as none (the old behaviour)
 });
 
 test('issue #695: urgent installs skip the wait: a rollback, or the homeowner asking; the urgency is spent by the install', async t => {
-  const w = world(t); await finished(w);
+  const w = world(t, { gap: GAP }); await finished(w);
   w.state.active = 1; assert.equal(await w.up.step(), 'batched');
   w.up.requestInstallNow();
-  assert.equal(await w.up.step(), 'busy');                        // skips the window, still drains running jobs
-  w.state.active = 0; assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.urgent, undefined);
+  assert.equal(await w.up.step(), 'upgraded');                    // skips the window, with the job still running
+  assert.equal(w.up.s.urgent, undefined);
   // rolled back: after the latch is cleared the next install is not batched
-  const b = world(t); await finished(b);
+  const b = world(t, { gap: GAP }); await finished(b);
   b.state.dry = { ok: true }; assert.equal(await b.up.step(), 'upgraded');
   assert.equal(await b.up.verifyPending({ running: b.state.target, ok: false, reason: 'boom' }), 'rolled-back');
   assert.equal(b.up.s.urgent.reason, 'the previous install rolled back');
   b.up.clearLatch(); b.state.active = 1; b.state.now += 4 * MIN; b.state.target = H('7');
-  assert.equal(await b.up.step(), 'busy');                        // inside the window, yet not batched
+  assert.equal(await b.up.step(), 'upgraded');                    // inside the window, yet not batched
 });
 
 test('issue #695: the window survives a restart, and a gap of 0 disables batching', async t => {
-  const w = world(t); await finished(w); w.state.active = 1;
+  const w = world(t, { gap: GAP }); await finished(w); w.state.active = 1;
   const again = w.make();                                         // a restarted process reads the same state file
   assert.equal(await again.step(), 'batched'); assert.equal(again.s.lastFinishedAt, w.up.s.lastFinishedAt);
-  const off = w.make(); off.minGapMs = 0; assert.equal(await off.step(), 'busy');
   const legacy = w.make(); delete legacy.s.lastFinishedAt;        // state from before this field: the install start stands in
   assert.equal(await legacy.step(), 'batched');
+  const off = w.make(); off.minGapMs = 0; assert.equal(await off.step(), 'upgraded');
 });
 
-test('issue #695: self_upgrade.min_install_gap_minutes is validated (0-1440 integers) and defaults to 45', async t => {
-  assert.equal(MIN_INSTALL_GAP_MS, 45 * MIN); assert.equal(world(t).up.minGapMs, 45 * MIN);
+test('issue #695: self_upgrade.min_install_gap_minutes is validated (0-1440 integers) and defaults to 0 (off)', async t => {
+  assert.equal(MIN_INSTALL_GAP_MS, 0); assert.equal(world(t).up.minGapMs, 0);
   const shipped = JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
   assert.equal(validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: { min_install_gap_minutes: 90 } })).self_upgrade.min_install_gap_minutes, 90);
   assert.equal(validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: { min_install_gap_minutes: 0 } })).self_upgrade.min_install_gap_minutes, 0);
@@ -949,7 +487,7 @@ test('issue #695: self_upgrade.min_install_gap_minutes is validated (0-1440 inte
 });
 
 test('issue #708: install-now is refused when current, lapses unspent, and is dropped when main is current', async t => {
-  const w = world(t); await finished(w);
+  const w = world(t, { gap: GAP }); await finished(w);
   // the installed version is main: refused, nothing stored
   w.state.target = w.state.installed; assert.equal(await w.up.step(), 'current');
   const r = w.up.requestInstallNow(); assert.equal(r.ok, false); assert.equal(w.up.s.urgent, undefined);
@@ -963,12 +501,12 @@ test('issue #708: install-now is refused when current, lapses unspent, and is dr
   w.up.s.urgent = { reason: 'the previous install rolled back', at: w.state.now - 48 * 3600 * 1000 };
   assert.ok(w.up.urgentNow(w.state.now));
   // a request left over when main becomes current is dropped by the 'current' step
-  const c = world(t); await finished(c); c.up.s.urgent = { reason: 'homeowner request', at: c.state.now }; c.state.target = c.state.installed;
+  const c = world(t, { gap: GAP }); await finished(c); c.up.s.urgent = { reason: 'homeowner request', at: c.state.now }; c.state.target = c.state.installed;
   assert.equal(await c.up.step(), 'current'); assert.equal(c.up.s.urgent, undefined);
 });
 
 test('issue #708: a hand-install restarts the batching window and spends a pending install-now', async t => {
-  const w = world(t); await finished(w);
+  const w = world(t, { gap: GAP }); await finished(w);
   w.up.noteMain(w.state.installed, H('7')); w.up.requestInstallNow(); assert.ok(w.up.s.urgent);
   w.state.now += 10 * MIN; const before = w.up.s.lastFinishedAt;
   w.up.noteHandInstalled();
@@ -978,20 +516,20 @@ test('issue #708: a hand-install restarts the batching window and spends a pendi
 });
 
 test('issue #798: install-now judges against live main, not the last tick; unknown main is refused', async t => {
-  const w = world(t); await finished(w);
+  const w = world(t, { gap: GAP }); await finished(w);
   // the recorded main is the installed one (one tick old), but main has moved: accepted, target is the live main
   w.up.noteMain(w.state.installed, w.state.installed); w.state.target = H('8');
   assert.equal(w.up.requestInstallNow().ok, true); assert.equal(w.up.s.urgent.to, H('8'));
   // live main equals the install although the recorded one is older: refused
-  const c = world(t); await finished(c); c.up.noteMain(c.state.installed, H('7')); c.state.target = c.state.installed;
+  const c = world(t, { gap: GAP }); await finished(c); c.up.noteMain(c.state.installed, H('7')); c.state.target = c.state.installed;
   assert.equal(c.up.requestInstallNow().ok, false); assert.equal(c.up.s.urgent, undefined);
   // fetch fails and nothing recorded: refused rather than stored and dropped later
-  const d = world(t); await finished(d); delete d.up.s.main; d.up.save(); d.up.d.fetchMain = () => { throw new Error('offline'); };
+  const d = world(t, { gap: GAP }); await finished(d); delete d.up.s.main; d.up.save(); d.up.d.fetchMain = () => { throw new Error('offline'); };
   const r = d.up.requestInstallNow(); assert.equal(r.ok, false); assert.match(r.reason, /not known/);
 });
 
 test('issue #798: state updates reread under upgrade.lock, keep a tick\'s newer fields, and refuse install-now while the lock is busy', async t => {
-  const w = world(t); await finished(w);
+  const w = world(t, { gap: GAP }); await finished(w);
   let held = false, takes = 0;
   w.up.lock = () => { takes++; if (held) return null; held = true; return () => { held = false; }; };
   w.up.lockSleep = () => {}; w.up.lockWaitMs = 0;
@@ -1007,7 +545,7 @@ test('issue #798: state updates reread under upgrade.lock, keep a tick\'s newer 
 });
 
 test('issue #798: a stale copy does not restore keys another process deleted when the hand-install note lands', async t => {
-  const w = world(t); await finished(w);
+  const w = world(t, { gap: GAP }); await finished(w);
   w.up.s.pending = { sha: H('9') }; w.up.s.refusal = { from: 'x' }; w.up.s.waitingFor = 'y'; w.up.save();
   const other = JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')); delete other.pending; delete other.refusal; delete other.waitingFor; fs.writeFileSync(w.up.stateFile, JSON.stringify(other));
   w.state.now += MIN; w.up.noteHandInstalled();
@@ -1017,9 +555,497 @@ test('issue #798: a stale copy does not restore keys another process deleted whe
 });
 
 test('issue #798: status hides a lapsed homeowner request without changing the state, and shows a rollback urgency', async t => {
-  const w = world(t); await finished(w);
+  const w = world(t, { gap: GAP }); await finished(w);
   w.up.s.urgent = { reason: 'homeowner request', at: w.state.now - 25 * 3600 * 1000 };
   assert.equal(w.up.urgentView(w.state.now), null); assert.ok(w.up.s.urgent, 'state untouched');
   w.up.s.urgent = { reason: 'the previous install rolled back', at: w.state.now - 48 * 3600 * 1000 };
   assert.ok(w.up.urgentView(w.state.now));
+});
+
+// ---- issue #846: side-by-side installs, no drain, cleanup of versions nothing names
+import { pruneVersions, jobVersions } from '../supervisor/versions.mjs';
+const V = c => c.repeat(40);
+const OLD = Date.now() - 3600000 * 24;
+function versionRoot(t, shas, jobs = []) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ver-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const sha of shas) { const d = path.join(root, 'versions', sha); fs.mkdirSync(path.join(d, 'supervisor'), { recursive: true }); fs.writeFileSync(path.join(d, 'supervisor/cli.mjs'), '//'); fs.utimesSync(d, OLD / 1000, OLD / 1000); }
+  fs.mkdirSync(path.join(root, 'jobs'), { recursive: true });
+  jobs.forEach((j, i) => fs.writeFileSync(path.join(root, 'jobs', `${i}.json`), JSON.stringify(j)));
+  return root;
+}
+const present = root => fs.readdirSync(path.join(root, 'versions')).sort();
+
+test('issue #846: cleanup removes versions nothing names, and keeps current, last good, and the version a live job names', async t => {
+  const root = versionRoot(t, [V('1'), V('2'), V('3'), V('4'), V('5')], [
+    { status: 'running', supervisorVersion: V('2') }, { status: 'completed', supervisorVersion: V('3') }, { status: 'paused_limit', supervisorVersion: V('4') }]);
+  const w = world(t, {}); w.deps.installed = () => V('1'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } });
+  up.s.lastGood = V('5');
+  const out = up.prune();
+  assert.deepEqual(out.removed, [V('3')]);                          // only the completed job's version is unreferenced
+  assert.deepEqual(present(root), [V('1'), V('2'), V('4'), V('5')]);
+  const log = fs.readFileSync(path.join(root, 'team/upgrades.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(log.at(-1).result, 'versions_removed'); assert.deepEqual(log.at(-1).removed, [V('3')]);
+  // the job ends: its version goes on the next tick; current and the rollback target stay whatever else happens
+  fs.writeFileSync(path.join(root, 'jobs/0.json'), JSON.stringify({ status: 'completed', supervisorVersion: V('2') }));
+  fs.writeFileSync(path.join(root, 'jobs/2.json'), JSON.stringify({ status: 'stopped', supervisorVersion: V('4') }));
+  assert.deepEqual(up.prune().removed.sort(), [V('2'), V('4')]);
+  assert.deepEqual(present(root), [V('1'), V('5')]);
+  assert.deepEqual(up.prune().removed, []);
+});
+
+test('issue #846: a paused or blocked job keeps its version; a pending install keeps both of its versions', async t => {
+  const root = versionRoot(t, [V('1'), V('2'), V('3'), V('4'), V('5'), V('6')], [{ status: 'paused_manual', supervisorVersion: V('2') }, { status: 'blocked', supervisorVersion: V('3') }]);
+  const w = world(t, {}); w.deps.installed = () => V('1'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } });
+  up.s.lastGood = V('1'); up.s.pending = { from: V('4'), to: V('5') };
+  assert.deepEqual(up.prune().removed, [V('6')]);
+  assert.deepEqual(present(root), [V('1'), V('2'), V('3'), V('4'), V('5')]);
+});
+
+test('issue #846: nothing is removed while the rollback target is unknown or a live job has no recorded version', async t => {
+  const root = versionRoot(t, [V('1'), V('2')], []);
+  const w = world(t, {}); w.deps.installed = () => V('1'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } });
+  assert.match(up.prune().skipped, /rollback target/); assert.deepEqual(present(root), [V('1'), V('2')]);
+  up.s.lastGood = V('1'); fs.writeFileSync(path.join(root, 'jobs/x.json'), JSON.stringify({ status: 'running' }));
+  assert.match(up.prune().skipped, /no recorded version/); assert.deepEqual(present(root), [V('1'), V('2')]);
+  fs.writeFileSync(path.join(root, 'jobs/x.json'), '{not json');   // an unreadable record counts as a reference
+  assert.match(up.prune().skipped, /no recorded version/);
+  fs.rmSync(path.join(root, 'jobs/x.json'));
+  assert.deepEqual(up.prune().removed, [V('2')]);
+});
+
+test('issue #846: pruneVersions never touches a symlink, a fresh directory or a name that is not a full sha', async t => {
+  const root = versionRoot(t, [V('1'), V('2')]);
+  fs.symlinkSync(path.join(root, 'versions', V('1')), path.join(root, 'versions', V('a')));
+  fs.mkdirSync(path.join(root, 'versions', 'notasha')); fs.mkdirSync(path.join(root, 'versions', V('b')));   // fresh: mtime is now
+  fs.symlinkSync('versions/' + V('1'), path.join(root, 'current'));
+  const out = pruneVersions({ root, keep: new Set([V('1')]) });
+  assert.deepEqual(out.removed, [V('2')]);
+  assert.deepEqual(present(root), ['notasha', V('1'), V('a'), V('b')].sort());
+  assert.equal(fs.readlinkSync(path.join(root, 'current')), 'versions/' + V('1'));
+});
+
+test('issue #846: a verified install records the previous version as the rollback target; a rollback does not move it', async t => {
+  const w = world(t, {}); await w.up.step();
+  assert.equal(await w.up.verifyPending({ running: TO, ok: true }), 'verified'); assert.equal(w.up.s.lastGood, FROM);
+});
+
+test('issue #846: a job started before an install finishes from its own version and its record is read by the new one', async t => {
+  // The worker records the directory it runs from; the new version keeps it, reads the same record, and the old worker keeps running there.
+  const root = versionRoot(t, [V('1'), V('2')], [{ status: 'running', supervisorVersion: V('1'), id: 'a' }]);
+  const w = world(t, { active: 1 }); w.deps.installed = () => V('2'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } }); up.s.lastGood = V('2');
+  assert.deepEqual(up.prune().removed, []);                          // V1 is not current and not the rollback target, but a running job is on it
+  assert.ok(fs.existsSync(path.join(root, 'versions', V('1'), 'supervisor/cli.mjs')));
+  const job = JSON.parse(fs.readFileSync(path.join(root, 'jobs/0.json'), 'utf8')); assert.equal(job.supervisorVersion, V('1'));   // the new version reads the record as is
+  fs.writeFileSync(path.join(root, 'jobs/0.json'), JSON.stringify({ ...job, status: 'completed' }));   // the old worker finished and saved its verdict
+  assert.deepEqual(up.prune().removed, [V('1')]);
+});
+
+test('issue #846: the wait shown on the dashboard is a rule, never a clock time, and none is shown when nothing waits', async t => {
+  const w = world(t, { verdicts: {} });                              // not reviewed
+  assert.equal(await w.up.step(), 'not-eligible');
+  assert.equal(w.up.s.nextInstall.at, null); assert.match(w.up.s.nextInstall.why, /independent PASS review with green CI/);
+  w.state.verdicts[`7:${H('d')}`] = { verdict: 'PASS', reviewer: 'codex' }; w.up.s.alerted = {};
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.nextInstall, undefined);
+  assert.equal(await w.up.step(), 'awaiting-verification'); assert.match(w.up.s.nextInstall.why, /verified/);
+  assert.equal(await w.up.verifyPending({ running: TO, ok: true }), 'verified');
+  w.state.installed = TO; w.state.now += 3 * MIN_UPGRADE_INTERVAL_MS; assert.equal(await w.up.step(), 'current'); assert.equal(w.up.s.nextInstall, undefined);
+});
+
+test('issue #846: the install directory is read from the running path (the worker stamp itself is tested with real workers in install-side-by-side.test.mjs)', () => {
+  assert.equal(runningSha(`/x/versions/${V('a')}/supervisor/cli.mjs`), V('a')); assert.equal(runningSha('/repo/supervisor/cli.mjs'), null);
+});
+
+test('pre-check failure: no upgrade, one alert, no repeat of the heavy checks for the same commit, retried for a newer main', async t => {
+  const w = world(t, { pre: { ok: false, reason: 'tests: 3 failed' } });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  assert.match(w.alerts()[0], /pre-check failed \(tests: 3 failed\)/);
+  assert.equal(w.log.some(x => x[0] === 'upgrade'), false);
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
+  assert.equal(w.records()[0].result, 'precheck_failed');
+  w.state.target = H('9'); w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'upgraded');
+});
+
+test('issue #101: a change to the bootstrap installer is refused as needs-homeowner, whatever else the range contains', async t => {
+  assert.deepEqual(BOOTSTRAP_PATHS, ['tools/bootstrap-install.sh']);
+  const w = world(t, { files: ['supervisor/team.mjs', 'tools/bootstrap-install.sh'] });
+  assert.equal(await w.up.step(), 'upgrader-changed');
+  assert.match(w.alerts()[0], /needs the homeowner: changes the bootstrap installer/);
+  assert.equal(w.log.some(x => ['pre', 'upgrade', 'rollback'].includes(x[0])), false);
+  assert.equal(await w.up.step(), 'upgrader-changed'); assert.equal(w.alerts().length, 1);
+  assert.equal(w.records()[0].result, 'refused');
+  assert.equal(w.up.s.install.result, 'needs-homeowner');
+  assert.equal(w.up.latch(), null, 'a refusal is not a rollback and must not latch');
+});
+
+test('issue #265: the bootstrap refusal is recorded once per target, raises one hand-deploy item and clears when the install moves', async t => {
+  const w = world(t, { files: ['supervisor/team.mjs', 'tools/bootstrap-install.sh'] });
+  w.deps.remoteUrl = () => 'https://example.invalid/r.git'; w.deps.commitsBehind = () => 4;
+  for (let i = 0; i < 5; i++) assert.equal(await w.up.step(), 'upgrader-changed');
+  assert.equal(w.records().filter(r => r.result === 'refused').length, 1, 'one record, not one per tick');
+  assert.deepEqual(w.up.s.handDeploy, { from: FROM, to: TO, files: ['tools/bootstrap-install.sh'], command: `/root/bin/ai-supervisor self-upgrade hand-install ${TO}`, at: w.up.s.handDeploy.at });
+  assert.equal(w.up.s.main.sha, TO); assert.equal(w.up.s.main.behind, 4);
+  // survives a restart of the process
+  const again = w.make(); assert.equal(await again.step(), 'upgrader-changed'); assert.equal(w.records().length, 1);
+  // a newer main is a new target: a new record and a new item
+  w.state.target = H('e'); assert.equal(await again.step(), 'upgrader-changed');
+  assert.equal(w.records().length, 2); assert.equal(again.s.handDeploy.to, H('e'));
+  // the homeowner installs by hand: the installed commit moves and the item clears
+  w.state.installed = H('e'); w.state.files = ['docs/x.md'];
+  assert.equal(await again.step(), 'current');
+  assert.equal(again.s.handDeploy, undefined); assert.equal(again.s.main.behind, 0);
+  assert.equal(w.records().length, 2);
+});
+
+test('issue #101: a change to the upgrader itself self-installs like any other reviewed change', async t => {
+  const w = world(t, { files: ['supervisor/upgrade.mjs', 'tools/upgrade-supervisor.sh', 'tools/rollback-supervisor.sh'] });
+  assert.equal(await w.up.step(), 'upgraded');
+  assert.deepEqual(w.log.map(x => x[0]), ['pre', 'upgrade', 'dry', 'alert']);
+  assert.equal(await w.up.verifyPending({ running: TO, ok: true }), 'verified');
+  assert.equal(w.up.s.install.result, 'verified'); assert.equal(w.up.s.install.sha, TO);
+  // negative: the same range without a reviewed PASS is still refused (the review gate applies to upgrader changes too)
+  const bad = world(t, { files: ['supervisor/upgrade.mjs'], verdicts: {} });
+  assert.equal(await bad.up.step(), 'not-eligible'); assert.equal(bad.log.some(x => x[0] === 'upgrade'), false);
+});
+
+test('issue #101: a failed post-swap health check of an upgrader change rolls back automatically and records the result', async t => {
+  const w = world(t, { files: ['supervisor/upgrade.mjs'], dry: { ok: false, reason: 'dry-run did not run a plan' } });
+  assert.equal(await w.up.step(), 'rolled-back');
+  assert.deepEqual(w.log.filter(x => x[0] === 'rollback'), [['rollback', FROM, TO]]);
+  assert.equal(w.up.s.install.result, 'rolled_back'); assert.ok(w.up.latch());
+  // and a live tick that fails after a good dry run also rolls back
+  const v = world(t, { files: ['supervisor/upgrade.mjs'] });
+  assert.equal(await v.up.step(), 'upgraded');
+  assert.equal(await v.up.verifyPending({ running: TO, ok: false, reason: 'boom' }), 'rolled-back');
+  assert.equal(v.up.s.install.result, 'rolled_back');
+});
+
+test('issue #101: GitHub unreachable is transient: backoff, no latch, one install record, recovers by itself', async t => {
+  const w = world(t);
+  let down = true; w.deps.fetchMain = () => { if (down) throw new Error('git fetch failed'); return w.state.target; };
+  assert.equal(await w.up.step(), 'github-unreachable');
+  assert.equal(w.up.s.install.result, 'transient'); assert.equal(w.up.s.install.nextAttemptAt, w.state.now + ENV_RETRY_MS);
+  assert.equal(w.up.latch(), null); assert.deepEqual(w.up.s.prechecked, {});
+  w.state.now += ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'github-unreachable'); assert.equal(w.up.s.fetchFailures, 1, 'no new attempt before the backoff ends');
+  w.state.now += 1; assert.equal(await w.up.step(), 'github-unreachable'); assert.equal(w.up.s.fetchFailures, 2);
+  assert.equal(w.up.s.install.nextAttemptAt, w.state.now + 2 * ENV_RETRY_MS, 'the backoff doubles');
+  down = false; w.state.now += 2 * ENV_RETRY_MS;
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.fetchFailures, undefined);
+  assert.equal(w.alerts().filter(a => /unreachable/i.test(a)).length, 0, 'a transient outage raises no alert');
+  assert.equal(envBackoffMs(1), ENV_RETRY_MS); assert.equal(envBackoffMs(99), ENV_RETRY_MAX_MS);
+});
+
+test('issue #101: a clone failure at install time is retried with backoff, not rolled back and not latched', async t => {
+  const w = world(t, { up: { ok: false, environmental: true, reason: 'clone failed' } });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  assert.equal(w.log.some(x => x[0] === 'rollback'), false); assert.equal(w.up.latch(), null);
+  assert.equal(w.up.s.install.result, 'transient'); assert.equal(w.up.s.install.attempts, 1);
+  w.state.now += ENV_RETRY_MS; w.state.up = { ok: true };
+  w.deps.upgrade = async sha => { w.log.push(['upgrade', sha]); return w.state.up; };
+  assert.equal(await w.up.step(), 'upgraded');
+});
+
+test('issue #101: a failed validator or test run blocks only that commit, with one alert, until a newer main', async t => {
+  const w = world(t, { pre: { ok: false, reason: 'validator: bad' } });
+  assert.equal(await w.up.step(), 'precheck-failed'); w.state.now += 100 * ENV_RETRY_MAX_MS;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.alerts().length, 1);
+  assert.equal(w.up.s.install.result, 'blocked');
+  w.state.target = H('9'); w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'upgraded');
+});
+
+test('health check failure at the dry run rolls back, alerts, records and latches', async t => {
+  const w = world(t, { dry: { ok: false, reason: 'exit 2' } });
+  assert.equal(await w.up.step(), 'rolled-back');
+  assert.deepEqual(w.log.map(x => x[0]), ['pre', 'upgrade', 'dry', 'rollback', 'alert']);
+  assert.deepEqual(w.log[3], ['rollback', FROM, TO]);
+  assert.match(w.alerts()[0], new RegExp(`^Upgrade to ${TO.slice(0, 7)} rolled back: team tick --dry-run failed: exit 2`));
+  assert.equal(w.up.s.pending, undefined);
+  assert.deepEqual(w.records().map(r => r.result), ['rolled_back']); assert.equal(w.records()[0].checks.dryRun, 'failed');
+  assert.ok(w.up.latch());
+  // latched: no further automatic upgrade, even for a newer eligible main and after the hour
+  w.state.target = H('9'); w.state.now += 10 * MIN_UPGRADE_INTERVAL_MS; w.log.length = 0;
+  assert.equal(await w.up.step(), 'latched'); assert.deepEqual(w.log, []);
+  assert.equal(await w.make().step(), 'latched', 'the latch survives a restart');
+  w.up.clearLatch(); w.state.dry = { ok: true };
+  assert.equal(await w.make().step(), 'upgraded');
+});
+
+test('upgrade script failure rolls back too', async t => {
+  const w = world(t, { up: { ok: false, reason: 'unsafe supervisor directory symlink' } });
+  assert.equal(await w.up.step(), 'rolled-back'); assert.match(w.alerts()[0], /upgrade script failed: unsafe supervisor directory symlink/);
+  assert.ok(w.up.latch());
+});
+
+test('the next live tick failing rolls back; a missing live tick rolls back after an hour', async t => {
+  const w = world(t);
+  assert.equal(await w.up.step(), 'upgraded');
+  assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: 'gh pr list failed' }), 'rolled-back');
+  assert.deepEqual(w.log.slice(-2).map(x => x[0]), ['rollback', 'alert']);
+  assert.match(w.alerts().at(-1), /rolled back: live tick failed: gh pr list failed/);
+  assert.deepEqual(w.records().map(r => r.result), ['upgraded', 'rolled_back']); assert.equal(w.records()[1].checks.liveTick, 'failed');
+  assert.ok(w.up.latch());
+  const slow = world(t);
+  await slow.up.step();
+  slow.state.now += VERIFY_MAX_WAIT_MS - 1;
+  assert.equal(await slow.up.verifyPending({ running: FROM, ok: true }), 'awaiting-verification');
+  slow.state.now += 1;
+  assert.equal(await slow.up.verifyPending({ running: FROM, ok: true }), 'rolled-back');
+  assert.match(slow.alerts().at(-1), /no live tick ran under the new version/);
+});
+
+test('a failing rollback is reported as such and still latches', async t => {
+  const w = world(t, { dry: { ok: false, reason: 'x' }, rb: { ok: false, reason: 'wrapper backup missing' } });
+  assert.equal(await w.up.step(), 'rollback-failed');
+  assert.match(w.alerts()[0], /ROLLBACK FAILED \(wrapper backup missing\), manual repair needed/);
+  assert.equal(w.records()[0].result, 'rollback_failed'); assert.ok(w.up.latch());
+});
+
+test('rate limit: a short cooldown (2 minutes) after an install, not an hour (issue #353)', async t => {
+  const w = world(t);
+  assert.equal(await w.up.step(), 'upgraded');
+  await w.up.verifyPending({ running: TO, ok: true });
+  w.state.installed = TO; w.state.target = H('9'); w.log.length = 0;
+  w.state.now += MIN_UPGRADE_INTERVAL_MS - 1;
+  assert.equal(await w.up.step(), 'rate-limited'); assert.deepEqual(w.log, []);
+  w.state.now += 1;
+  assert.equal(await w.make().step(), 'upgraded');
+});
+
+test('issue #353: a second merge installs within minutes of the first verified install, not after an hour', async t => {
+  assert.ok(MIN_UPGRADE_INTERVAL_MS <= 5 * 60 * 1000);
+  const w = world(t);
+  assert.equal(await w.up.step(), 'upgraded');
+  await w.up.verifyPending({ running: TO, ok: true });
+  w.state.installed = TO; w.state.target = H('9');
+  w.state.now += 5 * 60 * 1000;
+  assert.equal(await w.make().step(), 'upgraded');
+});
+
+test('an alert channel that throws never breaks the upgrade decision, and is not retried every tick', async t => {
+  const w = world(t);
+  w.deps.alert = async () => { throw new Error('channel down'); };
+  assert.equal(await w.up.step(), 'upgraded');
+  assert.ok(w.up.s.alerted[`${TO}:upgraded`]);
+});
+
+test('install helpers read the version from the current symlink and the running path', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-sym-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.equal(installedSha(dir), null);
+  fs.symlinkSync(`versions/${TO}`, path.join(dir, 'current')); assert.equal(installedSha(dir), TO);
+  fs.rmSync(path.join(dir, 'current')); fs.symlinkSync('versions/../../etc', path.join(dir, 'current')); assert.equal(installedSha(dir), null);
+  assert.equal(runningSha(`/mnt/cache/ai-supervisor/versions/${TO}/supervisor/cli.mjs`), TO);
+  assert.equal(runningSha('/mnt/user/projects/x/supervisor/cli.mjs'), null);
+});
+
+test('alerts.command is a validated, local-only override', () => {
+  const shipped = { enabled: false, limits: {}, agents: {}, depends_on_overrides: {} };
+  assert.deepEqual(applyLocalOverride(shipped, { alerts: { command: ['/root/bin/notify', '--channel', 'ai'] } }).alerts, { command: ['/root/bin/notify', '--channel', 'ai'] });
+  for (const bad of [{ command: 'notify' }, { command: [] }, { command: ['notify'] }, { command: ['/x', 1] }, { command: ['/x'], webhook: 'u' }, null])
+    assert.throws(() => applyLocalOverride(shipped, { alerts: bad }), /alerts\.command/);
+});
+
+// ---- real git: range detection, merge/PR parsing, ancestry, clean-checkout pre-checks
+
+function repo(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-git-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' } }).trim();
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  const write = (f, c) => { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), c); };
+  return { dir, git, write };
+}
+
+test('real git: PR merges, direct commits, changed files and ancestry are read correctly', t => {
+  const r = repo(t);
+  r.write('supervisor/a.mjs', '1'); r.write('tools/validate-project.mjs', 'process.exit(0)'); r.git('add', '-A'); r.git('commit', '-qm', 'base');
+  const base = r.git('rev-parse', 'HEAD');
+  r.git('checkout', '-qb', 'claude/issue-1-x'); r.write('supervisor/a.mjs', '2'); r.git('commit', '-qam', 'work');
+  const head = r.git('rev-parse', 'HEAD');
+  r.git('checkout', '-q', 'main'); r.git('merge', '--no-ff', '-qm', 'Merge pull request #12 from o/claude/issue-1-x', 'claude/issue-1-x');
+  r.write('docs/direct.md', 'x'); r.git('add', '-A'); r.git('commit', '-qm', 'direct push');
+  const tip = r.git('rev-parse', 'HEAD');
+  const deps = realDeps({ root: '/nonexistent', config: { repo_path: r.dir }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
+  const commits = deps.mainCommits(base, tip);
+  assert.equal(commits.length, 2);
+  assert.equal(commits[0].pr, 12); assert.equal(commits[0].head, head);
+  assert.equal(commits[1].pr, null); assert.equal(commits[1].head, null);
+  assert.deepEqual(deps.changedFiles(base, tip).sort(), ['docs/direct.md', 'supervisor/a.mjs']);
+  assert.equal(deps.isAncestor(base, tip), true); assert.equal(deps.isAncestor(tip, base), false);
+  // the injected-text subject cannot fake a PR number on a non-merge commit
+  r.write('docs/e.md', 'x'); r.git('add', '-A'); r.git('commit', '-qm', 'Merge pull request #99 from o/x'); const fake = r.git('rev-parse', 'HEAD');
+  assert.equal(deps.mainCommits(tip, fake)[0].pr, null);
+});
+
+// A real bootstrap installer run against a bare "GitHub" repository (a file URL), with fixture validator, tests and swap script.
+
+const BOOT = new URL('../tools/bootstrap-install.sh', import.meta.url).pathname;
+
+function remote(t, { validator = 'process.exit(0)', test_ = 'import t from "node:test"; t("a",()=>{});', swap = 'echo swapped > "$SWAP_MARK"' } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boot-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' };
+  const g = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', env }).trim();
+  const origin = path.join(dir, 'origin.git'), work = path.join(dir, 'work');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]); execFileSync('git', ['clone', '-q', origin, work], { stdio: 'ignore' });
+  const write = (f, c) => { fs.mkdirSync(path.dirname(path.join(work, f)), { recursive: true }); fs.writeFileSync(path.join(work, f), c); };
+  write('tools/validate-project.mjs', validator); write('tests/x.test.mjs', test_); write('tools/upgrade-supervisor.sh', swap + '\n'); write('tools/bootstrap-install.sh', fs.readFileSync(BOOT));
+  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'c'); g(work, 'push', '-q', 'origin', 'HEAD:main');
+  return { dir, origin, work, g, write, sha: g(work, 'rev-parse', 'HEAD'), mark: path.join(dir, 'swap.mark') };
+}
+
+const boot = (r, mode, url, sha) => spawnSync('bash', [BOOT, mode, url, sha], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME, SWAP_MARK: r.mark } });
+
+test('issue #101: bootstrap check/install from a clean remote copy: passes, swaps only on install, ignores local edits', t => {
+  const r = remote(t);
+  r.write('tests/untracked-local-change.txt', 'dirty'); fs.writeFileSync(path.join(r.work, 'tools/validate-project.mjs'), 'process.exit(9)');   // a dirty local checkout must not matter
+  const c = boot(r, 'check', r.origin, r.sha); assert.equal(c.status, 0, c.stderr);
+  assert.equal(fs.existsSync(r.mark), false, 'check never swaps');
+  const i = boot(r, 'install', r.origin, r.sha); assert.equal(i.status, 0, i.stderr);
+  assert.equal(fs.readFileSync(r.mark, 'utf8').trim(), 'swapped');
+});
+
+test('issue #101: bootstrap exit codes: failing validator or test = 11, bad usage = 2, swap failure = 13, no swap on failure', t => {
+  for (const over of [{ validator: 'process.exit(3)' }, { test_: 'import t from "node:test"; import a from "node:assert"; t("a",()=>a.fail("boom"));' }]) {
+    const r = remote(t, over);
+    for (const mode of ['check', 'install']) { const x = boot(r, mode, r.origin, r.sha); assert.equal(x.status, 11, x.stderr); }
+    assert.equal(fs.existsSync(r.mark), false);
+  }
+  const r = remote(t);
+  assert.equal(boot(r, 'check', r.origin, 'abc').status, 2); assert.equal(boot(r, 'bogus', r.origin, r.sha).status, 2); assert.equal(boot(r, 'check', '', r.sha).status, 2);
+  const f = remote(t, { swap: 'exit 5' }); assert.equal(boot(f, 'install', f.origin, f.sha).status, 13);
+});
+
+test('issue #101: bootstrap treats an unreachable remote or a missing commit as transient (10)', t => {
+  const r = remote(t);
+  assert.equal(boot(r, 'check', path.join(r.dir, 'nonexistent.git'), r.sha).status, 10);
+  assert.equal(boot(r, 'install', r.origin, 'f'.repeat(40)).status, 10);
+  assert.equal(fs.existsSync(r.mark), false);
+});
+
+test('issue #101: bootstrap refuses a payload that differs from the reviewed commit (a check that alters the copy)', t => {
+  const r = remote(t, { validator: 'import fs from "node:fs"; fs.appendFileSync("tools/upgrade-supervisor.sh", ' + JSON.stringify('echo evil > "$SWAP_MARK"\n') + ');' });
+  const x = boot(r, 'install', r.origin, r.sha);
+  assert.equal(x.status, 12, x.stderr); assert.match(x.stderr, /differs from the reviewed commit/);
+  assert.equal(fs.existsSync(r.mark), false, 'nothing is swapped');
+  // positive control for the same shape of repo: an untouched copy installs
+  const ok = remote(t); assert.equal(boot(ok, 'install', ok.origin, ok.sha).status, 0);
+});
+
+test('issue #101: realDeps runs the bootstrap installer taken from the installed commit against the origin URL and maps its exit codes', async t => {
+  const r = remote(t);
+  const clone = path.join(r.dir, 'repo'); execFileSync('git', ['clone', '-q', r.origin, clone], { stdio: 'ignore' });
+  const root = path.join(r.dir, 'state'); fs.mkdirSync(path.join(root, 'versions'), { recursive: true }); fs.symlinkSync(`versions/${r.sha}`, path.join(root, 'current'));
+  const deps = realDeps({ root, config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, run: (cmd, args, o = {}) => {
+    const x = spawnSync(cmd, args, { cwd: o.cwd, encoding: 'utf8', env: { ...process.env, SWAP_MARK: r.mark } }); return { status: x.status ?? 1, stdout: x.stdout || '', stderr: x.stderr || '' }; } });
+  assert.deepEqual(await deps.preChecks(r.sha), { ok: true });
+  const missing = await deps.preChecks('f'.repeat(40)); assert.equal(missing.ok, false); assert.equal(missing.environmental, true);
+  assert.deepEqual(await deps.upgrade(r.sha), { ok: true }); assert.equal(fs.existsSync(r.mark), true);
+  const bad = remote(t, { validator: 'process.exit(3)' }); const badClone = path.join(bad.dir, 'repo'); execFileSync('git', ['clone', '-q', bad.origin, badClone], { stdio: 'ignore' });
+  fs.mkdirSync(path.join(bad.dir, 'state/versions'), { recursive: true }); fs.symlinkSync(`versions/${bad.sha}`, path.join(bad.dir, 'state/current'));
+  const d2 = realDeps({ root: path.join(bad.dir, 'state'), config: { repo_path: badClone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
+  const res = await d2.preChecks(bad.sha); assert.equal(res.ok, false); assert.equal(res.environmental, undefined); assert.match(res.reason, /^validator:/);
+  // no installed version: nothing to take the bootstrap from, so it refuses rather than guess
+  const none = realDeps({ root: path.join(r.dir, 'no-state'), config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
+  assert.equal((await none.preChecks(r.sha)).ok, false);
+});
+
+test('dry-run health check: only a real plan counts, not a lock skip, bad JSON or a non-zero exit', async t => {
+  const mk = out => realDeps({ root: '/x', config: { repo_path: '/x' }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, wrapper: '/w', run: () => out });
+  assert.equal((await mk({ status: 0, stdout: JSON.stringify({ actions: [], skipped: [] }), stderr: '' }).dryRunTick()).ok, true);
+  assert.equal((await mk({ status: 0, stdout: JSON.stringify({ skipped: 'another tick is running' }), stderr: '' }).dryRunTick()).ok, false);
+  assert.equal((await mk({ status: 0, stdout: 'not json', stderr: '' }).dryRunTick()).ok, false);
+  assert.equal((await mk({ status: 2, stdout: '', stderr: 'boom' }).dryRunTick()).ok, false);
+});
+
+test('dry-run health check retries a failed register read, but not other failures', async () => {
+  const seq = outs => { const calls = []; const sleeps = []; const deps = realDeps({ root: '/x', config: { repo_path: '/x' }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, wrapper: '/w', sleep: async ms => sleeps.push(ms), run: () => { calls.push(1); return outs[Math.min(calls.length - 1, outs.length - 1)]; } }); return { deps, calls, sleeps }; };
+  const regFail = { status: 1, stdout: '', stderr: 'cannot read docs/DECISIONS.md from origin/main' };
+  const plan = { status: 0, stdout: JSON.stringify({ actions: [] }), stderr: '' };
+  let w = seq([regFail, plan]); assert.equal((await w.deps.dryRunTick()).ok, true); assert.equal(w.calls.length, 2); assert.equal(w.sleeps.length, 1);
+  w = seq([regFail]); const bad = await w.deps.dryRunTick(); assert.equal(bad.ok, false); assert.equal(w.calls.length, 3); assert.match(bad.reason, /cannot read docs/);
+  w = seq([{ status: 1, stdout: '', stderr: 'boom' }, plan]); assert.equal((await w.deps.dryRunTick()).ok, false); assert.equal(w.calls.length, 1);
+});
+
+// ---- the real rollback script against temporary directories
+
+function install(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selfup-rb-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, 'bin'), state = path.join(dir, 'state');
+  fs.mkdirSync(bin); fs.mkdirSync(path.join(state, 'versions', FROM), { recursive: true }); fs.mkdirSync(path.join(state, 'versions', TO), { recursive: true });
+  fs.symlinkSync(`versions/${TO}`, path.join(state, 'current'));
+  fs.writeFileSync(path.join(bin, 'ai-supervisor'), '#!/usr/bin/env bash\necho new\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, `ai-supervisor.before-${TO}`), '#!/usr/bin/env bash\necho old\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(state, 'team.local.json'), '{"enabled":true}');
+  const run = (...args) => spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname, ...args], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_BIN_DIR: bin, AI_SUPERVISOR_STATE_DIR: state } });
+  return { bin, state, run };
+}
+
+test('rollback script --supervisor restores the previous wrapper and version and keeps local configuration', t => {
+  const i = install(t);
+  const r = i.run('--supervisor', TO, FROM);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readlinkSync(path.join(i.state, 'current')), `versions/${FROM}`);
+  assert.match(fs.readFileSync(path.join(i.bin, 'ai-supervisor'), 'utf8'), /echo old/);
+  assert.equal(fs.readFileSync(path.join(i.state, 'team.local.json'), 'utf8'), '{"enabled":true}');
+  assert.ok(fs.existsSync(path.join(i.state, 'versions', TO)), 'the new version stays for inspection');
+});
+
+test('rollback script --supervisor refuses bad input without changing anything', t => {
+  const i = install(t);
+  for (const args of [['--supervisor'], ['--supervisor', TO], ['--supervisor', 'zz', FROM], ['--supervisor', TO, '../etc'], ['--supervisor', H('3'), FROM], ['--supervisor', TO, H('4')]]) {
+    const r = i.run(...args); assert.notEqual(r.status, 0, args.join(' '));
+  }
+  assert.equal(fs.readlinkSync(path.join(i.state, 'current')), `versions/${TO}`);
+  assert.match(fs.readFileSync(path.join(i.bin, 'ai-supervisor'), 'utf8'), /echo new/);
+  fs.writeFileSync(path.join(i.bin, `ai-supervisor.before-${TO}`), 'if then\n');   // a corrupt backup must not be installed
+  assert.notEqual(i.run('--supervisor', TO, FROM).status, 0);
+  assert.match(fs.readFileSync(path.join(i.bin, 'ai-supervisor'), 'utf8'), /echo new/);
+  assert.equal(fs.readlinkSync(path.join(i.state, 'current')), `versions/${TO}`);
+});
+
+test('rollback script keeps the original single-argument launcher behaviour', t => {
+  assert.notEqual(spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname], { encoding: 'utf8' }).status, 0);
+  assert.notEqual(spawnSync('bash', [new URL('../tools/rollback-supervisor.sh', import.meta.url).pathname, 'nothex'], { encoding: 'utf8' }).status, 0);
+});
+
+test('a PASS from the author\'s provider counts when it was recorded as independent (a different model, issue #152), and so does an earlier interim PASS', async t => {
+  for (const flag of [{ independent: true }, { interim: true }]) {
+    const w = world(t, { verdicts: { [`7:${H('d')}`]: { verdict: 'PASS', reviewer: 'claude', ...flag } } });
+    assert.notEqual(await w.up.step(), 'not-eligible', JSON.stringify(flag));
+    assert.ok(w.log.some(x => x[0] === 'pre'));
+  }
+});
+
+test('review fix (PR #168): an independent same-provider PASS counts only once D-024 is approved; an earlier interim PASS always counts', async t => {
+  const v = { verdict: 'PASS', reviewer: 'claude' };
+  assert.equal(await world(t, { d024: false, verdicts: { [`7:${H('d')}`]: { ...v, independent: true } } }).up.step(), 'not-eligible');
+  assert.notEqual(await world(t, { d024: false, verdicts: { [`7:${H('d')}`]: { ...v, interim: true } } }).up.step(), 'not-eligible');
+});
+
+test('issue #69/#101: an environmental pre-check failure is retried with backoff and one alert; a failed check stays latched', async t => {
+  const w = world(t, { pre: { ok: false, environmental: true, reason: 'checkout failed: unable to read tree' } });
+  assert.equal(await w.up.step(), 'precheck-failed');
+  w.state.now += ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 1);
+  w.state.now += 1;   // second failure doubles the wait
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
+  w.state.now += 2 * ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
+  w.state.now += 1; w.state.pre = { ok: true };
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.alerts().filter(a => /pre-check failed/.test(a)).length, 1);
+  const g = world(t, { pre: { ok: false, reason: 'tests: 1 failed' } });
+  assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS - 1; g.state.pre = { ok: true };
+  assert.equal(await g.up.step(), 'precheck-failed'); assert.equal(g.log.filter(x => x[0] === 'pre').length, 1);   // latched inside the delay (#581 covers the delayed retry)
+});
+
+test('issue #302: a verifying tick with only a live job\'s lease wait verifies; real faults still fail it', async t => {
+  assert.deepEqual(liveTickOutcome({ actions: [], skipped: [], waiting: [{ what: 'review 5 (claude)', reason: 'waiting for job abababab (running)' }] }), { ok: true, reason: null });
+  assert.equal(liveTickOutcome({ skipped: [{ what: 'x', reason: 'r', expected: true }] }).ok, true);
+  assert.deepEqual(liveTickOutcome({ skipped: [{ what: 'x', reason: 'gh failed' }] }), { ok: false, reason: 'gh failed' });
+  assert.deepEqual(liveTickOutcome({ error: 'boom' }), { ok: false, reason: 'boom' });
+  const w = world(t);
+  await w.up.step();
+  assert.equal(await w.up.verifyPending({ running: TO, ...liveTickOutcome({ skipped: [], waiting: [{ what: 'review', reason: 'waiting' }] }) }), 'verified');
+  assert.equal(w.up.latch(), null);
 });

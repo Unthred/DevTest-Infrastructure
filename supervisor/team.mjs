@@ -90,10 +90,11 @@ export function validateTeamConfig(input) {
   return c;
 }
 
-// Issue #136: how long a pending supervisor install drains running jobs (no new job starts) before it goes ahead.
+// Issue #136: how long a hand-install (issue #446, the bootstrap installer) drains running jobs before it goes ahead. Automatic installs no longer drain (issue #846).
 export const DRAIN_DEFAULT_MINUTES = 30;
-// Batching (issue #695): a new install begins draining only this long after the last install finished (0 = no wait), unless nothing is running or planned, or the install is urgent.
-export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 45;
+// Batching (issue #695): a new install begins only this long after the last install finished (0 = no wait). Issue #846: 0 by default, because
+// installs are side by side and cost no idle slot; raise it only to rate-limit installs (each one runs the full test suite in a test slot).
+export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 0;
 // Issue #556: origins other than the listen address that may POST to the dashboard (a reverse proxy at a public address). Exact
 // lowercase scheme://host[:port] only (browsers send a lowercase Origin), no path, wildcard or credentials; anything not listed is still refused.
 export const ORIGIN_PATTERN = /^https?:\/\/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:\d{1,5})?$/;
