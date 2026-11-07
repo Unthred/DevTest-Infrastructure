@@ -17,6 +17,8 @@ import { redact, redactLong, redactAddresses } from './redact.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 // Issue #488: a refusal reason kept in the upgrade history and shown on the dashboard carries no secret, address or absolute path.
+// Deliberately narrower than HOST_PORT_SKIP in supervisor/redact.mjs (issue #858): a refusal reason keeps fewer file-name exemptions and
+// redacts any host:port, including image tags (node:20) and a trailing .digit, so it can only over-redact, never leak. A test pins this.
 const HOST_PORT_SKIP = /\.(?:mjs|cjs|js|json|sh|md|ya?ml|ts|txt|log)$/i;
 const escRe = x => x.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
 // Issue #501: also hide a bare host:port token (tower:8123) and any operator-configured local domain (DEVTEST_LOCAL_DOMAINS, comma-separated), even under a public suffix.

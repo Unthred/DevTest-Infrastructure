@@ -36,6 +36,15 @@ test('issue #584: refusalText keeps its stricter behaviour (comments, path after
   assert.equal(refusalText('main.py:12', []), '[host]');
 });
 
+test('issue #858: refusalText stays stricter than redactTopology for host:port (intentional divergence)', () => {
+  for (const [input, want] of [['tower:8123.5', '[host].5'], ['node:20', '[host]'], ['main.py:12', '[host]'], ['build.mjs:42', 'build.mjs:42']]) {
+    assert.equal(refusalText(input, []), want, input);
+  }
+  // The shared rule keeps image tags and file names that refusalText hides.
+  assert.equal(redactTopology('node:20 main.py:12', []), 'node:20 main.py:12');
+  assert.equal(redactTopology('tower:8123', []), '[host]');
+});
+
 test('issue #584: every GitHub write (comment, issue create, issue body) is redacted before gh sees it', async () => {
   const calls = [];
   const gh = (args, input) => { calls.push({ args, input }); return args[0] === 'issue' && args[1] === 'create' ? 'https://github.com/o/r/issues/9\n' : ''; };
