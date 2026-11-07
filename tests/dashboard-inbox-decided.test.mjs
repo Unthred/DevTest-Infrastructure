@@ -92,7 +92,7 @@ test('route: a JSON decision answers with the state and undo time; the card leav
   const page = (await s.get('/')).body;
   assert.ok(!page.includes(`data-inbox="${a}"`), 'the decided card is gone from the pending list');
   assert.match(page, /<summary>Decided today \(<span class="inbox-decided-n">1<\/span>\)<\/summary>/);
-  assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, waiting for a free slot" data-tonly>Approved \\d\\d:\\d\\d UTC, waiting for a free slot</span>`));
+  assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-tag">.*?</span></span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, waiting for a free slot" data-tonly>Approved \\d\\d:\\d\\d UTC, waiting for a free slot</span>`));
   assert.match(page, /name="decision" value="undo"/);
   assert.match(page, /Needs you \(1\)/, 'the count dropped');
 });
@@ -196,4 +196,41 @@ test('script: postDecision turns a server refusal, a non-JSON page and a network
 });
 test('script: the Needs you count drops with the card and disappears at zero', () => {
   assert.equal(lowerCount('Needs you (3)'), 'Needs you (2)'); assert.equal(lowerCount('Needs you (1)'), 'Needs you'); assert.equal(lowerCount('Needs you'), 'Needs you');
+});
+
+// ---- issue #977: ids, search, direct link
+import { filterListRows } from '../supervisor/dashui/lists.mjs';
+test('#977: a pending item shows its short id and kind as a link, with the full id findable by search', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD(1)); inbox.scan(dir, 1000);
+  const page = (await (await serve(t, dir)).get('/')).body;
+  assert.ok(page.includes(`<a class="inbox-id" href="/inbox/${a}" title="Direct link to this item"><code>${a.slice(0, 8)}</code></a> <span class="inbox-kind">prompt</span><span class="inbox-fullid" hidden>${a}</span>`));
+  assert.ok(!page.includes(`<code>${a.slice(0, 9)}`), 'only eight characters are shown');
+});
+test('#977: /inbox/<id> redirects a waiting item to its card (full or short id); a decided one gets a state page; unknown, malformed and ambiguous ids are refused', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD(1)), b = drop(dir, GOOD(2)); inbox.scan(dir, 1000);
+  const s = await serve(t, dir);
+  for (const id of [a, a.slice(0, 8)]) { const r = await s.get(`/inbox/${id}`); assert.equal(r.status, 302); assert.equal(r.headers.location, `/#att-inbox-${a}`); }
+  const n = (await s.post(b, 'reject')); assert.equal(n.status, 200);
+  const r = await s.get(`/inbox/${b}`); assert.equal(r.status, 200); assert.match(r.body, /State: rejected/); assert.match(r.body, /Title: Tidy docs 2/);
+  assert.equal((await s.get(`/inbox/${'0'.repeat(32)}`)).status, 404);
+  assert.equal((await s.get('/inbox/zzzzzzzz')).status, 404, 'a malformed id is not a route');
+  assert.equal((await s.get(`/inbox/${a}/x`)).status, 404);
+  const c = 'ab'.repeat(16), d = 'ab' + 'cd'.repeat(15) + 'ef'; fs.writeFileSync(path.join(dir, 'items', `${c}.json`), JSON.stringify(GOOD(3))); fs.writeFileSync(path.join(dir, 'items', `${d}.json`), JSON.stringify(GOOD(4))); inbox.scan(dir, 2000);
+  assert.equal((await s.get('/inbox/abababab')).status, 302, 'distinct 8-char prefixes still resolve');
+  const e = 'ee' + 'a'.repeat(30), f = 'ee' + 'a'.repeat(28) + 'bb'; for (const [x, i] of [[e, 5], [f, 6]]) fs.writeFileSync(path.join(dir, 'items', `${x}.json`), JSON.stringify(GOOD(i))); inbox.scan(dir, 3000);
+  assert.equal((await s.get('/inbox/eeaaaaaa')).status, 409, 'a short id shared by two items is refused');
+});
+test('#977: a posted draft shows the GitHub issue number as a link in the decided list', async t => {
+  const dir = makeInbox(t), a = drop(dir, { kind: 'issue_draft', title: 'Draft one', body: 'Body text here.' }); inbox.scan(dir, Date.now());
+  const s = await serve(t, dir); assert.equal((await s.post(a, 'approve')).status, 200);
+  inbox.finish(dir, a, { state: 'done', issue: 321, result: 'posted as issue #321' }, Date.now());
+  assert.match((await s.get('/')).body, /data-decided="[a-f0-9]{32}">[\s\S]*?href="\/work\/issue\/321"/);
+});
+test('#977: search finds an item by short id, full id, title and body, and ignores quote and dash differences', () => {
+  const rows = [{ i: 0, text: 'Overseer proposal 35db929d 35db929d00112233445566778899aabb prompt Don’t stall — fix the log' }, { i: 1, text: 'Other item abcdef01 body about retries' }];
+  const ids = q => filterListRows(rows, q).map(r => r.i);
+  assert.deepEqual(ids('35db929d'), [0]); assert.deepEqual(ids('35db929d00112233445566778899aabb'), [0]);
+  assert.deepEqual(ids("don't stall"), [0], 'straight apostrophe finds a curly one'); assert.deepEqual(ids('Don’t stall'), [0]);
+  assert.deepEqual(ids('stall - fix'), [0], 'a hyphen finds an em dash'); assert.deepEqual(ids('stall – fix'), [0]); assert.deepEqual(ids('retries'), [1]);
+  assert.deepEqual(ids('nomatch'), []);
 });

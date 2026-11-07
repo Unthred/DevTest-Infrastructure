@@ -678,3 +678,14 @@ test('dashboard: refusals after pickup are one grouped Needs you line per reason
   assert.equal(ids.filter(id => inbox.statusOf(dir, id).state === 'pending').length, 3);
   s.clock.now = now + inbox.FAILED_SHOW_MS + 5000; assert.equal((await lines()).length, 0);
 });
+
+// ---- issue #977: the MCP result carries the dashboard link and the short id
+test('#977: foreman_propose and foreman_proposal_status return the short id and the dashboard link; the short id works for status', async t => {
+  const dir = makeInbox(t), tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: createInbox({ dir, baseUrl: 'http://10.0.0.5:8787/api/view.json' }) });
+  const r = JSON.parse((await tools.call('foreman_propose', GOOD)).text);
+  assert.equal(r.shortId, r.id.slice(0, 8)); assert.equal(r.link, `http://10.0.0.5:8787/inbox/${r.id}`);
+  const s = JSON.parse((await tools.call('foreman_proposal_status', { id: r.id })).text); assert.equal(s.link, r.link);
+  const short = JSON.parse((await tools.call('foreman_proposal_status', { id: r.shortId })).text); assert.equal(short.id, r.id);
+  assert.equal((await tools.call('foreman_proposal_status', { id: 'abcdef01' })).isError, true, 'an unknown short id is an error');
+  const none = createInbox({ dir }).status(r.id); assert.equal(none.link, null, 'no dashboard address, no link');
+});
