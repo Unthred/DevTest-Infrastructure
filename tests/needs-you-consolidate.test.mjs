@@ -144,18 +144,18 @@ test('an issue with a cached pullPrerequisites list counts towards that PR', () 
 });
 
 const limitState = (head, extra = {}) => ({ verdicts: { [`1:${head}`]: { verdict: 'CHANGES', reviewer: 'x' } }, fixAttempts: { [`1:${head}`]: 2 }, jobs: {}, unblock: { escalated: {}, pr: {}, day: {}, log: [] }, ...extra });
-test('final round pending (not escalated yet): the queue says a fix is coming, not that the limit was reached', async t => {
+const busyJob = { id: 'b'.repeat(32), provider: 'claude', kind: 'implement', issue: 30, branch: 'claude/issue-30-y', status: 'running', createdAt: NOW - 600000, updatedAt: NOW - 1000, lastProgress: NOW - 1000, attempts: 1 };
+const reasonOf = v => v.queues.claude.filter(x => x.ref === 1).map(x => x.reason).join('|');
+test('final round pending and planned: the queue says the fix is next, not that the limit was reached', async t => {
   const head = H(1);
   const v = await view(t, { pulls: [pr(1, { headRefOid: head })], state: limitState(head) });
-  const q = JSON.stringify(v.queues);
-  assert.ok(!/fix limit reached/.test(q), q); assert.match(q, /fix (is next|waits for a free slot)/);
+  assert.match(reasonOf(v), /CHANGES from x on 1111111; fix is next$/);
 });
-test('final round pending but not planned (no free slot): still not reported as the limit', async t => {
+test('final round pending but not planned (implementer slot taken): waits for a free slot, never the limit message', async t => {
   const head = H(1);
-  const state = limitState(head);
-  const v = await view(t, { pulls: [pr(1, { headRefOid: head }), pr(2, { headRefOid: H(2) }), pr(3, { headRefOid: H(3) })], state });
-  const mine = v.queues.claude.filter(x => x.ref === 1).map(x => x.reason).join('|');
-  assert.ok(!/fix limit reached/.test(mine), mine); assert.match(mine, /fix (is next|waits for a free slot)/);
+  const state = limitState(head, { jobs: { [busyJob.id]: { kind: 'implement', agent: 'claude', model: 'sonnet', issue: 30 } } });
+  const v = await view(t, { pulls: [pr(1, { headRefOid: head })], state, jobs: [busyJob] });
+  assert.match(reasonOf(v), /CHANGES from x on 1111111; fix waits for a free slot$/);
 });
 test('an escalated job still running keeps the limit message away; once ingested and escalated is set, it appears', async t => {
   const head = H(1);
