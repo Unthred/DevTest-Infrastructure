@@ -77,7 +77,8 @@ test('END covers every run-ending kind supervisor/core.mjs transitions to (issue
   for (const m of src.matchAll(/\['([a-z_]+(?:', '[a-z_]+)*)'\]\.includes\(result\.event\)/g)) for (const k of m[1].split("', '")) kinds.add(k);
   for (const k of ['context_too_large', 'preflight_failed', 'context_limit', 'orphaned_worker', 'completed_before_limit']) assert.ok(kinds.has(k), `scan found ${k}`);
   // Pin the whole scan result: a core.mjs refactor the regexes no longer match shrinks
-  // this set and fails here; a new kind must be added here and to END.
+  // this set and fails here. A new kind always goes in this pinned list; then also add it
+  // to END if it ends a run, or to preStart above if it is written before a run starts.
   assert.deepEqual([...kinds].sort(), [
     'approval_required', 'auth_error', 'checkpoint_failed', 'completed', 'completed_before_limit', 'completed_before_resume',
     'context_fresh_session', 'context_limit', 'context_too_large', 'crash', 'head_moved', 'incomplete', 'issue_closed',
