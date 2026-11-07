@@ -146,3 +146,9 @@ test('stale-label: an issue card with the same number does not hide a labelled P
   v.prs = [{ number: 77, status: 'open', needsHomeowner: true, awaitingReview: false }];
   assert.deepEqual(mismatches(v, NOW).items.filter(i => i.kind === 'stale-label').map(i => i.ref), ['pr #77']);
 });
+
+test('causeOf keeps decision proposals apart per decision but merges the pull request tail (#795)', () => {
+  assert.equal(causeOf('decision-proposal-D-030-12'), 'decision-proposal-D-030');
+  assert.equal(causeOf('decision-proposal-D-030-99'), causeOf('decision-proposal-D-030-12'));
+  assert.notEqual(causeOf('decision-proposal-D-030-12'), causeOf('decision-proposal-D-031-12'));
+});
