@@ -14,7 +14,7 @@ import { JOB_MARKER, underSupervisedJob } from '../supervisor/breaker.mjs';
 const CAUSE = 'review:blocked:postcondition_not_met';
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [10] } } };
-async function serve(t, { halted = true, supervised = () => false, peerPid = () => 4242 } = {}) {
+async function serve(t, { halted = true, supervised = () => false, peerPid = () => 4242, dashboard } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash626-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
   const at = Date.now() - 60000;
@@ -23,7 +23,7 @@ async function serve(t, { halted = true, supervised = () => false, peerPid = () 
   fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ breaker: { waste: {}, halts: halted ? { [CAUSE]: halt } : {}, global: null, clearedAt: {} } }));
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
   const port = server.address().port, clock = { now: Date.now() };
-  server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => clock.now, supervised, peerPid }));
+  server.on('request', handler({ root, config: dashboard ? { ...config, dashboard } : config, host: '127.0.0.1', port, now: () => clock.now, supervised, peerPid }));
   const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => { const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject); r.end(body); });
   // What a browser sends for a click on a form button on the dashboard itself.
   const click = (scope = CAUSE, { proof = writeToken(root), origin = `http://127.0.0.1:${port}`, person = true } = {}) => req('POST', '/breaker-resume', {
@@ -132,4 +132,23 @@ test('peer lookup: port pair to socket inode to pid, from /proc text', () => {
   assert.equal(isLocalPeer({ remoteAddress: '127.0.0.1', localAddress: '10.0.0.5' }), true);
   assert.equal(isLocalPeer({ remoteAddress: '::ffff:10.0.0.5', localAddress: '10.0.0.5' }), true);
   assert.equal(isLocalPeer({ remoteAddress: '10.0.0.9', localAddress: '10.0.0.5' }), false);
+});
+
+// Issue #830: Resume takes the same origin rule as the other writes, and its refusals are readable pages.
+test('Resume from a configured public origin is accepted; an unlisted one is refused with a readable page', async t => {
+  const PUBLIC = 'https://agents.example.test', s = await serve(t, { dashboard: { allowed_origins: [PUBLIC] } });
+  const bad = await s.click(CAUSE, { origin: 'https://evil.example' });
+  assert.equal(bad.status, 403); assert.match(bad.headers['content-type'], /text\/html/); assert.match(bad.body, /cross-origin request refused/); assert.match(bad.body, /Back to the dashboard/);
+  assert.deepEqual(takeBreakerResumeRequests(s.root), []);
+  assert.equal((await s.click(CAUSE, { origin: PUBLIC, person: false })).status, 403, 'the person-click check still applies from the public origin');
+  assert.equal((await s.click(CAUSE, { origin: PUBLIC })).status, 303);
+  assert.deepEqual(takeBreakerResumeRequests(s.root).map(x => x.scope), [CAUSE]);
+  const none = await serve(t);
+  assert.equal((await none.click(CAUSE, { origin: PUBLIC })).status, 403, 'without the list the public origin is refused');
+});
+test('a wrong access proof and an oversized body get a readable page', async t => {
+  const s = await serve(t), r = await s.click(CAUSE, { proof: 'f'.repeat(64) });
+  assert.equal(r.status, 403); assert.match(r.headers['content-type'], /text\/html/); assert.match(r.body, /missing or wrong access proof/); assert.match(r.body, /href="\/"/);
+  const big = await s.click(CAUSE, { proof: 'a'.repeat(2000) });
+  assert.equal(big.status, 413); assert.match(big.headers['content-type'], /text\/html/);
 });
