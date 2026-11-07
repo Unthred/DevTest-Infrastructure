@@ -159,17 +159,24 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // A readable page with a way back, not a bare text body. It names the Host and Origin received so the right origin can be configured;
   // both are escaped, and the response is still a 403 that changes nothing.
   const esc = v => String(v ?? '(none)').slice(0, 200).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
-  const refuseHost = (req, send) => { const q = v => JSON.stringify(String(v ?? '(none)').slice(0, 200)); console.error(`dashboard: write refused, unexpected host (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return send(421, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Unexpected host</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>Unexpected host</h1><p>The dashboard did not accept this action because the request arrived with a Host it does not serve (unexpected host). Nothing was changed.</p><p>Host received: <code>${esc(req.headers.host)}</code><br>Origin received: <code>${esc(req.headers.origin)}</code></p><p>If a reverse proxy sits in front of this dashboard, it must forward the upstream Host (see docs/supervisor.md).</p><p><a href="/">Back to the dashboard</a></p></main></body></html>`);};
-  const refuseOrigin = (req, send) => { const q = v => JSON.stringify(String(v ?? '(none)').slice(0, 200)); console.error(`dashboard: write refused (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return send(403, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Request refused</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>Request refused</h1><p>The dashboard did not accept this action because it came from an address that is not allowed (cross-origin request refused). Nothing was changed.</p><p>Origin received: <code>${esc(req.headers.origin)}</code><br>Host received: <code>${esc(req.headers.host)}</code></p><p>If this is the public address of this dashboard, add that origin to <code>dashboard.allowed_origins</code> in <code>team.local.json</code>.</p><p><a href="/">Back to the dashboard</a></p></main></body></html>`);};
+  const q = v => JSON.stringify(String(v ?? '(none)').slice(0, 200));
+  const page = (send, code, title, body) => send(code, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>${title}</h1>${body}<p><a href="/">Back to the dashboard</a></p></main></body></html>`);
+  const seen = req => `<p>Origin received: <code>${esc(req.headers.origin)}</code><br>Host received: <code>${esc(req.headers.host)}</code></p>`;
+  const refuseHost = (req, send) => { console.error(`dashboard: write refused, unexpected host (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 421, 'Unexpected host', `<p>The dashboard did not accept this action because the request arrived with a Host it does not serve (unexpected host). Nothing was changed.</p>${seen(req)}<p>If a reverse proxy sits in front of this dashboard, it must forward the upstream Host (see docs/supervisor.md).</p>`); };
+  const refuseOrigin = (req, send) => { console.error(`dashboard: write refused (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 403, 'Request refused', `<p>The dashboard did not accept this action because it came from an address that is not allowed (cross-origin request refused). Nothing was changed.</p>${seen(req)}<p>If this is the public address of this dashboard, add that origin to <code>dashboard.allowed_origins</code> in <code>team.local.json</code>.</p>`); };
+  // Issue #830: the other refusals on a write route (access proof, size, inbox not configured) are readable pages too, with the same way back.
+  const refuseWith = (send, code, title, text, hint = '') => page(send, code, title, `<p>${text} Nothing was changed.</p>${hint}`);
+  const tooLarge = send => refuseWith(send, 413, 'Request too large', 'The request was too large (too large).');
+  const badProof = send => refuseWith(send, 403, 'Access proof refused', 'The access proof was missing or wrong (missing or wrong access proof).', '<p>The page may be stale, for example after the proof was rotated. Go back to the dashboard, reload it and try again.</p>');
   // Mark as read (issue #253): the only write. Same-origin form POST; moves the marker to the time the page was built, so work that
   // finished between page load and click is still shown next time. It can never move the marker backwards or into the future.
   const markRead = async (req, res, send) => {
     if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
-    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+    if (!proofValid(root, form.get('proof'))) return badProof(send);
     const at = Number(form.get('at')), t = now(), prev = readLastSeen(root);
     if (!/^\d{10,15}$/.test(form.get('at') || '') || at > t) return send(400, 'text/plain; charset=utf-8', 'bad time');
     const slot = reserveCooldown(root, 'mark-read', t, MARK_READ_COOLDOWN_MS);
@@ -185,9 +192,9 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
-    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+    if (!proofValid(root, form.get('proof'))) return badProof(send);
     const kind = form.get('kind'), action = form.get('action'), raw = form.get('number') || '', number = /^\d{1,7}$/.test(raw) ? Number(raw) : NaN;
     const back = /^\/[A-Za-z0-9/_-]{0,80}$/.test(form.get('back') || '') ? form.get('back') : '/';
     if (!['issue', 'pr'].includes(kind) || !Number.isSafeInteger(number) || number < 1 || !['watch', 'unwatch', 'pin', 'unpin'].includes(action)) return send(400, 'text/plain; charset=utf-8', 'bad request');
@@ -203,13 +210,13 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // Inbox (issue #124): Approve or Reject one pending overseer proposal. The same write protection as the other posts (D-029): host, origin, the
   // secret proof, and a short cooldown. The decision is recorded only; the next tick acts on an approval. This route is the only way to approve.
   const inbox = async (req, res, send) => {
-    if (!source().inbox?.dir) return send(404, 'text/plain; charset=utf-8', 'the inbox is not configured');
+    if (!source().inbox?.dir) return refuseWith(send, 404, 'Inbox not configured', 'The inbox is not configured (the inbox is not configured).');
     if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
-    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+    if (!proofValid(root, form.get('proof'))) return badProof(send);
     const id = form.get('id') || '', decision = form.get('decision') || '';
     if (!INBOX_ID.test(id) || !['approve', 'reject'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
     const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
@@ -223,8 +230,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
   // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
   const breakerResume = async (req, res, send) => {
-    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
-    if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+    if (req.headers.host !== allowedHost) return refuseHost(req, send);
+    if (!originAllowed(req)) return refuseOrigin(req, send);
     if (req.headers['sec-fetch-site'] !== 'same-origin' || req.headers['sec-fetch-user'] !== '?1' || supervised()) return send(403, 'text/plain; charset=utf-8', 'resume needs a person clicking the button');
     // Issue #737: a request from this machine must not come from a process that descends from a supervised job, as the CLI route checks
     // its own caller. A caller that cannot be identified is refused rather than assumed to be a person.
@@ -234,9 +241,9 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       if (supervised({ env: {}, pid })) return send(403, 'text/plain; charset=utf-8', 'resume needs a person clicking the button');
     }
     const chunks = []; let size = 0;
-    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+    if (!proofValid(root, form.get('proof'))) return badProof(send);
     const scope = form.get('scope') || '', halts = readTeamState(root)?.breaker || {};
     const known = scope === 'all' ? !!(halts.global || Object.keys(halts.halts || {}).length) : scope === 'global' ? !!halts.global : !!(halts.halts || {})[scope];
     if (!known) return send(409, 'text/plain; charset=utf-8', 'nothing halted for that scope');
@@ -261,8 +268,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       if (req.headers.host !== allowedHost) return refuseHost(req, send);
       if (!originAllowed(req)) return refuseOrigin(req, send);
       const chunks = []; let size = 0;
-      for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
-      if (!proofValid(root, new URLSearchParams(Buffer.concat(chunks).toString('utf8')).get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+      for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
+      if (!proofValid(root, new URLSearchParams(Buffer.concat(chunks).toString('utf8')).get('proof'))) return badProof(send);
       // Cooldown per agent, kept in the state root. An unknown agent is refused before it takes a slot.
       const agent = probePath[1], at = now();
       if (!source().agents?.[agent]) return send(404, 'text/plain; charset=utf-8', 'unknown agent');
