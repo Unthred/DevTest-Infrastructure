@@ -604,7 +604,8 @@ async function main() {
     if (command === 'reconcile') {
       // Issue #406: one pass at a time, scheduled or woken (supervisor/wakepass.mjs). A scheduled fire that finds a pass running queues one more.
       if (a.wake !== undefined && !(typeof a.wake === 'string' && TRIGGERS.includes(a.wake))) throw new SupervisorError(`unknown --wake value; use one of: ${TRIGGERS.join(', ')}`);
-      const out = await drivePass({ root, wake: a.wake || null, spawnFollowUp: why => spawnPass(root, why), runPass: async pass => {
+      let out;
+      try { out = await drivePass({ root, wake: a.wake || null, spawnFollowUp: why => spawnPass(root, why), runPass: async pass => {
         // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
         const unlockRecover = tickLock(root, 'reconcile.lock');
         let result;
@@ -625,8 +626,12 @@ async function main() {
         // seen when this pass releases the pass lock, so the follow-up runs the installed code and verifies the install.
         if (before.result === 'upgraded') wakeNextJob(root, 'install');
         return result;
-      } });
-      if (a.wake) recordWakePass(root, { at: Date.now(), wake: a.wake, ran: out.ran, trigger: out.trigger || null, followUp: out.followUp || null, skipped: out.skipped || null, exit: process.exitCode || 0 });
+      } }); } catch (error) {
+        // A pass that throws is the case the record matters most for (review of PR #797): log it, then fail as before.
+        if (a.wake) recordWakePass(root, { at: Date.now(), wake: a.wake, path: process.env.PATH || null, ran: true, error: String(error?.message || error).slice(0, 200), exit: process.exitCode || 1 });
+        throw error;
+      }
+      if (a.wake) recordWakePass(root, { at: Date.now(), wake: a.wake, path: process.env.PATH || null, ran: out.ran, trigger: out.trigger || null, followUp: out.followUp || null, skipped: out.skipped || null, exit: process.exitCode || 0 });
       console.log(JSON.stringify(out.ran ? out.result : { skipped: out.skipped })); return;
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.

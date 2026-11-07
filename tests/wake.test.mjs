@@ -375,9 +375,26 @@ test('wakeEnv fills a missing HOME and PATH and sets the state root (issue #711)
   const e = wakeEnv('/r', { FOO: '1' }); assert.equal(e.HOME, '/root'); assert.match(e.PATH, /\/usr\/bin/); assert.equal(e.AI_SUPERVISOR_STATE_ROOT, '/r'); assert.equal(e.FOO, '1');
   assert.equal(wakeEnv('/r', { HOME: '/h', PATH: '/p' }).PATH, '/p');
 });
-test('recordWakePass appends one line and keeps the last 200 (issue #711)', async t => {
+test('recordWakePass appends one line and trims a long log to its last 200 (issue #711, #799)', async t => {
   const { recordWakePass } = await import('../supervisor/wake.mjs'), root = tmp(t);
-  for (let i = 0; i < 205; i++) recordWakePass(root, { i });
+  for (let i = 0; i < 400; i++) recordWakePass(root, { i, pad: 'x'.repeat(300) });
   const lines = fs.readFileSync(path.join(root, 'team', 'wake-passes.log'), 'utf8').trim().split('\n');
-  assert.equal(lines.length, 200); assert.equal(JSON.parse(lines.at(-1)).i, 204);
+  assert.ok(lines.length >= 200 && lines.length < 400, 'trimmed once it grew well past 200'); assert.equal(JSON.parse(lines.at(-1)).i, 399);
+  assert.equal(JSON.parse(lines[0]).i, 400 - lines.length, 'the oldest lines went, the order stayed');
+});
+test('concurrent recordWakePass calls from separate processes lose no line (issue #799)', async t => {
+  const root = tmp(t), mod = path.join(here, '..', 'supervisor', 'wake.mjs');
+  const code = `import(${JSON.stringify(mod)}).then(m => { for (let i = 0; i < 15; i++) m.recordWakePass(${JSON.stringify(root)}, { p: process.pid, i }); })`;
+  const kids = [0, 1, 2, 3].map(() => new Promise(res => spawn(process.execPath, ['-e', code], { stdio: 'ignore' }).on('exit', res)));
+  await Promise.all(kids);
+  const lines = fs.readFileSync(path.join(root, 'team', 'wake-passes.log'), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 60);
+});
+test('a woken pass that throws still writes a wake-passes.log line with the error and PATH (issue #799)', t => {
+  const root = tmp(t); fs.mkdirSync(path.join(root, 'jobs')); fs.writeFileSync(path.join(root, 'jobs', 'x.json'), '{}');   // an invalid job id makes the pass throw
+  const r = spawnSync(process.execPath, [path.join(here, '..', 'supervisor', 'cli.mjs'), 'reconcile', '--wake', 'inbox', '--state-root', root], { encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  const line = JSON.parse(fs.readFileSync(path.join(root, 'team', 'wake-passes.log'), 'utf8').trim());
+  assert.equal(line.wake, 'inbox'); assert.equal(line.ran, true); assert.match(line.error, /invalid job ID/); assert.equal(line.path, process.env.PATH); assert.ok(line.exit);
+  assert.equal(fs.existsSync(path.join(root, 'team', 'wake-pass.lock')), false, 'the lock is released');
 });
