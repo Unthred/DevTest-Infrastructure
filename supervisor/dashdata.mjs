@@ -75,6 +75,19 @@ export function writeLastSeen(root, at) {
   fs.mkdirSync(dashDir(root), { recursive: true, mode: 0o700 });
   atomicJson(seenFile(root), { at });
 }
+// The newest snapshot without parsing the whole history (issue #708): reads a bounded tail and falls back to the full read only if
+// no complete line is in it.
+export function readLastSnapshot(root) {
+  let fd; try { fd = fs.openSync(historyFile(root), 'r'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  try {
+    const size = fs.fstatSync(fd).size, len = Math.min(size, 512 * 1024), buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const lines = buf.toString('utf8').split('\n');
+    if (size > len) lines.shift();   // the first line of a tail read may be cut
+    for (let i = lines.length - 1; i >= 0; i--) { try { const s = JSON.parse(lines[i]); if (s && Number.isFinite(s.at)) return s; } catch (error) { if (!(error instanceof SyntaxError)) throw error; } }
+    return size > len ? readSnapshots(root).at(-1) ?? null : null;
+  } finally { fs.closeSync(fd); }
+}
 export function readSnapshots(root) {
   let text; try { text = fs.readFileSync(historyFile(root), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const out = [];

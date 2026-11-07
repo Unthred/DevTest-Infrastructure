@@ -21,7 +21,7 @@ import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
 import { advanceWatchlist, factsFromCache } from './watchlist.mjs';
-import { readCache, readJobs, readEvents, readSnapshots, readTeamState, recordTick, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
+import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
 import { idleReport, renderIdleReport, passStats, renderPassStats } from './idlecause.mjs';
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
@@ -315,7 +315,7 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
 }
 // Issue #695: work the previous tick planned (not merges), read from its snapshot; local only, no GitHub. A stale plan can only delay an install to the end of the batching window.
 function plannedWorkOf(root) {
-  const last = readSnapshots(root).at(-1);
+  const last = readLastSnapshot(root);
   return Array.isArray(last?.plan) ? last.plan.filter(a => a && a.type !== 'merge').length : 0;
 }
 function selfUpgradeFor(root, registry) {
@@ -593,16 +593,17 @@ async function main() {
           return { local, public: pub };
         },
         liveTick: d.liveTick,
-        record: e => upgrade.record(e)
+        record: e => upgrade.record(e),
+        noteInstalled: () => upgrade.noteHandInstalled()   // issue #708: the batching window runs from this install; a pending install-now is spent
       };
       const drain = config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : undefined;
       const out = await handInstall({ root, sha: a._[1], deps, say: line => console.log(line), ...(drain ? { drainMaxMs: drain } : {}) });
       process.exitCode = out.ok ? 0 : 1; return;
     }
-    if (a._[0] === 'install-now') { upgrade.requestInstallNow(); console.log('the next install skips the batching wait'); return; }   // issue #695
+    if (a._[0] === 'install-now') { const r = upgrade.requestInstallNow(); if (!r.ok) { console.log(`not requested: ${r.reason}`); process.exitCode = 1; return; } console.log('the next install skips the batching wait'); return; }   // issue #695
     if (a._[0] === 'clear-latch') { upgrade.clearLatch(); console.log('latch cleared'); return; }
     if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|install-now|clear-latch|hand-install SHA');
-    console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, install: upgrade.s.install || null, installed: upgrade.d.installed() }, null, 2)); return;
+    console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, lastFinishedAt: upgrade.s.lastFinishedAt || null, urgent: upgrade.s.urgent || null, nextInstall: upgrade.s.nextInstall || null, batchDueAt: upgrade.batchDueAt(), install: upgrade.s.install || null, installed: upgrade.d.installed() }, null, 2)); return;
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {

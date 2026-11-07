@@ -171,3 +171,10 @@ test('the real CLI command refuses a malformed SHA with the exact-SHA message', 
   assert.match(out, /RESULT: refused: give the exact full 40-character commit SHA/);
   assert.doesNotMatch(out, /is not defined/);
 });
+
+test('issue #708: a verified install tells the upgrader (noteInstalled); a failed one does not', async t => {
+  const w = world(t); let n = 0; w.deps.noteInstalled = () => { n++; };
+  assert.equal((await w.run()).result, 'installed'); assert.equal(n, 1);
+  const f = world(t, { dry: { ok: false, reason: 'x' } }); let m = 0; f.deps.noteInstalled = () => { m++; };
+  assert.equal((await f.run()).result, 'rolled-back'); assert.equal(m, 0);
+});

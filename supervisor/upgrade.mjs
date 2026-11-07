@@ -26,6 +26,7 @@ export const refusalText = (r, localDomains = (process.env.DEVTEST_LOCAL_DOMAINS
   if (doms.length) out = out.replace(new RegExp('\\b(?:[a-z0-9-]+\\.)*(?:' + doms.map(escRe).join('|') + ')\\b(?::\\d+)?(?:\\/\\S*)?', 'gi'), '[host]');
   return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => HOST_PORT_SKIP.test(m.replace(/:\d+$/, '')) ? m : '[host]').replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
 };
+export const URGENT_REQUEST_MAX_MS = 24 * 3600 * 1000;   // issue #708: an install-now request nobody spent lapses after a day
 export const MIN_INSTALL_GAP_MS = MIN_INSTALL_GAP_DEFAULT_MINUTES * 60 * 1000;   // issue #695: the shipped batching window
 export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
@@ -242,7 +243,7 @@ export const holdOf = (result, s) => (result === 'busy' || result === 'upgraded'
 
 export class SelfUpgrade {
   constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS }) {
-    this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs; this.minGapMs = minGapMs;   // issue #136: the configurable drain bound
+    this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs; this.minGapMs = minGapMs;   // issue #136: the configurable drain bound; issue #695: minGapMs is the batching window between installs (0 = off)
     this.dir = path.join(root, 'team');
     this.stateFile = path.join(this.dir, 'self-upgrade.json');
     this.latchFile = path.join(this.dir, 'self-upgrade.latch');       // the homeowner clears the latch by removing this file
@@ -306,7 +307,27 @@ export class SelfUpgrade {
     return this.minGapMs > 0 && Number.isFinite(last) ? last + this.minGapMs : null;
   }
   // Issue #695: the homeowner asks for the next install to skip the batching window (CLI: self-upgrade install-now).
-  requestInstallNow() { this.s.urgent = { reason: 'homeowner request', at: this.clock.now() }; this.save(); }
+  // Issue #708: refused when the install is already current (nothing to install, so the request would linger and skip a later window);
+  // a request not spent within URGENT_REQUEST_MAX_MS lapses. Urgency is spent only by an install (or lapses / is dropped when current).
+  requestInstallNow() {
+    const from = this.d.installed(), m = this.s.main;
+    if (m && SHA.test(m.sha || '') && m.sha === from) return { ok: false, reason: 'the installed version is already main; nothing to install' };
+    this.s.urgent = { reason: 'homeowner request', at: this.clock.now(), ...(m && SHA.test(m.sha || '') ? { to: m.sha } : {}) }; this.save();
+    return { ok: true };
+  }
+  // The urgent request in force, or null. A homeowner request lapses after URGENT_REQUEST_MAX_MS; a rollback's urgency does not.
+  urgentNow(now) {
+    const u = this.s.urgent;
+    if (!u) return null;
+    if (u.reason === 'homeowner request' && !(now - u.at < URGENT_REQUEST_MAX_MS)) { delete this.s.urgent; this.save(); return null; }
+    return u;
+  }
+  // Issue #708: a hand-install finished: the batching window is measured from it, and a pending install-now is spent.
+  // Rereads the state file first, since the CLI object may be older than the daemon's last write.
+  noteHandInstalled() {
+    try { this.s = { ...this.s, ...JSON.parse(fs.readFileSync(this.stateFile, 'utf8')) }; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    this.s.lastFinishedAt = this.clock.now(); delete this.s.urgent; delete this.s.nextInstall; this.save();
+  }
 
   // Returns a short result string for the tick report. `holding` (read by `team status` and the dashboard) is set only while the
   // result is 'busy': an upgrade is pending and eligible, and new jobs are held back (issue #134).
@@ -344,7 +365,7 @@ export class SelfUpgrade {
     this.noteMain(from, target);
     if (this.s.refusal && (this.s.refusal.from !== from || this.s.refusal.to !== target)) { delete this.s.refusal; this.save(); }   // issue #488: the installed commit or main moved
     if (this.s.handDeploy && this.s.handDeploy.from !== from) { delete this.s.handDeploy; this.save(); }   // the installed commit moved: the item is done
-    if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; delete this.s.waitingFor; this.save(); return 'current'; }
+    if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; delete this.s.waitingFor; if (this.s.urgent?.reason === 'homeowner request') delete this.s.urgent; this.save(); return 'current'; }
     if (!this.d.isAncestor(from, target)) {
       await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`);
       const why = this.refuse(from, target, 'diverged', `installed ${short(from)} is not an ancestor of main ${short(target)}`);
@@ -381,7 +402,7 @@ export class SelfUpgrade {
     // of merges does not stop all work every few minutes. Nothing running and nothing planned installs straight away (it costs no work),
     // and an urgent install (the previous one rolled back, or the homeowner asked) skips the wait. Within the window no hold applies.
     const running = await this.d.activeJobs();
-    const dueAt = this.batchDueAt(), urgent = this.s.urgent || null;
+    const dueAt = this.batchDueAt(), urgent = this.urgentNow(now);
     if (!urgent && dueAt != null && now < dueAt) {
       let planned = 0; if (running === 0) { try { planned = Number(await this.d.plannedWork?.()) || 0; } catch { planned = 0; } }
       if (running > 0 || planned > 0) {

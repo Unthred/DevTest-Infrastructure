@@ -142,6 +142,7 @@ export async function handInstall({ root, sha, deps, say = () => {}, drainMaxMs 
     }
     phase(8, 'done');
     d.record({ from, to: sha, result: 'verified', reason: 'hand-install' });
+    try { d.noteInstalled?.(); } catch { /* the batching window is a convenience; the install stands */ }   // issue #708
     journal('done');
     return finish('installed', `${shortCommit(sha)} installed and verified (dry-run, dashboard, live tick); new starts resumed`, { ok: true });
   } catch (error) {
