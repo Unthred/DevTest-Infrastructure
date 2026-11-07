@@ -573,6 +573,10 @@ async function main() {
       try { console.log(JSON.stringify(await (await teamFor(root, registry, config)).startApprovedNow({}))); } finally { release(); }
       return;
     }
+    if (a._[0] === 'followup-fold') {   // issue #963: one-off fold of merged-parent review follow-ups into area batches; dry run unless --apply
+      const { foldBacklog } = await import('./followfold.mjs');
+      console.log(JSON.stringify(await foldBacklog(githubClient(loadTeamConfig(teamConfigFile, root)), { apply: a.apply === true }), null, 2)); return;
+    }
     if (a._[0] === 'accept-split') {   // issue #244: the "Accept split" path of the Needs you item
       const n = Number(a._[1]);
       if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team accept-split ISSUE');

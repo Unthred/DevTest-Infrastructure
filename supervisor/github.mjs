@@ -80,6 +80,10 @@ export function githubClient(config, gh = ghRunner()) {
       return Number(match[1]);
     },
     updateIssueBody: async (n, body) => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'edit', String(n), '--repo', repo, '--body-file', '-'], redactTopology(body)); },
+    // Issue #963: close an issue with a comment saying where its content went (one-off backlog fold).
+    closeIssue: async (n, comment) => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'close', String(n), '--repo', repo, '--reason', 'not planned', '--comment', redactTopology(comment)], undefined, { retry: false }); },
+    getPullState: async n => { const p = json(['pr', 'view', String(n), '--repo', repo, '--json', 'state,files']); return p ? { state: p.state, files: (p.files || []).map(f => String(f.path)) } : null; },
+    listOpenIssues: async () => json(['issue', 'list', '--repo', repo, '--state', 'open', '--limit', '1000', '--json', 'number,title,body']) || [],
     pinIssue: async n => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'pin', String(n), '--repo', repo]); },
     addLabel: async (n, label) => {
       gh(['label', 'create', label, '--repo', repo, '--force', '--color', 'B60205', '--description', 'Needs a homeowner decision']);

@@ -69,3 +69,51 @@ export function churnText(rounds) {
   const clip = t => String(t).replace(/\s+/g, ' ').slice(0, 300);
   return rounds.map((r, i) => `Round ${i + 1} (head \`${String(r.head).slice(0, 12)}\`):\n${r.blocking.slice(0, 8).map(t => `  - ${clip(t)}`).join('\n')}`).join('\n');
 }
+
+// Issue #963: no follow-up of a follow-up. Non-blocking findings only ever go to the open area batch issue (batchFollowUps); Foreman
+// opens no standalone follow-up issue for them. These helpers recognise follow-up issues and plan the one-off fold of the old backlog.
+const FOLLOW_TITLE = /^\s*(Review follow-ups?\b|Follow-up from PR #\d+)/i;
+const PARENT_PR = /(?:Review follow-ups? for PR|Follow-up (?:from|to|of) PR|Split out of PR|From PR)\s*#(\d+)/i;
+export const isBatchIssue = i => String(i?.body || '').includes('devtest-followup-batch');
+export const isFollowUpIssue = i => isBatchIssue(i) || /devtest-review-followup|devtest-split/.test(String(i?.body || '')) || FOLLOW_TITLE.test(String(i?.title || ''));
+
+// The merged-or-not parent PR of a follow-up issue: the first PR number in its body, else in its title. null when none can be read.
+export function parentPrOf(issue) {
+  const m = PARENT_PR.exec(String(issue?.body || '')) || PARENT_PR.exec(String(issue?.title || ''));
+  return m ? Number(m[1]) : null;
+}
+
+// A plain title names what the follow-up changes and never chains the parent PR ("Review follow-ups for PR #850 Review follow-ups ...").
+export function plainTitle(title) {
+  let t = String(title || '').replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < 12; i++) {
+    const n = t.replace(/^(?:Review follow-ups?|Follow-up from PR #\d+|Follow-ups?)\s*(?:for|of|to|from)?\s*(?:PR\s*)?#?\d*\s*(?:\(issue #\d+\))?\s*[:\-–]?\s*/i, '');
+    if (n === t) break;
+    t = n;
+  }
+  return t || 'Review follow-ups';
+}
+
+// issues: open issues {number,title,body}. parents: Map prNumber -> { state: 'MERGED'|..., files: [paths] } for each parent PR.
+// Returns { fold: [{ issue, parent, area }], keep: [...], unclassified: [{ issue, why }] }. Batch issues are never folded; a follow-up
+// whose parent is not merged (or unreadable) stays open and is listed for the homeowner when the parent cannot be read at all.
+export function planFold(issues, parents) {
+  const fold = [], keep = [], unclassified = [];
+  for (const i of issues) {
+    if (!isFollowUpIssue(i) || isBatchIssue(i)) continue;
+    const parent = parentPrOf(i);
+    if (parent == null) { unclassified.push({ issue: i.number, why: 'no parent pull request found in the title or body' }); continue; }
+    const p = parents.get(parent);
+    if (!p) { unclassified.push({ issue: i.number, why: `parent PR #${parent} could not be read` }); continue; }
+    if (p.state !== 'MERGED') { keep.push({ issue: i.number, parent, why: `parent PR #${parent} is ${String(p.state).toLowerCase()}` }); continue; }
+    fold.push({ issue: i.number, parent, area: areaOf(p.files) });
+  }
+  return { fold, keep, unclassified };
+}
+
+// What a folded issue adds to its batch: its plain title plus its non-marker body lines, clipped.
+export function foldItems(issue) {
+  const lines = String(issue.body || '').split('\n').map(l => l.trim()).filter(l => /^[-*]\s+\S/.test(l)).map(l => l.replace(/^[-*]\s+/, ''));
+  const clip = t => (t.length > 400 ? `${t.slice(0, 399)}…` : t);
+  return (lines.length ? lines : [plainTitle(issue.title)]).slice(0, 20).map(t => clip(`${t} (was #${issue.number})`));
+}
