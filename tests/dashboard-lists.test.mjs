@@ -228,14 +228,20 @@ test('browser: an open step inside one watched row is restored to that row only 
   const b = build(); initList(b.el, store);
   assert.deepEqual(b.detailsOf.map(d => d.open), [true, false, false]);
 });
-test('browser: a detached list removes its pagehide listener and does not save', async () => {
-  const { initList } = await loadUi(), hooks = [];
-  globalThis.addEventListener = (t, f) => { if (t === 'pagehide') hooks.push(f); };
-  globalThis.removeEventListener = (t, f) => { const i = hooks.indexOf(f); if (t === 'pagehide' && i >= 0) hooks.splice(i, 1); };
-  const store = memory(), L = fakeList(); L.el.isConnected = true; initList(L.el, store);
-  assert.equal(hooks.length, 1);
-  hooks[0](); assert.equal(store.keys().length, 1, 'attached: saves');
-  const key = store.keys()[0]; L.ul.scrollTop = 99;
-  L.el.isConnected = false; hooks[0]();
-  assert.equal(hooks.length, 0, 'listener removed'); assert.equal(JSON.parse(store.getItem(key)).top, 0, 'no stale save');
+test('browser: one pagehide listener saves connected lists; a detached list is pruned at swap time and never saves', async () => {
+  const { initList, pruneLists } = await loadUi(), hooks = [];
+  const saved = { add: globalThis.addEventListener, remove: globalThis.removeEventListener };
+  try {
+    globalThis.addEventListener = (t, f) => { if (t === 'pagehide' && !hooks.includes(f)) hooks.push(f); };  // like the DOM, the same function is added once
+    globalThis.removeEventListener = (t, f) => { const i = hooks.indexOf(f); if (t === 'pagehide' && i >= 0) hooks.splice(i, 1); };
+    const store = memory(), A = fakeList(), B = fakeList({ id: 'warnings' });
+    A.el.isConnected = true; B.el.isConnected = true; initList(A.el, store); initList(B.el, store);
+    assert.equal(new Set(hooks).size, 1, 'a single page-level listener function');
+    hooks.at(-1)(); assert.equal(store.keys().length, 2, 'both connected lists save');
+    const keyA = store.keys().find(k => k.endsWith('.needs')); A.ul.scrollTop = 99;
+    A.el.isConnected = false; pruneLists();   // what the watchLists observer does on a swap
+    hooks.at(-1)(); assert.equal(JSON.parse(store.getItem(keyA)).top, 0, 'no stale save from the detached list');
+    B.el.isConnected = false; pruneLists();
+    assert.equal(hooks.length, 0, 'listener removed once no list is live');
+  } finally { globalThis.addEventListener = saved.add; globalThis.removeEventListener = saved.remove; }
 });

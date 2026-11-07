@@ -75,6 +75,20 @@ try {
   await page.locator('#c-needs').evaluate(c => { c.style.setProperty('--h', '1100px'); c.style.alignSelf = 'start'; });
   const c1 = await ul.evaluate(e => e.clientHeight);
   check('a card resized taller gives its list more room', c1 > c0 + 100, `${c0} -> ${c1}`);
+  // watched-steps reload (the #793 repro): each watched row holds nested li.wstep steps with their own details. Opening one step must come
+  // back as exactly that step after a reload, using the browser's real closest('.dl-scroll > li') matching (not a stub).
+  const W = page.locator('[data-dlist="watching"]'), wul = W.locator('> .dl-scroll');
+  const steps = await wul.evaluate(e => [...e.querySelectorAll(':scope > li')].map(li => li.querySelectorAll('li.wstep details').length));
+  check('the watched list has rows with nested step details', steps.length >= 2 && steps.every(n => n >= 2), JSON.stringify(steps));
+  const openState = () => wul.evaluate(e => [...e.querySelectorAll('details[open]')].map(d => `${d.closest('.dl-scroll > li')?.dataset.key}|${d.closest('[data-step]')?.dataset.step}`));
+  const target1 = wul.locator('> li').nth(1).locator('li.wstep details').nth(1);
+  await target1.locator('summary').click();
+  const want = await openState();
+  check('exactly one step is open before the reload, keyed by row and step', want.length === 1 && /^watch-.+\|.+$/.test(want[0]), JSON.stringify(want));
+  await page.waitForTimeout(400);
+  await page.reload({ waitUntil: 'networkidle' });
+  const got = await openState();
+  check('the watched step reopens after a reload, and only that step', JSON.stringify(got) === JSON.stringify(want), `${JSON.stringify(want)} -> ${JSON.stringify(got)}`);
   await ctx.close();
 
   const plain = await newCtx(false); await guard(plain);

@@ -9,6 +9,19 @@ const num = v => (v === undefined || v === '' ? null : Number(v));
 function readStore(store, id) { try { return JSON.parse(store.getItem(keyOf(id))); } catch { return null; } }
 function writeStore(store, id, st) { try { store.setItem(keyOf(id), JSON.stringify(st)); } catch { /* not remembered */ } }
 
+// One page-level pagehide listener saves every connected list. A list replaced by an in-place refresh is dropped at swap time
+// (pruneLists, called from the watchLists observer), so detached lists are not kept alive and cannot save stale state.
+const live = new Map();
+const onHide = () => { pruneLists(); for (const save of live.values()) save(); };
+export function pruneLists() {
+  for (const el of [...live.keys()]) if (el.isConnected !== true) live.delete(el);
+  if (!live.size && typeof removeEventListener === 'function') removeEventListener('pagehide', onHide);
+}
+function registerSave(el, save) {
+  if (typeof addEventListener !== 'function') return;
+  addEventListener('pagehide', onHide);   // the same function is added once by the DOM, so repeating it is harmless
+  live.set(el, save);
+}
 export function initList(el, store = sessionStorage) {
   if (el.dataset.dlReady) return;
   el.dataset.dlReady = '1';
@@ -67,15 +80,11 @@ export function initList(el, store = sessionStorage) {
   dirBtn?.addEventListener('click', () => { st.dir = st.dir === 'desc' ? 'asc' : 'desc'; ul.scrollTop = 0; apply(); save(); });
   ul.addEventListener('scroll', saveSoon, { passive: true });
   ul.addEventListener('toggle', saveSoon, true);
-  // A list replaced by an in-place refresh is detached: it drops its listener instead of saving stale state over the new list's.
-  if (typeof addEventListener === 'function') {
-    const onHide = () => { if (el.isConnected === false) { removeEventListener('pagehide', onHide); return; } save(); };
-    addEventListener('pagehide', onHide);
-  }
+  registerSave(el, save);
 }
 export function initLists(scope = document, store) { for (const el of scope.querySelectorAll('.dlist:not([data-dl-ready])')) initList(el, store); }
 // A list swapped in later (in-place refresh) is initialised in the same task, before the next paint.
 export function watchLists(root = document.body, store) {
   initLists(document, store);
-  if (typeof MutationObserver === 'function' && root) new MutationObserver(() => initLists(document, store)).observe(root, { childList: true, subtree: true });
+  if (typeof MutationObserver === 'function' && root) new MutationObserver(() => { pruneLists(); initLists(document, store); }).observe(root, { childList: true, subtree: true });
 }
