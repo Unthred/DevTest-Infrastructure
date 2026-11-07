@@ -588,6 +588,7 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 function localizeTimes(scope = document) {   // also run on the Next element refreshNext swaps in, so its time is not left in UTC
   for (const el of $$('time[data-local]', scope)) {
+    if (el.classList.contains('lz')) continue;   // already converted by layout-early.js before the first paint (issue #493)
     const ms = Date.parse(el.getAttribute('datetime'));
     if (!Number.isFinite(ms)) continue;
     el.title = `${el.textContent} (stored in UTC); shown in your time zone, ${zone}`;
@@ -595,6 +596,7 @@ function localizeTimes(scope = document) {   // also run on the Next element ref
   }
   // Chart axis labels and tooltips (SVG cannot hold <time>): rebuilt from their template in this zone.
   for (const el of $$('[data-lms]', scope)) {
+    if (el.classList.contains('lz')) continue;
     const ms = Number(el.getAttribute('data-lms'));
     if (!Number.isFinite(ms)) continue;
     const t = el.hasAttribute('data-tonly') ? timeOnly(ms, zone) : formatLocal(ms, zone);
@@ -602,6 +604,7 @@ function localizeTimes(scope = document) {   // also run on the Next element ref
   }
 }
 localizeTimes();
+document.documentElement.classList.remove('tzp');   // normally already removed by layout-early.js
 {
   const note = $('#tznote');
   if (note) note.textContent = `Times are shown in your time zone (${zone}). Data is stored in UTC; hover a time to see it.`;

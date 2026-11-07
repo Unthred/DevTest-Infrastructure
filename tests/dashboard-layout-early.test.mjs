@@ -6,7 +6,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { applyLayout, breakpointOf } from '../supervisor/dashui/logic.mjs';
+import { spawnSync } from 'node:child_process';
+import { applyLayout, breakpointOf, formatLocal, timeOnly } from '../supervisor/dashui/logic.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 
 const code = fs.readFileSync(new URL('../supervisor/dashui/layout-early.js', import.meta.url), 'utf8');
@@ -118,4 +119,75 @@ test('layout-early.js: a free layout is ignored on a phone, a pinned card is nev
   const ph = run({ width: 400, saved: { 'dash.layout.overview.phone': JSON.stringify(FREE) } });
   assert.ok(!ph.grid.gclasses.has('free')); assert.deepEqual(Object.values(ph.cards).flatMap(c => Object.keys(c.set)), []);
   for (const raw of ['{"v":2}', '{"v":2,"pos":[]}', '{"v":2,"pos":"x"}', '{"v":3,"pos":{}}']) { const r = run({ width: 1400, saved: { [key('desktop')]: raw } }); assert.ok(!r.grid.gclasses.has('free'), raw); }
+});
+// ---- local time before the first paint (issue #493)
+function fakeEl(attrs, text, classes = []) {
+  const cl = new Set(classes), a = { ...attrs };
+  return { textContent: text, classList: { contains: c => cl.has(c), add: c => cl.add(c) }, hasAttribute: n => n in a, getAttribute: n => (n in a ? a[n] : null), setAttribute: (n, v) => { a[n] = v; }, a, cl };
+}
+function runTimes(times, svgs) {
+  vm.runInNewContext(code, { window: { innerWidth: 1400 }, location: { pathname: '/' }, JSON, Number, Array, Date, isFinite, Intl,
+    localStorage: { getItem: () => null },
+    document: { querySelector: () => null, querySelectorAll: s => (s === 'time[data-local]' ? times : s === '[data-lms]' ? svgs : []) } });
+}
+test('layout-early.js puts server times in local time before the first paint, and app.js then changes no text', () => {
+  const ms = Date.UTC(2026, 6, 1, 12, 30);   // BST in London
+  const t = fakeEl({ datetime: new Date(ms).toISOString() }, '2026-07-01 12:30 UTC');
+  const bad = fakeEl({ datetime: 'nonsense' }, 'x');
+  const s = fakeEl({ 'data-lms': String(ms), 'data-tpl': 'at {t}' }, 'at 2026-07-01 12:30 UTC');
+  const so = fakeEl({ 'data-lms': String(ms), 'data-tonly': '' }, '12:30');
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  runTimes([t, bad], [s, so]);
+  assert.equal(t.textContent, formatLocal(ms, tz));
+  assert.ok(t.cl.has('lz'));
+  assert.match(t.a.title, /2026-07-01 12:30 UTC \(stored in UTC\)/);
+  assert.equal(bad.textContent, 'x', 'an unreadable time is left as it was');
+  assert.equal(s.textContent, `at ${formatLocal(ms, tz)}`);
+  assert.equal(so.textContent, timeOnly(ms, tz));
+});
+test('layout-early.js local time matches logic.mjs in a non-UTC zone', () => {
+  for (const zone of ['Asia/Kolkata', 'America/New_York', 'Europe/London']) {
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import fs from 'node:fs'; import vm from 'node:vm'; import { formatLocal } from ${JSON.stringify(new URL('../supervisor/dashui/logic.mjs', import.meta.url).href)};
+      const code = fs.readFileSync(${JSON.stringify(new URL('../supervisor/dashui/layout-early.js', import.meta.url).pathname)}, 'utf8');
+      const ms = Date.UTC(2026, 0, 15, 23, 45); const el = { textContent: 'u', classList: { contains: () => false, add() {} }, getAttribute: () => new Date(ms).toISOString(), setAttribute() {} };
+      vm.runInNewContext(code, { window: { innerWidth: 1400 }, location: { pathname: '/' }, JSON, Number, Array, Date, isFinite, Intl, localStorage: { getItem: () => null }, document: { querySelector: () => null, querySelectorAll: s => (s === 'time[data-local]' ? [el] : []) } });
+      process.stdout.write(el.textContent + '|' + formatLocal(ms, Intl.DateTimeFormat().resolvedOptions().timeZone));`], { env: { ...process.env, TZ: zone }, encoding: 'utf8' });
+    const [a, b] = r.stdout.split('|');
+    assert.equal(a, b, `${zone}: ${r.stderr}`);
+    assert.notEqual(a, '', zone);
+  }
+  assert.match(spawnSync(process.execPath, ['-e', 'process.stdout.write(new Intl.DateTimeFormat("en-GB",{hour:"2-digit",timeZoneName:"short"}).format(0))'], { env: { ...process.env, TZ: 'Asia/Kolkata' }, encoding: 'utf8' }).stdout, /GMT\+5:30|IST/);
+});
+test('every page hides until local time is applied, then shows final text: no visible time text changes after the first paint', () => {
+  const src = fs.readFileSync(new URL('../supervisor/dashrender.mjs', import.meta.url), 'utf8');
+  assert.ok(src.indexOf('</main><p id="tznote"') > 0 && src.indexOf('</p><script src="/static/layout-early.js">') > 0, 'note and times are final before the reveal');
+  const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
+  assert.match(css, /html\.tzp body \{ visibility: hidden; animation: tzreveal 0s linear 2s forwards/, 'hidden until revealed, with a CSS fallback');
+  // Simulate the page: <html> .tzp from early.js, then layout-early.js, then app.js's own localizeTimes. Record every visible text change.
+  const ms = Date.UTC(2026, 6, 1, 12, 30), tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const cl = new Set(), visible = () => !cl.has('tzp'), changes = [];
+  const track = (attrs, text, classes = []) => {
+    const c = new Set(classes), a = { ...attrs }; let t = text;
+    return { get textContent() { return t; }, set textContent(v) { if (visible() && v !== t) changes.push(v); t = v; }, classList: { contains: x => c.has(x), add: x => c.add(x) },
+      hasAttribute: n => n in a, getAttribute: n => (n in a ? a[n] : null), setAttribute: (n, v) => { a[n] = v; }, set title(v) {} };
+  };
+  const t1 = track({ datetime: new Date(ms).toISOString() }, '2026-07-01 12:30 UTC'), s1 = track({ 'data-lms': String(ms), 'data-tpl': 'at {t}' }, 'at 12:30');
+  const note = track({}, "Times are shown in UTC (your browser's time zone is applied when scripts run). Data is stored in UTC.");
+  const docEl = { dataset: {}, classList: { add: c => cl.add(c), remove: c => cl.delete(c) } };
+  const doc = { documentElement: docEl, getElementById: i => (i === 'tznote' ? note : null), querySelector: () => null,
+    querySelectorAll: q => (q === 'time[data-local]' ? [t1] : q === '[data-lms]' ? [s1] : []) };
+  const ctx = { window: { innerWidth: 1400 }, location: { pathname: '/' }, JSON, Number, Array, Date, isFinite, Intl, localStorage: { getItem: () => null }, document: doc };
+  vm.runInNewContext(fs.readFileSync(new URL('../supervisor/dashui/early.js', import.meta.url), 'utf8'), ctx);
+  assert.ok(cl.has('tzp'), 'early.js hides the page');
+  vm.runInNewContext(code, ctx);
+  assert.ok(visible(), 'layout-early.js reveals the page');
+  assert.equal(t1.textContent, formatLocal(ms, tz)); assert.match(note.textContent, /your time zone/);
+  // app.js: run its real localizeTimes and tznote code on the converted page
+  const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  const from = app.indexOf('const zone = Intl'), to = app.indexOf('// The cooldown notice');
+  assert.ok(from > 0 && to > from);
+  const $$ = (q, scope) => scope.querySelectorAll(q), $ = q => (q === '#tznote' ? note : null);
+  vm.runInNewContext(app.slice(from, to), { ...ctx, $, $$, formatLocal, timeOnly, document: doc });
+  assert.deepEqual(changes, [], 'no text changes once the page is visible');
 });
