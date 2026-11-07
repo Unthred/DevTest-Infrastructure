@@ -94,8 +94,19 @@ test('foreman_plan breakerHalt: built from the real haltView, lists every halted
   const h = await run({ halt: haltView(st, []) });
   assert.equal(h.halted, true); assert.equal(h.scope, 'new implement jobs'); assert.equal(h.cause, 'ci-fail'); assert.equal(h.count, 2);
   assert.deepEqual(h.entries.map(e => e.cause), ['ci-fail', 'review-loop']); assert.deepEqual(h.entries[1].types, ['review']);
+  // A global halt (real s.global has no types) reports a label, not null.
+  const gst = normalize({}); gst.global = { since: 1, trippedBy: 'cost', jobs: 3, tokens: 30, cost: 5, prs: [], causes: ['ci-fail'] };
+  const g = await run({ halt: haltView(gst, []) });
+  assert.equal(g.entries[0].cause, '@global'); assert.deepEqual(g.entries[0].types, ['every new job']); assert.match(g.scope, /every new job/);
   assert.deepEqual(await run({ halt: null, error: 'boom' }), { halted: false, error: 'boom', note: 'Breaker evaluation failed; existing halts stay in force.' });
   assert.deepEqual(await run({ halt: null, error: null }), { halted: false });
+});
+
+test('foreman_status carries the breaker error and no longer a never-set global (issue #753)', async () => {
+  const st = async breaker => JSON.parse((await call(createProtocol({ tools: toolsFor(() => ({ ...smallView(), breaker })) }), 'foreman_status')).result.content[0].text).breaker;
+  const withErr = await st({ halt: null, byCause: [], error: 'boom' });
+  assert.equal(withErr.error, 'boom'); assert.ok(!('global' in withErr));
+  assert.equal((await st({ halt: null, byCause: [] })).error, null);
 });
 
 test('tools: each tool answers from the view, with the planner\'s queue, reasons and cost', async () => {
