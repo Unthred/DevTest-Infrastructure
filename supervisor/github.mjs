@@ -44,7 +44,7 @@ export function githubClient(config, gh = ghRunner()) {
     // Issue #414: every OPEN issue is fetched (up to 1000, its own call), plus the newest 200 of any state for recently closed
     // prerequisites, so a labelled open issue cannot fall out of a 200 cap when newer issues crowd it out.
     listIssues: async () => {
-      const list = state => json(['issue', 'list', '--repo', repo, '--state', state, '--limit', state === 'open' ? '1000' : '200', '--json', 'number,title,state,body,labels']) || [];
+      const list = state => json(['issue', 'list', '--repo', repo, '--state', state, '--limit', state === 'open' ? '1000' : '200', '--json', 'number,title,state,body,labels,createdAt,closedAt']) || [];
       const byNo = new Map();
       for (const i of [...list('open'), ...list('all')]) byNo.set(i.number, i);
       return [...byNo.values()].filter(i => !isStatusIssue(i)).map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) }));

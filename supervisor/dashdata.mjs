@@ -109,6 +109,8 @@ const issueOfMerged = m => { const n = m.closingIssuesReferences?.[0]?.number ??
 export const compactMerged = merged => (merged || []).filter(m => Number.isSafeInteger(m.number) && typeof m.mergedAt === 'string')
   .sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).slice(0, 30).map(m => ({ number: m.number, title: redact(m.title, 120), mergedAt: m.mergedAt, issue: issueOfMerged(m), ...(/^[0-9a-f]{40}$/.test(m.mergeCommit?.oid || '') ? { mergeSha: m.mergeCommit.oid } : {}) }));
 export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, 120), state: i.state,
+  // Issue #866: when the issue was opened and closed (ISO text from GitHub), for the headline progress numbers.
+  ...(typeof i.createdAt === 'string' && Number.isFinite(Date.parse(i.createdAt)) ? { createdAt: i.createdAt } : {}), ...(typeof i.closedAt === 'string' && Number.isFinite(Date.parse(i.closedAt)) ? { closedAt: i.closedAt } : {}),
   labels: (i.labels || []).includes('needs-homeowner')
     ? ['needs-homeowner', ...(i.labels || []).filter(l => l !== 'needs-homeowner').slice(0, 9).map(l => redact(l, 40))]
     : (i.labels || []).slice(0, 10).map(l => redact(l, 40)),

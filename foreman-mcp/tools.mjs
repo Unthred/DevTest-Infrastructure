@@ -45,6 +45,8 @@ export function dropNullFields(out, key) {
   return { ...out, [key]: out[key].map(it => (it && typeof it === 'object' ? Object.fromEntries(Object.entries(it).filter(([, v]) => v !== null)) : it)) };
 }
 
+// The headline figures without the item lists (the MCP server imports nothing from the supervisor tree).
+const summariseHeadline = h => ({ ...h, windows: Object.fromEntries(Object.entries(h.windows || {}).map(([w, v]) => [w, { ...v, cards: Object.fromEntries(Object.entries(v.cards || {}).map(([id, c]) => { const { items, ...rest } = c; return [id, rest]; })) }])) });
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : dflt; };
 
@@ -154,6 +156,15 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       run: () => withView(v => mismatches(v, now())) },
     { name: 'foreman_needs_you', description: 'The Needs you items grouped by cause, with the count, the pull requests or issues involved and the action asked for each group, so a cluster of one cause shows as one decision. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => needsYouGroups(v)) },
+    { name: 'foreman_headline', description: 'The headline progress numbers shown at the top of the dashboard, for the last 24 hours and the last 7 days, each with the previous period: issues opened vs closed (and open now), issues processed, pull requests merged per hour, first-pass review approval rate, rounds per merged pull request, tokens per merged pull request (usage equivalent, not a charge), wasted tokens with the top cause, and rejects (CHANGES verdicts and blocked jobs). Optional card (one of issues, processed, merge-rate, first-pass, rounds, tokens, waste, rejects) with window (24h or 7d) lists the items behind that number, newest first, with limit (default 25). Read-only.', inputSchema: { type: 'object', properties: { card: { type: 'string', enum: ['issues', 'processed', 'merge-rate', 'first-pass', 'rounds', 'tokens', 'waste', 'rejects'] }, window: { type: 'string', enum: ['24h', '7d'] }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
+      run: args => withView(v => {
+        if (!v.headline) return { available: false, note: 'This dashboard view carries no headline figures.' };
+        if (args.card === undefined) return summariseHeadline(v.headline);
+        const card = String(args.card), win = args.window === undefined ? '24h' : String(args.window), c = v.headline.windows[win]?.cards?.[card];
+        if (!c) throw new Error('give card (issues, processed, merge-rate, first-pass, rounds, tokens, waste or rejects) and window 24h or 7d');
+        const { items, ...figures } = c;
+        return fitItems({ window: win, ...figures, note: v.headline.note, items: items.slice(0, num(args.limit, 1, 200, 25)) }, 'items', num(args.limit, 1, 200, 25));
+      }) },
     { name: 'foreman_rebase_stats', description: 'Rebases per merged pull request, reviews per merged pull request, and the time from first recorded activity to merge (mean and median), for all merged pull requests the view holds and, with splitAt (ISO date), before and after that time, so a change to the rebase policy can be measured. Read-only.', inputSchema: { type: 'object', properties: { splitAt: { type: 'string', maxLength: 40 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
       run: args => withView(v => rebaseStats(v, { splitAt: args.splitAt === undefined ? null : String(args.splitAt), limit: args.limit })) },
     ...(inbox.enabled ? [

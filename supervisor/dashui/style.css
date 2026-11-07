@@ -426,3 +426,10 @@ body.layout-editing{overscroll-behavior:contain}
 @media(prefers-reduced-motion:no-preference){.cards.editing>.card{transition:none}}
 .lay-live{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .cards.editing .tools{visibility:hidden}
+/* Issue #866: headline progress cards */
+.headline .hl-row{display:flex;flex-direction:column;gap:2px;padding:var(--sp2) 0;border-top:1px solid var(--line)}
+.headline .hl-row:first-of-type{border-top:0;padding-top:0}
+.headline .hl-w{color:var(--mut);font-size:var(--fs-sm)}
+.headline .hl-v,.hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1;text-decoration:none;color:inherit}
+.headline .hl-v:hover{color:var(--link)}
+.headline .hl-trend svg{width:1em;height:1em;vertical-align:-.15em;margin-right:.25em}
