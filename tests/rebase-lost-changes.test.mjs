@@ -214,8 +214,8 @@ test('keeping both main\'s line and the PR\'s line is not reported as lost', t =
   assert.deepEqual(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges, []);
 });
 
-// Positive control for unionSurvives and its main-line exclusion (issue #762): the resolution is a merged line that is neither verbatim
-// nor a substring of anything, so only the ordered-token union check can keep it.
+// Positive control for unionSurvives (issue #762); the main-line exclusion is guarded by the line-of-main refusal test.
+// The resolution is a merged line that is neither verbatim nor a substring of anything, so only the ordered-token union check can keep it.
 test('a merged line that is new in the resolution and holds the PR\'s tokens in order is not reported as lost', t => {
   const feat = '  sub(x, ready);', main = '  sub(x, y, ready);', merged = '  sub(x, y, z, ready);';
   const r = sameLineRepo(t, feat, main);
