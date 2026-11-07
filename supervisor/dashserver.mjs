@@ -21,7 +21,8 @@ import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
 import { installs, breakerHistory } from './installs.mjs';
-import { wasteByCause, configView } from './mcpreads.mjs';
+import { wasteByCause, configView, testRunsView, ticksView } from './mcpreads.mjs';
+import { DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import nodePath from 'node:path';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
@@ -284,6 +285,9 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       // Issue #635: the Diagnostics data, the failure cost by cause, and the effective configuration, for the Foreman MCP tools.
       if (path === '/api/diagnostics.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(diagnosticsData({ root, config: source(), now: now(), recorderDir })));
       if (path === '/api/waste.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(wasteByCause(readTeamState(root), { now: now(), days: new URLSearchParams(search).get('days') })));
+      // Issue #636: test-slot use with refused and killed runs, and recent ticks.
+      if (path === '/api/tests.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(testRunsView(root, { limit: source()?.limits?.test_slots ?? DEFAULT_TEST_SLOTS, now: now() })));
+      if (path === '/api/ticks.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(ticksView(root, { limit: new URLSearchParams(search).get('limit'), now: now() })));
       if (path === '/api/config.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(configView({ effective: source(), shippedFile: SHIPPED_CONFIG, localOverridePresent: fs.existsSync(nodePath.join(root, 'team.local.json')), configError: source.invalid })));
       // UI review evidence (issue #455): read-only files from <evidence root>/ui-review, png, json and md only, no symlink followed.
       const fileRequest = /^\/evidence\/files\/(.+)$/.exec(path);

@@ -12,7 +12,7 @@ import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
 import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, DEFAULT_REUSE_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
 import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
-import { acquireTestSlot, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup, formatRuntime } from './testslots.mjs';
+import { acquireTestSlot, recordTestEvent, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup, formatRuntime } from './testslots.mjs';
 import { upgradeLock } from './team.mjs';
 import { Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
@@ -462,18 +462,18 @@ async function main() {
     // none of this changes anything: the job is granted at once and runs as before.
     const res = cfg.test_resources || {}, klass = a.class || 'suite';
     const allowed = checkClass(klass, res);
-    if (!allowed.ok) { console.error(`test-slot: ${allowed.reason}`); process.exitCode = 3; return; }
+    if (!allowed.ok) { console.error(`test-slot: ${allowed.reason}`); recordTestEvent(root, { kind: 'refused', label: a.label, reason: allowed.reason }); process.exitCode = 3; return; }
     const num = v => (v === undefined ? undefined : Number(v));
     const grant = await admit({ klass, request: { memory_mb: num(a['memory-mb']), cpus: num(a.cpus) }, cfg: res, onQueue: why => console.error(`test-slot: queued: ${why}`) });
-    if (grant.action !== 'grant') { console.error(`test-slot: waited too long for host headroom (${grant.reason})`); process.exitCode = 3; return; }
+    if (grant.action !== 'grant') { console.error(`test-slot: waited too long for host headroom (${grant.reason})`); recordTestEvent(root, { kind: 'refused', label: a.label, reason: `waited too long for host headroom: ${grant.reason}` }); process.exitCode = 3; return; }
     const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
-    if (!release) { console.error('waited too long for a free test slot'); process.exitCode = 3; return; }
+    if (!release) { console.error('waited too long for a free test slot'); recordTestEvent(root, { kind: 'refused', label: a.label, reason: 'waited too long for a free test slot' }); process.exitCode = 3; return; }
     const id = `${Date.now()}-${process.pid}`;
     if (grant.limits) {
       // A memory-limited job runs through the resource runner (own group, cgroup wrapper, memory watchdog).
       const { code, kill } = await runLimited(cmd, { env: testEnv(process.env, cfg.test_tmp_root), limits: grant.limits, klass, id, wrapper: cgroupWrapper(grant, id, { available: fs.existsSync('/run/systemd/system') }) });
       if (kill) {
-        console.error(`test-slot: ${kill.note}`);
+        console.error(`test-slot: ${kill.note}`); recordTestEvent(root, { kind: 'killed', label: a.label, reason: kill.note });
         try { fs.mkdirSync(path.join(root, 'team'), { recursive: true }); fs.appendFileSync(path.join(root, 'team', 'test-job-results.jsonl'), JSON.stringify({ at: new Date().toISOString(), label: a.label || null, ...kill }) + '\n'); } catch { /* the stderr line above is the record */ }
       }
       release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
@@ -483,7 +483,8 @@ async function main() {
     const maxRuntimeMs = Number.isFinite(maxMinutes) && maxMinutes > 0 ? maxMinutes * 60000 : DEFAULT_MAX_RUNTIME_MS;
     const run = await runInGroup(cmd, { env: testEnv(process.env, cfg.test_tmp_root), maxRuntimeMs, graceMs: Number(process.env.AI_SUPERVISOR_TEST_GRACE_MS) || 5000 });
     if (run.timedOut) console.error(`test-slot: stopped after the maximum runtime of ${formatRuntime(maxRuntimeMs)} (process group terminated)`);
-    if (run.leftover) console.error('test-slot: WARNING processes of the test run survived SIGKILL');
+    if (run.timedOut) recordTestEvent(root, { kind: 'timeout', label: a.label, reason: `stopped after the maximum runtime of ${formatRuntime(maxRuntimeMs)}` });
+    if (run.leftover) { console.error('test-slot: WARNING processes of the test run survived SIGKILL'); recordTestEvent(root, { kind: 'orphaned', label: a.label, reason: 'processes of the test run survived SIGKILL' }); }
     const code = run.code;
     release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
   }

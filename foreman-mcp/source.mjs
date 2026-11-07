@@ -61,3 +61,38 @@ export function readHost({ proc = '/proc', fsRead = fs.readFileSync } = {}) {
   if (psi.length) out.memoryPressure = psi;   // omitted when the kernel has no /proc/pressure (Tower's has none)
   return out;
 }
+
+// Issue #636: swap activity, disk wait and the top processes by memory, from /proc only. Rates need two readings, so this waits `intervalMs`
+// between them. Only the kernel's short process name is read (never a command line, which can hold secrets). Anything unreadable is null.
+const DISK = /^(sd[a-z]+|vd[a-z]+|hd[a-z]+|nvme\d+n\d+|md\d+)$/;
+function counters(proc, fsRead) {
+  const vm = {}; for (const line of (read(`${proc}/vmstat`, fsRead) || '').split('\n')) { const m = /^(pswpin|pswpout) (\d+)/.exec(line); if (m) vm[m[1]] = Number(m[2]); }
+  const stat = read(`${proc}/stat`, fsRead) || '';
+  const cpu = (/^cpu\s+(.*)$/m.exec(stat)?.[1] || '').trim().split(/\s+/).map(Number);
+  const blocked = Number(/^procs_blocked\s+(\d+)/m.exec(stat)?.[1]);
+  const disks = {}; for (const line of (read(`${proc}/diskstats`, fsRead) || '').split('\n')) { const f = line.trim().split(/\s+/); if (f.length >= 13 && DISK.test(f[2])) disks[f[2]] = Number(f[12]); }   // f[12]: milliseconds spent doing I/O
+  return { vm, cpu: cpu.length >= 5 && cpu.every(Number.isFinite) ? cpu : null, blocked: Number.isFinite(blocked) ? blocked : null, disks };
+}
+export function topProcesses({ proc = '/proc', fsRead = fs.readFileSync, readDir = fs.readdirSync, count = 8 } = {}) {
+  let names; try { names = readDir(proc).filter(n => /^\d+$/.test(n)); } catch { return null; }
+  const rows = [];
+  for (const pid of names) {
+    const text = read(`${proc}/${pid}/status`, fsRead); if (!text) continue;
+    const kb = k => { const m = new RegExp(`^${k}:\\s+(\\d+)`, 'm').exec(text); return m ? Number(m[1]) : null; };
+    const rss = kb('VmRSS'); if (!Number.isFinite(rss)) continue;   // kernel threads have none
+    rows.push({ pid: Number(pid), name: (/^Name:\s*(.*)$/m.exec(text)?.[1] || '').slice(0, 32), rssMb: Math.round(rss / 1024), swapMb: Number.isFinite(kb('VmSwap')) ? Math.round(kb('VmSwap') / 1024) : null });
+  }
+  rows.sort((a, b) => b.rssMb - a.rssMb || a.pid - b.pid);
+  return { processCount: names.length, top: rows.slice(0, count), note: 'By resident memory. Only the short process name is read, never the command line.' };
+}
+export async function hostActivity({ proc = '/proc', fsRead = fs.readFileSync, readDir = fs.readdirSync, intervalMs = 500, sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  const a = counters(proc, fsRead); const t0 = Date.now(); await sleep(intervalMs); const b = counters(proc, fsRead); const secs = Math.max(0.001, (Date.now() - t0) / 1000);
+  const per = (x, y) => (Number.isFinite(x) && Number.isFinite(y) && y >= x ? Math.round(((y - x) / secs) * 10) / 10 : null);
+  const total = c => c.reduce((s, v) => s + v, 0);
+  const iowait = a.cpu && b.cpu && total(b.cpu) > total(a.cpu) ? Math.round(((b.cpu[4] - a.cpu[4]) / (total(b.cpu) - total(a.cpu))) * 1000) / 10 : null;   // field 5 of the cpu line is iowait
+  const busy = Object.fromEntries(Object.keys(b.disks).filter(d => d in a.disks).map(d => [d, Math.min(100, Math.max(0, Math.round(((b.disks[d] - a.disks[d]) / (secs * 1000)) * 1000) / 10))]));
+  return { sampledOverSeconds: Math.round(secs * 10) / 10,
+    swap: { pagesInPerSecond: per(a.vm.pswpin, b.vm.pswpin), pagesOutPerSecond: per(a.vm.pswpout, b.vm.pswpout), note: 'Pages swapped in and out per second over the sample; sustained values mean the host is thrashing.' },
+    diskWait: { cpuIowaitPercent: iowait, processesBlocked: b.blocked, busyPercentByDisk: busy, note: 'iowait is the share of CPU time spent waiting for disk; busy is the share of the sample each whole disk was doing I/O (md devices are the array view).' },
+    topProcessesByMemory: topProcesses({ proc, fsRead, readDir }) };
+}
