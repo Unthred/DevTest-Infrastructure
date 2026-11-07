@@ -26,7 +26,7 @@ function world({ configured = true, installed = true } = {}) {
   if (installed) {
     fs.mkdirSync(path.join(inst, 'foreman-mcp'));
     fs.writeFileSync(path.join(inst, 'foreman-mcp/server.mjs'), 'export const v = 1;\n');
-    fs.writeFileSync(path.join(inst, 'foreman-mcp/launcher.env'), 'NODE_BIN=/x\n', { mode: 0o640 });
+    fs.writeFileSync(path.join(inst, 'foreman-mcp/launcher.env'), 'NODE_BIN=/x\n'); fs.chmodSync(path.join(inst, 'foreman-mcp/launcher.env'), 0o640);   // explicit chmod: the install precheck runs under umask 077 (#993)
     fs.writeFileSync(path.join(inst, 'VERSION'), SH + '\n');
   }
   return { dir, state, inst, src };
@@ -80,7 +80,7 @@ test('install: skipped without a configuration file or without a hand-installed 
 test("install: Tower's layout (server in srv/, VERSION inside it with a note line) updates and keeps the note", () => {
   const w = world({ installed: false });
   const srv = path.join(w.inst, 'srv'); fs.mkdirSync(srv);
-  fs.writeFileSync(path.join(srv, 'server.mjs'), 'export const v = 1;\n'); fs.writeFileSync(path.join(srv, 'launcher.env'), 'NODE_BIN=/x\n', { mode: 0o640 });
+  fs.writeFileSync(path.join(srv, 'server.mjs'), 'export const v = 1;\n'); fs.writeFileSync(path.join(srv, 'launcher.env'), 'NODE_BIN=/x\n'); fs.chmodSync(path.join(srv, 'launcher.env'), 0o640);
   fs.writeFileSync(path.join(srv, 'VERSION'), SH + '\ncopied by hand on 6 Nov\n');
   fs.writeFileSync(path.join(srv, 'launcher.env.bak-1'), 'OLD=1\n');
   fs.writeFileSync(path.join(w.state, 'foreman-mcp.install'), `INSTALL_DIR=${w.inst}\nSERVER_DIR=srv\nVERSION_FILE=srv/VERSION\n`);
