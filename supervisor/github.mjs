@@ -38,6 +38,7 @@ export function githubClient(config, gh = ghRunner()) {
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
     // Check runs of any app (issue #142), including third-party checks such as GitGuardian that gh run view cannot show.
     listCheckRuns: async sha => { if (!/^[0-9a-f]{40}$/.test(String(sha))) throw new SupervisorError('invalid commit sha'); return json(['api', '--method', 'GET', `repos/${repo}/commits/${sha}/check-runs`, '-f', 'per_page=100'])?.check_runs || []; },
+    commitTime: async sha => { if (!/^[0-9a-f]{40}$/.test(String(sha))) throw new SupervisorError('invalid commit sha'); const t = Date.parse(json(['api', '--method', 'GET', `repos/${repo}/commits/${sha}`])?.commit?.committer?.date); return Number.isFinite(t) ? t : null; },
     listPullFiles: async n => (json(['pr', 'view', String(n), '--repo', repo, '--json', 'files'])?.files || []).map(f => String(f.path)),
     getPull: async n => { const p = json(['pr', 'view', String(n), '--repo', repo, '--json', PR_FIELDS]); return p ? withLabels([p])[0] : p; },
     // The pinned status issue (#358) is Foreman's own output, never work: it is dropped here so no planner or view sees it.

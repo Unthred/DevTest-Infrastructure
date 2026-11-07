@@ -2619,12 +2619,18 @@ export class Team {
     const n = Number(prNumber); if (!Number.isSafeInteger(n) || n <= 0 || typeof session !== 'string') throw new SupervisorError('usage: team record-writer PR SESSION_ID');
     const pr = await this.gh.getPull(n); if (!pr || !SHA.test(pr.headRefOid)) throw new SupervisorError(`PR #${n} was not found or has no head`);
     const author = agentOfBranch(this.c, pr.headRefName); if (!author) throw new SupervisorError(`PR #${n} is not on a configured agent branch`);
-    const found = this.sessionWriterOf({ session, branch: pr.headRefName, now: this.clock.now() });
+    // Fail closed: the session's git write must come at or after the head's commit time, so a session that only wrote an earlier head is not recorded for this one.
+    let since = null; try { since = await this.gh.commitTime?.(pr.headRefOid); } catch { since = null; }
+    if (!Number.isFinite(since)) throw new SupervisorError(`the commit time of ${shortCommit(pr.headRefOid)} could not be read, so nothing is recorded`);
+    const found = this.sessionWriterOf({ session, branch: pr.headRefName, now: this.clock.now(), since });
     if (!found || found.provider !== this.c.agents[author].provider) throw new SupervisorError('the session log shows no git write on this branch by the branch agent\'s provider, so nothing is recorded');
-    this.s.headWriters[`${n}:${pr.headRefOid}`] = { provider: found.provider, models: found.models, sessions: found.sessions, at: this.clock.now(), source: 'recorded-session' };
+    // An existing record for the head is never replaced or narrowed: the models are merged into it.
+    const wkey = `${n}:${pr.headRefOid}`, prior = this.s.headWriters[wkey];
+    this.s.headWriters[wkey] = prior ? { ...prior, models: [...new Set([...(prior.models || []), ...found.models])].sort(), sessions: [...new Set([...(prior.sessions || []), ...found.sessions])].sort() }
+      : { provider: found.provider, models: found.models, sessions: found.sessions, at: this.clock.now(), source: 'recorded-session' };
     delete this.s.headWriterMiss[`${n}:${pr.headRefOid}`];
     this.save();
-    return { pr: n, head: pr.headRefOid, models: found.models };
+    return { pr: n, head: pr.headRefOid, models: this.s.headWriters[wkey].models };
   }
   async requestReReview(prNumber, decision, comment = null) {
     const n = Number(prNumber), link = typeof decision === 'string' ? decision.trim() : '';

@@ -59,7 +59,7 @@ export function findHeadWriter({ head, branch, home = process.env.HOME || os.hom
 // no printed head exists. The harness-written session log must hold a git write command for this branch; the models of those turns are the
 // writer. The caller binds the record to the pull request's current head and may only record a head that GitHub reports. Same
 // log-only trust as findHeadWriter: nothing the agent says about itself is read.
-export function findSessionWriter({ session, branch, home = process.env.HOME || os.homedir(), now = Date.now(), files = null }) {
+export function findSessionWriter({ session, branch, home = process.env.HOME || os.homedir(), now = Date.now(), files = null, since = null }) {
   if (!/^[\w-]{8,64}$/.test(session || '') || !branch) return null;
   const models = new Set();
   for (const file of files || claudeLogFiles(home, now)) {
@@ -67,6 +67,7 @@ export function findSessionWriter({ session, branch, home = process.env.HOME || 
     let raw; try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
     for (const line of raw.split('\n')) {
       if (!line) continue; let r; try { r = JSON.parse(line); } catch { continue; }
+      if (since != null && !(Date.parse(r.timestamp) >= since)) continue;   // only a git write at or after the head's commit time can have produced the head
       if (r.type !== 'assistant' || !Array.isArray(r.message?.content) || typeof r.message.model !== 'string') continue;
       for (const b of r.message.content) if (b?.type === 'tool_use' && typeof b.input?.command === 'string' && GIT_WRITE.test(b.input.command) && (r.gitBranch === branch || b.input.command.includes(branch))) models.add(r.message.model);
     }

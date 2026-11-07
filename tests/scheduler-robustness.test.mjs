@@ -197,16 +197,29 @@ test('findSessionWriter reads a quiet git commit from the named session log only
   const row = (cmd, branch) => JSON.stringify({ type: 'assistant', gitBranch: branch, message: { model: 'claude-opus-x', content: [{ type: 'tool_use', id: 't', input: { command: cmd } }] } });
   fs.writeFileSync(path.join(dir, 'abcdef123456.jsonl'), row('git commit -q -m x', 'claude/issue-9-a') + '\n');
   const f = findSessionWriter({ session: 'abcdef123456', branch: 'claude/issue-9-a', home });
+  assert.equal(findSessionWriter({ session: 'abcdef123456', branch: 'claude/issue-9-a', home, since: 1000 }), null);   // no timestamp: not shown to be after the head
+  const keep = fs.readFileSync(path.join(dir, 'abcdef123456.jsonl'), 'utf8');
+  fs.writeFileSync(path.join(dir, 'abcdef123456.jsonl'), JSON.stringify({ ...JSON.parse(row('git push -q', 'claude/issue-9-a')), timestamp: new Date(5000).toISOString() }) + '\n');
+  assert.ok(findSessionWriter({ session: 'abcdef123456', branch: 'claude/issue-9-a', home, since: 4000 }));
+  assert.equal(findSessionWriter({ session: 'abcdef123456', branch: 'claude/issue-9-a', home, since: 6000 }), null);   // wrote an earlier head only
+  fs.writeFileSync(path.join(dir, 'abcdef123456.jsonl'), keep);
   assert.deepEqual(f.models, ['claude-opus-x']); assert.equal(f.sessions[0], 'abcdef12');
   assert.equal(findSessionWriter({ session: 'abcdef123456', branch: 'claude/other', home }), null);
   assert.equal(findSessionWriter({ session: '../../etc', branch: 'claude/issue-9-a', home }), null);
 });
 test('record-writer binds the session writer to the current head of a configured agent branch', async t => {
-  const w = world(t, { gh: { getPull: async () => ({ number: 9, headRefName: 'claude/issue-9-a', headRefOid: H(3) }) } });
-  w.team.sessionWriterOf = ({ session }) => session === 'good12345' ? { provider: 'claude', models: ['m1'], sessions: ['good1234'] } : null;
+  const w = world(t, { gh: { getPull: async () => ({ number: 9, headRefName: 'claude/issue-9-a', headRefOid: H(3) }), commitTime: async () => 5000 } });
+  let seenSince = null;
+  w.team.sessionWriterOf = ({ session, since }) => (seenSince = since, session === 'good12345') ? { provider: 'claude', models: ['m1'], sessions: ['good1234'] } : null;
   const r = await w.team.recordSessionWriter(9, 'good12345');
   assert.equal(r.head, H(3)); assert.deepEqual(w.team.s.headWriters[`9:${H(3)}`].models, ['m1']);
+  assert.equal(seenSince, 5000);
   await assert.rejects(() => w.team.recordSessionWriter(9, 'unknown123'), /nothing is recorded/);
+  w.team.s.headWriters[`9:${H(3)}`] = { provider: 'claude', models: ['m0'], sessions: [], at: 1, source: 'session-log' };   // an existing record is merged, never replaced
+  const r2 = await w.team.recordSessionWriter(9, 'good12345');
+  assert.deepEqual(r2.models, ['m0', 'm1']); assert.equal(w.team.s.headWriters[`9:${H(3)}`].source, 'session-log');
+  w.team.gh.commitTime = async () => { throw new Error('x'); };
+  await assert.rejects(() => w.team.recordSessionWriter(9, 'good12345'), /could not be read/);
 });
 test('a recovery re-arms queued job backoff and a blocked install', async t => {
   const moved = [], w = world(t, { jobsExtra: { listActive: async () => [{ id: 'q1abcdefgh', status: 'queued' }, { id: 'r1', status: 'running' }], rearm: async id => { moved.push(id); return true; } } });
