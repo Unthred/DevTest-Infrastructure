@@ -251,7 +251,8 @@ const defaultStart = (wrapper, args) => dashboardSpawn(wrapper, args);
 export const holdOf = (result, s) => (result === 'busy' || result === 'upgraded' ? { to: s?.holding?.to || s?.pending?.to || null } : null);
 
 export class SelfUpgrade {
-  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS }) {
+  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
+    this.lock = lock; this.lockWaitMs = lockWaitMs; this.lockSleep = lockSleep;   // issue #798: lock() returns an unlock function, or null while another process holds upgrade.lock
     this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs; this.minGapMs = minGapMs;   // issue #136: the configurable drain bound; issue #695: minGapMs is the batching window between installs (0 = off)
     this.dir = path.join(root, 'team');
     this.stateFile = path.join(this.dir, 'self-upgrade.json');
@@ -318,11 +319,40 @@ export class SelfUpgrade {
   // Issue #695: the homeowner asks for the next install to skip the batching window (CLI: self-upgrade install-now).
   // Issue #708: refused when the install is already current (nothing to install, so the request would linger and skip a later window);
   // a request not spent within URGENT_REQUEST_MAX_MS lapses. Urgency is spent only by an install (or lapses / is dropped when current).
+  // Issue #798: the CLI's read-then-write of the state file runs under upgrade.lock (the tick holds it for its whole step), so a tick that
+  // loaded its copy earlier cannot write it back over this change. Waits up to lockWaitMs; held:false means the lock could not be taken.
+  withStateLock(fn) {
+    if (!this.lock) return { held: true, value: fn() };
+    const end = Date.now() + this.lockWaitMs; let unlock = this.lock();
+    while (!unlock && Date.now() < end) { this.lockSleep(250); unlock = this.lock(); }
+    if (!unlock) return { held: false };
+    try { return { held: true, value: fn() }; } finally { unlock(); }
+  }
+  rereadState() {
+    try { this.s = { ...this.s, ...JSON.parse(fs.readFileSync(this.stateFile, 'utf8')) }; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  // Main as seen now: a live fetch, falling back to the main recorded at the last tick (which can be one tick old); null if neither is known.
+  currentMain() {
+    try { const t = this.d.fetchMain?.(); if (SHA.test(t || '')) return t; } catch { /* use the recorded main */ }
+    const m = this.s.main; return m && SHA.test(m.sha || '') ? m.sha : null;
+  }
+  // The urgent.to target is shown for information only: a request stays in force until an install spends it, it lapses, or main is current.
   requestInstallNow() {
-    const from = this.d.installed(), m = this.s.main;
-    if (m && SHA.test(m.sha || '') && m.sha === from) return { ok: false, reason: 'the installed version is already main; nothing to install' };
-    this.s.urgent = { reason: 'homeowner request', at: this.clock.now(), ...(m && SHA.test(m.sha || '') ? { to: m.sha } : {}) }; this.save();
-    return { ok: true };
+    const r = this.withStateLock(() => {
+      this.rereadState();
+      const from = this.d.installed(), main = this.currentMain();
+      if (!main) return { ok: false, reason: 'main is not known yet (GitHub unreachable and no tick has recorded it); try again shortly' };
+      if (main === from) return { ok: false, reason: 'the installed version is already main; nothing to install' };
+      this.s.urgent = { reason: 'homeowner request', at: this.clock.now(), to: main }; this.save();
+      return { ok: true };
+    });
+    return r.held ? r.value : { ok: false, reason: 'an install step holds upgrade.lock; try again in a minute' };
+  }
+  // The urgent request as status shows it: the same lapse rule as urgentNow, without changing the state.
+  urgentView(now = this.clock.now()) {
+    const u = this.s.urgent;
+    if (!u) return null;
+    return u.reason === 'homeowner request' && !(now - u.at < URGENT_REQUEST_MAX_MS) ? null : u;
   }
   // The urgent request in force, or null. A homeowner request lapses after URGENT_REQUEST_MAX_MS; a rollback's urgency does not.
   urgentNow(now) {
@@ -334,8 +364,10 @@ export class SelfUpgrade {
   // Issue #708: a hand-install finished: the batching window is measured from it, and a pending install-now is spent.
   // Rereads the state file first, since the CLI object may be older than the daemon's last write.
   noteHandInstalled() {
-    try { this.s = { ...this.s, ...JSON.parse(fs.readFileSync(this.stateFile, 'utf8')) }; } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    this.s.lastFinishedAt = this.clock.now(); delete this.s.urgent; delete this.s.nextInstall; this.save();
+    const apply = () => { this.rereadState(); this.s.lastFinishedAt = this.clock.now(); delete this.s.urgent; delete this.s.nextInstall; this.save(); };
+    // Issue #798: under upgrade.lock, so no tick is mid-step with an older copy. If the lock stays busy the update still goes ahead (the
+    // reread keeps it a field-level change of the latest file); losing it would leave the batching window wrong.
+    if (!this.withStateLock(apply).held) apply();
   }
 
   // Returns a short result string for the tick report. `holding` (read by `team status` and the dashboard) is set only while the

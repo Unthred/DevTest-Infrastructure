@@ -563,6 +563,7 @@ async function main() {
   }
   if (command === 'self-upgrade') {
     const { config, upgrade } = selfUpgradeFor(root, registry);
+    upgrade.lock = () => upgradeLock(root);   // issue #798: state updates from this command run under upgrade.lock
     if (a._[0] === 'hand-install') {
       // Issue #446: the one supported route for an update the automatic upgrader refuses.
       const d = upgrade.d;
@@ -589,7 +590,7 @@ async function main() {
     if (a._[0] === 'install-now') { const r = upgrade.requestInstallNow(); if (!r.ok) { console.log(`not requested: ${r.reason}`); process.exitCode = 1; return; } console.log('the next install skips the batching wait'); return; }   // issue #695
     if (a._[0] === 'clear-latch') { upgrade.clearLatch(); console.log('latch cleared'); return; }
     if (a._[0] !== 'status') throw new SupervisorError('usage: self-upgrade status|install-now|clear-latch|hand-install SHA');
-    console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, lastFinishedAt: upgrade.s.lastFinishedAt || null, urgent: upgrade.s.urgent || null, nextInstall: upgrade.s.nextInstall || null, batchDueAt: upgrade.batchDueAt(), install: upgrade.s.install || null, installed: upgrade.d.installed() }, null, 2)); return;
+    console.log(JSON.stringify({ latch: upgrade.latch(), pending: upgrade.s.pending || null, lastUpgradeAt: upgrade.s.lastUpgradeAt || null, lastFinishedAt: upgrade.s.lastFinishedAt || null, urgent: upgrade.urgentView(), nextInstall: upgrade.s.nextInstall || null, batchDueAt: upgrade.batchDueAt(), install: upgrade.s.install || null, installed: upgrade.d.installed() }, null, 2)); return;
   }
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
