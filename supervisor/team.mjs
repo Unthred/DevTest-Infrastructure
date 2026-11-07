@@ -1873,6 +1873,7 @@ export class Team {
       const pr = rec.pr != null ? (await this.gh.listPulls()).find(p => p.number === rec.pr) : null;
       if (rec.pr != null && (!pr || (rec.head && pr.headRefOid !== rec.head))) throw new SupervisorError(`PR #${rec.pr} is closed or has a newer head, so job ${target} cannot be resumed to any purpose; close it instead`);
       if (this.limitedOf(rec.agent)?.out) throw new SupervisorError(`${rec.agent} is out of allowance; resume it after the reset`);
+      if (breaker.blocks(this.s.breaker, this.c.breaker, { type: rec.kind, issue: rec.issue ?? null })) throw new SupervisorError(`the circuit breaker has halted new ${rec.kind} jobs; resume the breaker first`);   // issue #713: same rule as resumeTransient (issue #549)
       if (await this.providerRoleFull(job.provider ?? this.c.agents[rec.agent]?.provider, roleOfType(rec.kind))) throw new SupervisorError('the provider has no free slot for this role right now');
       rec.ingested = false; this.save();
       await this.jobs.resume(id); log(`resumed the ${rec.kind} job ${target}`, 'resumed once'); return `job ${target} resumed`;
