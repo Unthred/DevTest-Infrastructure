@@ -121,3 +121,49 @@ test('the header pill links to the first consolidated item', async () => {
   const href = pillLinks({ health: { state: 'needs_you' }, attention: [{ id: 'prclosed-9', severity: 'action' }], needsYou: [{ id: 'homeowner-3' }, { id: 'ci-4' }] }).health;
   assert.equal(href, '/system#att-homeowner-3');
 });
+
+// Issue #848: review follow-ups for PR #836.
+test('a PR counts every issue it closes, and issues that wait on it by PR number, once each', () => {
+  const c = { pulls: [{ number: 20, headRefName: 'claude/issue-7-x', closingIssuesReferences: [{ number: 8 }, { number: 9 }] }, { number: 21, headRefName: 'claude/issue-30-x' }],
+    issues: [
+      { number: 7, state: 'OPEN' }, { number: 8, state: 'OPEN' }, { number: 9, state: 'OPEN' },
+      { number: 1, state: 'OPEN', body: 'Prerequisites: #8' }, { number: 2, state: 'OPEN', body: 'Prerequisites: #9' },
+      { number: 3, state: 'OPEN', body: 'Prerequisites: #7' },                                   // names the branch issue, not a closing reference
+      { number: 4, state: 'OPEN', title: 'x', body: 'Blocked by PR #20' },
+      { number: 5, state: 'OPEN', body: 'Prerequisites: PR #20' },
+      { number: 6, state: 'OPEN', body: 'Prerequisites: #8\nBlocked by PR #20' },                  // both routes: still one
+      { number: 12, state: 'CLOSED', body: 'Blocked by PR #20' },                                  // closed issues never count
+      { number: 13, state: 'OPEN', body: 'Blocked by PR #99' }] };                                 // another PR
+  const r = consolidateNeedsYou([item('fixlimit-20', { kind: 'pull', n: 20 }), item('fixlimit-21', { kind: 'pull', n: 21 })], { cache: c }).needsYou;
+  assert.equal(r.find(x => x.id === 'fixlimit-20').blocks, 6);   // issues 1, 2, 3, 4, 5, 6
+  assert.equal(r.find(x => x.id === 'fixlimit-21').blocks, 0);
+});
+test('an issue with a cached pullPrerequisites list counts towards that PR', () => {
+  const c = { pulls: [{ number: 20, headRefName: 'claude/issue-7-x' }], issues: [{ number: 4, state: 'OPEN', pullPrerequisites: [20] }, { number: 5, state: 'OPEN', pullPrerequisites: [21] }] };
+  assert.equal(consolidateNeedsYou([item('fixlimit-20', { kind: 'pull', n: 20 })], { cache: c }).needsYou[0].blocks, 1);
+});
+
+const limitState = (head, extra = {}) => ({ verdicts: { [`1:${head}`]: { verdict: 'CHANGES', reviewer: 'x' } }, fixAttempts: { [`1:${head}`]: 2 }, jobs: {}, unblock: { escalated: {}, pr: {}, day: {}, log: [] }, ...extra });
+test('final round pending (not escalated yet): the queue says a fix is coming, not that the limit was reached', async t => {
+  const head = H(1);
+  const v = await view(t, { pulls: [pr(1, { headRefOid: head })], state: limitState(head) });
+  const q = JSON.stringify(v.queues);
+  assert.ok(!/fix limit reached/.test(q), q); assert.match(q, /fix (is next|waits for a free slot)/);
+});
+test('final round pending but not planned (no free slot): still not reported as the limit', async t => {
+  const head = H(1);
+  const state = limitState(head);
+  const v = await view(t, { pulls: [pr(1, { headRefOid: head }), pr(2, { headRefOid: H(2) }), pr(3, { headRefOid: H(3) })], state });
+  const mine = v.queues.claude.filter(x => x.ref === 1).map(x => x.reason).join('|');
+  assert.ok(!/fix limit reached/.test(mine), mine); assert.match(mine, /fix (is next|waits for a free slot)/);
+});
+test('an escalated job still running keeps the limit message away; once ingested and escalated is set, it appears', async t => {
+  const head = H(1);
+  const running = limitState(head, { jobs: { j1: { id: 'j1', pr: 1, kind: 'fix', escalated: true, ingested: false, status: 'running' } } });
+  running.unblock.escalated[1] = true;
+  const v1 = await view(t, { pulls: [pr(1, { headRefOid: head })], state: running });
+  assert.ok(!/fix limit reached/.test(JSON.stringify(v1.queues)), JSON.stringify(v1.queues));
+  const done = limitState(head); done.unblock.escalated[1] = true;
+  const v2 = await view(t, { pulls: [pr(1, { headRefOid: head })], state: done });
+  assert.match(JSON.stringify(v2.queues), /fix limit reached \(2 rounds\)/);
+});

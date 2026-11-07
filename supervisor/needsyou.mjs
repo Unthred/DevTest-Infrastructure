@@ -6,7 +6,7 @@
 //   - Order: what blocks the most other work first, then the oldest.
 // Pure: no I/O. The caller supplies the attention items and the lists it already holds.
 import { redact } from './redact.mjs';
-import { prerequisites } from './team.mjs';
+import { prerequisites, pullPrerequisites } from './team.mjs';
 
 // Lower is more specific: the primary cause of a merged item is the lowest-ranked one present.
 const RANK = ['breaker', 'fixlimit', 'reviewlimit', 'reviewrefused', 'noreviewer-refused', 'noreviewer', 'selfcheck', 'homeowner-pr', 'decision-proposal', 'stalled', 'job', 'homeowner', 'split', 'prclosed', 'rebase-lost', 'stale-mark', 'ci'];
@@ -40,10 +40,21 @@ export function consolidateNeedsYou(attention, { cache = {}, overrides = {} } = 
   }
   // Prerequisites come from the issue body (the GitHub cache carries no parsed list) unless depends_on_overrides names them.
   const depsOf = i => overrides?.[i.number] ?? i.prerequisites ?? prerequisites(i.body);
-  const dependantsOfIssue = n => (issues || []).filter(i => i.state === 'OPEN' && depsOf(i).includes(n)).length;
-  // A pull request blocks what the issue it closes blocks.
-  const closedBy = n => { const p = (pulls || []).find(x => x.number === n); const m = p?.closingIssuesReferences?.[0]?.number ?? Number(/\/issue-(\d+)(\D|$)/.exec(p?.headRefName || '')?.[1]); return Number.isSafeInteger(m) ? m : null; };
-  const dependants = ref => ref.kind === 'pull' ? (closedBy(ref.n) == null ? 0 : dependantsOfIssue(closedBy(ref.n))) : dependantsOfIssue(ref.n);
+  const prDepsOf = i => i.pullPrerequisites ?? pullPrerequisites(i.title, i.body);
+  const openIssues = () => (issues || []).filter(i => i.state === 'OPEN');
+  // A pull request blocks what every issue it closes blocks (all closing references and the branch's issue), plus every open issue
+  // that waits on the PR by number ("Blocked by PR #N", "Prerequisites: PR #N"). Each blocked issue counts once.
+  const dependants = ref => {
+    const blocked = new Set();
+    if (ref.kind === 'pull') {
+      const p = (pulls || []).find(x => x.number === ref.n);
+      const closes = new Set((p?.closingIssuesReferences || []).map(r => r?.number).filter(Number.isSafeInteger));
+      const branch = Number(/\/issue-(\d+)(\D|$)/.exec(p?.headRefName || '')?.[1]);
+      if (Number.isSafeInteger(branch)) closes.add(branch);
+      for (const i of openIssues()) if ([...closes].some(c => depsOf(i).includes(c)) || prDepsOf(i).includes(ref.n)) blocked.add(i.number);
+    } else for (const i of openIssues()) if (depsOf(i).includes(ref.n)) blocked.add(i.number);
+    return blocked.size;
+  };
   for (const [k, list] of groups) {
     list.sort((x, y) => rankOf(x.id) - rankOf(y.id));
     const [primary] = list, causes = list.map(cause);
