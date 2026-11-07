@@ -504,7 +504,7 @@ const isRepoFile = w => /^[\w./-]*\.\w+$/.test(w) && noDotSegments(w) && !w.incl
 const withoutRepoFiles = claim => claim.split(/(\s+)/).map(t => { const w = t.toLowerCase().replace(/^[,;:()'"`]+|[,;:()'"`.]+$/g, ''); return w && isRepoFile(w) ? ' ' : t; }).join('');
 export function isTrivialSlip(claim) {
   if (MATERIAL_TOPIC.test(withoutRepoFiles(claim)) || !TRIVIAL_DETAIL.test(claim)) return false;
-  const rest = claim.replace(new RegExp(TRIVIAL_DETAIL.source, 'gi'), ' ').toLowerCase().split(/[\s,;:()'"`]+/).map(w => w.replace(/\.+$/, '')).filter(Boolean);
+  const rest = claim.replace(new RegExp(TRIVIAL_DETAIL.source, 'gi'), ' ').toLowerCase().split(/[\s,;:()'"`]+/).map(w => w.replace(/\.$/, '')).filter(Boolean);
   // A token may be filler, a number, or a file path; anything else (a verb, a reason) makes the claim a behaviour claim.
   return rest.every(w => SLIP_FILLER.has(w) || /^[\d.,%]+$/.test(w) || isRepoFile(w) || isRepoDir(w));
 }

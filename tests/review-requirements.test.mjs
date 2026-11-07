@@ -336,6 +336,13 @@ test('#617: more real repo file shapes count as paths; a path segment named ci i
   assert.equal(isTrivialSlip('adds 2 lines in elsewhere/Dockerfile.agent'), false);
   assert.equal(isTrivialSlip('adds 2 lines in tests/fixtures/x.bin'), false);
 });
+test('#769: only one sentence-final full stop is stripped from a token', () => {
+  assert.equal(isTrivialSlip('adds 2 lines in docs/x.md.'), true);
+  assert.equal(isTrivialSlip('adds 2 lines in .github/workflows/ci.yml.'), true);
+  assert.equal(isTrivialSlip('adds 2 lines in docs/x.md..'), false);
+  assert.equal(isTrivialSlip('adds 2 lines in .github/workflows/ci.yml...'), false);
+  assert.equal(isTrivialSlip('adds 2 lines in docs/a..b.md.'), false);
+});
 test('#419: the review prompt asks for one complete pass and sends far-fetched cases to follow-ups', async t => {
   const w = reqWorld(t); const { spec } = await startReview(w);
   assert.match(spec.prompt, /every blocking finding you can find in a single pass/);
