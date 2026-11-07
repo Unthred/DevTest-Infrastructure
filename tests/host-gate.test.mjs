@@ -157,9 +157,9 @@ test('foreman_host returns the core count, per-container memory and the swap hol
   const host = readHost({ proc: '/p', fsRead: f => { if (f in files) return files[f]; throw new Error('ENOENT'); } });
   assert.equal(host.cores, 2);
   const id = 'a'.repeat(64), id2 = 'b'.repeat(64);
-  const cg = { [`/cg/docker/${id}/memory.current`]: String(300 * 1048576), [`/cg/docker/${id}/memory.swap.current`]: String(900 * 1048576), [`/cg/docker/${id}/cgroup.procs`]: '77\n', '/proc/77/comm': 'emby\n',
+  const cg = { [`/cg/docker/${id}/memory.current`]: String(300 * 1048576), [`/cg/docker/${id}/memory.swap.current`]: String(900 * 1048576), [`/cg/docker/${id}/cgroup.procs`]: '77\n', '/fakeproc/77/comm': 'emby\n',
     [`/cg/docker/${id2}/memory.current`]: String(500 * 1048576), [`/cg/docker/${id2}/memory.swap.current`]: '0\n' };
-  const c = containerMemory({ cgroupRoot: '/cg', readDir: () => [id, id2, 'not-a-container'], fsRead: f => { if (f in cg) return cg[f]; throw new Error('ENOENT'); } });
+  const c = containerMemory({ cgroupRoot: '/cg', proc: '/fakeproc', readDir: () => [id, id2, 'not-a-container'], fsRead: f => { if (f in cg) return cg[f]; throw new Error('ENOENT'); } });
   assert.deepEqual(c.top.map(r => [r.container, r.memoryMb, r.swapMb, r.mainProcess]), [['aaaaaaaaaaaa', 300, 900, 'emby'], ['bbbbbbbbbbbb', 500, 0, null]]);
   assert.equal(containerMemory({ cgroupRoot: '/cg', readDir: () => { throw new Error('ENOENT'); } }), null);
   const tools = createTools({ source: {}, readHost: () => host, readActivity: async () => ({}), readContainers: () => c, now: () => 0 });
