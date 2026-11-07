@@ -118,3 +118,35 @@ test('endedNoPr: set at ingest for a job outside the resume window; set when res
   assert.match(w.team.s.unblock.noResume[id].why, /no longer open/);
   assert.equal(entry().endedNoPr.event, 'checkpoint_failed', 'noResume recorded: stale cause set');
 });
+
+// Issue #741: a job deferred until it aged out of the window gets its stale cause from resumeTransient; ingest defers on the same
+// predicate as awaitingResume, so an exhausted unblock limit surfaces the cause at once.
+test('endedNoPr: set when a deferred job ages out of the window; set at ingest when the unblock limit is exhausted', async t => {
+  const w = world(t), id = 'f'.repeat(32), states = {};
+  w.team.jobs.get = async i => states[i] || null;
+  w.team.jobs.resume = async () => {};
+  const entry = () => w.team.s.jobs[id];
+  const ingest = async job => { states[id] = { id, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
+  w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '23', issue: 23, ingested: false, at: NOW - 1000 };
+  await ingest({ status: 'failed', lastEvent: 'checkpoint_failed', updatedAt: NOW });   // fresh stop: the resume cooldown holds it
+  assert.equal(entry().endedNoPr, undefined, 'inside the window: awaits its resume');
+  await w.team.resumeTransient({ ingested: [] });
+  assert.equal(entry().endedNoPr, undefined, 'still inside the window: nothing recorded');
+  entry().at = NOW - 8 * 86400000;
+  await w.team.resumeTransient({ ingested: [] });
+  assert.equal(entry().endedNoPr.event, 'checkpoint_failed', 'aged out: cause recorded');
+  const at = entry().endedNoPr.at; entry().endedNoPr.at = at - 5;
+  await w.team.resumeTransient({ ingested: [] });
+  assert.equal(entry().endedNoPr.at, at - 5, 'recorded once, not rewritten');
+  // negative: a non-implement job, and a completed job, get no cause
+  const id2 = 'a1'.repeat(16);
+  w.team.s.jobs[id2] = { kind: 'review', agent: 'claude', key: '24', issue: 24, ingested: true, at: NOW - 8 * 86400000 };
+  states[id2] = { id: id2, status: 'failed', lastEvent: 'checkpoint_failed' };
+  await w.team.resumeTransient({ ingested: [] });
+  assert.equal(w.team.s.jobs[id2].endedNoPr, undefined);
+  // shared predicate: an exhausted unblock limit means no resume is awaited, so ingest records the cause now
+  entry().at = NOW - 1000; delete entry().endedNoPr;
+  w.team.s.unblock.pr[23] = 999;
+  await ingest({ status: 'failed', lastEvent: 'checkpoint_failed' });
+  assert.equal(entry().endedNoPr.event, 'checkpoint_failed');
+});
