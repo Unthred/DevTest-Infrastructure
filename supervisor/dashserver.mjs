@@ -22,6 +22,7 @@ import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
 import { installs, breakerHistory } from './installs.mjs';
 import { readIndex, searchIndex } from './issueindex.mjs';
+import { readAlerts, LEVELS as ALERT_LEVELS } from './alert.mjs';
 import { wasteByCause, configView, testRunsView, ticksView } from './mcpreads.mjs';
 import { alertsView } from './alertsview.mjs';
 import { DEFAULT_TEST_SLOTS } from './testslots.mjs';
@@ -338,6 +339,16 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       if (path === '/api/discarded.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(discarded(readTeamState(root), 200)));
       // Issue #625: install history (with the version each process runs) and the circuit breaker's trip history, for the Foreman MCP tools.
       if (path === '/api/installs.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(installs(root, { now: now() })));
+      // Issue #947: the alert history with level filters (?level=action,problem), as JSON and as a plain page.
+      if (path === '/api/alerts.json' || path === '/alerts') {
+        const asked = (new URLSearchParams(search).get('level') || '').split(',').filter(l => ALERT_LEVELS.includes(l)), levels = asked.length ? asked : ALERT_LEVELS;
+        const rows = readAlerts(root, { levels, limit: 200 }).map(r => ({ at: r.at, level: r.level, text: redact(String(r.text || ''), 600), count: r.count ?? 1, pushed: Boolean(r.pushed), delivered: r.delivered ?? null, link: r.link ? redact(String(r.link), 300) : null, digest: Boolean(r.digest) }));
+        if (path === '/api/alerts.json') return send(200, 'application/json; charset=utf-8', JSON.stringify({ levels, alerts: rows }));
+        const h = v => String(v ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+        const nav = ['all', ...ALERT_LEVELS].map(l => `<a href="/alerts${l === 'all' ? '' : '?level=' + l}"${(l === 'all' ? asked.length === 0 : asked.length === 1 && asked[0] === l) ? ' aria-current="page"' : ''}>${l}</a>`).join(' | ');
+        const body = rows.length ? `<table><thead><tr><th>Time</th><th>Level</th><th>Alert</th><th>Count</th><th>Sent</th></tr></thead><tbody>${rows.map(r => `<tr data-level="${h(r.level)}"><td>${h(new Date(r.at).toISOString())}</td><td>${h(r.level)}</td><td>${h(r.text)}</td><td>${r.count}</td><td>${r.pushed ? (r.delivered === false ? 'failed' : 'pushed') : 'digest only'}</td></tr>`).join('')}</tbody></table>` : '<p>No alerts.</p>';
+        return send(200, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Alerts</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>Alerts</h1><p>${nav}</p>${body}<p><a href="/">Back to the dashboard</a></p></main></body></html>`);
+      }
       if (path === '/api/breaker.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(breakerHistory(readTeamState(root), 100)));
       // Issue #635: the Diagnostics data, the failure cost by cause, and the effective configuration, for the Foreman MCP tools.
       if (path === '/api/diagnostics.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(diagnosticsData({ root, config: source(), now: now(), recorderDir })));

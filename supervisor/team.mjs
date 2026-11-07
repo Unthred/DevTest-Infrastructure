@@ -28,6 +28,7 @@ import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
+import { validateAlertsConfig } from './alert.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -232,11 +233,7 @@ export function applyLocalOverride(shipped, local) {
   if ('breaker' in local) { try { out.breaker = validateBreakerConfig({ ...(out.breaker || {}), ...local.breaker }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }
   if ('dashboard' in local) { validateDashboard(local.dashboard); out.dashboard = { ...local.dashboard }; }
   if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
-  if ('alerts' in local) {
-    const cmd = local.alerts?.command;
-    if (!Array.isArray(cmd) || !cmd.length || !cmd.every(x => typeof x === 'string') || !path.isAbsolute(cmd[0]) || Object.keys(local.alerts).length !== 1) throw new SupervisorError('invalid team.local.json: alerts.command must be an absolute program plus arguments');
-    out.alerts = { command: cmd };
-  }
+  if ('alerts' in local) out.alerts = validateAlertsConfig(local.alerts);   // issue #947: command, push_levels, problem_after_minutes
   if ('interim_review' in local) {   // retired (issue #152): tolerated so an installed team.local.json keeps working; only weekly_at is read
     const o = local.interim_review;
     if (!o || typeof o !== 'object' || Array.isArray(o) || Object.keys(o).some(k => !['enabled', 'weekly_at'].includes(k))) throw new SupervisorError('invalid team.local.json: interim_review may set only enabled and weekly_at');
@@ -1046,6 +1043,11 @@ export class Team {
       return author && !pr.isDraft && !this.reviewRefusal(agent, pr, `${verdictKey(pr.number, pr.headRefOid)}:${agent}`) && SHA.test(pr.headRefOid) && this.s.verdicts[key]?.reviewer !== agent && (this.s.reviewAttempts[`${key}:${agent}`] || 0) < this.c.limits.max_review_attempts;
     }).length;
   }
+  // The link an action alert carries to its Needs you item: the thread that holds it, and the dashboard when its public address is configured (issue #947).
+  needsLink(number) {
+    const base = this.c.self_upgrade?.public_dashboard_url;
+    return `https://github.com/${this.c.repository}/issues/${number}${base ? ` ${base.replace(/\/+$/, '')}/` : ''}`;
+  }
   // A mode change is recorded once and alerted once (retried until the channel accepts it). Only a real tick calls this.
   async updateBudget(report) {
     if (!this.modes) return;
@@ -1060,7 +1062,7 @@ export class Team {
       else if (a.mode === 'reviews_only' && (prev.rule ?? null) !== (a.rule ?? null)) { prev.rule = a.rule ?? null; this.save(); }   // issue #680: an older latch gets its rule on the next tick
       const e = this.s.budget[agent];
       if (e.alerted || !this.alert) continue;
-      try { await this.alert(`Allowance: ${modeLine(agent, { ...a, mode: e.mode, reason: e.reason, until: e.until }, this.timeZone)}`); e.alerted = true; this.save(); }
+      try { await this.alert(`Allowance: ${modeLine(agent, { ...a, mode: e.mode, reason: e.reason, until: e.until }, this.timeZone)}`, { level: 'info', key: `allowance:${agent}:${e.mode}` }); e.alerted = true; this.save(); }
       catch { (report.skipped ||= []).push({ what: `alert allowance ${agent}`, reason: 'alert delivery failed; will retry' }); }
     }
   }
@@ -2650,7 +2652,7 @@ export class Team {
     await this.postNotice(target, `lease holder=${id || 'unknown'}`, text);
     await this.gh.addLabel(target, 'needs-homeowner');
     this.s.notified[key] = this.clock.now(); this.save();
-    if (this.alert) { try { await this.alert(`Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600)); } catch { (report.skipped ||= []).push({ what: 'alert lease holder', reason: 'alert delivery failed' }); } }
+    if (this.alert) { try { await this.alert(`Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600), { level: 'action', key, link: this.needsLink(target) }); } catch { (report.skipped ||= []).push({ what: 'alert lease holder', reason: 'alert delivery failed' }); } }
   }
   // A notice carries a stable marker and is never retried blindly: if GitHub accepted an earlier attempt but the response
   // was lost, the marker is already there and nothing is posted twice (same approach as verdict ingestion).
@@ -3024,7 +3026,7 @@ export class Team {
       const akey = `churn-alert:${pr.number}:${pr.headRefOid}`;   // like the fix-limit alert: recorded as sent only when the channel accepted it
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`, { level: 'action', key: `churn:${pr.number}`, link: this.needsLink(pr.number) });
           this.s.notified[akey] = this.clock.now(); this.save();
         } catch { (report.skipped ||= []).push({ what: `alert churn ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
       }
@@ -3061,7 +3063,7 @@ export class Team {
       // alert is retried on the next tick; a failing channel never undoes the notice.
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`, { level: 'action', key: `fixlimit:${pr.number}`, link: this.needsLink(pr.number) });
           this.s.notified[akey] = this.clock.now(); this.save();
         } catch { (report.skipped ||= []).push({ what: `alert fix-limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
       }
@@ -3111,7 +3113,7 @@ export class Team {
     try {
       await this.flag(target, { key: `limit:${room.key}`, kind: 'limit', tk });
       await this.postNotice(target, `unblock-limit ${room.key}`, `**Needs the homeowner.** Foreman stopped unblocking by itself: it reached ${room.text}. Nothing further is retried, resumed or escalated automatically for this scope until the limit resets (day) or you raise it in team.local.json. Required: look at what is stuck (#${target}) and decide.`);
-      if (this.alert) { try { await this.alert(`Needs the homeowner: Foreman reached ${room.text}; automatic unblocking has stopped. #${target}`); } catch { (report.skipped ||= []).push({ what: 'alert unblock limit', reason: 'alert delivery failed' }); } }
+      if (this.alert) { try { await this.alert(`Needs the homeowner: Foreman reached ${room.text}; automatic unblocking has stopped. #${target}`, { level: 'action', key: `limit:${room.key}`, link: this.needsLink(target) }); } catch { (report.skipped ||= []).push({ what: 'alert unblock limit', reason: 'alert delivery failed' }); } }
     } catch (error) { delete u.limit[room.key]; this.save(); throw error; }
     (report.notified ||= []).push({ target, unblockLimit: room.key });
   }

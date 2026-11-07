@@ -290,7 +290,7 @@ export class SelfUpgrade {
     this.s.flaky = { sha: target, at: this.clock.now(), stage, tests: (first.tests || []).slice(0, 5), excerpt: String(first.excerpt || '').slice(0, 1500) };
     this.save();
     this.record({ to: target, result: 'flaky_test', stage, reason: first.reason, tests: this.s.flaky.tests, excerpt: this.s.flaky.excerpt });
-    await this.alert(`${target}:flaky`, `Supervisor upgrade to ${short(target)}: ${stage} tests failed once and passed on the repeat in a fresh copy (flaky: ${testsOf(first) || 'test name not reported'}). The install went ahead.`);
+    await this.alert(`${target}:flaky`, `Supervisor upgrade to ${short(target)}: ${stage} tests failed once and passed on the repeat in a fresh copy (flaky: ${testsOf(first) || 'test name not reported'}). The install went ahead.`, 'info');
   }
   noteInstall(i) { this.s.install = { at: this.clock.now(), ...i }; }
   save() { fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 }); atomicJson(this.stateFile, this.s); }
@@ -320,10 +320,11 @@ export class SelfUpgrade {
     fs.appendFileSync(this.recordFile, `${JSON.stringify({ at: this.clock.now(), ...entry })}\n`, { mode: 0o600 });
   }
   // One alert per key, recorded before delivery so a failing channel cannot cause a repeat every tick.
-  async alert(key, text) {
+  async alert(key, text, level) {
+    if (!['action', 'problem', 'info'].includes(level)) throw new Error(`upgrade alert ${key} without a level`);
     if (this.s.alerted[key]) return;
     this.s.alerted[key] = this.clock.now(); this.save();
-    try { await this.d.alert(text); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
+    try { await this.d.alert(text, { level, key }); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
   }
 
   // Issue #695: when the batching window since the last finished install ends (null = no window: first install, or min_install_gap_minutes 0).
@@ -429,7 +430,7 @@ export class SelfUpgrade {
     if (this.s.handDeploy && this.s.handDeploy.from !== from) { delete this.s.handDeploy; this.save(); }   // the installed commit moved: the item is done
     if (!SHA.test(target || '') || target === from) { if (this.s.urgent?.reason === 'homeowner request') delete this.s.urgent; this.save(); return 'current'; }
     if (!this.d.isAncestor(from, target)) {
-      await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`);
+      await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`, 'problem');
       const why = this.refuse(from, target, 'diverged', `installed ${short(from)} is not an ancestor of main ${short(target)}`);
       if (this.s.divergedRecorded !== target) { this.s.divergedRecorded = target; this.save(); this.record({ from, to: target, result: 'refused', kind: 'diverged', reason: why }); }
       return 'diverged';
@@ -438,7 +439,7 @@ export class SelfUpgrade {
     if (!rangeNeedsInstall(files)) return 'no-supervisor-change';   // issue #489: only the no-install list exempts a path
     const touched = files.filter(f => BOOTSTRAP_PATHS.includes(f));
     if (touched.length) {
-      await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${target}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically. To install it, paste on Tower: ${this.installCommand(target)} (it pauses starts, drains jobs, installs with validator and tests, checks dry-run, dashboard and the next live tick, rolls back on any failure, and always resumes).`);
+      await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${target}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically. To install it, paste on Tower: ${this.installCommand(target)} (it pauses starts, drains jobs, installs with validator and tests, checks dry-run, dashboard and the next live tick, rolls back on any failure, and always resumes).`, 'action');
       // Issue #265: one record per target (the alert above is already once per target), and one Needs you item until the install moves.
       if (this.s.handDeploy?.to !== target) {
         this.record({ from, to: target, result: 'refused', reason: 'changes the bootstrap installer', files: touched });
@@ -449,7 +450,7 @@ export class SelfUpgrade {
     }
     const eligibility = await this.eligibility(from, target);
     if (!eligibility.ok) {
-      await this.alert(`${target}:eligibility`, `Supervisor upgrade to ${short(target)} not done: ${eligibility.reason}.`);
+      await this.alert(`${target}:eligibility`, `Supervisor upgrade to ${short(target)} not done: ${eligibility.reason}.`, 'problem');
       this.record({ from, to: target, prs: eligibility.prs, result: 'refused', kind: 'not-eligible', reason: this.refuse(from, target, 'not-eligible', eligibility.reason) });
       return 'not-eligible';
     }
@@ -494,7 +495,7 @@ export class SelfUpgrade {
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
         : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre) });
       this.save();
-      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).${excerptNote(pre)}`);
+      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).${excerptNote(pre)}`, 'problem');
       if (!pre.environmental) this.refuse(from, target, 'precheck', pre.reason);
       this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.environmental ? pre.reason : refusalText(pre.reason), ...failureFields(pre) });
       return 'precheck-failed';
@@ -524,7 +525,7 @@ export class SelfUpgrade {
       this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
       this.s.precheckRetried = this.retriedFor(target, retryDue);
       this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up) }); this.save();
-      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`);
+      await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`, 'problem');
       this.refuse(from, target, 'install-check', up.reason);
       this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: refusalText(up.reason), ...failureFields(up) });
       return 'precheck-failed';
@@ -540,7 +541,7 @@ export class SelfUpgrade {
     this.s.pending = { from, to: target, prs: eligibility.prs, checks, at: now };
     this.noteInstall({ result: 'installed', sha: target, reason: null }); this.save();
     this.record({ from, to: target, prs: eligibility.prs, checks, result: 'upgraded' });
-    await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (${await this.prNames(eligibility.prs)}).`);
+    await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (${await this.prNames(eligibility.prs)}).`, 'info');
     return 'upgraded';
   }
 
@@ -558,7 +559,7 @@ export class SelfUpgrade {
     this.s.mcp = { sha: target, result: r.result, reason: String(r.reason || '').slice(0, 200), at: this.clock.now() };
     this.save();
     this.record({ from, to: target, result: r.result === 'failed' ? 'mcp_install_failed' : 'mcp_install', reason: this.s.mcp.reason, mcpChanged: changed });
-    if (r.result === 'failed') await this.alert(`${target}:mcp`, `Foreman MCP server not updated to ${short(target)}: ${this.s.mcp.reason}. The previous copy was kept and still works; Foreman itself installed. Check docs/foreman-mcp.md.`);
+    if (r.result === 'failed') await this.alert(`${target}:mcp`, `Foreman MCP server not updated to ${short(target)}: ${this.s.mcp.reason}. The previous copy was kept and still works; Foreman itself installed. Check docs/foreman-mcp.md.`, 'problem');
   }
 
   // The delayed retry is spent once used or already recorded for this commit; only a different target clears it.
@@ -597,7 +598,7 @@ export class SelfUpgrade {
     if (!r.ok) this.s.dashboardFailure = { at: this.clock.now(), kind: rollingBack ? 'rollback' : 'upgrade', target: target, reason: String(r.reason || 'unknown').slice(0, 300), recovered: r.recovered === true, ...failDetail(r) };
     else if (r.restarted) delete this.s.dashboardFailure;
     this.save();
-    if (!r.ok) await this.alert(`${p.to}:dashboard${rollingBack ? ':rollback' : ''}`, `Dashboard server was not restarted on ${short(target)} after the ${rollingBack ? 'rollback' : 'upgrade'}: ${r.reason}. Check the dashboard and restart it by hand if needed (the page shows "restart pending" until then).`);
+    if (!r.ok) await this.alert(`${p.to}:dashboard${rollingBack ? ':rollback' : ''}`, `Dashboard server was not restarted on ${short(target)} after the ${rollingBack ? 'rollback' : 'upgrade'}: ${r.reason}. Check the dashboard and restart it by hand if needed (the page shows "restart pending" until then).`, 'problem');
   }
 
   // Issue #209: every tick checks that the dashboard server answers and starts it again if it does not, whatever the cause (a crash,
@@ -641,7 +642,7 @@ export class SelfUpgrade {
     if (r.ok) { this.save(); return 'ok'; }
     this.s.dashboardFailure = { at: now, kind: 'watchdog', target: sha, reason: String(r.reason || 'unknown').slice(0, 300), recovered: r.recovered === true, ...failDetail(r) };
     this.save();
-    await this.alert(`dashboard-down:${episodeAt}`, `Dashboard server was not answering and could not be restarted on ${short(sha)}: ${r.reason}. Foreman retries on later ticks with a growing delay; check the dashboard if it stays down.`);
+    await this.alert(`dashboard-down:${episodeAt}`, `Dashboard server was not answering and could not be restarted on ${short(sha)}: ${r.reason}. Foreman retries on later ticks with a growing delay; check the dashboard if it stays down.`, 'problem');
     return 'revive-failed';
   }
 
@@ -656,7 +657,7 @@ export class SelfUpgrade {
     this.record({ from, to, prs, checks, result: result.ok ? 'rolled_back' : 'rollback_failed', reason: note });
     // A rollback also restarts the dashboard so the badge and the running commit agree (issue #135); jobs are never touched.
     if (result.ok) await this.restartDashboard({ from: to, to: from }, true);
-    await this.alert(`${to}:rolledback`, `Upgrade to ${short(to)} rolled back: ${note}. Automatic upgrades are paused until the homeowner clears ${this.latchFile}.`);
+    await this.alert(`${to}:rolledback`, `Upgrade to ${short(to)} rolled back: ${note}. Automatic upgrades are paused until the homeowner clears ${this.latchFile}.`, 'action');
     return result.ok ? 'rolled-back' : 'rollback-failed';
   }
 
