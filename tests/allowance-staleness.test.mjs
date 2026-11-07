@@ -157,7 +157,7 @@ test('chart: a new reading after the reset starts a new segment (two polylines),
   const pts = v.graphs.allowance.claude.series['5-hour'];
   assert.deepEqual(pts.map(p => !!p.gap), [false, true, false]);            // the 0.95 sample was already expired and is dropped
   const g = usageHtml(v).match(/<g data-series="claude 5-hour">(.*?)<\/g>/s)[1];
-  assert.equal((g.match(/<polyline/g) || []).length, 2);
+  assert.equal((g.match(/<polyline data-ly="line area bars"/g) || []).length, 2);
   // a reset time that moves later while the old one has not passed is an observed reset, as before
   const w = await view(t, { jobs: [], snapshots: [snap(NOW - 600000, 0.2, NOW + 60000), snap(NOW - 300000, 0.1, NOW + 3600000)] });
   assert.equal(w.graphs.allowance.claude.resets.length, 1); assert.deepEqual(w.graphs.allowance.claude.expected, []);
