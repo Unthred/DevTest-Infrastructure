@@ -106,7 +106,7 @@ function limitView(job, allowance, now) {
   return { limiting, since: Number.isFinite(pausedAt(job)) ? pausedAt(job) : null, resetsAt: w ? w.resetsAt : null, basis: w ? `${windowLabel(w, allowance.provider)} window in the last reading` : null, retryAt: job.nextAttemptAt || null };
 }
 
-function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '', tz = undefined) {
+export function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '', tz = undefined) {
   const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })),
     // delivered-work issue numbers the tick cached, in the shape Team.plan() reads, so the page matches `team tick --dry-run`
     // plus every merged PR number the tick saw, so a follow-up waiting on a merged PR is not mistaken for one closed unmerged (issue #212)

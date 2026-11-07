@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildView } from '../supervisor/dashboard.mjs';
+import { buildView, cacheBackedTeam } from '../supervisor/dashboard.mjs';
 import { agentGenerated } from '../supervisor/team.mjs';
 import { compactIssues } from '../supervisor/dashdata.mjs';
 import { renderRoute, matchRoute } from '../supervisor/dashrender.mjs';
@@ -210,4 +210,22 @@ test('queue mode leaves the plan and the slot-full holds exactly as a plain plan
   const pick = a => `${a.type}:${a.pr ?? a.issue}`;
   const mine = w.plan.map(pick);
   assert.ok(mine.includes('implement:12') || !mine.some(x => x.startsWith('rebase:')), `the implement pick is not lost to a queued rebase: ${mine}`);
+});
+
+test('plan({queue:true}) returns exactly what a plain plan() returns, with the same holds, across roles and scenarios', async t => {
+  const sha = n => H(n);
+  const conflicting = [10, 11].map((iss, k) => ({ number: 60 + k, title: `p${k}`, headRefName: `claude/issue-${iss}-x`, headRefOid: sha(k + 1), baseRefName: 'main', isDraft: false, mergeable: 'CONFLICTING', statusCheckRollup: [] }));
+  const running = [{ id: 'a'.repeat(32), provider: 'claude', status: 'running', createdAt: NOW - MIN, updatedAt: NOW }];
+  const scenarios = [
+    { cfg: config({ roles: { implementer: 1, reviewer: 1, rebaser: 1 } }), pulls: conflicting, issues: [issue(10, 'a', { body: 'edit docs/a.md' }), issue(11, 'b', { body: 'edit docs/b.md' }), issue(12, 'c', { body: 'edit docs/b.md' })] },
+    { cfg: config({ roles: { implementer: 1, reviewer: 1 } }), pulls: [], issues: [issue(1, 'one'), issue(2, 'two'), issue(3, 'three')], jobs: running, state: { jobs: { [running[0].id]: { kind: 'implement', issue: 1, agent: 'claude' } } } } ];
+  for (const sc of scenarios) {
+    const mk = () => { const cache = { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: sc.pulls, issues: sc.issues, probes: {}, fetchedAt: NOW - 60000 };
+      return cacheBackedTeam(sc.cfg, tmp(t), cache, sc.jobs || [], sc.state || {}, [], NOW, [], '', 'UTC'); };
+    const [plain, queued] = [mk(), mk()];
+    const a = await plain.plan(), b = await queued.plan({ queue: true });
+    assert.deepEqual(b, a, 'same plan');
+    for (const [ag, h] of Object.entries(plain.held || {})) for (const [k, v] of Object.entries(h)) assert.equal(queued.held?.[ag]?.[k], v, `hold ${ag}.${k} survives the queue extension`);
+    assert.ok(queued.queued.length >= a.filter(x => x.type !== 'merge').length);
+  }
 });
