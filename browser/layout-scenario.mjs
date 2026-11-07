@@ -148,8 +148,8 @@ async function scenario(p, file) {
   await page.evaluate(i => document.getElementById('c-' + i).removeAttribute('data-pin'), hideId);
   await page.keyboard.press('Control+z'); await page.keyboard.press('Control+Shift+z');   // an unpinned card is hidden again by the same redo
   check(`${L}: once not pinned, undo/redo hides it again`, !(await card(hideId).isVisible()));
-  const hiddenN = await bar.locator('.lay-hiddens [data-n]').textContent();
-  check(`${L}: the hidden cards list counts it`, hiddenN === '1', hiddenN);
+  const onN = Number(await bar.locator('.lay-hiddens [data-n]').textContent()), totalN = Number(await bar.locator('.lay-hiddens [data-total]').textContent());
+  check(`${L}: the card picker counts it as not on the page`, totalN - onN === 1, `${onN} of ${totalN}`);
   const others = await geo(page);
   check(`${L}: hiding leaves the other cards where they are`, overlapAny(others.cards) === '');
   // reload keeps position and hidden
@@ -163,9 +163,9 @@ async function scenario(p, file) {
   await noHScroll(page, `${L} after reload`);
   await page.screenshot({ path: path.join(out, `${name}-${p}-saved.png`), fullPage: false });
   // bring it back from the list
-  check(`${L}: the hidden list is available outside layout mode`, await bar.locator('.lay-hiddens').isVisible());
+  check(`${L}: the card picker is available outside layout mode`, await bar.locator('.lay-hiddens').isVisible());
   await bar.locator('.lay-hiddens summary').click();
-  await bar.locator('.lay-hiddens button').first().click({ timeout: 5000 });
+  await bar.locator('.lay-hiddens button:text-is("Add")').first().click({ timeout: 5000 });
   check(`${L}: Show brings the card back, not overlapping`, (await card(hideId).isVisible()) && overlapAny((await geo(page)).cards) === '');
 
   // tidy
@@ -173,6 +173,59 @@ async function scenario(p, file) {
   await bar.locator('[data-lay=tidy]').click();
   const tidy = await geo(page);
   check(`${L}: Tidy up keeps cards apart and in their columns`, overlapAny(tidy.cards) === '');
+
+  // controls on the right (#927)
+  const rightGap = await page.evaluate(() => { const b = document.querySelector('.layoutbar').getBoundingClientRect(), e = [...document.querySelectorAll('.layoutbar > :not([hidden])')].map(n => n.getBoundingClientRect()).filter(r => r.width); return b.right - Math.max(...e.map(r => r.right)); });
+  check(`${L}: the layout controls sit at the right of the bar`, rightGap < 40, rightGap);
+
+  // groups (#927): select two cards, group them, move one, the other follows; the group survives a reload; ungroup
+  const pair = (await page.evaluate(() => [...document.querySelectorAll('.cards[data-layout] > .card[data-card]')].filter(c => !c.hasAttribute('data-pin') && c.offsetParent).map(c => c.dataset.card))).slice(0, 2);
+  if (pair.length === 2) {
+    await card(pair[0]).scrollIntoViewIfNeeded();
+    await page.keyboard.down('Shift'); await card(pair[0]).click({ position: { x: 20, y: 20 } }); await card(pair[1]).click({ position: { x: 20, y: 20 } }); await page.keyboard.up('Shift');
+    check(`${L}: two selected cards enable Group`, await bar.locator('[data-lay=group]').isEnabled());
+    await bar.locator('[data-lay=group]').click();
+    const gsaved = await saved(page, layoutName);
+    check(`${L}: the group is saved with the layout`, Array.isArray(gsaved?.groups) && gsaved.groups.some(g => pair.every(i => g.includes(i))), JSON.stringify(gsaved?.groups));
+    const g1 = await geo(page); const bb0 = await card(pair[0]).boundingBox();
+    await page.mouse.move(bb0.x + bb0.width / 2, bb0.y + 30); await page.mouse.down(); await page.mouse.move(bb0.x + bb0.width / 2, bb0.y + 30 + 96, { steps: 6 }); await page.mouse.up();
+    const g2 = await geo(page);
+    const d0 = g2.cards[pair[0]].y - g1.cards[pair[0]].y, d1 = g2.cards[pair[1]].y - g1.cards[pair[1]].y;
+    check(`${L}: moving one card of a group moves the other by the same amount (${d0.toFixed(0)} / ${d1.toFixed(0)} px)`, d0 > 20 && Math.abs(d0 - d1) < 2 && overlapAny(g2.cards) === '');
+    await bar.locator('[data-lay=done]').click();
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.evaluate(n => { document.querySelector('.cards[data-layout]').__cols = n; }, COLS);
+    check(`${L}: the group is still there after a reload`, (await saved(page, layoutName))?.groups?.some(g => pair.every(i => g.includes(i))));
+    await bar.locator('[data-lay=edit]').click();
+    check(`${L}: grouped cards are marked in layout mode`, (await page.locator('.cards.editing > .card.lay-grouped').count()) >= 2);
+    // box select over the empty strip below the cards would be viewport dependent; select with shift-click and ungroup
+    await card(pair[0]).scrollIntoViewIfNeeded();
+    await page.keyboard.down('Shift'); await card(pair[0]).click({ position: { x: 20, y: 20 } }); await page.keyboard.up('Shift');
+    check(`${L}: selecting one grouped card selects its whole group`, (await page.locator('.cards.editing > .card.lay-selected').count()) === 2);
+    await bar.locator('[data-lay=ungroup]').click();
+    check(`${L}: Ungroup removes the group`, ((await saved(page, layoutName))?.groups || []).length === 0);
+  }
+
+  // app bar editing (#927)
+  const barItems = () => page.evaluate(() => [...document.querySelectorAll('.statusbar > [data-bar]')].filter(e => getComputedStyle(e).display !== 'none' && !['brand', 'title'].includes(e.dataset.bar)).sort((a, b) => Number(a.style.order || 0) - Number(b.style.order || 0)).map(e => e.dataset.bar));
+  const bar0 = await barItems();
+  if (bar0.length >= 2) {
+    await page.locator('#barEdit').click();
+    await page.locator('.statusbar [data-bar="' + bar0[0] + '"] .bar-ctl button').nth(1).click();
+    const bar1 = await barItems();
+    check(`${L}: the app bar item moves later`, bar1[1] === bar0[0], bar1.join());
+    await page.locator('.statusbar [data-bar="' + bar0[0] + '"] .bar-ctl button').nth(2).click();
+    check(`${L}: the app bar item can be removed`, !(await barItems()).includes(bar0[0]));
+    await page.locator('.bar-picker summary').click(); await page.locator('.bar-picker button').first().click();
+    check(`${L}: and added back from the picker`, (await barItems()).includes(bar0[0]));
+    await page.locator('#barEdit').click();
+    await page.reload({ waitUntil: 'networkidle' });
+    check(`${L}: the app bar order is kept after a reload`, (await barItems()).join() === (await barItems()).join() && (await barItems()).includes(bar0[0]));
+    await page.evaluate(() => localStorage.removeItem('dash.appbar'));
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.evaluate(n => { document.querySelector('.cards[data-layout]').__cols = n; }, COLS);
+    await bar.locator('[data-lay=edit]').click();
+  }
 
   // reset to default
   await bar.locator('[data-lay=reset]').click();

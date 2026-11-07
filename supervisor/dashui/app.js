@@ -4,7 +4,8 @@
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends } from './legend.mjs';
 import { initChartOptions } from './chartopts.mjs';
-import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
+import { BAR_KEY, FIXED, addBarItem, barToSaved, moveBarItem, removeBarItem, sanitizeBar } from './appbar.mjs';
+import { COLS, MIN_W, ROW_PITCH, addGroup, canHide, compactGroups, dragRect, groupOf, placeGroup, removeGroups, withoutCard, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { saveLists, watchLists } from './lists-ui.mjs';
 import { postDecision, runDecision, lowerCount, OUTCOME_TEMPLATE } from './inbox-ui.mjs';
 import { readRegions, startRefresh } from './refresh.mjs';
@@ -386,6 +387,7 @@ if (grid) {
   let st = null;          // the free layout in use { pos, hidden }, or null for flow
   let editing = false;
   const hist = layoutHistory();
+  const sel = new Set();   // cards selected in layout mode (box select); never saved
   const saveFlow = () => store.set(key(), { ...lay, collapsed: readCollapsed() });   // phone: order only
   const persist = () => { if (st) store.set(key(), toSaved(st, readCollapsed())); };
 
@@ -448,10 +450,11 @@ if (grid) {
   const mk = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
   const tool = (name, text, title) => { const e = mk('button', { type: 'button', className: 'btn', textContent: text, title: title || '' }); e.dataset.lay = name; return e; };
   const editBtn = tool('edit', 'Edit layout'); editBtn.setAttribute('aria-pressed', 'false');
-  const tools = mk('span', { className: 'lay-tools', hidden: true }, tool('done', 'Done'), tool('undo', 'Undo', 'Undo (Ctrl+Z)'), tool('redo', 'Redo', 'Redo (Ctrl+Shift+Z)'), tool('tidy', 'Tidy up', 'Slide cards up to close gaps'), tool('reset', 'Reset to default', 'Back to the standard arrangement for this page'));
-  const hiddenBox = mk('details', { className: 'lay-hiddens', hidden: true }, mk('summary', {}, 'Hidden cards (', mk('span', { textContent: '0' }), ')'), mk('ul'));
-  hiddenBox.querySelector('span').dataset.n = '';
-  const hint = mk('span', { className: 'lay-hint', id: 'lay-help', hidden: true, textContent: 'Drag a card anywhere to move it; drag an edge or corner to resize. With the keyboard, focus a card and use the arrow keys to move it and Shift with the arrow keys to resize. Live refresh is paused while you edit.' });
+  const tools = mk('span', { className: 'lay-tools', hidden: true }, tool('done', 'Done'), tool('undo', 'Undo', 'Undo (Ctrl+Z)'), tool('redo', 'Redo', 'Redo (Ctrl+Shift+Z)'), tool('group', 'Group', 'Group the selected cards so they move as one block'), tool('ungroup', 'Ungroup', 'Split the selected group back into single cards'), tool('tidy', 'Tidy up', 'Slide cards up to close gaps'), tool('reset', 'Reset to default', 'Back to the standard arrangement for this page'));
+  // The card picker: every card available for this page; the ones on the page can be removed, the others added. Cards not chosen are simply not on the page.
+  const hiddenBox = mk('details', { className: 'lay-hiddens', hidden: true }, mk('summary', {}, 'Cards (', mk('span', { textContent: '0' }), ' of ', mk('span', { textContent: '0' }), ')'), mk('ul'));
+  const nums = $$('summary span', hiddenBox); nums[0].dataset.n = ''; nums[1].dataset.total = '';
+  const hint = mk('span', { className: 'lay-hint', id: 'lay-help', hidden: true, textContent: 'Drag on empty space to select several cards, then Group them so they move as one (Shift+click adds or removes a card from the selection). Drag a card anywhere to move it; drag an edge or corner to resize. With the keyboard, focus a card and use the arrow keys to move it and Shift with the arrow keys to resize. Live refresh is paused while you edit.' });
   hint.dataset.hint = '';
   bar.append(editBtn, tools, hiddenBox, hint, mk('span', { className: 'lay-live' }));
   $('.lay-live', bar).setAttribute('role', 'status'); $('.lay-live', bar).setAttribute('aria-live', 'polite');
@@ -466,15 +469,20 @@ if (grid) {
     $('[data-lay=edit]', bar).hidden = editing;
     $('.lay-tools', bar).hidden = !editing; $('[data-hint]', bar).hidden = !editing;
     if (btn('undo')) { btn('undo').disabled = !hist.canUndo; btn('redo').disabled = !hist.canRedo; }
-    const det = $('.lay-hiddens', bar); det.hidden = !hidden.length;
-    $('[data-n]', det).textContent = hidden.length;
+    if (btn('group')) { btn('group').disabled = sel.size < 2; btn('ungroup').disabled = ![...sel].some(i => st && groupOf(st.groups, i)); }
+    const det = $('.lay-hiddens', bar); det.hidden = !(editing || hidden.length);
+    $('[data-n]', det).textContent = cards().length - hidden.length; $('[data-total]', det).textContent = cards().length;
     const ul = $('ul', det); ul.textContent = '';
-    for (const id of hidden) {
-      const li = document.createElement('li'), name = cardById(id) ? titleOf(cardById(id)) : id, b = document.createElement('button');
-      b.type = 'button'; b.className = 'btn'; b.textContent = 'Show'; b.setAttribute('aria-label', `Show ${name}`); b.addEventListener('click', () => showCard(id));
-      li.append(Object.assign(document.createElement('span'), { textContent: name }), b); ul.append(li);
+    for (const c of cards()) {
+      const id = c.dataset.card, on = !hidden.includes(id), pinned = !canHide(id, c.hasAttribute('data-pin'));
+      const li = document.createElement('li'), b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn'; b.textContent = on ? 'Remove' : 'Add'; b.disabled = on && (pinned || !editing);
+      b.setAttribute('aria-label', `${on ? 'Remove' : 'Add'} ${titleOf(c)}${pinned ? ' (always shown)' : ''}`);
+      b.addEventListener('click', () => (on ? hideCard(id) : showCard(id)));
+      li.append(Object.assign(document.createElement('span'), { textContent: titleOf(c) + (on ? '' : ' (not on page)') }), b); ul.append(li);
     }
-    if (!hidden.length) det.open = false;
+    if (!editing && !hidden.length) det.open = false;
+    for (const c of cards()) { c.classList.toggle('lay-selected', sel.has(c.dataset.card)); c.classList.toggle('lay-grouped', !!(st && groupOf(st.groups, c.dataset.card))); }
   }
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   function change(next, note) {
@@ -487,7 +495,7 @@ if (grid) {
     const g = grid.getBoundingClientRect(), colPitch = (g.width + gap()) / cols;
     const boxes = cards().filter(c => c.offsetParent).map(c => { const r = c.getBoundingClientRect(); return { id: c.dataset.card, left: r.left - g.left, top: r.top - g.top, width: r.width, height: r.height }; });
     for (const c of shut) c.classList.add('collapsed');
-    return { pos: fromBoxes(boxes, { colPitch, cols }), hidden: [] };
+    return { pos: fromBoxes(boxes, { colPitch, cols }), hidden: [], groups: [] };
   }
   const CURSORS = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
   function decorate(on) {
@@ -509,27 +517,28 @@ if (grid) {
   function startEditing() {
     if (editing || bpNow() === 'phone') return;
     if (!st) { st = convertFlow(); }
-    editing = true; hist.clear();
+    editing = true; hist.clear(); sel.clear();
     document.body.classList.add('layout-editing'); grid.classList.add('editing');
     paintFree(); decorate(true); renderBar(); say('Layout mode on. Drag cards to move them and their edges to resize.');
     $('[data-lay=done]', bar).focus({ preventScroll: true });
   }
   function stopEditing() {
     if (!editing) return;
-    finishAct(false); editing = false; decorate(false);
+    finishAct(false); editing = false; sel.clear(); decorate(false);
     document.body.classList.remove('layout-editing'); grid.classList.remove('editing');
     apply(); say('Layout mode off.'); $('[data-lay=edit]', bar).focus({ preventScroll: true });
   }
   function hideCard(id) {
     const c = cardById(id); if (!st || !c || !canHide(id, c.hasAttribute('data-pin')) || st.hidden.includes(id)) return;
     const pos = { ...st.pos }; delete pos[id];
-    change({ pos, hidden: [...st.hidden, id] }, `${titleOf(c)} hidden. Use Hidden cards to bring it back.`);
+    sel.delete(id);
+    change({ pos, hidden: [...st.hidden, id], groups: withoutCard(st.groups, id) }, `${titleOf(c)} removed from the page. Use Cards to add it back.`);
     if (editing) { c.classList.add('lay-hidden'); $('[data-lay=done]', bar).focus({ preventScroll: true }); }
   }
   function showCard(id) {
     const c = cardById(id); if (!st || !c) return;
     const w = defaultW(c), pos = { ...st.pos }; pos[id] = firstFit(pos, w, naturalRows(c, w), colsNow());
-    change({ pos, hidden: st.hidden.filter(i => i !== id) }, `${titleOf(c)} is back.`);
+    change({ pos, hidden: st.hidden.filter(i => i !== id), groups: st.groups }, `${titleOf(c)} added to the page.`);
     c.scrollIntoView({ block: 'nearest' });
   }
   function undoRedo(redo) {
@@ -548,10 +557,12 @@ if (grid) {
     const cols = colsNow(), g = grid.getBoundingClientRect(), colPitch = (g.width + gap()) / cols;
     const dx = act.x - act.x0, dy = act.y - act.y0 + (scrollY - act.scroll0);
     const target = act.edge ? resizeRect(act.from, act.edge, Math.round(dx / colPitch), Math.round(dy / ROW_PITCH), cols) : dragRect(act.from, Math.round(dx / colPitch), Math.round(dy / ROW_PITCH), cols);
-    act.target = target; act.preview = placeCard(act.base.pos, act.id, target, cols);
+    act.target = target;
+    act.preview = act.members && !act.edge ? placeGroup(act.base.pos, act.members, target.x - act.from.x, target.y - act.from.y, cols) : placeCard(act.base.pos, act.id, target, cols);
+    if (act.members && !act.edge) act.target = act.preview[act.id];
     for (const c of cards()) { const r = act.preview[c.dataset.card]; if (r && c !== act.c) setBox(c, r); }
     if (act.edge) { setBox(act.c, target); act.ghost.hidden = true; }
-    else { setBox(act.c, act.from); act.c.style.transform = `translate(${dx}px,${dy}px)`; setBox(act.ghost, target); act.ghost.hidden = false; }
+    else { setBox(act.c, act.from); act.c.style.transform = `translate(${dx}px,${dy}px)`; setBox(act.ghost, act.target); act.ghost.hidden = false; }
   }
   function finishAct(commit) {
     if (!act) return;
@@ -559,16 +570,20 @@ if (grid) {
     a.ghost.remove(); a.c.classList.remove('lay-active'); a.c.style.transform = '';
     try { a.c.releasePointerCapture(a.pid); } catch { /* already released */ }
     if (commit && a.preview && !same(a.preview, a.base.pos)) {
-      change({ pos: a.preview, hidden: a.base.hidden }, `${titleOf(a.c)}: column ${a.target.x + 1}, row ${a.target.y + 1}, ${a.target.w} wide, ${a.target.h} high.`);
+      change({ pos: a.preview, hidden: a.base.hidden, groups: a.base.groups }, `${titleOf(a.c)}${a.members ? ' and its group' : ''}: column ${a.target.x + 1}, row ${a.target.y + 1}, ${a.target.w} wide, ${a.target.h} high.`);
     } else paintFree();
   }
   grid.addEventListener('pointerdown', e => {
     if (!editing || e.button > 0 || act || e.target.closest('.lay-hide')) return;
-    const c = e.target.closest('.card[data-card]'); if (!c || !st.pos[c.dataset.card]) return;
+    const c = e.target.closest('.card[data-card]');
+    if (!c) { startBox(e); return; }
+    if (!st.pos[c.dataset.card]) return;
+    if (e.shiftKey) { e.preventDefault(); toggleSel(c.dataset.card); return; }
     e.preventDefault(); c.focus({ preventScroll: true });
+    if (!sel.has(c.dataset.card)) { sel.clear(); renderBar(); }
     try { c.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
     const ghost = document.createElement('div'); ghost.className = 'lay-ghost'; ghost.hidden = true; grid.append(ghost);
-    act = { c, id: c.dataset.card, edge: edgeAt(c.getBoundingClientRect(), e.clientX, e.clientY, 10), x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, scroll0: scrollY, pid: e.pointerId, base: JSON.parse(JSON.stringify(st)), from: { ...st.pos[c.dataset.card] }, ghost };
+    act = { c, id: c.dataset.card, edge: edgeAt(c.getBoundingClientRect(), e.clientX, e.clientY, 10), x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, scroll0: scrollY, pid: e.pointerId, base: JSON.parse(JSON.stringify(st)), from: { ...st.pos[c.dataset.card] }, ghost, members: groupOf(st.groups, c.dataset.card) };
     c.classList.add('lay-active');
     // edge scrolling is gentle and proportional: the nearer the pointer is to the window edge, the faster, and nothing in the middle
     scrollTimer = setInterval(() => { if (!act) return; const z = 36, d = act.y > innerHeight - z ? Math.ceil((act.y - (innerHeight - z)) / z * 14) : act.y < z ? -Math.ceil((z - act.y) / z * 14) : 0; if (d) { scrollBy(0, d); showPreview(); } }, 30);
@@ -582,14 +597,39 @@ if (grid) {
   grid.addEventListener('pointercancel', () => finishAct(false));
   grid.addEventListener('dragstart', e => { if (editing) e.preventDefault(); });
   grid.addEventListener('click', e => { if (editing && !e.target.closest('.lay-hide')) e.preventDefault(); }, true);
+  // box select: drag on empty space; every card the box touches is selected, and a grouped card brings its whole group
+  const withGroups = list => { const out = new Set(list); for (const i of list) for (const m of groupOf(st.groups, i) || []) out.add(m); return out; };
+  function toggleSel(id) {
+    const grp = groupOf(st.groups, id) || [id], on = !sel.has(id);
+    for (const m of grp) { if (on) sel.add(m); else sel.delete(m); }
+    renderBar();
+  }
+  function startBox(e) {
+    if (e.target.closest('.lay-ghost')) return;
+    e.preventDefault();
+    const g = grid.getBoundingClientRect(), x0 = e.clientX, y0 = e.clientY, sc0 = scrollY;
+    const box = document.createElement('div'); box.className = 'lay-box'; box.hidden = true; grid.append(box);
+    const rect = (x, y) => { const y1 = y0 - (scrollY - sc0); return { left: Math.min(x0, x), right: Math.max(x0, x), top: Math.min(y1, y), bottom: Math.max(y1, y) }; };
+    const hit = r => cards().filter(c => st.pos[c.dataset.card]).filter(c => { const b = c.getBoundingClientRect(); return b.left < r.right && r.left < b.right && b.top < r.bottom && r.top < b.bottom; }).map(c => c.dataset.card);
+    const move = ev => { const r = rect(ev.clientX, ev.clientY); box.hidden = false; Object.assign(box.style, { left: r.left - g.left + 'px', top: r.top - g.top + 'px', width: r.right - r.left + 'px', height: r.bottom - r.top + 'px' }); };
+    const end = ev => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', end); removeEventListener('pointercancel', end);
+      const r = rect(ev.clientX, ev.clientY), moved = r.right - r.left > 4 || r.bottom - r.top > 4; box.remove();
+      if (ev.type === 'pointercancel') return;
+      if (!e.shiftKey) sel.clear();
+      if (moved) for (const i of withGroups(hit(r))) sel.add(i);
+      renderBar(); if (moved) say(sel.size ? `${sel.size} card${sel.size === 1 ? '' : 's'} selected.` : 'No cards selected.');
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', end); addEventListener('pointercancel', end);
+  }
   // keyboard: arrows move the focused card one cell, Shift+arrows resize it from its east and south edges
   grid.addEventListener('keydown', e => {
     if (!editing || e.target.closest('.lay-hide') || !e.target.matches?.('.card[data-card]')) return;
     const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]; if (!d) return;
     e.preventDefault();
     const id = e.target.dataset.card, r = st.pos[id]; if (!r) return;
-    const t = e.shiftKey ? resizeRect(r, d[0] ? 'e' : 's', d[0], d[1], colsNow()) : dragRect(r, d[0], d[1], colsNow()), next = placeCard(st.pos, id, t, colsNow());
-    if (!same(next, st.pos)) { change({ pos: next, hidden: st.hidden }, `${titleOf(e.target)}: column ${t.x + 1}, row ${t.y + 1}, ${t.w} wide, ${t.h} high.`); cardById(id)?.focus({ preventScroll: false }); }
+    const t = e.shiftKey ? resizeRect(r, d[0] ? 'e' : 's', d[0], d[1], colsNow()) : dragRect(r, d[0], d[1], colsNow()), grp = e.shiftKey ? null : groupOf(st.groups, id), next = grp ? placeGroup(st.pos, grp, d[0], d[1], colsNow()) : placeCard(st.pos, id, t, colsNow());
+    if (!same(next, st.pos)) { change({ pos: next, hidden: st.hidden, groups: st.groups }, `${titleOf(e.target)}: column ${t.x + 1}, row ${t.y + 1}, ${t.w} wide, ${t.h} high.`); cardById(id)?.focus({ preventScroll: false }); }
   });
   addEventListener('keydown', e => {
     if (!editing) return;
@@ -600,7 +640,9 @@ if (grid) {
   bar.addEventListener('click', e => {
     const b = e.target.closest('[data-lay]'); if (!b) return;
     ({ edit: startEditing, done: stopEditing, undo: () => undoRedo(false), redo: () => undoRedo(true), reset: resetDefault,
-      tidy: () => { const next = compact(st.pos); if (!same(next, st.pos)) change({ pos: next, hidden: st.hidden }, 'Gaps closed.'); } })[b.dataset.lay]?.();
+      tidy: () => { const next = compactGroups(st.pos, st.groups); if (!same(next, st.pos)) change({ pos: next, hidden: st.hidden, groups: st.groups }, 'Gaps closed.'); },
+      group: () => { if (sel.size < 2) return; change({ pos: st.pos, hidden: st.hidden, groups: addGroup(st.groups, [...sel]) }, `${sel.size} cards grouped. They now move as one block.`); },
+      ungroup: () => { const groups = removeGroups(st.groups, [...sel]); if (groups.length !== st.groups.length) change({ pos: st.pos, hidden: st.hidden, groups }, 'Group split into single cards.'); } })[b.dataset.lay]?.();
   });
   apply(); let last = bpNow(); addEventListener('resize', () => { if (bpNow() !== last) { last = bpNow(); if (editing) stopEditing(); apply(); } });
 }
@@ -740,6 +782,48 @@ document.documentElement.classList.remove('tzp');   // normally already removed 
 
 // The cooldown notice (issue #483) arrives as ?notice=mark-read-cooldown. Once it is on screen, drop it from the address so a reload or
 // bookmark does not show "that click was ignored" again. Other query parameters (range, filters) are kept.
+// app bar editing (issue #927): rearrange, remove and add its items; saved per viewer. Not on a phone (the bar is a fixed layout there).
+{
+  const bar = $('.statusbar'), editBtn = $('#barEdit');
+  if (bar && editBtn) {
+    const items = () => $$(':scope > [data-bar]', bar).filter(el => !FIXED.includes(el.dataset.bar));
+    const itemIds = () => items().map(el => el.dataset.bar);
+    const itemById = id => items().find(el => el.dataset.bar === id);
+    const nameOf = el => el.dataset.barName || el.dataset.bar;
+    let state = sanitizeBar(store.get(BAR_KEY), itemIds()), editing = false;
+    const picker = document.createElement('details'); picker.className = 'bar-picker'; picker.hidden = true;
+    picker.append(Object.assign(document.createElement('summary'), { textContent: 'Add item' }), document.createElement('ul'));
+    editBtn.after(picker);
+    const save = () => { const raw = barToSaved(state); if (!state.removed.length && JSON.stringify(state.order) === JSON.stringify(itemIds())) store.del(BAR_KEY); else store.set(BAR_KEY, raw); };
+    function paint() {
+      const phone = bpNow() === 'phone';
+      state = sanitizeBar(barToSaved(state), itemIds());
+      items().forEach(el => { const i = state.order.indexOf(el.dataset.bar); el.style.order = phone || i < 0 ? '' : String(10 + i); el.classList.toggle('bar-removed', !phone && state.removed.includes(el.dataset.bar)); });
+      bar.classList.toggle('bar-editing', editing && !phone);
+      editBtn.setAttribute('aria-pressed', String(editing)); editBtn.textContent = editing ? 'Done' : 'Edit bar';
+      for (const el of items()) $('.bar-ctl', el)?.remove();
+      if (editing && !phone) for (const el of items()) {
+        if (el.classList.contains('bar-removed')) continue;
+        const id = el.dataset.bar, i = state.order.indexOf(id), ctl = document.createElement('span'); ctl.className = 'bar-ctl';
+        const b = (t, label, fn, off) => { const x = document.createElement('button'); x.type = 'button'; x.textContent = t; x.setAttribute('aria-label', label + ' ' + nameOf(el)); x.disabled = !!off; x.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); fn(); }); return x; };
+        ctl.append(b('◀', 'Move earlier:', () => act(moveBarItem(state, id, -1), id), i <= 0), b('▶', 'Move later:', () => act(moveBarItem(state, id, 1), id), i >= state.order.length - 1), b('✕', 'Remove', () => act(removeBarItem(state, id))));
+        el.append(ctl);
+      }
+      const ul = $('ul', picker); ul.textContent = '';
+      for (const id of state.removed) {
+        const li = document.createElement('li'), x = document.createElement('button'); x.type = 'button'; x.className = 'btn'; x.textContent = 'Add'; x.setAttribute('aria-label', 'Add ' + nameOf(itemById(id)));
+        x.addEventListener('click', () => act(addBarItem(state, id)));
+        li.append(Object.assign(document.createElement('span'), { textContent: nameOf(itemById(id)) }), x); ul.append(li);
+      }
+      picker.hidden = !(editing && !phone && state.removed.length); if (picker.hidden) picker.open = false;
+    }
+    function act(next, focusId) { state = next; save(); paint(); if (focusId) $('.bar-ctl button:not(:disabled)', itemById(focusId))?.focus({ preventScroll: true }); }
+    editBtn.addEventListener('click', () => { editing = !editing; paint(); });
+    addEventListener('resize', paint);
+    paint();
+  }
+}
+
 try {
   const u = new URL(location.href);
   if (u.searchParams.get('notice') === 'mark-read-cooldown' && history.replaceState) {
@@ -747,4 +831,5 @@ try {
     history.replaceState(history.state, '', u.pathname + u.search + u.hash);
   }
 } catch { /* the notice just stays in the address bar */ }
+
 
