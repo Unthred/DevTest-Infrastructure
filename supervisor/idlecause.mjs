@@ -14,10 +14,18 @@ export const CAUSE_LABEL = { 'waiting-for-tick': 'waiting for the next tick', up
 // Issue #530: a hold is grouped by its cause, not its display text. The live figures in a text (weekly %, projected %, days or hours
 // left, a reset time, the rate source) change on every reading, so they are masked to form the key; identifiers such as "PR #9" stay,
 // because a different PR is a different cause. The report shows the latest text of each cause once, with the total time.
-export const holdCause = text => String(text ?? '')
+// Issue #719: a text of several holds is joined with ' | '. It is split so each part is masked on its own and the distinct parts are
+// sorted: a different mix or order of the same holds is then one cause per part set. A bare count (not after '#') changes on every
+// reading ("10 open PRs (cap 10); 12 more waiting"), so it is masked too; "PR #9" keeps its number. The masked key is cut at a fixed
+// length AFTER masking, so a figure that changes width never moves the cut.
+const HOLD_KEY_CHARS = 200;
+const maskHold = part => String(part)
   .replace(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/g, '~').replace(/\b\d{1,2}:\d{2}\b/g, '~')
   .replace(/\d+(?:\.\d+)?\s*(?:%|days?|hours?|hrs?|h|min(?:ute)?s?)(?![A-Za-z])/g, '~')
-  .replace(/\((?:~[^()]*)?(?:window average|recent)[^()]*\)/g, '(~)').replace(/\s+/g, ' ').trim();
+  .replace(/\((?:~[^()]*)?(?:window average|recent)[^()]*\)/g, '(~)')
+  .replace(/(?<![#\w.~])\d+(?:\.\d+)?(?!\w)/g, '~')
+  .replace(/\s+/g, ' ').trim().slice(0, HOLD_KEY_CHARS);
+export const holdCause = text => [...new Set(String(text ?? '').split(' | ').map(maskHold).filter(Boolean))].sort().join(' | ');
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
 const MIN = 60000;
 
@@ -32,8 +40,11 @@ export function classifyIdle({ states, heldAgents = null, holds = {}, plan = [] 
     if (heldAgents?.includes(agent)) out[agent] = { cause: 'upgrade' };
     else if (mine) out[agent] = { cause: 'work-planned' };
     else {
-      const text = [...new Set(Object.values(holds?.[agent] || {}))].join(' | ').slice(0, 300);
-      out[agent] = text ? { cause: 'named-hold', hold: redact(text, 300) } : { cause: 'no-eligible-work' };
+      // Each value is itself a ' | '-joined list of reasons (Team.hold), so split it and cut every reason on its own: a figure that
+      // changes width then only moves its own reason's cut, and one long reason cannot push the others out (issue #719).
+      const parts = Object.values(holds?.[agent] || {}).flatMap(t => String(t).split(' | ')).map(t => t.trim()).filter(Boolean);
+      const text = [...new Set(parts.map(t => redact(t, 300)))].join(' | ');
+      out[agent] = text ? { cause: 'named-hold', hold: text } : { cause: 'no-eligible-work' };
     }
   }
   return out;
