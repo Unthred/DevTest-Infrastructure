@@ -372,9 +372,12 @@ test('real process: a replay pass that did something enters the chain window, an
   const done = new Promise(res => child.on('exit', code => res(code)));
   const until = async (cond, ms) => { for (let n = 0; n < ms / 100 && !cond(); n++) await new Promise(r => setTimeout(r, 100)); return cond(); };
   t.after(() => child.kill());
-  assert.ok(await until(() => w.probes() - p0 >= 8, 30000), 'the replay check made its probes');
+  assert.ok(await until(() => w.probes() - p0 >= first.probes, 30000), 'the replay check made its probes');
   assert.equal(w.issueReads(), i0, 'the replay pass read no issue list');
-  await new Promise(r => setTimeout(r, 3000));   // the replay pass is in the chain window by now (poll 1 s, window 60 s)
+  // The replay pass is in the chain window once it has gone quiet: its GitHub calls stop and the process stays alive for longer than two chain polls
+  // (1 s each, window 60 s). Observed as a condition (a stable call count), not a fixed sleep, so a slow host only waits longer.
+  let seen = w.calls().length, since = Date.now();
+  assert.ok(await until(() => { const n = w.calls().length; if (n !== seen) { seen = n; since = Date.now(); } return child.exitCode !== null || Date.now() - since >= 2500; }, 60000), 'the pass went quiet');
   assert.equal(child.exitCode, null, 'the pass is still waiting in the chain window');
   const j2 = JSON.parse(fs.readFileSync(file, 'utf8')); j2.status = 'completed'; fs.writeFileSync(file, JSON.stringify(j2));   // the job ends
   await done;   // the pass is not clean (it has a skipped item), so its exit status is not the point
