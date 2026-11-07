@@ -25,7 +25,7 @@ import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
 import { advanceWatchlist, factsFromCache } from './watchlist.mjs';
-import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
+import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, addPassPhases, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
 import { idleReport, renderIdleReport, passStats, renderPassStats } from './idlecause.mjs';
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
@@ -41,7 +41,7 @@ import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
-import { requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
+import { dirLock, requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -294,21 +294,25 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
         mode = check.replay ? 'replay' : check.baseline ? 'record' : 'memo';
       } else mode = 'memo';
     }
+    const phasesBefore = { 'change check': check ? Date.now() - checkedAt : 0 };
     const wrapGh = raw => (mode === 'plain' ? raw : (wrapper ||= cachedGithub(raw, { mode, cache: prevCache })).gh);
     try {
+      const setupSince = Date.now();
       let team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
       // Issue #110: refresh the allowance of a held agent whose reading is stale (or whose reset time has just passed) before
       // planning, so a fresh reading can release the reviews-only latch in this very tick. A dry run or a hold never spends a run.
       if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
+      phasesBefore['team setup'] = Date.now() - setupSince;
       const report = await team.tick({ dryRun, hold, replay: mode === 'replay', beforeChain: () => wrapper?.endReplay() });
       if (!dryRun) {
-        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}), noop: report.noop === true, durationMs: Date.now() - tickStartedAt, phases: report.phases || null, ghCalls: ghStats.calls, ghMs: ghStats.ms, ...(check ? { check: { result: check.replay ? 'unchanged' : 'full', reason: check.reason, probes: check.probes, served: wrapper?.stats.served ?? 0 } } : {}) });
+        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}), noop: report.noop === true, durationMs: Date.now() - tickStartedAt, phases: report.phases ? { ...report.phases, ...phasesBefore, total: (report.phases.total || 0) + (phasesBefore['change check'] || 0) + (phasesBefore['team setup'] || 0) } : null, ghCalls: ghStats.calls, ghMs: ghStats.ms, ...(check ? { check: { result: check.replay ? 'unchanged' : 'full', reason: check.reason, probes: check.probes, served: wrapper?.stats.served ?? 0 } } : {}) });
         // Issue #951: bounded incremental refresh of the searchable issue and PR index (one gh call per kind). Best effort; skipped on a pass GitHub proved unchanged once caught up.
         updateIndex(root, { run: ghRunner(), repository: config.repository, idle: mode === 'replay', isStatusIssue });
         // The baseline is stored only after a full pass that read everything without error, and never after a replay (so the forced-full clock keeps running).
         if (mode === 'record' && tickOutcome(report).status === 'ok') { try { const next = buildCache({ repository: config.repository, baseline: check.baseline, wrapper, now: checkedAt }); if (next) saveCache(root, next); } catch { /* the next pass is a full one */ } }
         // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
         // Issue #430: advance the watched changes (merge commit, install, alerts, clearing). Never throws, never fails the tick.
+        const reportsStart = Date.now();
         try {
           const cache = readCache(root) || {}, state = readTeamState(root), ver = readVersion(root), now = Date.now();
           await advanceWatchlist({ root, cache, state, now, installed: ver?.installed || null, running: runningSha(self), tickOk: tickOutcome(report).status === 'ok',
@@ -316,6 +320,7 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
             factsFor: factsFromCache({ cache, state, now, checksOf: (pull, at) => checksState(pull.statusCheckRollup, retriedIn(state.cancelWatch, pull, at)) }), title: n => `#${n}` });
         } catch (error) { console.error(`ai-supervisor: watchlist step failed: ${error?.name || 'Error'}`); }
         await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
+        addPassPhases(root, { reports: Date.now() - reportsStart });
       }
       return report;
     } catch (error) {
@@ -540,6 +545,14 @@ async function main() {
       const status = await currentStatus({ root, config, register: readRegister(config), gh: a['no-github'] ? null : githubClient(config) });
       console.log(a.json === true ? JSON.stringify(status, null, 2) : renderStatus(status).trimEnd()); return;
     }
+    if (a._[0] === 'start-approved') {   // issue #985: the fast lane for an approved prompt; no tick lock, no team state write
+      const config = loadTeamConfig(teamConfigFile, root);
+      if (!config.enabled || handInstallHold(root) || installRunning(root)) { console.log(JSON.stringify({ started: false, why: 'the team loop is off or an install is running' })); return; }
+      const release = dirLock(root, 'inbox-lane.lock');
+      if (!release) { console.log(JSON.stringify({ started: false, why: 'the lane is already running' })); return; }
+      try { console.log(JSON.stringify(await (await teamFor(root, registry, config)).startApprovedNow({}))); } finally { release(); }
+      return;
+    }
     if (a._[0] === 'accept-split') {   // issue #244: the "Accept split" path of the Needs you item
       const n = Number(a._[1]);
       if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team accept-split ISSUE');
@@ -632,7 +645,10 @@ async function main() {
         else { try { result = reconcileOnce(root, registry, installRunning(root)); } finally { unlockRecover(); } }
         // The upgrade check comes first (issue #134). A failure here never fails the tick.
         let before;
+        const installsStart = Date.now();   // issue #985: the install steps (before and after the team step) are one phase of the pass
+        let installsMs = 0;
         try { before = await selfUpgradeBefore(root, registry); } catch (error) { before = { error: String(error.message).slice(0, 200), hold: null }; }
+        installsMs += Date.now() - installsStart;
         // The five-minute reconcile cron also runs the token-free team tick, when the team loop is enabled.
         try {
           result.team = await teamTick(root, registry, false, before.hold, pass);
@@ -640,7 +656,10 @@ async function main() {
           if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
         } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
         // After the tick lock is released, so the new version's dry-run health check can take it (the pass lock is not taken by that check). A failure here never fails the tick.
+        const afterStart = Date.now();
         try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
+        installsMs += Date.now() - afterStart;
+        if (result.team && !result.team.skipped && !result.team.error) addPassPhases(root, { installs: installsMs });
         // Issue #406: this process ran the old code and dispatched nothing after an install; ask for a pass on the new code now. The request is
         // seen when this pass releases the pass lock, so the follow-up runs the installed code and verifies the install.
         if (before.result === 'upgraded') wakeNextJob(root, 'install');

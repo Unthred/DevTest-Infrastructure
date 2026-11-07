@@ -1678,8 +1678,8 @@ export class Team {
     // One failing item (a lease conflict, one gh error) is recorded and skipped; it never aborts the other agents (issue #35).
     // Issue #985: time spent per phase of the pass (milliseconds, summed per name), so a slow pass can be traced to the phase that made it slow.
     const phases = report.phases = {}, t0 = Date.now();
-    const lap = (name, since) => { phases[name] = (phases[name] || 0) + (Date.now() - since); };
-    const guard = async (what, fn) => { const since = Date.now(); try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } finally { lap(what.replace(/ \d.*$/, ''), since); } };
+    const lap = (name, since) => { const k = String(name).toLowerCase().replace(/[^a-z0-9 -]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^[^a-z]+/, '').slice(0, 31) || 'step'; phases[k] = (phases[k] || 0) + (Date.now() - since); };   // a name the record would drop is cleaned, not lost
+    const guard = async (what, fn) => { const since = Date.now(); try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } finally { lap(what.replace(/ \d.*$/, '').replace(/ \(.*$/, ''), since); } };
     if (!dryRun) {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
       await guard('inbox', () => this.processInbox(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
@@ -1997,6 +1997,11 @@ export class Team {
     const now = this.clock.now();
     scanInboxNow({ root: this.root, inboxDir: dir, scan: inboxStore.scan, maxPending: this.c.inbox.max_pending, now });   // issue #985: the dashboard's watcher may have scanned already
     for (const st of inboxStore.allStatuses(dir)) {
+      // Issue #985: a job the fast lane started while this pass (or none) ran is adopted into the team state here, once.
+      if (st.state === 'running' && st.adopt?.id && st.adopt.rec) {
+        if (!this.s.jobs[st.adopt.id]) { this.s.jobs[st.adopt.id] = st.adopt.rec; this.save(); }
+        inboxStore.finish(dir, st.id, { adopt: null }, now);
+      }
       if (!['approved', 'posting'].includes(st.state)) continue;
       try {
         const l = inboxStore.loadItem(dir, st.id);
@@ -2005,6 +2010,36 @@ export class Team {
         if (st.kind === 'action' && st.state === 'approved') await this.runInboxAction(dir, st, l.item, report);
       } catch (error) { (report.skipped ||= []).push({ what: `inbox ${st.id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
     }
+  }
+  // Issue #985: the fast lane. Starts the oldest approved prompt now, from a small separate process, even while a full pass runs. It never
+  // writes the team state (a running pass holds its own copy and would overwrite it): the job record goes into the inbox item's status and
+  // the next pass adopts it (processInbox). The same limits as the planner: a free implementer slot, a place under limits.overall, the
+  // provider cap, the agent's allowance and usage limit, and the writer-model rules in modelFor. `admit` is the host-load check hook (#972):
+  // it returns { ok, why }; none is installed yet.
+  async startApprovedNow(report = {}, { admit = null } = {}) {
+    const dir = this.inboxDir(); if (!dir) return { started: false, why: 'no inbox configured' };
+    const next = this.inboxNext(); if (!next) return { started: false, why: 'no approved prompt is waiting' };
+    const L = this.c.limits, active = (await this.jobs.listActive()).filter(j => j.status !== 'paused_limit');
+    const usedBy = {}; let impl = 0;
+    for (const j of active) { const role = roleOfType(this.s.jobs[j.id]?.kind); if (role === 'implementer') impl++; const k = `${j.provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    if (impl >= roleCount(L, 'implementer')) return { started: false, why: 'no free implementer slot' };
+    if (active.length >= overallCap(L)) return { started: false, why: `the overall cap (${overallCap(L)}) is reached` };
+    const gate = admit ? admit() : { ok: true };
+    if (!gate.ok) return { started: false, why: gate.why || 'the host is busy' };
+    this.modes = this.budgets();
+    let agent = null;
+    for (const [name, a] of this.agents()) {
+      if (this.limitedOf(name).out || this.providerSlotFull(a.provider, 'implementer', usedBy)) continue;
+      const B = this.modes?.[name]; if (B && !admits(B, 'implement', 0).ok) continue;
+      agent = name; break;
+    }
+    if (!agent) return { started: false, why: 'no agent can take an implement job now (allowance, usage limit or provider cap)' };
+    const id = next.id;
+    const adopt = () => { const jid = Object.keys(this.s.jobs).find(k => this.s.jobs[k].inboxId === id); if (jid) inboxStore.finish(dir, id, { adopt: { id: jid, rec: this.s.jobs[jid] } }, this.clock.now()); };
+    this.save = adopt;   // the lane never writes state.json; the record of the new job is kept with the inbox item instead
+    this.taken = new Set();
+    await this.runAction({ type: 'inbox', agent, key: id, inboxId: id, title: next.item.title }, report);
+    return { started: inboxStore.statusOf(dir, id)?.state === 'running', id, agent };
   }
   // Issue #629: an approved named action. 'running' is recorded BEFORE the effect, so a crash leaves it unrepeated (at most once); a refusal
   // is a normal outcome: the item ends 'failed' with the reason and nothing is changed. The audit log and the unblock log record it.

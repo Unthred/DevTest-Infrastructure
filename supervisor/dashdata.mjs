@@ -188,10 +188,35 @@ export function tickOutcome(report) {
   return { status: 'error', error: `${skipped.length} action(s) skipped: ${skipped.map(s => `${s.what}: ${s.reason}`).join('; ')}`.slice(0, 300) };
 }
 
+// Issue #985: phase name -> whole milliseconds. Hostile names and values are dropped; "total" and the fixed phases come first, so the cap of
+// 20 names can only ever cut the variable per-step names.
+const PHASE_NAME = /^[a-z][a-z0-9 -]{0,30}$/, FIXED_PHASES = ['total', 'team setup', 'change check', 'github reads', 'plan', 'job launches', 'reports', 'installs'];
+export function cleanPhases(phases) {
+  if (!phases || typeof phases !== 'object') return null;
+  const ok = Object.entries(phases).filter(([k, v]) => PHASE_NAME.test(k) && Number.isFinite(v) && v >= 0);
+  const rank = k => { const i = FIXED_PHASES.indexOf(k); return i < 0 ? FIXED_PHASES.length : i; };
+  return Object.fromEntries(ok.sort((a, b) => rank(a[0]) - rank(b[0])).slice(0, 20).map(([k, v]) => [k, Math.round(v)]));
+}
+// Issue #985: work done after the tick was recorded (the install steps and the reports) adds its time to the record it belongs to: the cache
+// tick and, when it is still the newest line, the snapshot. Best effort; a failure leaves the record as it was.
+export function addPassPhases(root, add) {
+  try {
+    const prev = readCache(root); if (!prev?.tick || !add || typeof add !== 'object') return;
+    const extra = cleanPhases(add) || {}, sum = Object.values(extra).reduce((n, v) => n + v, 0);
+    if (!Object.keys(extra).length) return;
+    const merge = o => JSON.parse(JSON.stringify({ ...o, durationMs: Number.isFinite(o.durationMs) ? o.durationMs + sum : undefined,
+      phases: cleanPhases({ ...Object.fromEntries(Object.entries(o.phases || {}).map(([k, v]) => [k, k === 'total' ? v + sum : v])), ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, (o.phases?.[k] || 0) + v])) }) }));
+    atomicJson(cacheFile(root), { ...prev, tick: merge(prev.tick) });
+    const file = historyFile(root), lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean), last = JSON.parse(lines[lines.length - 1]);
+    if (last.at !== prev.tick.at) return;
+    lines[lines.length - 1] = JSON.stringify(merge(last));
+    const temp = `${file}.tmp-${process.pid}`; fs.writeFileSync(temp, lines.join('\n') + '\n', { mode: 0o600 }); fs.renameSync(temp, file);
+  } catch { /* the record stays as it was */ }
+}
 // Written by the tick (never by the dashboard server). `error` is the failure of this tick, if any.
 export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0, startedAt = null, heldAgents = null, holds = {}, trigger = null, merged = null, noop = false, ghCalls = null, ghMs = null, check = null, durationMs = null, phases = null }) {
   // Issue #985: how long the pass took and where (phase name -> milliseconds), kept with the tick so the dashboard and foreman_status can show it.
-  const phaseMs = phases && typeof phases === 'object' ? Object.fromEntries(Object.entries(phases).filter(([k, v]) => /^[a-z][a-z0-9 -]{0,30}$/.test(k) && Number.isFinite(v) && v >= 0).slice(0, 20).map(([k, v]) => [k, Math.round(v)])) : null;
+  const phaseMs = cleanPhases(phases);
   const passTiming = { ...(Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {}), ...(phaseMs && Object.keys(phaseMs).length ? { phases: phaseMs } : {}) };
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null), ...passTiming },

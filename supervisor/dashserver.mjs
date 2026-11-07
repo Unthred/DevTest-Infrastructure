@@ -29,7 +29,7 @@ import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
-import { wakeView, requestWake, spawnDetachedPass, inboxWatcher, scanInboxNow } from './wake.mjs';
+import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, scanInboxNow } from './wake.mjs';
 import * as inboxStore from './inbox.mjs';
 import { fileURLToPath } from 'node:url';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
@@ -45,6 +45,8 @@ const SHIPPED_CONFIG = fileURLToPath(new URL('./team.json', import.meta.url));
 export function defaultWake(root, reason, config) {
   try {
     if (!config?.enabled) return;
+    // Issue #985: an approval also starts the approved prompt at once in the fast lane, so it does not wait for a running pass to end.
+    if (reason === 'approve') { try { spawnDetachedLane({ root, self: cliPath }); } catch { /* the woken pass starts it */ } }
     requestWake({ root, reason, spawnPass: why => spawnDetachedPass({ root, reason: why, self: cliPath }) });
   } catch (error) { console.error(`dashboard: wake not requested: ${error?.name || 'Error'}`); }
 }

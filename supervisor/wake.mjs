@@ -167,6 +167,14 @@ export function spawnDetachedPass({ root, reason, self, registry = null, spawnFn
   const child = spawnFn(process.execPath, wakeArgs({ target: wakeTarget({ root, self }), reason, root, registry }), { detached: true, stdio: 'ignore', env: wakeEnv(root) });
   child.on?.('error', () => {}); child.unref?.();
 }
+// Issue #985: start an approved prompt now, in its own small process, whatever a running pass is doing. The process takes inbox-lane.lock (one
+// at a time; a second finds it held and ends: the holder reads the same approved items), runs `team start-approved` on the installed code and
+// ends. Failure to start it is no failure: the woken pass starts the prompt the normal way.
+export const laneArgs = ({ target, root, registry }) => [target, 'team', 'start-approved', '--state-root', root, ...(registry ? ['--registry', registry] : [])];
+export function spawnDetachedLane({ root, self, registry = null, spawnFn = spawn }) {
+  const child = spawnFn(process.execPath, laneArgs({ target: wakeTarget({ root, self }), root, registry }), { detached: true, stdio: 'ignore', env: wakeEnv(root) });
+  child.on?.('error', () => {}); child.unref?.();
+}
 // A new overseer proposal arrives as a file in <inbox>/items/ (the existing write route, foreman-mcp/inbox.mjs). The dashboard server, which
 // already reads the inbox, looks at the folder's file names every few seconds (one directory listing, no reads of file content) and calls
 // `onNew` when a name appears that it has not seen. Names present when the watcher starts are not new: the schedule picks those up.
