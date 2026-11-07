@@ -541,3 +541,17 @@ test('just after a weekly reset a short burst is not extrapolated: 4% used is no
   const later = NOW + 20 * HOUR, r2 = NOW + 120 * HOUR, h2 = [{ at: later - 3 * HOUR, used: 0.1, resetsAt: r2 }, { at: later, used: 0.3, resetsAt: r2 }];
   assert.equal(assessAgent({ allowance: codexAl(0.3, { resetsAt: r2, at: later }), history: h2, now: later }).rateSource, 'recent');
 });
+
+test('the recent rate blends in gradually: no cliff at recent_hours (issue #698)', () => {
+  const proj = elapsedH => {
+    const now = NOW, resetsAt = NOW + (168 - elapsedH) * HOUR;
+    const history = [{ at: now - 3 * HOUR, used: 0.0, resetsAt }, { at: now, used: 0.04, resetsAt }];
+    return assessAgent({ allowance: codexAl(0.04, { resetsAt }), history, now });
+  };
+  const at12 = proj(12), at18 = proj(18), at23 = proj(23), at24 = proj(24);
+  assert.equal(at12.rateSource, 'window average');
+  assert.ok(at18.projected > at12.projected && at23.projected < at24.projected);
+  // continuity: the step between 23h and 24h is small relative to the old 29% -> 196% jump
+  assert.ok(at24.projected - at23.projected < 0.3, `${at23.projected} -> ${at24.projected}`);
+  assert.ok(at23.projected > 0.3, 'the recent rate already counts at 23h');
+});
