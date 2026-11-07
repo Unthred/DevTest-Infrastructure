@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createViewStore } from '../supervisor/viewstore.mjs';
 import { redact } from '../supervisor/redact.mjs';
-import { renderRoute } from '../supervisor/dashrender.mjs';
+import { renderRoute, pageDataStat } from '../supervisor/dashrender.mjs';
 
 const gate = () => { let open; const p = new Promise(r => { open = r; }); return { p, open }; };
 const mk = (over = {}) => {
@@ -267,10 +267,15 @@ parentPort.on('message', ({ id }) => { if (fs.existsSync(${JSON.stringify(flag)}
   } finally { await w.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('page-data tooltip names the reason: behind a write, rebuilding, or just old', async () => {
-  const { pageDataStat } = await import('../supervisor/dashrender.mjs').catch(() => ({}));
-  if (!pageDataStat) return;
+test('page-data tooltip names the reason: behind a write, rebuilding, or just old', () => {
   assert.match(pageDataStat({ pageData: { ageMs: 2000, stale: true, behindWrite: true, refreshing: false } }), /before the latest change/);
   assert.match(pageDataStat({ pageData: { ageMs: 40000, stale: true, refreshing: true } }), /being rebuilt/);
   assert.doesNotMatch(pageDataStat({ pageData: { ageMs: 40000, stale: true, refreshing: false } }), /being rebuilt/);
+  assert.match(pageDataStat({ pageData: { ageMs: 40000, stale: true, refreshing: false } }), /next request/);
+});
+
+test('page-data tooltip: a failed rebuild wins over behindWrite', () => {
+  const html = pageDataStat({ pageData: { ageMs: 40000, stale: true, behindWrite: true, failed: 'boom' } });
+  assert.match(html, /last rebuild failed \(boom\)/);
+  assert.doesNotMatch(html, /before the latest change/);
 });
