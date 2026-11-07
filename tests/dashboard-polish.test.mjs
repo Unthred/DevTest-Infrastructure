@@ -297,3 +297,12 @@ test('#924 early.js applies a saved sticky flag and menu width; a bad width is i
   for (const bad of ['"wide"', '5', '99999', 'null']) assert.equal(run({ 'dash.navw': bad }).props['--nav-w'], undefined, bad);
   assert.equal(run({ 'dash.sticky': 'false' }).dataset.sticky, undefined);
 });
+
+test('issue #938: stable page-scrollbar gutter and a horizontally centred back-to-top button', () => {
+  assert.match(css, /^html\{[^}]*scrollbar-gutter:stable/m);
+  const rule = css.match(/^\.to-top\{[^}]*\}/m)[0];
+  assert.match(rule, /left:50%/); assert.match(rule, /transform:translateX\(-50%\)/);
+  assert.doesNotMatch(rule, /right:/);
+  assert.match(rule, /height:44px/);
+  assert.doesNotMatch(css, /^html\{[^}]*scrollbar-gutter:auto/m);
+});
