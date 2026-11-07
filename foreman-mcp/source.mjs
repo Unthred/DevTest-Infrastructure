@@ -64,7 +64,7 @@ export function readHost({ proc = '/proc', fsRead = fs.readFileSync } = {}) {
 
 // Issue #636: swap activity, disk wait and the top processes by memory, from /proc only. Rates need two readings, so this waits `intervalMs`
 // between them. Only the kernel's short process name is read (never a command line, which can hold secrets). Anything unreadable is null.
-const DISK = /^(sd[a-z]+|vd[a-z]+|hd[a-z]+|nvme\d+n\d+|md\d+)$/;
+const DISK = /^(sd[a-z]+|vd[a-z]+|hd[a-z]+|nvme\d+n\d+|md\d+(?:p\d+)?)$/;
 function counters(proc, fsRead) {
   const vm = {}; for (const line of (read(`${proc}/vmstat`, fsRead) || '').split('\n')) { const m = /^(pswpin|pswpout) (\d+)/.exec(line); if (m) vm[m[1]] = Number(m[2]); }
   const stat = read(`${proc}/stat`, fsRead) || '';

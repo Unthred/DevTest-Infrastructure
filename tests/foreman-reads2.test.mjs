@@ -29,7 +29,7 @@ const fakeProc = (vals) => {
   const files = {
     '/p/vmstat': `nr_free_pages 1\npswpin ${vals.pswpin}\npswpout ${vals.pswpout}\n`,
     '/p/stat': `cpu  ${vals.cpu.join(' ')} 0 0 0\nprocs_blocked ${vals.blocked}\n`,
-    '/p/diskstats': `   8 0 sda 1 2 3 4 5 6 7 8 9 ${vals.sda} 11 12\n   8 1 sda1 1 2 3 4 5 6 7 8 9 99999 11 12\n   7 0 loop0 1 2 3 4 5 6 7 8 9 99999 11 12\n   9 0 md1 1 2 3 4 5 6 7 8 9 ${vals.md} 11 12\n`,
+    '/p/diskstats': `   8 0 sda 1 2 3 4 5 6 7 8 9 ${vals.sda} 11 12\n   8 1 sda1 1 2 3 4 5 6 7 8 9 99999 11 12\n   7 0 loop0 1 2 3 4 5 6 7 8 9 99999 11 12\n   9 0 md1 1 2 3 4 5 6 7 8 9 ${vals.md} 11 12\n 259 1 md2p1 1 2 3 4 5 6 7 8 9 ${vals.md} 11 12\n`,
     '/p/10/status': `Name:\tbigproc\nVmRSS:\t 2097152 kB\nVmSwap:\t 524288 kB\n`, '/p/11/status': `Name:\tsmall\nVmRSS:\t 1024 kB\n`, '/p/12/status': `Name:\tkthread\n`, '/p/13/status': `Name:\tmid\nVmRSS:\t 1048576 kB\nVmSwap:\t 0 kB\n`,
     '/p/10/cmdline': `bigproc\0--token=${GH}`,
   };
@@ -43,7 +43,7 @@ test('hostActivity: swap rate, iowait, busy percent for whole disks only, and th
   const r = await hostActivity({ proc: '/p', fsRead: f => { const v = fsRead(f); if (['/p/vmstat', '/p/stat', '/p/diskstats'].includes(f)) n += 2; return v; }, readDir: a.readDir, sleep: async () => { n = 6; } });
   assert.ok(r.swap.pagesInPerSecond > 0, 'swap in moved'); assert.equal(r.swap.pagesOutPerSecond, 0);
   assert.equal(r.diskWait.processesBlocked, 7); assert.equal(r.diskWait.cpuIowaitPercent, 60);
-  assert.deepEqual(Object.keys(r.diskWait.busyPercentByDisk).sort(), ['md1', 'sda'], 'partitions and loop devices are left out');
+  assert.deepEqual(Object.keys(r.diskWait.busyPercentByDisk).sort(), ['md1', 'md2p1', 'sda'], 'disk partitions and loop devices are left out; Unraid\'s partitioned array devices (mdNpM) are kept');
   assert.deepEqual(r.topProcessesByMemory.top.map(p => [p.name, p.rssMb, p.swapMb]), [['bigproc', 2048, 512], ['mid', 1024, 0], ['small', 1, null]], 'sorted by RSS, kernel threads (no VmRSS) skipped');
   assert.ok(![...a.reads, ...b.reads].some(f => /cmdline|environ/.test(f)), 'no command line or environment read');
   assert.ok(!JSON.stringify(r).includes(GH));
@@ -96,6 +96,13 @@ test('testRunsView: running and queued runs with ages, free slots, counts by kin
   const text = JSON.stringify(v); for (const bad of [GH, PWVAL]) assert.ok(!text.includes(bad), 'no secret-shaped output');
   assert.equal(await queued, null); a();
 });
+test('testRunsView: counts cover the whole window, only the events list is capped at 50', t => {
+  const root = tmp(t), now = Date.now();
+  for (let i = 0; i < 70; i++) recordTestEvent(root, { kind: 'refused', label: 'x', reason: 'headroom', at: now - 1000 - i });
+  for (let i = 0; i < 3; i++) recordTestEvent(root, { kind: 'timeout', label: 'y', reason: 'long', at: now - 5000 - i });
+  const v = testRunsView(root, { limit: 2, now });
+  assert.equal(v.counts.refused, 70); assert.equal(v.counts.timeout, 3); assert.equal(v.events.length, 50);
+});
 
 // ---- ticks
 const writeSnaps = (root, snaps) => { fs.mkdirSync(path.join(root, 'dashboard'), { recursive: true }); fs.writeFileSync(path.join(root, 'dashboard', 'snapshots.jsonl'), snaps.map(s => JSON.stringify(s)).join('\n') + '\n'); };
@@ -124,9 +131,21 @@ test('itemTimeline: a pull request joins its own jobs, its issue\'s jobs and its
   assert.deepEqual(r.entries.map(e => [e.type, e.what]), [['job', 'implement'], ['job', 'rebase'], ['job', 'review'], ['review', 'pass'], ['merge', 'merged']]);
   assert.deepEqual(r.entries.map(e => e.at), [1000, 2000, 3000, 4000, 5000].map(ms => new Date(ms).toISOString()));
   assert.equal(r.counts.implementJobs, 1); assert.equal(r.counts.reviews, 1);
-  const i = itemTimeline(VIEW, 'issue', 12); assert.deepEqual(i.entries.map(e => e.what), ['implement'], 'an issue shows its own jobs, not its pull request');
+  const i = itemTimeline(VIEW, 'issue', 12); assert.deepEqual(i.entries.map(e => e.what), ['implement', 'rebase', 'review', 'pass', 'merged'], 'an issue also shows the jobs, reviews and merge of the pull request that closes it');
   assert.equal(itemTimeline(VIEW, 'pr', 51).entries.length, 1); assert.equal(itemTimeline(VIEW, 'pr', 404).found, false); assert.equal(itemTimeline({}, 'issue', 1).total, 0);
   assert.equal(itemTimeline(VIEW, 'pr', 50, { limit: 2 }).entries.length, 2, 'limit keeps the newest');
+});
+test('itemTimeline: reviews and the merge come from the pull request\'s verdicts and mergedAt; counts name activity job rows apart; an issue joins its closing pull request', () => {
+  const view = { prs: [{ number: 60, title: 'T', status: 'merged', issue: 20, mergedAt: 9000, verdicts: [{ at: 7000, reviewer: 'codex', verdict: 'CHANGES', head: 'abcdef123' }, { at: 8000, reviewer: 'codex', verdict: 'PASS', head: 'fedcba987' }], jobs: [{ fullId: 'e'.repeat(32), kind: 'fix', agent: 'claude', status: 'completed', startedAt: 7500 }] }], issues: [{ number: 20, title: 'i' }],
+    jobs: [{ fullId: 'f'.repeat(32), kind: 'review', ref: 60, agent: 'codex', status: 'completed', startedAt: 6500 }, { fullId: 'g'.repeat(32), kind: 'implement', ref: 20, startedAt: 1000 }],
+    activity: [{ at: 8000, kind: 'review', outcome: 'pass', text: 'dup', link: { url: 'https://github.com/o/r/pull/60' } }, { at: 8500, kind: 'job', outcome: 'completed', text: 'rebase row', link: { url: 'https://github.com/o/r/pull/60' } }] };
+  const p = itemTimeline(view, 'pr', 60);
+  assert.deepEqual(p.entries.map(e => [e.type, e.what]), [['job', 'implement'], ['job', 'review'], ['review', 'changes'], ['job', 'fix'], ['review', 'pass'], ['job', 'completed'], ['merge', 'merged']]);
+  assert.deepEqual(p.entries.map(e => e.at), [1000, 6500, 7000, 7500, 8000, 8500, 9000].map(ms => new Date(ms).toISOString()));
+  assert.equal(p.counts.reviews, 2, 'the activity duplicate of a verdict is not counted twice'); assert.equal(p.counts.merges, 1); assert.equal(p.counts.jobEvents, 1); assert.equal(p.counts.completedJobs, undefined); assert.equal(p.counts.fixJobs, 1);
+  const i = itemTimeline(view, 'issue', 20);
+  assert.equal(i.total, 7, 'implement job, review and fix jobs, two verdicts, the job row and the merge of the closing pull request'); assert.equal(i.counts.merges, 1); assert.equal(i.counts.reviewJobs, 1);
+  assert.equal(itemTimeline(view, 'issue', 21).total, 0);
 });
 test('foreman_item_timeline: bad input is refused, output is redacted', async () => {
   const tools = createTools({ source: { get: async () => ({ view: VIEW, ageMs: 0 }) }, readHost: () => ({}) });
