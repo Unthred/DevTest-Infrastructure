@@ -93,7 +93,8 @@ test('an over-limit fake job is killed as a unit: children die with it and the r
   assert.equal(r.kill.reason, 'memory-limit'); assert.equal(r.kill.class, 'suite'); assert.equal(r.kill.suggested_class, 'small'); assert.equal(r.kill.limit_mb, 64);
   assert.ok(r.kill.observed_mb > 64);
   const grand = Number(fs.readFileSync(pidFile, 'utf8'));
-  await new Promise(res => setTimeout(res, 200));
+  // Poll (bounded) instead of a fixed wait: teardown of a 150 MB process can lag on a loaded runner.
+  for (let i = 0; i < 100 && alive(grand); i++) await new Promise(res => setTimeout(res, 50));
   assert.equal(alive(grand), false, 'the grandchild is gone with its group');
 });
 

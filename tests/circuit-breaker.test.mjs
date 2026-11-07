@@ -297,6 +297,17 @@ test('resume is refused for a process under a supervised job, even with a termin
 test('trippedBy labels: every value the breaker records has display text, unknown values pass through', () => {
   for (const v of ['count', 'cost', 'any-kind-cost']) assert.notEqual(B.trippedByLabel(v), v);
   assert.equal(B.trippedByLabel('something-new'), 'something-new');
+  // inherited Object.prototype keys must pass through as text, not resolve to prototype members
+  for (const k of ['toString', '__proto__', 'constructor', 'hasOwnProperty']) assert.equal(B.trippedByLabel(k), k);
+});
+
+test('haltView exposes a display label next to the raw trippedBy, for the view and every entry', () => {
+  const s = stateWith(blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 2.6 } }), blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 2.5 } }));
+  B.evaluate(s, L, NOW);
+  const v = B.haltView(s);
+  assert.equal(v.trippedBy, 'cost');
+  assert.equal(v.trippedByLabel, B.TRIPPED_BY_LABEL.cost);
+  assert.ok(v.entries.length > 0 && v.entries.every(e => e.trippedByLabel === B.trippedByLabel(e.trippedBy) && e.trippedByLabel !== e.trippedBy));
 });
 
 // ---- issue #626: judge by repeat cause and cost, clear itself, Resume
