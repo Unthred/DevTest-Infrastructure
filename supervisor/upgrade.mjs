@@ -4,6 +4,7 @@
 // Order of checks per tick (cheapest first): rollback latch, verification of a pending upgrade, hourly rate limit, detection,
 // upgrader guard, review/CI eligibility, quiet wait, pre-checks, upgrade, dry-run health check. The "next live tick" health
 // check is `verifyPending`, called by the CLI with the outcome of the live tick that ran under the new version.
+import { mcpNeedsInstall } from './mcpinstall.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -531,11 +532,29 @@ export class SelfUpgrade {
     const dry = await this.d.dryRunTick();
     if (!dry.ok) return this.rollback(from, target, `team tick --dry-run failed: ${dry.reason}`, eligibility.prs, { ...checks, dryRun: 'failed' });
     checks.dryRun = 'ok';
+    await this.noteMcp(from, target, files);
     this.s.pending = { from, to: target, prs: eligibility.prs, checks, at: now };
     this.noteInstall({ result: 'installed', sha: target, reason: null }); this.save();
     this.record({ from, to: target, prs: eligibility.prs, checks, result: 'upgraded' });
     await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (${await this.prNames(eligibility.prs)}).`);
     return 'upgraded';
+  }
+
+  // Issue #946: the swap also updates the MCP server copy when foreman-mcp/ changed. That step never undoes the supervisor swap; its
+  // installer restores the previous copy on failure and the outcome is read here: a failure is recorded and alerted once per target.
+  async noteMcp(from, target, files) {
+    if (typeof this.d.mcpResult !== 'function') return;
+    let r = null; try { r = await this.d.mcpResult(target); } catch { r = null; }
+    const changed = mcpNeedsInstall(files);
+    if (!r || r.sha !== target) {
+      if (!changed) return;   // nothing in foreman-mcp/ moved and the installer recorded nothing: no news
+      r = { result: 'failed', reason: 'the installer left no result for this commit' };
+    }
+    if (r.result === 'skipped' && !changed) return;
+    this.s.mcp = { sha: target, result: r.result, reason: String(r.reason || '').slice(0, 200), at: this.clock.now() };
+    this.save();
+    this.record({ from, to: target, result: r.result === 'failed' ? 'mcp_install_failed' : 'mcp_install', reason: this.s.mcp.reason, mcpChanged: changed });
+    if (r.result === 'failed') await this.alert(`${target}:mcp`, `Foreman MCP server not updated to ${short(target)}: ${this.s.mcp.reason}. The previous copy was kept and still works; Foreman itself installed. Check docs/foreman-mcp.md.`);
   }
 
   // The delayed retry is spent once used or already recorded for this commit; only a different target clears it.
@@ -760,6 +779,8 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
       const healthy = d ? await httpHealth(d.host, d.port || process.env.DASHBOARD_PORT || '8731') : false;
       return { running: true, healthy, good: d ? { host: d.host, port: d.port, version: d.version, argv: d.argv } : null };
     },
+    // Issue #946: what tools/install-foreman-mcp.sh recorded for this commit (null when it recorded nothing).
+    mcpResult: async sha => { try { const r = JSON.parse(fs.readFileSync(path.join(root, 'team', 'mcp-install.json'), 'utf8')); return r && r.sha === sha ? r : null; } catch { return null; } },
     alert: sendAlert
   };
 }

@@ -16,6 +16,10 @@ if [ "${1:-}" = "--supervisor" ]; then
   cp -p "$backup" "$bin/.ai-supervisor-rollback-$new"
   mv "$bin/.ai-supervisor-rollback-$new" "$bin/ai-supervisor"
   printf 'supervisor restored to %s from %s\n' "$previous" "$backup"
+  # Issue #946: put the MCP server copy of the restored version back (best effort; versions installed before this had none).
+  if [ -f "$state/versions/$previous/tools/install-foreman-mcp.sh" ] && [ -d "$state/versions/$previous/foreman-mcp" ]; then
+    AI_SUPERVISOR_STATE_DIR="$state" bash "$state/versions/$previous/tools/install-foreman-mcp.sh" "$state/versions/$previous" "$previous" || printf 'foreman-mcp restore failed\n' >&2
+  fi
   exit 0
 fi
 commit=${1:?usage: rollback-supervisor.sh COMMIT}

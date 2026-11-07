@@ -72,6 +72,13 @@ Added after the 4 and 5 Nov 2026 stalls (load 60 to 80, swap full), where each c
    `restrict` turns off the pty, port, agent and X11 forwarding and `~/.ssh/rc`, and the forced command ignores whatever the client asks to run.
 6. If sshd uses `AllowUsers` or `AllowGroups`, the account must be listed. Check with `sshd -T` (read-only); do not reload sshd without the homeowner.
 
+### Automatic updates (issue #946)
+After the hand install above, Foreman's self-upgrade keeps the copy current. Once, as root, write `/mnt/cache/ai-supervisor/foreman-mcp.install` with one line, `INSTALL_DIR=<the install directory>` (the directory that holds `foreman-mcp/` and `VERSION`). Without that file, or without the hand-installed `foreman-mcp/`, nothing is installed and the result is `skipped`.
+- Each install of Foreman runs `tools/install-foreman-mcp.sh` from `tools/upgrade-supervisor.sh`, after the supervisor swap. If `foreman-mcp/` in the commit differs from the installed copy, the new copy is checked (identical to the commit, `server.mjs` parses), swapped in with two renames and recorded in `VERSION`; if it already matches, only `VERSION` moves, so it always names the Foreman commit. Code is root-owned, directories 0755, files 0644, `launcher.sh` 0755 (the account only reads it). `launcher.env` is carried over and never replaced.
+- The same pre-checks (validator and full tests, before anything is swapped) apply as for every Foreman install. A failed MCP install never undoes the supervisor swap: the previous copy is put back and keeps working, the failure is recorded (`team/mcp-install.json`, an `mcp_install_failed` upgrade record) and alerted once per commit. A supervisor rollback also restores the MCP copy of the version it returns to.
+- The System page's Version card and `foreman_status` (`version.mcp`) show the installed MCP commit and flag it when it differs from Foreman's. Nothing is shown while the file above is absent.
+- Tests: `node --test tests/mcp-install.test.mjs` (a change under `foreman-mcp/` must be in the upgrade plan).
+
 ## Claude desktop configuration
 In Claude desktop's MCP configuration, add a server that runs `ssh` and speaks MCP over its stdin and stdout, with placeholders for your values:
 ```
