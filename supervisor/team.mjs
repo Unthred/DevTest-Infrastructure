@@ -7,6 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
 import { takeBreakerResumeRequests, discardBreakerResumeRequests } from './breakerresume.mjs';
+import { takeHomeownerRequests, discardHomeownerRequest } from './homeownerqueue.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as breaker from './breaker.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
@@ -1667,7 +1668,7 @@ export class Team {
     const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
     if (!dryRun) {
       await this.loadNames();
-      await guard('inbox', () => this.processInbox(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
+      await guard('inbox', () => this.processInbox(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
@@ -1735,6 +1736,25 @@ export class Team {
     }
     // The request files go only after the state is saved: if the save throws, the next tick applies the clicks again (issue #737).
     if (reqs.length) { this.save(); discardBreakerResumeRequests(reqs); }
+  }
+  // Issue #867: apply the reopen, accept-split and request-review commands that timed out waiting for the tick lock and left a request. A
+  // request that is done or refused for its own reason is reported and its file discarded; an unexpected failure keeps the file for the next tick.
+  async applyHomeownerRequests(report) {
+    let reqs = [];
+    try { reqs = takeHomeownerRequests(this.root); } catch (error) { (report.skipped ||= []).push({ what: 'queued homeowner requests', reason: String(error?.message || error).slice(0, 200) }); return; }
+    for (const r of reqs) {
+      const what = `queued ${r.command} ${r.args.join(' ')}`.slice(0, 120);
+      try {
+        if (r.command === 'reopen') await this.reopen(Number(r.args[0]));
+        else if (r.command === 'accept-split') await this.acceptSplit(Number(r.args[0]));
+        else await this.requestReReview(r.args[0], r.args[1]);
+        (report.notified ||= []).push({ queuedHomeownerRequest: what, applied: true });
+        discardHomeownerRequest(r);
+      } catch (error) {
+        (report.skipped ||= []).push({ what, reason: String(error?.message || error).slice(0, 200) });
+        if (error instanceof SupervisorError) discardHomeownerRequest(r);
+      }
+    }
   }
   // Issue #549: clear one cause, 'global' or 'all'. Reached only from the homeowner's CLI (see cli.mjs), never from a job.
   breakerResume(scope) {

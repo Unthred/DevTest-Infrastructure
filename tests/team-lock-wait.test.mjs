@@ -46,3 +46,34 @@ test('issue #867: a CLI breaker resume that times out leaves a queued request fo
   assert.notEqual(r.status, 0); assert.match(text, /resume is queued/);
   const q = takeBreakerResumeRequests(root); assert.equal(q.length, 1); assert.equal(q[0].scope, 'global');
 });
+
+import { Team } from '../supervisor/team.mjs';
+import { takeHomeownerRequests, queueHomeownerRequest } from '../supervisor/homeownerqueue.mjs';
+
+test('issue #867: reopen, accept-split and request-review that time out leave a queued request', t => {
+  const dir = tmp(t), root = stateRoot(dir), held = tickLock(root); t.after(() => held());
+  const run = (...args) => spawnSync(process.execPath, [cli, 'team', ...args], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: dir, AI_SUPERVISOR_LOCK_WAIT_MS: '200' } });
+  for (const args of [['reopen', '23'], ['accept-split', '24'], ['request-review', '25', 'https://example.test/c']]) {
+    const r = run(...args); assert.notEqual(r.status, 0); assert.match(r.stdout + r.stderr, /request is queued; the next tick applies it/);
+  }
+  const q = takeHomeownerRequests(root);
+  assert.deepEqual(q.map(x => [x.command, ...x.args]), [['reopen', '23'], ['accept-split', '24'], ['request-review', '25', 'https://example.test/c']]);
+});
+
+test('issue #867: the tick applies a queued reopen, discards a refused one, and ignores malformed files', async t => {
+  const dir = tmp(t), root = stateRoot(dir);
+  const gh = { listIssues: async () => [{ number: 23, state: 'OPEN' }], listPulls: async () => [], getIssue: null };
+  const team = new Team({ config: { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
+    limits: { roles: { implementer: 2, reviewer: 2 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+    agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [23] } },
+    board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } },
+  root, gh, jobs: { listActive: async () => [], get: async () => null }, git: {}, register: '', clock: { now: () => 5000 } });
+  team.s.implemented[23] = 1; team.save();
+  queueHomeownerRequest(root, 'reopen', ['23'], 1);
+  queueHomeownerRequest(root, 'reopen', ['99'], 2);   // issue not found: refused, reported, discarded
+  fs.writeFileSync(path.join(root, 'homeowner-requests', '3-bad.json'), '{not json');
+  const report = {}; await team.applyHomeownerRequests(report);
+  assert.equal(team.s.implemented[23], undefined, 'the queued reopen was applied');
+  assert.equal(report.notified.length, 1); assert.match(report.skipped[0].reason, /not found/);
+  assert.deepEqual(takeHomeownerRequests(root), [], 'applied, refused and malformed files are all gone');
+});
