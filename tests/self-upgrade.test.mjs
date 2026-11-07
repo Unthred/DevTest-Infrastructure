@@ -954,7 +954,7 @@ test('issue #708: install-now is refused when current, lapses unspent, and is dr
   w.state.target = w.state.installed; assert.equal(await w.up.step(), 'current');
   const r = w.up.requestInstallNow(); assert.equal(r.ok, false); assert.equal(w.up.s.urgent, undefined);
   // a request while main is ahead is stored with its target and applies
-  w.up.noteMain(w.state.installed, H('7'));
+  w.up.noteMain(w.state.installed, H('7')); w.state.target = H('7');
   assert.equal(w.up.requestInstallNow().ok, true); assert.equal(w.up.s.urgent.to, H('7'));
   // it lapses after a day without an install
   w.up.s.urgent.at = w.state.now - 25 * 3600 * 1000;
@@ -975,4 +975,51 @@ test('issue #708: a hand-install restarts the batching window and spends a pendi
   assert.equal(w.up.s.urgent, undefined); assert.equal(w.up.s.lastFinishedAt, w.state.now); assert.ok(w.up.s.lastFinishedAt > before);
   assert.equal(w.up.batchDueAt(), w.state.now + w.up.minGapMs);
   assert.equal(JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')).urgent, undefined, 'persisted');
+});
+
+test('issue #798: install-now judges against live main, not the last tick; unknown main is refused', async t => {
+  const w = world(t); await finished(w);
+  // the recorded main is the installed one (one tick old), but main has moved: accepted, target is the live main
+  w.up.noteMain(w.state.installed, w.state.installed); w.state.target = H('8');
+  assert.equal(w.up.requestInstallNow().ok, true); assert.equal(w.up.s.urgent.to, H('8'));
+  // live main equals the install although the recorded one is older: refused
+  const c = world(t); await finished(c); c.up.noteMain(c.state.installed, H('7')); c.state.target = c.state.installed;
+  assert.equal(c.up.requestInstallNow().ok, false); assert.equal(c.up.s.urgent, undefined);
+  // fetch fails and nothing recorded: refused rather than stored and dropped later
+  const d = world(t); await finished(d); delete d.up.s.main; d.up.save(); d.up.d.fetchMain = () => { throw new Error('offline'); };
+  const r = d.up.requestInstallNow(); assert.equal(r.ok, false); assert.match(r.reason, /not known/);
+});
+
+test('issue #798: state updates reread under upgrade.lock, keep a tick\'s newer fields, and refuse install-now while the lock is busy', async t => {
+  const w = world(t); await finished(w);
+  let held = false, takes = 0;
+  w.up.lock = () => { takes++; if (held) return null; held = true; return () => { held = false; }; };
+  w.up.lockSleep = () => {}; w.up.lockWaitMs = 0;
+  // a stale in-memory copy must not overwrite what another process saved
+  const other = JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')); other.marker = 'newer'; fs.writeFileSync(w.up.stateFile, JSON.stringify(other));
+  w.state.now += MIN; w.up.noteHandInstalled();
+  assert.equal(held, false, 'lock released'); assert.ok(takes >= 1);
+  const saved = JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')); assert.equal(saved.marker, 'newer'); assert.equal(saved.lastFinishedAt, w.state.now);
+  // busy lock: install-now is refused and changes nothing
+  held = true; const r = w.up.requestInstallNow(); assert.equal(r.ok, false); assert.match(r.reason, /upgrade\.lock/); assert.equal(w.up.s.urgent, undefined);
+  // busy lock: the hand-install note still lands
+  w.state.now += MIN; w.up.noteHandInstalled(); assert.equal(JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')).lastFinishedAt, w.state.now);
+});
+
+test('issue #798: a stale copy does not restore keys another process deleted when the hand-install note lands', async t => {
+  const w = world(t); await finished(w);
+  w.up.s.pending = { sha: H('9') }; w.up.s.refusal = { from: 'x' }; w.up.s.waitingFor = 'y'; w.up.save();
+  const other = JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')); delete other.pending; delete other.refusal; delete other.waitingFor; fs.writeFileSync(w.up.stateFile, JSON.stringify(other));
+  w.state.now += MIN; w.up.noteHandInstalled();
+  const saved = JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8'));
+  for (const k of ['pending', 'refusal', 'waitingFor']) assert.equal(saved[k], undefined, k);
+  assert.equal(saved.lastFinishedAt, w.state.now);
+});
+
+test('issue #798: status hides a lapsed homeowner request without changing the state, and shows a rollback urgency', async t => {
+  const w = world(t); await finished(w);
+  w.up.s.urgent = { reason: 'homeowner request', at: w.state.now - 25 * 3600 * 1000 };
+  assert.equal(w.up.urgentView(w.state.now), null); assert.ok(w.up.s.urgent, 'state untouched');
+  w.up.s.urgent = { reason: 'the previous install rolled back', at: w.state.now - 48 * 3600 * 1000 };
+  assert.ok(w.up.urgentView(w.state.now));
 });
