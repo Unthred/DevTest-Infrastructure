@@ -2,6 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import { headlineStats } from './headline.mjs';
+import { buildQueue } from './queue.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
 import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
@@ -105,7 +106,7 @@ function limitView(job, allowance, now) {
   return { limiting, since: Number.isFinite(pausedAt(job)) ? pausedAt(job) : null, resetsAt: w ? w.resetsAt : null, basis: w ? `${windowLabel(w, allowance.provider)} window in the last reading` : null, retryAt: job.nextAttemptAt || null };
 }
 
-function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '', tz = undefined) {
+export function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now = Date.now(), events = [], register = '', tz = undefined) {
   const gh = { listPulls: async () => cache.pulls || [], listIssues: async () => (cache.issues || []).map(i => ({ ...i, labels: i.labels || [] })),
     // delivered-work issue numbers the tick cached, in the shape Team.plan() reads, so the page matches `team tick --dry-run`
     // plus every merged PR number the tick saw, so a follow-up waiting on a merged PR is not mistaken for one closed unmerged (issue #212)
@@ -646,7 +647,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
   const allowance = latestAllowance(jobs, cache?.probes);
   const c = cache || { pulls: [], issues: [] };
   const team = cacheBackedTeam(config, root, c, jobs, state, snapshots, now, events || [], register, tz);
-  return team.plan().then(async plan => {
+  return team.plan({ queue: true }).then(async plan => {
     const names = makeNamer({ repo: config.repository, issues: c.issues, pulls: c.pulls, merged: c.merged, mergeLog: state.mergeLog, stateJobs: state.jobs, titles: state.titles });
     const queues = reasons(team, c, jobs, plan, states, names, now);
     const byNoAll = new Map((c.issues || []).map(i => [i.number, i]));
@@ -730,6 +731,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     return {
       ...extra,
       // Issue #866: the headline progress numbers, from the same records the rest of the view uses.
+      // Issue #863: every open issue and pull request in the planner's own order (team.queued, from plan({ queue: true })), with reasons and estimated starts.
+      queue: buildQueue({ team, queues, jobs, state, names, needsYou: extra.panels.needsYou, breaker: breakerView, nextTickAt: extra.nextTickAt, now }),
       headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), now }),
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),

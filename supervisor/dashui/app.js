@@ -17,6 +17,15 @@ const store = {
 // shared lists (search, sort, state across refresh): initialised right away, and again for any list a later refresh swaps in
 watchLists(document.body);
 
+// Issue #863: centre each queue-strip row on now (the running card, or the marker between finished and queued work). Progressive: without
+// script the row simply starts at the left. A row that was already centred is left alone.
+for (const row of $$('.qs-row')) {
+  if (row.dataset.centred) continue;
+  const now = $('.qs-now', row);
+  if (now) row.scrollLeft = Math.max(0, now.offsetLeft - row.offsetLeft - (row.clientWidth - now.offsetWidth) / 2);
+  row.dataset.centred = '1';
+}
+
 // theme
 const root = document.documentElement;
 const theme = store.get('dash.theme');
@@ -611,6 +620,7 @@ document.documentElement.classList.remove('tzp');   // normally already removed 
   const note = $('#tznote');
   if (note) note.textContent = `Times are shown in your time zone (${zone}). Data is stored in UTC; hover a time to see it.`;
 }
+
 
 // The cooldown notice (issue #483) arrives as ?notice=mark-read-cooldown. Once it is on screen, drop it from the address so a reload or
 // bookmark does not show "that click was ignored" again. Other query parameters (range, filters) are kept.

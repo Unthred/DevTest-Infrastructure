@@ -46,7 +46,7 @@ const slug = s => String(s).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(
 export function pagePlan(view, { root, evidenceRoot, recorderDir = null } = {}) {
   let procSample = null;   // one live reading shared by the processes pages of this capture (issue #568)
   const entries = NAV.map(([page, href]) => ({ name: page, path: href }));
-  entries.push({ name: 'timeline', path: '/activity/timeline' }, { name: 'ticks', path: '/supervisor/ticks' }, { name: 'upgrades', path: '/supervisor/upgrades' }, { name: 'headline', path: '/headline/merge-rate' }, { name: 'evidence', path: '/evidence' }, { name: 'processes', path: '/system/processes' });
+  entries.push({ name: 'timeline', path: '/activity/timeline' }, { name: 'ticks', path: '/supervisor/ticks' }, { name: 'upgrades', path: '/supervisor/upgrades' }, { name: 'queue', path: '/queue' }, { name: 'headline', path: '/headline/merge-rate' }, { name: 'evidence', path: '/evidence' }, { name: 'processes', path: '/system/processes' });
   const first = obj => Object.keys(obj || {})[0];
   const agent = (view.agents || [])[0]?.name, pr = first(view.refs?.pr), issue = first(view.refs?.issue), jobKey = first(view.refs?.job), watch = (view.jobs || []).find(j => j.fullId)?.fullId;
   if (agent) entries.push({ name: `agent-${slug(agent)}`, path: `/agents/${agent}` }, { name: `processes-${slug(agent)}`, path: `/system/processes/${agent}` });

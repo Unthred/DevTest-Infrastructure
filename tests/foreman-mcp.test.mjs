@@ -54,7 +54,7 @@ test('protocol: initialize negotiates the version, notifications get no reply, p
   assert.equal(p.initialized, true);
   assert.deepEqual((await rpc(p, { id: 3, method: 'ping' })).result, {});
   const list = (await rpc(p, { id: 4, method: 'tools/list' })).result.tools;
-  assert.deepEqual(list.map(x => x.name).sort(), ['foreman_breaker_history', 'foreman_budget', 'foreman_config', 'foreman_diagnostics', 'foreman_discarded', 'foreman_headline', 'foreman_host', 'foreman_installs', 'foreman_item_timeline', 'foreman_job_outcome', 'foreman_jobs', 'foreman_mismatches', 'foreman_needs_you', 'foreman_plan', 'foreman_rebase_stats', 'foreman_reports', 'foreman_review_order', 'foreman_status', 'foreman_tests', 'foreman_ticks', 'foreman_waste', 'foreman_why_blocked']);
+  assert.deepEqual(list.map(x => x.name).sort(), ['foreman_breaker_history', 'foreman_budget', 'foreman_config', 'foreman_diagnostics', 'foreman_discarded', 'foreman_headline', 'foreman_host', 'foreman_installs', 'foreman_item_timeline', 'foreman_job_outcome', 'foreman_jobs', 'foreman_mismatches', 'foreman_needs_you', 'foreman_plan', 'foreman_queue', 'foreman_rebase_stats', 'foreman_reports', 'foreman_review_order', 'foreman_status', 'foreman_tests', 'foreman_ticks', 'foreman_waste', 'foreman_why_blocked']);
   assert.ok(list.every(x => x.annotations.readOnlyHint === true && x.annotations.destructiveHint === false && x.inputSchema.type === 'object'));
 });
 test('protocol: a malformed line, a batch, a bad request, an unknown method and an unknown tool each get a JSON-RPC error and the server carries on', async () => {

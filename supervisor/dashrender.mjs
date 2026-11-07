@@ -4,6 +4,7 @@
 import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { PINNED } from './dashui/grid.mjs';
 import { CARD_IDS, CARD_TITLES, WINDOWS } from './headline.mjs';
+import { ROLE_LABEL, TYPE_LABEL } from './queue.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
 import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
@@ -55,12 +56,13 @@ export function matchRoute(pathname) {
   if (p === '/evidence') return { page: 'evidence' };
   if ((m = /^\/evidence\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.exec(p))) return { page: 'evidence-run', id: m[1] };
   if (p === '/activity/timeline') return { page: 'timeline' };
+  if (p === '/queue') return { page: 'queue' };
   if (p === '/supervisor/ticks') return { page: 'ticks' };
   if (p === '/supervisor/upgrades') return { page: 'upgrades' };
   if ((m = /^\/headline\/([a-z-]{1,20})$/.exec(p)) && CARD_IDS.includes(m[1])) return { page: 'headline', id: m[1] };
   return null;
 }
-const parentOf = page => ({ processes: 'system', agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity', headline: 'overview', evidence: 'system', 'evidence-run': 'system' })[page] || page;
+const parentOf = page => ({ processes: 'system', agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity', headline: 'overview', queue: 'overview', evidence: 'system', 'evidence-run': 'system' })[page] || page;
 
 // ---- icons: authored for this project (24x24, 2px stroke); no third-party icon set is bundled
 const ICONS = {
@@ -482,6 +484,55 @@ function headlinePage(view, query, path, route) {
     emptyState: empty('Nothing in this period', 'No items behind this number.') }) });
   return { title: CARD_TITLES[id], crumbs: [['/', 'Overview'], [null, CARD_TITLES[id]]], body: grid('headline', summary + t2) };
 }
+// ---- Issue #863: the queue. A strip per role at the top of the Overview, and the full table at /queue.
+const Q_STATE = { running: ['ok', 'play', 'Running'], retry: ['warning', 'clock', 'Retry or wait'], waiting: ['warning', 'clock', 'Waiting'], queued: ['info', 'list', 'Queued'], 'needs-you': ['info', 'users', 'Needs you'], done: ['ok', 'check', 'Finished'], failed: ['action', 'alert', 'Failed'] };
+const qEst = (it, withLabel = true) => (Number.isFinite(it.estStart) ? `${it.state === 'running' ? 'started' : it.startsNow ? 'starts next tick' : 'est. start'} ${lt(it.estStart)}${withLabel && it.estimate && !it.startsNow ? ' <span class="est-tag">(estimate)</span>' : ''}` : it.estimate ? '<span class="muted">no estimate</span>' : '');
+const waitSentence = w => (w ? `${w.text}${w.action ? ` Action: ${w.action}` : ''}` : '');
+function stripCard(it, cls = '') {
+  const [sev, ic, label] = Q_STATE[it.state] || Q_STATE.queued, struck = it.state === 'done';
+  const num = it.number == null ? '' : `${it.kind === 'pr' ? 'PR ' : '#'}${it.number}`;
+  const title = String(it.name || '').replace(/^(PR )?#\d+\s*/, '');
+  const head = `<span class="qs-ic sev-${sev}" title="${esc(label)}">${icon(ic)}<span class="sr">${esc(label)}</span></span><a class="qs-num" href="${esc(it.url)}">${struck ? `<s>${esc(num)}</s>` : esc(num || it.name)}</a><span class="qs-desc">${esc(title.slice(0, 70))}</span>`;
+  const body = `<p class="qs-type">${esc(it.typeLabel || it.type)}${it.agent ? ` · ${esc(it.agent)}` : ''} · ${esc(label)}</p><p>${esc(it.reason || '')}</p>${it.waitsOn ? `<p><b>Waits on:</b> ${esc(waitSentence(it.waitsOn))}</p>` : ''}${it.state !== 'done' && it.state !== 'failed' ? `<p class="sub">${qEst(it)}</p>` : it.at ? `<p class="sub">${lt(it.at)}</p>` : ''}`;
+  return `<details class="qs-card st-${esc(it.state)} ${cls}" data-qs="${esc(it.key)}"><summary>${head}</summary><div class="qs-why">${body}</div></details>`;
+}
+function queueStrip(view) {
+  const qv = view.queue;
+  if (!qv) return '';
+  const lanes = qv.lanes.map(l => {
+    const cards = [...l.done.map(i => stripCard(i)), ...l.running.map((i, n) => stripCard(i, n === 0 ? 'qs-now' : '')), ...l.next.map(i => stripCard(i))].join('');
+    const nowAnchor = l.running.length ? '' : '<span class="qs-nowmark qs-now" aria-hidden="true"></span>';
+    const more = l.more ? `<a class="qs-card qs-more" href="${esc(`/queue?qf.role=${l.role}`)}"><b>+${l.more} more</b><span class="sub">open the full queue</span></a>` : '';
+    const pile = l.waitingForYou.length ? `<details class="qs-card qs-pile"><summary><span class="qs-ic sev-info">${icon('users')}</span><b>Waiting for you (${l.waitingForYou.length})</b></summary><div class="qs-why"><ul>${l.waitingForYou.map(i => `<li><a href="${esc(i.url)}">${esc(i.name)}</a><br><span class="sub">${esc(waitSentence(i.waitsOn))}</span></li>`).join('')}</ul><a href="/queue?qf.needs=1">Everything waiting for you</a></div></details>` : '';
+    return `<div class="qs-lane" data-role="${esc(l.role)}"><h3>${esc(l.label)} <span class="sub">${l.slots} slot${l.slots === 1 ? '' : 's'}</span></h3><div class="qs-row" tabindex="0" role="group" aria-label="${esc(l.label)} queue, swipe sideways">${cards}${nowAnchor}${more}${pile}${!cards && !more && !pile ? '<span class="sub">Nothing queued</span>' : ''}</div></div>`;
+  }).join('');
+  return card({ id: 'queue-strip', title: 'Queue', span: 12, movable: false, href: '/queue', cls: 'panel queue-strip', type: 'panel',
+    body: `<p class="sub">Finished on the left (struck through), running in the middle, next in the planner's own order on the right. Tap a card for why it sits there. Start times are estimates.</p><div class="qs-lanes">${lanes}</div>` });
+}
+function queuePage(view, query, path) {
+  const qv = view.queue;
+  if (!qv) return null;
+  const f = { type: query.get('qf.type') || '', role: query.get('qf.role') || '', needs: query.get('qf.needs') === '1' };
+  let items = qv.items;
+  if (f.type) items = items.filter(i => i.type === f.type);
+  if (f.role) items = items.filter(i => i.role === f.role);
+  if (f.needs) items = items.filter(i => i.needsMe);
+  const pill = (label, set, on) => `<a href="${esc(withQuery(path, query, { ...set, 'queue.page': null }))}"${on ? ' aria-current="true"' : ''}>${esc(label)}</a>`;
+  const typePills = `<div class="ranges" role="group" aria-label="Type">${pill('All types', { 'qf.type': null }, !f.type)}${['implement', 'review', 'fix', 'cifix', 'rebase', 'continue', 'merge'].map(t => pill(TYPE_LABEL[t], { 'qf.type': t }, f.type === t)).join('')}</div>`;
+  const rolePills = `<div class="ranges" role="group" aria-label="Role">${pill('All roles', { 'qf.role': null }, !f.role)}${Object.entries(ROLE_LABEL).map(([r, l]) => pill(l, { 'qf.role': r }, f.role === r)).join('')}${pill('Needs me', { 'qf.needs': f.needs ? null : '1' }, f.needs)}</div>`;
+  const basis = Object.entries(qv.medians).map(([t, m]) => `${TYPE_LABEL[t] || t}: ${dur(m.ms)} (${m.samples} jobs)`).join(', ') || 'none yet';
+  const summary = card({ id: 'q-sum', title: `Queue (${qv.total} open items)`, span: 12, movable: false, cls: 'panel', type: 'panel', body: `<p class="sub">${esc(qv.estimateNote)}</p><p class="sub">Median durations used: ${esc(basis)}.</p>${qv.truncated ? `<p class="sub">Showing the first ${qv.items.length}; ${qv.truncated} more are not listed.</p>` : ''}<div class="qfilters">${typePills}${rolePills}</div>` });
+  const rows = items.map(i => ({ ...i, search: `${i.name} ${i.reason} ${i.waitsOn?.text || ''}`, waitKind: i.waitsOn?.kind || '', roleLabel: ROLE_LABEL[i.role] || '', start: Number.isFinite(i.estStart) ? i.estStart : null }));
+  const groupLabel = new Map(qv.groups.map(g => [g.key, g.label]));
+  const t = card({ id: 'q-items', title: 'In the order Foreman will take them', span: 12, movable: false, body: table({ id: 'queue', path, query, noun: 'queue items', rows, searchKeys: ['search', 'typeLabel', 'agent'],
+    cols: [{ key: 'position', label: '#', num: true }, { key: 'name', label: 'Item', html: r => `<a href="${esc(r.url)}">${esc(r.name)}</a>` }, { key: 'typeLabel', label: 'Type' }, { key: 'roleLabel', label: 'Role' },
+      { key: 'group', label: 'Group', html: r => (r.group ? `<span class="qgroup">${esc(groupLabel.get(r.group) || r.group)}</span>` : '<span class="muted">–</span>') },
+      { key: 'start', label: 'Est. start', html: r => qEst(r) || '<span class="muted">–</span>' },
+      { key: 'reason', label: 'Why here', more: true }, { key: 'waitKind', label: 'Waits on', html: r => (r.waitsOn ? `<b>${esc(r.waitsOn.kind)}</b>: ${esc(r.waitsOn.text)}${r.waitsOn.action ? ` <i>Action: ${esc(r.waitsOn.action)}</i>` : ''}` : '<span class="muted">nothing</span>') },
+      { key: 'state', label: 'State', html: r => { const [sev, ic, label] = Q_STATE[r.state] || Q_STATE.queued; return badge(sev, label); } }],
+    emptyState: empty('Nothing in the queue', 'There are no open issues or pull requests.') }) });
+  return { title: 'Queue', crumbs: [['/', 'Overview'], [null, 'Queue']], body: grid('queue', summary + t) };
+}
 function overview(view, query) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
   const now = view.generatedAt;
@@ -511,7 +562,7 @@ function overview(view, query) {
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
-  return { title: 'Overview', body: `${grid('overview', headlineCards(view) + watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
+  return { title: 'Overview', body: `${grid('overview', queueStrip(view) + headlineCards(view) + watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
 }
 
 function agentsPage(view, query, path) {
@@ -939,7 +990,7 @@ function processesPage(view, query, pathname, route) {
   return { title: agent ? `Processes: ${agent}` : 'Processes', crumbs: agent ? [['/system', 'System'], ['/system/processes', 'Processes'], [null, agent]] : [['/system', 'System'], [null, 'Processes']], bodyClass: 'procs',
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
-const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+const PAGES = { queue: queuePage, headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 export const PAGE_NAMES = Object.keys(PAGES);
 
