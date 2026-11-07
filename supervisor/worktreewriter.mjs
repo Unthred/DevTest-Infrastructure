@@ -14,6 +14,9 @@
 // A merge, pull or rebase is deliberately NOT authorship (issue #704). `git merge` of main into the job's branch produces a head whose
 // first parent was written by whoever wrote the branch before; recording only the job's model for it would drop that earlier writer and
 // could let the real writer review its own work. Such a head stays 'writer unknown' (fails safe) until the evidence covers the whole chain.
+// Known limit: this guard does not cover a squash merge (`git merge --squash` then `git commit`) or plain commits stacked on another writer's
+// branch commits; both write a single-parent `commit:` line and are accepted as the job's authorship, as before this change. Recording every
+// branch commit's writer would close that gap.
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
