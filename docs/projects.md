@@ -7,7 +7,7 @@ Evidence for the "today" statements was read from the source on this branch (mai
 ## 0. Goals and non-goals
 Goals: Foreman works any project that has an issue list; GitHub first, other work sources (Azure DevOps first among them) later; Foreman itself becomes the first project, not a special case; the migration loses nothing and Foreman keeps running this repository throughout.
 
-Non-goals: building an Azure DevOps source; moving anything into SquigOS; changing any binding decision (D-001 to D-034). A project is not given weaker rules: D-007, D-008, D-009, D-010, D-015, D-020, D-024 to D-026 apply to every project unchanged.
+Non-goals: building an Azure DevOps source; moving anything into SquigOS; changing any binding decision. (The register also holds agent-proposal entries, D-027 onward at the time of writing, which bind only once the homeowner approves them.) A project is not given weaker rules: D-007, D-008, D-009, D-010, D-015, D-020, D-024 to D-026 apply to every project unchanged.
 
 ## 1. Project model
 
@@ -66,6 +66,8 @@ Inside `githubClient` (supervisor/github.mjs); these become the `GitHubSource` i
 |---|---|---|
 | `listPulls` | `pr list --state open` | `listChangeRequests()` |
 | `listMergedPulls`, `listClosedPulls` | `pr list --state merged/closed` | `listChangeRequests({state})` |
+| `getMergedPull` (github.mjs:38, `pr view --json number,state,headRefName,headRefOid,statusCheckRollup`; used at team.mjs:840 and 1059 and upgrade.mjs:722; wrapped in ghchange.mjs:199) | `pr view` of a merged pull | `getChangeRequest(id)` returning the normalised `state: 'open'|'merged'|'closed'`, `head`, `branch`, `checks`; the merged-state read is just this call |
+| `issueAuthorAssociation` (github.mjs:55; used at team.mjs:2955 to admit only OWNER issue text into review requirements) | `api repos/<repo>/issues/<n>` -> `author_association` | Dropped as a separate member: `getWorkItem(id)` and `listComments(id)` carry `author: {login, isOwner}` (below); the planner tests `author.isOwner` |
 | `getPull`, `listPullFiles`, `prComments`, `listCheckRuns` | `pr view`, files, comments, check runs | `getChangeRequest(id)`, `listChangedFiles(id)`, `listComments(id)`, `listChecks(id)` |
 | `listIssues`, `getIssue`, `issueComments`, `getComment`, `hasComment` | `issue list/view`, `api .../comments` | `listWorkItems()`, `getWorkItem(id)`, `listComments(id)`, `getComment(id)`; `hasComment` becomes a helper over `listComments` |
 | `findIssueByMarker`, `findOpenIssueByMarker` | `issue list` + body search | `findWorkItemByMarker(marker, {open})` |
@@ -82,6 +84,7 @@ Outside `githubClient`; these are the call sites the issue asks to list, each mo
 |---|---|---|
 | `supervisor/core.mjs:294` | `spawnSync('gh', ['issue','view',...,'--json','state'])` run in a job worktree to check the issue is still open | `source.getWorkItem(id).state`, called from the dispatcher, not the job runner |
 | `supervisor/ghchange.mjs` (`ghProbeRunner`, `endpoints`, `checkForChanges`, `cachedGithub`, `loadCache/saveCache`) | The cheap ETag change probe and the cache wrapper over `githubClient`; spawns `gh api` and hard-codes `repos/<repo>/...` endpoints; cache file `team/gh-cache.json` records `repository` | Becomes `source.changeProbe()` (optional capability: `{changed, baseline}`) and a generic caching decorator around any source. The cache is keyed by project id |
+| `supervisor/history.mjs:193-196` | `entryLink` hard-codes GitHub pull and issue links from `repository` | `source.url(kind, id)` |
 | `supervisor/history.mjs:140` | `githubBackfill`: `gh pr list` to backfill the merge history | `source.listChangeRequests({state:'merged'})` |
 | `supervisor/naming.mjs:124-135` | Builds `https://github.com/<repo>/issues/<n>`, `/pull/<n>`, `/commit/<sha>` links | `source.url(kind, id)`; the namer takes a url builder, not a repo string |
 | `supervisor/cli.mjs:20-30, 187, 191, 219, 281-296, 323, 514, 527` | Builds the client, the probe, the cache, the connectivity check (`listPulls`), `githubBackfill`, status | `makeSource(project)` factory; the CLI asks it, never `githubClient` |
@@ -92,7 +95,7 @@ Outside `githubClient`; these are the call sites the issue asks to list, each mo
 | Review and job prompts (`team.mjs:584`) | Tell the agent to run `gh pr view` and `git clone` | Prompt is generated from `source.agentHints()` (the commands an agent may use), so an Azure DevOps project can say `az repos pr show` |
 | `tools/` and `docs/` | CI helpers (`tools/ci/*`) are repository-side and stay GitHub Actions for Foreman | Out of scope; they belong to the project, not to the dispatcher |
 
-Count check: 34 `repository` references in 4 supervisor files was the issue's figure; a recount on this branch finds the references spread over 10 files (core, dashboard, cli, dashdata, dashrender, github, ghchange, teamstatus, team, upgrade). The follow-up issue 1 starts with a fresh `grep` and a test that fails if a new `gh` call or `config.repository` appears outside the source module (a lint in `tools/validate-project.mjs`).
+Count check: 34 `repository` references in 4 supervisor files was the issue's figure; a recount on this branch finds `config.repository` or the view's `repository` used in 10 files (core, dashboard, cli, dashdata, dashrender, github, ghchange, teamstatus, team, upgrade); `history.mjs` also takes `repository` as a parameter and builds GitHub links, and the bare word appears in about 19 supervisor files, so the lint must scan by pattern, not by this list. Link builders at `dashboard.mjs:887` and `:897` are covered by the dashboard row above. The follow-up issue 1 starts with a fresh `grep` and a test that fails if a new `gh` call or `config.repository` appears outside the source module (a lint in `tools/validate-project.mjs`).
 
 ### The interface
 
@@ -116,6 +119,8 @@ WorkSource {
   pinWorkItem(id), setBoardStatus(id, status), changeProbe(prev)
 }
 ```
+
+**Trust boundary.** Every work item, change request and comment carries `author: {login, isOwner}`. `isOwner` is computed by the source, never by the planner: GitHub maps `author_association == OWNER` (what `issueAuthorAssociation` does today) and the owner login (`ownerLogin`, team.mjs:2474-2478); Azure DevOps maps the identity to the project administrators group or an explicit `owners` list in the project config. The planner uses `isOwner` for owner-only review requirements (team.mjs:2955), `owner_comment_review` and the `homeowner-approval` comment check. A source that cannot establish `isOwner` reports `false`, so the safe default is untrusted. Work items and comments also carry `body` and `createdAt`.
 
 Normalised records carry only fields the planner uses: for a change request `{id, title, branch, head, base, draft, mergeable: 'yes'|'no'|'unknown', checks: [{name, state: 'pass'|'fail'|'pending'|'skipped'|'neutral'}], labels, closes: [workItemId], url}`. The GitHub adapter does the translation that is spread through the planner today (`statusCheckRollup` to a normalised state, `closingIssuesReferences` to `closes`, label objects to names). Everything the planner does with the rollup keeps its D-025 meaning (skipped and neutral do not block).
 
