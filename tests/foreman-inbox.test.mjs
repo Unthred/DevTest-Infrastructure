@@ -689,3 +689,14 @@ test('#977: foreman_propose and foreman_proposal_status return the short id and 
   assert.equal((await tools.call('foreman_proposal_status', { id: 'abcdef01' })).isError, true, 'an unknown short id is an error');
   const none = createInbox({ dir }).status(r.id); assert.equal(none.link, null, 'no dashboard address, no link');
 });
+
+test('#977: the short id still resolves once Foreman has finished the item and deleted items/<id>.json', async t => {
+  const dir = makeInbox(t), ib = createInbox({ dir });
+  const r = ib.propose(GOOD);
+  fs.unlinkSync(path.join(dir, 'items', `${r.id}.json`));
+  fs.mkdirSync(path.join(dir, 'status'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'status', `${r.id}.json`), JSON.stringify({ state: 'done', kind: 'draft', issue: 4242, updatedAt: Date.now() }));
+  const s = ib.status(r.shortId);
+  assert.equal(s.id, r.id); assert.equal(s.state, 'done'); assert.equal(s.issue, 4242);
+  assert.throws(() => ib.status('abcdef01'), /no such item/);
+});

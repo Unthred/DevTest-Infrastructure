@@ -70,10 +70,14 @@ export function createInbox({ dir, baseUrl = null }) {
     status(id) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       if (/^[a-f0-9]{8}$/.test(String(id))) {   // the short id the dashboard shows: resolved only when exactly one item starts with it
-        let names = []; try { names = fs.readdirSync(items); } catch { /* none */ }
-        const hits = names.filter(n => n.startsWith(id) && /^[a-f0-9]{32}\.json$/.test(n));
-        if (hits.length !== 1) throw new Error(hits.length ? 'more than one item starts with that id; use the full id' : 'no such item');
-        id = hits[0].slice(0, 32);
+        // Foreman deletes items/<id>.json once an item is finished, so status/ is searched as well.
+        const found = new Set();
+        for (const d of [items, status]) {
+          let names = []; try { names = fs.readdirSync(d); } catch { /* none */ }
+          for (const n of names) if (n.startsWith(id) && /^[a-f0-9]{32}\.json$/.test(n)) found.add(n.slice(0, 32));
+        }
+        if (found.size !== 1) throw new Error(found.size ? 'more than one item starts with that id; use the full id' : 'no such item');
+        id = [...found][0];
       }
       if (!ID_RE.test(String(id))) throw new Error('id must be the 32-character id returned by foreman_propose (or its first 8 characters)');
       let s = null; try { s = JSON.parse(fs.readFileSync(path.join(status, `${id}.json`), 'utf8')); } catch { /* none yet */ }
