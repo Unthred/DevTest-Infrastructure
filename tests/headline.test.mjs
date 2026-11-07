@@ -3,7 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { headlineStats, WINDOWS, CARD_IDS } from '../supervisor/headline.mjs';
 import { compactIssues } from '../supervisor/dashdata.mjs';
-import { renderRoute, matchRoute } from '../supervisor/dashrender.mjs';
+import { readFileSync } from 'node:fs';
+import { renderRoute, matchRoute, queueSplit } from '../supervisor/dashrender.mjs';
 import { createTools } from '../foreman-mcp/tools.mjs';
 import { overviewView, NOW } from './helpers/lists-fixture.mjs';
 
@@ -153,4 +154,32 @@ test('foreman_headline: the summary has no item lists; a card lists its items; a
   const bad = await tools.call('foreman_headline', { card: 'nope' }); assert.equal(bad.isError, true);
   const none = JSON.parse((await createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), now: () => NOW }).call('foreman_headline', {})).text);
   assert.equal(none.available, false);
+});
+
+// Issue #928: throughput, cost per issue and the queue split.
+test('throughput: PRs opened, merged and issues implemented per hour over the window', () => {
+  const ps = prs.map((p, i) => ({ ...p, openedAt: [ago(6), ago(3), ago(40), ago(5)][i], costUsd: [2, 4, null, null][i] }));
+  const js = [...jobs, { id: 'd'.repeat(32), kind: 'implement', status: 'completed', createdAt: ago(7), updatedAt: ago(6), issue: 9 }, { id: 'e'.repeat(32), kind: 'implement', status: 'failed', createdAt: ago(7), updatedAt: ago(6), issue: 9 }];
+  const s = headlineStats({ issues, prs: ps, jobs: js, wasteRecords, now: NOW }).windows;
+  const t = s['24h'].cards.throughput;
+  assert.deepEqual([t.opened, t.merged, t.implemented], [3, 2, 1]);   // opened 6h, 3h, 5h ago; the 40h one is outside
+  assert.equal(t.openedPerHour, 0.125); assert.equal(t.mergedPerHour, round3(2 / 24)); assert.equal(s['7d'].cards.throughput.opened, 4);
+  const c = s['24h'].cards.cost;
+  assert.equal(c.value, 3); assert.equal(c.withKnownCost, 2); assert.equal(c.merged, 2);   // (2 + 4) / 2; the unknown cost is not counted as zero
+  assert.equal(s['7d'].cards.cost.withKnownCost, 2); assert.equal(s['7d'].cards.cost.merged, 3);
+  assert.equal(headlineStats({ now: NOW }).windows['24h'].cards.cost.value, null);
+});
+const round3 = n => Math.round(n * 1000) / 1000;
+
+test('the Overview centres the tiles, explains Data age, splits the queue and shows throughput and cost', async () => {
+  const view = await overviewView(); view.headline = stats();
+  view.queues = { codex: [{ type: 'issue', ref: 1, reason: 'next' }, { type: 'issue', ref: 2, reason: 'x' }, { type: 'review', ref: 3, reason: 'review' }, { type: 'pr', ref: 4, reason: 'CI failing' }, { type: 'pr', ref: 5, reason: 'needs a rebase: conflict' }, { type: 'pr', ref: 6, reason: 'CI pending' }] };
+  assert.deepEqual(queueSplit(view), { implement: 2, review: 1, fix: 1, rebase: 1, waiting: 1, total: 6 });
+  const html = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(), pathname: '/' }).html;
+  assert.match(html, /2 implement, 1 review, 1 fix, 1 rebase, 1 waiting on CI or merge; \d+ running now/);
+  assert.match(html, /how old the GitHub data behind this page is/);
+  assert.match(html, /PRs opened\/h/); assert.match(html, /per merged issue, from implement through merge/);
+  assert.match(html, /href="\/headline\/cost\?window=7d"/); assert.match(html, /data-card="k-queue"[^>]*href="\/work"/);
+  const css = readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.kpi\{text-align:center\}/); assert.match(css, /\.headline \.hl-row\{align-items:center;text-align:center\}/);
 });

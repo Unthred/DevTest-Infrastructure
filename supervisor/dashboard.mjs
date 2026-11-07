@@ -884,6 +884,8 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       // Issue #717: second-opinion reviews (kept apart from verdicts, one per pr:head) and the implement time from the merge log, for foreman_rebase_stats.
       secondOpinionRounds: secondOpinionsOf(state, n).filter(o => !(o && (o.carry || o.carriedFrom))).length, secondOpinionCarried: secondOpinionsOf(state, n).filter(o => o && (o.carry || o.carriedFrom)).length, startedAt: Number.isFinite(m?.startedAt) ? m.startedAt : null,
+      openedAt: (() => { const t = Date.parse(p?.createdAt); if (Number.isFinite(t)) return t; const f = rel.filter(j => j.kind === 'implement' && Number.isFinite(j.updatedAt)).map(j => j.updatedAt); return f.length ? Math.min(...f) : null; })(),
+      costUsd: rel.some(j => Number.isFinite(j.usage?.costUsdEstimate)) ? rel.reduce((s, j) => s + (Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : 0), 0) : null,
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
       head: p?.headRefOid ?? null, needsHomeowner: (p?.labels || []).includes('needs-homeowner'), mergedAt: m?.mergedAt ?? null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,

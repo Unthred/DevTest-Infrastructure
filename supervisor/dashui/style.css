@@ -431,6 +431,9 @@ body.layout-editing{overscroll-behavior:contain}
 .headline .hl-v,.hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1;text-decoration:none;color:inherit}
 .headline .hl-v:hover{color:var(--link)}
 .headline .hl-trend svg{width:1em;height:1em;vertical-align:-.15em;margin-right:.25em}
+/* Issue #928: the headline and KPI numbers are centred in their tiles. */
+.headline .hl-row{align-items:center;text-align:center}
+.kpi{text-align:center}.kpi .kpi-sub{font-size:var(--fs-sm)}
 
 /* Inbox decisions (issue #856) */
 .inbox-outcome{display:inline-block;font-weight:600;padding:0 var(--sp2);border-radius:var(--r-sm);border:1px solid var(--line)}

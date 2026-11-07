@@ -261,7 +261,7 @@ function card({ id, title, span = 6, body, href, tools = '', cls = '', movable =
 <span class="tools">${tools}<button class="tbtn" type="button" data-collapse aria-expanded="true" aria-label="Collapse ${esc(title)}" title="Collapse or expand (or double-click the header)" hidden>${icon('down')}</button>${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}</section>`;
 }
 const grid = (layout, cards, cls = '') => `<div class="cards ${cls}" data-layout="${esc(layout)}">${cards}</div>`;
-const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div><div class="spark-slot">${spark}</div></a>`;
+const kpi = ({ id, label, value, href, spark = '', span = 2, sub = '' }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div>${sub ? `<div class="sub kpi-sub">${esc(sub)}</div>` : ''}<div class="spark-slot">${spark}</div></a>`;
 
 // ---- the four panels (Overview top) and the status bar
 function nowPanel(view, { describe = true, list = null } = {}) {
@@ -457,6 +457,8 @@ const signed = n => (n > 0 ? `+${num(n)}` : n < 0 ? `\u2212${num(-n)}` : '0');
 const HEADLINE = {
   issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` }),
   processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play` }),
+  throughput: c => ({ big: Number.isFinite(c.openedPerHour) ? `${dec1(c.openedPerHour)} PRs opened/h` : 'no data', sub: `${dec1(c.mergedPerHour)} merged/h, ${dec1(c.implementedPerHour)} issues implemented/h (${c.opened} opened, ${c.merged} merged, ${c.implemented} implemented)` }),
+  cost: c => ({ big: Number.isFinite(c.value) ? `$${c.value.toFixed(2)}` : 'unknown', sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),
   'merge-rate': c => ({ big: Number.isFinite(c.value) ? `${dec1(Math.round(c.value * 100) / 100)}/h` : 'no data', sub: `${c.merged} merged` }),
   'first-pass': c => ({ big: pctText(c.value), sub: c.reviewed ? `${c.approved} of ${c.reviewed} approved on the first review` : 'no first reviews' }),
   rounds: c => ({ big: Number.isFinite(c.value) ? dec1(c.value) : 'no data', sub: `${c.merged} merged (review, fix and rebase rounds)` }),
@@ -491,6 +493,20 @@ function headlinePage(view, query, path, route) {
     emptyState: empty('Nothing in this period', 'No items behind this number.') }) });
   return { title: CARD_TITLES[id], crumbs: [['/', 'Overview'], [null, CARD_TITLES[id]]], body: grid('headline', summary + t2) };
 }
+// Issue #928: the queue tile's split. 'issue' entries are implement work and 'review' entries are reviews; a pull request entry is a fix (CHANGES, red CI, draft), a rebase (conflict or not mergeable) or just waiting (CI pending, merge on the next tick).
+export function queueSplit(view) {
+  const n = { implement: 0, review: 0, fix: 0, rebase: 0, waiting: 0, total: 0 };
+  for (const q of Object.values(view.queues || {})) for (const e of q) {
+    n.total++;
+    if (e.type === 'issue') n.implement++;
+    else if (e.type === 'review') n.review++;
+    else if (/rebase|conflict|not mergeable/i.test(e.reason || '')) n.rebase++;
+    else if (/CHANGES|CI failing|draft|fix/i.test(e.reason || '')) n.fix++;
+    else n.waiting++;
+  }
+  return n;
+}
+const queueSub = (view, running) => { const n = queueSplit(view); return `${n.implement} implement, ${n.review} review, ${n.fix} fix, ${n.rebase} rebase${n.waiting ? `, ${n.waiting} waiting on CI or merge` : ''}; ${running} running now`; };
 function overview(view, query) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
   const now = view.generatedAt;
@@ -511,10 +527,10 @@ function overview(view, query) {
     kpi({ id: 'k-active', label: 'Jobs running', value: view.agents.some(a => a.state === 'unknown') ? `? / ${view.capacity ?? view.agents.length}` : `${active} / ${view.capacity ?? view.agents.length}`, href: '/agents' }),
     kpi({ id: 'k-avail', label: 'Agents available', value: view.agents.some(a => a.state === 'unknown') ? '?' : `${available} / ${view.agents.length}`, href: '/agents' }),
     kpi({ id: 'k-prs', label: 'Open pull requests', value: String(open.length), href: '/work', spark: sparkline(daily) }),
-    kpi({ id: 'k-queue', label: 'Queued items', value: String(Object.values(view.queues).reduce((s, q) => s + q.length, 0)), href: '/work' }),
+    kpi({ id: 'k-queue', label: 'Queued items', value: String(queueSplit(view).total), sub: queueSub(view, active), href: '/work' }),
     kpi({ id: 'k-reviews', label: 'Reviews recorded', value: String(verdicts.length), href: '/reviews' }),
     kpi({ id: 'k-tokens', label: 'Tokens recorded', value: tokens ? num(tokens) : 'unknown', href: '/usage' }),
-    kpi({ id: 'k-fresh', label: 'Data age', value: view.freshness.ageMs === null ? 'none' : dur(view.freshness.ageMs), href: '/system' })
+    kpi({ id: 'k-fresh', label: 'Data age', value: view.freshness.ageMs === null ? 'none' : dur(view.freshness.ageMs), sub: 'how old the GitHub data behind this page is', href: '/system' })
   ].join('');
   const charts = [
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
