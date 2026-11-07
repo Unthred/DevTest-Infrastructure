@@ -358,6 +358,23 @@ test('labels: the fix-limit flag clears only after a PASS on the new head, and a
   assert.equal(f.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 1, 'the notice marker is per PR, so the comment is not duplicated');
 });
 
+test('self-check (issue #752): a removed label at a still-rejected head is neither re-flagged nor re-noticed by runSelfCheck then notifyFixLimit', async t => {
+  const f = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  reject(f, 38, H(1)); f.team.s.fixAttempts[`38:${H(0)}`] = 2; f.team.s.unblock.escalated[38] = { head: H(1) };
+  await f.team.tick(); assert.deepEqual(f.calls.labels, [[38, 'needs-homeowner']]);
+  const notices = () => f.calls.comments.filter(c => /fix rounds/.test(c[1])).length;
+  assert.equal(notices(), 1);
+  // The homeowner removes the label; the record is old enough for the self-check to consider it. The head is still rejected.
+  for (const c of Object.values(f.team.s.unblock.flags[38])) c.at = 0;
+  f.gh.pulls = [{ ...f.gh.pulls[0], labels: [] }];
+  f.team.view = { prs: f.gh.pulls, issues: f.gh.issues };
+  const report = {}; await f.team.runSelfCheck(report); await f.team.notifyFixLimit(report);
+  assert.equal(report.selfChecked, undefined, 'the fix-limit record is not dropped');
+  assert.ok(f.team.s.unblock.flags[38], 'the record stays');
+  assert.ok(f.team.s.notified['fixlimit:38'] && f.team.s.notified['fixlimit-alert:38'], 'the notice markers stay');
+  assert.equal(f.calls.labels.length, 1, 'not flagged again'); assert.equal(notices(), 1, 'not noticed again');
+});
+
 test('budget: a spent budget at the fix limit raises the limit item, and the fix-limit notice says no escalated round ran', async t => {
   const e = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], cfg: config({ per_pr: 0 }) });
   reject(e, 38, H(1)); e.team.s.fixAttempts[`38:${H(0)}`] = 2;
