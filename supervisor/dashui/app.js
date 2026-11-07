@@ -4,8 +4,9 @@
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends } from './legend.mjs';
 import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
-import { watchLists } from './lists-ui.mjs';
+import { saveLists, watchLists } from './lists-ui.mjs';
 import { postDecision, runDecision, lowerCount, OUTCOME_TEMPLATE } from './inbox-ui.mjs';
+import { readRegions, startRefresh } from './refresh.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -14,6 +15,9 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: the layout simply is not remembered */ } },
   del(k) { try { localStorage.removeItem(k); } catch { /* nothing to remove */ } }
 };
+
+// What the server sent, read before any script below changes the page: the refresh in place compares each fetch with it (issue #930).
+const serverRegions = readRegions(document);
 
 // shared lists (search, sort, state across refresh): initialised right away, and again for any list a later refresh swaps in
 watchLists(document.body);
@@ -250,12 +254,20 @@ function restoreScroll() {
   if (y) scrollTo(0, y);
 }
 history.scrollRestoration = 'manual';
-// The periodic refresh is driven from here, not by a <meta refresh>: a declarative refresh keeps the address the page loaded
-// with, so it would undo an in-place table change (replaceState). Without script the <noscript> meta still refreshes.
-{
-  const secs = Number($('meta[name=refresh-seconds]')?.content) || 60;
-  setInterval(() => { if (document.body.classList.contains('layout-editing')) return; saveScroll(); location.reload(); }, secs * 1000);   // never while the layout is being edited: that would drop a drag in progress
-}
+// The periodic refresh (issue #930) updates the page in place: it fetches the same address and swaps only the cards whose content changed,
+// keeping scroll, open items, typed text and focus, and waits while the viewer is interacting (refresh.mjs). Without script the <noscript>
+// meta still reloads the page. It is not a <meta refresh> when script runs: a declarative refresh keeps the address the page loaded with,
+// so it would undo an in-place table change (replaceState).
+startRefresh({
+  document, baseline: serverRegions, seconds: Number($('meta[name=refresh-seconds]')?.content) || 60,
+  hooks: {
+    beforeSwap: () => saveLists(),   // list search, sort, scroll and open rows are written first; the swapped-in list re-reads them
+    afterSwap: card => { bindCopy(card); localizeTimes(card); bindTables(card); initLegends({ document: scoped(card), store, legendKey }); },
+    afterStats: () => { localizeTimes($('.statusbar') || document); tickClock(); }
+  }
+});
+// initLegends reads and creates through `document`; a swapped-in card is initialised through a view of just that card.
+function scoped(card) { return { querySelectorAll: q => card.querySelectorAll(q), querySelector: q => card.querySelector(q), createElement: t => document.createElement(t) }; }
 
 // movable and resizable cards
 const grid = $('.cards[data-layout]');
@@ -323,7 +335,9 @@ async function loadTable(region, qs, { syncInput = false } = {}) {
     if (hadFocus && !document.contains(hadFocus) && focusTitle) $$('[title]', region).find(a => a.getAttribute('title') === focusTitle)?.focus({ preventScroll: true });
   } catch { if (tableSeq.get(id) === seq) fallbackNavigate(url); }
 }
-for (const region of $$('[data-tregion]')) {
+function bindTables(scope = document) { for (const region of $$('[data-tregion]', scope)) bindTable(region); }
+function bindTable(region) {
+  if (region.dataset.tbound) return; region.dataset.tbound = '1';
   const id = region.dataset.tregion, form = $('form.tbar', region);
   const search = $('input[type=search]', region);
   const typed = debounce(() => loadTable(region, tableChange(location.search, id, { q: search.value.trim() })), FILTER_DEBOUNCE_MS);
@@ -338,6 +352,7 @@ for (const region of $$('[data-tregion]')) {
     loadTable(region, mergeTableParams(location.search, u.search, id), { syncInput: true });
   });
 }
+bindTables();
 
 // back to top (issue #61): shown after scrolling down, smooth unless the viewer prefers reduced motion; focus returns to the page start
 {

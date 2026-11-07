@@ -466,3 +466,9 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
   .nav-resize:hover,.nav-resize:focus-visible,.nav-resize.drag{background:var(--link);opacity:.5}
 }
 @media(max-width:639px){.stickybtn,.nav-resize{display:none!important}}
+
+/* Refresh in place (issue #930): a small, quiet "Updated hh:mm:ss" and a manual Refresh button in the status bar */
+.refresh-box{display:inline-flex;align-items:center;gap:var(--sp2);color:var(--muted,inherit);font-size:var(--fs-sm,.85em);white-space:nowrap}
+.refresh-at{font-variant-numeric:tabular-nums}
+.refresh-now{font-size:inherit;padding:0 var(--sp2)}
+@media print{.refresh-box{display:none}}

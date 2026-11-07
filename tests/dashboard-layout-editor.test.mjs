@@ -246,7 +246,9 @@ test('layout mode: the whole card is the handle, contents are inert, a phone get
   assert.match(appJs, /bpNow\(\) === 'phone'/);
 });
 test('the periodic refresh never runs while the layout is being edited, so a drag or an unsaved change is not lost', () => {
-  assert.match(appJs, /setInterval\(\(\) => \{ if \(document\.body\.classList\.contains\('layout-editing'\)\) return; saveScroll\(\); location\.reload\(\); \}/);
+  const refreshJs = fs.readFileSync(new URL('../supervisor/dashui/refresh.mjs', import.meta.url), 'utf8');
+  assert.match(refreshJs, /layoutEditing: doc\.body\.classList\.contains\('layout-editing'\)/); assert.match(refreshJs, /if \(s\.layoutEditing\) return 'layout editing'/);
+  assert.doesNotMatch(appJs, /location\.reload\(\)/);
   assert.match(appJs, /document\.body\.classList\.add\('layout-editing'\)/); assert.match(appJs, /document\.body\.classList\.remove\('layout-editing'\)/);
 });
 test('keyboard: arrows move a focused card, Shift+arrows resize, Ctrl+Z undoes; the pointer path is cancelled by Escape', () => {
