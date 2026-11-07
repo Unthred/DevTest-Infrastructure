@@ -172,7 +172,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['prompt', 'issue_draft', 'action'] }, title: { type: 'string', maxLength: 200 }, action: { type: 'string', enum: ['new_review_attempt', 'reopen', 'close_job', 'stop_job', 'resume_job'], description: 'kind action: the named action' }, target: { type: 'string', maxLength: 12, description: 'kind action: PR or issue number, or 8-character job id' }, reason: { type: 'string', maxLength: 300, description: 'kind action: why' }, prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' }, body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' }, why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' } }, required: ['kind', 'title'], additionalProperties: false },
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, run: args => inbox.propose(args) },
       { name: 'foreman_proposal_status', description: 'The state of a proposal made with foreman_propose: waiting, pending (awaiting the homeowner), refused (with the reason), rejected, approved, running, done or failed, with the result summary once there is one.',
-        inputSchema: { type: 'object', properties: { id: { type: 'string', pattern: '^[a-f0-9]{32}$' } }, required: ['id'], additionalProperties: false }, run: args => inbox.status(args.id) },
+        inputSchema: { type: 'object', properties: { id: { type: 'string', pattern: '^([a-f0-9]{8}|[a-f0-9]{32})$' } }, required: ['id'], additionalProperties: false }, run: args => inbox.status(args.id) },
     ] : []),
   ];
 

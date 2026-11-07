@@ -482,3 +482,5 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .refresh-at{font-variant-numeric:tabular-nums}
 .refresh-now{font-size:inherit;padding:0 var(--sp2)}
 @media print{.refresh-box{display:none}}
+
+.inbox-id code{font-weight:600}.inbox-kind{color:var(--mut);font-size:.9em}

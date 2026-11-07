@@ -22,7 +22,7 @@ function loadConfig(env = process.env) {
 export function buildServer(config) {
   const callLog = createCallLog(config.logFile);
   const getPath = config.viewUrl ? p => getJson(new URL(p, config.viewUrl).href) : null;   // same dashboard, same GET-only reader
-  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost, getPath, reports: createReports(config.reportsDir, { redact }), inbox: createInbox({ dir: config.inboxDir }) });
+  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost, getPath, reports: createReports(config.reportsDir, { redact }), inbox: createInbox({ dir: config.inboxDir, baseUrl: config.viewUrl }) });
   return createProtocol({ tools, log: e => callLog.record(e) });
 }
 

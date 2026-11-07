@@ -33,10 +33,12 @@ export function sortListRows(rows, key = 'default', dir = 'asc') {
   return rows.map(r => r).sort((a, b) => compareValues(keyOf(a, k), keyOf(b, k), dir === 'desc' ? 'desc' : 'asc') || a.i - b.i);
 }
 // Case-insensitive "contains" over what the row shows; "#41" finds number 41 as people type it. Every word must match.
+// Issue #977: curly and straight quotes and apostrophes match each other, and so do the hyphen, non-breaking hyphen, en dash, em dash and minus sign.
+export const foldPunctuation = s => String(s ?? '').replace(/[\u2018\u2019\u201A\u201B\u2032\u00B4`]/g, "'").replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"').replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, '-');
 export function filterListRows(rows, query) {
-  const words = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean).map(w => w.replace(/^#(?=\d)/, ''));
+  const words = foldPunctuation(String(query || '').trim().toLowerCase()).split(/\s+/).filter(Boolean).map(w => w.replace(/^#(?=\d)/, ''));
   if (!words.length) return rows.slice();
-  return rows.filter(r => { const hay = `${String(r.text || '').toLowerCase()} ${r.num ?? ''}`; return words.every(w => hay.includes(w)); });
+  return rows.filter(r => { const hay = foldPunctuation(`${String(r.text || '').toLowerCase()} ${r.num ?? ''}`); return words.every(w => hay.includes(w)); });
 }
 export function sanitizeListState(raw, { sorts = ['default'], defaultSort = { key: 'default', dir: 'asc' }, searchable = true } = {}) {
   const r = raw && typeof raw === 'object' ? raw : {};

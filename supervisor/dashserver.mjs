@@ -30,7 +30,7 @@ import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_RO
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
 import { fileURLToPath } from 'node:url';
-import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID } from './inbox.mjs';
+import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
@@ -309,6 +309,18 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       if (path === '/healthz') return send(200, 'text/plain; charset=utf-8', 'ok\n');
       if (STATIC[path]) return send(200, STATIC[path][1], staticFile(STATIC[path][0]));
       let m;
+      // Issue #977: a direct link to one inbox item, by its full id or the first 8 characters. A waiting item opens the overview at its card
+      // (the row is the page's :target, so it is highlighted); any other item gets a small page with its state, so the link never dead-ends.
+      if ((m = /^\/inbox\/([a-f0-9]{8}|[a-f0-9]{32})$/.exec(path))) {
+        const dir = source().inbox?.dir;
+        if (!dir) return refuseWith(send, 404, 'Inbox not configured', 'The inbox is not configured.');
+        const hits = inboxStatuses(dir).filter(s => s.id.startsWith(m[1]));
+        if (hits.length !== 1) return refuseWith(send, hits.length ? 409 : 404, hits.length ? 'Ambiguous inbox id' : 'No such inbox item', hits.length ? 'More than one inbox item starts with that id; use the full id.' : 'No inbox item has that id. It may have been cleared after fourteen days.');
+        const s = hits[0];
+        if (s.state === 'pending') return send(302, 'text/plain; charset=utf-8', 'found', { location: `/#att-inbox-${s.id}` });
+        const issue = Number.isSafeInteger(s.issue) && s.issue > 0 && s.issue < 900000000 ? s.issue : null;
+        return page(send, 200, `Inbox item ${esc(s.id.slice(0, 8))}`, `<p><code>${esc(s.id)}</code></p><ul><li>Kind: ${esc(s.kind || 'unknown')}</li><li>State: ${esc(s.state || 'unknown')}</li>${s.title ? `<li>Title: ${esc(String(s.title).slice(0, 200))}</li>` : ''}${issue ? `<li>GitHub issue: <a href="/work/issue/${issue}">#${issue}</a></li>` : ''}${s.reason ? `<li>Reason: ${esc(String(s.reason).slice(0, 300))}</li>` : ''}</ul>`);
+      }
       if ((m = /^\/api\/jobs\/([a-f0-9]{32})\/(events|transcript\.json)$/.exec(path))) {
         const id = m[1], q = new URLSearchParams(search);
         const afterRaw = req.headers['last-event-id'] ?? q.get('after') ?? '0', after = /^\d{1,12}$/.test(String(afterRaw)) ? Number(afterRaw) : 0;
