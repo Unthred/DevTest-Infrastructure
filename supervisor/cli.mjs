@@ -127,6 +127,8 @@ function realJobs(root, registry) {
       job.attempts = 0; job.incompleteRetries = 0; job.nextAttemptAt = Date.now(); saveJob(root, job, realClock, true);
       startWorker(root, id, registry);
     },
+    // issue #995 part 5: a queued job waiting out a backoff is tried at once after a recovery; true when its time was moved
+    rearm: async id => { const job = readJob(root, id); if (job.status !== 'queued' || !(job.nextAttemptAt > Date.now())) return false; job.nextAttemptAt = Date.now(); saveJob(root, job, realClock, true); return true; },
     // Issue #629: the homeowner's approved stop, the same steps as `ai-supervisor stop ID`
     transcriptMtime: async id => transcriptMtime(transcriptFile(root, id)),   // issue #995: the job's heartbeat
     stop: async (id, reason = 'manual_stop') => {
@@ -162,6 +164,8 @@ function realGit(repoPath) {
       for (const pre of branchPrefixes) { const r = spawnSync('git', ['-C', repoPath, 'for-each-ref', '--format=%(refname:short)', `refs/heads/${pre}*`], { encoding: 'utf8', timeout: 60000 }); if (r.status !== 0) throw new SupervisorError('git for-each-ref failed'); out.push(...r.stdout.split('\n').filter(Boolean).map(b => `the local branch ${b}`)); }
       return out;
     },
+    // issue #995: remove a worktree whose work is already saved, and its local branch (the work is on a saved/ branch)
+    removeWorktree: async ({ worktree, branch }) => { git('worktree', 'remove', '--force', worktree); if (branch) spawnSync('git', ['-C', repoPath, 'branch', '-D', branch], { encoding: 'utf8', timeout: 60000 }); },
     worktreeFor: async branch => { const out = git('worktree', 'list', '--porcelain').split('\n\n'); const hit = out.find(b => b.includes(`branch refs/heads/${branch}`)); return hit ? hit.split('\n')[0].replace('worktree ', '') : null; },
     ensureWorktree: async ({ path: wt, branch, base }) => {
       if (fs.existsSync(wt)) {
@@ -374,7 +378,7 @@ async function main() {
   const registry = path.resolve(a.registry || defaultRegistry);
   registryOption = a.registry ? registry : null;   // only an operator-given registry is passed on (issue #406)
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -555,6 +559,11 @@ async function main() {
       try { console.log(JSON.stringify({ issue: n, reopened: await (await teamFor(root, registry)).reopen(n) })); } finally { release(); }
       return;
     }
+    if (a._[0] === 'record-writer') {   // issue #995: an interactive session records itself as the writer of a PR's current head
+      const release = await homeownerLock(root, 'record-writer');
+      try { console.log(JSON.stringify(await (await teamFor(root, registry)).recordSessionWriter(a._[1], String(a._[2] ?? '')))); } finally { release(); }
+      return;
+    }
     if (a._[0] === 'request-review') {   // issue #366: the homeowner asks for one new review of the same head, citing the decision
       if (!/^\d+$/.test(String(a._[1] ?? '')) || typeof a._[2] !== 'string' || !a._[2]) throw new SupervisorError('usage: team request-review PR DECISION_LINK');
       const release = await homeownerLock(root, 'request-review', queueOf(root, 'request-review', [a._[1], a._[2]]));
@@ -572,7 +581,7 @@ async function main() {
       const wk = rep.wake, wakeLine = `Wakes: ${wk.acceptedLastHour} of ${wk.cap} used in the last hour${wk.capHit ? `; CAP REACHED: ${wk.droppedLastHour} request(s) dropped, the five-minute schedule is the fallback` : ''}`;
       console.log(a.json === true ? JSON.stringify(rep, null, 2) : `${renderIdleReport(rep)}\n${renderPassStats(rep.passes)}\n${wakeLine}`); return;
     }
-    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team idle-report [--hours N | --from T --to T] [--json] | team status [--json] | team accept-split ISSUE | team request-review PR DECISION_LINK');
+    if (a._[0] !== 'tick') throw new SupervisorError('usage: team tick [--dry-run] | team idle-report [--hours N | --from T --to T] [--json] | team status [--json] | team accept-split ISSUE | team request-review PR DECISION_LINK | team record-writer PR SESSION_ID');
     console.log(JSON.stringify(await teamTick(root, registry, a['dry-run'] === true), null, 2)); return;
   }
   if (command === 'self-upgrade') {

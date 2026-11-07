@@ -18,7 +18,7 @@ import { makeNamer, shortCommit } from './naming.mjs';
 import { entryApproved } from './decisions.mjs';
 import { redact, redactLong } from './redact.mjs';
 import { EXCEPTION_DECISION, validateReviewException, activeException, endedNow, modelWrittenRanges } from './review-exception.mjs';
-import { findHeadWriter } from './writerevidence.mjs';
+import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
@@ -634,9 +634,9 @@ export function readSplitDraft(root, ticket) {
 
 const STALE_MARK_MS = 10 * 60000;   // issue #521
 export class Team {
-  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
+  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, sessionWriterOf = findSessionWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
-    this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
+    this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.sessionWriterOf = sessionWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
     this.c = validateTeamConfig(config); this.root = root; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
@@ -1685,7 +1685,7 @@ export class Team {
     let actions = await this.plan();
     if (!dryRun) await guard('breaker successes', () => this.backfillSuccesses());
     actions = this.applyBreaker(actions, report, dryRun);
-    if (!dryRun) this.rearmOnRecovery(report);
+    if (!dryRun) await this.rearmOnRecovery(report);
     actions = this.applyRetryCap(actions, report);   // issue #995
     if (!dryRun) await guard('job liveness', () => this.livenessSweep(report));
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
@@ -1750,6 +1750,35 @@ export class Team {
     }
     this.save();
   }
+  // Issue #995: save the stopped job's uncommitted work to a saved/ branch on the remote, remove its worktree and local branch, and clear the
+  // implemented mark, so Foreman plans the issue again from origin/main without `team reopen` or any hand cleanup. Anything unproven keeps
+  // the worktree and the mark (the stale-mark notice then names it) and is reported. Returns false while the job's process is still alive.
+  async cleanupStoppedImplement(id, j, job, report) {
+    if (typeof this.jobs.alive === 'function' && await this.jobs.alive(job).catch(() => true)) return false;
+    const issue = j.issue, wt = job.worktree, branch = j.branch || job.branch || null;
+    let saved = 'nothing to save', ok = true;
+    try {
+      if (wt && typeof this.git.saveWork === 'function') {
+        const r = await this.git.saveWork(wt, { branch, id: id.slice(0, 8) });
+        if (r?.ref) saved = `saved to ${r.ref}`;
+        if (!r?.missing) {
+          const isClean = await this.git.isClean?.(wt), unpushed = await this.git.unpushedCommits?.(wt);
+          if (isClean !== true || unpushed !== 0) throw new SupervisorError('unsaved work remains in the job worktree');
+          if (typeof this.git.removeWorktree === 'function') await this.git.removeWorktree({ worktree: wt, branch });
+        }
+      } else if (wt) throw new SupervisorError('this supervisor cannot save a worktree');
+    } catch (error) {
+      ok = false;
+      (report.skipped ||= []).push({ what: `clean up stopped job ${id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) });
+    }
+    if (ok) {
+      delete this.s.implemented[issue];
+      j.stopCleanup = { at: this.clock.now(), saved, event: job.lastEvent };
+      this.logUnblock({}, { target: issue, tk: 'issue', what: 'requeued after the job was stopped', why: job.lastEvent === 'idle_timeout' ? 'no activity within the liveness limit' : 'stopped by hand', result: saved });
+      this.save();
+    }
+    return true;
+  }
   // Issue #995 part 3: one failed attempt of a job type on a PR (or issue), by cause. The same cause twice in a row on the same head stops
   // the item (applyRetryCap) and raises a Needs you item.
   countFailure(rec, cause) {
@@ -1781,12 +1810,15 @@ export class Team {
   retryCapItems() { return robust.cappedItems(this.s, robust.sameCauseCap(this.c.limits)); }
   livenessView() { const l = this.s.liveness || {}; return { limitMs: l.limitMs ?? robust.idleLimitMs(this.c.limits), running: l.running || {}, cancelled: l.cancelled || [] }; }
   // Issue #995 part 5: a halt that was held last tick and is gone now (a success or a Resume) re-arms the waits. The upgrader reads the marker.
-  rearmOnRecovery(report) {
+  async rearmOnRecovery(report) {
     const now = robust.haltScopes(this.s.breaker), cleared = robust.clearedScopes(this.s.haltScopes, now);
     this.s.haltScopes = now;
     if (!cleared.length) return;
     try { robust.writeRearm(this.root, this.clock.now(), cleared); } catch (error) { (report.skipped ||= []).push({ what: 're-arm waits', reason: String(error?.message || error).slice(0, 200) }); return; }
-    this.s.rearm = { at: this.clock.now(), scopes: cleared, items: ['install and fetch waits'] };
+    // Queued jobs waiting out a backoff (usage-limit pauses stay: their reset time is the provider's, not ours) are tried again now.
+    const jobItems = [];
+    if (typeof this.jobs.rearm === 'function') for (const a of await this.jobs.listActive().catch(() => [])) { if (a.status !== 'queued') continue; try { if (await this.jobs.rearm(a.id)) jobItems.push(`job ${a.id.slice(0, 8)}`); } catch { /* the next recovery retries */ } }
+    this.s.rearm = { at: this.clock.now(), scopes: cleared, items: ['install and fetch waits', ...jobItems] };
     (report.rearmed ||= []).push({ scopes: cleared });
     this.save();
   }
@@ -2144,6 +2176,10 @@ export class Team {
       // Issue #995 part 3: count the failed attempt by cause (a homeowner stop is not a failure); a completed job clears the count.
       if (job.status === 'completed') { const subject = j.pr ?? j.issue; if (subject != null) robust.noteSuccessFor(this.s, { type: j.kind, subject }); }
       else if (job.lastEvent !== 'manual_stop') this.countFailure(j, String(job.incompleteReason?.cause || job.lastEvent || job.status));
+      // Issue #995 (owner comment 1): a stopped implement job (by hand or for inactivity) is backed up, cleaned up and made requeueable.
+      if (job.status === 'stopped' && ['manual_stop', 'idle_timeout'].includes(job.lastEvent) && j.kind === 'implement' && Number.isSafeInteger(j.issue)) {
+        if (!(await this.cleanupStoppedImplement(id, j, job, report))) return;
+      }
       // An attempt that ended incomplete on a non-escalated model makes the next attempt of the same work use the stronger one.
       if (job.status !== 'completed' && job.lastEvent === 'incomplete' && j.modelSource !== 'escalated' && this.c.models?.agents?.[j.agent]) {
         this.s.escalations[`${j.kind}:${j.key ?? j.pr}`] = { reason: `the previous ${j.kind} job ${id.slice(0, 8)} ended incomplete on ${j.model || 'the default model'}`, job: id, at: this.clock.now() };
@@ -2577,6 +2613,19 @@ export class Team {
     return { head, key, v, entry: this.s.reReviews[n] ||= entry };
   }
   // `comment` is given by the tick, which has already read it from the PR; the command reads the cited comment through GitHub.
+  // Issue #995 (owner comment 1): `team record-writer PR SESSION`. An interactive session records itself as the writer of the pull request's
+  // current head. The session log (written by the harness) must show a git write on that branch; the record is bound to the exact head.
+  async recordSessionWriter(prNumber, session) {
+    const n = Number(prNumber); if (!Number.isSafeInteger(n) || n <= 0 || typeof session !== 'string') throw new SupervisorError('usage: team record-writer PR SESSION_ID');
+    const pr = await this.gh.getPull(n); if (!pr || !SHA.test(pr.headRefOid)) throw new SupervisorError(`PR #${n} was not found or has no head`);
+    const author = agentOfBranch(this.c, pr.headRefName); if (!author) throw new SupervisorError(`PR #${n} is not on a configured agent branch`);
+    const found = this.sessionWriterOf({ session, branch: pr.headRefName, now: this.clock.now() });
+    if (!found || found.provider !== this.c.agents[author].provider) throw new SupervisorError('the session log shows no git write on this branch by the branch agent\'s provider, so nothing is recorded');
+    this.s.headWriters[`${n}:${pr.headRefOid}`] = { provider: found.provider, models: found.models, sessions: found.sessions, at: this.clock.now(), source: 'recorded-session' };
+    delete this.s.headWriterMiss[`${n}:${pr.headRefOid}`];
+    this.save();
+    return { pr: n, head: pr.headRefOid, models: found.models };
+  }
   async requestReReview(prNumber, decision, comment = null) {
     const n = Number(prNumber), link = typeof decision === 'string' ? decision.trim() : '';
     if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team request-review PR DECISION_LINK');

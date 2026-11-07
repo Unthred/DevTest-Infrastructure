@@ -107,6 +107,8 @@ export function rearmUpgradeState(s, mark, now) {
   const out = [];
   if (s.fetchRetryAt) { delete s.fetchRetryAt; delete s.fetchFailures; out.push('GitHub fetch backoff'); }
   if (s.install?.result === 'transient' && Number.isFinite(s.install.nextAttemptAt)) { s.install = { ...s.install, nextAttemptAt: now }; out.push('install retry'); }
+  // An install left 'blocked' by a pre-check is latched for its commit with no retry time; the recovery lifts the latch so it is tried again now.
+  if (s.install?.result === 'blocked' && s.install.sha && s.prechecked?.[s.install.sha] !== undefined) { delete s.prechecked[s.install.sha]; delete s.lastUpgradeAt; s.install = { ...s.install, result: 'transient', nextAttemptAt: now, reason: `re-armed after a recovery; was: ${s.install.reason}` }; out.push('blocked install'); }
   for (const [sha, v] of Object.entries(s.prechecked || {})) if (v && typeof v === 'object' && v.environmental) { delete s.prechecked[sha]; out.push('install pre-check wait'); }
   s.rearmedAt = mark.at;
   return out;

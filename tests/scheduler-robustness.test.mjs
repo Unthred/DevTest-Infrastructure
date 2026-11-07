@@ -160,10 +160,60 @@ test('rearmUpgradeState clears the fetch backoff, the install retry wait and an 
 test('a halt that clears writes the re-arm marker once and is visible in state; a halt still held does not', async t => {
   const w = world(t);
   w.team.s.breaker.halts = { context_too_large: { since: NOW0, types: ['rebase'], prs: [7] } };
-  const report = {}; w.team.rearmOnRecovery(report); assert.equal(robust.readRearm(w.root), null, 'still held: no re-arm');
+  const report = {}; await w.team.rearmOnRecovery(report); assert.equal(robust.readRearm(w.root), null, 'still held: no re-arm');
   w.team.s.breaker.halts = {};
-  w.team.rearmOnRecovery(report);
+  await w.team.rearmOnRecovery(report);
   assert.deepEqual(robust.readRearm(w.root).scopes, ['context_too_large']);
   assert.deepEqual(w.team.s.rearm.scopes, ['context_too_large']); assert.equal(report.rearmed.length, 1);
-  const again = {}; w.team.rearmOnRecovery(again); assert.equal(again.rearmed, undefined, 'nothing new cleared');
+  const again = {}; await w.team.rearmOnRecovery(again); assert.equal(again.rearmed, undefined, 'nothing new cleared');
+});
+
+// owner comment 1 and the review round
+const stoppedImplement = (w, id, lastEvent, extra = {}) => { w.records[id] = { id, status: 'stopped', lastEvent, worktree: '/p/wt5' }; w.team.s.jobs[id] = { kind: 'implement', issue: 5, agent: 'claude', branch: 'claude/issue-5-x', ...extra }; w.team.s.implemented[5] = NOW0; };
+const cleanGit = (calls, over = {}) => ({ saveWork: async (wt, o) => { calls.push(['save', wt, o.branch]); return { ref: 'saved/abc-x' }; }, isClean: async () => true, unpushedCommits: async () => 0, removeWorktree: async o => calls.push(['remove', o.worktree, o.branch]), ...over });
+test('an idle-cancelled or hand-stopped implement job is backed up, cleaned up and requeueable', async t => {
+  for (const ev of ['idle_timeout', 'manual_stop']) {
+    const calls = [], w = world(t, { git: cleanGit(calls) });
+    stoppedImplement(w, 'i1', ev);
+    await w.team.ingestOneInner('i1', w.team.s.jobs.i1, { ingested: [] });
+    assert.deepEqual(calls.map(c => c[0]), ['save', 'remove'], 'saved before removed');
+    assert.equal(w.team.s.implemented[5], undefined, 'the stale mark is gone');
+    assert.match(w.team.s.jobs.i1.stopCleanup.saved, /saved\/abc-x/);
+  }
+});
+test('stop cleanup keeps the worktree and the mark when the work cannot be proven saved, and waits while the process lives', async t => {
+  const calls = [], w = world(t, { git: cleanGit(calls, { saveWork: async () => { throw new Error('secret-shaped text'); } }) });
+  stoppedImplement(w, 'i1', 'manual_stop'); const report = { ingested: [] };
+  await w.team.ingestOneInner('i1', w.team.s.jobs.i1, report);
+  assert.ok(w.team.s.implemented[5], 'mark kept'); assert.equal(calls.length, 0); assert.match(report.skipped[0].reason, /secret/);
+  const w2 = world(t, { git: cleanGit([]), jobsExtra: { alive: async () => true } });
+  stoppedImplement(w2, 'i2', 'idle_timeout'); await w2.team.ingestOneInner('i2', w2.team.s.jobs.i2, { ingested: [] });
+  assert.ok(w2.team.s.implemented[5], 'a live process is not cleaned up yet');
+});
+test('findSessionWriter reads a quiet git commit from the named session log only', async t => {
+  const { findSessionWriter } = await import('../supervisor/writerevidence.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = path.join(home, '.claude', 'projects', 'p'); fs.mkdirSync(dir, { recursive: true });
+  const row = (cmd, branch) => JSON.stringify({ type: 'assistant', gitBranch: branch, message: { model: 'claude-opus-x', content: [{ type: 'tool_use', id: 't', input: { command: cmd } }] } });
+  fs.writeFileSync(path.join(dir, 'abcdef123456.jsonl'), row('git commit -q -m x', 'claude/issue-9-a') + '\n');
+  const f = findSessionWriter({ session: 'abcdef123456', branch: 'claude/issue-9-a', home });
+  assert.deepEqual(f.models, ['claude-opus-x']); assert.equal(f.sessions[0], 'abcdef12');
+  assert.equal(findSessionWriter({ session: 'abcdef123456', branch: 'claude/other', home }), null);
+  assert.equal(findSessionWriter({ session: '../../etc', branch: 'claude/issue-9-a', home }), null);
+});
+test('record-writer binds the session writer to the current head of a configured agent branch', async t => {
+  const w = world(t, { gh: { getPull: async () => ({ number: 9, headRefName: 'claude/issue-9-a', headRefOid: H(3) }) } });
+  w.team.sessionWriterOf = ({ session }) => session === 'good12345' ? { provider: 'claude', models: ['m1'], sessions: ['good1234'] } : null;
+  const r = await w.team.recordSessionWriter(9, 'good12345');
+  assert.equal(r.head, H(3)); assert.deepEqual(w.team.s.headWriters[`9:${H(3)}`].models, ['m1']);
+  await assert.rejects(() => w.team.recordSessionWriter(9, 'unknown123'), /nothing is recorded/);
+});
+test('a recovery re-arms queued job backoff and a blocked install', async t => {
+  const moved = [], w = world(t, { jobsExtra: { listActive: async () => [{ id: 'q1abcdefgh', status: 'queued' }, { id: 'r1', status: 'running' }], rearm: async id => { moved.push(id); return true; } } });
+  w.team.s.breaker.halts = { c: { since: NOW0, types: ['rebase'], prs: [7] } }; await w.team.rearmOnRecovery({});
+  w.team.s.breaker.halts = {}; await w.team.rearmOnRecovery({});
+  assert.deepEqual(moved, ['q1abcdefgh']); assert.ok(w.team.s.rearm.items.includes('job q1abcdef'));
+  const s = { install: { result: 'blocked', sha: 'abc', reason: 'disk full' }, prechecked: { abc: NOW0 } };
+  assert.deepEqual(robust.rearmUpgradeState(s, { at: NOW0 }, NOW0), ['blocked install']);
+  assert.equal(s.install.nextAttemptAt, NOW0); assert.deepEqual(s.prechecked, {});
 });
