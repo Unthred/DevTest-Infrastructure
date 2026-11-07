@@ -375,6 +375,20 @@ test('self-check (issue #752): a removed label at a still-rejected head is neith
   assert.equal(f.calls.labels.length, 1, 'not flagged again'); assert.equal(notices(), 1, 'not noticed again');
 });
 
+test('self-check (issue #844): a full second tick after the label is removed neither re-flags nor re-notices, with the view filled by plan()', async t => {
+  const f = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  reject(f, 38, H(1)); f.team.s.fixAttempts[`38:${H(0)}`] = 2; f.team.s.unblock.escalated[38] = { head: H(1) };
+  await f.team.tick(); assert.deepEqual(f.calls.labels, [[38, 'needs-homeowner']]);
+  const notices = () => f.calls.comments.filter(c => /fix rounds/.test(c[1])).length;
+  assert.equal(notices(), 1);
+  for (const c of Object.values(f.team.s.unblock.flags[38])) c.at = 0;
+  f.gh.pulls = [{ ...f.gh.pulls[0], labels: [] }];
+  f.team.view = undefined;   // not set by hand: the second tick's plan() must fill it
+  await f.team.tick();
+  assert.ok(f.team.s.unblock.flags[38], 'the record stays after the full tick');
+  assert.equal(f.calls.labels.length, 1, 'not flagged again'); assert.equal(notices(), 1, 'not noticed again');
+});
+
 test('budget: a spent budget at the fix limit raises the limit item, and the fix-limit notice says no escalated round ran', async t => {
   const e = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], cfg: config({ per_pr: 0 }) });
   reject(e, 38, H(1)); e.team.s.fixAttempts[`38:${H(0)}`] = 2;
