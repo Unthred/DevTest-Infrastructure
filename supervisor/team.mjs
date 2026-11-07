@@ -1084,9 +1084,9 @@ export class Team {
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
-      const v0 = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)], v = this.staleExceptionPass(v0, pr.number) ? undefined : v0;
-      const interim = v?.interim === true && v.reviewer === author;
-      if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.carryOk(v, pr) && !this.reqHoldAll && !this.reqHold?.has(pr.number) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr) && !(this.exceptionFor(pr.number) && this.exceptionMissing(pr))) {
+      const v = this.mergeVerdict(pr, author);
+      if (v) {
+        const interim = v.interim === true && v.reviewer === author;
         const exception = !!this.exceptionFor(pr.number);
         // Applies only while D-024 is not approved (D-021): an interim merge owes a post-merge review by a reviewer on another model.
         actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job, ...(interim && !this.independenceApproved() ? { interim: true, branch: pr.headRefName, author } : {}), ...(exception ? { exception: true, commitsJob: this.s.exceptionReviews[verdictKey(pr.number, pr.headRefOid)]?.job } : {}) });
@@ -1536,17 +1536,39 @@ export class Team {
   reviewInFlight(pr) {
     return Object.values(this.s.jobs).some(j => j.kind === 'review' && !j.ingested && j.pr === pr.number && j.head === pr.headRefOid && this.c.agents[j.agent] && !this.reviewRefusal(j.agent, pr, j.key));
   }
+  // The PASS verdict that lets the merge step merge `pr` now, or null. The one predicate behind both the merge loop and the rebase deferral
+  // (issue #717), so a PR counted as ahead in the queue is one the merge step would actually merge.
+  mergeVerdict(pr, author = agentOfBranch(this.c, pr.headRefName)) {
+    if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) return null;
+    const v0 = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)], v = this.staleExceptionPass(v0, pr.number) ? undefined : v0;
+    const interim = v?.interim === true && v.reviewer === author;
+    if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.carryOk(v, pr) && !this.reqHoldAll && !this.reqHold?.has(pr.number) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr) && !(this.exceptionFor(pr.number) && this.exceptionMissing(pr))) return v;
+    return null;
+  }
+  // Rank of a PR in the rebase / merge order (issue #326): the position of its issue in agents.<name>.issues, Infinity when not queued.
+  queueRank(p) {
+    const m = /\/issue-(\d+)(\D|$)/.exec(p.headRefName || ''), ag = agentOfBranch(this.c, p.headRefName);
+    const i = m && ag ? this.issuesOf(ag).indexOf(Number(m[1])) : -1;
+    return i < 0 ? Infinity : i;
+  }
   // Issue #633: a conflicting PR is rebased just before its review or merge, not on every main move. It waits while another open, non-conflicting
   // agent PR is ahead of it in the review/merge queue (green and unreviewed on its head, or holding a PASS on a green head). A PR with nothing
   // ahead is next, so it rebases at once. A behind-with-PASS rebase (right before merge) is never deferred here.
+  // Issue #717: only a PR the merge step would act on counts as ahead (mergeVerdict is the merge loop's own test), and only one ahead of `pr` in
+  // the #326 queue order (issue rank, then PR number), so a stream of newer or later-queued PRs can never hold an older conflicting PR back.
   rebaseNotNext(pr, prs) {
     if (pr.mergeable !== 'CONFLICTING') return false;
+    const me = this.queueRank(pr), L = this.c.limits;
     return (prs || []).some(o => {
       if (o.number === pr.number || o.isDraft || !SHA.test(o.headRefOid) || !agentOfBranch(this.c, o.headRefName) || o.mergeable === 'CONFLICTING' || this.ciState(o) !== 'green') return false;
+      const r = this.queueRank(o);
+      if (!(r < me || (r === me && o.number < pr.number))) return false;   // not ahead of this PR in the queue order
       if (this.parkedReason(o, null, prs)) return false;   // needs-homeowner or a PASS held on a decision cannot move, so it is not ahead
       const v = this.s.verdicts[verdictKey(o.number, o.headRefOid)];
       if (!v) return this.otherReviewers('', o).length > 0;   // unreviewed: ahead only if some agent can review it now
-      return v.verdict === 'PASS' && o.mergeStateStatus !== 'BLOCKED';   // a PASS GitHub reports blocked cannot merge next
+      if (v.verdict !== 'PASS' || o.mergeStateStatus === 'BLOCKED') return false;   // a PASS GitHub reports blocked cannot merge next
+      if (o.mergeStateStatus === 'BEHIND' && (this.s.rebaseAttempts[verdictKey(o.number, o.headRefOid)] || 0) >= L.max_fix_attempts) return false;   // BEHIND with no rebase left waits for the homeowner
+      return !!this.mergeVerdict(o);
     });
   }
   rebaseDeferred(pr, prs, issueByNo, busy) {
@@ -1569,11 +1591,7 @@ export class Team {
     };
     // Homeowner decision (issue #326): rebase in the order of the issues in agents.<name>.issues; a PR whose issue is not in the queue
     // comes after those; ties go by PR number.
-    const rank = p => {
-      const m = /\/issue-(\d+)(\D|$)/.exec(p.headRefName || ''), ag = agentOfBranch(this.c, p.headRefName);
-      const i = m && ag ? this.issuesOf(ag).indexOf(Number(m[1])) : -1;
-      return i < 0 ? Infinity : i;
-    };
+    const rank = p => this.queueRank(p);
     const ranked = prs.filter(wants).map(p => ({ p, r: rank(p) }));
     // Issue #460: rebases have their own slot count (limits.roles.rebaser), so the first N candidates in that order may rebase at once.
     // A rebase never holds the implementer slot, so the alternation with implement jobs (issue #266) is no longer needed: new work

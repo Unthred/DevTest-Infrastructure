@@ -196,19 +196,40 @@ test('#326 a PR refused by writeBlock does not hold the next rebase', async t =>
 
 // Issue #633: a conflicting PR is rebased just before review/merge, not while another PR is ahead of it.
 test('#633 a conflicting PR waits while a green unreviewed PR is ahead; a lone conflicting PR rebases', async t => {
-  const ahead = pr(302, H(2), { mergeable: 'MERGEABLE' });
-  const team = world(t, [pr(301, H(1)), ahead]);
+  const ahead = pr(301, H(1), { mergeable: 'MERGEABLE' });
+  const team = world(t, [pr(302, H(2)), ahead]);
   team.otherReviewers = () => ['codex'];
-  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [], 'deferred: 302 is next to review');
-  const lone = world(t, [pr(301, H(1))]);
-  assert.deepEqual((await lone.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [], 'deferred: 301 is next to review');
+  const lone = world(t, [pr(302, H(2))]);
+  assert.deepEqual((await lone.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [302]);
 });
 test('#633 a PASS-holding green PR is ahead too; once it is gone the conflicting PR rebases', async t => {
-  const team = world(t, [pr(301, H(1)), pr(302, H(2), { mergeable: 'MERGEABLE' })]);
-  team.s.verdicts[`302:${H(2)}`] = { verdict: 'PASS', reviewer: 'codex' };
+  const team = world(t, [pr(302, H(2)), pr(301, H(1), { mergeable: 'MERGEABLE' })]);
+  team.c.agents.codex = { provider: 'codex', branch_prefix: 'codex/', issues: [] };   // the reviewer must be a configured agent for its PASS to merge
+  team.s.verdicts[`301:${H(1)}`] = { verdict: 'PASS', reviewer: 'codex' };
   assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), []);
-  team.gh.pulls = [pr(301, H(1))];
-  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
+  team.gh.pulls = [pr(302, H(2))];
+  assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [302]);
+});
+// Issue #717: "ahead" is what the merge step would act on, and only PRs ahead in the #326 queue order.
+test('#717 a PASS the merge step would not merge is not ahead (second opinion owed, UNKNOWN, BEHIND with no rebase left, invalid carry)', async t => {
+  const mk = (over, setup) => { const team = world(t, [pr(302, H(2)), pr(301, H(1), { mergeable: 'MERGEABLE', ...over })]); team.c.agents.codex = { provider: 'codex', branch_prefix: 'codex/', issues: [] }; team.s.verdicts[`301:${H(1)}`] = { verdict: 'PASS', reviewer: 'codex' }; setup?.(team); return team; };
+  assert.deepEqual(await rebasesOf(mk({})).then(r => r), [], 'control: a mergeable PASS is ahead');
+  assert.deepEqual(await rebasesOf(mk({ mergeable: 'UNKNOWN' })), [302], 'UNKNOWN');
+  assert.deepEqual(await rebasesOf(mk({}, tm => { tm.secondOpinionPending = p => p.number === 301; })), [302], 'second opinion owed');
+  assert.deepEqual(await rebasesOf(mk({}, tm => { tm.carryOk = () => false; })), [302], 'invalid carry');
+  assert.deepEqual(await rebasesOf(mk({}, tm => { tm.reqHold = new Set([301]); })), [302], 'requirements hold');
+  assert.deepEqual(await rebasesOf(mk({ mergeStateStatus: 'BEHIND' }, tm => { tm.s.rebaseAttempts[`301:${H(1)}`] = 99; })), [302], 'BEHIND with rebase attempts used up');
+  const m = mk({}); m.s.verdicts[`301:${H(1)}`].reviewer = 'gone';
+  assert.deepEqual(await rebasesOf(m), [302], 'reviewer no longer in agents');
+});
+test('#717 only a PR ahead in the queue order defers a rebase: a newer or later-queued PR does not', async t => {
+  const newer = world(t, [pr(301, H(1)), pr(302, H(2), { mergeable: 'MERGEABLE' })]);
+  newer.otherReviewers = () => ['codex'];
+  assert.deepEqual(await rebasesOf(newer), [301], 'a newer unreviewed PR cannot hold an older conflicting one');
+  const queued = world(t, [pr(300, H(3)), pr(258, H(4), { mergeable: 'MERGEABLE', headRefName: 'claude/issue-258-x' })]);   // 258 is in the issue queue, 300 is not
+  queued.otherReviewers = () => ['codex'];
+  assert.deepEqual(await rebasesOf(queued), [], 'a PR queued earlier is ahead whatever its number');
 });
 // Issue #633: only a PR that can move now is "ahead"; one that is stuck must not hold a conflicting PR's rebase.
 const rebasesOf = async team => (await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr);

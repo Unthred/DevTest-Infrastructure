@@ -111,6 +111,14 @@ test('rebase stats (#633): carried verdicts are not reviews; the merge entry is 
   assert.equal(s.all.openToMergeHours.median, 6);
 });
 
+test('rebase stats (#717): the merge-log start beats a late first timeline entry; second opinions count as reviews', () => {
+  const base = { number: 9, status: 'merged', mergedAt: 100 * H, rebaseRounds: 0, reviewRounds: 1, verdicts: [{}], timeline: [{ at: 90 * H, text: 'x' }, { at: 100 * H, text: 'merged' }] };
+  const s = rebaseStats({ prs: [{ ...base, startedAt: 40 * H, secondOpinionRounds: 1 }, { ...base, number: 10 }] });
+  assert.equal(s.all.reviews.total, 3);
+  assert.equal(s.recent.find(r => r.pr === 9).openToMergeHours, 60, 'from startedAt');
+  assert.equal(s.recent.find(r => r.pr === 10).openToMergeHours, 10, 'falls back to the first timeline entry');
+});
+
 test('a bare numeric ref (noreviewer-refused) is read as a pull request in both tools', () => {
   const v = view(); v.panels.needsYou.push(card('noreviewer-refused-31', 31, { ref: 31 }));
   assert.deepEqual(mismatches(v, NOW).items.filter(i => i.kind === 'finished-not-recorded').map(i => i.ref), ['pr #31']);
