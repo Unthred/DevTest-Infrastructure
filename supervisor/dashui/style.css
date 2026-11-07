@@ -395,7 +395,9 @@ html:not(.js) .dl-bar{display:none}
   .cards.free>.card.expanded{grid-column:auto;grid-row:auto;overflow:auto}
   /* content adapts: lists and tables scroll with the card, charts scale to the card, KPI tiles reflow */
   .cards.free .dlist{--dl-max:none}
-  .cards.free .dl-scroll{max-height:none;overflow:visible}
+  .cards.free .dl-scroll{max-height:none;flex:1 1 0;min-height:4rem;overflow-y:auto}   /* issue #940: the list fills the card and scrolls inside it */
+  .cards.free>.card .dlist{flex:1 1 auto;min-height:0}
+  .cards.free>.card>.panel-list{max-height:none;flex:1 1 0;min-height:4rem}
   .cards.free>.card figure.chart{min-height:3rem}
   .cards.free>.card figure.chart svg{flex:1 1 0;min-height:0;height:100%}
   .cards.free>.card.kpi{container-type:size;display:flex;flex-direction:column;overflow:auto;padding:var(--sp2) var(--sp3)}
@@ -508,3 +510,19 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .bar-picker summary{cursor:pointer;padding:4px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);min-height:36px;display:inline-flex;align-items:center}
 .bar-picker[open]>ul{position:absolute;right:0;z-index:50;margin:var(--sp1) 0 0;padding:var(--sp2);list-style:none;min-width:14rem;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-lg)}
 .bar-picker li{display:flex;align-items:center;justify-content:space-between;gap:var(--sp3);padding:var(--sp1) 0}
+
+/* ---- issue #940: one shared card chrome, roll-up summary, lists scroll instead of growing, two-column reflow */
+.card{container:card/inline-size}
+.card>header>.tools{margin-left:auto}
+.card-summary{display:none;flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mut);font-size:var(--fs-sm)}
+.card.collapsed>header .card-summary{display:block}
+.card.collapsed>header h2{flex:0 1 auto}
+.card.kpi>header{margin-bottom:var(--sp1);min-height:0}
+.card.kpi>header h2{font-size:var(--fs-sm);font-weight:500;color:var(--mut)}
+/* a plain list in a card never makes the card taller than its saved size: it scrolls inside the card */
+.card>.panel-list{max-height:clamp(10rem,42vh,26rem);overflow-y:auto;overflow-x:hidden}
+.card.expanded>.panel-list{max-height:calc(94vh - 8rem)}
+/* a list card wide enough for two columns shows its rows in two, and back to one when narrowed (by the card's own width) */
+@container card (min-width:46rem){
+  .dl-scroll{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--sp4);align-content:start}
+}

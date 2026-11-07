@@ -12,7 +12,7 @@ const config = () => ({
 const job = (id, over = {}) => ({ id: id.repeat(32), provider: 'claude', kind: 'implement', issue: 30, branch: 'claude/issue-30-x', status: 'running', createdAt: NOW - 600000, updatedAt: NOW - 1000, lastProgress: NOW - 1000, attempts: 1, ...over });
 const view = (jobs, state = { jobs: {} }) => buildView({ config: config(), root: '/nonexistent-root', jobs, events: [], state, cache: { tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, pulls: [], issues: [{ number: 30, title: 'Thirty', state: 'OPEN', labels: [] }] }, snapshots: [], now: NOW });
 const cards = html => (html.match(/data-job-card="/g) || []).length;
-const kpi = (html, id) => new RegExp(`data-card="${id}"[^>]*><div class="v">([^<]*)</div>`).exec(html)?.[1];
+const kpi = (html, id) => new RegExp(`data-card="${id}"[\\s\\S]*?<div class="v">([^<]*)</div>`).exec(html)?.[1];
 
 test('two jobs on one agent give two cards, jobs 2 / 2 and one agent available', async () => {
   const jobs = [job('a'), job('b', { kind: 'review', issue: 31, branch: 'claude/issue-31-y', createdAt: NOW - 60000 })];
