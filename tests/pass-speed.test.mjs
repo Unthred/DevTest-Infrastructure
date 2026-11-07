@@ -104,7 +104,7 @@ import { decide } from '../supervisor/inbox.mjs';
 import { cleanPhases, addPassPhases } from '../supervisor/dashdata.mjs';
 import { laneArgs, spawnDetachedLane } from '../supervisor/wake.mjs';
 
-function laneWorld(t, { active = [], limits = {} } = {}) {
+function laneWorld(t, { active = [], limits = {}, pulls = [], register = REGISTER } = {}) {
   const dir = tmp(t), inbox = path.join(dir, 'inbox'), root = stateRoot(path.join(dir, 'state'));
   fs.mkdirSync(path.join(inbox, 'items'), { recursive: true });
   const id = 'c'.repeat(32);
@@ -114,9 +114,9 @@ function laneWorld(t, { active = [], limits = {} } = {}) {
     limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2, ...limits }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] } },
     board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } };
   const created = [];
-  const gh = { listPulls: async () => [], getPull: async () => null, listIssues: async () => [], listMergedPulls: async () => [], comment: async () => {}, addLabel: async () => {}, hasComment: async () => false, board: async () => {} };
+  const gh = { listPulls: async () => pulls, getPull: async () => null, listIssues: async () => [], listMergedPulls: async () => [], comment: async () => {}, addLabel: async () => {}, hasComment: async () => false, board: async () => {} };
   const jobs = { listActive: async () => active, get: async () => null, create: async spec => { created.push(spec); return { id: 'f'.repeat(32) }; } };
-  const mk = () => new Team({ config: cfg, root, gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register: REGISTER, clock: { now: () => 5000 }, sleep: async () => {}, limitedOf: () => ({ out: false }),
+  const mk = () => new Team({ config: cfg, root, gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register, clock: { now: () => 5000 }, sleep: async () => {}, limitedOf: () => ({ out: false }),
     providerModels: { claude: { aliases: ['opus', 'sonnet', 'haiku'], pattern: '^claude-', efforts: ['low', 'medium', 'high'] } } });
   return { inbox, root, id, created, mk };
 }
@@ -177,4 +177,28 @@ test('the lane command runs the installed code with the state root', () => {
   assert.deepEqual(laneArgs({ target: '/x/cli.mjs', root: '/s', registry: null }), ['/x/cli.mjs', 'team', 'start-approved', '--state-root', '/s']);
   let seen; spawnDetachedLane({ root: '/nonexistent-root', self: '/self/cli.mjs', spawnFn: (cmd, args, o) => { seen = { args, detached: o.detached }; return { unref() {}, on() {} }; } });
   assert.equal(seen.args[0], '/self/cli.mjs'); assert.equal(seen.detached, true);
+});
+
+test('negative: the fast lane keeps the D-020 gate and the open-PR pause that the pass enforces', async t => {
+  const w = laneWorld(t, { register: REGISTER.replace(/homeowner-approved/g, 'agent-proposal') });
+  const out = await w.mk().startApprovedNow({});
+  assert.equal(out.started, false); assert.match(out.why, /D-020 is not homeowner-approved/);
+  assert.equal(w.created.length, 0); assert.equal(statusOf(w.inbox, w.id).state, 'approved');
+  const pr = n => ({ number: n, headRefName: `claude/issue-${n}-x`, title: 't', state: 'OPEN', labels: [], isDraft: false });
+  const w2 = laneWorld(t, { limits: { max_open_prs: 2 }, pulls: [pr(1), pr(2)] });
+  const out2 = await w2.mk().startApprovedNow({});
+  assert.equal(out2.started, false); assert.match(out2.why, /Paused new work: 2 open PRs/);
+  assert.equal(w2.created.length, 0);
+});
+
+test('a pass reads the open PR and issue lists once; a write, or the end of the window, reads GitHub again', async () => {
+  const { cachedGithub } = await import('../supervisor/ghchange.mjs');
+  let pulls = 0, writes = 0;
+  const raw = { listPulls: async () => { pulls++; return [{ number: pulls }]; }, listIssues: async () => [], comment: async () => { writes++; } };
+  const w = cachedGithub(raw, { mode: 'memo', cache: null });
+  await w.gh.listPulls(); await w.gh.listPulls(); await w.gh.listPulls();
+  assert.equal(pulls, 1); assert.equal(w.stats.recentHits, 2);
+  await w.gh.comment(1, 'x');
+  assert.deepEqual(await w.gh.listPulls(), [{ number: 2 }]);   // a write forces a fresh read
+  w.endReplay(); await w.gh.listPulls(); assert.equal(pulls, 3);
 });

@@ -2019,6 +2019,11 @@ export class Team {
   async startApprovedNow(report = {}, { admit = null } = {}) {
     const dir = this.inboxDir(); if (!dir) return { started: false, why: 'no inbox configured' };
     const next = this.inboxNext(); if (!next) return { started: false, why: 'no approved prompt is waiting' };
+    // The gates tickPass applies before any launch: D-020 for full access, and the open-PR pause that holds every new implement job.
+    if (this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision)) return { started: false, why: `${this.c.access.decision} is not homeowner-approved in the decision register` };
+    let pause = null;
+    try { const prs = await this.gh.listPulls(), issues = await this.gh.listIssues(); pause = this.pauseText(prs, issues); } catch { return { started: false, why: 'GitHub could not be read to check the open-PR cap' }; }
+    if (pause) return { started: false, why: pause };
     const L = this.c.limits, active = (await this.jobs.listActive()).filter(j => j.status !== 'paused_limit');
     const usedBy = {}; let impl = 0;
     for (const j of active) { const role = roleOfType(this.s.jobs[j.id]?.kind); if (role === 'implementer') impl++; const k = `${j.provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
