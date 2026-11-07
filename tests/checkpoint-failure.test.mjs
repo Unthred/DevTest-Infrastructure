@@ -161,8 +161,8 @@ test('checkpoint: a nested call is refused as already active; the budget resets 
   const root = path.join(d, 'state'); fs.mkdirSync(path.join(root, 'events'), { recursive: true });
   const job = { id: J1, worktree: r, kind: 'implement', issue: 1, status: 'running' };
   let inner = null;
-  const nestingClock = { now: () => { try { checkpoint(root, job, { now: () => 0 }); } catch (e) { inner = e; } return 0; } };
-  try { checkpoint(root, job, nestingClock); } catch { /* the outer call may fail for unrelated reasons */ }
+  const afterGuard = () => { try { checkpoint(root, job, { now: () => 0 }); } catch (e) { inner = e; } };
+  try { checkpoint(root, job, { now: () => 0 }, undefined, { afterGuard }); } catch { /* the outer call may fail for unrelated reasons */ }
   assert.match(String(inner?.message), /already active/);
   const broken = { ...job, worktree: path.join(d, 'missing') };
   assert.throws(() => checkpoint(root, broken, { now: () => 0 }));
