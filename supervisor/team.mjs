@@ -2090,8 +2090,7 @@ export class Team {
       if (j.kind === 'implement' && job.status === 'completed') delete j.endedNoPr;
       else if (j.kind === 'implement') {
         // Issue #660: the same conditions as resumeTransient's candidate test (RESUME_WINDOW_MS included); a job it will never look at is surfaced now.
-        const resumable = !!this.jobs.resume && TRANSIENT_STOPS.has(job.lastEvent) && !this.s.unblock.resumed[id] && !this.s.unblock.noResume[id] && !j.settled && this.inResumeWindow(j);
-        if (resumable) delete j.endedNoPr; else j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
+        if (this.willResume(id, job, j)) delete j.endedNoPr; else j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
       }
       j.ingested = true; this.save();
   }
@@ -2768,6 +2767,8 @@ export class Team {
     if (!this.jobs.resume || this.s.unblock.resumed[id] || this.s.unblock.noResume[id] || !TRANSIENT_STOPS.has(job.lastEvent)) return false;
     return !this.unblockRoom(j.issue ?? j.pr);
   }
+  // One predicate for "resumeTransient will pick this stopped job up" (issue #741): ingest uses it to defer the stale cause, so the two cannot drift apart.
+  willResume(id, job, j) { return !j.settled && this.inResumeWindow(j) && this.awaitingResume(id, job, j); }
   inResumeWindow(j) { return !(j.at && this.clock.now() - j.at > RESUME_WINDOW_MS); }
   reported(id) { return Object.keys(this.s.notified).some(k => k.startsWith(`${id}:`)); }
   async staleResume(id, j, open) {
@@ -2789,7 +2790,15 @@ export class Team {
     const open = {};   // the open PRs and issues, read at most once per tick and only when a job is a candidate
     for (const [id, j] of Object.entries(this.s.jobs)) {
       if (this.s.unblock.resumed[id] || this.s.unblock.noResume[id] || j.settled) continue;
-      if (!this.inResumeWindow(j)) continue;   // (a blocked job is already `ingested`; resuming makes it ingestible again)
+      if (!this.inResumeWindow(j)) {   // (a blocked job is already `ingested`; resuming makes it ingestible again)
+        // Issue #741: a job deferred until it aged out of the window never got its stale cause at ingest; record it once now.
+        if (j.kind === 'implement' && j.ingested && !j.endedNoPr) await guard(`resume ${id}`, async () => {
+          const job = await this.jobs.get(id);
+          if (job && ['completed', 'stopped'].includes(job.status)) { j.settled = true; this.save(); return; }
+          if (job && ['blocked', 'failed'].includes(job.status)) { j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() }; this.save(); }
+        });
+        continue;
+      }
       await guard(`resume ${id}`, async () => {
         const job = await this.jobs.get(id);
         if (job && ['completed', 'stopped'].includes(job.status)) { j.settled = true; this.save(); return; }   // never transient again

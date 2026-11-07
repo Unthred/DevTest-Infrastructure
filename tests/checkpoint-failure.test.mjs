@@ -148,3 +148,19 @@ test('worker: no further checkpoint is attempted after the limit, even when the 
   assert.equal(result.event, 'checkpoint_failed');
   assert.equal(events(f.root, job.id).filter(k => k.startsWith('checkpoint_failed:')).length, 3);
 });
+
+// Issue #741: checkpoint() refuses a nested call, and the budget is reset after a throw so the next checkpoint is not wrongly refused.
+test('checkpoint: a nested call is refused as already active; the budget resets after a throw', t => {
+  const { d, r } = repo(t);
+  const root = path.join(d, 'state'); fs.mkdirSync(path.join(root, 'events'), { recursive: true });
+  const job = { id: J1, worktree: r, kind: 'implement', issue: 1, status: 'running' };
+  let inner = null;
+  const nestingClock = { now: () => { try { checkpoint(root, job, { now: () => 0 }); } catch (e) { inner = e; } return 0; } };
+  try { checkpoint(root, job, nestingClock); } catch { /* the outer call may fail for unrelated reasons */ }
+  assert.match(String(inner?.message), /already active/);
+  const broken = { ...job, worktree: path.join(d, 'missing') };
+  assert.throws(() => checkpoint(root, broken, { now: () => 0 }));
+  let again = null;
+  try { checkpoint(root, job, { now: () => 0 }); } catch (e) { again = e; }
+  assert.doesNotMatch(String(again?.message), /already active/, 'a throw does not leave the guard set');
+});
