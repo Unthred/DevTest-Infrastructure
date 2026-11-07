@@ -104,7 +104,7 @@ test('the browser script keys the saved layout by breakpoint and never reads or 
   assert.match(js, /dash\.layout\.\$\{page\}\.\$\{bpNow\(\)\}/);
   assert.doesNotMatch(js, /XMLHttpRequest|WebSocket|sendBeacon|eval\(|new Function|innerHTML|document\.write|import\(/);
   // Issue #61: the one network use is a same-origin GET of the page's own address to update a table in place; nothing is sent.
-  assert.equal((js.match(/fetch\(/g) || []).length, 2, 'exactly two fetches: the table update and the app bar Next stat refresh (both same-origin GETs)');
+  assert.equal((js.match(/fetch\(/g) || []).length, 3, 'exactly three fetches: the table update, the in-place chart range change (issue #926) and the app bar Next stat refresh (both same-origin GETs)');
   assert.match(js, /url = location\.pathname \+ \(qs/); assert.match(js, /fetch\(url, \{ headers: \{ accept: 'text\/html' \}, credentials: 'same-origin' \}\)/);
   assert.doesNotMatch(js, /method:\s*['"](?!GET)|body:\s/, 'no request carries a body');
 });
@@ -463,6 +463,7 @@ function fakeEl(tag, attrs = {}, kids = []) {
     setAttribute(k, v) { el.attrs[k] = String(v); }, getAttribute: k => el.attrs[k] ?? null,
     classList: { toggle: (c, on) => { on ? el.classes.add(c) : el.classes.delete(c); }, contains: c => el.classes.has(c) },
     append(...n) { for (const c of n) { c.parent = el; el.children.push(c); } },
+    before(n) { const i = el.parent.children.indexOf(el); n.parent = el.parent; el.parent.children.splice(i, 0, n); },
     addEventListener(t, f) { (el.listeners[t] ||= []).push(f); }, click() { for (const f of el.listeners.click || []) f(); },
     all: () => el.children.flatMap(c => [c, ...c.all()]),
     contains: n => n === el || el.children.some(c => c.contains(n)),
@@ -658,4 +659,71 @@ test('every card on every page sits inside a layout grid, and the editor is not 
   assert.doesNotMatch(app, /querySelector\('\[data-move\]'\)\) grid\.before\(bar\)/, 'the editor must not depend on phone move buttons');
   assert.match(app, /if \(cards\(\)\.length\) grid\.before\(bar\)/);
   assert.match(app, /lay-hide[^\n]*addEventListener\('click', e => \{ e\.preventDefault\(\); e\.stopPropagation\(\)/, 'Hide never follows a card that is a link');
+});
+
+// ---- issue #926: alternative allowance chart styles, legend position, no jump on range change
+const snap926 = (at, u) => ({ at, status: 'ok', plan: [], agents: {}, allowance: { claude: { observedAt: at, windows: [{ type: 'five_hour', utilization: u, resetsAt: at + 1000 }, { type: 'seven_day', utilization: u / 2, resetsAt: at + 5000 }] }, codex: { observedAt: at, windows: [{ type: 'primary', windowMinutes: 300, utilization: 0.1, resetsAt: at + 9 }] } } });
+test('allowance charts (issue #926): every style is drawn in the one SVG, tagged by layer, and the list matches the client labels', async t => {
+  const { CHART_STYLES } = await import('../supervisor/dashrender.mjs');
+  const { STYLE_LABELS } = await import('../supervisor/dashui/chartopts.mjs');
+  assert.deepEqual(Object.fromEntries(CHART_STYLES), STYLE_LABELS);
+  assert.ok(CHART_STYLES.length >= 4);
+  const s = await serve(t, { jobs: [jb()], cache: cache(), snapshots: [snap926(NOW - 3 * 86400000, 0.5), snap926(NOW - 2 * 3600000, 0.3)] });
+  for (const url of ['/usage', '/']) {
+    const b = (await s.get(url)).body;
+    assert.match(b, /<figure class="chart" data-style="line" data-styles="line area step stack bars">/, url);
+    for (const ly of ['polygon data-ly="area"', 'polyline data-ly="step"', 'polygon data-ly="stack"', 'rect data-ly="bars"']) assert.ok(b.includes('<' + ly), url + ' ' + ly);
+    assert.match(b, /peak 50% on /); assert.match(b, /\(stacked\)/);
+    assert.doesNotMatch(b, /NaN|undefined/, 'no broken coordinates');
+  }
+  const css = (await s.get('/static/style.css')).body;
+  assert.match(css, /\.chart\[data-style=stack\] \[data-ly~=stack\]/); assert.match(css, /figure\.chart\[data-legend=hidden\] \.legend\{display:none\}/);
+  assert.equal((await s.get('/static/chartopts.mjs')).status, 200);
+});
+test('allowance charts (issue #926): the jobs-per-day chart has no style choice and an empty chart draws no style layers', async t => {
+  const s = await serve(t, { jobs: [jb()], cache: cache() });
+  const b = (await s.get('/')).body;
+  assert.doesNotMatch(b, /data-styles/, 'no allowance history: the empty state replaces the chart');
+  assert.match(b, /No allowance history in this range/);
+});
+function optsPage(stored, styles = 'line area step stack bars') {
+  const fig = fakeEl('figure', styles ? { 'data-styles': styles } : {}, [fakeEl('svg', { 'aria-label': 'allowance' }), fakeEl('div', { class: 'legend' })]);
+  const wrap = fakeEl('div', {}, [fig]), doc = fakeEl('body', {}, [wrap]); doc.createElement = tag => fakeEl(tag);
+  const mem = new Map(stored ? [['o', JSON.stringify(stored)]] : []);
+  const store = { get: k => (mem.has(k) ? JSON.parse(mem.get(k)) : null), set: (k, v) => mem.set(k, JSON.stringify(v)), del: k => mem.delete(k) };
+  const sel = n => doc.all().find(c => c.tag === 'select' && c.attrs['data-opt'] === n);
+  const change = (n, v) => { const el = sel(n); el.value = v; for (const f of el.listeners.change) f(); };
+  return { doc, fig, mem, store, sel, change };
+}
+test('chart options (issue #926): style and legend position are applied, saved per chart, and restored', async () => {
+  const { initChartOptions } = await import('../supervisor/dashui/chartopts.mjs');
+  const pg = optsPage(); initChartOptions({ document: pg.doc, store: pg.store, key: 'o' });
+  assert.equal(pg.fig.attrs['data-style'], 'line'); assert.equal(pg.fig.attrs['data-legend'], 'bottom'); assert.equal(pg.mem.has('o'), false, 'defaults store nothing');
+  assert.deepEqual(pg.sel('style').children.map(o => o.value), ['line', 'area', 'step', 'stack', 'bars']);
+  assert.deepEqual(pg.sel('legend').children.map(o => o.value), ['top', 'right', 'bottom', 'hidden']);
+  pg.change('style', 'stack'); pg.change('legend', 'right');
+  assert.equal(pg.fig.attrs['data-style'], 'stack'); assert.equal(pg.fig.attrs['data-legend'], 'right');
+  assert.deepEqual(JSON.parse(pg.mem.get('o')).allowance, { style: 'stack', legend: 'right' });
+  const back = optsPage(JSON.parse(pg.mem.get('o')).allowance && { allowance: { style: 'stack', legend: 'hidden' } }); initChartOptions({ document: back.doc, store: back.store, key: 'o' });
+  assert.equal(back.fig.attrs['data-style'], 'stack'); assert.equal(back.fig.attrs['data-legend'], 'hidden'); assert.equal(back.sel('style').value, 'stack');
+  pg.change('style', 'line'); pg.change('legend', 'bottom'); assert.equal(pg.mem.has('o'), false, 'back to the defaults clears the stored entry');
+  initChartOptions({ document: pg.doc, store: pg.store, key: 'o' }); assert.equal(pg.doc.all().filter(c => c.tag === 'select').length, 2, 'a second run does not add a second set of controls');
+});
+test('chart options (issue #926): tampered or stale stored values fall back, and a chart without styles only gets the legend choice', async () => {
+  const { initChartOptions, pickOption } = await import('../supervisor/dashui/chartopts.mjs');
+  const bad = optsPage({ allowance: { style: '<script>', legend: 'diagonal' } }); initChartOptions({ document: bad.doc, store: bad.store, key: 'o' });
+  assert.equal(bad.fig.attrs['data-style'], 'line'); assert.equal(bad.fig.attrs['data-legend'], 'bottom');
+  for (const junk of ['junk', 7, [], null]) { const p = optsPage(junk); initChartOptions({ document: p.doc, store: p.store, key: 'o' }); assert.equal(p.fig.attrs['data-style'], 'line'); }
+  assert.equal(pickOption('__proto__', ['a'], 'a'), 'a'); assert.equal(pickOption(undefined, ['a'], 'a'), 'a');
+  const plain = optsPage(null, ''); initChartOptions({ document: plain.doc, store: plain.store, key: 'o' });
+  assert.equal(plain.sel('style'), undefined); assert.ok(plain.sel('legend')); assert.equal(plain.fig.attrs['data-style'], undefined);
+  plain.change('legend', 'bogus'); assert.equal(plain.fig.attrs['data-legend'], 'bottom', 'an invalid choice is ignored');
+});
+test('range change (issue #926): chart range links update in place without a navigation', async t => {
+  const s = await serve(t, { jobs: [jb()], cache: cache(), snapshots: [snap926(NOW - 2 * 3600000, 0.3)] });
+  const js = (await s.get('/static/app.js')).body;
+  assert.match(js, /async function loadRange\(/); assert.match(js, /\.chart-card \[aria-label="Time range"\] a\[href\]/);
+  assert.match(js, /e\.preventDefault\(\); loadRange\(u\)/); assert.match(js, /scrollTo\(scrollX, y\)/);
+  const page = (await s.get('/usage')).body;
+  assert.match(page, /<section class="card[^"]*chart-card[^>]*id="c-u-chart"[\s\S]*?<div class="ranges" role="group" aria-label="Time range"><a href="\/usage\?range=24h">/, 'the links are real hrefs, so a failed fetch still navigates');
 });
