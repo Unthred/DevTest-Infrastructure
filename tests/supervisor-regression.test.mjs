@@ -3,6 +3,7 @@
 // Provider output shapes marked "captured" were recorded from real CLIs (Claude Code 2.1.314, Codex CLI 0.165.0)
 // using an invalid-model call, which spends no tokens. Real usage-limit output has NOT been captured: limit
 // wording here is simulated and the capability stays unverified.
+import { removeLater } from './_tmp-leaks.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -22,6 +23,7 @@ function fixture(t, autoResume = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-regress-'));
   // reconcile spawns detached workers (supervisor/cli.mjs) that may still write state as the test ends; retry the removal (ENOTEMPTY race). Retrying hides the race rather than removing it; awaiting worker exit at the source is tracked in issue #906
   t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
+  removeLater(dir);   // detached workers may still write as the test ends (issue #1007)
   const repo = path.join(dir, 'repo'), worktree = path.join(dir, 'wt');
   fs.mkdirSync(repo); git(repo, 'init', '-q', '-b', 'main');
   git(repo, 'config', 'user.email', 'test@example.invalid'); git(repo, 'config', 'user.name', 'Test');

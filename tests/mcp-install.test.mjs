@@ -1,5 +1,5 @@
 // Issue #946: the Foreman MCP server is installed and updated with the self-upgrade.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,7 +11,9 @@ import { readVersion } from '../supervisor/dashdata.mjs';
 
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const SH = '1'.repeat(40), SH2 = '2'.repeat(40);
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-install-'));
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });   // issue #1007
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-install-')); made.push(d); return d; };
 const install = (src, commit, state) => {
   const r = spawnSync('bash', [path.join(REPO, 'tools/install-foreman-mcp.sh'), src, commit], { encoding: 'utf8', env: { PATH: process.env.PATH, AI_SUPERVISOR_STATE_DIR: state } });
   return { status: r.status, out: r.stdout.trim() ? JSON.parse(r.stdout.trim().split('\n').pop()) : null, err: r.stderr };

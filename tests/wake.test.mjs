@@ -1,5 +1,6 @@
 // Issue #406: start work on events, not only on the schedule. Unit tests for the request flag, the cap, the pass lock and the pass driver;
 // real-process tests (the real `worker` and `reconcile` commands, a fake gh and git on PATH, no model) for the paths #406 names.
+import { removeLater } from './_tmp-leaks.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -246,6 +247,7 @@ function plannerWorld(t, { tweak = () => {}, issue = 950, open = true } = {}) {
   const registry = path.join(dir, 'registry.json'); fs.writeFileSync(registry, JSON.stringify({ schemaVersion: 1, providers }));
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_STATE_ROOT: root };
   t.after(() => cleanupWhenQuiet(root, () => fs.rmSync(dir, { maxRetries: 8, retryDelay: 250, recursive: true, force: true })));
+  removeLater(dir);   // last resort at the end of the file's run, if a late writer beat the removal (issue #1007)
   const cli = path.join(code, 'supervisor', 'cli.mjs');
   const issueReads = () => (fs.existsSync(ghlog) ? fs.readFileSync(ghlog, 'utf8').split('\n').filter(l => /^issue list/.test(l)).length : 0);
   const make = async n => { const worktree = path.join(dir, 'wt' + n); git(repo, 'worktree', 'add', '-qb', 'issue-' + n, worktree); return createJob(root, { role: 'devtest', provider: 'fake', repository: repo, worktree, issue: n, scope: 'fixture', allowed_actions: ['read'], prompt: 'x', handover: 'H.md', autoResume: true }, registry); };

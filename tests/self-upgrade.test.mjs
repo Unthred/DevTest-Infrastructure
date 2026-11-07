@@ -733,8 +733,9 @@ test('issue #412: realDeps maps the installer report (exit 11) to a named, block
   assert.deepEqual(r.tests, ['alpha works', 'beta works']); assert.equal(r.reason, 'tests failed: alpha works; beta works'); assert.match(r.excerpt, /not ok 2/);
 });
 
-test('issue #448: an unwritable state root makes the install check an environmental failure, not a thrown error', async () => {
-  const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'slot-blocked-')), 'file'); fs.writeFileSync(blocker, ''); // a root under a plain file cannot hold a slot directory, as any user
+test('issue #448: an unwritable state root makes the install check an environmental failure, not a thrown error', async (t) => {
+  const blockerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'slot-blocked-')); t.after(() => fs.rmSync(blockerDir, { recursive: true, force: true }));
+  const blocker = path.join(blockerDir, 'file'); fs.writeFileSync(blocker, ''); // a root under a plain file cannot hold a slot directory, as any user
   const none = realDeps({ root: blocker, config: { repo_path: '/x', agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
   const res = await none.preChecks('a'.repeat(40));
   assert.equal(res.ok, false); assert.equal(res.environmental, true); assert.match(res.reason, /test slot unavailable/);

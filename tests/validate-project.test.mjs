@@ -1,7 +1,7 @@
 // Positive and negative tests for tools/validate-project.mjs.
 // Every case works on an independent temporary copy (no Git, no linked worktree) so a fixture can never touch a real branch.
 // Forbidden strings (secrets, socket, privileged, unpinned images) are assembled at run time so this file stays clean under its own scan.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -14,8 +14,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..');
 const cli = path.join(repo, 'tools', 'validate-project.mjs');
 
+// Every fixture registers itself here, so no caller can forget to remove its copy (issue #1007).
+const fixtureDirs = new Set();
+after(() => { for (const d of fixtureDirs) fs.rmSync(d, { recursive: true, force: true }); fixtureDirs.clear(); });
+
 function fixture(mutate = () => {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-validate-'));
+  fixtureDirs.add(dir);
   fs.cpSync(repo, dir, { recursive: true, verbatimSymlinks: true, filter: (src) => !['.git', 'node_modules'].includes(path.basename(src)) });
   const api = {
     dir,
