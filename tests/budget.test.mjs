@@ -525,6 +525,10 @@ test('budget #682: a genuine old high-water latch (no rule field) keeps holding 
   const fc = { mode: 'reviews_only', since: now - 30 * HOUR, until: R1, reason: 'weekly 5%, projected 280% at reset (60h left, recent): runs out before the reset at the current rate (rule: recent rate over the limit)' };
   assert.equal(assessAgent({ allowance: claudeAt(now, 0.9), now, latched: fc }).mode, 'normal');
   assert.equal(assessAgent({ allowance: claudeAt(now, 0.9), now, latched: { ...old, until: R1 - 7 * 24 * HOUR } }).mode, 'normal', 'another window');
+  // a fractional high_water_min_hours was written as '12.5h' by the old code; that latch holds too, and a malformed fraction does not
+  const frac = { ...old, reason: old.reason.replace('24h', '12.5h') };
+  assert.equal(assessAgent({ allowance: claudeAt(now, 0.9), now, latched: frac }).mode, 'reviews_only', 'fractional hours');
+  assert.equal(assessAgent({ allowance: claudeAt(now, 0.9), now, latched: { ...old, reason: old.reason.replace('24h', '12.h') } }).mode, 'normal', 'malformed fraction');
 });
 test('budget #680: a token-shaped value in a latched reason does not reach the reason or the mode line', () => {
   const secret = ['gh', 'p_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('');   // assembled at run time
