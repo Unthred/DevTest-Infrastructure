@@ -14,6 +14,8 @@ const SHA = /^[0-9a-f]{40}$/;
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const FAILED = new Set(['precheck_failed', 'flaky_test', 'rolled_back', 'rollback_failed', 'dashboard_restart_failed', 'dashboard_revive_failed', 'refused']);
 
+// The role is the subcommand (first argument after cli.mjs), not a later argument that happens to share a word.
+const cliRole = sub => sub === 'dashboard' ? 'dashboard' : sub === 'worker' ? 'worker' : sub === 'team' || sub === 'reconcile' ? 'foreman' : 'supervisor-cli';
 // The version each Foreman process was started from, read from its command line only: a path under `versions/<40 hex>/`.
 // The command line itself is never returned (it can hold anything); only the role, pid, version and start tick are.
 export function processVersions(procRoot = '/proc', { currentSha = null } = {}) {
@@ -36,7 +38,7 @@ export function processVersions(procRoot = '/proc', { currentSha = null } = {}) 
     version ||= /\/versions\/([0-9a-f]{40})\//.exec(script)[1];
     const base = m[1], rest = args.slice(args.indexOf(script) + 1);
     const role = /^dash(server|board)$/.test(base) ? 'dashboard' : /worker/.test(base) ? 'worker'
-      : base === 'cli' ? (rest.includes('dashboard') ? 'dashboard' : rest.includes('worker') ? 'worker' : rest.includes('team') || rest.includes('reconcile') ? 'foreman' : 'supervisor-cli')
+      : base === 'cli' ? cliRole(rest[0])
       : scrub(base, 32);
     out.push({ role, pid: Number(n), version });
   }
@@ -56,7 +58,7 @@ export function installs(root, { now = Date.now(), procRoot = '/proc', running }
     installed: inst.sha, main: ver?.main && SHA.test(ver.main) ? ver.main : null, behind: ver?.behind ?? null, drift: !!ver?.drift, nextInstall: ver?.nextInstall ? { at: iso(ver.nextInstall.at), why: scrub(ver.nextInstall.why, 200), state: ver.nextInstall.state } : null,
     draining, latch: su.latch ? { at: iso(su.latch.at), from: su.latch.from, to: su.latch.to, reason: su.latch.reason } : null,
     lastInstall: i ? { result: i.result, sha: i.sha, at: iso(i.at), nextAttemptAt: iso(i.nextAttemptAt), reason: i.reason, failingTests: i.tests, retried: i.retried, excerpt: i.excerpt } : null,
-    refusal: f && SHA.test(f.to || '') ? { kind: scrub(f.kind || '', 24), from: f.from ?? null, to: f.to, at: iso(f.at), reason: scrub(f.reason || '', 300) } : null,
+    refusal: f && SHA.test(f.to || '') ? { kind: scrub(f.kind || '', 24), from: SHA.test(f.from || '') ? f.from : null, to: f.to, at: iso(f.at), reason: scrub(f.reason || '', 300) } : null,
     processes: processVersions(procRoot, { currentSha: inst.sha }).map(p => ({ ...p, matchesInstalled: inst.sha ? p.version === inst.sha : null })),
     recent: records,
   };
