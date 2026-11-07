@@ -9,7 +9,7 @@ import { redact } from './redact.mjs';
 export const IDLE_CAUSES = ['waiting-for-tick', 'upgrade', 'tick-run', 'named-hold', 'no-eligible-work', 'unrecorded'];
 // Causes that count as "idle with work available": every one except nothing-to-do and no tick record.
 export const WORK_CAUSES = ['waiting-for-tick', 'upgrade', 'tick-run', 'named-hold'];
-export const CAUSE_LABEL = { 'waiting-for-tick': 'waiting for the next tick', upgrade: 'upgrade pending or draining', 'tick-run': 'tick run time before the job started',
+export const CAUSE_LABEL = { 'waiting-for-tick': 'waiting for the next tick', upgrade: 'install in progress', 'tick-run': 'tick run time before the job started',
   'named-hold': 'a named hold', 'no-eligible-work': 'no eligible work', unrecorded: 'no tick record' };
 // Issue #530: a hold is grouped by its cause, not its display text. The live figures in a text (weekly %, projected %, days or hours
 // left, a reset time, the rate source) change on every reading, so they are masked to form the key; identifiers such as "PR #9" stay,

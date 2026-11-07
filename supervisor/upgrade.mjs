@@ -250,9 +250,16 @@ const dashboardSpawn = (cmd, args) => {
 const defaultStartArgv = argv => dashboardSpawn(argv[0], argv.slice(1));
 const defaultStart = (wrapper, args) => dashboardSpawn(wrapper, args);
 
-// What the team step receives from the upgrade step (issues #134, #191): a hold only while an install is pending (busy) or was just
-// made by this old process (upgraded); every other outcome, rolled-back and failures included, lets dispatch go ahead.
-export const holdOf = (result, s) => (result === 'busy' || result === 'upgraded' ? { to: s?.holding?.to || s?.pending?.to || null } : null);
+// What the team step receives from the upgrade step (issues #134, #191): a hold only when this old process just made an install (upgraded); every other outcome, rolled-back and failures included, lets dispatch go ahead.
+// Issue #845: why a merged commit is not installed yet, by step result, in terms of the rule (no fixed wait is involved).
+export const NEXT_INSTALL_WHY = {
+  'not-eligible': 'the merged range is not eligible yet: a pull request in it still lacks a passing independent review or green checks',
+  'precheck-failed': 'the pre-install validator or tests failed (or could not run); retried with backoff or when main moves',
+  'github-unreachable': 'GitHub could not be read; retried with backoff',
+  'upgrader-changed': 'the range changes the bootstrap installer, which needs the homeowner to hand-install it',
+  latched: 'the rollback latch is set; installs after the homeowner clears it',
+};
+export const holdOf = (result, s) => (result === 'upgraded' ? { to: s?.pending?.to || null } : null);
 
 export class SelfUpgrade {
   constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
@@ -375,14 +382,16 @@ export class SelfUpgrade {
     if (!this.withStateLock(apply).held) apply();
   }
 
-  // Returns a short result string for the tick report. `holding` (read by `team status` and the dashboard) is set only while the
-  // result is 'busy': an upgrade is pending and eligible, and new jobs are held back (issue #134).
+  // Returns a short result string for the tick report. Issue #845: running jobs never delay an install, so nothing waits on them; the
+  // dashboard's "Next install" names the rule that is holding the install (never a fixed time), from NEXT_INSTALL_WHY or the batching rule.
   async step() {
     const dp = this.s.dashboardPending;
     if (dp && !this.s.pending) await this.restartDashboard({ from: dp.from, to: dp.to }, dp.rollingBack === true);
     const result = await this.stepInner();
-    if (result !== 'busy' && this.s.holding) { delete this.s.holding; this.save(); }
-    if (result !== 'busy' && result !== 'batched' && this.s.nextInstall) { delete this.s.nextInstall; this.save(); }
+    if (this.s.holding) { delete this.s.holding; this.save(); }   // state written by a version that still drained
+    const why = NEXT_INSTALL_WHY[result];
+    if (why) { this.s.nextInstall = { to: this.s.main?.sha || null, at: null, why, state: result.slice(0, 12) }; this.save(); }
+    else if (result !== 'batched' && this.s.nextInstall) { delete this.s.nextInstall; this.save(); }
     return result;
   }
   async stepInner() {
@@ -411,7 +420,7 @@ export class SelfUpgrade {
     this.noteMain(from, target);
     if (this.s.refusal && (this.s.refusal.from !== from || this.s.refusal.to !== target)) { delete this.s.refusal; this.save(); }   // issue #488: the installed commit or main moved
     if (this.s.handDeploy && this.s.handDeploy.from !== from) { delete this.s.handDeploy; this.save(); }   // the installed commit moved: the item is done
-    if (!SHA.test(target || '') || target === from) { delete this.s.waitingSince; delete this.s.waitingFor; if (this.s.urgent?.reason === 'homeowner request') delete this.s.urgent; this.save(); return 'current'; }
+    if (!SHA.test(target || '') || target === from) { if (this.s.urgent?.reason === 'homeowner request') delete this.s.urgent; this.save(); return 'current'; }
     if (!this.d.isAncestor(from, target)) {
       await this.alert(`${target}:diverged`, `Supervisor self-upgrade skipped: installed ${short(from)} is not an ancestor of main ${short(target)}.`);
       const why = this.refuse(from, target, 'diverged', `installed ${short(from)} is not an ancestor of main ${short(target)}`);
@@ -444,29 +453,23 @@ export class SelfUpgrade {
     const latched = this.s.prechecked[target];
     const retryDue = typeof latched === 'number' && !this.s.precheckRetried?.[target] && now - latched >= PRECHECK_RETRY_MS;
     if (latched && !retryDue && !(latched.environmental && now - latched.at >= envBackoffMs(latched.attempts))) return 'precheck-failed';
-    // Batching (issue #695): merged work waits to be installed until the window since the last finished install has passed, so a stream
-    // of merges does not stop all work every few minutes. Nothing running and nothing planned installs straight away (it costs no work),
-    // and an urgent install (the previous one rolled back, or the homeowner asked) skips the wait. Within the window no hold applies.
+    // Issue #845: no drain. A running job needs nothing from the install: each version is its own immutable directory under versions/<sha>
+    // and the install only repoints `current`, so a running worker keeps executing the files it started from, and the tick (ingest, post-
+    // conditions, rebase checks) always runs the installed code against job records that older workers wrote. The install therefore happens
+    // in this tick whatever is running, and new jobs start on the new code from the next tick (the install wakes one at once).
+    // Optional batching (issue #695, off by default): with self_upgrade.min_install_gap_minutes above 0, a merge waits for the window
+    // since the last finished install while work is running or planned; nothing running and nothing planned installs at once.
     const running = await this.d.activeJobs();
     const dueAt = this.batchDueAt(), urgent = this.urgentNow(now);
     if (!urgent && dueAt != null && now < dueAt) {
       let planned = 0; if (running === 0) { try { planned = Number(await this.d.plannedWork?.()) || 0; } catch { planned = 0; } }
       if (running > 0 || planned > 0) {
-        const why = `batched: installs about ${Math.max(1, Math.round((dueAt - now) / 60000))} min from now at the earliest (self_upgrade.min_install_gap_minutes ${Math.round(this.minGapMs / 60000)}), sooner if nothing is running or planned`;
-        this.s.nextInstall = { to: target, at: dueAt, why, state: 'batched' }; delete this.s.waitingSince; delete this.s.waitingFor; this.save();
+        const why = `batching is on (self_upgrade.min_install_gap_minutes ${Math.round(this.minGapMs / 60000)}): installs when the window since the last install ends (about ${Math.max(1, Math.round((dueAt - now) / 60000))} min), or sooner when nothing is running or planned`;
+        this.s.nextInstall = { to: target, at: null, why, state: 'batched' }; this.save();
         return 'batched';
       }
     }
-    // The drain clock runs from the first tick of a continuous hold and a newer main during the hold does not restart it (issue #695: merges
-    // every few minutes must not extend a hold without bound); a hold that ended, or a target that failed a check, starts afresh (PR #162).
-    if (this.s.waitingSince == null || (this.s.waitingFor !== target && !this.s.holding)) { this.s.waitingSince = now; this.s.waitingFor = target; } else this.s.waitingFor = target;
-    // Drain (issue #136): while jobs run and the bound is not reached, no new job starts; the install happens at the first job
-    // boundary. At the bound the install goes ahead without waiting further; it replaces files only and never kills a running job.
-    if (running > 0 && now - this.s.waitingSince < this.drainMaxMs) {
-      this.s.holding = { to: target, since: this.s.waitingSince, jobs: running };
-      this.s.nextInstall = { to: target, at: this.s.waitingSince + this.drainMaxMs, why: 'draining: installs when running jobs finish, at the latest at this time', state: 'draining' }; this.save(); return 'busy';
-    }
-    const checks = { eligibility: 'ok', quiet: running > 0 ? 'forced-after-wait' : 'idle' };
+    const checks = { eligibility: 'ok', quiet: running > 0 ? 'jobs-running-unaffected' : 'idle' };
     let pre = await this.d.preChecks(target);
     // Issue #412: a failed test run is repeated once in a fresh clean copy (each installer call takes its own) before the commit is
     // latched. It runs here, in this tick, after the drain and before dispatch, so no job can be starting while it runs.
@@ -478,7 +481,7 @@ export class SelfUpgrade {
     }
     if (!pre.ok) {
       const attempts = pre.environmental ? (latched?.environmental ? (latched.attempts || 1) + 1 : 1) : 0;
-      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now; delete this.s.waitingSince; delete this.s.waitingFor;
+      this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now;
       this.s.precheckRetried = this.retriedFor(target, retryDue);   // one delayed retry per commit, kept across environmental outcomes
       this.noteInstall(pre.environmental
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
@@ -492,7 +495,7 @@ export class SelfUpgrade {
     checks.preChecks = flaky ? 'ok-after-retry' : 'ok';
     if (flaky) await this.noteFlaky(target, flaky, 'pre-check');
     // The rate-limit stamp is written before the upgrade, so a crash mid-upgrade cannot cause an immediate second attempt.
-    this.s.lastUpgradeAt = now; delete this.s.waitingSince; delete this.s.waitingFor; delete this.s.urgent; delete this.s.nextInstall; this.save();
+    this.s.lastUpgradeAt = now; delete this.s.urgent; delete this.s.nextInstall; this.save();
     let up = await this.d.upgrade(target);
     if (isTestFailure(up)) {   // the same single repeat for a failure at install time, before anything was swapped
       const first = up;

@@ -201,7 +201,7 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
   if (config.enabled === false) return { text: 'the team loop is switched off', links: [] };
   const next = plan.find(a => a.agent === agent);
   // Issue #487: name the hold from the last tick's record for this agent; "on the next tick" only when no hold applied to it.
-  const held = hold?.cause === 'upgrade' ? 'an upgrade is pending or draining' : hold?.cause === 'named-hold' ? hold.hold : null;
+  const held = hold?.cause === 'upgrade' ? 'an install is in progress' : hold?.cause === 'named-hold' ? hold.hold : null;
   if (next) return { text: `about to start ${next.type === 'cifix' ? 'fix CI on' : next.type} ${['implement', 'continue'].includes(next.type) ? names.issue(next.issue).text : names.pr(next.pr).text} ${held ? `once the hold clears; held: ${held}` : 'on the next tick'}`, links: [] };
   // A slot or cap hold stops the planner too, so the live plan has no work for this agent: name the hold anyway.
   if (held) return { text: `held: ${held}`, links: [] };

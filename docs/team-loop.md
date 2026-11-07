@@ -135,7 +135,7 @@ Issue #418: the command now reads the cited comment through GitHub and refuses, 
 - The dashboard shows the PR as waiting for the requested re-review, and afterwards as still rejected and waiting for the homeowner.
 
 ## Jobs paused on a usage limit (issue #380)
-A `paused_limit` job runs no process, so it holds neither a role slot nor a place under the overall cap, and an upgrade drain does not wait for it. Its job record keeps its place. The worker resumes it only through a gate that (1) for a review, compares the pull request's current head with the review target and, if the head moved, stops the job (`head_moved`) without a verdict so the planner reviews the new head; and (2) checks, under one lock held until the job is marked running, that every other running or queued job leaves a free slot in the job's role and under the overall cap. When it must wait, the reason names the jobs in the way and is shown on the job (`resumeWait`) and on the dashboard card. `paused_manual` is unchanged: it still holds its slot. When eligible work finds its role (or the overall cap) full, the planner records a held reason naming the running jobs.
+A `paused_limit` job runs no process, so it holds neither a role slot nor a place under the overall cap, and an upgrade does not wait for it (nor for any running job, issue #845). Its job record keeps its place. The worker resumes it only through a gate that (1) for a review, compares the pull request's current head with the review target and, if the head moved, stops the job (`head_moved`) without a verdict so the planner reviews the new head; and (2) checks, under one lock held until the job is marked running, that every other running or queued job leaves a free slot in the job's role and under the overall cap. When it must wait, the reason names the jobs in the way and is shown on the job (`resumeWait`) and on the dashboard card. `paused_manual` is unchanged: it still holds its slot. When eligible work finds its role (or the overall cap) full, the planner records a held reason naming the running jobs.
 
 ## Review order (issue #405)
 With one review slot per reviewer, the order in which waiting pull requests are reviewed decides how long each waits. GitHub lists open PRs newest first, so the planner no longer takes that order. For each reviewer, eligible PRs (green CI, not conflicting, no verdict on the current head, not draft) are taken in this order:
@@ -264,7 +264,7 @@ The five-minute schedule stays as the safety net. On top of it, four local event
 | Work on the pass | On an unchanged pass |
 |---|---|
 | job timeouts, dead-worker detection, lease release, recovery, due restarts (`reconcileOnce`) | runs first, before the check, always |
-| self-upgrade step, `min_install_gap_minutes` batching, hand-install hold, watchdog | runs, untouched (it does not use the cache) |
+| self-upgrade step, `min_install_gap_minutes` batching (off by default), hand-install hold, watchdog | runs, untouched (it does not use the cache) |
 | ingest of finished job results, retries that came due, owner-comment scan, inbox proposals, Approve/Reject | run on the local files; their GitHub reads come from the cache, their writes are real |
 | allowance and budget readings, due probes, breaker evaluation and clearing, self-check, idle tracking, stall and stuck-check timers | run against the current clock and local state; stuck-check age is computed from the current time on the cached rollup |
 | dashboard record, snapshot, status issue | written as usual; the data was verified a moment ago |
