@@ -512,3 +512,47 @@ test('dashboard: a failed action item without a job is still one line, with no s
   const f = JSON.parse((await s.get('/api/view.json')).body).panels.needsYou.filter(x => x.id.startsWith('inboxfail-'));
   assert.equal(f.length, 1); assert.doesNotMatch(f[0].decision, /ai-supervisor status/);
 });
+
+// Issue #713: review follow-ups for the inbox actions.
+test('issue #713: an approved resume_job obeys the circuit breaker like the automatic resume; without a halt it still runs', async t => {
+  const halted = actionWorld(t); halted.team.s.breaker.global = { text: 'halted', at: 1 }; halted.team.s.jobs[JOB].head = HEAD2;
+  const r = await runAction(halted, act('resume_job', JOB.slice(0, 8)));
+  assert.equal(r.state, 'failed'); assert.match(r.reason, /circuit breaker/); assert.equal(halted.calls.resumed.length, 0);
+  const free = actionWorld(t); free.team.s.jobs[JOB].head = HEAD2;
+  assert.equal((await runAction(free, act('resume_job', JOB.slice(0, 8)))).state, 'done'); assert.equal(free.calls.resumed.length, 1);
+});
+test('issue #713: the proposal check names the real limit for an oversized action or target', () => {
+  const r = checkProposal({ ...act('reopen', 5), action: 'x'.repeat(41) });
+  assert.equal(r.ok, false); assert.match(r.error, /action is longer than 40 characters/); assert.doesNotMatch(r.error, /undefined/);
+  assert.match(checkProposal({ ...act('stop_job', 'c3c3c3c3'), target: 'c'.repeat(41) }).error, /target is longer than 40 characters/);
+});
+test('issue #713: saveWork against a real bare remote and a clone saves dirty and untracked files, keeps ignored ones out, and is idempotent', async t => {
+  const { saveWork } = await import('../supervisor/savework.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'save713-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const g = (cwd, ...a) => { const r = spawnSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@localhost', ...a], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  const bare = path.join(root, 'remote.git'), main = path.join(root, 'main'), wt = path.join(root, 'wt');
+  spawnSync('git', ['init', '-q', '--bare', '-b', 'main', bare]); spawnSync('git', ['init', '-q', '-b', 'main', main]);
+  fs.writeFileSync(path.join(main, '.gitignore'), 'ignored.txt\n'); fs.writeFileSync(path.join(main, 'a.txt'), 'one\n');
+  g(main, 'add', '-A'); g(main, 'commit', '-q', '-m', 'base'); g(main, 'remote', 'add', 'origin', bare); g(main, 'push', '-q', 'origin', 'main');
+  spawnSync('git', ['clone', '-q', bare, wt]); g(wt, 'checkout', '-q', '-b', 'work');   // an independent clone, never a linked worktree (AGENTS.md)
+  fs.writeFileSync(path.join(wt, 'a.txt'), 'two\n'); fs.writeFileSync(path.join(wt, 'new.txt'), 'n\n'); fs.writeFileSync(path.join(wt, 'ignored.txt'), 'i\n');
+  const r = await saveWork(wt, { branch: 'claude/issue-9-x', id: 'abcd1234' });
+  assert.equal(r.ref, 'saved/abcd1234-claude-issue-9-x');
+  const files = g(bare, 'ls-tree', '-r', '--name-only', r.ref).split('\n');
+  assert.ok(files.includes('new.txt') && files.includes('a.txt') && !files.includes('ignored.txt'));
+  assert.equal(g(wt, 'status', '--porcelain'), '');
+  assert.deepEqual(await saveWork(wt, { branch: 'claude/issue-9-x', id: 'abcd1234' }), {});
+  assert.deepEqual(await saveWork(path.join(root, 'nowhere'), { branch: 'b', id: 'x' }), { missing: true });
+});
+test('issue #713: saveWork refuses secret-shaped content, publishes nothing, commits nothing and leaves the file in place', async t => {
+  const { saveWork } = await import('../supervisor/savework.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'save713s-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const g = (cwd, ...a) => { const r = spawnSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@localhost', ...a], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  const bare = path.join(root, 'remote.git'), main = path.join(root, 'main');
+  spawnSync('git', ['init', '-q', '--bare', '-b', 'main', bare]); spawnSync('git', ['init', '-q', '-b', 'main', main]);
+  fs.writeFileSync(path.join(main, 'a.txt'), 'one\n'); g(main, 'add', '-A'); g(main, 'commit', '-q', '-m', 'base'); g(main, 'remote', 'add', 'origin', bare); g(main, 'push', '-q', 'origin', 'main');
+  fs.writeFileSync(path.join(main, 'notes.txt'), `token ${TOKEN}\n`);
+  await assert.rejects(saveWork(main, { branch: 'b', id: 'abcd1234' }), /secret-shaped/);
+  assert.equal(g(bare, 'branch', '--list', 'saved/*'), ''); assert.equal(g(main, 'rev-list', '--count', 'HEAD'), '1');
+  assert.match(g(main, 'status', '--porcelain'), /\?\? notes\.txt/);
+});
