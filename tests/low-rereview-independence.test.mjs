@@ -64,3 +64,11 @@ test('#698: no candidate list and a low entry that is not independent: the re-re
   const c2 = config({ low: { model: 'sonnet', effort: 'low' }, review: O }); delete c2.models.agents.claude.review_candidates;
   assert.equal(world(t, { cfg: c2, writer: 'opus' }).modelFor(act(), 'review', {}).effort, 'low');
 });
+
+test('#794: the fallback to the review entry is named in a warning, and says when it is not independent either', t => {
+  const mk = (review, writer) => { const c = config({ low: { model: 'sonnet', effort: 'low' }, review }); delete c.models.agents.claude.review_candidates; const team = world(t, { cfg: c, writer }); const report = {}; team.modelFor(act(), 'review', report); return report.warnings?.map(w => w.warning) || []; };
+  const ok = mk(O, 'sonnet');
+  assert.equal(ok.length, 1); assert.match(ok[0], /fell back to the review entry \(opus\)/); assert.doesNotMatch(ok[0], /not independent either/);
+  assert.match(mk(S, 'sonnet')[0], /not independent either/);
+  assert.deepEqual(mk(O, 'opus'), []);   // low entry independent: no fallback, no warning
+});

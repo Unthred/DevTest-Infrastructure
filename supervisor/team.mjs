@@ -697,7 +697,11 @@ export class Team {
     // Issue #698: with no candidate list the low entry gets the same independence check; when it is not independent of the writers the
     // re-review runs on the agent's normal review entry instead, so it is not started and then refused.
     else if (typeOfKind(kind) === 'review' && act.pr != null && lowEntry && this.independenceRefusal(act.agent, fields.model ?? null, pr)) {
+      const lowModel = fields.model ?? null;
       ({ fields, warnings } = resolveModel({ ...base, low: false, reReview: false }));
+      // Issue #794: name the fallback so the dashboard shows why the low entry was skipped, and whether the review entry is independent.
+      const still = this.independenceRefusal(act.agent, fields.model ?? null, pr);
+      warnings = [...warnings, `low re-review entry (${lowModel ?? 'unknown'}) is not independent of the PR's writers; fell back to the review entry (${fields.model ?? 'unknown'})${still ? ', which is not independent either, so the review will be refused' : ''}`];
     }
     if (warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: warnings.join('; ') });
     return fields;
