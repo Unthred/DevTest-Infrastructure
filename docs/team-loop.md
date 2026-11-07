@@ -274,3 +274,9 @@ The five-minute schedule stays as the safety net. On top of it, four local event
 **Config** (`change_check` in `team.json`, overridable in `team.local.json`): `enabled` (true), `force_full_minutes` (30), `max_open_prs` (40), `timeout_seconds` (30).
 
 **Measurement.** A pass record carries `noop`, `ghCalls`, `ghMs` and `check` (`result`, `reason`, `probes`, `served`). Diagnostics ("Passes by trigger") and `team idle-report` show no-op passes per trigger, the median duration of a no-op against a full pass that did nothing, and the median `gh` processes per pass. Compare before and after install with `ai-supervisor team idle-report --hours 48`.
+
+## Review follow-up batching and the churn stop (issue #864)
+
+- A PASS review's non-blocking findings are not given an issue each. They are added to one open issue per area (the top-level directory holding most of the PR's changed files; `general` if the file list is unreadable), marked `devtest-followup-batch v1 area=<area>`. A later review of the same area updates that issue; a finding already listed is not repeated, and a review job is never added twice. A new batch issue is opened only when a reviewer-written follow-up is in it; a list of only immaterial description-claim notes joins an existing batch and otherwise stays on the review comment. Because one issue holds the area's follow-ups, one implementer run clears several.
+- A fix-round re-review first judges whether each previous blocking finding is resolved. A new blocking finding is allowed only for a real defect in lines the fix changed; anything else is a follow-up.
+- Churn: when the last two re-reviews of a PR each drew blocking findings that repeat nothing from the round before, Foreman starts no further fix job for it and raises one Needs you item (the needs-homeowner flag and a PR notice) with the three rounds side by side. A new head that is reviewed PASS clears it. At the fix limit the ordinary fix-limit item applies instead.

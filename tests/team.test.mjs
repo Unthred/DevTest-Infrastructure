@@ -32,6 +32,8 @@ function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = 
     listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues,
     rerunRun: async r => { (calls.reruns ||= []).push(r); }, comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]),
     findIssueByMarker: async marker => gh.issues.find(i => i.body?.includes(marker))?.number || null,
+    findOpenIssueByMarker: async marker => { const i = gh.issues.find(x => x.state === 'OPEN' && x.body?.includes(marker)); return i ? { number: i.number, body: i.body } : null; },
+    updateIssueBody: async (n, body) => { gh.issues.find(i => i.number === n).body = body; (calls.updates ||= []).push([n, body]); },
     createIssue: async (title, body) => { const number = 100 + gh.issues.length; gh.issues.push(issue(number, 'OPEN', body)); calls.issues.push([number, title, body]); return number; },
     merge: async (n, head) => { const p = gh.pulls.find(x => x.number === n); if (!p || p.headRefOid !== head) throw new Error('head moved'); calls.merges.push([n, head]); },
     board: async (n, s) => calls.board.push([n, s]), merged: [], listMergedPulls: async () => gh.merged
@@ -1590,4 +1592,81 @@ test('#583 a job on the current head, or with unpushed or uncommitted work, or u
   const detached = heldWorld(t, { branch: null }); assert.equal(await detached.team.causeCleared(cause, detached.gh.pulls[0]), false, 'detached HEAD');
   const noBr = heldWorld(t); delete noBr.git.currentBranch; assert.equal(await noBr.team.causeCleared(cause, noBr.gh.pulls[0]), false);
   const other = heldWorld(t); other.team.s.jobs.jobA.pr = 99; assert.equal(await other.team.causeCleared(cause, other.gh.pulls[0]), false);
+});
+
+// ---- issue #864: batched follow-ups, re-review scope and the churn stop
+test('#864 follow-ups of several reviews in one area share one open issue, updated rather than duplicated', async t => {
+  const w = reviewWorld(t);
+  w.gh.listPullFiles = async () => ['supervisor/team.mjs', 'supervisor/github.mjs', 'tests/team.test.mjs'];
+  const a = await w.team.batchFollowUps('job1', { pr: 10, head: H(1) }, ['Wording of the status line', 'Rename a helper'], true);
+  const b = await w.team.batchFollowUps('job2', { pr: 12, head: H(2) }, ['Rename a helper', 'Add a comment on the cap'], true);
+  assert.equal(a, b); assert.equal(w.calls.issues.length, 1); assert.equal(w.calls.updates.length, 1);
+  const body = w.gh.issues.find(i => i.number === a).body;
+  assert.match(body, /area=supervisor/); assert.match(body, /From PR #10/); assert.match(body, /From PR #12/);
+  assert.equal(body.split('Rename a helper').length - 1, 1, 'a finding already listed is not added twice');
+  assert.match(body, /Add a comment on the cap/);
+  // the same review job again changes nothing
+  await w.team.batchFollowUps('job2', { pr: 12, head: H(2) }, ['Add a comment on the cap'], true);
+  assert.equal(w.calls.updates.length, 1);
+});
+test('#864 a different area gets its own batch, and a closed batch is not reused', async t => {
+  const w = reviewWorld(t);
+  w.gh.listPullFiles = async n => (n === 10 ? ['docs/a.md'] : ['supervisor/x.mjs']);
+  const docs = await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, ['Fix a typo'], true);
+  const sup = await w.team.batchFollowUps('j2', { pr: 11, head: H(2) }, ['Tidy a name'], true);
+  assert.notEqual(docs, sup);
+  w.gh.issues.find(i => i.number === sup).state = 'CLOSED';
+  const again = await w.team.batchFollowUps('j3', { pr: 13, head: H(3) }, ['Another note'], true);
+  assert.notEqual(again, sup); assert.equal(w.calls.issues.length, 3);
+});
+test('#864 immaterial-only follow-ups open no issue, but join an existing batch', async t => {
+  const w = reviewWorld(t);
+  w.gh.listPullFiles = async () => ['supervisor/x.mjs'];
+  assert.equal(await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, ['Description claim is wrong (immaterial): 5 files'], false), null);
+  assert.equal(w.calls.issues.length, 0);
+  const n = await w.team.batchFollowUps('j2', { pr: 10, head: H(1) }, ['A real follow-up'], true);
+  assert.equal(await w.team.batchFollowUps('j3', { pr: 11, head: H(2) }, ['Description claim is wrong (immaterial): 6 lines'], false), n);
+  assert.match(w.gh.issues.find(i => i.number === n).body, /6 lines/);
+});
+test('#864 an unreadable file list falls back to a general batch', async t => {
+  const w = reviewWorld(t);
+  w.gh.listPullFiles = async () => { throw new Error('gh down'); };
+  await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, ['x note'], true);
+  assert.match(w.calls.issues[0][2], /area=general/);
+});
+test('#864 the re-review prompt judges the earlier blocking findings first and keeps new blocking to the changed lines', () => {
+  const p = reviewPrompt({ pr: 10, head: H(1), branch: 'b', repository: 'o/r', inbox: '/i', previousBlocking: true });
+  assert.match(p, /previous blocking findings and regressions/);
+  assert.match(p, /whether each previous blocking finding is resolved/);
+  assert.match(p, /lines the fix changed/);
+  assert.match(p, /follow-up, never blocking/);
+  assert.doesNotMatch(reviewPrompt({ pr: 10, head: H(1), branch: 'b', repository: 'o/r', inbox: '/i' }), /whether each previous blocking/);
+});
+const churnWorld = (t, rounds) => {
+  const w = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(3))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  rounds.forEach((texts, i) => { w.team.s.verdicts[`38:${H(i + 1)}`] = { verdict: 'CHANGES', reviewer: 'codex', at: i + 1, findings: texts.map(text => ({ kind: 'blocking', text })) }; });
+  return w;
+};
+test('#864 two rounds of new, different blocking findings stop the fix loop with one Needs you item showing them side by side', async t => {
+  const w = churnWorld(t, [['The cache key ignores the branch name entirely'], ['The retry loop never backs off after a failure'], ['The dashboard card shows a stale timestamp forever']]);
+  w.team.s.fixAttempts[`38:${H(2)}`] = 1;
+  assert.ok(w.team.churned(38));
+  assert.equal((await w.team.plan()).filter(a => a.type === 'fix').length, 0);
+  await w.team.notifyChurn({}); await w.team.notifyChurn({});
+  const n = w.calls.comments.filter(c => /different set of blocking findings/.test(c[1]));
+  assert.equal(n.length, 1);
+  for (const s of ['cache key ignores', 'retry loop never backs off', 'stale timestamp forever']) assert.match(n[0][1], new RegExp(s));
+  assert.deepEqual(w.calls.labels, [[38, 'needs-homeowner']]);
+});
+test('#864 no churn stop when findings repeat, after one new round only, or when the last round passed', async t => {
+  const same = ['The cache key ignores the branch name entirely'];
+  const rep = churnWorld(t, [same, ['The retry loop never backs off after a failure'], ['The retry loop never backs off after a failure at all']]);
+  assert.equal(rep.team.churned(38), null);
+  const one = churnWorld(t, [same, ['The retry loop never backs off after a failure']]);
+  assert.equal(one.team.churned(38), null);
+  const passed = churnWorld(t, [same, ['The retry loop never backs off after a failure'], ['The dashboard card shows a stale timestamp forever']]);
+  passed.team.s.verdicts[`38:${H(4)}`] = { verdict: 'PASS', reviewer: 'codex', at: 9, findings: [] };
+  assert.equal(passed.team.churned(38), null);
+  await rep.team.notifyChurn({}); assert.equal(rep.calls.comments.filter(c => /different set/.test(c[1])).length, 0);
+  assert.equal((await rep.team.plan()).filter(a => a.type === 'fix').length, 1);
 });

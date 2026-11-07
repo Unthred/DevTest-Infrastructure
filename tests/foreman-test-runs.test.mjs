@@ -185,7 +185,7 @@ test('drain while an install runs: the team tick does not resume a transiently s
     let resumed = 0;
     const probe = Object.create(Team.prototype);
     Object.assign(probe, { c: { access: {} }, register: '', jobs: {}, modes: null, held: {}, loadNames: async () => {}, resumeTransient: async () => { resumed++; }, plan: async () => { throw new Error('stop'); } });
-    for (const m of ['ingest', 'retryCarries', 'scanOwnerComments', 'recheckRequirements', 'notifyBlocked', 'notifyFixLimit', 'watchCancelled', 'clearStale', 'releaseFinished', 'updateBudget']) probe[m] = async () => {};
+    for (const m of ['ingest', 'retryCarries', 'scanOwnerComments', 'recheckRequirements', 'notifyBlocked', 'notifyFixLimit', 'notifyChurn', 'watchCancelled', 'clearStale', 'releaseFinished', 'updateBudget']) probe[m] = async () => {};
     probe.budgets = () => ({});
     await probe.tickPass({ hold }).catch(e => assert.match(String(e.message), /stop/));
     return resumed;
