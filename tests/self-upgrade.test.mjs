@@ -947,3 +947,32 @@ test('issue #695: self_upgrade.min_install_gap_minutes is validated (0-1440 inte
   assert.equal(validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: { min_install_gap_minutes: 0 } })).self_upgrade.min_install_gap_minutes, 0);
   for (const bad of [-1, 1441, 1.5, '45', null]) assert.throws(() => validateTeamConfig(applyLocalOverride(shipped, { self_upgrade: { min_install_gap_minutes: bad } })), /min_install_gap_minutes/, String(bad));
 });
+
+test('issue #708: install-now is refused when current, lapses unspent, and is dropped when main is current', async t => {
+  const w = world(t); await finished(w);
+  // the installed version is main: refused, nothing stored
+  w.state.target = w.state.installed; assert.equal(await w.up.step(), 'current');
+  const r = w.up.requestInstallNow(); assert.equal(r.ok, false); assert.equal(w.up.s.urgent, undefined);
+  // a request while main is ahead is stored with its target and applies
+  w.up.noteMain(w.state.installed, H('7'));
+  assert.equal(w.up.requestInstallNow().ok, true); assert.equal(w.up.s.urgent.to, H('7'));
+  // it lapses after a day without an install
+  w.up.s.urgent.at = w.state.now - 25 * 3600 * 1000;
+  assert.equal(w.up.urgentNow(w.state.now), null); assert.equal(w.up.s.urgent, undefined);
+  // a rollback's urgency does not lapse
+  w.up.s.urgent = { reason: 'the previous install rolled back', at: w.state.now - 48 * 3600 * 1000 };
+  assert.ok(w.up.urgentNow(w.state.now));
+  // a request left over when main becomes current is dropped by the 'current' step
+  const c = world(t); await finished(c); c.up.s.urgent = { reason: 'homeowner request', at: c.state.now }; c.state.target = c.state.installed;
+  assert.equal(await c.up.step(), 'current'); assert.equal(c.up.s.urgent, undefined);
+});
+
+test('issue #708: a hand-install restarts the batching window and spends a pending install-now', async t => {
+  const w = world(t); await finished(w);
+  w.up.noteMain(w.state.installed, H('7')); w.up.requestInstallNow(); assert.ok(w.up.s.urgent);
+  w.state.now += 10 * MIN; const before = w.up.s.lastFinishedAt;
+  w.up.noteHandInstalled();
+  assert.equal(w.up.s.urgent, undefined); assert.equal(w.up.s.lastFinishedAt, w.state.now); assert.ok(w.up.s.lastFinishedAt > before);
+  assert.equal(w.up.batchDueAt(), w.state.now + w.up.minGapMs);
+  assert.equal(JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')).urgent, undefined, 'persisted');
+});
