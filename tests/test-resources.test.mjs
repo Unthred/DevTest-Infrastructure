@@ -81,6 +81,9 @@ const alive = pid => {
   try { return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8')); } catch { return true; }
 };
 
+// A SIGKILLed process holding memory can take a while to be torn down on a loaded runner: wait for it rather than sampling once.
+const goneWithin = async (pid, ms = 5000) => { for (const end = Date.now() + ms; Date.now() < end;) { if (!alive(pid)) return true; await new Promise(res => setTimeout(res, 50)); } return !alive(pid); };
+
 test('an over-limit fake job is killed as a unit: children die with it and the result records why', async t => {
   const d = tmp(t), pidFile = path.join(d, 'child.pid');
   // The parent spawns a grandchild that records its pid, then both hold memory beyond the 64 MB grant.
@@ -93,9 +96,7 @@ test('an over-limit fake job is killed as a unit: children die with it and the r
   assert.equal(r.kill.reason, 'memory-limit'); assert.equal(r.kill.class, 'suite'); assert.equal(r.kill.suggested_class, 'small'); assert.equal(r.kill.limit_mb, 64);
   assert.ok(r.kill.observed_mb > 64);
   const grand = Number(fs.readFileSync(pidFile, 'utf8'));
-  // Poll (bounded) instead of a fixed wait: teardown of a 150 MB process can lag on a loaded runner.
-  for (let i = 0; i < 100 && alive(grand); i++) await new Promise(res => setTimeout(res, 50));
-  assert.equal(alive(grand), false, 'the grandchild is gone with its group');
+  assert.equal(await goneWithin(grand), true, 'the grandchild is gone with its group');
 });
 
 test('a job inside its limit exits normally with its own code and no kill record', async () => {
@@ -110,8 +111,7 @@ test('a leftover background process of a finished limited job is cleaned up with
   const f = path.join(d, 'j.cjs'); fs.writeFileSync(f, script);
   const r = await runLimited([process.execPath, f], { env: process.env, limits: { memory_mb: 512, cpus: 1 }, klass: 'small', id: 'j3', intervalMs: 50 });
   assert.equal(r.code, 0);
-  await new Promise(res => setTimeout(res, 200));
-  assert.equal(alive(Number(fs.readFileSync(pidFile, 'utf8'))), false);
+  assert.equal(await goneWithin(Number(fs.readFileSync(pidFile, 'utf8'))), true);
 });
 
 const runCli = (state, args, cmd) => spawnSync(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, ...args, '--', ...cmd], { encoding: 'utf8', timeout: 60000 });
