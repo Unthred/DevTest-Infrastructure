@@ -62,6 +62,7 @@ test('a finished review with no verdict raises one item only when it is the open
   assert.equal(run(mk(), { prs: [] }).items.length, 0, 'pull request not open');
   const withVerdict = mk(); withVerdict.verdicts[`7:${HEAD}`] = {}; assert.equal(run(withVerdict, { prs: open }).items.length, 0);
   const refused = mk(); refused.refusedReviews[`7:${HEAD}`] = {}; assert.equal(run(refused, { prs: open }).items.length, 0);
+  const faulted = mk(); faulted.reviewFaults = { [key]: { pr: 7, head: HEAD } }; assert.equal(run(faulted, { prs: open }).items.length, 0, 'issue #756: a validator fault is already a review-validator-fault stall reason');
   const left = mk(); left.reviewAttempts[key] = 1; assert.equal(run(left, { prs: open }).items.length, 0, 'an attempt is left');
   const indep = mk(); indep.jobs[JOB].refusal = 'independence'; assert.equal(run(indep, { prs: open }).items.length, 0, 'already a refused-verdict card');
   const running = mk(); running.jobs[JOB].ingested = false; assert.equal(run(running, { prs: open }).items.length, 0);

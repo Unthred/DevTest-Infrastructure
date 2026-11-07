@@ -85,12 +85,12 @@ export function configSource(config) {
 // `tz` is the zone for clock times on the page (issue #185); it defaults to the host zone, as 'team status' does.
 // Issue #362: `timeline` loads the retained timeline; `allTime` also loads the archived tick snapshots for the all-time chart range. Both read
 // local files only. Storage figures are always included (a few directory sizes) so the Needs you warning shows on every page.
-export async function currentView({ root, config, now = Date.now(), tz = defaultZone(), configError = null, timeline = false, allTime = false }) {
+export async function currentView({ root, config, now = Date.now(), tz = defaultZone(), configError = null, timeline = false, allTime = false, statfs = undefined }) {
   if (typeof config === 'function') config = config();
   const jobs = readJobs(root);
   const register = registerCached(config);
   const hot = readSnapshots(root), tl = readTimeline(root);
-  const history = { timeline: timeline ? tl : [], gaps: timeline ? computeGaps(tl, allSnapshots(root, hot), now) : [], storage: storageReport(root, { now, timeline: tl }), ...(allTime ? { chartSnapshots: allSnapshots(root, hot) } : {}) };
+  const history = { timeline: timeline ? tl : [], gaps: timeline ? computeGaps(tl, allSnapshots(root, hot), now) : [], storage: storageReport(root, { now, timeline: tl, ...(statfs ? { statfs } : {}) }), ...(allTime ? { chartSnapshots: allSnapshots(root, hot) } : {}) };
   return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register });
 }
 
@@ -141,11 +141,11 @@ export function diagnosticsData({ root, config, now, recorderDir }) {
   return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir, wake: (() => { try { return wakeStatus(root, now); } catch { return null; } })() });
 }
 const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, behindWrite: p.behindWrite, refreshing: p.refreshing, failed: p.failed });
-export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR }) {
+export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
   // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
   // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
   const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
-  const store = createViewStore({ build: worker ? worker.build : currentView, ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now(),
+  const store = createViewStore({ build: worker ? worker.build : o => currentView(statfs ? { ...o, statfs } : o), ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now(),
     rebuildOpts: o => ({ ...o, now: now(), config: source(), configError: source.invalid }) });   // the timer rebuilds with the current time and config, not the last request's
   const cachedView = opts => store.get(`${opts.timeline}:${opts.allTime}`, opts);
   const source = configSource(config);
