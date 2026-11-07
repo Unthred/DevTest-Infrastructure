@@ -153,8 +153,14 @@ export function recordWakePass(root, entry) {
   try {
     const file = path.join(root, 'team', 'wake-passes.log');
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    let lines = []; try { lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); } catch { /* none yet */ }
-    lines.push(JSON.stringify(entry)); fs.writeFileSync(file, lines.slice(-200).join('\n') + '\n', { mode: 0o600 });
+    // An O_APPEND write of one short line is atomic, so two passes ending together cannot lose a line (review of PR #797; a lock was tried
+    // and rejected: the directory lock can stay held by a live process after a contended release). The file is trimmed to the last 200
+    // lines only when it has grown well past that, so a trim racing an append can lose at most a line, rarely. Best effort.
+    fs.appendFileSync(file, JSON.stringify(entry) + '\n', { mode: 0o600 });
+    if (fs.statSync(file).size > 200 * 400) {
+      const tmp = `${file}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-200).join('\n') + '\n', { mode: 0o600 }); fs.renameSync(tmp, file);
+    }
   } catch { /* a log failure never stops a pass */ }
 }
 export function spawnDetachedPass({ root, reason, self, registry = null, spawnFn = spawn }) {
