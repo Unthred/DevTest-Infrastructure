@@ -88,9 +88,9 @@ export function rebaseStats(view, { splitAt = null, limit = 100 } = {}) {
     // Issue #717: start from the implement time the merge log recorded when there is one (the job list is capped, so the first timeline entry of an older PR is late); else the first recorded activity.
     const first = Number.isFinite(p.startedAt) ? p.startedAt : Math.min(...(p.timeline || []).filter(t => t.text !== 'merged').map(t => t.at).filter(Number.isFinite));
     // Reviews are verdicts a review produced; a D-025 carried verdict (carry set) is an avoided review and is counted apart.
-    const vs = Array.isArray(p.verdicts) ? p.verdicts : null, carried = vs ? vs.filter(v => v && v.carry).length : 0;
+    const vs = Array.isArray(p.verdicts) ? p.verdicts : null, carriedV = vs ? vs.filter(v => v && v.carry).length : 0, carried = carriedV + (Number.isFinite(p.secondOpinionCarried) ? p.secondOpinionCarried : 0);   // issue #804: carried second opinions are counted as carried too
     const second = Number.isFinite(p.secondOpinionRounds) ? p.secondOpinionRounds : 0;   // issue #717: a second opinion is a review on a head that already has a verdict
-    const reviews = (vs ? vs.length - carried : (Number.isFinite(p.reviewRounds) ? p.reviewRounds : 0)) + second;
+    const reviews = (vs ? vs.length - carriedV : (Number.isFinite(p.reviewRounds) ? p.reviewRounds : 0)) + second;
     return { pr: p.number, mergedAt: p.mergedAt, rebases: Number.isFinite(p.rebaseRounds) ? p.rebaseRounds : 0, reviews, carried, hours: Number.isFinite(first) && p.mergedAt >= first ? (p.mergedAt - first) / 3600000 : null };
   }).sort((a, b) => b.mergedAt - a.mergedAt);
   const out = { all: summarise(rows) };

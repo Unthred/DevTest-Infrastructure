@@ -454,3 +454,17 @@ test('#212 an issue no agent lists raises no attention item (it is eligible, not
   assert.ok(!ids(v).includes('unowned'));
   assert.ok(!ids(v).includes('unqueued'));
 });
+
+test('second-opinion rounds (#804): a carried second opinion is not a review and is counted as carried', async t => {
+  const H = 'a'.repeat(40), H2 = 'b'.repeat(40), H3 = 'c'.repeat(40);
+  const state = { secondOpinions: {
+    [`60:${H}`]: { verdict: 'PASS', reviewer: 'codex' },
+    [`60:${H2}`]: { verdict: 'PASS', reviewer: 'codex', carriedFrom: H, carry: { oldHead: H, newHead: H2 } },
+    [`60:${H3}`]: { verdict: 'PASS', reviewer: 'codex', carriedFrom: H2 },
+    [`600:${H}`]: { verdict: 'PASS', reviewer: 'codex' } } };
+  const v = await view(t, { state, cache: { tick: okTick(), pulls: [pr(60, 'claude/issue-30-x', H3)], issues: [issue(30)] } });
+  const row = v.prs.find(p => p.number === 60);
+  assert.equal(row.secondOpinionRounds, 1); assert.equal(row.secondOpinionCarried, 2);
+  const none = await view(t, { cache: { tick: okTick(), pulls: [pr(60, 'claude/issue-30-x', H3)], issues: [issue(30)] } });
+  assert.deepEqual([none.prs.find(p => p.number === 60).secondOpinionRounds, none.prs.find(p => p.number === 60).secondOpinionCarried], [0, 0]);
+});
