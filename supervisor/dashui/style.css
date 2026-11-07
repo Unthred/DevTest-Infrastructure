@@ -23,7 +23,7 @@
   --claude:#ef8a5c;--codex:#7fa8ff;--s3:#58c796;--s4:#b48af0;--s5:#ee7aaa;--s6:#a3afbd;
   --shadow:0 1px 2px rgba(0,0,0,.4);--shadow-lg:0 12px 40px rgba(0,0,0,.6);}}
 *{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;scrollbar-gutter:stable}  /* issue #938: with no script the native bar stays; reserve its space so the width is identical on every page. With script, early.js sets html.sb-overlay before first paint (scrollbar-width:none, no bar space), so the width is the same before and after app.js starts */
 body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs)/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--link)}a:hover{text-decoration:none}
 :focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:4px}
@@ -259,9 +259,9 @@ a.pill:focus-visible{outline-offset:3px}
 .card:target{outline:3px solid var(--focus);outline-offset:2px}
 li:target{outline:3px solid var(--focus);outline-offset:2px;border-radius:var(--r-sm);background:var(--surface2)}
 .count{color:var(--mut);margin-left:auto}
-.to-top{position:fixed;right:max(var(--sp4),env(safe-area-inset-right));bottom:max(var(--sp4),env(safe-area-inset-bottom));z-index:40;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--fg);box-shadow:var(--shadow-lg);cursor:pointer;padding:0}
+.to-top{position:fixed;left:50%;transform:translateX(-50%);bottom:max(var(--sp4),env(safe-area-inset-bottom));z-index:40;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--fg);box-shadow:var(--shadow-lg);cursor:pointer;padding:0}
 .to-top:hover{background:var(--surface2)}
-/* never on top of the content or the bottom tab bar: sit above the bar, small, in the corner */
+/* never on top of the content or the bottom tab bar: centred horizontally, small */
 html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-area-inset-bottom))}
 @media(max-width:639px){.to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-area-inset-bottom));width:44px;height:44px;opacity:.92}}
 @media print{.to-top{display:none!important}}

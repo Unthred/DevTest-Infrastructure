@@ -1,7 +1,7 @@
 // Runs before the page is painted (issue #58): puts the saved navigation dock and rail state on <html> so there is no jump.
 // Same-origin, sends nothing. The breakpoint edges and dock names mirror logic.mjs (a test keeps them identical).
 (function () {
-  var cl = document.documentElement.classList; if (cl) { cl.add('js'); cl.add('tzp'); }   // lets the stylesheet reserve the list controls' room before paint (no jump when the script starts)
+  var cl = document.documentElement.classList; if (cl) { cl.add('js'); cl.add('tzp'); cl.add('sb-overlay'); }   // sb-overlay (issue #938): native bars hidden from the first paint, so the width never changes when app.js starts   // lets the stylesheet reserve the list controls' room before paint (no jump when the script starts)
   try {
     var w = window.innerWidth, bp = w >= 1100 ? 'desktop' : w >= 640 ? 'tablet' : 'phone';
     var d = JSON.parse(localStorage.getItem('dash.dock.' + bp));
