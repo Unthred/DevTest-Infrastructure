@@ -32,7 +32,7 @@ function world(t, { pulls = [], issues = [], active = [], jobStates = {}, cfg = 
     listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues,
     rerunRun: async r => { (calls.reruns ||= []).push(r); }, comment: async (n, body) => calls.comments.push([n, body]), addLabel: async (n, l) => calls.labels.push([n, l]),
     findIssueByMarker: async marker => gh.issues.find(i => i.body?.includes(marker))?.number || null,
-    findOpenIssueByMarker: async marker => { const i = gh.issues.find(x => x.state === 'OPEN' && x.body?.includes(marker)); return i ? { number: i.number, body: i.body } : null; },
+    findOpenIssueByMarker: async (marker, skip = []) => { const i = gh.issues.find(x => x.state === 'OPEN' && !skip.includes(x.number) && x.body?.includes(marker)); return i ? { number: i.number, body: i.body } : null; },
     updateIssueBody: async (n, body) => { gh.issues.find(i => i.number === n).body = body; (calls.updates ||= []).push([n, body]); },
     createIssue: async (title, body) => { const number = 100 + gh.issues.length; gh.issues.push(issue(number, 'OPEN', body)); calls.issues.push([number, title, body]); return number; },
     merge: async (n, head) => { const p = gh.pulls.find(x => x.number === n); if (!p || p.headRefOid !== head) throw new Error('head moved'); calls.merges.push([n, head]); },
@@ -1657,6 +1657,26 @@ test('#864 two rounds of new, different blocking findings stop the fix loop with
   assert.equal(n.length, 1);
   for (const s of ['cache key ignores', 'retry loop never backs off', 'stale timestamp forever']) assert.match(n[0][1], new RegExp(s));
   assert.deepEqual(w.calls.labels, [[38, 'needs-homeowner']]);
+});
+test('#864 churn raises its Needs you item at the shipped fix limit and no final round starts', async t => {
+  const w = churnWorld(t, [['The cache key ignores the branch name entirely'], ['The retry loop never backs off after a failure'], ['The dashboard card shows a stale timestamp forever']]);
+  w.team.s.fixAttempts[`38:${H(2)}`] = w.team.c.limits.max_fix_attempts;
+  assert.ok(w.team.fixCount(38) >= w.team.c.limits.max_fix_attempts);
+  assert.equal((await w.team.plan()).filter(a => a.type === 'fix').length, 0);
+  await w.team.notifyChurn({}); await w.team.notifyFixLimit({}); await w.team.notifyChurn({});
+  assert.equal(w.calls.comments.filter(c => /different set of blocking findings/.test(c[1])).length, 1);
+  assert.deepEqual(w.calls.labels, [[38, 'needs-homeowner']]);
+});
+test('#864 a batch that a PR implements is frozen: later follow-ups open the next batch', async t => {
+  const w = reviewWorld(t);
+  w.gh.listPullFiles = async () => ['supervisor/x.mjs'];
+  const first = await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, ['A note'], true);
+  const before = w.gh.issues.find(i => i.number === first).body;
+  w.gh.listPulls = async () => [{ number: 50, headRefName: `claude/issue-${first}-batch` }];
+  const next = await w.team.batchFollowUps('j2', { pr: 50, head: H(2) }, ['Another note'], true);
+  assert.notEqual(next, first);
+  assert.equal(w.gh.issues.find(i => i.number === first).body, before);
+  assert.equal(await w.team.batchFollowUps('j3', { pr: 51, head: H(3) }, ['Third note'], true), next);
 });
 test('#864 no churn stop when findings repeat, after one new round only, or when the last round passed', async t => {
   const same = ['The cache key ignores the branch name entirely'];

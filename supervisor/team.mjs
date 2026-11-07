@@ -2108,7 +2108,16 @@ export class Team {
   async batchFollowUps(id, j, texts, material) {
     let files = []; try { files = (await this.gh.listPullFiles?.(j.pr)) || []; } catch { /* area falls back to general */ }
     const area = areaOf(files), marker = batchMarker(area), entry = { job: id, pr: j.pr, head: j.head, items: texts };
-    const open = this.gh.findOpenIssueByMarker ? await this.gh.findOpenIssueByMarker(marker) : null;
+    // A batch that a PR or job already implements is frozen: editing its body would change that PR's requirements hash and withdraw
+    // its PASS. Its follow-ups go to the next batch of the area instead.
+    const prs = await this.gh.listPulls().catch(() => []), skip = [];
+    let open = null;
+    while (this.gh.findOpenIssueByMarker && (open = await this.gh.findOpenIssueByMarker(marker, skip))) {
+      const re = new RegExp(`/issue-${open.number}(\\D|$)`);
+      const taken = prs.some(p => re.test(p.headRefName || '')) || Object.values(this.s.jobs).some(x => re.test(x.branch || '') || (x.issue === open.number && WRITER_KINDS.has(x.kind)));
+      if (!taken) break;
+      skip.push(open.number); open = null;
+    }
     if (open) {
       const { body } = appendToBatch(open.body, entry);
       if (body !== open.body) await this.gh.updateIssueBody(open.number, body);
@@ -2702,7 +2711,7 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict !== 'CHANGES') continue;
       const rounds = this.churned(pr.number), nkey = `churn:${pr.number}:${pr.headRefOid}`;
-      if (!rounds || this.s.notified[nkey] || this.fixCount(pr.number) >= this.c.limits.max_fix_attempts) continue;   // at the fix limit the fix-limit item already asks
+      if (!rounds || this.s.notified[nkey]) continue;   // churn owns the item even at the fix limit (notifyFixLimit skips churned PRs)
       await guard(`churn ${pr.number}`, async () => {
         this.s.notified[nkey] = this.clock.now(); this.save();
         try {
@@ -2711,6 +2720,13 @@ export class Team {
         } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
         (report.notified ||= []).push({ pr: pr.number, churn: true });
       });
+      const akey = `churn-alert:${pr.number}:${pr.headRefOid}`;   // like the fix-limit alert: recorded as sent only when the channel accepted it
+      if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
+        try {
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${FIX_LIMIT_OPTIONS}.`);
+          this.s.notified[akey] = this.clock.now(); this.save();
+        } catch { (report.skipped ||= []).push({ what: `alert churn ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
+      }
     }
   }
   // A PR that is still rejected (CHANGES verdict or red CI on its current head) after max_fix_attempts fix rounds gets exactly one
@@ -2722,6 +2738,7 @@ export class Team {
       const rejected = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'CHANGES' || this.ciState(pr) === 'red';
       const nkey = `fixlimit:${pr.number}`, akey = `fixlimit-alert:${pr.number}`;
       if (!rejected) continue;
+      if (this.churned(pr.number)) continue;   // issue #864: notifyChurn raises the one item
       if (this.escalationPending(pr.number, pr)) continue;   // issue #163: one final round runs (or is still allowed) before the homeowner is asked
       // The final round was never run because the unblock budget is spent: that limit is its own Needs you item, and the
       // fix-limit notice says that no final round ran rather than claiming one did.
