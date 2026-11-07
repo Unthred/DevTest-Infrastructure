@@ -5,7 +5,7 @@
 // card, grid.mjs) is applied as the card's --cx/--cy/--cw/--ch with the .free class on the grid; an old order/span/h layout is applied as before.
 // Local time (issue #493): early.js (in <head>, blocking) marks <html> .tzp, which hides the page (CSS visibility, no layout shift) until
 // this script has converted the times and removed it, so no time text can change while visible. If this script never runs, a CSS
-// animation reveals the page after 2 s. Every <time data-local> and [data-lms] is put in this browser's zone here, before the first paint, so a time
+// animation reveals the page after 10 s (long enough that a slow layout-early.js does not bring back a UTC-then-local flash, issue #839). Every <time data-local> and [data-lms] is put in this browser's zone here, before the first paint, so a time
 // never changes text after the first draw. Mirrors formatLocal and timeOnly in logic.mjs (a test compares them); app.js skips .lz nodes.
 (function () {
   try {
