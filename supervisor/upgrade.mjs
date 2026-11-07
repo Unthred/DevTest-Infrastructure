@@ -113,7 +113,7 @@ export function findDashboards(procRoot = '/proc', self = process.pid) {
 // not running at all, and `force` restarts one that is on the right version but does not answer. Without them nothing running means
 // nothing to do (the upgrade path never starts a dashboard that was not there). A start that fails or does not answer is tried once
 // more, then the last good command line is started again, so the dashboard is not left down.
-export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500, settleProbes = 3, settleProbeMs = 2000, settleMaxMs = 60000, restartMaxMs = 150000, recoverMaxMs = 30000, now = Date.now, logMark = defaultLogMark, logTail = defaultLogTail, revive = null, force = false } = {}) {
+export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500, settleProbes = 3, settleProbeMs = 2000, settleMaxMs = 60000, settleMinMs = 10000, restartMaxMs = 150000, recoverMaxMs = 30000, now = Date.now, logMark = defaultLogMark, logTail = defaultLogTail, revive = null, force = false } = {}) {
   const startedAt = now();
   const found = findDashboards(procRoot);
   if (!found.length && !revive) return { ok: true, restarted: false, reason: 'no dashboard server was running' };
@@ -155,11 +155,14 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
   // that fails while the process is still running is retried until `settleMaxMs`. A process that has exited fails at once.
   const alive = () => findDashboards(procRoot).some(d => d.version === sha);
   const settled = async () => {
-    await sleep(settleMs);
+    await sleep(Math.max(0, Math.min(settleMs, deadline - now())));
     if (!alive()) return { cause: 'exited' };
     if (!health) return { ok: true };
     // Bounded by elapsed time, probe duration included: each probe is cut off when the deadline arrives.
-    const until = Math.min(now() + settleMaxMs, deadline);
+    // Issue #810: the window is capped by the overall deadline but never shorter than settleMinMs, so a healthy server that answers
+    // late is not rolled back before it could show a stable streak. The window actually used is reported.
+    const began = now();
+    const until = Math.max(Math.min(began + settleMaxMs, deadline), began + Math.min(settleMinMs, settleMaxMs));
     let streak = 0;
     for (let i = 0, rounds = Math.max(settleProbes, Math.ceil(settleMaxMs / Math.max(1, settleProbeMs))); i < rounds; i++) {
       if (i) { const gap = until - now(); if (gap <= 0) break; await sleep(Math.min(settleProbeMs, gap)); }
@@ -169,7 +172,7 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
       streak = ok ? streak + 1 : 0;
       if (streak >= settleProbes) return { ok: true };
     }
-    return { cause: 'unresponsive' };
+    return { cause: 'unresponsive', windowMs: until - began };
   };
   const failWith = async (cause, text, mark) => {
     let said = ''; try { said = redactAddresses(redact((await logTail(mark)) || '', 600)).trim(); } catch { said = ''; }
@@ -180,7 +183,7 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
     if (r.ok) return up;
     return r.cause === 'exited'
       ? failWith('exited', `the dashboard server on ${short(sha)} ${health ? 'answered but did not stay up (the process exited after start)' : 'did not stay running'}`, mark)
-      : failWith('unresponsive', `the dashboard server on ${short(sha)} is running but stopped answering its health check for ${Math.round(settleMaxMs / 1000)} s`, mark);
+      : failWith('unresponsive', `the dashboard server on ${short(sha)} is running but stopped answering its health check for ${Math.max(1, Math.round((r.windowMs ?? settleMaxMs) / 1000))} s`, mark);
   };
   const up = { ok: true, restarted: true, host: old.host, port: old.port };
   const attempt = async () => {
@@ -206,10 +209,11 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
   };
   const first = res.fail, firstCause = res.cause, firstOutput = res.output;
   await stopNew();
-  if (now() < deadline) res = await attempt();
+  const retried = now() < deadline;
+  if (retried) res = await attempt();
   if (!res.fail) return res;
   const out = res.output || firstOutput;
-  const r = await recover(`${res.fail} (tried twice; first: ${first})${out ? `; the new process said: ${out.slice(0, 200)}` : ''}`);
+  const r = await recover(`${res.fail} (${retried ? `tried twice; first: ${first}` : 'tried once (overall deadline reached)'})${out ? `; the new process said: ${out.slice(0, 200)}` : ''}`);
   return { ...r, cause: res.cause || firstCause, ...(out ? { output: out } : {}) };
 }
 // Issue #632: why a failed restart failed, kept in the record: a cause ('exited' or 'unresponsive') and what the new process wrote to
