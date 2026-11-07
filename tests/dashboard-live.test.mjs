@@ -234,3 +234,16 @@ test('the periodic refresh is script-driven so it keeps an in-place table addres
   assert.doesNotMatch(appJs, /\bscrollKey\b/);   // the key is computed from the current address at save and restore time
   assert.match(appJs, /scrollKeyNow\(\)/);
 });
+
+test('debounce: the default timers call setTimeout unbound (a browser throws Illegal invocation otherwise)', async () => {
+  const real = globalThis.setTimeout, realClear = globalThis.clearTimeout, seen = [];
+  globalThis.setTimeout = function (f, ms) { seen.push(this); return real(f, ms); };
+  globalThis.clearTimeout = function (t) { seen.push(this); return realClear(t); };
+  try {
+    const calls = [], d = debounce(v => calls.push(v), 5);
+    d(1); d(2);
+    await new Promise(r => real(r, 40));
+    assert.deepEqual(calls, [2]);
+    assert.ok(seen.every(t => t === undefined || t === globalThis), 'setTimeout/clearTimeout must not be called with the timers object as this');
+  } finally { globalThis.setTimeout = real; globalThis.clearTimeout = realClear; }
+});
