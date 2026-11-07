@@ -59,6 +59,7 @@ export function breakerHaltOf(b) {
   if (!h) return error ? { halted: false, error, note: 'Breaker evaluation failed; existing halts stay in force.' } : { halted: false };
   return { halted: true, scope: h.scope ?? null, cause: h.cause ?? null, count: h.count ?? 1, entries: (h.entries || []).slice(0, 8).map(e => ({ cause: e.cause ?? null, types: e.cause === '@global' ? GLOBAL_TYPES : (e.types ?? null), since: e.since ?? null })), error, caution: PLAN_CAUTION };
 }
+const ISSUES_SCHEMA = { type: 'object', properties: { text: { type: 'string', maxLength: 200 }, kind: { type: 'string', enum: ['issue', 'pr', 'any'] }, state: { type: 'string', enum: ['open', 'closed', 'merged', 'all'] }, label: { type: 'string', maxLength: 60 }, number: { type: 'integer', minimum: 1 }, from: { type: 'integer', minimum: 1 }, to: { type: 'integer', minimum: 1 }, author: { type: 'string', maxLength: 60 }, updatedSince: { type: 'string', maxLength: 40 }, head: { type: 'string', maxLength: 100 }, ci: { type: 'string', enum: ['passing', 'failing', 'pending', 'none'] }, verdict: { type: 'string', enum: ['PASS', 'CHANGES', 'none'] }, issue: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1, maximum: 50 } }, additionalProperties: false };
 export function createTools({ source, readHost, readActivity = hostActivity, getPath = null, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
   const calls = [];   // times of recent calls, for the rate limit
   const withView = async fn => { const r = await source.get(); return { ...fn(r.view), viewAgeSeconds: Math.round(r.ageMs / 1000), ...(r.stale ? { stale: true, staleBecause: r.error } : {}) }; };
@@ -146,6 +147,20 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       run: async () => { if (!getPath) throw new Error('test-slot figures are not available on this server'); return getPath('/api/tests.json'); } },
     { name: 'foreman_ticks', description: 'Recent Foreman ticks, newest first: when, what started it, duration, status, the actions planned, errors, GitHub calls and no-op passes; plus the ticks skipped in the last 24 hours with the reason. Optional limit (default 20, at most 100). Read-only.', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } }, additionalProperties: false },
       run: async args => { if (!getPath) throw new Error('tick records are not available on this server'); return getPath(`/api/ticks.json?limit=${num(args.limit, 1, 100, 20)}`); } },
+    { name: 'foreman_issues', description: 'Search all issues and pull requests (open, closed and merged) from Foreman\'s own cache, without a GitHub call, to check whether an issue already exists. Filters: text (every word must appear in the title or body), kind (issue, pr, any), state (open, closed, merged, all), label, number, from and to (a number range), author, updatedSince (ISO date); for pull requests also head (branch substring), ci (passing, failing, pending, none), verdict (PASS, CHANGES, none) and issue (a linked issue number). Results: number, title, state, labels, updated, URL and a short redacted excerpt. A lookup by number returns the full redacted body and the latest comments. The coverage field says whether the history is complete. Optional limit (default 20, at most 50). Read-only.',
+      inputSchema: ISSUES_SCHEMA,
+      run: async args => {
+        if (!getPath) throw new Error('the issue index is not available on this server');
+        const spec = ISSUES_SCHEMA; const bad = Object.keys(args || {}).filter(k => !(k in spec.properties));
+        if (bad.length) throw new Error(`unknown argument: ${bad.join(', ')}`);
+        for (const [k, def] of Object.entries(spec.properties)) { const v = args[k]; if (v === undefined) continue;
+          if (def.enum && !def.enum.includes(v)) throw new Error(`${k} must be one of: ${def.enum.join(', ')}`);
+          if (def.type === 'integer' && !(Number.isInteger(v) && v >= 1)) throw new Error(`${k} must be a positive integer`);
+          if (def.type === 'string' && (typeof v !== 'string' || v.length > def.maxLength)) throw new Error(`${k} must be text of at most ${def.maxLength} characters`); }
+        const qs = new URLSearchParams();
+        for (const k of ['text', 'kind', 'state', 'label', 'number', 'from', 'to', 'author', 'updatedSince', 'head', 'ci', 'verdict', 'issue', 'limit']) if (args[k] !== undefined && args[k] !== null && args[k] !== '') qs.set(k, String(args[k]));
+        return fitItems(dropNullFields(await getPath(`/api/issues.json?${qs}`), 'items'), 'items', 50);
+      } },
     { name: 'foreman_item_timeline', description: 'One pull request or issue across its jobs, reviews, fixes, rebases and merge, oldest first, with agent, status, duration and cost (usage equivalent, not a charge). For a pull request the jobs of its issue are included. Optional limit (default 60, at most 200). Read-only.', inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['pr', 'issue'] }, number: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, required: ['kind', 'number'], additionalProperties: false },
       run: args => {
         const n = Number(args.number), kind = args.kind;

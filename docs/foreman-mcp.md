@@ -117,3 +117,9 @@ The trial account's key and forced command are unchanged by this feature. To sto
 
 ## Checks
 `node --test tests/foreman-mcp.test.mjs` covers the protocol, agreement with the planner's order, the proof that it cannot modify Foreman state (a fake state tree is byte-for-byte unchanged, only GETs reach the dashboard, and the permission model refuses other writes), bounded output, and no secret-shaped output. The restricted-key check required by #569 (no shell, no other command, no pty, no forwarding, tools callable over SSH) is a recorded manual check on the host.
+
+## foreman_issues (issue #951)
+Read-only search of every issue and pull request, open, closed and merged, served from Foreman's own index (`<state root>/dashboard/issue-index.json`) through `GET /api/issues.json`, with no GitHub call per request. It lets the overseer, who cannot reach the GitHub API from Claude chat, check whether an issue already exists before drafting one.
+- Filters: `text` (every word in the title or body), `kind`, `state` (open, closed, merged, all), `label`, `number`, `from`/`to`, `author`, `updatedSince`; for pull requests also `head`, `ci`, `verdict` (from Foreman's recorded verdicts for the current head) and `issue` (a linked issue). Unknown arguments and bad values are refused.
+- Results: number, title, state, labels, updated, URL and a redacted excerpt. A `number` lookup returns the full redacted body (12000 characters at most) and the latest 5 comments. `coverage` says whether the history is complete.
+- Refresh: at the end of each real tick, one bounded `gh ... list --search "updated:>=<cursor> sort:updated-asc"` call per kind (100 items). A new index pages back through the history one page per tick; once caught up a tick fetches only what changed, and a pass GitHub proved unchanged makes no call. The refresh is best effort and never fails a tick. Text is redacted before it is stored.
