@@ -70,13 +70,13 @@ export function wasteOf({ id, entry, job, verdictRecorded = false, refusal = nul
   }
   if (!cause) return null;
   return {
-    job: String(id || job.id), at: Number.isFinite(job.updatedAt) ? job.updatedAt : 0, type, cause: `${type}:${cause}`.slice(0, 120),
+    job: String(id || job.id), at: Number.isFinite(job.updatedAt) ? job.updatedAt : 0, created: Number.isFinite(job.createdAt) ? job.createdAt : null, type, cause: `${type}:${cause}`.slice(0, 120),
     agent: entry.agent ?? null, pr: entry.pr ?? null, issue: entry.issue ?? null, model: job.model ?? entry.model ?? null,
     inputTokens: num(usage.inputTokens), outputTokens: num(usage.outputTokens), tokens, cost: num(usage.costUsdEstimate),
   };
 }
 
-export const emptyState = () => ({ waste: {}, halts: {}, global: null, clearedAt: {}, error: null, history: [] });
+export const emptyState = () => ({ waste: {}, successes: {}, halts: {}, global: null, clearedAt: {}, error: null, history: [] });
 // Issue #625: one history entry per trip (kept after the halt is cleared) so the overseer can read cause, jobs, cost, when it
 // tripped and when it cleared. Figures follow the halt while it is held and stop at the clear. Never holds job content.
 const HISTORY_MAX = 100;
@@ -91,7 +91,7 @@ function noteTrip(s, scope, h) {
 function noteClear(s, scope, since, now) { const open = openHistory(s, scope, since); if (open) open.clearedAt = now; }
 export function normalize(s) {
   s ||= {};
-  s.waste ||= {}; s.halts ||= {}; s.clearedAt ||= {}; s.history ||= []; if (s.global === undefined) s.global = null; if (s.error === undefined) s.error = null;
+  s.waste ||= {}; s.successes ||= {}; s.halts ||= {}; s.clearedAt ||= {}; s.history ||= []; if (s.global === undefined) s.global = null; if (s.error === undefined) s.error = null;
   return s;
 }
 export function record(s, w, now) {
@@ -103,6 +103,25 @@ export function record(s, w, now) {
   const over = Object.values(s.waste).sort((a, b) => a.at - b.at).slice(0, Math.max(0, Object.keys(s.waste).length - KEEP_MAX));
   for (const x of over) delete s.waste[x.job];
   return true;
+}
+
+// Issue #865: a finished job that was not waste is kept (type, subject, when it began and ended) so that waste it came after can be
+// recognised as superseded whenever the breaker is evaluated, including after a restart. Never holds job content.
+export function noteSuccess(s, { job, type, pr = null, issue = null, created = null, at = 0 }, now) {
+  normalize(s);
+  if (!job || !type || type === 'merge' || s.successes[job]) return false;
+  s.successes[job] = { job: String(job), type, pr, issue, created: Number.isFinite(created) ? created : null, at: Number.isFinite(at) ? at : 0 };
+  for (const x of Object.values(s.successes)) if (now - (x.at || x.created || 0) > KEEP_MS) delete s.successes[x.job];
+  const over = Object.values(s.successes).sort((a, b) => a.at - b.at).slice(0, Math.max(0, Object.keys(s.successes).length - KEEP_MAX));
+  for (const x of over) delete s.successes[x.job];
+  return true;
+}
+// Waste is superseded when a later job of the same type succeeded on the same pull request (or, with none, the same issue). "Later"
+// means it began after the wasted job began; a record without a start time falls back to the success finishing after the waste did.
+export function superseded(s, w) {
+  const same = w.pr != null ? x => x.pr === w.pr : w.issue != null ? x => x.pr == null && x.issue === w.issue : null;
+  if (!same) return false;
+  return Object.values(s.successes || {}).some(x => x.type === w.type && x.job !== w.job && same(x) && (Number.isFinite(w.created) && Number.isFinite(x.created) ? x.created > w.created : x.at > w.at));
 }
 
 const sum = (list, k) => list.reduce((n, x) => n + x[k], 0);
@@ -135,7 +154,19 @@ export function evaluate(s, limits, now) {
   const trips = [];
   if (!limits.enabled) return trips;
   const window = limits.window_hours * 3600000;
-  const live = Object.values(s.waste).filter(w => now - w.at <= window && w.at > clearedFor(s, w.cause));
+  const inWindow = Object.values(s.waste).filter(w => now - w.at <= window && w.at > clearedFor(s, w.cause));
+  const gone = new Set(inWindow.filter(w => superseded(s, w)).map(w => w.job));   // issue #865: a later same-type success on the same PR settles it
+  const live = inWindow.filter(w => !gone.has(w.job));
+  // A halt whose waste is all superseded ends by itself; one with other live waste, or with no waste left in the window, is untouched.
+  for (const [cause, h] of Object.entries(s.halts)) {
+    if (live.some(w => w.cause === cause) || !inWindow.some(w => w.cause === cause)) continue;
+    noteClear(s, cause, h.since, now); delete s.halts[cause]; s.clearedAt[cause] = now;
+    s.resumes = [...(s.resumes || []), { at: now, scope: 'superseded', cleared: [cause], by: 'success' }].slice(-50);
+  }
+  if (s.global && inWindow.length && !live.length) {
+    noteClear(s, '@global', s.global.since, now); s.global = null; s.clearedAt['@global'] = now;
+    s.resumes = [...(s.resumes || []), { at: now, scope: 'superseded', cleared: ['@global'], by: 'success' }].slice(-50);
+  }
   const byCause = new Map();
   for (const w of live) { if (!byCause.has(w.cause)) byCause.set(w.cause, []); byCause.get(w.cause).push(w); }
   // $5 of waste of any kind: when all live waste together reaches the cost limit, every cause that contributed is halted in its own scope.

@@ -476,3 +476,68 @@ test('a resume request file survives a failed save and is applied by the next ti
   assert.deepEqual(r.breaker?.resumed?.[0]?.scope, cause, 'the click was not lost');
   assert.deepEqual(takeBreakerResumeRequests(w.team.root), []);
 });
+
+// ---- issue #865: waste that a later same-type job on the same pull request already succeeded after does not count ----
+const done = (over = {}) => blocked({ status: 'completed', createdAt: NOW - 3000, ...over });
+const costly = (over = {}) => blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 5.5 }, createdAt: NOW - 5000, ...over });
+const addSuccess = (s, id, over = {}) => B.noteSuccess(s, { job: id, type: 'review', pr: 10, created: NOW - 3000, at: NOW - 2000, ...over }, NOW);
+
+test('superseded waste: only a later same-type success on the same pull request settles it', () => {
+  const w = waste(costly());
+  const s = B.emptyState(); B.record(s, w, NOW);
+  assert.equal(B.superseded(s, w), false);
+  addSuccess(s, 'wrong-pr', { pr: 11 }); addSuccess(s, 'wrong-type', { type: 'fix' }); addSuccess(s, 'earlier', { created: NOW - 9000, at: NOW - 8000 });
+  assert.equal(B.superseded(s, w), false, 'other pull request, other type, or an earlier job does not settle it');
+  addSuccess(s, 'later');
+  assert.equal(B.superseded(s, w), true);
+  const t = B.emptyState(); B.record(t, w, NOW); addSuccess(t, 'later');
+  assert.deepEqual(B.evaluate(t, L, NOW), [], 'the cost trip does not fire');
+  const u = B.emptyState(); B.record(u, w, NOW);
+  assert.equal(B.evaluate(u, L, NOW).length, 1, 'without the success it does');
+});
+
+test('an existing halt ends by itself once its waste is superseded; a halt with other live waste stays', () => {
+  const s = B.emptyState(); B.record(s, waste(costly()), NOW);
+  B.evaluate(s, L, NOW);
+  assert.equal(Object.keys(s.halts).length, 1);
+  addSuccess(s, 'later');
+  B.evaluate(s, L, NOW + 1);
+  assert.equal(Object.keys(s.halts).length, 0);
+  assert.equal(s.history[0].clearedAt, NOW + 1);
+  B.evaluate(s, L, NOW + 2);
+  assert.equal(Object.keys(s.halts).length, 0, 'and it does not trip again');
+  // other live waste on a pull request with no success keeps it held
+  const k = B.emptyState(); B.record(k, waste(costly(), { pr: 10 }), NOW); B.record(k, waste(costly(), { pr: 12 }), NOW);
+  B.evaluate(k, L, NOW); addSuccess(k, 'later'); B.evaluate(k, L, NOW + 1);
+  assert.equal(Object.keys(k.halts).length, 1);
+});
+
+test('replay of #865: blocked review, a later successful review of the same pull request, then a restart: the breaker stays clear', async t => {
+  const w = world(t);
+  add(w, 'c8a288e5', { kind: 'review', pr: 40, head: H(1) }, costly({ id: 'c8a288e5' }));
+  const ticket = 'd'.repeat(32), idir = path.join(w.team.dir, 'inbox', ticket); fs.mkdirSync(idir, { recursive: true });
+  fs.writeFileSync(path.join(idir, 'verdict.json'), JSON.stringify({ pr: 40, headSha: H(1), verdict: 'PASS', findings: [], commandsRun: ['node --test'] }));
+  add(w, '070f8ff4', { kind: 'review', pr: 40, head: H(1), ticket, model: 'opus' }, done({ id: '070f8ff4', model: 'opus' }));
+  await w.team.ingest({ ingested: [], skipped: [] });
+  const input = [{ type: 'review', agent: 'claude', pr: 40 }];
+  assert.equal(w.team.applyBreaker(input, {}).length, 1);
+  const restarted = w.mk();
+  await restarted.backfillSuccesses();
+  assert.equal(restarted.applyBreaker(input, {}).length, 1);
+  assert.deepEqual(restarted.s.breaker.halts, {});
+});
+
+test('a halt recorded before successes were kept clears after the backfill; a success on another pull request does not clear it', async t => {
+  const w = world(t);
+  add(w, 'old', { kind: 'review', pr: 40, head: H(1), wasteChecked: true, ingested: true }, costly({ id: 'old' }));
+  add(w, 'other', { kind: 'review', pr: 41, head: H(2), wasteChecked: true, ingested: true }, done({ id: 'other' }));
+  const b = w.team.s.breaker, wr = waste(costly({ id: 'old', createdAt: undefined, updatedAt: NOW - 4000 }), { pr: 40 });
+  B.record(b, wr, NOW); B.evaluate(b, L, NOW);
+  assert.equal(Object.keys(b.halts).length, 1);
+  await w.team.backfillSuccesses(); B.evaluate(b, L, NOW + 1);
+  assert.equal(Object.keys(b.halts).length, 1, 'a success on pull request 41 does not settle waste on 40');
+  add(w, 'later', { kind: 'review', pr: 40, head: H(1), wasteChecked: true, ingested: true }, done({ id: 'later', updatedAt: NOW - 500 }));
+  await w.team.backfillSuccesses();
+  assert.deepEqual(w.team.applyBreaker([{ type: 'review', agent: 'claude', pr: 40 }], {}).map(a => a.pr), [40]);
+  assert.deepEqual(b.halts, {});
+});

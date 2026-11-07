@@ -1671,6 +1671,7 @@ export class Team {
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     let actions = await this.plan();
+    if (!dryRun) await guard('breaker successes', () => this.backfillSuccesses());
     actions = this.applyBreaker(actions, report, dryRun);
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
     if (!dryRun) await guard('self-check', () => this.runSelfCheck(report));
@@ -2010,10 +2011,26 @@ export class Team {
       const w = breaker.wasteOf({ id, entry: j, job, verdictRecorded: recorded, refusal: j.refusal || null });
       j.wasteChecked = true;
       // Issue #626: a completed job that was not waste is a success; it ends the halt of its type if it began after the halt.
-      if (!w && job.status === 'completed' && !j.refusal) { const cleared = breaker.succeeded(b, { type: typeOfKind(j.kind || job.kind || ''), createdAt: job.createdAt }, this.clock.now()); if (cleared.length) (report.breaker ||= {}).cleared = cleared; }
+      if (!w && job.status === 'completed' && !j.refusal) { breaker.noteSuccess(b, { job: id, type: typeOfKind(j.kind || job.kind || ''), pr: j.pr ?? null, issue: j.issue ?? null, created: job.createdAt, at: job.updatedAt }, this.clock.now()); const cleared = breaker.succeeded(b, { type: typeOfKind(j.kind || job.kind || ''), createdAt: job.createdAt }, this.clock.now()); if (cleared.length) (report.breaker ||= {}).cleared = cleared; }
       if (w && breaker.record(b, w, this.clock.now())) (report.wasted ||= []).push({ job: id.slice(0, 8), cause: w.cause, cost: w.cost });
       this.save();
     } catch (error) { this.breakerFailed(error, report); }
+  }
+  // Issue #865: successes finished before this version kept none, so after an install the breaker would still count the waste they
+  // superseded. Read each such job once (only those that could supersede waste still on file) and record it.
+  async backfillSuccesses() {
+    const b = breaker.normalize(this.s.breaker ||= {}), wastes = Object.values(b.waste);
+    if (!wastes.length) return;
+    let changed = false;
+    for (const [id, j] of Object.entries(this.s.jobs)) {
+      if (!j.wasteChecked || j.refusal || j.successChecked || b.waste[id] || b.successes[id]) continue;
+      const type = typeOfKind(j.kind || '');
+      if (!wastes.some(w => w.type === type && (w.pr != null ? w.pr === j.pr : w.issue != null && w.issue === j.issue))) continue;
+      j.successChecked = true; changed = true;
+      const job = await this.jobs.get(id);
+      if (job?.status === 'completed') breaker.noteSuccess(b, { job: id, type, pr: j.pr ?? null, issue: j.issue ?? null, created: job.createdAt, at: job.updatedAt }, this.clock.now());
+    }
+    if (changed) this.save();
   }
   breakerFailed(error, report) {
     this.s.breaker.error = { at: this.clock.now(), message: redact(String(error?.message || error), 200) };
