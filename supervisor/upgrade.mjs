@@ -472,7 +472,7 @@ export class SelfUpgrade {
     const checks = { eligibility: 'ok', quiet: running > 0 ? 'jobs-running-unaffected' : 'idle' };
     let pre = await this.d.preChecks(target);
     // Issue #412: a failed test run is repeated once in a fresh clean copy (each installer call takes its own) before the commit is
-    // latched. It runs here, in this tick, after the drain and before dispatch, so no job can be starting while it runs.
+    // latched. It runs here, in this tick, before dispatch, so no job can be starting while it runs.
     let flaky = null;
     if (isTestFailure(pre)) {
       const first = pre;

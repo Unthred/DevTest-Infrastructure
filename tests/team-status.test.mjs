@@ -228,16 +228,13 @@ test('3. problems: attention times are shown in the status time zone, with no in
   assert.match(text(utc), /- Last tick failed at 2026-10-30 11:30 UTC: boom/);
 });
 
-test('drain (issue #136): team status shows "install pending since …, draining (N jobs running)" only while holding', async () => {
+test('issue #845: team status never shows a draining hold, even from an old state file', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'drainst-'));
   try {
     fs.mkdirSync(path.join(root, 'team'), { recursive: true });
-    assert.equal((await status({ root })).hold, null); assert.doesNotMatch(text(await status({ root })), /draining/);
     atomicJson(path.join(root, 'team', 'self-upgrade.json'), { holding: { to: H(7), since: NOW - 10 * MIN, jobs: 2 } });
     const s = await status({ root });
-    assert.match(text(s), /install pending since 11:50 \(upgrade to 7777777\), draining \(2 jobs running\)/);
-    atomicJson(path.join(root, 'team', 'self-upgrade.json'), { holding: { to: H(7), since: NOW, jobs: 1 } });
-    assert.match(text(await status({ root })), /draining \(1 job running\)/);
+    assert.equal(s.hold, undefined); assert.doesNotMatch(text(s), /draining/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

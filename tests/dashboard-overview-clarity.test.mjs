@@ -235,7 +235,6 @@ test('time: warning texts are plain labelled UTC in the view and <time data-loca
   const byId = id => v.attention.find(a => a.id === id).text;
   assert.match(byId('tick-failed'), /^Last tick failed at 2026-11-02 17:00 UTC: boom$/);
   assert.match(byId('tick-stale'), /\(last 2026-11-02 17:00 UTC\)/);
-  assert.match(byId('upgrade-hold'), /^Install pending since 2026-11-02 19:50 UTC /);
   for (const p of ['overview', 'system']) {
     const html = page(v, { page: p });
     assert.ok(!/\u27e6|\u27e7/.test(html), `${p}: marker in HTML`);

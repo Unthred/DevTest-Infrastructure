@@ -49,14 +49,12 @@ export function installs(root, { now = Date.now(), procRoot = '/proc', running }
   const ver = readVersion(root, running === undefined ? { now } : { running, now });
   const su = readSelfUpgrade(root), inst = readInstalled(root);
   let state = {}; try { state = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')) || {}; } catch { /* none */ }
-  const h = state.holding;
-  const draining = h && typeof h.to === 'string' ? { to: SHA.test(h.to) ? h.to : null, since: iso(h.since), jobsRunning: Number.isSafeInteger(h.jobs) ? h.jobs : null } : null;
   const records = readUpgrades(root).slice(-INSTALLS_KEPT).reverse().map(r => ({ at: iso(r.at), from: r.from, to: r.to, prs: r.prs, result: r.result, failed: FAILED.has(r.result), reason: r.reason, checks: r.checks, files: r.files }));
   const f = state.refusal, i = su.install;
   return {
     note: 'Install records come from team/upgrades.jsonl and self-upgrade.json. Process versions are read from each process command line under versions/<sha>/ (the command line itself is not returned). Evidence, not a remote check.',
     installed: inst.sha, main: ver?.main && SHA.test(ver.main) ? ver.main : null, behind: ver?.behind ?? null, drift: !!ver?.drift, nextInstall: ver?.nextInstall ? { at: iso(ver.nextInstall.at), why: scrub(ver.nextInstall.why, 200), state: ver.nextInstall.state } : null,
-    draining, latch: su.latch ? { at: iso(su.latch.at), from: su.latch.from, to: su.latch.to, reason: su.latch.reason } : null,
+    latch: su.latch ? { at: iso(su.latch.at), from: su.latch.from, to: su.latch.to, reason: su.latch.reason } : null,
     lastInstall: i ? { result: i.result, sha: i.sha, at: iso(i.at), nextAttemptAt: iso(i.nextAttemptAt), reason: i.reason, failingTests: i.tests, retried: i.retried, excerpt: i.excerpt } : null,
     refusal: f && SHA.test(f.to || '') ? { kind: scrub(f.kind || '', 24), from: SHA.test(f.from || '') ? f.from : null, to: f.to, at: iso(f.at), reason: scrub(f.reason || '', 300) } : null,
     processes: processVersions(procRoot, { currentSha: inst.sha }).map(p => ({ ...p, matchesInstalled: inst.sha ? p.version === inst.sha : null })),
