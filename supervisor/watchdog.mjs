@@ -40,9 +40,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 export function gateJob(cmd, { runnerPid = process.pid, maxWaitS = 10 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'job-gate-'));
   const file = path.join(dir, 'open');
-  const script = 'r=$1; f=$2; n=$3; shift 3; i=0; while [ ! -e "$f" ]; do kill -0 "$r" 2>/dev/null || exit 125; i=$((i+1)); [ "$i" -gt "$n" ] && exit 125; sleep 0.05; done; exec "$@"';
+  // The gate removes its own directory on every way out (opened, runner gone, timed out), so a SIGKILLed runner leaves nothing behind
+  // (issue #736). It also treats a zombie or exited runner as gone, reading /proc/<pid>/stat as runnerGone does; with no readable /proc
+  // it falls back to kill -0.
+  const script = 'r=$1; d=$2; n=$3; shift 3; f=$d/open; i=0; '
+    + 'alive() { if [ -r /proc/$$/stat ]; then read -r l < /proc/$r/stat 2>/dev/null || return 1; l=${l##*) }; case ${l%% *} in Z|X) return 1;; esac; return 0; else kill -0 "$r" 2>/dev/null; fi; }; '
+    + 'while [ ! -e "$f" ]; do alive || { rm -rf "$d"; exit 125; }; i=$((i+1)); [ "$i" -gt "$n" ] && { rm -rf "$d"; exit 125; }; sleep 0.05; done; rm -rf "$d"; exec "$@"';
   return {
-    argv: ['sh', '-c', script, 'job-gate', String(runnerPid), file, String(Math.round(maxWaitS * 20)), ...cmd],
+    argv: ['sh', '-c', script, 'job-gate', String(runnerPid), dir, String(Math.round(maxWaitS * 20)), ...cmd],
     open() { try { fs.writeFileSync(file, ''); } catch { /* the gate times out and the job does not run */ } },
     cleanup() { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } },
   };
