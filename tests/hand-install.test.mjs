@@ -149,7 +149,7 @@ test('a crash part-way (thrown error) resumes new starts and undoes the swap', a
   assert.equal(r.result, 'rolled-back'); assert.equal(w.s.installed, FROM); assert.equal(w.hold(), null);
 });
 
-test('the Needs you item and the alert for a refused update carry the exact commit and the one command', async t => {
+test('the Inbox item and the alert for a refused update carry the exact commit and the one command', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'handalert-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const alerts = [];
   const deps = { config: { agents: { claude: { branch_prefix: 'claude/' } } }, installed: () => FROM, fetchMain: () => TO, isAncestor: () => true, changedFiles: () => ['supervisor/team.mjs', 'tools/bootstrap-install.sh'],

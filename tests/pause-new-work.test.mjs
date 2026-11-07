@@ -122,7 +122,7 @@ test('a needs-homeowner PR is parked and the text says so', async t => {
 const sameModel = cap => { const cfg = config(cap); delete cfg.agents.claude; return cfg; };
 const authored = n => Array.from({ length: n }, (_, i) => pr(100 + i, `codex/issue-${200 + i}-x`, H(i + 1)));
 
-test('Needs you item: appears when the cap blocks all work and no PR can progress, and clears when one can', async t => {
+test('Inbox item: appears when the cap blocks all work and no PR can progress, and clears when one can', async t => {
   const stuck = await view(t, sameModel(2), authored(2));
   const item = stuck.attention.find(a => a.id === 'cap-deadlock');
   assert.ok(item, JSON.stringify(stuck.attention.map(a => a.id)));

@@ -36,13 +36,13 @@ try {
     if (k === 'many') await page.screenshot({ path: path.join(out, `${name}-many.png`), fullPage: true });
   }
   if (arg('heights-only')) { fs.writeFileSync(path.join(out, `${name}.json`), JSON.stringify({ profile, heights, headless: true }, null, 2)); await ctx.close(); process.exit(0); }
-  check('page height with 50 Needs you rows is bounded near the height with 5 (within 1.6x)', heights.many <= heights.few * 1.6 + 200, JSON.stringify(heights));
+  check('page height with 50 Inbox rows is bounded near the height with 5 (within 1.6x)', heights.many <= heights.few * 1.6 + 200, JSON.stringify(heights));
   check('no script errors', errors.length === 0, errors.join('; '));
 
   await page.goto(url(pages.many), { waitUntil: 'networkidle' });
   const L = page.locator('[data-dlist="needs"]'), ul = L.locator('> .dl-scroll');
   const box = await ul.evaluate(e => ({ client: e.clientHeight, scroll: e.scrollHeight, rows: e.children.length, ox: getComputedStyle(e).overflowY }));
-  check('Needs you has 50 rows inside a scrolling box shorter than its content', box.rows === 50 && box.scroll > box.client && box.client <= 0.6 * 900 + 400 && box.ox === 'auto', JSON.stringify(box));
+  check('Inbox has 50 rows inside a scrolling box shorter than its content', box.rows === 50 && box.scroll > box.client && box.client <= 0.6 * 900 + 400 && box.ox === 'auto', JSON.stringify(box));
   check('the footer counts the rows', (await L.locator('[data-dl-foot]').textContent()) === '50 items · 50 action');
   // search
   await L.locator('.dl-q').fill('item 105');

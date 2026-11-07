@@ -1096,7 +1096,7 @@ test('issue #149 tick(): a lone cancelled run is rerun once, then labelled needs
   assert.equal(w.calls.comments.filter(([, b]) => /cancelled/.test(b)).length, 1);
 });
 
-test('issue #149 tick(): a rerun that goes in progress and then ends cancelled again is not rerun a second time; it becomes Needs you', async t => {
+test('issue #149 tick(): a rerun that goes in progress and then ends cancelled again is not rerun a second time; it becomes Inbox', async t => {
   const clock = { t: 1000, now: () => clock.t };
   const url = { detailsUrl: 'https://github.com/o/r/actions/runs/777/job/1' };
   const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1), { statusCheckRollup: [done('CANCELLED', 'test', T0, url)] })], issues: [issue(23), issue(5)], teamOpts: { clock } });
@@ -1317,7 +1317,7 @@ test('issue #302: a finished holder with a clean worktree is released automatica
   assert.ok(w.jobs.states['cd'.repeat(16)], 'the holder job record is kept');
 });
 
-test('issue #302: an uncertain holder raises one Needs you item naming the holder and the next step, and is not released', async t => {
+test('issue #302: an uncertain holder raises one Inbox item naming the holder and the next step, and is not released', async t => {
   for (const [name, opts] of [
     ['dead running job', { holder: { id: 'ef'.repeat(16), status: 'running', worktree: '/p/wt' }, alive: false }],
     ['finished with uncommitted work', { holder: { id: 'ef'.repeat(16), status: 'completed', worktree: '/p/wt' }, alive: false, clean: false }],
@@ -1647,7 +1647,7 @@ const churnWorld = (t, rounds) => {
   rounds.forEach((texts, i) => { w.team.s.verdicts[`38:${H(i + 1)}`] = { verdict: 'CHANGES', reviewer: 'codex', at: i + 1, findings: texts.map(text => ({ kind: 'blocking', text })) }; });
   return w;
 };
-test('#864 two rounds of new, different blocking findings stop the fix loop with one Needs you item showing them side by side', async t => {
+test('#864 two rounds of new, different blocking findings stop the fix loop with one Inbox item showing them side by side', async t => {
   const w = churnWorld(t, [['The cache key ignores the branch name entirely'], ['The retry loop never backs off after a failure'], ['The dashboard card shows a stale timestamp forever']]);
   w.team.s.fixAttempts[`38:${H(2)}`] = 1;
   assert.ok(w.team.churned(38));
@@ -1658,7 +1658,7 @@ test('#864 two rounds of new, different blocking findings stop the fix loop with
   for (const s of ['cache key ignores', 'retry loop never backs off', 'stale timestamp forever']) assert.match(n[0][1], new RegExp(s));
   assert.deepEqual(w.calls.labels, [[38, 'needs-homeowner']]);
 });
-test('#864 churn raises its Needs you item at the shipped fix limit and no final round starts', async t => {
+test('#864 churn raises its Inbox item at the shipped fix limit and no final round starts', async t => {
   const w = churnWorld(t, [['The cache key ignores the branch name entirely'], ['The retry loop never backs off after a failure'], ['The dashboard card shows a stale timestamp forever']]);
   w.team.s.fixAttempts[`38:${H(2)}`] = w.team.c.limits.max_fix_attempts;
   assert.ok(w.team.fixCount(38) >= w.team.c.limits.max_fix_attempts);

@@ -190,7 +190,7 @@ test('resume with Last-Event-ID or ?after= skips what was seen; bad input, wrong
   assert.deepEqual(matchRoute(`/jobs/${ID}`), { page: 'watch', id: ID }); assert.equal(matchRoute('/jobs/abc'), null);
 });
 
-test('the watch page: unknown job is a 404, a job with no transcript says so, and the running card, Needs you, Activity and job history link to it', async t => {
+test('the watch page: unknown job is a 404, a job with no transcript says so, and the running card, Inbox, Activity and job history link to it', async t => {
   const root = tmp(t); const s = await serve(t, root);
   assert.equal((await s.req(`/jobs/${ID2}`)).status, 404);
   writeJob(root, 'completed');
@@ -201,7 +201,7 @@ test('the watch page: unknown job is a 404, a job with no transcript says so, an
   const page = await s.req(`/jobs/${ID}`); assert.match(page.body, /data-live="true"/); assert.match(page.body, /Elapsed/); assert.match(page.body, /1 messages/);
   assert.match((await s.req('/')).body, new RegExp(`href="/jobs/${ID}"[^>]*>[^]*?Watch live`));
   assert.match((await s.req('/agents/claude')).body, new RegExp(`href="/jobs/${ID}">(?:watch|transcript)<`));
-  // a failed job puts a Needs you item with a replay link; Activity links finished jobs
+  // a failed job puts a Inbox item with a replay link; Activity links finished jobs
   const failed = { ...live, id: ID2, status: 'failed', lastEvent: 'crash' }; fs.writeFileSync(path.join(root, 'jobs', `${ID2}.json`), JSON.stringify(failed)); new TranscriptWriter(root, ID2).append({ kind: 'system', text: 'x', error: true });
   fs.mkdirSync(path.join(root, 'events'), { recursive: true }); fs.writeFileSync(path.join(root, 'events', `${ID2}.jsonl`), JSON.stringify({ at: Date.now(), job: ID2, kind: 'crash' }) + '\n');
   const home = (await s.req('/')).body; assert.match(home, new RegExp(`Replay transcript`)); assert.ok(home.includes(`href="/jobs/${ID2}"`));

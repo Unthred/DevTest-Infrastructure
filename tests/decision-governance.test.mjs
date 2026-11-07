@@ -1,4 +1,4 @@
-// Issue #303: agents cannot mark a decision homeowner-approved. Register check (CI), Needs you item for proposals, and the
+// Issue #303: agents cannot mark a decision homeowner-approved. Register check (CI), Inbox item for proposals, and the
 // decisionApproved() enforcement of every decision code must check. Fixtures use git init, never a linked worktree.
 import { tmpDir } from './helpers/tmp.mjs';
 import test from 'node:test';
@@ -77,7 +77,7 @@ test('the live register still passes against itself and the workflow runs the ch
   assert.match(fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8'), /validate-decision-status\.mjs/);
 });
 
-test('Needs you: a pending proposal in an open PR is one item naming the entry and the PR; none once on main or when absent', async t => {
+test('Inbox: a pending proposal in an open PR is one item naming the entry and the PR; none once on main or when absent', async t => {
   const r = repoWith(t, {}); const head = r.commit(BASE + entry('D-003', 'agent-proposal'));
   const noHead = r.commit(BASE);
   const H = (n) => String(n).repeat(40);

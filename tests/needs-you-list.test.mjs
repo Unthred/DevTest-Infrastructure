@@ -1,4 +1,4 @@
-// Issue #414: Needs you lists only decisions the homeowner can act on now; parked and staged work is in Later; no label advice that starts held-back work.
+// Issue #414: Inbox lists only decisions the homeowner can act on now; parked and staged work is in Later; no label advice that starts held-back work.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -41,10 +41,10 @@ test('an issue with a stated question appears with the question and the effect o
   const p = await panels(t, { issues: [iss(50, 'Question: Approve decision D-030? Yes: PRs #4 and #5 merge. No: they stay open.'), iss(51, 'Nothing to answer here.')] });
   const card = p.needsYou.find(a => a.id === 'homeowner-50');
   assert.ok(card); assert.match(card.text, /Approve decision D-030\?/); assert.match(card.decision, /Yes: PRs #4 and #5 merge\./); assert.match(card.decision, /No: they stay open\./);
-  assert.ok(!p.needsYou.some(a => a.id === 'homeowner-51'), 'no answerable question: not in Needs you');
+  assert.ok(!p.needsYou.some(a => a.id === 'homeowner-51'), 'no answerable question: not in Inbox');
   assert.ok(p.later.some(l => l.number === 51), 'it is listed as Later, quietly');
   const np = await panels(t, { issues: [iss(52, 'Question: Should the team move to a new repository?'), iss(53, 'Question: Should it move? Yes: it moves.')] });
-  for (const n of [52, 53]) assert.ok(!np.needsYou.some(a => a.id === `homeowner-${n}`), `#${n} does not state both answer effects: not in Needs you`);
+  for (const n of [52, 53]) assert.ok(!np.needsYou.some(a => a.id === `homeowner-${n}`), `#${n} does not state both answer effects: not in Inbox`);
   assert.match(np.later.find(l => l.number === 52).waits, /does not state what each answer does/);
 });
 
@@ -60,11 +60,11 @@ test('#37 appears even when it is outside the first 200 issues the list call ret
   assert.ok(p.needsYou.some(a => a.id === 'homeowner-37' && /own repository/.test(a.text)));
 });
 
-test('#376 and #373 are Later, not Needs you, and say what they wait for and what ends the wait', async t => {
+test('#376 and #373 are Later, not Inbox, and say what they wait for and what ends the wait', async t => {
   const issues = [iss(375, 'stage 3', [], 'OPEN'), iss(376, 'Stage 4.\n\nPrerequisites: #375\n\nBring a recommendation to the homeowner.'), iss(373, 'Stage 1. Depends on: nothing.')];
   const pulls = [pr(1, H(1)), pr(2, H(2))];
   const p = await panels(t, { issues, pulls, limits: { max_open_prs: 2 } });
-  for (const n of [376, 373]) assert.ok(!p.needsYou.some(a => a.ref?.n === n || a.id === `homeowner-${n}`), `#${n} is not in Needs you`);
+  for (const n of [376, 373]) assert.ok(!p.needsYou.some(a => a.ref?.n === n || a.id === `homeowner-${n}`), `#${n} is not in Inbox`);
   const l376 = p.later.find(l => l.number === 376), l373 = p.later.find(l => l.number === 373);
   assert.match(l376.waits, /#375/); assert.match(l376.ends, /#375 closing/);
   assert.match(l373.waits, /open PR backlog/); assert.match(l373.waits, /cap 2/); assert.match(l373.ends, /Foreman ends the wait/);

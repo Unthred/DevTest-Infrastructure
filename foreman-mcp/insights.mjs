@@ -36,7 +36,7 @@ export function needsYouGroups(view) {
     g.example ||= short(a.text || a.why, 240); groups.set(cause, g);
   }
   const out = [...groups.values()].sort((a, b) => b.count - a.count || a.cause.localeCompare(b.cause)).map(g => ({ cause: g.cause, count: g.count, example: g.example, refs: g.refs, actions: [...g.actions].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([action, n]) => ({ action, items: n })) }));
-  return { totalItems: items.length, distinctCauses: out.length, groups: out.slice(0, CAP), note: 'Grouped by the cause part of the item id. Items of one cause usually need one decision, not one each.' };
+  return { inboxItems: items.length, totalItems: items.length, distinctCauses: out.length, groups: out.slice(0, CAP), note: 'Grouped by the cause part of the item id. Items of one cause usually need one decision, not one each.' };
 }
 
 // Records that disagree with reality, each with the evidence that shows it. Heuristics over the view, not a remote check.

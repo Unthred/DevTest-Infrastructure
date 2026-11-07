@@ -1,5 +1,5 @@
 // Issue #258: Foreman tries the next review model before holding a PR under D-024; a clean rebase is not authorship; a PR nobody
-// can review raises one Needs you item with the real reasons. Fake GitHub, fake jobs, real git only for the rebase classification.
+// can review raises one Inbox item with the real reasons. Fake GitHub, fake jobs, real git only for the rebase classification.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -70,7 +70,7 @@ test('Opus writers plus a Sonnet rebase that resolved conflicts, or an unknown o
   }
 });
 
-test('Opus and Sonnet writers (PR 137): no Claude review, and one Needs you item per PR with every reason', async t => {
+test('Opus and Sonnet writers (PR 137): no Claude review, and one Inbox item per PR with every reason', async t => {
   const w = world(t); job(w, 'w1', {}); job(w, 'w2', { kind: 'fix', model: 'sonnet' });
   assert.equal(await claudeReview(w), undefined);
   const [u, ...more] = w.team.unreviewable(w.gh.pulls);
@@ -86,7 +86,7 @@ test('Opus and Sonnet writers (PR 137): no Claude review, and one Needs you item
   assert.match(items[0].text, /137/); assert.match(items[0].text, /5555555/); assert.match(items[0].text, /the model that wrote it/);
 });
 
-test('no Needs you item while a reviewer is available, and none once reviewed', async t => {
+test('no Inbox item while a reviewer is available, and none once reviewed', async t => {
   const w = world(t); job(w, 'w1', {});
   assert.deepEqual(w.team.unreviewable(w.gh.pulls), []);
   const x = world(t, { out: {} }); job(x, 'w1', {}); job(x, 'w2', { kind: 'fix', model: 'sonnet' });
@@ -241,7 +241,7 @@ test('hand-pushed head, evidence says opus wrote it: a sonnet review is accepted
   assert.equal(report.ingested[0].verdict, 'PASS'); assert.equal(w.team.s.verdicts[`342:${HAND.headRefOid}`].verdict, 'PASS');
   assert.deepEqual(w.team.refusedVerdicts([HAND]), []);
 });
-test('hand-pushed head, evidence says opus wrote it: an opus review is refused, settled once, and visible in Needs you', async t => {
+test('hand-pushed head, evidence says opus wrote it: an opus review is refused, settled once, and visible in Inbox', async t => {
   const { w, report } = await ingestReview(t, { model: 'opus', evidence: ['claude-opus-5-5'] });
   assert.match(report.ingested[0].error, /a model that wrote this pull request/); assert.equal(w.team.s.verdicts[`342:${HAND.headRefOid}`], undefined);
   assert.equal(w.team.s.jobs.rv.ingested, true);

@@ -31,5 +31,5 @@ export async function runDecision({ decision, post, ui }) {
   return result;
 }
 
-// The Needs you heading count after a card leaves: "Needs you (3)" -> "Needs you (2)"; no count when none are left.
+// The Inbox heading count after a card leaves: "Inbox (3)" -> "Inbox (2)"; no count when none are left.
 export const lowerCount = (heading, by = 1) => String(heading).replace(/\((\d+)\)/, (m, n) => (Number(n) - by > 0 ? `(${Number(n) - by})` : '')).trim();

@@ -403,7 +403,7 @@ test('#140 a review verdict names the provider, model and effort of the job that
   assert.ok(!copies(over).some(c => /Action needed: Action needed/.test(c)));
 });
 
-test('a failed team-alert notify is a Needs you item; other alert warnings are dashboard warnings (issue #215)', async t => {
+test('a failed team-alert notify is a Inbox item; other alert warnings are dashboard warnings (issue #215)', async t => {
   const tickAt = new Date(NOW - MIN).toISOString().replace(/\.\d+Z$/, 'Z');
   const view = async line => {
     const root = stateRoot(t, { log: `${tickAt} tick\n{"resumed":0,"blocked":0,"team":{"actions":[]}}\n${line}` });
@@ -418,14 +418,14 @@ test('a failed team-alert notify is a Needs you item; other alert warnings are d
   assert.ok(![...clean.panels.needsYou, ...clean.panels.warnings].some(a => /^alert-/.test(a.id)));
 });
 
-test('#252 Copy all on Needs you and Warnings joins the item texts in order; job page and tick detail have copy buttons; none with a single/empty list', async t => {
+test('#252 Copy all on Inbox and Warnings joins the item texts in order; job page and tick detail have copy buttons; none with a single/empty list', async t => {
   const root = stateRoot(t, { log: SAMPLE });
   writeJob(root, job({ status: 'blocked', lastEvent: 'retry_exhausted' }));
   const s = await serve(t, { root, state: { verdicts: {}, jobs: {} }, cache: { ...cache, tick: { at: NOW - 20 * MIN, status: 'error', error: 'gh issue list failed', lastOkAt: NOW - 3600000 } } });
   const over = (await s.get('/')).body;
   const needs = over.slice(over.indexOf('data-card="needs"'), over.indexOf('data-card="warnings"'));
   const items = copies(needs).filter(c => c.startsWith('DevTest overseer note') && !c.includes('\n\n---\n\n'));
-  assert.ok(items.length >= 2, 'fixture has several Needs you items');
+  assert.ok(items.length >= 2, 'fixture has several Inbox items');
   const all = copies(needs).find(c => c.includes('\n\n---\n\n'));
   assert.ok(all, 'a Copy all button'); assert.match(needs, /<span data-copy-label>Copy all<\/span>/);
   assert.deepEqual(all.split('\n\n---\n\n'), items, 'same text per item, same order as shown');
@@ -442,7 +442,7 @@ test('#252 Copy all on Needs you and Warnings joins the item texts in order; job
   assert.doesNotMatch(quiet.slice(quiet.indexOf('data-card="needs"'), quiet.indexOf('data-card="warnings"')), /Copy all/, 'no Copy all on an empty list');
 });
 
-test('a failed status-issue update is a dashboard warning, not a Needs you item (issue #358)', async t => {
+test('a failed status-issue update is a dashboard warning, not a Inbox item (issue #358)', async t => {
   const tickAt = new Date(NOW - MIN).toISOString().replace(/\.\d+Z$/, 'Z');
   const root = stateRoot(t, { log: `${tickAt} tick\n{"resumed":0,"blocked":0,"team":{"actions":[]}}\n` });
   const view = async () => JSON.parse((await (await serve(t, { root, state: { jobs: {} }, cache })).get('/api/view.json')).body);

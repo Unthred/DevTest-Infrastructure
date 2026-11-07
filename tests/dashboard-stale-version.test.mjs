@@ -254,7 +254,7 @@ test('issue #265: hand-deploy item and drift values come from live main and the 
   assert.match(v.attention.find(a => a.id === 'dashboard-stale').text, /Restart the dashboard server/);
 });
 
-test('issue #302: a rollback latch raises a Needs you item with the clear command and replaces the "next try" promise', async t => {
+test('issue #302: a rollback latch raises a Inbox item with the clear command and replaces the "next try" promise', async t => {
   const root = tmp(t); install(root, OLD); fs.mkdirSync(path.join(root, 'team'));
   fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({ lastUpgradeAt: NOW - 60_000 }));
   let v = await view(root, { running: OLD });
@@ -443,7 +443,7 @@ test('issue #209: crash-loop throttling: restarts back off, cap, and reset after
   assert.equal(w.log.restarts.length, 4);
 });
 
-test('issue #209: a restart that fails is recorded, alerted once, and raised as a Needs you item once the server is back', async t => {
+test('issue #209: a restart that fails is recorded, alerted once, and raised as a Inbox item once the server is back', async t => {
   const w = watchRig(t, { startsOk: false });
   await w.mk().watchdog();
   w.sim.running = false;
@@ -477,7 +477,7 @@ test('issue #209: a failed restart after a recovery is a new outage and is alert
   assert.equal(w.log.alerts.length, 2, 'the second outage sends its own alert');
 });
 
-test('issue #209: a failed upgrade restart that fell back to the last good version stays a Needs you item until a restart succeeds', async t => {
+test('issue #209: a failed upgrade restart that fell back to the last good version stays a Inbox item until a restart succeeds', async t => {
   const root = tmp(t), alerts = []; install(root, NEW);
   let res = { ok: false, recovered: true, reason: 'the dashboard server started on bbbbbbb but did not answer its health check (tried twice)' };
   const deps = { config: { agents: {} }, restartDashboard: async () => res, alert: async x => alerts.push(x) };

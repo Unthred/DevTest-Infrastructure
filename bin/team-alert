@@ -10,7 +10,7 @@ trap 'exit 0' EXIT
 sstatus(){ $S status 2>/dev/null || warn "supervisor status failed"; return 0; }
 # The state file is created (mode 600) when it is missing; a missing file is the normal first run.
 [ -e "$ST" ] || ( umask 077; : > "$ST" ) 2>/dev/null || warn "cannot create $ST"
-# A failed notify is a warning that the dashboard raises as "Needs you" (#215); it is never swallowed.
+# A failed notify is a warning that the dashboard raises as "Inbox" (#215); it is never swallowed.
 send(){ $NOTIFY -e "AI agent team" -s "Tower | $1" -d "$2" -i "$3" >/dev/null 2>&1 || { warn "notify failed: alert not delivered"; return 1; }; }
 [ "$1" = "--test" ] && { send "Agents TEST - alert route works" "TEST message from team-alert. No action." normal; exit; }
 if [ -n "$(sstatus | awk '$4=="running"')" ]; then

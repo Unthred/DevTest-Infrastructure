@@ -116,7 +116,7 @@ const strip = html => html.replace(/<(script|style)[\s\S]*?<\/\1>/g, '').replace
 const build = (over = {}) => buildView({ config, root: tmpDir('nm-'), jobs, events, state, cache: cache(), snapshots: [], now: NOW, ...over });
 const ROUTES = ['/', '/agents', '/agents/codex', '/agents/claude', '/work', '/work/pr/146', '/work/issue/104', '/work/job/3f2a91c0', '/work/job/9d8e7f60', '/activity', '/activity?group=issue', '/reviews', '/usage'];
 
-test('Activity, Now, Needs you, Reviews and Work render the known job and PR through the formatter, linked', async () => {
+test('Activity, Now, Inbox, Reviews and Work render the known job and PR through the formatter, linked', async () => {
   const v = await build();
   const page = name => renderRoute(v, matchRoute(name.split('?')[0]), { pathname: name.split('?')[0], query: new URLSearchParams(name.split('?')[1] || '') }).html;
   const overview = page('/'), activity = page('/activity'), reviews = page('/reviews'), work = page('/work');
@@ -124,7 +124,7 @@ test('Activity, Now, Needs you, Reviews and Work render the known job and PR thr
   const needs = overview.slice(overview.indexOf('data-card="needs"'), overview.indexOf('data-card="warnings"'));
   assert.ok(strip(now).replace(/\s+/g, ' ').includes(known()), 'Now panel');
   assert.match(now, /<a href="\/work\/job\/3f2a91c0"[^>]*>Reviewer · review · PR #146/, 'a job links to its job page');
-  assert.ok(strip(needs).replace(/\s+/g, ' ').includes(known()), 'Needs you');
+  assert.ok(strip(needs).replace(/\s+/g, ' ').includes(known()), 'Inbox');
   assert.ok(strip(activity).replace(/\s+/g, ' ').includes(known()), 'Activity');
   assert.match(strip(reviews), /PR #146 Allow menu/, 'Reviews');
   assert.match(work, /<a href="\/work\/pr\/146"[^>]*>PR #146 Allow menu[^<]*<\/a>/, 'Work');

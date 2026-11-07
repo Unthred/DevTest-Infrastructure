@@ -1,4 +1,4 @@
-// Issue #297: the no-reviewer Needs you card names every review model tried and what approval would unblock; a conflicting PR with
+// Issue #297: the no-reviewer Inbox card names every review model tried and what approval would unblock; a conflicting PR with
 // no reviewer gets a card too; a blocked-job card clears when its issue is closed, split or an epic.
 import test from 'node:test';
 import assert from 'node:assert/strict';

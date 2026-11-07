@@ -63,7 +63,7 @@ test('a fresh mark, an unmarked issue and a live job are not stale; no closed-PR
   assert.match(nolookup.team.staleText(23), /no open or merged pull request/);
 });
 
-test('dashboard: Needs you names the issue and the reopen action; the queue and estimate say why it is not next', async t => {
+test('dashboard: Inbox names the issue and the reopen action; the queue and estimate say why it is not next', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-dash-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); fs.chmodSync(root, 0o700);
   const cache = { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: [], issues: [{ number: 23, title: 'A', state: 'OPEN', body: '', labels: [] }, { number: 24, title: 'B', state: 'OPEN', body: '', labels: [] }] };
   const state = { implemented: { 23: MARKED }, closedUnmerged: { 23: [411] } };
@@ -168,4 +168,14 @@ test('resumeTransient: an aged-out job with a missing record is settled; a runni
   await w.team.resumeTransient({ ingested: [] });
   assert.ok(!looked.includes(gone), 'the settled job is not looked up again');
   assert.ok(looked.includes(live), 'the running job still is');
+});
+
+test('issue #976: a merged PR whose title says it fixes the issue clears the hold with a record; an unrelated mention does not', async t => {
+  const w = world(t, { merged: [{ number: 500, title: 'Dashboard: fixes #23 for good', headRefName: 'codex/other', closingIssuesReferences: [] }], closed: [] });
+  await w.team.plan();
+  assert.deepEqual(w.team.stale, {});
+  assert.equal(w.team.s.staleCleared[23].pr, 500);
+  const n = world(t, { merged: [{ number: 501, title: 'Follow-up to #23, see also #230', headRefName: 'codex/other', closingIssuesReferences: [] }], closed: [] });
+  await n.team.plan();
+  assert.deepEqual(Object.keys(n.team.stale), ['23'], 'a plain mention is not delivery');
 });

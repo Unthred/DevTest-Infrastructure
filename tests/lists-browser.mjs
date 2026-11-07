@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Tower-only browser check for the shared Overview lists, in the pinned Chromium container (same path as tests/dashboard-visual.mjs).
-// Renders the Overview with 50 / 5 / 0 Needs you rows from the test fixture (fake data, no supervisor state), stages the real static files,
+// Renders the Overview with 50 / 5 / 0 Inbox rows from the test fixture (fake data, no supervisor state), stages the real static files,
 // and runs browser/lists-scenario.mjs at a laptop and a phone width. Results (JSON, one screenshot) go to the directory in argv[2].
 // LISTS_SRC=<dir> renders from another checkout (to measure the page height before a change) and only records heights.
 // Run `node browser/prepare-cache.mjs` first.

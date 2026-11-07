@@ -205,7 +205,7 @@ test('80 proposals submitted and decided leave the inbox able to accept more (is
   assert.equal((await propose(dir)).isError, false);
   assert.ok(fs.readdirSync(path.join(dir, 'items')).length <= 1);
 });
-test('scan: a configured maxPending caps pickup and is published for the MCP server; refusals group into one Needs you line (issue #943)', t => {
+test('scan: a configured maxPending caps pickup and is published for the MCP server; refusals group into one Inbox line (issue #943)', t => {
   const dir = makeInbox(t), now = 1e12;
   const ids = Array.from({ length: 20 }, (_, i) => drop(dir, { ...GOOD, title: `d ${i}` }));
   inbox.scan(dir, now, { maxPending: 25 });
@@ -273,7 +273,7 @@ test('dashboard: no proof, wrong proof, a foreign origin, a bad id or decision a
 test('dashboard: without an inbox configured the route does not exist; the item files are never an approval path', async t => {
   const s = await serve(t, null); assert.equal((await s.post('a'.repeat(32), 'approve')).status, 404);
 });
-test('dashboard: a failed inbox item is one Needs you line for three days, then leaves; done and pending items add none (issue #641)', async t => {
+test('dashboard: a failed inbox item is one Inbox line for three days, then leaves; done and pending items add none (issue #641)', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD), b = drop(dir, { ...GOOD, prompt: 'Another job, quite different' }), c = drop(dir, { ...GOOD, prompt: 'Third job entirely' });
   inbox.scan(dir, 1000);
   const s = await serve(t, dir), now = s.clock.now;
@@ -399,7 +399,7 @@ test('team: an approved issue draft is posted once, redacted, with no attributio
   w2.gh.issues.push({ number: 7, title: 'x', body: `y\n${inbox.marker(id2)}` });
   await w2.team.processInbox(rep()); assert.equal(w2.calls.issues.length, 0, 'found, not filed again'); assert.equal(inbox.statusOf(w2.dir, id2).issue, 7);
   // pending and rejected drafts are never posted
-  const w3 = world(t); const p = drop(w3.dir, DRAFT); await w3.team.processInbox(rep()); inbox.decide(w3.dir, p, 'reject', 2); await w3.team.processInbox(rep()); assert.equal(w3.calls.issues.length, 0);
+  const w3 = world(t); w3.team.c.inbox.auto_post_issue_drafts_per_day = 0; const p = drop(w3.dir, DRAFT); await w3.team.processInbox(rep()); inbox.decide(w3.dir, p, 'reject', 2); await w3.team.processInbox(rep()); assert.equal(w3.calls.issues.length, 0);
 });
 test('team: an issue draft is never posted on a failed final check (secret or attribution added after validation)', async t => {
   const w = world(t); const id = approve(w, DRAFT);
@@ -411,7 +411,8 @@ test('team: an issue draft is never posted on a failed final check (secret or at
 test('config: inbox must be { dir: absolute path }', () => {
   const base = teamCfg('/x');
   assert.doesNotThrow(() => validateTeamConfig(base));
-  for (const bad of [{ dir: 'rel' }, { dir: '/x', extra: 1 }, 'x', [], { dir: 5 }, { dir: '/x', max_pending: 0 }, { dir: '/x', max_pending: 'a' }, { dir: '/x', max_pending: 201 }]) assert.throws(() => validateTeamConfig({ ...base, inbox: bad }), /invalid inbox/);
+  for (const bad of [{ dir: 'rel' }, { dir: '/x', extra: 1 }, 'x', [], { dir: 5 }, { dir: '/x', max_pending: 0 }, { dir: '/x', max_pending: 'a' }, { dir: '/x', max_pending: 201 }, { dir: '/x', auto_post_issue_drafts_per_day: -1 }, { dir: '/x', auto_post_issue_drafts_per_day: 51 }, { dir: '/x', auto_post_issue_drafts_per_day: '3' }]) assert.throws(() => validateTeamConfig({ ...base, inbox: bad }), /invalid inbox/);
+  for (const ok of [0, 5, 50]) assert.doesNotThrow(() => validateTeamConfig({ ...base, inbox: { dir: '/x', auto_post_issue_drafts_per_day: ok } }), String(ok));   // issue #976
   const { inbox: _, ...none } = base; assert.doesNotThrow(() => validateTeamConfig(none));
 });
 
@@ -668,7 +669,7 @@ test('team: an Undo between the tick snapshot and the effect wins; nothing is po
   assert.match(inbox.undo(w3.dir, id3, 3).reason, /try again/); assert.equal(inbox.claim(w3.dir, id3, 'approved', { state: 'posting' }, 4), false);
   assert.equal(inbox.statusOf(w3.dir, id3).state, 'approved');
 });
-test('dashboard: refusals after pickup are one grouped Needs you line per reason (issue #943)', async t => {
+test('dashboard: refusals after pickup are one grouped Inbox line per reason (issue #943)', async t => {
   const dir = makeInbox(t), ids = Array.from({ length: 5 }, (_, i) => drop(dir, { ...GOOD, title: `g ${i}` }));
   const s = await serve(t, dir), now = s.clock.now;
   inbox.scan(dir, now, { maxPending: 3 });
@@ -699,4 +700,15 @@ test('#977: the short id still resolves once Foreman has finished the item and d
   const s = ib.status(r.shortId);
   assert.equal(s.id, r.id); assert.equal(s.state, 'done'); assert.equal(s.issue, 4242);
   assert.throws(() => ib.status('abcdef01'), /no such item/);
+});
+
+test('issue #976: with no click, the next tick posts an issue draft under the daily limit and not one over it; a prompt still waits', async t => {
+  const w = world(t); w.team.c.inbox.auto_post_issue_drafts_per_day = 1;
+  const a = drop(w.dir, DRAFT), b = drop(w.dir, { ...DRAFT, title: 'Second draft' }), p = drop(w.dir, GOOD);
+  await w.team.processInbox(rep()); await w.team.processInbox(rep());
+  assert.equal(w.calls.issues.length, 1, 'one draft posted without a click');
+  const states = [a, b].map(id => inbox.statusOf(w.dir, id));
+  assert.equal(states.filter(s => s.state === 'done' && s.auto === true).length, 1);
+  assert.equal(states.filter(s => s.state === 'pending').length, 1, 'the one over the limit waits');
+  assert.equal(inbox.statusOf(w.dir, p).state, 'pending', 'a prompt always needs a click');
 });

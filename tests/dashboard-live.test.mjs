@@ -188,7 +188,7 @@ test('the header and the System page show the same version severity; a latch in 
 });
 
 // ---- 7. clickable header pills
-test('pill targets: Needs you → that item, Stuck / Tick error / Data → the tick card, Version → the version card, Team loop → dispatcher facts', () => {
+test('pill targets: Inbox → that item, Stuck / Tick error / Data → the tick card, Version → the version card, Team loop → dispatcher facts', () => {
   const att = (...a) => a.map(([id, severity]) => ({ id, severity }));
   assert.equal(pillLinks({ health: { state: 'needs_you' }, attention: att(['ci-4', 'warning'], ['homeowner-9', 'action']) }).health, '/system#att-homeowner-9');
   assert.equal(pillLinks({ health: { state: 'stuck' }, attention: att(['tick-stale', 'warning']) }).health, '/supervisor#c-h-tick');
@@ -208,12 +208,12 @@ test('every header pill is a link, and each link lands on an element that exists
   }
   const tickPill = new RegExp(`<a class="pill" href="/supervisor#c-h-tick"[^>]*><span class="badge sev-action[^>]*>[^]*?Tick error`); assert.match(bar, tickPill);
   assert.match(css, /li:target\{outline/); assert.match(css, /\.card:target\{outline/);
-  // a "Needs you" item: the pill leads to the exact item and that item carries the anchor
-  const needs = (await s.get('/')).body.match(/Needs you \(\d+\)/);
+  // a "Inbox" item: the pill leads to the exact item and that item carries the anchor
+  const needs = (await s.get('/')).body.match(/Inbox \(\d+\)/);
   const view = await currentView({ root: s.root, config, now: NOW });
   const first = view.attention.find(a => a.severity === 'action');
-  if (needs && first) { const link = /<a class="pill" href="([^"]+)"[^>]*><span class="badge sev-action[^>]*>[^]*?Needs you/.exec(bar)[1]; assert.equal(link, `/system#att-${first.id}`); assert.match((await s.get('/system')).body, new RegExp(`<li class="sev-action" id="att-${first.id}"`)); }
-  assert.ok(needs && first, 'the tick error produced a Needs you item');
+  if (needs && first) { const link = /<a class="pill" href="([^"]+)"[^>]*><span class="badge sev-action[^>]*>[^]*?Inbox/.exec(bar)[1]; assert.equal(link, `/system#att-${first.id}`); assert.match((await s.get('/system')).body, new RegExp(`<li class="sev-action" id="att-${first.id}"`)); }
+  assert.ok(needs && first, 'the tick error produced a Inbox item');
 });
 test('pills are keyboard reachable links with a visible focus ring and an explanatory title', async t => {
   const s = await serve(t); const body = (await s.get('/')).body;

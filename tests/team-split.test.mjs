@@ -1,5 +1,5 @@
 // Issue #244: an implement job that ran out of context is not restarted with the same scope. One cheap read-only session drafts a
-// split, it is posted on the issue, raised as a Needs you item, and "Accept split" files the children. Fake GitHub, jobs and clock.
+// split, it is posted on the issue, raised as a Inbox item, and "Accept split" files the children. Fake GitHub, jobs and clock.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -51,7 +51,7 @@ test('no same-scope restart: a context_too_large stop starts one read-only split
   assert.ok(!(await w.team.plan()).some(a => a.type === 'implement' && a.issue === 23));
 });
 
-test('the split draft is posted on the issue and a Needs you item is raised', async t => {
+test('the split draft is posted on the issue and a Inbox item is raised', async t => {
   const w = world(t);
   await w.team.notifyBlocked(rep());
   const [draftId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'split');

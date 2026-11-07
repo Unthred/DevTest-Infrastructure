@@ -135,7 +135,7 @@ test('expiry, ended and unapproved: the exception stops applying and the D-024 r
   assert.equal(world(t, { register: REG('agent-proposal') }).team.exceptionFor(77), null);
 });
 
-test('fixes: Sonnet only, never escalated; the fix limit stops the PR with one Needs you reason', async t => {
+test('fixes: Sonnet only, never escalated; the fix limit stops the PR with one Inbox reason', async t => {
   const w = world(t);
   const vk = `77:${H(5)}`;
   w.team.s.verdicts[vk] = { verdict: 'CHANGES', reviewer: 'claude', job: 'd'.repeat(32), model: 'opus', exceptionStage: 'full', independent: true, findings: [{ kind: 'blocking', text: 'x' }], commandsRun: ['x'], at: NOW };

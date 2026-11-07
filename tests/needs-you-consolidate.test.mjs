@@ -1,4 +1,4 @@
-// Overseer job 211f3615: Needs you is short and trustworthy. Fixtures replay the real audit cases without private details.
+// Overseer job 211f3615: Inbox is short and trustworthy. Fixtures replay the real audit cases without private details.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -93,7 +93,7 @@ test('one shared count: health, label, list and the MCP reading agree', async t 
   const head = H(1);
   const ref = [pr(1, { headRefOid: head, labels: ['needs-homeowner'] })];
   const v = await view(t, { pulls: ref, issues: [iss(7)], state: { verdicts: { [`1:${head}`]: { verdict: 'CHANGES', reviewer: 'x' } }, fixAttempts: { [`1:${head}`]: 2 }, jobs: {}, unblock: { escalated: { 1: true }, pr: {}, day: {}, log: [] } } });
-  assert.equal(v.health.count, v.panels.needsYou.length); assert.equal(v.health.label, `Needs you (${v.panels.needsYou.length})`); assert.equal(needsYouCount(v), v.panels.needsYou.length);
+  assert.equal(v.health.count, v.panels.needsYou.length); assert.equal(v.health.label, `Inbox (${v.panels.needsYou.length})`); assert.equal(needsYouCount(v), v.panels.needsYou.length);
   // a warning in attention is not counted: the list and the count never differ by it
   assert.ok(v.attention.length >= v.panels.needsYou.length);
   assert.equal(healthOf({ attention: [{ severity: 'action' }, { severity: 'action' }], states: {}, needsYouCount: 1 }).count, 1);

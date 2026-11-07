@@ -130,8 +130,8 @@ test('shipped 001 negative: per_agent stays when limits.roles is set locally; a 
   const input = { limits: { per_agent: 1 } }; migrate(input); assert.deepEqual(input, { limits: { per_agent: 1 } });   // pure: input untouched
 });
 
-// ---- dashboard: Needs you and Activity
-test('dashboard: a failed migration is a Needs you item naming it, and applied/failed migrations show in Activity; none when clean', async t => {
+// ---- dashboard: Inbox and Activity
+test('dashboard: a failed migration is a Inbox item naming it, and applied/failed migrations show in Activity; none when clean', async t => {
   const { buildView } = await import('../supervisor/dashboard.mjs');
   const root = tmp(t), dir = path.join(root, 'm'), NOW = Date.now();
   const cfg = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
@@ -184,7 +184,7 @@ test('activity: a failed migration error with a secret-shaped value is redacted'
 // ---- issue #191: invalid override and the drain clock
 const viewCfg = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [1] } } };
-test('issue #191: an invalid team.local.json is a Needs you item while the last good configuration is served; none when valid', async t => {
+test('issue #191: an invalid team.local.json is a Inbox item while the last good configuration is served; none when valid', async t => {
   const { buildView } = await import('../supervisor/dashboard.mjs');
   const { configSource } = await import('../supervisor/dashserver.mjs');
   const NOW = Date.now(), root = tmp(t);

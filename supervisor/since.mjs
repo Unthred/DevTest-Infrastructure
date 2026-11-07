@@ -51,7 +51,7 @@ export function summarise(ctx, from, to = ctx.now) {
   return { from, to, counts: Object.fromEntries(Object.entries(lists).map(([k, v]) => [k, v.length])), ...lists, tokens: tokenJobs ? tokens : null, tokenJobs };
 }
 
-const LABELS = [['merged', 'PRs merged'], ['opened', 'PRs opened'], ['reviews', 'Reviews'], ['issuesDone', 'Issues completed'], ['failed', 'Jobs failed or blocked'], ['needsYou', 'Needs you now']];
+const LABELS = [['merged', 'PRs merged'], ['opened', 'PRs opened'], ['reviews', 'Reviews'], ['issuesDone', 'Issues completed'], ['failed', 'Jobs failed or blocked'], ['needsYou', 'In your Inbox now']];
 export const SECTIONS = LABELS;
 
 // Plain text for the copy button: every item as number + title.

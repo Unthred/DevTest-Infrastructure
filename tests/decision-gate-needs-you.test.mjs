@@ -1,4 +1,4 @@
-// Issue #249: an unapproved decision that holds back reviewed PRs is one Needs you item, named in the overseer note.
+// Issue #249: an unapproved decision that holds back reviewed PRs is one Inbox item, named in the overseer note.
 // No GitHub call and no model call.
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -72,4 +72,4 @@ export function consolidateNeedsYou(attention, { cache = {}, overrides = {} } = 
 const cause = a => ({ id: a.id, text: redact(a.text, 300), ...(a.action ? { action: redact(a.action, 300) } : {}), ...(Number.isFinite(a.since) ? { since: a.since } : {}) });
 
 // The one count: the consolidated list's length, with the health count as the fallback.
-export const needsYouCount = view => (Array.isArray(view?.panels?.needsYou) ? view.panels.needsYou.length : Number.isSafeInteger(view?.health?.count) ? view.health.count : 0);
+export const needsYouCount = view => (Array.isArray(view?.panels?.needsYou) ? view.panels.needsYou.filter(a => a.section !== 'auto').length : Number.isSafeInteger(view?.health?.count) ? view.health.count : 0);

@@ -69,7 +69,7 @@ export function validateTeamConfig(input) {
   validateDashboard(c.dashboard);
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
-  if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir' || k === 'max_pending') && (c.inbox.max_pending === undefined || (Number.isSafeInteger(c.inbox.max_pending) && c.inbox.max_pending >= 1 && c.inbox.max_pending <= 200)))) throw new SupervisorError('invalid inbox: { dir: absolute path, max_pending?: 1-200 }');   // issue #124
+  if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir' || k === 'max_pending' || k === 'auto_post_issue_drafts_per_day') && (c.inbox.max_pending === undefined || (Number.isSafeInteger(c.inbox.max_pending) && c.inbox.max_pending >= 1 && c.inbox.max_pending <= 200)) && (c.inbox.auto_post_issue_drafts_per_day === undefined || (Number.isSafeInteger(c.inbox.auto_post_issue_drafts_per_day) && c.inbox.auto_post_issue_drafts_per_day >= 0 && c.inbox.auto_post_issue_drafts_per_day <= 50)))) throw new SupervisorError('invalid inbox: { dir: absolute path, max_pending?: 1-200, auto_post_issue_drafts_per_day?: 0-50 }');   // issue #124, #976
   if (c.owner_comment_review !== undefined) {
     const o = c.owner_comment_review, login = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(x);
     if (!o || typeof o !== 'object' || typeof o.enabled !== 'boolean' || ('owner' in o && !login(o.owner)) || ('agent_logins' in o && !(Array.isArray(o.agent_logins) && o.agent_logins.every(login))))
@@ -1987,6 +1987,8 @@ export class Team {
     const dir = this.inboxDir(); if (!dir) return;
     const now = this.clock.now();
     inboxStore.scan(dir, now, { maxPending: this.c.inbox.max_pending });
+    // Issue #976: an issue draft posts without a click while fewer than the daily limit were posted automatically today. A prompt or action never does.
+    inboxStore.autoApproveDrafts(dir, now, this.c.inbox.auto_post_issue_drafts_per_day ?? inboxStore.DEFAULT_AUTO_POST_PER_DAY);
     for (const st of inboxStore.allStatuses(dir)) {
       if (!['approved', 'posting'].includes(st.state)) continue;
       try {
@@ -2724,6 +2726,10 @@ export class Team {
       const n = Number(k), issue = issueByNo.get(n), re = new RegExp(`/issue-${n}(\\D|$)`);
       if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || live.has(n)) continue;
       if (prs.some(p => agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName))) continue;
+      // Issue #976: the work landed under another merged pull request whose title says it closes, fixes, resolves or implements this issue
+      // (or whose closing references name it, already covered by `delivered`): the hold is not a fault, so it is recorded and not raised.
+      const via = (this.merged || []).find(m => new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|implement(?:s|ed)?)\\s+#${n}\\b`, 'i').test(String(m.title || '')));
+      if (via) { (this.s.staleCleared ||= {})[n] = { pr: via.number, at: this.clock.now() }; continue; }
       if (closed === null) { try { closed = (await this.gh.listClosedPulls?.()) ?? false; } catch { closed = false; } }
       if (closed) {
         const found = closed.filter(p => !p.mergedAt && agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName)).map(p => p.number);

@@ -127,7 +127,7 @@ test('fix limit: no notice while the escalation is pending; one escalated fix ru
   // only one escalated round per PR; while it runs, still no notice
   assert.equal((await w.team.plan()).some(a => a.type === 'fix'), false); await w.team.tick(); assert.equal(w.calls.created.length, 1);
   assert.equal(w.calls.comments.filter(c => /fix rounds/.test(c[1])).length, 0);
-  // the escalated round is rejected: now it becomes a Needs you item, once
+  // the escalated round is rejected: now it becomes a Inbox item, once
   w.jobs.states[jobId] = { id: jobId, status: 'completed' };
   reject(w, 38, H(2));
   await w.team.tick(); await w.team.tick();
@@ -255,7 +255,7 @@ test('labels: the cancelled-CI notice clears when the check turns green; another
   assert.deepEqual(w.calls.removed, [[10, 'needs-homeowner']]);
 });
 
-test('budget: the per-PR limit stops automation and raises exactly one Needs you item that names it', async t => {
+test('budget: the per-PR limit stops automation and raises exactly one Inbox item that names it', async t => {
   const w = world(t, { pulls: [pr(10, 'claude/issue-23-x', H(1), { statusCheckRollup: cancelled() })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')], cfg: config({ per_pr: 1 }) });
   w.team.s.unblock.pr[10] = 1;   // the one allowed unblock for this PR is already spent
   for (let i = 0; i < 3; i++) await w.team.tick();
@@ -320,7 +320,7 @@ test('transient stop: a job already reported to the homeowner, a closed PR, a mo
   assert.deepEqual(w.calls.resumed, ['live']);
   assert.deepEqual(Object.keys(w.team.s.unblock.noResume).sort(), ['closed', 'merged', 'moved', 'notified']);
   assert.match(w.team.s.unblock.noResume.notified.why, /already reported/);
-  // the stale ones are handled as before: one Needs you notice each, nothing relaunched
+  // the stale ones are handled as before: one Inbox notice each, nothing relaunched
   assert.ok(w.calls.comments.some(c => c[0] === 9 && /Needs the homeowner/.test(c[1])));
   assert.ok(w.calls.comments.some(c => c[0] === 10 && /Needs the homeowner/.test(c[1])));
   noMerge(w);
@@ -341,7 +341,7 @@ test('split: a blocking finding is never split automatically, even when it parap
   assert.equal(b.w.calls.issues.length, 0);
 });
 
-test('labels: the fix-limit flag clears only after a PASS on the new head, and a later rejection raises Needs you again', async t => {
+test('labels: the fix-limit flag clears only after a PASS on the new head, and a later rejection raises Inbox again', async t => {
   const f = world(t, { pulls: [pr(38, 'claude/issue-23-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   reject(f, 38, H(1)); f.team.s.fixAttempts[`38:${H(0)}`] = 2; f.team.s.unblock.escalated[38] = { head: H(1) };
   await f.team.tick(); assert.deepEqual(f.calls.labels, [[38, 'needs-homeowner']]);

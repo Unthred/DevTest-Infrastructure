@@ -74,6 +74,8 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         budget: Object.fromEntries(Object.entries(v.budget || {}).map(([k, b]) => [k, { mode: b.mode, reason: b.reason, used: b.used, projected: b.projected }])),
         planned: (v.plan || []).map(a => ({ type: a.type, agent: a.agent ?? null, pr: a.pr ?? null, issue: a.issue ?? null, why: a.why ?? null })),
         running: (v.jobs || []).filter(j => ['running', 'queued', 'paused_limit', 'paused_manual'].includes(j.status)).map(j => ({ id: j.fullId, kind: j.kind, ref: j.ref, agent: j.agent, status: j.status, startedAt: iso(j.startedAt) })),
+        inboxCount: v.health?.count ?? v.panels?.needsYou?.length ?? (v.attention || []).filter(a => a.severity === 'action').length,
+        // Issue #976: the old field name stays as an alias for one release.
         needsYouCount: v.health?.count ?? v.panels?.needsYou?.length ?? (v.attention || []).filter(a => a.severity === 'action').length })) },
     { name: 'foreman_review_order', description: 'The order in which each reviewer will review waiting pull requests, taken from the planner\'s own queue, with the reason each one waits or is held; plus open pull requests that are not queued for review and why.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => {
@@ -84,7 +86,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         });
         return { reviewers: q, plannedReviews: (v.plan || []).filter(a => a.type === 'review').map(a => ({ agent: a.agent, pr: a.pr, why: a.why ?? null })), notQueued };
       }) },
-    { name: 'foreman_why_blocked', description: 'Why a pull request or issue is not moving: its state, queue entries, Needs you items, waits and exclusions.', inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['pr', 'issue'] }, number: { type: 'integer', minimum: 1 } }, required: ['kind', 'number'], additionalProperties: false },
+    { name: 'foreman_why_blocked', description: 'Why a pull request or issue is not moving: its state, queue entries, Inbox items, waits and exclusions.', inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['pr', 'issue'] }, number: { type: 'integer', minimum: 1 } }, required: ['kind', 'number'], additionalProperties: false },
       run: args => {
         const n = Number(args.number), kind = args.kind;
         if (!Number.isInteger(n) || n < 1 || !['pr', 'issue'].includes(kind)) throw new Error('give kind "pr" or "issue" and a positive integer number');
@@ -92,7 +94,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
           const out = { kind, number: n };
           const queueItems = Object.entries(v.queues || {}).flatMap(([agent, items]) => (items || []).filter(i => i.ref === n && (kind === 'pr' ? ['pr', 'review'].includes(i.type) : i.type === 'issue')).map(i => ({ agent, type: i.type, order: i.order ?? null, next: !!i.next, reason: i.reason })));
           out.queue = queueItems;
-          out.needsYou = (v.attention || []).filter(a => a.ref?.n === n && (kind === 'pr' ? a.ref?.kind === 'pull' : a.ref?.kind === 'issue')).map(a => ({ text: a.text, tried: a.tried, action: a.action, severity: a.severity }));
+          out.inbox = out.needsYou = (v.attention || []).filter(a => a.ref?.n === n && (kind === 'pr' ? a.ref?.kind === 'pull' : a.ref?.kind === 'issue')).map(a => ({ text: a.text, tried: a.tried, action: a.action, severity: a.severity }));
           if (kind === 'pr') { const p = (v.prs || []).find(x => x.number === n); out.found = !!p; if (p) out.pr = { title: p.title, status: p.status, head: p.head, checks: p.checks, verdict: p.verdict, awaitingReview: p.awaitingReview, reviewRounds: p.reviewRounds, fixRounds: p.fixRounds, rebaseRounds: p.rebaseRounds, needsHomeowner: p.needsHomeowner, issue: p.issue, jobs: (p.jobs || []).slice(0, 8) }; }
           else { const i = (v.issues || []).find(x => x.number === n); out.found = !!i || queueItems.length > 0; if (i) out.issue = { title: i.title, state: i.state, labels: i.labels }; out.excluded = (v.excluded || []).filter(e => e.number === n); out.waits = (v.panels?.later || []).filter(l => l.number === n).map(l => ({ waits: l.waits, ends: l.ends })); }
           return out;
@@ -169,7 +171,10 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       } },
     { name: 'foreman_mismatches', description: 'Records that disagree with reality, read from the dashboard view: an issue recorded as implemented with no pull request or job, a review that finished with no verdict recorded, stale needs-homeowner labels, and holds kept by old jobs. Each has the evidence. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => mismatches(v, now())) },
-    { name: 'foreman_needs_you', description: 'The Needs you items grouped by cause, with the count, the pull requests or issues involved and the action asked for each group, so a cluster of one cause shows as one decision. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    { name: 'foreman_inbox', description: 'The Inbox items (formerly Needs you) grouped by cause, with the count, the pull requests or issues involved and the action asked for each group, so a cluster of one cause shows as one decision. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      run: () => withView(v => needsYouGroups(v)) },
+    // Issue #976: the old tool name is kept as an alias for one release.
+    { name: 'foreman_needs_you', description: 'Deprecated alias of foreman_inbox (the Needs you list is now the Inbox). Same result.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       run: () => withView(v => needsYouGroups(v)) },
     { name: 'foreman_headline', description: 'The headline progress numbers shown at the top of the dashboard, for the last 24 hours and the last 7 days, each with the previous period: issues opened vs closed (and open now), issues processed, pull requests merged per hour, first-pass review approval rate, rounds per merged pull request, tokens per merged pull request (usage equivalent, not a charge), wasted tokens with the top cause, and rejects (CHANGES verdicts and blocked jobs). Optional card (one of issues, processed, merge-rate, first-pass, rounds, tokens, waste, rejects) with window (24h or 7d) lists the items behind that number, newest first, with limit (default 25). Read-only.', inputSchema: { type: 'object', properties: { card: { type: 'string', enum: ['issues', 'processed', 'merge-rate', 'first-pass', 'rounds', 'tokens', 'waste', 'rejects'] }, window: { type: 'string', enum: ['24h', '7d'] }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
       run: args => withView(v => {

@@ -115,7 +115,7 @@ test('probing for a startable implement job leaves the dashboard hold reasons un
   assert.equal(team.held.claude?.implement, undefined);
 });
 
-// ---- issue #326: a deferred PR is skipped, never ends the search; idle Needs you item
+// ---- issue #326: a deferred PR is skipped, never ends the search; idle Inbox item
 test('#326 conflicting PRs listed newest first: the lowest number is rebased', async t => {
   const team = world(t, backlog().reverse());
   assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [301]);
@@ -139,7 +139,7 @@ test('#326 negative: newest first, an exhausted lowest PR is skipped for the nex
   assert.deepEqual((await team.plan()).filter(a => a.type === 'rebase').map(a => a.pr), [302]);
 });
 
-test('#326 idle Needs you item: appears after idle_minutes with the work and reason, clears when a job starts', async t => {
+test('#326 idle Inbox item: appears after idle_minutes with the work and reason, clears when a job starts', async t => {
   let now = 1_800_000_000_000;
   const team = world(t, [pr(301, H(1))]); team.clock = { now: () => now };
   team.s.rebaseAttempts[`301:${H(1)}`] = 2;      // nothing can be planned for it

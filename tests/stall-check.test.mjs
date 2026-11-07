@@ -1,4 +1,4 @@
-// Issue #259: the read-only stalled-PR check and its Needs you items. Fake GitHub, fake jobs, fake clock; no network, no model call.
+// Issue #259: the read-only stalled-PR check and its Inbox items. Fake GitHub, fake jobs, fake clock; no network, no model call.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -43,7 +43,7 @@ test('no progress past the limit raises one item with the required facts; just i
   const items = stalled(await view(w)); assert.equal(items.length, 1);
   const [it] = items;
   assert.match(it.text, /PR #7/); assert.match(it.text, /head 1111111/); assert.match(it.text, /no progress for 3h 1m/); assert.match(it.text, /last: first seen/);
-  assert.match(it.tried, /CI has not finished/); assert.equal(it.severity, 'info', 'Foreman waits for CI itself: a notice, not Needs you'); assert.equal(v0(await view(w)).length, 0);
+  assert.match(it.tried, /CI has not finished/); assert.equal(it.severity, 'info', 'Foreman waits for CI itself: a notice, not Inbox'); assert.equal(v0(await view(w)).length, 0);
 });
 
 test('a running job holds off the item; a job that ends without a new head or verdict does not reset the timer', async t => {

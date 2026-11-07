@@ -205,13 +205,13 @@ test('Overview: four labelled panels, KPI tiles and charts all link to detail pa
   const s = await serve(t, { jobs: [jb()], cache: cache() });
   const body = (await s.get('/')).body;
   for (const id of ['now', 'next', 'needs', 'warnings']) assert.match(body, new RegExp(`data-card="${id}"`));
-  for (const h of ['>Now<', '>Next<', '>Needs you', '>Warnings']) assert.ok(body.includes(h), h);
+  for (const h of ['>Now<', '>Next<', '>Inbox', '>Warnings']) assert.ok(body.includes(h), h);
   assert.match(body, /<body class="overview">/);
   for (const href of ['/agents', '/work', '/reviews', '/usage', '/system', '/activity']) assert.ok(body.includes(`href="${href}"`), href);
   assert.doesNotMatch(body, /data-reset-layout/, 'Reset to default is in the layout bar the script adds'); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 3, 'the early dock script, the early layout script and the module');
   assert.match(body, /data-tick-state="(scheduled|starting|overdue)"/);
 });
-test('Needs you lists every needs-homeowner item with what, why, the decision needed, a link and the exact command; Warnings holds the rest', async t => {
+test('Inbox lists every needs-homeowner item with what, why, the decision needed, a link and the exact command; Warnings holds the rest', async t => {
   const s = await serve(t, { cache: { ...cache(), tick: { at: NOW - 20 * 60000, status: 'error', error: 'gh failed', lastOkAt: NOW - 3 * 3600000 } } });
   const body = (await s.get('/')).body;
   const needs = body.slice(body.indexOf('data-card="needs"'), body.indexOf('data-card="warnings"'));
@@ -221,7 +221,7 @@ test('Needs you lists every needs-homeowner item with what, why, the decision ne
   assert.match(warn, /No tick for 20 minutes/); assert.match(warn, /sev-warning/); assert.doesNotMatch(needs, /No tick for/);
   const calm = cache(); calm.issues = calm.issues.filter(i => i.number !== 3);
   const quiet = (await (await serve(t, { cache: calm, repo: registerRepo(t) })).get('/')).body;
-  assert.match(quiet, /Nothing needs you/); assert.match(quiet, /No warnings/);
+  assert.match(quiet, /Inbox is empty/); assert.match(quiet, /No warnings/);
   // Same quiet state but the register cannot be read: a warning says so.
   const blind = (await (await serve(t, { cache: calm })).get('/')).body;
   assert.match(blind, /Cannot read docs\/DECISIONS\.md from origin\/main/); assert.doesNotMatch(blind, /No warnings/);
@@ -326,7 +326,7 @@ test('routes: matchRoute accepts only the documented shapes', () => {
   for (const bad of ['/work/pr/', '/work/pr/-1', '/agents/a b', '/agents/a/b', '/WORK', '/work/issue/1e3']) assert.equal(matchRoute(bad), null, bad);
 });
 
-// ---- issue #141: the Needs you panel lists every open needs-homeowner item and clears when it is resolved
+// ---- issue #141: the Inbox panel lists every open needs-homeowner item and clears when it is resolved
 const red = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
 const calmCache = (pull = {}, extra = {}) => { const c = cache(extra); c.issues = c.issues.filter(i => i.number !== 3); c.pulls = [{ ...c.pulls[0], ...pull }]; return c; };
 const needsOf = async (s) => JSON.parse((await s.get('/api/view.json')).body);
@@ -335,7 +335,7 @@ test('#141 a blocked job gives exactly one card with what, tried, action and lin
   const v = await needsOf(await serve(t, { jobs: [blocked], cache: calmCache() }));
   assert.equal(v.panels.needsYou.length, 1); const c = v.panels.needsYou[0];
   assert.match(c.text, /is blocked/); assert.ok(c.tried && c.decision); assert.ok(c.links.some(l => l.url === 'https://github.com/o/r/pull/41')); assert.ok(c.links.some(l => /^(Implementer|Reviewer) · /.test(l.text) && /^\/work\/job\//.test(l.url)));
-  assert.equal(v.health.label, 'Needs you (1)'); assert.equal(v.health.count, 1);
+  assert.equal(v.health.label, 'Inbox (1)'); assert.equal(v.health.count, 1);
   const gone = calmCache(); gone.pulls = [{ ...gone.pulls[0], number: 99 }];
   assert.equal((await needsOf(await serve(t, { jobs: [blocked], cache: gone }))).panels.needsYou.length, 0, 'the PR is no longer open');
 });
@@ -352,7 +352,7 @@ test('#211 no Action needed while the final fix round is planned; Action needed 
   const state = { fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {} };
   const planned = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state }));
   assert.ok(!planned.panels.needsYou.some(c => /^fixlimit-/.test(c.id)), 'Foreman has a next step, so nothing is asked of the homeowner');
-  assert.equal(planned.health.label === 'Needs you (1)', false);
+  assert.equal(planned.health.label === 'Inbox (1)', false);
   assert.ok(!planned.panels.warnings.some(w => w.id === 'ci-41'));
   assert.match(JSON.stringify(planned), /Foreman is handling: one final fix round.*no action needed/, 'the page says what Foreman is doing');
   const failed = await needsOf(await serve(t, { cache: calmCache({ statusCheckRollup: red }), state: { ...state, unblock: { escalated: { 41: true }, pr: {}, day: {}, log: [] } } }));
@@ -366,7 +366,7 @@ test('#211 no Action needed while the final fix round is planned; Action needed 
 });
 test('#141 no limit card while the final review or fix job is still running', async t => {
   const rv = await needsOf(await serve(t, { jobs: [jb({ kind: 'review', issue: 41, status: 'running' })], cache: calmCache(), state: { reviewAttempts: { [`41:${H(1)}:codex`]: 2 }, verdicts: {}, jobs: {} } }));
-  assert.equal(rv.panels.needsYou.length, 0); assert.notEqual(rv.health.label, 'Needs you (1)');
+  assert.equal(rv.panels.needsYou.length, 0); assert.notEqual(rv.health.label, 'Inbox (1)');
   const fx = await needsOf(await serve(t, { jobs: [jb({ kind: 'fix', issue: 41, status: 'running' })], cache: calmCache({ statusCheckRollup: red }), state: { fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {} } }));
   assert.ok(!fx.panels.needsYou.some(c => /^fixlimit-/.test(c.id)));
 });
@@ -409,11 +409,11 @@ test('#141 a review-limit PR gives one card', async t => {
 test('#141 a labelled PR gives one card, removing the label clears it, and the empty state shows only when nothing is open', async t => {
   const labelled = await serve(t, { cache: calmCache({ labels: ['needs-homeowner'] }) });
   const v = await needsOf(labelled); assert.deepEqual(v.panels.needsYou.map(c => c.id), ['homeowner-pr-41']);
-  assert.match(v.health.label, /^Needs you \(1\)$/);
-  const page = (await labelled.get('/')).body; assert.match(page, /Needs you \(1\)/); assert.doesNotMatch(page, /Nothing needs you/); assert.match(page, /Tried: Foreman labelled this PR/);
+  assert.match(v.health.label, /^Inbox \(1\)$/);
+  const page = (await labelled.get('/')).body; assert.match(page, /Inbox \(1\)/); assert.doesNotMatch(page, /Inbox is empty/); assert.match(page, /Tried: Foreman labelled this PR/);
   const clear = await serve(t, { cache: calmCache({ labels: [] }), repo: registerRepo(t) });
   assert.equal((await needsOf(clear)).panels.needsYou.length, 0); assert.equal((await needsOf(clear)).health.label, 'Idle');
-  assert.match((await clear.get('/')).body, /Nothing needs you/);
+  assert.match((await clear.get('/')).body, /Inbox is empty/);
 });
 test('#212 an issue in no agent list is eligible: no Needs-you card; exclusions are listed with reasons; a closed-unmerged PR raises a card', async t => {
   const c = calmCache();
@@ -515,7 +515,7 @@ test('legend (issue #160): app.js uses the shared handler, never hides the legen
 });
 
 // ---- issue #244: a too-large issue shows one Accept-split card; failed attempts show their tokens and cost
-test('#244 a proposed split is one Needs you card with the Accept split path and the spend; no duplicate job or label card', async t => {
+test('#244 a proposed split is one Inbox card with the Accept split path and the spend; no duplicate job or label card', async t => {
   const blocked = jb({ status: 'blocked', lastEvent: 'context_too_large', issue: 30, updatedAt: NOW - 1000, usage: { inputTokens: 3000000, outputTokens: 700000, costUsdEstimate: 2 } });
   const c = cache(); c.issues = c.issues.map(i => (i.number === 30 ? { ...i, labels: ['needs-homeowner'] } : i));
   const state = { jobs: {}, verdicts: {}, splits: { 30: { status: 'proposed', implementJob: blocked.id, agent: 'claude', wasted: { tokens: 3700000, cost: 2, attempts: 4 }, children: [{ title: 'A', scope: 'a' }, { title: 'B', scope: 'b' }] } } };
@@ -545,12 +545,12 @@ test('#244 failed attempts: tokens and cost are summed on the dashboard and show
   assert.deepEqual([none.failedSpend.jobs, none.failedSpend.tokens, none.failedSpend.cost], [0, null, null]);
 });
 
-// ---- issue #186: review follow-ups to the Needs you panel
+// ---- issue #186: review follow-ups to the Inbox panel
 test('#186 a failed job on a PR at the review or fix limit folds into the limit card', async t => {
   const failed = jb({ status: 'failed', kind: 'review', issue: 41, provider: 'codex', lastEvent: 'failed', updatedAt: NOW - 1000 });
   const rl = await needsOf(await serve(t, { jobs: [failed], cache: calmCache(), state: { reviewAttempts: { [`41:${H(1)}:codex`]: 2 }, verdicts: {}, jobs: {} } }));
   assert.deepEqual(rl.panels.needsYou.map(c => c.id), ['reviewlimit-41']);
-  assert.equal(rl.health.label, 'Needs you (1)');
+  assert.equal(rl.health.label, 'Inbox (1)');
   const fixJob = jb({ status: 'failed', kind: 'fix', issue: 41, provider: 'claude', lastEvent: 'failed', updatedAt: NOW - 1000 });
   const fl = await needsOf(await serve(t, { jobs: [fixJob], cache: calmCache({ statusCheckRollup: red }), state: { fixAttempts: { [`41:${H(1)}`]: 2 }, verdicts: {}, jobs: {}, unblock: { escalated: { 41: true }, pr: {}, day: {}, log: [] } } }));
   assert.deepEqual(fl.panels.needsYou.map(c => c.id), ['fixlimit-41']);
@@ -571,26 +571,26 @@ test('#186 a failed issue job whose issue is older than the cached issue window 
   assert.equal((await needsOf(await serve(t, { jobs: [failed], cache: c }))).panels.needsYou.filter(x => /^job-/.test(x.id)).length, 1);
 });
 
-// Issue #405: Needs you shows a fix-limit item only when the homeowner must act.
-test('#405 fix limit: a real CHANGES on the current head is Needs you, with or without the label', async t => {
+// Issue #405: Inbox shows a fix-limit item only when the homeowner must act.
+test('#405 fix limit: a real CHANGES on the current head is Inbox, with or without the label', async t => {
   const state = { ...fixLimitState(), verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'codex', at: 1 } } };
   const v = await needsOf(await serve(t, { jobs: [], cache: calmCache(), state }));
   assert.ok(v.panels.needsYou.some(c => c.id === 'fixlimit-41'), 'listed although the PR carries no needs-homeowner label');
 });
-test('#405 fix limit: a PR only awaiting review is queued, not Needs you, even with a stale needs-homeowner label', async t => {
+test('#405 fix limit: a PR only awaiting review is queued, not Inbox, even with a stale needs-homeowner label', async t => {
   const state = fixLimitState();   // fix limit reached earlier, no verdict on the current head
   for (const pull of [{}, { labels: ['needs-homeowner'] }]) {
     const v = await needsOf(await serve(t, { jobs: [], cache: calmCache(pull), state }));
     assert.ok(!v.panels.needsYou.some(c => /^(fixlimit|homeowner-pr)-41$/.test(c.id)), JSON.stringify(v.panels.needsYou.map(c => c.id)));
   }
 });
-test('#405 fix limit: a CHANGES verdict recorded on an older head does not make the current head Needs you', async t => {
+test('#405 fix limit: a CHANGES verdict recorded on an older head does not make the current head Inbox', async t => {
   const state = { ...fixLimitState(), verdicts: { [`41:${H(7)}`]: { verdict: 'CHANGES', reviewer: 'codex', at: 1 } } };
   const v = await needsOf(await serve(t, { jobs: [], cache: calmCache(), state }));
   assert.ok(!v.panels.needsYou.some(c => c.id === 'fixlimit-41'));
 });
 // Issue #550: a review whose verdict file was refused shows the reason, the file and the next action.
-test('#550 Needs you names the refused verdict file, the reason and what to do', async t => {
+test('#550 Inbox names the refused verdict file, the reason and what to do', async t => {
   const refusal = { count: 1, error: 'verdict has an unknown field', job: 'ab12cd34'.repeat(4), pr: 41, head: H(1), file: '/state/team/inbox/t1/verdict.json' };
   const maxed = { [`41:${H(1)}:codex`]: 2 };
   const v = await needsOf(await serve(t, { cache: calmCache(), state: { reviewAttempts: maxed, reviewRefusals: { [`41:${H(1)}:codex`]: refusal }, verdicts: {}, jobs: {} } }));

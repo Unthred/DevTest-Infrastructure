@@ -20,7 +20,7 @@ test('default order is the original order; the reverse direction reverses it', (
   assert.deepEqual(sortListRows(needs).map(r => r.i), [0, 1, 2]);
   assert.deepEqual(sortListRows(needs, 'default', 'desc').map(r => r.i), [2, 1, 0]);
 });
-test('Needs you: number sorts numerically and rows without a number go last in either direction', () => {
+test('Inbox: number sorts numerically and rows without a number go last in either direction', () => {
   assert.deepEqual(sortListRows(needs, 'number', 'asc').map(r => r.num), [7, 112, null]);
   assert.deepEqual(sortListRows(needs, 'number', 'desc').map(r => r.num), [112, 7, null]);
 });
@@ -78,7 +78,7 @@ const lists = html => [...html.matchAll(/<div class="dlist[^"]*" data-dlist="([^
 // A list element that is not inside a .dlist: strip every dlist block (they never nest) and look for a bare one.
 const outsideDlist = html => { const main = /<main[\s\S]*<\/main>/.exec(html)[0]; return main.replace(/<div class="dlist[\s\S]*?<div class="dl-foot[^>]*>[^<]*<\/div><\/div>/g, ''); };
 
-test('Overview: Now, Next, Needs you, Later, Warnings, Watching and the Since sections all use the shared list; no bare list remains', async () => {
+test('Overview: Now, Next, Inbox, Later, Warnings, Watching and the Since sections all use the shared list; no bare list remains', async () => {
   const html = page(await overviewView({ needs: 5, warnings: 5, later: 3, next: 3, watching: 2, since: 4 }));
   const ids = lists(html);
   for (const id of ['now', 'next', 'needs', 'later', 'warnings', 'watching']) assert.ok(ids.includes(id), `${id} is a shared list`);
@@ -89,7 +89,7 @@ test('Overview: a bare panel-list on the page fails the check (negative control)
   const sample = '<main><div class="dlist" data-dlist="x"><ul class="panel-list dl-scroll"></ul><div class="dl-foot">1 item</div></div><ul class="panel-list"><li>x</li></ul></main>';
   assert.equal((outsideDlist(`<html>${sample}</html>`).match(BARE) || []).length, 1);
 });
-test('Overview with 50 Needs you rows: all 50 rows and their buttons and links are still there, in one bounded list', async () => {
+test('Overview with 50 Inbox rows: all 50 rows and their buttons and links are still there, in one bounded list', async () => {
   const html = page(await overviewView({ needs: 50 }));
   const block = /<div class="dlist[^"]*" data-dlist="needs"[\s\S]*?<div class="dl-foot[^>]*>([^<]*)<\/div>/.exec(html);
   assert.equal((block[0].match(/<li /g) || []).length, 50);
@@ -100,7 +100,7 @@ test('Overview with 50 Needs you rows: all 50 rows and their buttons and links a
 });
 test('Overview with 0 rows: no list box at all, only the empty states', async () => {
   const html = page(await overviewView({}));
-  assert.ok(!lists(html).includes('needs')); assert.match(html, /Nothing needs you/); assert.match(html, /No warnings/);
+  assert.ok(!lists(html).includes('needs')); assert.match(html, /Inbox is empty/); assert.match(html, /No warnings/);
 });
 test('a short list has no search box but keeps its sort and footer; sort controls need two rows', async () => {
   const html = page(await overviewView({ needs: 3 }));
@@ -109,7 +109,7 @@ test('a short list has no search box but keeps its sort and footer; sort control
   const one = /<div class="dlist[^"]*" data-dlist="needs"[\s\S]*?<div class="dl-foot/.exec(page(await overviewView({ needs: 1 })))[0];
   assert.doesNotMatch(one, /dl-key|dl-bar/);
 });
-test('defaults: Needs you keeps the planner order (most urgent first); Warnings are rendered most urgent first', async () => {
+test('defaults: Inbox keeps the planner order (most urgent first); Warnings are rendered most urgent first', async () => {
   const html = page(await overviewView({ needs: 3, warnings: 8 }));
   assert.match(/data-dlist="needs"[^>]*data-default-key="default"/.exec(html)[0], /default-key="default"/);
   const w = /<div class="dlist[^"]*" data-dlist="warnings"[\s\S]*?<div class="dl-foot/.exec(html)[0];
@@ -121,7 +121,7 @@ test('defaults: Needs you keeps the planner order (most urgent first); Warnings 
 test('the controls are labelled, the list is a keyboard-reachable scroll region, and nothing leaks into row ids', async () => {
   const html = page(await overviewView({ needs: 9 }));
   const block = /<div class="dlist[^"]*" data-dlist="needs"[\s\S]*?<div class="dl-foot/.exec(html)[0];
-  assert.match(block, /aria-label="Search Needs you"/); assert.match(block, /<ul class="panel-list dl-scroll" tabindex="0" aria-label="Needs you">/);
+  assert.match(block, /aria-label="Search Inbox"/); assert.match(block, /<ul class="panel-list dl-scroll" tabindex="0" aria-label="Inbox">/);
   assert.match(block, /id="att-homeowner-0"/, 'the existing row ids (links to #att-…) are kept');
 });
 test('CSS: the list height is capped, scrolls inside the card, shrinks on a phone, and a resized or expanded card gives it room', () => {

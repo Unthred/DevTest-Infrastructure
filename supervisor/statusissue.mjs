@@ -40,7 +40,7 @@ export function renderContent(s) {
   out.push(...bullets((s.pulls || []).map(p => line(p.name, '-', p.status + ',', 'CI', p.ci + ',', p.verdict ? `${p.verdict.verdict}${p.verdict.current ? '' : ' (older commit)'}` : 'no verdict yet')), 'none open'));
   out.push('', '## Allowance by provider');
   out.push(...bullets((s.allowance || []).map(a => line(a.text)), 'no allowance data'));
-  out.push('', '## Needs you');
+  out.push('', '## Inbox');
   out.push(...bullets((s.needsYou || []).map(n => line(n.text)), 'nothing'));
   out.push('', `Installed version: ${scrub(s.installed || 'unknown', 12)}`);
   return out.join('\n');

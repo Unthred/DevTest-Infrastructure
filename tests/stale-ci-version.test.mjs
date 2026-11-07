@@ -50,7 +50,7 @@ const viewWith = async (roll, t, now = NOW, headOid = H(9)) => {
   return buildView({ config, root, jobs: [], events: [], state: {}, cache: { tick: { at: now - 60000, status: 'ok', lastOkAt: now - 60000 }, pulls: [pull], issues: [] }, snapshots: [], now });
 };
 
-test('a stuck check raises one Needs you item that says to re-run it, and it clears when the check finishes', async t => {
+test('a stuck check raises one Inbox item that says to re-run it, and it clears when the check finishes', async t => {
   const stuck = [run({ status: 'IN_PROGRESS', completedAt: null })], ids = v => v.attention.filter(a => a.id.startsWith('ci-stuck-'));
   const head = H(7);
   assert.equal(ids(await viewWith(stuck, t, NOW, head)).length, 0, 'first sighting starts the clock; startedAt is not used');

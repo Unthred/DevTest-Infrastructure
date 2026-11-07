@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Tower-only browser check for the refresh in place (issue #930), in the pinned Chromium container (same path as tests/lists-browser.mjs).
-// Renders the Overview twice from the test fixture (fake data, no supervisor state): /a.html, and /b.html with one more Needs you row and
+// Renders the Overview twice from the test fixture (fake data, no supervisor state): /a.html, and /b.html with one more Inbox row and
 // changed values in a plain card; the real static files are staged and browser/refresh-scenario.mjs scrolls, searches, types and opens
 // things, then triggers several refreshes with changed data and asserts nothing moved, closed or cleared and the new values showed.
 // Results (JSON, one screenshot) go to the directory in argv[2]. Run `node browser/prepare-cache.mjs` first.

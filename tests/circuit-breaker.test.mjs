@@ -230,12 +230,12 @@ test('if the breaker itself fails it reports the failure; existing halts stay an
   assert.ok(report.breaker.error, 'reported in the tick report');
   assert.ok(w.team.s.breaker.error.message, 'kept in the state for the dashboard');
   assert.deepEqual(acts.map(a => a.type), ['implement'], 'the existing halt still applies');
-  // the dashboard shows the failure as a Needs you item
+  // the dashboard shows the failure as a Inbox item
   const view = await buildView({ config: config(), root: w.team.root, jobs: [], events: [], state: w.team.s, register: '', cache: { tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 }, pulls: [], issues: [] }, snapshots: [], now: NOW });
   assert.ok(view.attention.some(a => a.id === 'breaker-error'));
 });
 
-test('dashboard: the halt is the top Needs you item with cause, count, cost label and the exact command; wasted usage by cause is shown', async t => {
+test('dashboard: the halt is the top Inbox item with cause, count, cost label and the exact command; wasted usage by cause is shown', async t => {
   const w = world(t);
   for (const id of ['r1', 'r2', 'r3']) reviewBlocked(w, id);
   await w.team.ingest({ ingested: [], skipped: [] });

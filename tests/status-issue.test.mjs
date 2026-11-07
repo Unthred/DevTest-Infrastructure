@@ -35,7 +35,7 @@ test('a changed status updates the same issue and does not pin or create again',
   await publishStatusIssue({ root, gh, status: status(), now: 1 });
   assert.equal(await publishStatusIssue({ root, gh, status: status({ needsYou: [] }), now: 2 }), 'updated');
   assert.deepEqual(gh.calls, ['create', 'pin', 'update']);
-  assert.match(gh.issues[0].body, /## Needs you\n- nothing/);
+  assert.match(gh.issues[0].body, /## Inbox\n- nothing/);
   assert.equal(gh.issues.length, 1);
 });
 
@@ -50,7 +50,7 @@ test('after a restart (state lost) the existing issue is found by its marker and
 
 test('the body lists the required sections with items by number and exact title', () => {
   const b = renderBody(status(), Date.UTC(2026, 10, 2, 12, 30));
-  for (const h of ['## Running jobs', '## Queue', '## Open pull requests', '## Allowance by provider', '## Needs you']) assert.ok(b.includes(h), h);
+  for (const h of ['## Running jobs', '## Queue', '## Open pull requests', '## Allowance by provider', '## Inbox']) assert.ok(b.includes(h), h);
   assert.match(b, /- claude: implement #358 Foreman: publish live status/);
   assert.match(b, /PR #400 Some title - ready, CI green, PASS/);
   assert.match(b, /Installed version: abc1234/); assert.match(b, /Last updated: 2026-11-02 12:30 UTC/);

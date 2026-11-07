@@ -25,7 +25,8 @@ import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { sinceView } from './since.mjs';
-import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards } from './inbox.mjs';
+import { buildInbox, actionCount as inboxActionCount, SECTIONS as INBOX_SECTIONS } from './inboxsections.mjs';
+import { autoPostSummary, DEFAULT_AUTO_POST_PER_DAY, pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -728,7 +729,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const sup = supervisorHealth({ root, config, jobs, now });
     // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.
     { const w = sup.ticks.filter(t => Number.isFinite(t.at)).at(-1)?.warnings || [];
-      if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told the team needs you.', ref: null, severity: 'action' });
+      if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told there is something in your Inbox.', ref: null, severity: 'action' });
       else if (w.length) attention.push({ id: 'alert-warning', text: redact(w[0].replace(/^team-alert: warning: /, 'Alerting: '), 200), ref: null, severity: 'warning' }); }
     // Issue #358: the pinned status issue could not be updated; the tick itself is unaffected.
     { const e = readStatusIssueState(root).error; if (e) attention.push({ id: 'status-issue-failed', text: redact(e, 300), ref: null, severity: 'warning' }); }
@@ -821,7 +822,7 @@ const NEXT_STEP = {
 const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run', 'upgrade-latched': 'ai-supervisor self-upgrade clear-latch' };
 export function healthOf({ attention, states, teamEnabled, needsYouCount }) {
   const open = Number.isSafeInteger(needsYouCount) ? needsYouCount : attention.filter(a => a.severity === 'action').length;   // one shared count: the consolidated list's length (issue #141: the header shows how many)
-  if (open) return { state: 'needs_you', label: `Needs you (${open})`, count: open, severity: 'action' };
+  if (open) return { state: 'needs_you', label: `Inbox (${open})`, count: open, severity: 'action' };
   if (attention.some(a => /^(tick-stale|idle)/.test(a.id))) return { state: 'stuck', label: 'Stuck', severity: 'warning' };
   if (Object.values(states).some(s => s.state === 'unknown')) return { state: 'unknown', label: 'Unknown', severity: 'warning' };
   if (Object.values(states).some(s => s.state === 'paused')) return { state: 'paused', label: 'Paused', severity: 'warning' };
@@ -918,7 +919,11 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
   const consolidated = consolidateNeedsYou(attention, { cache, overrides: config.depends_on_overrides });
-  const needsYou = consolidated.needsYou.map(a => {
+  const autoLimit = config.inbox?.auto_post_issue_drafts_per_day ?? DEFAULT_AUTO_POST_PER_DAY;
+  const autoSummary = config.inbox?.dir ? autoPostSummary(config.inbox.dir, now, autoLimit) : null;
+  const sectionRank = id => INBOX_SECTIONS.findIndex(x => x.id === id);
+  const inboxView = buildInbox(consolidated.needsYou, { auto: autoSummary ? { limit: autoSummary.limit, posted: autoSummary.posted } : null });
+  const needsYou = inboxView.items.map((a, i) => ({ a, i })).sort((x, y) => sectionRank(x.a.section) - sectionRank(y.a.section) || x.i - y.i).map(({ a }) => a).map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
     const watch = a.id.startsWith('job-') && transcriptExists(root, a.id.slice(4)) ? a.id.slice(4) : null;
@@ -926,9 +931,9 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   });
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {
-    health: healthOf({ attention, states, teamEnabled, needsYouCount: needsYou.length }), freshness: freshness(tickAt, now),
+    health: healthOf({ attention, states, teamEnabled, needsYouCount: inboxActionCount(inboxView) }), freshness: freshness(tickAt, now),
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inbox: { sections: inboxView.sections, total: inboxView.total, autoPost: inboxView.autoPost }, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };

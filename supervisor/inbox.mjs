@@ -244,7 +244,7 @@ export function undo(inboxDir, id, now = Date.now()) {
     if (!s) return { ok: false, reason: 'unknown item' };
     if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
     if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
-    const { decision, decidedAt, title, result, ...rest } = s;
+    const { decision, decidedAt, title, result, auto, ...rest } = s;
     writeAtomic(file, { ...rest, state: 'pending', id, updatedAt: now });
     audit(inboxDir, { id, event: 'undone', kind: s.kind, hash: s.hash }, now);
     return { ok: true, state: 'pending' };
@@ -269,6 +269,33 @@ export function decidedCards(inboxDir, now = Date.now()) {
   return allStatuses(inboxDir).filter(s => s.decision && Number.isFinite(s.decidedAt) && s.decidedAt >= day.getTime() && s.decidedAt <= now + 60000)
     .sort((x, y) => y.decidedAt - x.decidedAt).map(s => ({ id: s.id, kind: s.kind || null, title: s.title || null, issue: Number.isSafeInteger(s.issue) && s.issue > 0 && s.issue < 900000000 ? s.issue : null, decision: s.decision, state: s.state || null, decidedAt: s.decidedAt,
       undoUntil: ['approved', 'rejected'].includes(s.state) && now - s.decidedAt <= UNDO_MS ? s.decidedAt + UNDO_MS : null }));
+}
+// Issue #976: issue drafts post without a click up to a daily limit (agreed 6 Nov; it was never built, so every draft waited for a click).
+// "Today" is the server's calendar day, as in decidedCards. Only issue drafts qualify: a prompt starts a job and an action changes
+// state, so both always need the homeowner. Each auto-approved item passes the same re-validation and hash check as a click (decide()),
+// is marked `auto`, and is audited as such. The oldest draft goes first; a limit of 0 switches this off.
+export const DEFAULT_AUTO_POST_PER_DAY = 5;
+const dayStart = now => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); };
+export function autoPostedToday(inboxDir, now = Date.now()) {
+  return allStatuses(inboxDir).filter(s => s.kind === 'issue_draft' && s.auto === true && Number.isFinite(s.decidedAt) && s.decidedAt >= dayStart(now) && s.state !== 'pending').length;
+}
+export function autoApproveDrafts(inboxDir, now = Date.now(), limit = DEFAULT_AUTO_POST_PER_DAY) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) return { approved: 0 };
+  let room = limit - autoPostedToday(inboxDir, now), approved = 0;
+  const pending = allStatuses(inboxDir).filter(s => s.state === 'pending' && s.kind === 'issue_draft').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  for (const s of pending) {
+    if (room <= 0) break;
+    const r = decide(inboxDir, s.id, 'approve', now);
+    if (!r.ok) continue;
+    setStatus(inboxDir, s.id, { auto: true }, now);
+    audit(inboxDir, { id: s.id, event: 'auto-approved', kind: s.kind, hash: s.hash }, now);
+    room--; approved++;
+  }
+  return { approved };
+}
+// "N of M posted today" for the Inbox; null when auto-posting is off.
+export function autoPostSummary(inboxDir, now = Date.now(), limit = DEFAULT_AUTO_POST_PER_DAY) {
+  return Number.isSafeInteger(limit) && limit > 0 ? { posted: autoPostedToday(inboxDir, now), limit } : null;
 }
 export function approvedItems(inboxDir, kind) {
   return allStatuses(inboxDir).filter(s => s.state === 'approved' && s.kind === kind).sort((a, b) => (a.decidedAt || 0) - (b.decidedAt || 0));

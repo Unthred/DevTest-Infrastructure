@@ -78,7 +78,7 @@ test('decidedCards: today only, newest first, undo offered only inside the windo
 });
 
 // ---- the write route
-test('route: a JSON decision answers with the state and undo time; the card leaves Needs you at once and is under Decided today with its outcome', async t => {
+test('route: a JSON decision answers with the state and undo time; the card leaves Inbox at once and is under Decided today with its outcome', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)), b = drop(dir, GOOD(2)); inbox.scan(dir, 1000);
   const s = await serve(t, dir);
   assert.equal((await view(s)).panels.needsYou.filter(x => x.inbox).length, 2);
@@ -94,7 +94,7 @@ test('route: a JSON decision answers with the state and undo time; the card leav
   assert.match(page, /<summary>Decided today \(<span class="inbox-decided-n">1<\/span>\)<\/summary>/);
   assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-tag">.*?</span></span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, waiting for a free slot" data-tonly>Approved \\d\\d:\\d\\d UTC, waiting for a free slot</span>`));
   assert.match(page, /name="decision" value="undo"/);
-  assert.match(page, /Needs you \(1\)/, 'the count dropped');
+  assert.match(page, /Inbox \(1\)/, 'the count dropped');
 });
 test('route: Reject is shown as Rejected, newest decision first; the plain form post still redirects', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)), b = drop(dir, GOOD(2)); inbox.scan(dir, 1000);
@@ -194,8 +194,8 @@ test('script: postDecision turns a server refusal, a non-JSON page and a network
   let sent; await postDecision(async (u, o) => { sent = o; return res(200, '{"ok":true}')(); }, '/inbox', { id: 'a', decision: 'approve' });
   assert.equal(sent.headers.accept, 'application/json'); assert.equal(sent.body, 'id=a&decision=approve');
 });
-test('script: the Needs you count drops with the card and disappears at zero', () => {
-  assert.equal(lowerCount('Needs you (3)'), 'Needs you (2)'); assert.equal(lowerCount('Needs you (1)'), 'Needs you'); assert.equal(lowerCount('Needs you'), 'Needs you');
+test('script: the Inbox count drops with the card and disappears at zero', () => {
+  assert.equal(lowerCount('Inbox (3)'), 'Inbox (2)'); assert.equal(lowerCount('Inbox (1)'), 'Inbox'); assert.equal(lowerCount('Inbox'), 'Inbox');
 });
 
 // ---- issue #977: ids, search, direct link
