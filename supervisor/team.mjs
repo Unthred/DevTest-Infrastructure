@@ -769,7 +769,7 @@ export class Team {
   // new commit has no record and starts unknown again; records of heads that are no longer open are dropped. Misses are retried
   // after a few minutes only. Nothing a writer says about itself is read.
   recordHeadWriters(prs) {
-    const open = new Set(), now = this.clock.now();
+    const open = new Set(), now = this.clock.now(), reflogCache = new Map();   // one reflog read per worktree per call (issue #704)
     for (const pr of prs || []) {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || !SHA.test(pr.headRefOid)) continue;
@@ -777,7 +777,7 @@ export class Team {
       if (this.s.headWriters[key] || now - (this.s.headWriterMiss[key] || 0) < 300000) continue;
       if (Object.values(this.s.jobs).some(j => WRITER_KINDS.has(j.kind) && this.c.agents[j.agent] && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)))) continue;
       // An inbox job may push to a branch of its own naming; git's reflog in that job's worktree then binds the head to the job.
-      const viaJob = this.inboxWritersOf(pr, author);
+      const viaJob = this.inboxWritersOf(pr, author, reflogCache);
       if (viaJob.length) { this.s.headWriters[key] = { provider: this.c.agents[author].provider, models: [...new Set(viaJob.map(x => x.model))].sort(), sessions: [], jobs: viaJob.map(x => x.id.slice(0, 8)), at: now, source: 'worktree-reflog' }; continue; }
       let found = null; try { found = this.headWriterOf({ head: pr.headRefOid, branch: pr.headRefName, now }); } catch { found = null; }
       if (found && found.provider === this.c.agents[author].provider && found.models?.length) this.s.headWriters[key] = { provider: found.provider, models: found.models, sessions: found.sessions || [], at: now, source: 'session-log' };
@@ -792,12 +792,14 @@ export class Team {
   }
   // Inbox jobs (same provider as the branch's agent, a recorded model) whose own worktree reflog shows a commit entry for this exact head
   // inside the job's run window. The worktree is the one Foreman made for the job (recorded, or derived from the inbox id for older records).
-  inboxWritersOf(pr, author) {
+  inboxWritersOf(pr, author, cache = null) {
     const provider = this.c.agents[author].provider, out = [];
     for (const [id, j] of Object.entries(this.s.jobs)) {
       if (j.kind !== 'inbox' || !j.inboxId || !j.model || !this.c.agents[j.agent] || this.c.agents[j.agent].provider !== provider || !Number.isFinite(j.at)) continue;
       const worktree = j.worktree || path.join(this.c.worktree_base, `DevTest-Infrastructure-${j.agent}-inbox-${String(j.inboxId).slice(0, 8)}`);
-      let hit = null; try { hit = this.worktreeWriterOf({ worktree, head: pr.headRefOid, from: j.at, to: Number.isFinite(j.endedAt) ? j.endedAt : j.at + INBOX_WINDOW_MS, repoPath: this.c.repo_path }); } catch { hit = null; }
+      // Issue #704: a job whose worktree has been removed proves nothing; skip it before any git process runs.
+      if (!fs.existsSync(worktree)) continue;
+      let hit = null; try { hit = this.worktreeWriterOf({ cache, worktree, head: pr.headRefOid, from: j.at, to: Number.isFinite(j.endedAt) ? j.endedAt : j.at + INBOX_WINDOW_MS, repoPath: this.c.repo_path }); } catch { hit = null; }
       if (hit) out.push({ id, model: j.model });
     }
     return out;
