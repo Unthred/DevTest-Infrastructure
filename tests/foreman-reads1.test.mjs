@@ -47,6 +47,20 @@ test('scrubConfig removes secret-named values, alert command arguments and secre
   for (const bad of [GH, SK]) assert.ok(!JSON.stringify(out).includes(bad));
 });
 
+test('scrubConfig matches whole name segments: counts named like secrets are kept, real secrets still go', () => {
+  const out = scrubConfig({ chain_passes: 'two', retry_passes: { a: 1 }, max_tokens_by_model: { x: 1 }, tokens_per_job: 'many', passwd: 'a', client_secret: 'b', 'api-key': 'c', apiKey: 'd', access_tokens: { r: 'x' }, secrets: ['y'] });
+  assert.equal(out.chain_passes, 'two'); assert.deepEqual(out.retry_passes, { a: 1 }); assert.deepEqual(out.max_tokens_by_model, { x: 1 }); assert.equal(out.tokens_per_job, 'many');
+  for (const k of ['passwd', 'client_secret', 'api-key', 'apiKey', 'access_tokens', 'secrets']) assert.equal(out[k], '[removed]', k);
+});
+
+test('wasteByCause caps each day at its top causes plus a remainder; byCause stays complete', () => {
+  const waste = Object.fromEntries(Array.from({ length: 12 }, (_, i) => w('j' + i, 1000 + i, i + 1, 'cause-' + i)).map(x => [x.job, x]));
+  const r = wasteByCause({ breaker: { waste } }, { now: NOW });
+  assert.equal(r.byCause.length, 12); assert.equal(r.byDay[0].causes.length, 6);
+  const rest = r.byDay[0].causes[5]; assert.equal(rest.remainder, true); assert.equal(rest.jobs, 7); assert.equal(rest.costUsdEquivalent, 28);
+  assert.equal(r.byDay[0].causes[0].cause, 'cause-11');
+});
+
 test('configDiff reports changed, added and removed settings by path and nothing for equal ones', () => {
   const d = configDiff({ a: 1, b: { c: [1, 2], d: 'x' }, gone: 1 }, { a: 1, b: { c: [1, 3], d: 'x' }, extra: { k: true } });
   assert.deepEqual(d.map(x => [x.path, x.change]), [['b.c', 'changed'], ['extra.k', 'added'], ['gone', 'removed']]);

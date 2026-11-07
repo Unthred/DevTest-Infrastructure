@@ -25,21 +25,36 @@ export function wasteByCause(state, { now = Date.now(), days = 7 } = {}) {
     if (!byDay.has(day)) byDay.set(day, new Map());
     add(byDay.get(day), cause, w);
   }
-  const out = m => [...m].map(([cause, e]) => ({ cause, jobs: e.jobs, tokens: e.tokens, costUsdEquivalent: round2(e.cost) })).sort((a, b) => b.costUsdEquivalent - a.costUsdEquivalent || b.tokens - a.tokens || a.cause.localeCompare(b.cause));
+  const PER_DAY = 5;   // per day: the top causes by cost, then one remainder row, so a 30-day answer stays useful inside the output bound
+  const sorted = m => [...m].map(([cause, e]) => ({ cause, jobs: e.jobs, tokens: e.tokens, costUsdEquivalent: round2(e.cost) })).sort((a, b) => b.costUsdEquivalent - a.costUsdEquivalent || b.tokens - a.tokens || a.cause.localeCompare(b.cause));
+  const out = m => sorted(m);
+  const dayOut = m => {
+    const all = sorted(m); if (all.length <= PER_DAY) return all;
+    const rest = all.slice(PER_DAY);
+    return [...all.slice(0, PER_DAY), { cause: `(${rest.length} other causes)`, jobs: rest.reduce((n, c) => n + c.jobs, 0), tokens: rest.reduce((n, c) => n + c.tokens, 0), costUsdEquivalent: round2(rest.reduce((n, c) => n + c.costUsdEquivalent, 0)), remainder: true }];
+  };
   const sum = k => rows.reduce((n, w) => n + (Number.isFinite(w[k]) ? w[k] : 0), 0);
   return {
     from: iso(from), to: iso(now), days: span, jobs: rows.length, totalTokens: sum('tokens'), totalCostUsdEquivalent: round2(sum('cost')),
-    note: 'Waste is a finished job that spent tokens and left no usable result. Cost is the provider CLI usage estimate, not a charge. The record covers the last 7 days and at most 1000 entries, so a longer span shows no more.',
-    byCause: out(causes), byDay: [...byDay].sort((a, b) => b[0].localeCompare(a[0])).map(([day, m]) => ({ day, causes: out(m) })),
+    note: 'Waste is a finished job that spent tokens and left no usable result. Cost is the provider CLI usage estimate, not a charge. The record covers the last 7 days and at most 1000 entries, so a longer span shows no more. Each day lists its top 5 causes by cost and one remainder row; byCause is complete.',
+    byCause: out(causes), byDay: [...byDay].sort((a, b) => b[0].localeCompare(a[0])).map(([day, m]) => ({ day, causes: dayOut(m) })),
   };
 }
 
 // ---- configuration ----
-const SECRET_KEY = new RegExp(KEY, 'i');   // anywhere in the key: webhook_secret, githubToken
+// Whole name segments only (camelCase and _ - . split): webhook_secret, githubToken and api_key match; chain_passes does not. A token(s) segment next to a
+// quantity word (max_tokens, tokens_by_model) names a count, not a secret, so it is kept. Over-redaction hides a difference; this keeps it visible.
+const SECRET_KEY = new RegExp(`(?:^|_)${KEY}(?:_|$)`, 'i');
+const COUNT_KEY = new RegExp(`(?:^|_)${KEY.replace('|token|', '|')}(?:_|$)`, 'i');
+const QUANTITY = /(?:^|_)(?:max|min|num|count|limit|total|by|per)(?:_|$)/;
+const isSecretKey = key => {
+  const n = String(key).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  return (QUANTITY.test(n) ? COUNT_KEY : SECRET_KEY).test(n);
+};
 // Every string passes through the shared redaction; a key that names a secret loses its value; an alert command keeps its program only.
 export function scrubConfig(value, key = '', depth = 0) {
   if (depth > 12) return '[too deep]';
-  if (SECRET_KEY.test(key) && value != null && typeof value !== 'boolean' && typeof value !== 'number') return '[removed]';
+  if (isSecretKey(key) && value != null && typeof value !== 'boolean' && typeof value !== 'number') return '[removed]';
   if (key === 'command' && Array.isArray(value)) return value.length ? [redact(String(value[0]), 200), `[${value.length - 1} argument(s) removed]`] : [];
   if (typeof value === 'string') return redact(value, 300);
   if (Array.isArray(value)) return value.slice(0, 100).map(v => scrubConfig(v, '', depth + 1));
