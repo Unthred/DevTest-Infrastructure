@@ -306,3 +306,8 @@ test('issue #938: stable page-scrollbar gutter and a horizontally centred back-t
   assert.match(rule, /height:44px/);
   assert.doesNotMatch(css, /^html\{[^}]*scrollbar-gutter:auto/m);
 });
+
+test('issue #938: sb-overlay is applied before first paint so the scrollbar state is identical before and after app.js starts', () => {
+  assert.match(earlyJs, /cl\.add\('sb-overlay'\)/);
+  assert.match(css, /html\.sb-overlay,html\.sb-overlay \*\{scrollbar-width:none\}/);
+});
