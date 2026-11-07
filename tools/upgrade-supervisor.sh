@@ -24,6 +24,10 @@ chmod 700 /mnt/cache/ai-supervisor /mnt/cache/ai-supervisor/versions "$install_r
 [ ! -e "$source_root/supervisor/team.local.json" ] || { printf 'team.local.json must not be in the versioned payload\n' >&2; exit 2; }
 cp -a "$source_root/supervisor" "$install_root/"
 diff -r "$source_root/supervisor" "$install_root/supervisor" >/dev/null || { printf 'installed payload differs from the reviewed commit\n' >&2; exit 2; }
+# The MCP server and its installer travel with the version (issue #946), so a rollback can put the previous server copy back.
+cp -a "$source_root/foreman-mcp" "$install_root/"
+mkdir -p "$install_root/tools"; cp -a "$source_root/tools/install-foreman-mcp.sh" "$install_root/tools/"
+diff -r "$source_root/foreman-mcp" "$install_root/foreman-mcp" >/dev/null || { printf 'installed MCP payload differs from the reviewed commit\n' >&2; exit 2; }
 chmod -R go-rwx "$install_root"
 current=/mnt/cache/ai-supervisor/current
 if [ -e "$current" ] && [ ! -L "$current" ]; then printf 'current supervisor path is not a symlink\n' >&2; exit 2; fi
@@ -59,4 +63,7 @@ cp "$source_root/bin/team-alert" "$alert_tmp"; chmod 755 "$alert_tmp"
 bash -n "$alert_tmp"; cmp -s "$source_root/bin/team-alert" "$alert_tmp" || { printf 'installed team-alert differs from the reviewed commit\n' >&2; exit 2; }
 mv -f "$alert_tmp" "$alert_dir/team-alert"
 /root/bin/ai-agent --supervisor help >/dev/null
+# Issue #946: update the Foreman MCP server copy. A failure here never undoes the supervisor swap: the installer restores the previous
+# copy, records the failure in team/mcp-install.json, and the self-upgrade alerts on it.
+bash "$source_root/tools/install-foreman-mcp.sh" "$source_root" "$commit" || printf 'foreman-mcp install failed; previous copy kept\n' >&2
 printf 'upgraded=%s previous_wrapper=%s\n' "$commit" "$backup"
