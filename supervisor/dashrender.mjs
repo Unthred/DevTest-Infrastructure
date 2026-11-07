@@ -185,26 +185,58 @@ const fmtAxisTime = (t, range) => new Date(t).toISOString().slice(range === '24h
 function legend(items) {
   return `<div class="legend" role="group" aria-label="Series">${items.map(s => `<button type="button" aria-pressed="true" data-series="${esc(s.key)}"${s.marker ? ' data-marker="true"' : ''}><i style="background:${s.colour}"></i>${esc(s.label)}</button>`).join('')}</div>`;
 }
+// Alternative styles for the allowance charts (issue #926). Every style is drawn into the same SVG and tagged data-ly; the
+// stylesheet shows the layers of the figure's data-style, so switching needs no new request and the choice is a pure client setting.
+export const CHART_STYLES = [['line', 'Line'], ['area', 'Line with shaded area'], ['step', 'Stepped line'], ['stack', 'Stacked area (sum of readings)'], ['bars', 'Bars per day (daily peak) with line']];
+const DAY = 86400000;
+function dayBuckets(t0, t1) {
+  const out = []; for (let d = Math.floor(t0 / DAY) * DAY; d < t1 && out.length < 400; d += DAY) out.push({ from: d, to: d + DAY, day: new Date(d).toISOString().slice(0, 10) });
+  return out.length ? out : [{ from: t0, to: t1, day: new Date(t0).toISOString().slice(0, 10) }];
+}
+// Stacked area: each series is sampled at 48 points (its latest reading, held only until the next reading or briefly after the last),
+// and stacked. The y axis is rescaled to the largest sum, so the labels are the sum of readings, not an allowance percentage.
+function stackLayer(live, t0, t1, x, top, bottom) {
+  const N = 48, step = (t1 - t0) / (N - 1), times = Array.from({ length: N }, (_, i) => t0 + i * step);
+  const at = (s, t) => { let k = -1; for (let i = 0; i < s.points.length && s.points[i].at <= t; i++) k = i; if (k < 0) return 0; const nx = s.points[k + 1]; return (nx ? !nx.gap : t - s.points[k].at <= step * 2) ? s.points[k].v : 0; };
+  const vals = live.map(s => times.map(t => at(s, t))), totals = times.map((_, i) => vals.reduce((a, v) => a + v[i], 0)), max = Math.max(...totals, 0.01);
+  const ys = v => bottom - (v / max) * (bottom - top), shapes = new Map(), acc = times.map(() => 0);
+  live.forEach((s, k) => {
+    const lo = [...acc]; times.forEach((_, i) => { acc[i] += vals[k][i]; });
+    const pts = [...times.map((t, i) => `${x(t).toFixed(1)},${ys(acc[i]).toFixed(1)}`), ...times.map((t, i) => `${x(t).toFixed(1)},${ys(lo[i]).toFixed(1)}`).reverse()].join(' ');
+    shapes.set(s.key, `<polygon data-ly="stack" fill="${s.colour}" fill-opacity="0.6" stroke="${s.colour}" points="${pts}"><title>${esc(s.label)} (stacked)</title></polygon>`);
+  });
+  const axis = [0, 0.25, 0.5, 0.75, 1].map(v => `<text data-ly="stack" x="38" y="${(ys(max * v) + 4).toFixed(1)}" text-anchor="end" class="ax">${Math.round(max * v * 100)}%</text>`).join('');
+  return { shapes, axis };
+}
 function lineChart({ series, resets = [], expected = [], now, range, title }) {
   const pts = series.flatMap(s => s.points);
   if (!pts.length) return empty('No allowance history in this range', 'The chart fills in as ticks record what the providers report.', 'chart');
   const W = 900, H = 320, L = 44, B = 28, T = 12, R = 14;
   const t1 = now, t0 = Number.isFinite(RANGES[range]) ? now - RANGES[range] : Math.min(...pts.map(p => p.at));
   const x = t => L + ((t - t0) / (t1 - t0)) * (W - L - R), y = v => T + (1 - Math.min(1, Math.max(0, v))) * (H - T - B);
-  let g = [0, 0.25, 0.5, 0.75, 1].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="gridline"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v * 100}%</text>`).join('');
+  let g = [0, 0.25, 0.5, 0.75, 1].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="gridline"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax" data-ly="line area step bars">${v * 100}%</text>`).join('');
   for (let i = 0; i <= 4; i++) { const t = t0 + ((t1 - t0) * i) / 4; g += `<text x="${x(t)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}" class="ax" ${lms(Math.round(t), '{t}', range === '24h')}>${esc(fmtAxisTime(t, range))}</text>`; }
   for (const r of resets.filter(r => r.at >= t0)) g += `<line x1="${x(r.at)}" x2="${x(r.at)}" y1="${T}" y2="${H - B}" class="reset" data-series="reset"><title ${lms(r.at, `${r.window} window reset {t}`)}>${esc(r.window)} window reset ${esc(utc(r.at))}</title></line>`;
   const shownExpected = expected.filter(r => r.at >= t0 && r.at <= t1);
   for (const r of shownExpected) g += `<line x1="${x(r.at).toFixed(1)}" x2="${x(r.at).toFixed(1)}" y1="${T}" y2="${H - B}" class="reset expected" data-series="expected"><title ${lms(r.at, `${r.window} window expected to reset {t}: the reading before it has expired`)}>${esc(r.window)} window expected to reset ${esc(utc(r.at))}: the reading before it has expired</title></line>`;
-  for (const s of series) {
-    if (!s.points.length) continue;
+  const live = series.filter(s => s.points.length);
+  const X = p => x(p.at).toFixed(1), Y = p => y(p.v).toFixed(1), base = y(0).toFixed(1);
+  const stack = stackLayer(live, t0, t1, x, T, H - B);
+  const days = dayBuckets(t0, t1), slot = (W - L - R) / days.length;
+  for (const s of live) {
     // a gap (reading expired, then a new one) splits the line: nothing is drawn across the time no reading was current
     const segments = s.points.reduce((acc, p) => { if (p.gap || !acc.length) acc.push([]); acc.at(-1).push(p); return acc; }, []);
-    g += `<g data-series="${esc(s.key)}">${segments.map(seg => `<polyline fill="none" stroke="${s.colour}" stroke-width="2.5" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ''} points="${seg.map(p => `${x(p.at).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ')}"/>`).join('')}`
-      + s.points.filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0).map(p => `<circle class="pt" tabindex="0" cx="${x(p.at).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="5" fill="${s.colour}"><title ${lms(p.at, `${s.label}: ${pct(p.v)} at {t}`)}>${esc(s.label)}: ${pct(p.v)} at ${esc(utc(p.at))}</title></circle>`).join('') + '</g>';
+    const dash = s.dash ? ` stroke-dasharray="${s.dash}"` : '';
+    const poly = (ly, pts) => `<polyline data-ly="${ly}" fill="none" stroke="${s.colour}" stroke-width="2.5" stroke-linejoin="round"${dash} points="${pts}"/>`;
+    const step = seg => seg.flatMap((p, i) => (i ? [`${X(p)},${Y(seg[i - 1])}`, `${X(p)},${Y(p)}`] : [`${X(p)},${Y(p)}`])).join(' ');
+    const area = seg => `<polygon data-ly="area" fill="${s.colour}" fill-opacity="0.18" stroke="none" points="${X(seg[0])},${base} ${seg.map(p => `${X(p)},${Y(p)}`).join(' ')} ${X(seg.at(-1))},${base}"/>`;
+    const bars = days.map((d, di) => { const v = Math.max(0, ...s.points.filter(p => p.at >= d.from && p.at < d.to).map(p => p.v)); if (!v) return ''; const bw = Math.max(1, (slot - 2) / live.length), bx = L + di * slot + 1 + live.indexOf(s) * bw; return `<rect data-ly="bars" x="${bx.toFixed(1)}" y="${y(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(y(0) - y(v)).toFixed(1)}" fill="${s.colour}" fill-opacity="0.55"><title>${esc(s.label)}: peak ${pct(v)} on ${esc(d.day)}</title></rect>`; }).join('');
+    g += `<g data-series="${esc(s.key)}">${segments.map(seg => area(seg) + poly('line area bars', seg.map(p => `${X(p)},${Y(p)}`).join(' ')) + poly('step', step(seg))).join('')}${bars}${stack.shapes.get(s.key) || ''}`
+      + s.points.filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0).map(p => `<circle class="pt" data-ly="line area step bars" tabindex="0" cx="${X(p)}" cy="${Y(p)}" r="5" fill="${s.colour}"><title ${lms(p.at, `${s.label}: ${pct(p.v)} at {t}`)}>${esc(s.label)}: ${pct(p.v)} at ${esc(utc(p.at))}</title></circle>`).join('') + '</g>';
   }
+  g += stack.axis;
   const items = [...series.filter(s => s.points.length).map(s => ({ key: s.key, label: s.label, colour: s.colour })), ...(resets.length ? [{ key: 'reset', label: 'Window reset', colour: 'var(--action)', marker: true }] : []), ...(shownExpected.length ? [{ key: 'expected', label: 'Expected reset (reading expired)', colour: 'var(--mut)', marker: true }] : [])];
-  return `<figure class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">${g}</svg>${legend(items)}</figure>`;
+  return `<figure class="chart" data-style="line" data-styles="${CHART_STYLES.map(([k]) => k).join(' ')}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">${g}</svg>${legend(items)}</figure>`;
 }
 function stackedChart({ days, title, range, now }) {
   const names = Object.keys(days).filter(d => inRange(Date.parse(`${d}T12:00:00Z`) + 12 * 3600000, now, range)).sort();
