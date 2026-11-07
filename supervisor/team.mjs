@@ -682,6 +682,11 @@ export class Team {
       // act.candidate (issue #297): judge one named candidate, for the Needs you card that lists every model tried.
       ({ fields, warnings } = Number.isInteger(act.candidate) && tried[act.candidate] ? tried[act.candidate] : tried.find(r => !this.independenceRefusal(act.agent, r.fields.model ?? null, pr)) || tried[0]);
     }
+    // Issue #698: with no candidate list the low entry gets the same independence check; when it is not independent of the writers the
+    // re-review runs on the agent's normal review entry instead, so it is not started and then refused.
+    else if (typeOfKind(kind) === 'review' && act.pr != null && lowEntry && this.independenceRefusal(act.agent, fields.model ?? null, pr)) {
+      ({ fields, warnings } = resolveModel({ ...base, low: false, reReview: false }));
+    }
     if (warnings.length) (report.warnings ||= []).push({ agent: act.agent, kind, warning: warnings.join('; ') });
     return fields;
   }

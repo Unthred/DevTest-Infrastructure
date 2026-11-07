@@ -53,7 +53,14 @@ test('#619: the planner holds a review no candidate can pass, before any job exi
   assert.equal(world(t).reviewRefusal('claude', pr, 'k'), null);
 });
 
-test('#619: no candidate list: the low entry is used as before', t => {
-  const f = world(t, { cfg: (() => { const c = config(); delete c.models.agents.claude.review_candidates; return c; })() }).modelFor(act(), 'review', {});
+test('#619/#698: no candidate list: the low entry is used when independent of the writer', t => {
+  const f = world(t, { writer: 'opus', cfg: (() => { const c = config(); delete c.models.agents.claude.review_candidates; return c; })() }).modelFor(act(), 'review', {});
   assert.equal(f.effort, 'low');
+});
+
+test('#698: no candidate list and a low entry that is not independent: the re-review uses the review entry', t => {
+  const c = config({ low: { model: 'sonnet', effort: 'low' }, review: O }); delete c.models.agents.claude.review_candidates;
+  assert.equal(world(t, { cfg: c, writer: 'sonnet' }).modelFor(act(), 'review', {}).model, 'opus');
+  const c2 = config({ low: { model: 'sonnet', effort: 'low' }, review: O }); delete c2.models.agents.claude.review_candidates;
+  assert.equal(world(t, { cfg: c2, writer: 'opus' }).modelFor(act(), 'review', {}).effort, 'low');
 });

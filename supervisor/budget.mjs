@@ -124,11 +124,13 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (weekly) {
     const windowH = (weekly.windowMinutes || WEEK_MINUTES) / 60, hoursLeft = (weekly.resetsAt - now) / HOUR;
     const average = weekly.utilization / Math.max(windowH * MIN_ELAPSED_FRACTION, windowH - hoursLeft);
-    // Just after a reset little has been used and a short burst extrapolates wildly (4% used read as 299%, issue #619):
-    // the recent rate counts only once the window has run as long as the recent-rate span.
-    const recent = windowH - hoursLeft >= settings.recent_hours ? recentRate(history, weekly.resetsAt, now, settings.recent_hours) : null;
-    const rate = Math.max(average, recent ?? 0);
-    Object.assign(out, { known: true, used: weekly.utilization, resetsAt: weekly.resetsAt, hoursLeft, ratePerHour: rate, rateSource: recent !== null && recent > average ? 'recent' : 'window average',
+    // Just after a reset little has been used and a short burst extrapolates wildly (4% used read as 299%, issue #619). The recent rate
+    // is blended in gradually (issue #698): weight 0 until the window has run half the recent-rate span, rising linearly to 1 at the full
+    // span, so the estimate has no cliff at recent_hours (4% used, +4% in 3 h read 29% at 23 h and 196% at 24 h with a hard cutoff).
+    const elapsed = windowH - hoursLeft, half = settings.recent_hours / 2, weight = Math.min(1, Math.max(0, (elapsed - half) / half));
+    const recent = weight > 0 ? recentRate(history, weekly.resetsAt, now, settings.recent_hours) : null;
+    const rate = recent !== null && recent > average ? average + weight * (recent - average) : average;
+    Object.assign(out, { known: true, used: weekly.utilization, resetsAt: weekly.resetsAt, hoursLeft, ratePerHour: rate, rateSource: rate > average ? 'recent' : 'window average',
       projected: weekly.utilization + rate * hoursLeft, runsOutAt: weekly.utilization >= 1 ? now : rate > 0 ? now + ((1 - weekly.utilization) / rate) * HOUR : null, costs: jobCosts(jobs, weekly, now) });
   } else out.reason = windows.length ? 'no weekly window reported' : 'no current allowance reading (window reset since the last report)';
   const fresh = windows.length > 0 || (Number.isFinite(out.observedAt) && now - out.observedAt < 7 * 24 * HOUR);
