@@ -197,3 +197,17 @@ test('foreman_queue: the same data, filters, read-only, and a clear answer when 
   const none = JSON.parse((await createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), now: () => NOW }).call('foreman_queue', {})).text);
   assert.equal(none.available, false);
 });
+
+test('queue mode leaves the plan and the slot-full holds exactly as a plain plan: no non-fitting pick feeds a later role', async t => {
+  // Slot-full hold (issue #380) survives the queue extension.
+  const running = [{ id: 'a'.repeat(32), provider: 'claude', status: 'running', createdAt: NOW - MIN, updatedAt: NOW }];
+  const v = await view(t, { cfg: config({ roles: { implementer: 1, reviewer: 1 } }), issues: [issue(1, 'one'), issue(2, 'two'), issue(3, 'three')], jobs: running, state: { jobs: { [running[0].id]: { kind: 'implement', issue: 1, agent: 'claude' } } } });
+  assert.match(Object.values(v.budget || {}).map(b => b.held?.implement).filter(Boolean).join('|'), /implementer slot full/);
+  // Across roles: a rebase pick beyond the rebaser slot must not claim files that block a fitting implement pick.
+  const sha = n => H(n);
+  const pulls = [10, 11].map((iss, k) => ({ number: 60 + k, title: `p${k}`, headRefName: `claude/issue-${iss}-x`, headRefOid: sha(k + 1), baseRefName: 'main', isDraft: false, mergeable: 'CONFLICTING', statusCheckRollup: [] }));
+  const w = await view(t, { cfg: config({ roles: { implementer: 1, reviewer: 1, rebaser: 1 } }), pulls, issues: [issue(10, 'a', { body: 'edit docs/a.md' }), issue(11, 'b', { body: 'edit docs/b.md' }), issue(12, 'c', { body: 'edit docs/b.md' })] });
+  const pick = a => `${a.type}:${a.pr ?? a.issue}`;
+  const mine = w.plan.map(pick);
+  assert.ok(mine.includes('implement:12') || !mine.some(x => x.startsWith('rebase:')), `the implement pick is not lost to a queued rebase: ${mine}`);
+});

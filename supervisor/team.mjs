@@ -1043,7 +1043,7 @@ export class Team {
   agentOfProvider(provider) { return this.agents().find(([, a]) => a.provider === provider)?.[0] || null; }
 
   // `queue: true` (issue #863) runs the same dispatch with no slot limit and records every pick in this.queued, in the order the planner
-  // takes them, each marked with whether it fits a free slot now. The returned plan is the slot-limited prefix: identical to a plain plan().
+  // takes them, each marked with whether it fits a free slot now. The returned plan and the holds come from the slot-limited pass, which runs first and is identical to a plain plan(); the extra picks follow it.
   async plan({ queue = false } = {}) {
     const actions = [];
     this.queued = []; this.overlapOf = new Map();
@@ -1123,9 +1123,10 @@ export class Team {
     // 2. dispatch per role slot: any agent may fill a free slot, and one agent may fill both. Where several agents could, a review goes
     // to the reviewer with the most spare allowance (issue #402), after any review only that agent can do, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
+    const dispatch = extend => {
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
-      for (let guard = 0; queue ? guard < 400 : (used[role] < roleCount(L, role) && total < overallCap(L)); guard++) {
-        const fits = used[role] < roleCount(L, role) && total < overallCap(L);
+      for (let guard = 0; guard < 400 && (extend || (used[role] < roleCount(L, role) && total < overallCap(L))); guard++) {
+        const fits = !extend && used[role] < roleCount(L, role) && total < overallCap(L);
         const cands = [];
         for (const [agent, a] of this.agents()) {
           if (fits && this.providerSlotFull(a.provider, role, usedBy)) continue;
@@ -1150,7 +1151,12 @@ export class Team {
         if (claimN != null && issueByNo.get(claimN)) for (const f of this.predictFiles(issueByNo.get(claimN))) this.claimed.set(f, claimN);
       }
     }
+    };
+    dispatch(false);
     this.holdFullSlots(occupying, usedAtStart, totalAtStart, prs, issueByNo);
+    // Issue #863: the queue view extends the dispatch past the free slots only after the slot-limited pass and the holds are done, so the extra
+    // picks cannot change what the tick starts (claimed files, taken work, planned allowance) nor the slot-full reasons.
+    if (queue) dispatch(true);
     // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
     const order = n => this.agents().findIndex(([x]) => x === n);
     return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -1 : order(x.agent)) - (y.type === 'merge' ? -1 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
