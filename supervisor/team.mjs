@@ -138,7 +138,7 @@ export const OVERALL_ROLES = ROLES.filter(r => r !== 'inbox');
 export const DEFAULT_INBOX_MAX_MINUTES = 15;
 export const inboxMaxMs = L => (Number.isFinite(L?.inbox_max_minutes) && L.inbox_max_minutes > 0 ? L.inbox_max_minutes : DEFAULT_INBOX_MAX_MINUTES) * 60000;
 // Prompts that change the queue order or a config file must apply before the planner hands out new implement work (the order guard).
-export const ORDER_SENSITIVE = /\b(queue|order|reorder|priorit\w*|sequence|config\w*|limits?|roles?)\b|\.json\b/i;
+export const ORDER_SENSITIVE = /\b(queue|reorder|re-order|priorit\w*|sequence|config\w*|limits?|roles?|ahead\s+of|in\s+front\s+of|(move|swap|put|bump|push|pull|promote|demote|defer|postpone|delay|do|run|start|work\s+on|handle|take)\b[^.\n]{0,80}\b(before|after|first|next|last|above|below|top|front|earlier|later)|(?<!in )order(?!\s+to\b))\b|\.json\b/i;
 export const orderSensitive = item => ORDER_SENSITIVE.test(`${item?.title || ''}\n${item?.prompt || ''}`);
 export const DEFAULT_REBASERS = 1;
 // The count of a role: the configured one, else 1. limits.roles.rebaser is optional; an absent value is left absent so a config is not rewritten.

@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as inbox from '../supervisor/inbox.mjs';
-import { Team, validateTeamConfig, loadTeamConfig, roleCount, overallCap, resumeDecision } from '../supervisor/team.mjs';
+import { Team, validateTeamConfig, loadTeamConfig, roleCount, overallCap, resumeDecision, orderSensitive } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
@@ -389,6 +389,11 @@ test('team: the order guard holds new implement work while an order-changing pro
   const mk = item => { const w = world(t, { agents }); w.gh.listIssues = async () => [{ number: 5, title: 'five', state: 'OPEN', body: '', labels: [] }]; if (item) approve(w, item); return w; };
   const implementing = async w => (await w.team.plan()).some(a => a.type === 'implement');
   assert.equal(await implementing(mk(null)), true, 'baseline: the issue is implemented');
+  for (const text of ['Move issue 940 ahead of 935', 'Put #940 first in the implement list', 'Do issue 12 before issue 7.', 'Swap 940 and 935 so 940 goes next']) {
+    const w = mk({ ...GOOD, title: 'Change picks', prompt: text }); const pl = await w.team.plan();
+    assert.ok(pl.some(a => a.type === 'inbox') && !pl.some(a => a.type === 'implement'), `holds implement work: ${text}`);
+  }
+  assert.equal(orderSensitive({ title: 'Tidy', prompt: 'Fix the typo in README in order to read better' }), false, '"in order to" is not an order change');
   const plain = mk({ ...GOOD, title: 'Tidy the docs', prompt: 'Fix a typo in the README.' });
   assert.equal(await implementing(plain), true, 'a harmless prompt does not hold implement work');
   const order = mk({ ...GOOD, title: 'Reorder the issue queue', prompt: 'Put issue 9 before issue 5 in team.json.' });
