@@ -127,6 +127,12 @@ function topNames(list, n = 4) {
 // Issue #639: job records are re-read only when their size or modification time changed, so a reading costs one directory listing and
 // one stat per record instead of reading and parsing every record each time. A record that cannot be parsed is kept as `unreadable`
 // (never dropped, as readJobs does); a vanished one is forgotten. Same output as readJobs(root).
+// The same job objects are returned on every reading, so they are deeply frozen: a consumer that tries to mutate one throws in strict
+// mode (ES modules) instead of silently corrupting the cache. Copy a job before changing it.
+function deepFreeze(v) {
+  if (v && typeof v === 'object' && !Object.isFrozen(v)) { Object.freeze(v); for (const k of Object.keys(v)) deepFreeze(v[k]); }
+  return v;
+}
 export function createJobReader(root) {
   const dir = path.join(root, 'jobs'), cache = new Map();   // name -> { key, job }
   return () => {
@@ -140,7 +146,7 @@ export function createJobReader(root) {
         let job;
         try { const j = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); job = j && typeof j === 'object' && !Array.isArray(j) ? j : bad; }
         catch (e) { if (e instanceof SyntaxError) job = bad; else if (e.code === 'ENOENT') continue; else throw e; }
-        hit = { key, job }; cache.set(name, hit);
+        hit = { key, job: deepFreeze(job) }; cache.set(name, hit);
       }
       seen.add(name); out.push(hit.job);
     }
