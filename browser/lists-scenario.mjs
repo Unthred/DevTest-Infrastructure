@@ -31,8 +31,7 @@ try {
     await page.goto(url(pages[k]), { waitUntil: 'networkidle' });
     heights[k] = await height();
     const findings = await page.evaluate(layoutCheck, { touch: PROFILES[profile].hasTouch });
-    // the visually hidden label text (.vh, 1 px by design) is reported as "clipped" on every page that has one, also the empty page
-    const fails = findings.filter(f => f.severity === 'fail' && !(f.check === 'clipped' && /label\[\d+\]>span\[0\]$/.test(f.element))).map(({ text, ...f }) => `${f.check}@${f.element}`);
+    const fails = findings.filter(f => f.severity === 'fail').map(({ text, ...f }) => `${f.check}@${f.element}`);
     check(`${k}: no overflow or covered link (layout check)`, fails.length === 0, fails.slice(0, 5).join('; '));
     if (k === 'many') await page.screenshot({ path: path.join(out, `${name}-many.png`), fullPage: true });
   }
