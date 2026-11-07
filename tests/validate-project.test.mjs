@@ -177,6 +177,9 @@ test('stale wording: a phrase split across a line break, and contracts/ and supe
   expectFinding((a) => a.write('contracts/x.md', 'Opposite-Agent\n'), 'stale-wording', 'contracts/x.md');
   expectFinding((a) => a.write('supervisor/prompt-x.mjs', "export const p = 'ask the opposite  agent';\n"), 'stale-wording', 'supervisor/prompt-x.mjs');
   expectFinding((a) => a.write('supervisor/adapters/sub/p.mjs', '// opposite agent\n'), 'stale-wording', 'supervisor/adapters/sub/p.mjs');
+  expectFinding((a) => a.write('supervisor/dashui/app.js', '// opposite agent\n'), 'stale-wording', 'supervisor/dashui/app.js');
+  assert.ok(!checks(fixture((a) => a.write('supervisor/x.test.mjs', '// opposite agent\n'))).includes('stale-wording'));
+  assert.ok(!checks(fixture((a) => a.write('supervisor/x.test.js', '// opposite agent\n'))).includes('stale-wording'));
   expectFinding((a) => a.write('contracts/z.yaml', 'note: opposite agent\n'), 'stale-wording', 'contracts/z.yaml');
   assert.ok(!checks(fixture((a) => a.write('contracts/y.md', 'independent review only\n'))).includes('stale-wording'));
 });
