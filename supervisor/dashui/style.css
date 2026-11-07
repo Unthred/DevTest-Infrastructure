@@ -433,3 +433,28 @@ body.layout-editing{overscroll-behavior:contain}
 .headline .hl-v,.hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1;text-decoration:none;color:inherit}
 .headline .hl-v:hover{color:var(--link)}
 .headline .hl-trend svg{width:1em;height:1em;vertical-align:-.15em;margin-right:.25em}
+
+/* Issue #863: queue strip (one swipeable row per role) and the queue page. State is colour plus an icon plus a word, never colour alone. */
+.queue-strip .qs-lane{margin-top:var(--sp2)}
+.queue-strip .qs-lane h3{margin:0 0 var(--sp1);font-size:var(--fs-md,1rem)}
+.qs-row{display:flex;gap:var(--sp2);overflow-x:auto;scroll-snap-type:x proximity;padding:var(--sp1) 2px var(--sp2);-webkit-overflow-scrolling:touch;align-items:flex-start}
+.qs-card{flex:0 0 auto;width:min(15rem,72vw);scroll-snap-align:center;border:1px solid var(--line);border-left-width:4px;border-radius:8px;padding:var(--sp1) var(--sp2)}
+.qs-card summary{display:flex;flex-wrap:wrap;gap:var(--sp1);align-items:center;cursor:pointer;min-height:44px}
+.qs-card .qs-ic{display:inline-flex;border-radius:50%;padding:2px}
+.qs-card .qs-ic svg{width:1.1em;height:1.1em}
+.qs-card .qs-num{font-weight:700}
+.qs-card .qs-desc{flex-basis:100%;color:var(--mut);font-size:var(--fs-sm)}
+.qs-card .qs-why{padding:var(--sp1) 0;font-size:var(--fs-sm)}
+.qs-card .qs-why p{margin:0 0 var(--sp1)}
+.qs-card.st-running{border-left-color:var(--ok)}
+.qs-card.st-retry,.qs-card.st-waiting{border-left-color:var(--warning)}
+.qs-card.st-failed{border-left-color:var(--action)}
+.qs-card.st-done{border-left-color:var(--ok);opacity:.75}
+.qs-card.st-queued{border-left-color:var(--info)}
+.qs-card.qs-more,.qs-card.qs-pile{border-left-color:var(--info);text-decoration:none;color:inherit}
+.qs-card.qs-more{display:flex;flex-direction:column;justify-content:center;min-height:44px}
+.qs-nowmark{flex:0 0 2px;align-self:stretch;background:var(--line)}
+.est-tag{color:var(--mut)}
+.qfilters{display:flex;flex-wrap:wrap;gap:var(--sp2)}
+.qgroup{white-space:nowrap}
+@media(max-width:639px){.qs-card{width:78vw}}

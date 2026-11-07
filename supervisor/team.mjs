@@ -126,6 +126,11 @@ export const ROLES = ['implementer', 'reviewer', 'rebaser'];
 export const DEFAULT_REBASERS = 1;
 // The count of a role: the configured one, else 1. limits.roles.rebaser is optional; an absent value is left absent so a config is not rewritten.
 export const roleCount = (L, r) => (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : r === 'rebaser' ? DEFAULT_REBASERS : 1);
+// Issue #863: an issue Foreman or an agent filed as a follow-up (the post-merge marker, or the "Review follow-ups for PR #n" title), as opposed to
+// one the homeowner raised. The homeowner's own issues are taken first.
+export const FOLLOW_UP_TITLE = /^\s*Review follow-ups? for PR #\d+/i;
+export const FOLLOW_UP_MARKER = /devtest-(review-followup|postmerge) v1/;
+export const agentGenerated = issue => !!issue && (issue.followUp === true || FOLLOW_UP_MARKER.test(issue.body || '') || FOLLOW_UP_TITLE.test(issue.title || ''));
 export const roleOfType = type => (type === 'review' ? 'reviewer' : type === 'rebase' ? 'rebaser' : 'implementer');   // implement, continue, fix, cifix -> implementer; review -> reviewer; rebase -> rebaser
 // The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
 // role count is the only change needed. One implementer and one reviewer give 2, as before.
@@ -729,7 +734,14 @@ export class Team {
     const listed = new Set(this.agents().flatMap(([a]) => this.issuesOf(a)));
     return (this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)).map(i => i.number).sort((a, b) => a - b);
   }
-  candidates(agent) { return [...this.issuesOf(agent), ...this.unlisted()]; }
+  // Issue #863: issues the homeowner raised go ahead of agent-generated follow-ups (stable: each group keeps its list order), so nobody has to
+  // hand-edit agents.<name>.issues to get that order.
+  homeownerFirst(list) {
+    const byNo = new Map((this.view?.issues || []).map(i => [i.number, i]));
+    const generated = n => agentGenerated(byNo.get(n));
+    return [...list.filter(n => !generated(n)), ...list.filter(n => generated(n))];
+  }
+  candidates(agent) { return this.homeownerFirst([...this.issuesOf(agent), ...this.unlisted()]); }
   // Review independence (issue #152). The models that wrote a pull request head are the models of every implementer job the dispatcher
   // recorded for it (implement, continue, fix, cifix, rebase), by provider and model. Without a record (a PR written by hand) only the
   // branch author's provider is known, so only a reviewer on another provider counts as independent.
@@ -1030,8 +1042,11 @@ export class Team {
   fixCount(pr) { if (this.exceptionFor(pr)) return this.s.exceptionFixes[pr] || 0; return Object.entries(this.s.fixAttempts).reduce((n, [k, v]) => n + (k === String(pr) || k.startsWith(`${pr}:`) ? v : 0), 0); }
   agentOfProvider(provider) { return this.agents().find(([, a]) => a.provider === provider)?.[0] || null; }
 
-  async plan() {
+  // `queue: true` (issue #863) runs the same dispatch with no slot limit and records every pick in this.queued, in the order the planner
+  // takes them, each marked with whether it fits a free slot now. The returned plan is the slot-limited prefix: identical to a plain plan().
+  async plan({ queue = false } = {}) {
     const actions = [];
+    this.queued = []; this.overlapOf = new Map();
     this.picked = new Set();   // issues already given to an agent in this plan (one taker per issue)
     const [prs, issues] = [await this.gh.listPulls(), await this.gh.listIssues()];
     this.view = { prs, issues };
@@ -1099,6 +1114,7 @@ export class Team {
       if (v) {
         const interim = v.interim === true && v.reviewer === author;
         const exception = !!this.exceptionFor(pr.number);
+        if (queue) this.queued.push({ type: 'merge', pr: pr.number, role: 'implementer', fits: true, head: pr.headRefOid, agent: author });
         // Applies only while D-024 is not approved (D-021): an interim merge owes a post-merge review by a reviewer on another model.
         actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job, ...(interim && !this.independenceApproved() ? { interim: true, branch: pr.headRefName, author } : {}), ...(exception ? { exception: true, commitsJob: this.s.exceptionReviews[verdictKey(pr.number, pr.headRefOid)]?.job } : {}) });
         break;
@@ -1108,18 +1124,23 @@ export class Team {
     // to the reviewer with the most spare allowance (issue #402), after any review only that agent can do, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
-      while (used[role] < roleCount(L, role) && total < overallCap(L)) {
+      for (let guard = 0; queue ? guard < 400 : (used[role] < roleCount(L, role) && total < overallCap(L)); guard++) {
+        const fits = used[role] < roleCount(L, role) && total < overallCap(L);
         const cands = [];
         for (const [agent, a] of this.agents()) {
-          if (this.providerSlotFull(a.provider, role, usedBy)) continue;
+          if (fits && this.providerSlotFull(a.provider, role, usedBy)) continue;
           const act = this.choose(agent, a, prs, issueByNo, role);
           if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) + 0.1 * actions.filter(x => x.agent === agent).length });   // tie-break: spread load to an agent without a slot this tick
         }
         if (!cands.length) break;
         const best = cands.sort((x, y) => x.rank - y.rank)[0];   // stable: ties keep the team.json agent order
         const why = best.act.type === 'review' ? this.reviewWhy(best.agent, best.act, prs) : null;
-        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}) }); used[role]++; total++;
-        { const k = `${this.c.agents[best.agent].provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+        const entry = { agent: best.agent, ...best.act, ...(why ? { why } : {}) };
+        if (queue) this.queued.push({ ...entry, role, fits });
+        if (fits) {
+          actions.push(entry); used[role]++; total++;
+          const k = `${this.c.agents[best.agent].provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1;
+        }
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
         this.taken.add(`${best.act.type}:${best.act.key}`);
@@ -1158,7 +1179,7 @@ export class Team {
   overlapHold(agent, n, issue, type = 'implement') {
     for (const f of this.predictFiles(issue)) {
       const other = this.claimed?.get(f);
-      if (other !== undefined && other !== n) { this.hold(agent, type, `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
+      if (other !== undefined && other !== n) { this.overlapOf?.set(`${type}:${n}`, { file: f, other }); this.hold(agent, type, `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
     }
     return false;
   }
@@ -1491,7 +1512,7 @@ export class Team {
     for (const [other, o] of this.agents()) {
       const ob = this.ownerOut(other);
       if (other === agent || !ob) continue;
-      for (const n of this.issuesOf(other)) {
+      for (const n of this.homeownerFirst(this.issuesOf(other))) {
         const issue = this.implementable(n, prs, issueByNo, busy);
         if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
         if (!allow('implement')) return null;

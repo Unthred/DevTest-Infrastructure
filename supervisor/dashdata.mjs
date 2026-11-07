@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
-import { checksState, retriedIn, prerequisites, pullPrerequisites } from './team.mjs';
+import { checksState, retriedIn, prerequisites, pullPrerequisites, agentGenerated } from './team.mjs';
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
@@ -117,7 +117,9 @@ export const compactIssues = issues => (issues || []).map(i => ({ number: i.numb
   // Parsed from the full title and body before the body is dropped, so the dashboard's exclusions match the tick's (issue #212).
   prerequisites: prerequisites(i.body), pullPrerequisites: pullPrerequisites(i.title, i.body),
   // Issue #414: the question the issue states for the homeowner and whether Foreman filed it, read before the body is dropped.
-  ...(homeownerQuestion(i.body) ? { question: homeownerQuestion(i.body) } : {}), ...(/devtest-postmerge v1/.test(i.body || '') ? { foremanFiled: true } : {}) }));
+  ...(homeownerQuestion(i.body) ? { question: homeownerQuestion(i.body) } : {}), ...(/devtest-postmerge v1/.test(i.body || '') ? { foremanFiled: true } : {}),
+  // Issue #863: an agent-generated follow-up (marker or title), read before the body is dropped, so the page orders issues as the tick does.
+  ...(agentGenerated(i) ? { followUp: true } : {}) }));
 
 // idle | running | paused | blocked, per agent, from the supervisor's own job records.
 export function agentStates(config, jobs, now) {
