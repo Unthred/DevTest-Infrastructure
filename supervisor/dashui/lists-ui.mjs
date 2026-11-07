@@ -23,7 +23,7 @@ export function initList(el, store = sessionStorage) {
   let saveTimer = 0;
   const save = () => writeStore(store, id, { q: st.q, key: st.key, dir: st.dir, top: ul.scrollTop, open: openKeys() });
   const saveSoon = () => { clearTimeout(saveTimer); saveTimer = setTimeout(save, 150); };
-  const detailKey = d => { const li = d.closest('li'); return li ? `${li.dataset.key || ''}|${d.closest('[data-step]')?.dataset.step || ''}` : ''; };
+  const detailKey = d => { const li = d.closest('.dl-scroll > li'); /* the row, not a step's nested li.wstep (no data-key) */ return li ? `${li.dataset.key || ''}|${d.closest('[data-step]')?.dataset.step || ''}` : ''; };
   const openKeys = () => [...ul.querySelectorAll('details[open]')].map(detailKey).filter(Boolean).slice(0, 200);
 
   function apply({ keepScroll = true } = {}) {
@@ -67,7 +67,11 @@ export function initList(el, store = sessionStorage) {
   dirBtn?.addEventListener('click', () => { st.dir = st.dir === 'desc' ? 'asc' : 'desc'; ul.scrollTop = 0; apply(); save(); });
   ul.addEventListener('scroll', saveSoon, { passive: true });
   ul.addEventListener('toggle', saveSoon, true);
-  addEventListener('pagehide', save);
+  // A list replaced by an in-place refresh is detached: it drops its listener instead of saving stale state over the new list's.
+  if (typeof addEventListener === 'function') {
+    const onHide = () => { if (el.isConnected === false) { removeEventListener('pagehide', onHide); return; } save(); };
+    addEventListener('pagehide', onHide);
+  }
 }
 export function initLists(scope = document, store) { for (const el of scope.querySelectorAll('.dlist:not([data-dl-ready])')) initList(el, store); }
 // A list swapped in later (in-place refresh) is initialised in the same task, before the next paint.

@@ -152,7 +152,7 @@ function fakeList({ rows = 10, id = 'needs' } = {}) {
   const detailsOf = [];
   for (let i = 0; i < rows; i++) {
     const li = new El('li', { key: `att-${i}`, i: String(i), sev: 'action', num: String(100 + i), name: `Item ${i}` }); li.text = `Item ${i} decision for #${100 + i}`;
-    const d = new El('details'); li.append(d); d.is = s => s === 'details'; li.is = s => s === 'li'; detailsOf.push(d); ul.append(li);
+    const d = new El('details'); li.append(d); d.is = s => s === 'details'; li.is = s => s === 'li' || s === '.dl-scroll > li'; detailsOf.push(d); ul.append(li);
   }
   ul.qa = { 'details[open]': () => detailsOf.filter(d => d.open), details: () => detailsOf };
   detailsOf.forEach(d => { d.dataset = {}; });
@@ -210,4 +210,32 @@ test('browser: bad saved state (garbage, unknown sort) is ignored and a list is 
   store.setItem('dash.dl./.needs', JSON.stringify({ key: 'bogus', q: 'x'.repeat(500), top: 'far' }));
   const b = fakeList(); initList(b.el, store); initList(b.el, store);
   assert.equal(b.input.value.length, 200); assert.equal(b.select.value, 'default'); assert.equal(b.ul.scrollTop, 0); assert.equal(b.ul.on.scroll.length, 1, 'bound once');
+});
+
+test('browser: an open step inside one watched row is restored to that row only (nested li.wstep has no data-key)', async () => {
+  const { initList } = await loadUi(), store = memory();
+  const build = () => {
+    const L = fakeList({ rows: 3 });
+    L.detailsOf.forEach(d => {   // each row holds li.wstep[data-step] > details; the step li is not a list row
+      const row = d.parent, step = new El('li', { step: 'implement' }); step.is = s => s === 'li' || s === '[data-step]';
+      row.children.splice(row.children.indexOf(d), 1); step.append(d); row.append(step);
+    });
+    return L;
+  };
+  const a = build(); initList(a.el, store);
+  a.detailsOf[0].open = true; a.ul.fire('toggle');
+  await new Promise(r => setTimeout(r, 200));
+  const b = build(); initList(b.el, store);
+  assert.deepEqual(b.detailsOf.map(d => d.open), [true, false, false]);
+});
+test('browser: a detached list removes its pagehide listener and does not save', async () => {
+  const { initList } = await loadUi(), hooks = [];
+  globalThis.addEventListener = (t, f) => { if (t === 'pagehide') hooks.push(f); };
+  globalThis.removeEventListener = (t, f) => { const i = hooks.indexOf(f); if (t === 'pagehide' && i >= 0) hooks.splice(i, 1); };
+  const store = memory(), L = fakeList(); L.el.isConnected = true; initList(L.el, store);
+  assert.equal(hooks.length, 1);
+  hooks[0](); assert.equal(store.keys().length, 1, 'attached: saves');
+  const key = store.keys()[0]; L.ul.scrollTop = 99;
+  L.el.isConnected = false; hooks[0]();
+  assert.equal(hooks.length, 0, 'listener removed'); assert.equal(JSON.parse(store.getItem(key)).top, 0, 'no stale save');
 });
