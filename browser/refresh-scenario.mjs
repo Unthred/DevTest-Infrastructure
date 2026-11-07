@@ -126,6 +126,23 @@ try {
   const end = await mark();
   check('after several refreshes the page, list, search, open items and typed text are all still in place', Math.abs(end.y - before.y) <= 2 && Math.abs(end.list - before.list) <= 2 && end.q === before.q && JSON.stringify(end.steps) === JSON.stringify(before.steps) && Math.abs(end.inner - before.inner) <= 2 && end.open && end.typed === 'abc', JSON.stringify(end));
   check('still no reload', navigations === startNav && (await page.evaluate(() => window.__same)) === 'still here');
+  // ---- 8. rows are keyed: a list that lost one row keeps every other row element (rows update, the list is not re-rendered)
+  const rows = () => nul.locator('> li');
+  await rows().evaluateAll(l => l.forEach((li, i) => { li.__row = i; }));
+  const nRows = await rows().count();
+  served.mode = 'same'; await clickRefresh(); await sleep(800);
+  const kept = await rows().evaluateAll(l => l.filter(li => li.__row !== undefined).length);
+  check('the list lost its extra row (keyed by item id)', (await rows().count()) === nRows - 1, `${nRows} -> ${await rows().count()}`);
+  check('every row that stayed is the same element, not a re-render', kept === nRows - 1, `${kept} of ${nRows - 1} kept`);
+
+  // ---- 9. the page's own script changed the cards (an Inbox decision, then its Undo): the server record must win, even though it equals the previous fetch
+  await ctx.route('**/inbox/**', r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }));
+  const had = await rows().count();
+  await rows().first().evaluate(li => li.remove());   // what the decision did to the live page
+  await page.evaluate(() => { document.body.insertAdjacentHTML('beforeend', '<form class="inbox-form" method="post" action="/inbox/x/undo"><input type="hidden" name="decision" value="undo"><button>Undo</button></form>'); });
+  await page.locator('form.inbox-form button').evaluate(b => b.click());
+  await page.waitForFunction(n => document.querySelectorAll('[data-dlist="needs"] > .dl-scroll > li').length === n, had, { timeout: 4000 }).catch(() => {});
+  check('Undo restored the row from the server record without a reload', (await rows().count()) === had && navigations === startNav, `${had}/${await rows().count()}`);
   check('no script errors', errors.length === 0, errors.join('; '));
   await page.screenshot({ path: path.join(out, `${name}.png`), fullPage: false });
   await ctx.close();

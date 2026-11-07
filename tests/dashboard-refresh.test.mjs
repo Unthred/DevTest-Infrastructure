@@ -68,3 +68,11 @@ test('the card shell keeps what the swap relies on: a header first, then the bod
   const cards = [...html.matchAll(/<section class="card [^"]*" data-card="([^"]+)"[^>]*><header>/g)].map(x => x[1]);
   assert.ok(cards.length > 5); assert.equal(new Set(cards).size, cards.length, 'card ids are unique');
 });
+
+test('rows are kept by item id, and an Undo compares with the live page (issue #930 review)', () => {
+  const src = read('refresh.mjs');
+  assert.match(src, /export function retainRows/);   // a row unchanged on the server stays the same element
+  assert.match(src, /live = false/);                  // a refresh can compare with the page as it is now
+  assert.match(read('app.js'), /refresher\?\.refresh\(true, \{ live: true \}\)/);
+  assert.doesNotMatch(read('app.js'), /\.refresh-now'\)/);
+});

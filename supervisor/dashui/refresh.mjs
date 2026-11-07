@@ -46,7 +46,7 @@ export function readRegions(root) {
   const out = new Map();
   for (const el of root.querySelectorAll('.card[data-card]')) {
     if (el.querySelector(OWN_SCRIPT)) continue;
-    out.set(regionKey(el), { el, sig: el.innerHTML, classes: serverClasses(el.className), href: el.getAttribute('href') });
+    out.set(regionKey(el), { el, sig: el.innerHTML, rows: rowMap(el, li => li.outerHTML), classes: serverClasses(el.className), href: el.getAttribute('href') });
   }
   const stats = [...root.querySelectorAll('.statusbar .stat')];
   out.set('stats', { els: stats, sig: stats.map(s => s.outerHTML).join(''), classes: [] });
@@ -112,13 +112,34 @@ export function restore(card, snap) {
   }
 }
 
-function swapCard(live, fresh, doc, hooks) {
+// Keyed rows (issue #930, requirement 2): every list row carries the item's id (data-key). A row whose server content is the same as in the
+// previous fetch is moved into the fresh list as the very element the viewer has, with its open details, focus and inner scroll; only a new
+// or changed row is taken from the fresh page, and a vanished row is dropped with the old list. The list is then initialised again by the
+// page's list script (lists-ui.mjs), which re-reads its search, sort and scroll.
+const rowMap = (card, pick) => { const m = new Map(); for (const list of card.querySelectorAll('[data-dlist]')) for (const li of list.querySelectorAll(':scope > .dl-scroll > li[data-key]')) m.set(`${list.dataset.dlist}|${li.dataset.key}`, pick(li)); return m; };
+export function retainRows(nodes, liveRows, prevSigs) {
+  let kept = 0;
+  for (const n of nodes) {
+    if (n.nodeType !== 1) continue;
+    for (const list of n.matches('[data-dlist]') ? [n] : n.querySelectorAll('[data-dlist]')) {
+      for (const li of list.querySelectorAll(':scope > .dl-scroll > li[data-key]')) {
+        const id = `${list.dataset.dlist}|${li.dataset.key}`, old = liveRows.get(id);
+        if (old && prevSigs.get(id) === li.outerHTML) { li.replaceWith(old); kept++; }
+      }
+    }
+  }
+  return kept;
+}
+
+function swapCard(live, fresh, doc, hooks, prevRows) {
   const snap = capture(live, doc);
   hooks.beforeSwap?.(live);
-  for (const c of [...live.children]) if (!c.matches(KEEP)) c.remove();
   const head = fresh.querySelector(':scope > header h2'), liveHead = live.querySelector(':scope > header h2');
   if (head && liveHead && liveHead.textContent !== head.textContent) liveHead.textContent = head.textContent;
-  for (const c of [...fresh.children]) if (!c.matches('header')) live.append(doc.importNode(c, true));
+  const nodes = [...fresh.children].filter(c => !c.matches('header')).map(c => doc.importNode(c, true));
+  if (prevRows) retainRows(nodes, rowMap(live, li => li), prevRows);
+  for (const c of [...live.children]) if (!c.matches(KEEP)) c.remove();
+  for (const c of nodes) live.append(c);
   restore(live, snap);
   hooks.afterSwap?.(live);
 }
@@ -141,7 +162,7 @@ export function applyFresh({ doc, fresh, known, hooks = {} }) {
     }
     const el = live.get(k)?.el, f = fresh.get(k);
     if (!el || !f) continue;
-    swapCard(el, f.el, doc, hooks);
+    swapCard(el, f.el, doc, hooks, known.get(k)?.rows);
     syncClasses(el, known.get(k).classes, f.classes);
     if (f.href != null && el.getAttribute('href') !== f.href) el.setAttribute('href', f.href);
     n++;
@@ -165,7 +186,7 @@ export function startRefresh(env) {
   const { document: doc, seconds = 60, hooks = {}, fetchFn = (...a) => fetch(...a), setTimer = setTimeout, clearTimer = clearTimeout, setRepeat = setInterval, now = () => new Date(), isBusy } = env;
   const bar = doc.querySelector('.statusbar');
   if (!bar) return null;   // a page without the status bar (the unreachable page, a bare fragment) has nothing to keep fresh
-  let known = env.baseline || readRegions(doc), pending = null, inflight = false, waitTimer = 0, lastKey = null, lastAt = Date.now(), failures = 0, pointerDown = false;
+  let known = env.baseline || readRegions(doc), pending = null, againLive = false, pendingLive = false, inflight = false, waitTimer = 0, lastKey = null, lastAt = Date.now(), failures = 0, pointerDown = false;
   const anchor = doc.querySelector('#theme');
   const box = doc.createElement('span'); box.className = 'refresh-box';
   const label = doc.createElement('span'); label.className = 'refresh-at'; label.dataset.refreshAt = ''; label.setAttribute('role', 'status'); label.setAttribute('aria-live', 'off');
@@ -194,24 +215,26 @@ export function startRefresh(env) {
     clearTimer(waitTimer); waitTimer = 0;
     if (!pending) return;
     if (busy(manual)) { waitTimer = setTimer(() => flush(false), 500); return; }   // apply straight after the interaction ends
-    const fresh = pending; pending = null;
-    try { applyFresh({ doc, fresh, known, hooks }); known = fresh; show(`Updated ${stamp(now())}`); lastAt = Date.now(); }
+    const fresh = pending, from = pendingLive ? readRegions(doc) : known; pending = null; pendingLive = false;
+    try { applyFresh({ doc, fresh, known: from, hooks }); known = fresh; show(`Updated ${stamp(now())}`); lastAt = Date.now(); }
     catch { show(`Update failed ${stamp(now())}`); }
   };
-  async function refresh(manual = false) {
-    if (inflight) return; inflight = true;
+  // live: compare the fresh page with the page as it is now, not with the previous fetch. The page's own script changes cards between
+  // fetches (an Inbox decision, its Undo), so the previous fetch no longer describes what is on screen.
+  async function refresh(manual = false, { live = false } = {}) {
+    if (inflight) { if (live) againLive = true; return; } inflight = true;
     if (manual) show('Updating…');
     try {
       const r = await fetchFn(doc.defaultView.location.href, { headers: { accept: 'text/html' }, credentials: 'same-origin', cache: 'no-store' });
       if (!r.ok || !/html/.test(r.headers?.get?.('content-type') || 'text/html')) throw new Error(`HTTP ${r.status}`);
       const parsed = new doc.defaultView.DOMParser().parseFromString(await r.text(), 'text/html');
       if (!parsed.querySelector('.cards')) throw new Error('not a dashboard page');
-      pending = readRegions(parsed); failures = 0;
+      pending = readRegions(parsed); pendingLive = pendingLive || live; failures = 0;
       flush(manual);
       if (manual && !pending) lastAt = Date.now();
     } catch {
       failures++; show(`Update failed ${stamp(now())}${failures > 1 ? ', still trying' : ''}`);
-    } finally { inflight = false; }
+    } finally { inflight = false; if (againLive) { againLive = false; refresh(true, { live: true }); } }
   }
   btn.addEventListener('click', () => refresh(true));
   setRepeat(() => { if (!doc.hidden) refresh(false); }, seconds * 1000);

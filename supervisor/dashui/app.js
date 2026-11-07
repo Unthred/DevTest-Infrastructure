@@ -33,7 +33,7 @@ document.addEventListener('submit', async e => {
   if (decision === 'undo') {
     const btn = form.querySelector('button'); btn.disabled = true;
     const j = await postInbox(form);
-    if (j.ok) { const r = $('.refresh-now'); if (r) r.click(); btn.disabled = false; return; }   // the server record is re-read in place (issue #930)
+    if (j.ok) { refresher?.refresh(true, { live: true }); btn.disabled = false; return; }   // the server record is re-read in place (issue #930)
     btn.disabled = false; btn.textContent = 'Undo refused: ' + j.reason; return;
   }
   const btns = $$('.inbox-form button', item), pressed = form.querySelector('button'), err = $('.inbox-err', item), was = pressed.textContent;
@@ -258,7 +258,7 @@ history.scrollRestoration = 'manual';
 // keeping scroll, open items, typed text and focus, and waits while the viewer is interacting (refresh.mjs). Without script the <noscript>
 // meta still reloads the page. It is not a <meta refresh> when script runs: a declarative refresh keeps the address the page loaded with,
 // so it would undo an in-place table change (replaceState).
-startRefresh({
+const refresher = startRefresh({
   document, baseline: serverRegions, seconds: Number($('meta[name=refresh-seconds]')?.content) || 60,
   hooks: {
     beforeSwap: () => saveLists(),   // list search, sort, scroll and open rows are written first; the swapped-in list re-reads them
