@@ -11,9 +11,11 @@ import { processInfo } from './core.mjs';
 // An unreadable /proc/<pid>/stat means "gone" only when the runner's start time was read at launch (so /proc works here). With no recorded
 // start time (no readable /proc: not Linux, or hidepid) fall back to process.kill(pid, 0), as the older watchdog did (issue #695).
 function pidExists(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
-export function runnerGone(pid, start, readInfo = processInfo) {
+// Limitation: in this fallback kill(pid, 0) cannot tell a zombie runner or a reused PID from a live one. That matches the older watchdog and
+// does not apply on Foreman's Linux host, where the start time is always recorded.
+export function runnerGone(pid, start, readInfo = processInfo, exists = pidExists) {
   const info = readInfo(pid);
-  if (!info && start == null) return !pidExists(pid);
+  if (!info && start == null) return !exists(pid);
   return !info || info.state === 'Z' || info.state === 'X' || (start != null && info.start !== start);
 }
 

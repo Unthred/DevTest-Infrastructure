@@ -131,12 +131,12 @@ test('runnerGone: a live runner with its own start time is not gone; a different
   assert.equal(runnerGone(c.pid, '1'), true);
 });
 
-test('runnerGone without /proc (issue #695): with no recorded start time it falls back to kill(pid, 0); with one, unreadable means gone', async () => {
+test('runnerGone without /proc (issue #695): with no recorded start time it falls back to kill(pid, 0); with one, unreadable means gone', () => {
   const noProc = () => null;
   assert.equal(runnerGone(process.pid, null, noProc), false, 'a live PID is not gone when /proc is unreadable and no start was recorded');
-  const c = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
-  await new Promise(r => c.on('exit', r));
-  assert.equal(runnerGone(c.pid, null, noProc), true, 'a dead PID is gone');
+  // The existence probe is injected so the result does not depend on an exited child's PID staying unused.
+  assert.equal(runnerGone(4242, null, noProc, () => false), true, 'a dead PID is gone');
+  assert.equal(runnerGone(4242, null, noProc, () => true), false, 'a PID that still exists is not gone');
   assert.equal(runnerGone(process.pid, '123', noProc), true, 'a recorded start time but unreadable stat: gone');
 });
 
