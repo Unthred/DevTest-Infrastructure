@@ -99,7 +99,7 @@ test('an item edited after it was picked up cannot be approved or run', t => {
 // ---- decisions and audit
 test('reject does nothing; approve is recorded once; a decided item cannot be decided again', t => {
   const dir = makeInbox(t), a = drop(dir, GOOD), b = drop(dir, DRAFT); inbox.scan(dir, 1);
-  assert.deepEqual(inbox.decide(dir, a, 'reject', 5), { ok: true });
+  assert.equal(inbox.decide(dir, a, 'reject', 5).ok, true);
   assert.equal(inbox.statusOf(dir, a).state, 'rejected');
   assert.deepEqual(inbox.approvedItems(dir, 'prompt'), []);
   assert.equal(inbox.decide(dir, a, 'approve', 6).ok, false);

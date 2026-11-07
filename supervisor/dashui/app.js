@@ -1,10 +1,11 @@
 // Dashboard v2 browser script (issue #54): progressive enhancement only. Every page is complete without it; this adds
 // the live countdown, theme choice, legend toggles, chart expand, copy buttons, drag/resize/reorder of cards, the dockable navigation, Back and
-// scroll restoration (all saved per breakpoint, in this browser only). It sends nothing; its only network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
+// scroll restoration (all saved per breakpoint, in this browser only). Its one write is the inbox decision (issue #856: Approve, Reject, Undo post to /inbox with the page's access proof); its only other network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends } from './legend.mjs';
 import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved } from './grid.mjs';
 import { watchLists } from './lists-ui.mjs';
+import { postDecision, runDecision, lowerCount, OUTCOME_LABEL } from './inbox-ui.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -16,6 +17,48 @@ const store = {
 
 // shared lists (search, sort, state across refresh): initialised right away, and again for any list a later refresh swaps in
 watchLists(document.body);
+
+// Inbox decisions (issue #856). The form still works without this script (a plain post and redirect). With it, the click disables both buttons
+// at once, labels the pressed one, shows the outcome and time beside the title, moves the card into "Decided today" and lowers the counts;
+// a refusal re-enables the buttons and shows the reason on the card. The server is the only record: an Undo reloads the page from it.
+const postInbox = form => postDecision(fetch.bind(window), form.action, new FormData(form));
+document.addEventListener('submit', async e => {
+  const form = e.target.closest?.('form.inbox-form'); if (!form) return;
+  e.preventDefault();
+  const decision = form.elements.decision.value, item = form.closest('.inbox-item'), row = form.closest('li');
+  if (decision === 'undo') {
+    const btn = form.querySelector('button'); btn.disabled = true;
+    const j = await postInbox(form);
+    if (j.ok) { location.reload(); return; }
+    btn.disabled = false; btn.textContent = 'Undo refused: ' + j.reason; return;
+  }
+  const btns = $$('.inbox-form button', item), pressed = form.querySelector('button'), err = $('.inbox-err', item), was = pressed.textContent;
+  await runDecision({ decision, post: () => postInbox(form), ui: {
+    error: text => { err.textContent = text || ''; err.hidden = !text; },
+    lock: label => { for (const b of btns) { b.disabled = true; if (b !== pressed) b.classList.add('greyed'); } pressed.textContent = label; },
+    unlock: () => { for (const b of btns) { b.disabled = false; b.classList.remove('greyed'); } pressed.textContent = was; },
+    decided: j => {
+      const title = (row.querySelector('.t')?.textContent || '').replace(/\s+/g, ' ').replace(/^\s*action\s*/i, '').trim();
+      const out = row.querySelector('.inbox-outcome');
+      out.className = 'inbox-outcome ' + (decision === 'approve' ? 'approved' : 'rejected'); out.setAttribute('data-lms', j.decidedAt); out.setAttribute('data-tonly', ''); out.setAttribute('data-tpl', OUTCOME_LABEL[decision] + ' {t}'); out.hidden = false; localizeTimes(row);
+      const list = $('.inbox-decided-list'), box = $('.inbox-decided');
+      if (!list || !box) return;
+      const li = document.createElement('li'); li.dataset.decided = item.dataset.inbox;
+      const t = document.createElement('span'); t.className = 'inbox-title'; t.textContent = title.slice(0, 200);
+      li.append(t, ' ', out.cloneNode(true));
+      if (j.undoUntil) {
+        const f = form.cloneNode(false); f.className = 'inbox-form inbox-undo'; f.dataset.undoUntil = j.undoUntil;
+        const mk = (n, v) => { const i = document.createElement('input'); i.type = 'hidden'; i.name = n; i.value = v; return i; };
+        f.append(mk('proof', form.elements.proof.value), mk('id', item.dataset.inbox), mk('decision', 'undo'));
+        const b = document.createElement('button'); b.type = 'submit'; b.className = 'linkbtn'; b.textContent = 'Undo'; f.append(b); li.append(' ', f);
+      }
+      list.prepend(li); box.hidden = false; $('.inbox-decided-n', box).textContent = String($$('li', list).length);
+      row.remove();
+      const h = $('#h-needs'); if (h) h.textContent = lowerCount(h.textContent);
+    } } });
+});
+// An Undo link disappears when its window ends, so it is never offered after the server would refuse it.
+setInterval(() => { for (const f of $$('form.inbox-undo')) if (Date.now() > Number(f.dataset.undoUntil)) f.remove(); }, 1000);
 
 // theme
 const root = document.documentElement;
@@ -621,3 +664,4 @@ try {
     history.replaceState(history.state, '', u.pathname + u.search + u.hash);
   }
 } catch { /* the notice just stays in the address bar */ }
+

@@ -433,3 +433,14 @@ body.layout-editing{overscroll-behavior:contain}
 .headline .hl-v,.hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1;text-decoration:none;color:inherit}
 .headline .hl-v:hover{color:var(--link)}
 .headline .hl-trend svg{width:1em;height:1em;vertical-align:-.15em;margin-right:.25em}
+
+/* Inbox decisions (issue #856) */
+.inbox-outcome{display:inline-block;font-weight:600;padding:0 var(--sp2);border-radius:var(--r-sm);border:1px solid var(--line)}
+.inbox-outcome.approved{color:var(--ok)}.inbox-outcome.rejected{color:var(--warning)}
+.inbox-form button[disabled]{opacity:.6;cursor:not-allowed}.inbox-form button.greyed{opacity:.35}
+.inbox-err{margin-top:var(--sp2);padding:var(--sp1) var(--sp2);border:1px solid var(--action);border-left-width:4px;border-radius:var(--r-sm);color:var(--action)}
+.inbox-decided{margin-top:var(--sp3)}.inbox-decided summary{cursor:pointer;min-height:36px;display:flex;align-items:center}
+.inbox-decided-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--sp2)}
+.inbox-decided-list li{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2)}.inbox-decided-list .inbox-title{overflow-wrap:anywhere}
+.inbox-undo{display:inline;margin:0}.linkbtn{font:inherit;background:none;border:0;padding:0 var(--sp1);color:var(--link);text-decoration:underline;cursor:pointer;min-height:36px}
+@media(max-width:640px){.inbox-form{flex:1 1 auto}.inbox-form .btn{width:100%;justify-content:center}.linkbtn{min-height:44px;min-width:44px}.inbox-decided summary{min-height:44px}}
