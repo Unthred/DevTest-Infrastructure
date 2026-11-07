@@ -125,7 +125,8 @@ const heldSubjects = (list, limit, byCount) => {
   for (const w of list) n.set(subjectOf(w), (n.get(subjectOf(w)) || 0) + 1);
   return [...n].filter(([k, c]) => !byCount || c >= limit || k === 'none').map(([k]) => k).sort();
 };
-const actSubject = a => a.pr != null ? `pr:${a.pr}` : a.issue != null ? `issue:${a.issue}` : 'none';
+// An action's subjects: a continue job carries both its pull request and its issue, and waste may have been recorded under either (issue #737).
+const actSubjects = a => { const l = []; if (a.pr != null) l.push(`pr:${a.pr}`); if (a.issue != null) l.push(`issue:${a.issue}`); return l.length ? l : ['none']; };
 const clearedFor = (s, cause) => Math.max(s.clearedAt['*'] || 0, s.clearedAt[cause] || 0);
 
 // Trip any limit that is reached. Existing halts are never removed here; only their figures are refreshed from the waste still on file.
@@ -142,7 +143,12 @@ export function evaluate(s, limits, now) {
   for (const [cause, list] of byCause) {
     const f = figures(list), byCount = worstSubject(list) >= limits.same_cause_jobs, byCost = f.cost >= limits.cause_cost_usd;
     const held = s.halts[cause];
-    if (held) { s.halts[cause] = { ...held, ...f, subjects: [...new Set([...(held.subjects || []), ...heldSubjects(list, limits.same_cause_jobs, held.trippedBy === 'count')])].sort() }; noteTrip(s, cause, s.halts[cause]); continue; }
+    if (held) {
+      // A halt recorded before subjects existed (issue #737) keeps holding the whole type, as it did when it tripped; giving it an empty
+      // list would hold nothing while the dashboard still said "Work halted".
+      const subjects = Array.isArray(held.subjects) ? { subjects: [...new Set([...held.subjects, ...heldSubjects(list, limits.same_cause_jobs, held.trippedBy === 'count')])].sort() } : {};
+      s.halts[cause] = { ...held, ...f, ...subjects }; noteTrip(s, cause, s.halts[cause]); continue;
+    }
     if (!byCount && !byCost && !byTotal) continue;
     s.halts[cause] = { cause, since: now, trippedBy: byCount ? 'count' : byCost ? 'cost' : 'any-kind-cost', ...f, subjects: heldSubjects(list, limits.same_cause_jobs, byCount) };
     noteTrip(s, cause, s.halts[cause]);
@@ -163,10 +169,10 @@ export function blocks(s, limits, act) {
   if (s.global) return { ...s.global, cause: '@global', scope: 'all new jobs' };
   const fixable = ['implement', 'continue'].includes(type) && (limits.fix_issues || []).includes(act.issue);
   if (fixable) return null;
-  const subject = actSubject(act);
+  const subjects = actSubjects(act);
   for (const h of Object.values(s.halts || {})) {
     if (!(h.types || []).includes(type)) continue;
-    if (Array.isArray(h.subjects) && !h.subjects.includes('none') && subject !== 'none' && !h.subjects.includes(subject)) continue;   // another pull request or issue may run, and its success clears this halt
+    if (Array.isArray(h.subjects) && !h.subjects.includes('none') && !subjects.includes('none') && !subjects.some(x => h.subjects.includes(x))) continue;   // another pull request or issue may run, and its success clears this halt
     return h;
   }
   return null;
