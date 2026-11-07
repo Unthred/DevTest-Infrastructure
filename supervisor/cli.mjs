@@ -406,8 +406,8 @@ async function main() {
     const job = await createJob(root, spec, registry);
     if (a.foreground) {
       job.workerPid = process.pid; job.workerStart = processStart(process.pid);
-    job.supervisorVersion = runningSha(self) || 'source';   // issue #846: the install directory this worker runs from; cleanup keeps it while the job is live
-    saveJob(root, job);
+      job.supervisorVersion = runningSha(self) || 'source';   // issue #846: the install directory this worker runs from; cleanup keeps it while the job is live
+      saveJob(root, job);
       const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null, async j => (await teamFor(root, registry, undefined, false)).resumeGate()(j));
       result.workerPid = null; result.workerStart = null; saveJob(root, result); print(result);
     }
@@ -420,7 +420,9 @@ async function main() {
     const job = readJob(root, a._[0]);
     if (job.status !== 'queued' && job.status !== 'paused_limit') throw new SupervisorError('job is not runnable');
     if (job.workerPid && processStart(job.workerPid) === job.workerStart) throw new SupervisorError('another worker owns job');
-    job.workerPid = process.pid; job.workerStart = processStart(process.pid); saveJob(root, job);
+    job.workerPid = process.pid; job.workerStart = processStart(process.pid);
+    job.supervisorVersion = runningSha(self) || 'source';   // issue #846: a job finishes against the install directory it started on; a resumed job starts a new worker and re-stamps
+    saveJob(root, job);
     const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null, async j => (await teamFor(root, registry, undefined, false)).resumeGate()(j));
     result.workerPid = null; result.workerStart = null; saveJob(root, result);
     } finally { release(); }
