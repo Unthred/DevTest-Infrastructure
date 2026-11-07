@@ -67,7 +67,7 @@ export function validateTeamConfig(input) {
   validateDashboard(c.dashboard);
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
-  if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir'))) throw new SupervisorError('invalid inbox: { dir: absolute path }');   // issue #124
+  if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir' || k === 'max_pending') && (c.inbox.max_pending === undefined || (Number.isSafeInteger(c.inbox.max_pending) && c.inbox.max_pending >= 1 && c.inbox.max_pending <= 200)))) throw new SupervisorError('invalid inbox: { dir: absolute path, max_pending?: 1-200 }');   // issue #124
   if (c.owner_comment_review !== undefined) {
     const o = c.owner_comment_review, login = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(x);
     if (!o || typeof o !== 'object' || typeof o.enabled !== 'boolean' || ('owner' in o && !login(o.owner)) || ('agent_logins' in o && !(Array.isArray(o.agent_logins) && o.agent_logins.every(login))))
@@ -1883,7 +1883,7 @@ export class Team {
   async processInbox(report) {
     const dir = this.inboxDir(); if (!dir) return;
     const now = this.clock.now();
-    inboxStore.scan(dir, now);
+    inboxStore.scan(dir, now, { maxPending: this.c.inbox.max_pending });
     for (const st of inboxStore.allStatuses(dir)) {
       if (!['approved', 'posting'].includes(st.state)) continue;
       try {

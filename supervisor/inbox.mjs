@@ -20,10 +20,14 @@ export const ACTIONS = {
 };
 const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
-export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 10, keepDays: 14, resultChars: 4000, reasonChars: 300 };
+export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'] };
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
+// Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
+// status record keeps the history. A rejected item keeps its file until the undo window has passed, because Undo returns it to pending.
+const FINAL_NOW = ['done', 'failed', 'refused'];
+export const limitsFile = inboxDir => path.join(dirs(inboxDir).status, 'limits.json');
 
 export const dirs = inboxDir => ({ items: path.join(inboxDir, 'items'), status: path.join(inboxDir, 'status'), audit: path.join(inboxDir, 'audit.jsonl') });
 export const hashOf = item => crypto.createHash('sha256').update(JSON.stringify(item)).digest('hex');
@@ -111,15 +115,19 @@ export const statusOf = (inboxDir, id) => (ID_RE.test(String(id)) ? readJson(pat
 function setStatus(inboxDir, id, patch, now) {
   const file = path.join(dirs(inboxDir).status, `${id}.json`), cur = readJson(file) || {};
   writeAtomic(file, { ...cur, ...patch, id, updatedAt: now });
+  if (FINAL_NOW.includes(patch.state)) { try { fs.unlinkSync(path.join(dirs(inboxDir).items, `${id}.json`)); } catch { /* already gone */ } }
   return { ...cur, ...patch, id };
 }
 
 // Picks up new item files. A file is read only if it is a regular file (never a symlink), small, and has a well-formed name; an item
-// that fails any check is recorded as refused with a reason and never becomes a card. At most LIMITS.pending items wait at once.
+// that fails any check is recorded as refused with a reason and never becomes a card. At most maxPending (default LIMITS.pending) items wait at once.
 // Items finished more than keepDays ago are removed from both directories.
-export function scan(inboxDir, now = Date.now()) {
+export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending } = {}) {
   const d = dirs(inboxDir);
   fs.mkdirSync(d.status, { recursive: true, mode: 0o755 });
+  // The MCP server reads this to refuse at submit time exactly what pickup would refuse (it cannot write status/, so it only reads).
+  try { if (readJson(limitsFile(inboxDir))?.pending !== maxPending) writeAtomic(limitsFile(inboxDir), { pending: maxPending }); } catch { /* the MCP server then uses its default */ }
+  sweepFinished(inboxDir, now);
   let names = [];
   try { names = fs.readdirSync(d.items); } catch { return { picked: 0 }; }
   let picked = 0;
@@ -135,13 +143,19 @@ export function scan(inboxDir, now = Date.now()) {
     let raw; try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { refuse('not valid JSON'); continue; }
     const v = validateItem(raw), hash = hashOf(raw);
     if (!v.ok) { setStatus(inboxDir, id, { state: 'refused', reason: v.reason, kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, reason: v.reason }, now); picked++; continue; }
-    if (pending >= LIMITS.pending) { setStatus(inboxDir, id, { state: 'refused', reason: `${LIMITS.pending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
+    if (pending >= maxPending) { setStatus(inboxDir, id, { state: 'refused', reason: `${maxPending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
     setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now }, now);
     audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash }, now);
     pending++; picked++;
   }
   prune(inboxDir, now);
   return { picked };
+}
+function sweepFinished(inboxDir, now) {
+  for (const s of allStatuses(inboxDir)) {
+    if (!FINAL_NOW.includes(s.state) && !(s.state === 'rejected' && !(now - (s.decidedAt || 0) <= UNDO_MS))) continue;
+    try { fs.unlinkSync(path.join(dirs(inboxDir).items, `${s.id}.json`)); } catch { /* none */ }
+  }
 }
 function prune(inboxDir, now) {
   const d = dirs(inboxDir);
@@ -179,6 +193,17 @@ export function pendingCards(inboxDir) {
   });
 }
 
+// Issue #943: items Foreman refused after pickup (a full queue, a failed check) have no GitHub notice either. They are grouped by reason into one
+// Needs you line each ("N overseer proposals were refused: reason"), for FAILED_SHOW_MS after the latest refusal. No item content is shown.
+export function refusedGroups(inboxDir, now = Date.now()) {
+  const groups = new Map();
+  for (const s of allStatuses(inboxDir)) {
+    if (s.state !== 'refused' || !Number.isFinite(s.updatedAt) || now - s.updatedAt < 0 || now - s.updatedAt > FAILED_SHOW_MS) continue;
+    const reason = redactLong(String(s.reason || 'no reason recorded').replace(/\s+/g, ' '), 200, ' [cut]').trim(), g = groups.get(reason) || { reason, count: 0, newest: 0 };
+    g.count++; g.newest = Math.max(g.newest, s.updatedAt); groups.set(reason, g);
+  }
+  return [...groups.values()].sort((a, b) => a.newest - b.newest);
+}
 // Issue #641: a failed item (an approved prompt whose job stopped, a failed action or post) has no GitHub notice, so the dashboard shows it as
 // one Needs you line for FAILED_SHOW_MS after it failed. Text is redacted and bounded again for display; no item content is shown.
 export const FAILED_SHOW_MS = 3 * 86400000;
