@@ -628,8 +628,8 @@ const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.
 export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: the real tick would refuse to launch jobs.';
 // Role slots (issue #148): who holds the implementer and reviewer slot right now, with the model and the work. A job the dispatcher has
 // no record of (started by hand) counts against the implementer slot, as the planner counts it.
-const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer', rebaser: 'Rebaser' };
-const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
+const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer', rebaser: 'Rebaser', inbox: 'Inbox lane' };
+const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI', inbox: 'running an approved prompt' };
 export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.repository, stateJobs: state.jobs, titles: state.titles })) {
   return ROLES.map(role => {
     const held = jobs.filter(j => ((ACTIVE.includes(j.status) && j.status !== 'paused_limit') || isUnknownJob(j)) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {

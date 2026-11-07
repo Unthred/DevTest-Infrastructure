@@ -303,7 +303,7 @@ function nowPanel(view, { describe = true, list = null } = {}) {
   // The description is the link text, once; the agent card passes describe:false and gets a plain id link (issue #421).
   const jobRef = (id, name) => (describe ? named(jobPath(id), REFS.job[String(id).slice(0, 8)], name || `job ${String(id).slice(0, 8)}`) : named(jobPath(id), null, `job ${String(id).slice(0, 8)}`));
   const jobItem = (a, j) => {
-    const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : j.role === 'rebaser' ? 'Rebaser' : 'Implementer';
+    const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : j.role === 'rebaser' ? 'Rebaser' : j.role === 'inbox' ? 'Inbox lane' : 'Implementer';
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
     return dli({ cls: `sev-${level}`, extra: `data-job-card="${esc(j.id)}"`, key: `job-${j.id}`, sev: level, name: a.name, age: j.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div>` });
   };
@@ -402,13 +402,14 @@ const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.w
 // Issue #856: what was chosen and when ("Approved 06:20"), shown beside the title. dashui/app.js rewrites the time in the viewer's zone from data-lms.
 const OUTCOME = { approve: ['Approved', 'approved', '✓'], reject: ['Rejected', 'rejected', '✗'] };
 // Issue #925: an approval nothing has acted on yet says it is waiting for a free slot; once the tick has taken it, it reads plainly "Approved".
-const outcomeSpan = (decision, ms, state) => { const [label, cls] = OUTCOME[decision] || OUTCOME.reject, wait = decision === 'approve' && state === 'approved' ? ', waiting for a free slot' : ''; return `<span class="inbox-outcome ${cls}" ${lms(ms, `${label} {t}${wait}`, true)}>${label} ${esc(utc(ms).slice(11, 16))} UTC${wait}</span>`; };
+// Issue #971: a prompt is queued for, then running in, the inbox lane; the time it waited is shown.
+const outcomeSpan = (decision, ms, state, c = {}) => { const [label, cls] = OUTCOME[decision] || OUTCOME.reject, laneWait = c.lane === 'inbox' && Number.isFinite(c.waitedMs) ? ` (waited ${dur(c.waitedMs)})` : '', wait = c.lane === 'inbox' && decision === 'approve' && (state === 'approved' || state === 'running') ? (state === 'approved' ? `, queued for the inbox lane${laneWait}` : `, running in the inbox lane${laneWait}`) : decision === 'approve' && state === 'approved' ? ', waiting for a free slot' : ''; return `<span class="inbox-outcome ${cls}" ${lms(ms, `${label} {t}${wait}`, true)}>${label} ${esc(utc(ms).slice(11, 16))} UTC${wait}</span>`; };
 const undoForm = c => (c.undoUntil ? `<form method="post" action="/inbox" class="inbox-form inbox-undo" data-undo-until="${Math.round(c.undoUntil)}"><input type="hidden" name="id" value="${esc(c.id)}"><input type="hidden" name="decision" value="undo"><button class="linkbtn" type="submit">Undo</button></form>` : '');
 // The collapsed "Decided today" list (newest first). It is also rendered, hidden and empty, while a proposal is pending, so the script can move a decided card into it.
 function decidedBlock(view) {
   const list = view.panels.inboxDecided || [], pending = view.panels.needsYou.some(a => a.inbox);
   if (!list.length && !pending) return '';
-  const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state)} ${undoForm(c)}</li>`).join('');
+  const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state, c)} ${undoForm(c)}</li>`).join('');
   return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary><ul class="inbox-decided-list">${rows}</ul></details>`;
 }
 function needsPanel(view) {

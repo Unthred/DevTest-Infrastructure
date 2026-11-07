@@ -93,7 +93,7 @@ test('route: a JSON decision answers with the state and undo time; the card leav
   const page = (await s.get('/')).body;
   assert.ok(!page.includes(`data-inbox="${a}"`), 'the decided card is gone from the pending list');
   assert.match(page, /<summary>Decided today \(<span class="inbox-decided-n">1<\/span>\)<\/summary>/);
-  assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-tag">.*?</span></span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, waiting for a free slot" data-tonly>Approved \\d\\d:\\d\\d UTC, waiting for a free slot</span>`));
+  assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-tag">.*?</span></span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, queued for the inbox lane \\(waited 0m\\)" data-tonly>Approved \\d\\d:\\d\\d UTC, queued for the inbox lane \\(waited 0m\\)</span>`));
   assert.match(page, /name="decision" value="undo"/);
   assert.match(page, /Needs you \(1\)/, 'the count dropped');
 });
@@ -181,7 +181,7 @@ test('route: a second click on an approved item is refused and changes nothing; 
   s.clock.now += 5000; const again = await s.post(a, 'reject'); assert.equal(again.status, 409); assert.match(JSON.parse(again.body).reason, /^the item is already approved/);
   assert.equal(inbox.statusOf(dir, a).decision, 'approve');
   inbox.finish(dir, a, { state: 'running' });
-  const page = (await s.get('/')).body; assert.match(page, new RegExp(`data-decided="${a}">[^]*?>Approved \\d\\d:\\d\\d UTC</span>`));
+  const page = (await s.get('/')).body; assert.match(page, new RegExp(`data-decided="${a}">[^]*?>Approved \\d\\d:\\d\\d UTC, running in the inbox lane</span>`));
   assert.ok(!page.includes('waiting for a free slot'));
 });
 test('script: postDecision turns a server refusal, a non-JSON page and a network failure into a reason, never a success', async () => {
