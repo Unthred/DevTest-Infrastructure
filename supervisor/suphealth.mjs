@@ -195,7 +195,7 @@ function fetchedAt(repo) {
 // ---- the six cards
 // Self-upgrade step result (the `selfUpgrade` field of the last tick) -> severity and a plain explanation.
 const UPGRADE_STEP = {
-  current: ['ok', 'installed version is origin/main'], 'no-supervisor-change': ['ok', 'main is ahead with no supervisor change'], verified: ['ok', 'upgrade verified by a live tick'],
+  current: ['ok', 'installed version is origin/main'], 'no-supervisor-change': ['ok', 'main is ahead; only no-install paths changed'], verified: ['ok', 'upgrade verified by a live tick'],
   upgraded: ['ok', 'upgraded; waiting for a live tick to verify it'], 'awaiting-verification': ['info', 'upgraded; waiting for a live tick to verify it'],
   busy: ['info', 'upgrade waits for running jobs (at most the drain limit, 30 minutes by default)'], batched: ['info', 'merged work is not installed yet: installs are batched (minimum gap since the last install); jobs start normally'], 'rate-limited': ['info', 'short cooldown (2 minutes) after the last install; the next tick installs'],
   'precheck-failed': ['warning', 'pre-checks failed for this main; waits for a newer main'], 'not-eligible': ['warning', 'main has a change without a recorded PASS and green CI'],

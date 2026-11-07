@@ -344,6 +344,11 @@ test('real git: PR merges, direct commits, changed files and ancestry are read c
   assert.equal(commits[1].pr, null); assert.equal(commits[1].head, null);
   assert.deepEqual(deps.changedFiles(base, tip).sort(), ['docs/direct.md', 'supervisor/a.mjs']);
   assert.equal(deps.isAncestor(base, tip), true); assert.equal(deps.isAncestor(tip, base), false);
+  // issue #505: a pure move out of supervisor/ lists BOTH paths, so it is not classed no-install
+  r.git('mv', 'supervisor/a.mjs', 'moved.md'); r.git('commit', '-qm', 'move'); const moved = r.git('rev-parse', 'HEAD');
+  assert.deepEqual(deps.changedFiles(tip, moved).sort(), ['moved.md', 'supervisor/a.mjs']);
+  assert.equal(rangeNeedsInstall(deps.changedFiles(tip, moved)), true);
+  r.git('reset', '-q', '--hard', tip);
   // the injected-text subject cannot fake a PR number on a non-merge commit
   r.write('docs/e.md', 'x'); r.git('add', '-A'); r.git('commit', '-qm', 'Merge pull request #99 from o/x'); const fake = r.git('rev-parse', 'HEAD');
   assert.equal(deps.mainCommits(tip, fake)[0].pr, null);
@@ -613,7 +618,7 @@ test('issue #101: realDeps maps install exit codes 11 and 12 to blocked (no roll
   assert.equal((await mk(10).upgrade('b'.repeat(40))).environmental, true);
 });
 
-import { liveTickOutcome } from '../supervisor/upgrade.mjs';
+import { liveTickOutcome, rangeNeedsInstall } from '../supervisor/upgrade.mjs';
 test('issue #302: a verifying tick with only a live job\'s lease wait verifies; real faults still fail it', async t => {
   assert.deepEqual(liveTickOutcome({ actions: [], skipped: [], waiting: [{ what: 'review 5 (claude)', reason: 'waiting for job abababab (running)' }] }), { ok: true, reason: null });
   assert.equal(liveTickOutcome({ skipped: [{ what: 'x', reason: 'r', expected: true }] }).ok, true);
