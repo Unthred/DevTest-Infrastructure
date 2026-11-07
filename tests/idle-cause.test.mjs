@@ -147,3 +147,42 @@ test('the Now card shows one short idle line per agent with a link to the breakd
   const agentPage = renderRoute(view, { page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }).html;
   assert.match(agentPage, /holds: reviews only: weekly 92%[^<]*300 min/);
 });
+
+// Issue #719: other changing counts, joined holds, and the cut position.
+test('holdCause masks bare counts, splits joined holds, and is not moved by a figure changing width', () => {
+  const a = 'Paused new work: 10 open PRs (cap 10); 12 more waiting', b = 'Paused new work: 11 open PRs (cap 10); 13 more waiting';
+  assert.equal(holdCause(a), holdCause(b));
+  assert.equal(holdCause('kept for 2 pending review(s)'), holdCause('kept for 3 pending review(s)'));
+  // identifiers after '#' stay distinct
+  assert.notEqual(holdCause('review slot full: PR #9'), holdCause('review slot full: PR #10'));
+  // the same holds in another mix or order are the same parts; a different hold is not
+  const x = 'out of allowance: weekly 95%', y = 'review slot full: PR #9';
+  assert.equal(holdCause(`${x} | ${y}`), holdCause(`${y} | ${x}`));
+  assert.equal(holdCause(`${x} | ${y}`), holdCause(`${x.replace('95', '100')} | ${y} | ${x}`));
+  assert.notEqual(holdCause(`${x} | ${y}`), holdCause(x));
+  assert.notEqual(holdCause(x), holdCause('review slot full: PR #9'));
+  // a figure that changes width before a long text does not move the cut
+  const long = w => `reviews only: weekly ${w}%, ${'padding words '.repeat(30)}tail-${'z'.repeat(40)}`;
+  assert.equal(holdCause(long(9)), holdCause(long(10)));
+});
+
+test('classifyIdle cuts each hold on its own, so a long hold does not hide the others', () => {
+  const r = classifyIdle({ states: { codex: 'idle' }, holds: { codex: { a: 'x'.repeat(500), b: 'review slot full: PR #9' } } });
+  assert.match(r.codex.hold, /\| review slot full: PR #9$/);
+});
+
+test('on an agent card the Now panel shows only that agent\'s idle line; the Overview shows every agent\'s', async () => {
+  const { renderRoute } = await import('../supervisor/dashrender.mjs');
+  const { overviewView } = await import('./helpers/lists-fixture.mjs');
+  const base = await overviewView();
+  const names = base.agents.map(a => a.name);
+  assert.ok(names.length >= 2);
+  const row = { idleWithWorkPercent: 10, minutes: { 'named-hold': 60 }, holds: {} };
+  const view = { ...base, idleCauses: { agents: Object.fromEntries(names.map(n => [n, row])) } };
+  const opts = p => ({ query: new URLSearchParams(), pathname: p });
+  const page = renderRoute(view, { page: 'agent', id: names[0] }, opts('/agents/' + names[0])).html;
+  assert.ok(page.includes(`data-idle-causes="${names[0]}"`));
+  assert.ok(!page.includes(`data-idle-causes="${names[1]}"`));
+  const overview = renderRoute(view, { page: 'overview' }, opts('/')).html;
+  for (const n of names) assert.ok(overview.includes(`data-idle-causes="${n}"`));
+});
