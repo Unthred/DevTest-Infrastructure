@@ -32,7 +32,8 @@ export function layoutCheck(options) {
   const controls = new Set(['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'IMG']);
   for (const el of elements) {
     const c = getComputedStyle(el);
-    const srOnly = c.position === 'absolute' && el.clientWidth <= 1 && el.getBoundingClientRect().height <= 1; // the standard visually-hidden label (.vh): 1 px by design, not clipped content (issue #526)
+    // the standard visually-hidden label (.vh): absolute, <= 1 px and cut away by clip/clip-path by design, not clipped content (issues #526, #715); a plain 1 px box without a clip is still checked
+    const srOnly = c.position === 'absolute' && el.clientWidth <= 1 && el.getBoundingClientRect().height <= 1 && ((c.clip && c.clip !== 'auto') || (c.clipPath && c.clipPath !== 'none'));
     if ((c.overflowX === 'hidden' || c.overflowX === 'clip') && !srOnly && el.scrollWidth > el.clientWidth + tol)
       add(c.textOverflow === 'ellipsis' ? 'truncated' : 'clipped', c.textOverflow === 'ellipsis' ? 'warn' : 'fail', el, { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
     const p = el.parentElement;
