@@ -378,6 +378,20 @@ function breakerCard(view) {
   const table = rows ? `<table><thead><tr><th>Cause</th><th>Wasted jobs</th><th>Tokens</th><th>Cost (usage equivalent)</th><th>PRs</th></tr></thead><tbody>${rows}</tbody></table><p class="sub">Cost is ${escT(b.costLabel)}.</p>` : '';
   return card({ id: 'breaker', title: b.halt ? 'Work halted' : 'Wasted usage', span: 12, body: err + halt + table, cls: 'panel', type: b.halt ? 'action' : 'info' });
 }
+// Issue #995: liveness limit and last activity per running job, retry counts by cause, and what a recovery re-armed.
+function robustnessCard(view) {
+  const r = view.robustness;
+  if (!r || (!r.running.length && !r.retries.length && !r.rearm && !r.cancelled.length)) return '';
+  const ago = ms => (ms == null ? 'unknown' : `${Math.round(ms / 60000)} min ago`);
+  const jobs = r.running.map(j => `<tr><td>${esc(j.id)}</td><td>${esc(j.kind || '')}</td><td>${esc(ago(j.idleMs))}</td></tr>`).join('');
+  const retries = r.retries.map(x => `<tr><td>${esc(x.key)}</td><td>${esc(x.cause)}</td><td>${x.count}${x.capped ? ' (stopped)' : ''}</td></tr>`).join('');
+  const body = `<p class="sub">A running job with no activity for ${r.limitMinutes} minutes is cancelled and requeued.</p>`
+    + (jobs ? `<table><thead><tr><th>Job</th><th>Kind</th><th>Last activity</th></tr></thead><tbody>${jobs}</tbody></table>` : '')
+    + (r.cancelled.length ? `<p class="sub">Cancelled for inactivity: ${r.cancelled.map(c => escT(`${c.job} (${c.reason})`)).join('; ')}</p>` : '')
+    + (retries ? `<table><thead><tr><th>Item</th><th>Same cause</th><th>Attempts</th></tr></thead><tbody>${retries}</tbody></table>` : '')
+    + (r.rearm ? `<p class="sub">Re-armed after ${escT(r.rearm.scopes.join(', '))} cleared: ${escT(r.rearm.items.join(', '))}.</p>` : '');
+  return card({ id: 'robustness', title: 'Job liveness and retries', span: 12, body, cls: 'panel', type: 'info' });
+}
 // Issue #124: the Approve/Reject card of one inbox item. The item's own text is shown in full (escaped), so the click is informed.
 // Issue #977: every inbox item shows its short id (the first 8 characters, as the overseer quotes it) beside its kind, as a link to /inbox/<id>.
 // The full id sits in a hidden span so the list search matches either.
@@ -537,6 +551,7 @@ function overview(view, query) {
   const warnCount = view.panels.warnings.length + (view.agents.some(a => a.state === 'unknown') ? 1 : 0);
   const panels = [
     breakerCard(view),
+    robustnessCard(view),
     card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view, { list: 'now' }), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
