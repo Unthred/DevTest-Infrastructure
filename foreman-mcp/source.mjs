@@ -73,14 +73,14 @@ function coreCount(proc, fsRead) {
 // Issue #972: memory and swap held by each Docker container, from the cgroup files (memory.current, memory.swap.current) that any
 // account may read; no Docker socket and no container name (config files are root only), so a container is its short id plus the name
 // of its main process. Biggest first; at most `count` rows. Null when the cgroup tree has no docker directory.
-export function containerMemory({ cgroupRoot = '/sys/fs/cgroup', fsRead = fs.readFileSync, readDir = fs.readdirSync, count = 15 } = {}) {
+export function containerMemory({ cgroupRoot = '/sys/fs/cgroup', proc = '/proc', fsRead = fs.readFileSync, readDir = fs.readdirSync, count = 15 } = {}) {
   let ids; try { ids = readDir(`${cgroupRoot}/docker`).filter(n => /^[a-f0-9]{64}$/.test(n)); } catch { return null; }
   const num = f => { const t = String(read(f, fsRead) ?? '').trim(); return /^\d+$/.test(t) ? Number(t) : null; };
   const rows = [];
   for (const id of ids) {
     const dir = `${cgroupRoot}/docker/${id}`, mem = num(`${dir}/memory.current`); if (mem === null) continue;
     const swap = num(`${dir}/memory.swap.current`), pid = (read(`${dir}/cgroup.procs`, fsRead) || '').split('\n')[0];
-    rows.push({ container: id.slice(0, 12), memoryMb: Math.round(mem / 1048576), swapMb: swap === null ? null : Math.round(swap / 1048576), mainProcess: /^\d+$/.test(pid) ? (read(`/proc/${pid}/comm`, fsRead) || '').trim().slice(0, 32) || null : null });
+    rows.push({ container: id.slice(0, 12), memoryMb: Math.round(mem / 1048576), swapMb: swap === null ? null : Math.round(swap / 1048576), mainProcess: /^\d+$/.test(pid) ? (read(`${proc}/${pid}/comm`, fsRead) || '').trim().slice(0, 32) || null : null });
   }
   rows.sort((a, b) => (b.memoryMb + (b.swapMb || 0)) - (a.memoryMb + (a.swapMb || 0)) || a.container.localeCompare(b.container));
   return { count: rows.length, top: rows.slice(0, count), note: 'Resident memory and swap per container from the cgroup files; a container has no name here (the container list needs the Docker socket), so match the short id with docker ps on Tower.' };
