@@ -30,6 +30,8 @@ import { idleReport, renderIdleReport, passStats, renderPassStats } from './idle
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
 import { ghRunner } from './github.mjs';
+import { updateIndex } from './issueindex.mjs';
+import { isStatusIssue } from './statusissue.mjs';
 import { redact } from './redact.mjs';
 import { saveWork } from './savework.mjs';
 import { hasProbe, refreshProvider } from './probe.mjs';
@@ -301,6 +303,8 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
       const report = await team.tick({ dryRun, hold, replay: mode === 'replay', beforeChain: () => wrapper?.endReplay() });
       if (!dryRun) {
         record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}), noop: report.noop === true, ghCalls: ghStats.calls, ghMs: ghStats.ms, ...(check ? { check: { result: check.replay ? 'unchanged' : 'full', reason: check.reason, probes: check.probes, served: wrapper?.stats.served ?? 0 } } : {}) });
+        // Issue #951: bounded incremental refresh of the searchable issue and PR index (one gh call per kind). Best effort; skipped on a pass GitHub proved unchanged once caught up.
+        updateIndex(root, { run: ghRunner(), repository: config.repository, idle: mode === 'replay', isStatusIssue });
         // The baseline is stored only after a full pass that read everything without error, and never after a replay (so the forced-full clock keeps running).
         if (mode === 'record' && tickOutcome(report).status === 'ok') { try { const next = buildCache({ repository: config.repository, baseline: check.baseline, wrapper, now: checkedAt }); if (next) saveCache(root, next); } catch { /* the next pass is a full one */ } }
         // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
