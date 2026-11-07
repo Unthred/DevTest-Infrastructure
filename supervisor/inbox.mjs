@@ -85,6 +85,18 @@ export function validateItem(raw) {
   return { ok: true, item: Object.fromEntries(allowed.filter(k => raw[k] !== undefined).map(k => [k, raw[k]])) };
 }
 
+// Issue #856: a per-item lock (an exclusive lock file, stale after 10 s) so the dashboard's Undo and the tick's claim never interleave.
+// A held lock makes the caller back off: Undo is refused with "try again", the tick leaves the item for the next pass.
+function withLock(inboxDir, id, fn) {
+  const lock = path.join(dirs(inboxDir).status, `${id}.lock`);
+  let fd = null;
+  for (let i = 0; i < 2 && fd === null; i++) {
+    try { fd = fs.openSync(lock, 'wx'); }
+    catch { try { if (Date.now() - fs.statSync(lock).mtimeMs > 10000) fs.unlinkSync(lock); else break; } catch { /* gone or unreadable */ } }
+  }
+  if (fd === null) return { locked: true };
+  try { return { locked: false, value: fn() }; } finally { try { fs.closeSync(fd); fs.unlinkSync(lock); } catch { /* already removed */ } }
+}
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 function writeAtomic(file, value) {
   const temp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
@@ -201,15 +213,29 @@ export function decide(inboxDir, id, decision, now = Date.now()) {
 // (approved or rejected): once the tick has started the job or posted the issue the state has moved on and nothing can be taken back.
 // The item returns to pending as it was; the decision fields are removed.
 export function undo(inboxDir, id, now = Date.now()) {
-  const s = statusOf(inboxDir, id);
-  if (!s) return { ok: false, reason: 'unknown item' };
-  if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
-  if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
-  const file = path.join(dirs(inboxDir).status, `${id}.json`), cur = readJson(file) || {};
-  const { decision, decidedAt, title, result, ...rest } = cur;
-  writeAtomic(file, { ...rest, state: 'pending', id, updatedAt: now });
-  audit(inboxDir, { id, event: 'undone', kind: s.kind, hash: s.hash }, now);
-  return { ok: true, state: 'pending' };
+  if (!ID_RE.test(String(id))) return { ok: false, reason: 'unknown item' };
+  const r = withLock(inboxDir, id, () => {
+    const file = path.join(dirs(inboxDir).status, `${id}.json`), s = readJson(file);
+    if (!s) return { ok: false, reason: 'unknown item' };
+    if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
+    if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
+    const { decision, decidedAt, title, result, ...rest } = s;
+    writeAtomic(file, { ...rest, state: 'pending', id, updatedAt: now });
+    audit(inboxDir, { id, event: 'undone', kind: s.kind, hash: s.hash }, now);
+    return { ok: true, state: 'pending' };
+  });
+  return r.locked ? { ok: false, reason: 'the item is being acted on; try again in a moment' } : r.value;
+}
+// Issue #856: the tick takes an item before any effect. Under the same lock as undo() it re-reads the on-disk state and moves
+// `from` to patch.state only if the state is still `from`; false means an Undo (or another writer) won and the effect must not happen.
+export function claim(inboxDir, id, from, patch, now = Date.now()) {
+  if (!ID_RE.test(String(id))) return false;
+  const r = withLock(inboxDir, id, () => {
+    if (statusOf(inboxDir, id)?.state !== from) return false;
+    finish(inboxDir, id, patch, now);
+    return true;
+  });
+  return !r.locked && r.value === true;
 }
 // Issue #856: items decided today (the server's calendar day), newest first, for the collapsed "Decided today" list. `undoUntil` is set
 // only while an undo is still possible. Nothing beyond the title kept at decision time is shown.

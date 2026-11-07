@@ -1897,7 +1897,7 @@ export class Team {
   // is a normal outcome: the item ends 'failed' with the reason and nothing is changed. The audit log and the unblock log record it.
   async runInboxAction(dir, st, item, report) {
     const id = st.id, now = () => this.clock.now();
-    inboxStore.finish(dir, id, { state: 'running' }, now());
+    if (!inboxStore.claim(dir, id, 'approved', { state: 'running' }, now())) return;   // issue #856: an Undo won; run nothing
     try {
       const result = String(await this.applyInboxAction(item, report)).slice(0, 300);
       inboxStore.finish(dir, id, { state: 'done', result }, now());
@@ -1996,7 +1996,7 @@ export class Team {
   // response or a repeated tick finds the issue instead of filing a second one. The text is redacted again and must carry no AI attribution.
   async postIssueDraft(dir, st, item, report) {
     const id = st.id, mark = inboxStore.marker(id);
-    if (st.state === 'approved') inboxStore.finish(dir, id, { state: 'posting' }, this.clock.now());
+    if (st.state === 'approved' && !inboxStore.claim(dir, id, 'approved', { state: 'posting' }, this.clock.now())) return;   // issue #856: an Undo won; post nothing
     let n = await this.gh.findIssueByMarker(mark);
     if (!n) {
       const title = redact(item.title, 200), body = redactLong(item.body, 8000, ' [cut]');
@@ -3149,7 +3149,7 @@ export class Team {
     }
     const a = this.c.agents[act.agent], base = this.c.worktree_base, ticket = crypto.randomBytes(16).toString('hex');
     const common = { role: 'devtest', provider: a.provider, repository: this.c.repo_path, access: this.c.access?.mode === 'full' ? 'full' : 'standard', autoRestart: true };
-    let spec, meta, bump = () => {}, announce = null, escalatedInbox = null;
+    let spec, meta, bump = () => {}, announce = null, escalatedInbox = null, preclaim = null, unclaim = null;
     if (act.escalated) {   // issue #163: the one final round gets the full review history as task data and may propose a scope split
       escalatedInbox = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(escalatedInbox, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(escalatedInbox, 'review-history.json'), JSON.stringify({ pr: act.pr, verdicts: this.reviewHistory(act.pr) }) + '\n', { mode: 0o600 });
@@ -3229,6 +3229,8 @@ export class Team {
       spec = { ...common, kind: 'inbox', worktree: wt, issue: inboxStore.placeholderIssue(act.inboxId), scope: `Overseer prompt ${short}: ${redact(l.item.title, 100)}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
         prompt: inboxPrompt({ title: l.item.title, prompt: l.item.prompt, branch, resultFile }), postcondition: { kind: 'inbox_result', ticket } };
       meta = { inboxId: act.inboxId, branch, worktree: wt };
+      preclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'approved', { state: 'running' }, this.clock.now());   // issue #856: taken just before the effect; an earlier Undo wins
+      unclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'running', { state: 'approved' }, this.clock.now());
       bump = () => inboxStore.finish(this.inboxDir(), act.inboxId, { state: 'running', job: Object.keys(this.s.jobs).find(k => this.s.jobs[k].inboxId === act.inboxId)?.slice(0, 8) }, this.clock.now());
     } else {
       const branch = `${a.branch_prefix}issue-${act.issue}-${slug(act.title)}`;
@@ -3241,7 +3243,10 @@ export class Team {
     Object.assign(spec, this.modelFor(act, spec.kind, report));
     if (spec.writeRefusal) { (report.warnings ||= []).push({ agent: act.agent, kind: spec.kind, warning: `job not started: ${spec.writeRefusal}` }); return; }
     const create = async () => {
-      const job = await this.jobs.create(spec);   // a lease conflict throws here, before any attempt is counted
+      if (preclaim && !preclaim()) return 'not started: the inbox item was undone';
+      let job;
+      try { job = await this.jobs.create(spec); }   // a lease conflict throws here, before any attempt is counted
+      catch (error) { if (unclaim) unclaim(); throw error; }
       if (announce) await announce();
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
       Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job

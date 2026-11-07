@@ -593,3 +593,23 @@ test('issue #802: a package-lock integrity hash is saved; a refusal keeps what t
   await refused(main);
   assert.match(g(main, 'status', '--porcelain'), /^A  x$/m); assert.match(g(main, 'status', '--porcelain'), /\?\? bad\.txt/);
 });
+
+// Issue #856: an Undo that lands after the tick read the item as approved must win; the tick claims the item at the point of use.
+test('team: an Undo between the tick snapshot and the effect wins; nothing is posted or run', async t => {
+  const w = world(t); const id = approve(w, DRAFT);
+  const stale = inbox.allStatuses(w.dir).find(s => s.id === id);   // the tick's snapshot: approved
+  assert.equal(inbox.undo(w.dir, id, 3).ok, true);
+  await w.team.postIssueDraft(w.dir, stale, inbox.loadItem(w.dir, id).item, rep());
+  assert.equal(w.calls.issues.length, 0, 'the issue is not posted'); assert.equal(inbox.statusOf(w.dir, id).state, 'pending');
+  const a = actionWorld(t); const aid = approve(a, act('stop_job', JOB.slice(0, 8)));
+  const astale = inbox.allStatuses(a.dir).find(s => s.id === aid); inbox.undo(a.dir, aid, 3);
+  await a.team.runInboxAction(a.dir, astale, {}, rep()); assert.equal(inbox.statusOf(a.dir, aid).state, 'pending', 'the action is not run');
+  // the other order: once the tick has claimed the item, Undo is refused
+  const w2 = world(t); const id2 = approve(w2, DRAFT);
+  assert.equal(inbox.claim(w2.dir, id2, 'approved', { state: 'posting' }, 3), true);
+  assert.equal(inbox.undo(w2.dir, id2, 4).ok, false); assert.equal(inbox.claim(w2.dir, id2, 'approved', { state: 'posting' }, 5), false);
+  // a held lock makes both back off rather than interleave
+  const w3 = world(t); const id3 = approve(w3, DRAFT); const lock = path.join(w3.dir, 'status', `${id3}.lock`); fs.writeFileSync(lock, '');
+  assert.match(inbox.undo(w3.dir, id3, 3).reason, /try again/); assert.equal(inbox.claim(w3.dir, id3, 'approved', { state: 'posting' }, 4), false);
+  assert.equal(inbox.statusOf(w3.dir, id3).state, 'approved');
+});
