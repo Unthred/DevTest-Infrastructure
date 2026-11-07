@@ -228,10 +228,10 @@ test('the badge shows "running X, installed Y, restart pending" in amber when th
   const root = tmp(t); install(root, NEW);
   const v = await view(root, { running: OLD });
   assert.equal(v.version.running, OLD);
-  const html = renderPage(v);
+  const html = renderPage(v, { route: { page: 'system' } });
   assert.match(html, new RegExp(`Restart needed: ${OLD.slice(0, 7)} running, ${NEW.slice(0, 7)} installed`));
   assert.match(html, /badge sev-warning [^>]*>(<svg[^]*?<\/svg>)?Restart needed: [0-9a-f]{7} running, [0-9a-f]{7} installed/);
-  const agree = renderPage(await view(root, { running: NEW }));
+  const agree = renderPage(await view(root, { running: NEW }), { route: { page: 'system' } });
   assert.doesNotMatch(agree, /Restart needed/);
 });
 

@@ -86,7 +86,7 @@ test('every page except Overview has a breadcrumb trail and a Back control that 
   const s = await serve(t);
   for (const u of PAGES) {
     const body = (await s.get(u)).body;
-    if (u === '/') { assert.doesNotMatch(body, /class="pagehead"|data-back/, 'Overview is the root'); continue; }
+    if (u === '/') { assert.doesNotMatch(body, /class="crumbstrip"|data-back/, 'Overview is the root'); continue; }
     assert.match(body, /<nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="\/">Overview<\/a>/, u);
     assert.equal((body.match(/aria-current="page">[^<]+<\/span><\/li><\/ol>/g) || []).length, 1, `${u}: exactly one current step, last`);
     assert.match(body, /<a class="btn back" href="\/[^"]*" data-back>/, u);
@@ -201,13 +201,14 @@ test('version badge: matches the installed link, flags a server still running ol
   const s = await serve(t, { link: H(5) });
   const view = await currentView({ root: s.root, config, now: NOW });
   assert.equal(view.version.installed, H(5));
-  const page = v => renderRoute({ ...view, version: v }, { page: 'overview' }).html;
+  const page = v => renderRoute({ ...view, version: v }, { page: 'system' }).html;
   assert.match(page({ installed: H(5), main: H(5), drift: false, running: H(5) }), /sev-ok[^>]*>[^]*?Up to date \(5555555\)/);
   assert.match(page({ installed: H(5), main: H(5), drift: false, running: null }), /Up to date \(5555555\)/, 'unknown running code is not an alarm');
   const stale = page({ installed: H(5), main: H(5), drift: false, running: H(4) });
   assert.match(stale, /sev-warning[^>]*>[^]*?Restart needed: 4444444 running, 5555555 installed/); assert.doesNotMatch(stale, /= main/);
   assert.match(page({ installed: H(5), main: H(6), drift: true, running: H(5) }), /sev-warning[^>]*>[^]*?Deploy needed: 5555555 → 6666666/);
-  assert.match(page(null), /Version<\/span><a class="pill"[^>]*><span class="badge sev-info[^>]*>[^]*?Version unknown/);
+  assert.match(page(null), /No version record/);
+  assert.doesNotMatch(renderRoute({ ...view, version: { installed: H(5), main: H(5), drift: false } }, { page: 'overview' }).html.split('</header>')[0], /Up to date/, 'the app bar carries no version (issue #924)');
   assert.doesNotMatch((await s.get('/system')).body, /undefined|NaN/);
 });
 
@@ -232,9 +233,10 @@ test('#140 the saved range wins only when the address names none', () => {
 test('#140 title and Back live in the app bar; one h1; no gap-less Supervisor stack; one overseer title', async t => {
   const s = await serve(t);
   for (const u of PAGES) {
-    const body = (await s.get(u)).body, bar = body.slice(body.indexOf('<header class="statusbar"'), body.indexOf('</header>'));
+    const body = (await s.get(u)).body, bar = body.slice(body.indexOf('<header class="statusbar"'), body.indexOf('</header>')), strip = body.slice(body.indexOf('</header>'), body.indexOf('<nav class="nav"'));
     assert.match(bar, /<h1 id="page-title">/, u); assert.equal((body.match(/<h1 id="page-title">/g) || []).length, 1, u); assert.ok(!body.slice(body.indexOf('<main')).includes('<h1 id="page-title">'), u);
-    if (u !== '/') assert.match(bar, /data-back/, u);
+    if (u !== '/') { assert.match(strip, /<div class="crumbstrip">[^]*data-back[^]*class="crumbs"/, u); assert.doesNotMatch(bar, /data-back|class="crumbs"/, `${u}: Back and breadcrumbs sit below the app bar (issue #924)`); }
+    else assert.doesNotMatch(strip, /crumbstrip/, u);
   }
   assert.match(css, /main\{width:100%/, 'main keeps the same width on every page, also in the flex docks');
   assert.match(css, /\.cards\.stacked\{margin-top/); assert.match((await s.get('/supervisor')).body, /<div class="cards stacked">/);
@@ -270,4 +272,28 @@ test('status pills and breadcrumb links keep a 24px target; card tools wrap', ()
 // ---- issue #428: a short plain link (for example "#3") must still be a 24px target (WCAG 2.5.8)
 test('plain links in main keep a 24px minimum width as well as height', () => {
   assert.match(css, /main a:not\(\[class\]\)\{[^}]*min-height:24px[^}]*min-width:24px/);
+});
+
+// ---- issue #924: right-aligned bar, sticky option, resizable vertical menu
+test('#924 app bar: version, data and team loop are off it; the sticky button and resize handle exist; the bar is right-aligned', async t => {
+  const s = await serve(t); const body = (await s.get('/system')).body, bar = body.slice(body.indexOf('<header class="statusbar"'), body.indexOf('</header>'));
+  for (const gone of ['>Version<', '>Data<', '>Team loop<']) assert.ok(!bar.includes(gone), gone);
+  assert.match(bar, /<button class="stickybtn wide-only" id="sticky" type="button" aria-pressed="false"/);
+  assert.ok(bar.indexOf('id="sticky"') < bar.indexOf('id="theme"') && bar.endsWith('</button>'), 'the theme button ends the bar');
+  assert.match(body, /<div class="nav-resize wide-only" role="separator" aria-orientation="vertical" tabindex="0" data-nav-resize/);
+  assert.match(css, /\.statusbar>h1\{margin-right:auto\}/, 'the title takes the free space so every control sits at the right');
+  assert.doesNotMatch(css, /\.brand\{margin-right:0\}/, 'the desktop rule that pulled the controls left is gone');
+  assert.match(css, /grid-template-columns:var\(--nav-w,13rem\) minmax\(0,1fr\)/, 'a vertical menu has a set width, not auto');
+  assert.match(css, /html\[data-sticky=on\] \.statusbar\{position:sticky;top:0/);
+  assert.match(appJs, /dash\.sticky/); assert.match(appJs, /dash\.navw/); assert.match(appJs, /ArrowLeft: cur - 16 \* dir/);
+});
+test('#924 early.js applies a saved sticky flag and menu width; a bad width is ignored', () => {
+  const run = store => {
+    const dataset = {}, props = {}, ls = { getItem: k => (k in store ? store[k] : null) };
+    vm.runInNewContext(earlyJs, { window: { innerWidth: 1400 }, localStorage: ls, document: { documentElement: { dataset, style: { setProperty: (k, v) => { props[k] = v; } } } }, JSON });
+    return { dataset, props };
+  };
+  const good = run({ 'dash.sticky': 'true', 'dash.navw': '260' }); assert.equal(good.dataset.sticky, 'on'); assert.equal(good.props['--nav-w'], '260px');
+  for (const bad of ['"wide"', '5', '99999', 'null']) assert.equal(run({ 'dash.navw': bad }).props['--nav-w'], undefined, bad);
+  assert.equal(run({ 'dash.sticky': 'false' }).dataset.sticky, undefined);
 });

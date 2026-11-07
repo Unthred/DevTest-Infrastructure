@@ -278,8 +278,8 @@ const plainTimes = html => html
 test('time: the version badge next-try time is a local <time> and no page shows a plain UTC clock time', async t => {
   const v = await build(t, { jobs: [job(), paused()] });
   v.version = { installed: 'a'.repeat(40), main: 'b'.repeat(40), drift: true, behind: 2, nextTryAt: Date.parse('2026-07-01T12:34:00Z'), latched: false };
-  const home = page(v);
-  assert.match(header(home), /2 commits behind, next try <time class="lt" datetime="2026-07-01T12:34:00.000Z" data-local>2026-07-01 12:34 UTC<\/time>/);
+  const home = page(v, { page: 'system' });
+  assert.match(home, /2 commits behind, next try <time class="lt" datetime="2026-07-01T12:34:00.000Z" data-local>2026-07-01 12:34 UTC<\/time>/);
   for (const p of ['overview', 'agents', 'work', 'activity', 'usage', 'reviews', 'supervisor', 'ticks', 'upgrades', 'system']) {
     const html = renderRoute(v, { page: p }, { query: new URLSearchParams(), pathname: `/${p}` }).html;
     assert.deepEqual(plainTimes(html), [], `page ${p} shows a plain UTC time: ${(html.replace(/<time\b[\s\S]*?<\/time>/g,'').match(/.{50}\d{1,2}:\d{2}\s*UTC.{10}/)||[''])[0]}`);

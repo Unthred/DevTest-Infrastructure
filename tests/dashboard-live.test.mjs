@@ -175,15 +175,15 @@ test('version status: up to date is green, deploy/restart needed is amber with a
 });
 test('the header and the System page show the same version severity; a latch in the real state is red', async t => {
   const up = await serve(t, { link: H(5) });
+  // issue #924: the version left the app bar; the System page is its one place
   const bar = b => b.slice(b.indexOf('class="statusbar"'), b.indexOf('<nav class="nav"'));
-  const ok = (await up.get('/')).body; assert.match(bar(ok), /Version<\/span><a class="pill"[^>]*><span class="badge sev-ok[^>]*>[^]*?Up to date \(5555555\)/);
+  const ok = (await up.get('/')).body; assert.doesNotMatch(bar(ok), /Version<|Up to date/, 'the app bar no longer carries the version');
   assert.match((await up.get('/system')).body, /<dt>State<\/dt><dd><span class="badge sev-ok[^>]*>[^]*?Up to date/);
   const failed = await serve(t, { link: H(5), upgrades: [{ at: NOW - 3600000, from: H(5), to: H(6), result: 'rolled_back', reason: 'live tick failed' }] });
-  const fb = (await failed.get('/')).body; assert.match(bar(fb), /Version<\/span><a class="pill"[^>]*><span class="badge sev-action[^>]*>[^]*?Upgrade failed/);
-  assert.match((await failed.get('/system')).body, /<dt>State<\/dt><dd><span class="badge sev-action/);
+  const fsys = (await failed.get('/system')).body; assert.match(fsys, /<dt>State<\/dt><dd><span class="badge sev-action[^>]*>[^]*?Upgrade failed/);
   const latched = await serve(t, { link: H(5), latch: { at: NOW - 1000, from: H(5), to: H(6), reason: 'rollback' } });
   const view = await currentView({ root: latched.root, config, now: NOW });
-  if (view.version.latched) assert.match(bar((await latched.get('/')).body), /sev-action[^>]*>[^]*?latched/);
+  if (view.version.latched) assert.match((await latched.get('/system')).body, /<dt>State<\/dt><dd><span class="badge sev-action[^>]*>[^]*?latched/);
   assert.equal(typeof view.version.latched, 'boolean', 'the view carries the latch');
 });
 
@@ -201,7 +201,7 @@ test('every header pill is a link, and each link lands on an element that exists
   const s = await serve(t, { link: H(5), tick: { at: NOW - 60000, status: 'error', error: 'boom: cannot read x', lastOkAt: NOW - 7200000 } });
   const home = (await s.get('/')).body, bar = home.slice(home.indexOf('class="statusbar"'), home.indexOf('<nav class="nav"'));
   const hrefs = [...bar.matchAll(/<a class="pill" href="([^"]+)"/g)].map(m => m[1]);
-  assert.equal(hrefs.length, 5, 'health, last tick, data, team loop, version'); 
+  assert.equal(hrefs.length, 2, 'health and last tick (data, team loop and version moved to the System page, issue #924)');
   for (const h of hrefs) {
     const [p, frag] = h.split('#'); const page = (await s.get(p)).body;
     assert.equal(page.includes(`id="${frag}"`), true, `${h}: target exists`);
@@ -217,7 +217,7 @@ test('every header pill is a link, and each link lands on an element that exists
 });
 test('pills are keyboard reachable links with a visible focus ring and an explanatory title', async t => {
   const s = await serve(t); const body = (await s.get('/')).body;
-  assert.ok([...body.matchAll(/<a class="pill" href="[^"]+" title="[^"]+">/g)].length >= 5);
+  assert.ok([...body.matchAll(/<a class="pill" href="[^"]+" title="[^"]+">/g)].length >= 2);
   assert.match(css, /a\.pill:focus-visible\{outline-offset/); assert.match(css, /:focus-visible\{outline:3px solid var\(--focus\)/);
 });
 test('renderRoute still escapes everything in the new markup', () => {
