@@ -150,3 +150,22 @@ test('endedNoPr: set when a deferred job ages out of the window; set at ingest w
   await ingest({ status: 'failed', lastEvent: 'checkpoint_failed' });
   assert.equal(entry().endedNoPr.event, 'checkpoint_failed');
 });
+
+// Issue #826: an aged-out implement job whose record is gone is settled, so it is not looked up on every tick; a job that still exists
+// in a non-final status is not settled (it may yet stop).
+test('resumeTransient: an aged-out job with a missing record is settled; a running one is not', async t => {
+  const w = world(t), gone = 'b1'.repeat(16), live = 'b2'.repeat(16), states = {}, looked = [];
+  w.team.jobs.get = async i => { looked.push(i); return states[i] || null; };
+  w.team.jobs.resume = async () => {};
+  const old = NOW - 8 * 86400000;
+  w.team.s.jobs[gone] = { kind: 'implement', agent: 'claude', key: '31', issue: 31, ingested: true, at: old };
+  w.team.s.jobs[live] = { kind: 'implement', agent: 'claude', key: '32', issue: 32, ingested: true, at: old };
+  states[live] = { id: live, status: 'running' };
+  await w.team.resumeTransient({ ingested: [] });
+  assert.equal(w.team.s.jobs[gone].settled, true);
+  assert.equal(w.team.s.jobs[live].settled, undefined);
+  looked.length = 0;
+  await w.team.resumeTransient({ ingested: [] });
+  assert.ok(!looked.includes(gone), 'the settled job is not looked up again');
+  assert.ok(looked.includes(live), 'the running job still is');
+});
