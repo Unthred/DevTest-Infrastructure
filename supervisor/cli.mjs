@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { requestBreakerResume } from './breakerresume.mjs';
+import { queueHomeownerRequest } from './homeownerqueue.mjs';
 import { resumeAllowed } from './breaker.mjs';
 import { rangeEqual } from './rangediff.mjs';
 import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
@@ -14,7 +16,7 @@ import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, record
 import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
 import { acquireTestSlot, recordTestEvent, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup, formatRuntime } from './testslots.mjs';
 import { upgradeLock } from './team.mjs';
-import { Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
+import { Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, tickLockWait, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { changeCheckOf, checkForChanges, ghProbeRunner, loadCache, saveCache, buildCache, cachedGithub } from './ghchange.mjs';
 import { publishStatusIssue } from './statusissue.mjs';
@@ -228,6 +230,16 @@ async function gatePreflight(registry, config) {
   } finally { process.chdir(here); }
   return { ok: Object.values(checks).every(v => v === 'ok'), checks };
 }
+// Issue #867: homeowner commands wait for the tick lock (default 5 minutes, AI_SUPERVISOR_LOCK_WAIT_MS overrides) and say so. On timeout the command
+// leaves its request for the next tick and fails with a clear message, so the request is not lost.
+async function homeownerLock(root, what, queue = null) {
+  const ms = Number(process.env.AI_SUPERVISOR_LOCK_WAIT_MS);
+  const release = await tickLockWait(root, { timeoutMs: Number.isFinite(ms) && ms >= 0 ? ms : 300000, say: line => console.error(`ai-supervisor: ${line}`) });
+  if (release) return release;
+  const queued = queue ? queue() : null;
+  throw new SupervisorError(`a team tick kept running past the wait, so team ${what} was not applied now${queued ? `; ${queued}` : ''}`);
+}
+const queueOf = (root, command, args) => () => { queueHomeownerRequest(root, command, args, Date.now()); return 'the request is queued; the next tick applies it'; };
 const currentStatusFor = (root, config) => currentStatus({ root, config, register: readRegister(config) });
 const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 async function teamTick(root, registry, dryRun, hold = null, pass = null) {
@@ -518,8 +530,7 @@ async function main() {
     if (a._[0] === 'accept-split') {   // issue #244: the "Accept split" path of the Needs you item
       const n = Number(a._[1]);
       if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team accept-split ISSUE');
-      const release = tickLock(root);
-      if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
+      const release = await homeownerLock(root, 'accept-split', queueOf(root, 'accept-split', [n]));
       try { console.log(JSON.stringify({ issue: n, filed: await (await teamFor(root, registry)).acceptSplit(n) })); } finally { release(); }
       return;
     }
@@ -528,22 +539,20 @@ async function main() {
       if (sub === 'status') { console.log(JSON.stringify(await (await teamFor(root, registry)).breakerStatus(), null, 2)); return; }
       if (sub !== 'resume' || !a._[2]) throw new SupervisorError('usage: team breaker status | team breaker resume CAUSE|global|all');
       if (!resumeAllowed()) throw new SupervisorError('team breaker resume needs a person at a terminal, outside any supervised job; there is no supported route for a supervised job to clear it');
-      const release = tickLock(root);
-      if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
+      const release = await homeownerLock(root, 'breaker resume', () => { requestBreakerResume(root, String(a._[2]), Date.now()); return 'the resume is queued; the next tick applies it'; });
       try { console.log(JSON.stringify((await teamFor(root, registry)).breakerResume(String(a._[2])))); } finally { release(); }
       return;
     }
     if (a._[0] === 'reopen') {   // issue #490: let an issue be implemented again after its pull request was closed unmerged
       const n = Number(a._[1]);
       if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team reopen ISSUE');
-      const release = tickLock(root);
-      if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
+      const release = await homeownerLock(root, 'reopen', queueOf(root, 'reopen', [n]));
       try { console.log(JSON.stringify({ issue: n, reopened: await (await teamFor(root, registry)).reopen(n) })); } finally { release(); }
       return;
     }
     if (a._[0] === 'request-review') {   // issue #366: the homeowner asks for one new review of the same head, citing the decision
-      const release = tickLock(root);
-      if (!release) throw new SupervisorError('a team tick is running; retry in a minute');
+      if (!/^\d+$/.test(String(a._[1] ?? '')) || typeof a._[2] !== 'string' || !a._[2]) throw new SupervisorError('usage: team request-review PR DECISION_LINK');
+      const release = await homeownerLock(root, 'request-review', queueOf(root, 'request-review', [a._[1], a._[2]]));
       try { console.log(JSON.stringify(await (await teamFor(root, registry)).requestReReview(a._[1], a._[2]))); } finally { release(); }
       return;
     }
