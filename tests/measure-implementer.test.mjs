@@ -71,12 +71,18 @@ test('a re-queued job not restarted by the window end is queued only when its cu
 test('END covers every run-ending kind supervisor/core.mjs transitions to (issue #672)', () => {
   const src = fs.readFileSync(new URL('../supervisor/core.mjs', import.meta.url), 'utf8');
   // Kinds written before a run starts (or not at all by a run) do not end a run.
-  const preStart = new Set(['started', 'issue_closed', 'stale_handover', 'head_moved', 'completed_before_resume']);
+  const preStart = new Set(['issue_closed', 'stale_handover', 'head_moved', 'completed_before_resume']);
   const kinds = new Set();
   for (const m of src.matchAll(/transition\(root, \w+, '(?:blocked|failed|queued|paused_limit|completed|stopped)', '([a-z_]+)'/g)) kinds.add(m[1]);
   for (const m of src.matchAll(/\['([a-z_]+(?:', '[a-z_]+)*)'\]\.includes\(result\.event\)/g)) for (const k of m[1].split("', '")) kinds.add(k);
-  for (const k of ['context_too_large', 'preflight_failed', 'context_limit', 'orphaned_worker', 'completed_before_limit']) assert.ok(kinds.has(k) || k === 'preflight_failed', `scan found ${k}`);
-  assert.ok(kinds.size > 10);
+  for (const k of ['context_too_large', 'preflight_failed', 'context_limit', 'orphaned_worker', 'completed_before_limit']) assert.ok(kinds.has(k), `scan found ${k}`);
+  // Pin the whole scan result: a core.mjs refactor the regexes no longer match shrinks
+  // this set and fails here; a new kind must be added here and to END.
+  assert.deepEqual([...kinds].sort(), [
+    'approval_required', 'auth_error', 'checkpoint_failed', 'completed', 'completed_before_limit', 'completed_before_resume',
+    'context_fresh_session', 'context_limit', 'context_too_large', 'crash', 'head_moved', 'incomplete', 'issue_closed',
+    'network_error', 'orphaned_worker', 'preflight_failed', 'retry_exhausted', 'stale_handover', 'transient_rate_limit', 'usage_limit',
+  ]);
   for (const k of kinds) if (!preStart.has(k)) assert.ok(END.has(k), `END is missing core.mjs kind ${k}`);
 });
 
