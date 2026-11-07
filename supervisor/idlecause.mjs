@@ -18,7 +18,12 @@ export const CAUSE_LABEL = { 'waiting-for-tick': 'waiting for the next tick', up
 // sorted: a different mix or order of the same holds is then one cause per part set. A bare count (not after '#') changes on every
 // reading ("10 open PRs (cap 10); 12 more waiting"), so it is masked too; "PR #9" keeps its number. The masked key is cut at a fixed
 // length AFTER masking, so a figure that changes width never moves the cut.
-const HOLD_KEY_CHARS = 200;
+// HOLD_KEY_CHARS must stay well below HOLD_REASON_CHARS: classifyIdle cuts each raw reason at HOLD_REASON_CHARS (redact) BEFORE masking, and
+// the key is stable only because masking that many raw characters still leaves more than HOLD_KEY_CHARS, so the post-mask cut decides it.
+export const HOLD_KEY_CHARS = 200;
+export const HOLD_REASON_CHARS = 300;
+// Overall display cap for the joined hold text, applied at a part boundary (issue #813). The key is formed from the uncapped text first.
+export const HOLD_TEXT_CHARS = 600;
 const maskHold = part => String(part)
   .replace(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/g, '~').replace(/\b\d{1,2}:\d{2}\b/g, '~')
   .replace(/\d+(?:\.\d+)?\s*(?:%|days?|hours?|hrs?|h|min(?:ute)?s?)(?![A-Za-z])/g, '~')
@@ -43,8 +48,12 @@ export function classifyIdle({ states, heldAgents = null, holds = {}, plan = [] 
       // Each value is itself a ' | '-joined list of reasons (Team.hold), so split it and cut every reason on its own: a figure that
       // changes width then only moves its own reason's cut, and one long reason cannot push the others out (issue #719).
       const parts = Object.values(holds?.[agent] || {}).flatMap(t => String(t).split(' | ')).map(t => t.trim()).filter(Boolean);
-      const text = [...new Set(parts.map(t => redact(t, 300)))].join(' | ');
-      out[agent] = text ? { cause: 'named-hold', hold: text } : { cause: 'no-eligible-work' };
+      const reasons = [...new Set(parts.map(t => redact(t, HOLD_REASON_CHARS)))];
+      const holdKey = holdCause(reasons.join(' | '));
+      const shown = [];
+      for (const r of reasons) { if (shown.length && [...shown, r].join(' | ').length > HOLD_TEXT_CHARS) break; shown.push(r); }
+      const text = shown.join(' | ');
+      out[agent] = text ? { cause: 'named-hold', hold: text, ...(shown.length < reasons.length ? { holdKey } : {}) } : { cause: 'no-eligible-work' };
     }
   }
   return out;
@@ -79,7 +88,7 @@ export function idleBreakdown({ jobs, snapshots, agents, from, to }) {
   for (const [agent, provider] of Object.entries(agents)) {
     const row = { windowMinutes: (to - from) / MIN, busyMinutes: 0, minutes: Object.fromEntries(IDLE_CAUSES.map(k => [k, 0])), holds: {} };
     const latest = {};   // cause key -> the newest text seen (intervals are visited in time order)
-    const add = (cause, ms, hold) => { row.minutes[cause] += ms / MIN; if (cause === 'named-hold' && hold) { const k = holdCause(hold); latest[k] = hold; row.holds[k] = (row.holds[k] || 0) + ms / MIN; } };
+    const add = (cause, ms, hold, key) => { row.minutes[cause] += ms / MIN; if (cause === 'named-hold' && hold) { const k = key ?? holdCause(hold); latest[k] = hold; row.holds[k] = (row.holds[k] || 0) + ms / MIN; } };
     const busy = busyIntervals(jobs, provider, from, to);
     let cursor = from;
     const idleSpans = [];
@@ -96,16 +105,16 @@ export function idleBreakdown({ jobs, snapshots, agents, from, to }) {
         if (y <= x) continue;
         const prev = snaps[firstAtOrAfter(snaps, x + 1) - 1], end = snaps[firstAtOrAfter(snaps, y)];
         const entry = prev?.idle?.[agent];
-        let cause, hold = entry?.hold;
+        let cause, hold = entry?.hold, key = entry?.holdKey;
         if (entry) cause = mapCause(entry.cause);
         else {
           // The previous tick saw the agent running (or there was none): the tick that ends the interval says what held its work.
           const e = end?.idle?.[agent];
-          cause = e ? mapCause(e.cause) : end ? 'no-eligible-work' : 'unrecorded'; hold = e?.hold;
+          cause = e ? mapCause(e.cause) : end ? 'no-eligible-work' : 'unrecorded'; hold = e?.hold; key = e?.holdKey;
           if (!prev && !e) cause = 'unrecorded';
         }
         if (cause === 'no-eligible-work' && end && end === startSnap) cause = 'waiting-for-tick';
-        add(cause, y - x, hold);
+        add(cause, y - x, hold, key);
       }
     }
     row.holds = Object.fromEntries(Object.entries(row.holds).map(([k, m]) => [latest[k], m]));

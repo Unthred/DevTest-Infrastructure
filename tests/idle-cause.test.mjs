@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { holdCause, classifyIdle, idleBreakdown, idleReport, renderIdleReport } from '../supervisor/idlecause.mjs';
+import { HOLD_KEY_CHARS, HOLD_REASON_CHARS, HOLD_TEXT_CHARS, holdCause, classifyIdle, idleBreakdown, idleReport, renderIdleReport } from '../supervisor/idlecause.mjs';
 import { idleReason } from '../supervisor/dashboard.mjs';
 import { recordTick, readSnapshots } from '../supervisor/dashdata.mjs';
 
@@ -196,3 +196,28 @@ test('one job type carrying several joined reasons: a figure changing width does
   assert.equal(key(9), key(10));
   assert.match(key(9), /review held: codex is out of allowance/);
 });
+
+test('issue #813: the joined hold text is capped at a part boundary, the key still comes from every reason', () => {
+  const reason = n => `reason ${String.fromCharCode(97 + n)} ` + 'word '.repeat(56);
+  const holds = { codex: { review: [0, 1, 2, 3, 4].map(reason).join(' | '), build: reason(5) } };
+  const e = classifyIdle({ states: { codex: 'idle' }, holds }).codex;
+  assert.ok(e.hold.length <= HOLD_TEXT_CHARS, `${e.hold.length}`);
+  assert.equal(e.hold.split(' | ').length, 2);                       // whole parts only, none cut mid-part
+  assert.ok(e.hold.split(' | ').every(p => p.startsWith('reason ')));
+  assert.equal(e.holdKey.split(' | ').length, 6);                    // key formed before the cap, stored only when the text was cut
+  assert.equal(shortKeyAbsent(), true);
+  const shortE = classifyIdle({ states: { codex: 'idle' }, holds: { codex: { review: 'one | two' } } }).codex;
+  assert.equal(shortE.hold, 'one | two');                            // under the cap: unchanged
+  // idleBreakdown groups by the stored key, so a capped text keeps its cause
+  const snaps = [{ at: 1000, idle: { codex: e } }, { at: 2000, idle: { codex: e } }];
+  const r = idleBreakdown({ jobs: [], snapshots: snaps, agents: { codex: 'codex' }, from: 0, to: 2000 });
+  assert.equal(Object.keys(r.codex.holds).length, 1);
+});
+
+test('issue #813: the key cut stays well below the raw per-reason cut', () => {
+  assert.ok(HOLD_KEY_CHARS <= HOLD_REASON_CHARS - 50);
+  const long = 'held: ' + '12 '.repeat(200);                         // digits mask to shorter text, so masking shrinks the raw cut
+  const key = holdCause(classifyIdle({ states: { codex: 'idle' }, holds: { codex: { a: long } } }).codex.hold);
+  assert.equal(key.length, HOLD_KEY_CHARS);
+});
+function shortKeyAbsent() { return !('holdKey' in classifyIdle({ states: { codex: 'idle' }, holds: { codex: { a: 'one | two' } } }).codex); }
