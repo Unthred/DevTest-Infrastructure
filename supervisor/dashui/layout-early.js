@@ -3,7 +3,9 @@
 // sends nothing. It mirrors applyLayout and sanitizeCollapsed in logic.mjs (a test runs both on the same input); app.js applies
 // the same layout again once it loads, so a failure here only costs the early draw. A free layout (v: 2, a saved place and size per
 // card, grid.mjs) is applied as the card's --cx/--cy/--cw/--ch with the .free class on the grid; an old order/span/h layout is applied as before.
-// Local time (issue #493): every <time data-local> and [data-lms] is put in this browser's zone here, before the first paint, so a time
+// Local time (issue #493): early.js (in <head>, blocking) marks <html> .tzp, which hides the page (CSS visibility, no layout shift) until
+// this script has converted the times and removed it, so no time text can change while visible. If this script never runs, a CSS
+// animation reveals the page after 2 s. Every <time data-local> and [data-lms] is put in this browser's zone here, before the first paint, so a time
 // never changes text after the first draw. Mirrors formatLocal and timeOnly in logic.mjs (a test compares them); app.js skips .lz nodes.
 (function () {
   try {
@@ -30,7 +32,10 @@
       e2.textContent = (e2.getAttribute('data-tpl') || '{t}').replace('{t}', function () { return t; });
       e2.classList.add('lz');
     }
+    var note = document.getElementById && document.getElementById('tznote');
+    if (note) note.textContent = 'Times are shown in your time zone (' + zone + '). Data is stored in UTC; hover a time to see it.';   // same text as app.js
   } catch (e) { /* app.js converts them later */ }
+  try { document.documentElement.classList.remove('tzp'); } catch (e) { /* the CSS fallback reveals the page */ }
 })();
 (function () {
   try {

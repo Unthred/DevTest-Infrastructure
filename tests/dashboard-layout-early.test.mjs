@@ -144,9 +144,6 @@ test('layout-early.js puts server times in local time before the first paint, an
   assert.equal(bad.textContent, 'x', 'an unreadable time is left as it was');
   assert.equal(s.textContent, `at ${formatLocal(ms, tz)}`);
   assert.equal(so.textContent, timeOnly(ms, tz));
-  // app.js skips converted nodes, so nothing changes after the first paint
-  const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
-  assert.match(app, /classList\.contains\('lz'\)\) continue/);
 });
 test('layout-early.js local time matches logic.mjs in a non-UTC zone', () => {
   for (const zone of ['Asia/Kolkata', 'America/New_York', 'Europe/London']) {
@@ -162,7 +159,35 @@ test('layout-early.js local time matches logic.mjs in a non-UTC zone', () => {
   }
   assert.match(spawnSync(process.execPath, ['-e', 'process.stdout.write(new Intl.DateTimeFormat("en-GB",{hour:"2-digit",timeZoneName:"short"}).format(0))'], { env: { ...process.env, TZ: 'Asia/Kolkata' }, encoding: 'utf8' }).stdout, /GMT\+5:30|IST/);
 });
-test('layout-early.js runs after <main> in every page, so times are local on the first draw', () => {
+test('every page hides until local time is applied, then shows final text: no visible time text changes after the first paint', () => {
   const src = fs.readFileSync(new URL('../supervisor/dashrender.mjs', import.meta.url), 'utf8');
-  assert.ok(src.indexOf('</main><script src="/static/layout-early.js">') > 0);
+  assert.ok(src.indexOf('</main><p id="tznote"') > 0 && src.indexOf('</p><script src="/static/layout-early.js">') > 0, 'note and times are final before the reveal');
+  const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
+  assert.match(css, /html\.tzp body \{ visibility: hidden; animation: tzreveal 0s linear 2s forwards/, 'hidden until revealed, with a CSS fallback');
+  // Simulate the page: <html> .tzp from early.js, then layout-early.js, then app.js's own localizeTimes. Record every visible text change.
+  const ms = Date.UTC(2026, 6, 1, 12, 30), tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const cl = new Set(), visible = () => !cl.has('tzp'), changes = [];
+  const track = (attrs, text, classes = []) => {
+    const c = new Set(classes), a = { ...attrs }; let t = text;
+    return { get textContent() { return t; }, set textContent(v) { if (visible() && v !== t) changes.push(v); t = v; }, classList: { contains: x => c.has(x), add: x => c.add(x) },
+      hasAttribute: n => n in a, getAttribute: n => (n in a ? a[n] : null), setAttribute: (n, v) => { a[n] = v; }, set title(v) {} };
+  };
+  const t1 = track({ datetime: new Date(ms).toISOString() }, '2026-07-01 12:30 UTC'), s1 = track({ 'data-lms': String(ms), 'data-tpl': 'at {t}' }, 'at 12:30');
+  const note = track({}, "Times are shown in UTC (your browser's time zone is applied when scripts run). Data is stored in UTC.");
+  const docEl = { dataset: {}, classList: { add: c => cl.add(c), remove: c => cl.delete(c) } };
+  const doc = { documentElement: docEl, getElementById: i => (i === 'tznote' ? note : null), querySelector: () => null,
+    querySelectorAll: q => (q === 'time[data-local]' ? [t1] : q === '[data-lms]' ? [s1] : []) };
+  const ctx = { window: { innerWidth: 1400 }, location: { pathname: '/' }, JSON, Number, Array, Date, isFinite, Intl, localStorage: { getItem: () => null }, document: doc };
+  vm.runInNewContext(fs.readFileSync(new URL('../supervisor/dashui/early.js', import.meta.url), 'utf8'), ctx);
+  assert.ok(cl.has('tzp'), 'early.js hides the page');
+  vm.runInNewContext(code, ctx);
+  assert.ok(visible(), 'layout-early.js reveals the page');
+  assert.equal(t1.textContent, formatLocal(ms, tz)); assert.match(note.textContent, /your time zone/);
+  // app.js: run its real localizeTimes and tznote code on the converted page
+  const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  const from = app.indexOf('const zone = Intl'), to = app.indexOf('// The cooldown notice');
+  assert.ok(from > 0 && to > from);
+  const $$ = (q, scope) => scope.querySelectorAll(q), $ = q => (q === '#tznote' ? note : null);
+  vm.runInNewContext(app.slice(from, to), { ...ctx, $, $$, formatLocal, timeOnly, document: doc });
+  assert.deepEqual(changes, [], 'no text changes once the page is visible');
 });

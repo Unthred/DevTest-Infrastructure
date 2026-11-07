@@ -312,6 +312,9 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .chip.on { background: var(--accent, #2b6cb0); color: #fff; font-weight: 600; }
 .chips { margin: 0 0 .6rem; }
 .tznote { margin: 1rem 1.5rem; }
+/* Issue #493: hidden until layout-early.js has converted times to local time, so no time text changes while visible; revealed after 2 s regardless. */
+html.tzp body { visibility: hidden; animation: tzreveal 0s linear 2s forwards; }
+@keyframes tzreveal { to { visibility: visible; } }
 
 /* UI review evidence (issue #455) */
 .ev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,18rem),1fr));gap:var(--sp3)}

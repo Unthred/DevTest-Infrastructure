@@ -604,6 +604,7 @@ function localizeTimes(scope = document) {   // also run on the Next element ref
   }
 }
 localizeTimes();
+document.documentElement.classList.remove('tzp');   // normally already removed by layout-early.js
 {
   const note = $('#tznote');
   if (note) note.textContent = `Times are shown in your time zone (${zone}). Data is stored in UTC; hover a time to see it.`;
