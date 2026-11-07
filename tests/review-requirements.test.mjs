@@ -243,11 +243,12 @@ const count = { claim: 'tests/probe.test.mjs has 21 cases', status: 'false', evi
 const lock = { claim: 'only one run per provider at a time', status: 'false', evidence: 'not true across processes', materiality: 'material', reason: 'concurrency behaviour' };
 const err = async (t, verdict) => { const w = reqWorld(t); await startReview(w); return { w, r: await finish(w, { requirements: [ok], ...verdict }) }; };
 
-test('#419: a PASS may carry an immaterial false claim, and it becomes a follow-up', async t => {
+test('#419/#864: a PASS may carry an immaterial false claim; it is on the PR comment and opens no issue by itself', async t => {
   const { w, r } = await err(t, { verdict: 'PASS', descriptionClaims: [count] });
   assert.equal(r.report.ingested.at(-1).error, undefined);
   assert.equal(w.team.s.verdicts['77:' + H(5)].verdict, 'PASS');
-  assert.match(w.calls.issues.at(-1)[2], /21 cases/);
+  assert.equal(w.calls.issues.length, 0);   // issue #864: nothing material to batch
+  assert.match(w.calls.comments.at(-1)[1], /21 cases/);
 });
 test('#419: CHANGES resting only on a false immaterial claim is refused', async t => {
   const { r } = await err(t, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'The PR description claims tests/probe.test.mjs has 21 cases but it has 26' }], descriptionClaims: [count] });

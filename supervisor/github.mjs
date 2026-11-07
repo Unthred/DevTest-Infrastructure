@@ -67,6 +67,8 @@ export function githubClient(config, gh = ghRunner()) {
     hasComment: async (n, text) => (json(['issue', 'view', String(n), '--repo', repo, '--json', 'comments'])?.comments || []).some(c => String(c.body || '').includes(text)),
     findIssueByMarker: async marker => json(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '1000', '--json', 'number,body'])
       .find(i => String(i.body || '').includes(marker))?.number || null,
+    // Issue #864: the open issue carrying a marker, with its body (the batched follow-up issue of an area).
+    findOpenIssueByMarker: async (marker, skip = []) => { const i = json(['issue', 'list', '--repo', repo, '--state', 'open', '--limit', '1000', '--json', 'number,body']).find(x => !skip.includes(x.number) && String(x.body || '').includes(marker)); return i ? { number: i.number, body: String(i.body || '') } : null; },
     createIssue: async (title, body) => {
       const url = gh(['issue', 'create', '--repo', repo, '--title', redactTopology(title), '--body-file', '-'], redactTopology(body), { retry: false }).trim();
       const match = /\/issues\/(\d+)$/.exec(url);
