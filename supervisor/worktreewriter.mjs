@@ -19,8 +19,9 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const SHA = /^[0-9a-f]{40}$/;
-// Reflog subjects git writes when the working tree's owner makes a commit. A reset, checkout, pull, rebase or branch move is not authorship.
-const AUTHORED = /^(?:commit(?: \((?:amend|merge|initial)\))?|cherry-pick|revert):/;
+// Reflog subjects git writes when the working tree's owner makes a commit. `commit (merge)` is excluded: a conflicted merge resolved with
+// `git commit` is still a merge. Any head with more than one parent is also rejected below. A reset, checkout, pull, rebase or branch move is not authorship.
+const AUTHORED = /^(?:commit(?: \((?:amend|initial)\))?|cherry-pick|revert):/;
 const SLACK_MS = 120000;     // reflog times are whole seconds and the job record is written a moment around the first command
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 15000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' } });
@@ -43,6 +44,7 @@ export function findWorktreeWriter({ worktree, head, from, to, repoPath = null, 
       if (h !== head || !m || !AUTHORED.test(subject || '')) continue;
       const at = Number(m[1]) * 1000;
       if (at < from - SLACK_MS || at > to + SLACK_MS) continue;
+      if (memo('parents\0' + worktree + '\0' + head, () => git(worktree, ['rev-list', '--parents', '-n', '1', head]).trim().split(/\s+/).length) > 2) continue;
       const committed = Number(memo('ct\0' + worktree + '\0' + head, () => git(worktree, ['show', '-s', '--format=%ct', head]).trim())) * 1000;
       if (Number.isFinite(committed) && Math.abs(committed - at) <= SLACK_MS) return { head, at };
     }

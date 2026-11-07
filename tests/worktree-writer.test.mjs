@@ -117,6 +117,22 @@ test('a merge or pull in the job worktree is not authorship: the head stays unkn
   assert.equal(w.team.independenceRefusal('claude', 'opus', w.gh.pulls[0]), 'writer unknown');
 });
 
+test('a conflicted or --no-commit merge finished with git commit is not authorship either (issue #704)', t => {
+  const f = fixture(t); f.commit('main work', 'main\n');
+  git(f.repo, 'checkout', '-q', '-b', 'side', 'HEAD~1'); fs.writeFileSync(path.join(f.repo, 'f'), 'side\n'); git(f.repo, 'commit', '-q', '-am', 'side');
+  const win = head => ({ worktree: f.repo, head, from: NOW - 600000, to: NOW + 60000, repoPath: f.repo });
+  assert.throws(() => git(f.repo, 'merge', '-q', 'main'));
+  fs.writeFileSync(path.join(f.repo, 'f'), 'resolved\n'); git(f.repo, 'commit', '-q', '-am', 'resolve');
+  assert.match(git(f.repo, 'reflog', '-1', '--format=%gs'), /^commit \(merge\):/);
+  assert.equal(findWorktreeWriter(win(git(f.repo, 'rev-parse', 'HEAD'))), null, 'conflicted merge');
+  git(f.repo, 'reset', '-q', '--hard', 'HEAD~1');
+  fs.writeFileSync(path.join(f.repo, 'h'), 'h\n'); git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-q', '-m', 'h');
+  git(f.repo, 'branch', 'other', 'main~1'); git(f.repo, 'checkout', '-q', 'other'); fs.writeFileSync(path.join(f.repo, 'g'), 'g\n'); git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-q', '-m', 'g'); git(f.repo, 'checkout', '-q', 'side');
+  git(f.repo, 'merge', '-q', '--no-commit', '--no-ff', 'other'); git(f.repo, 'commit', '-q', '-m', 'merged');
+  assert.match(git(f.repo, 'reflog', '-1', '--format=%gs'), /^commit \(merge\):/);
+  assert.equal(findWorktreeWriter(win(git(f.repo, 'rev-parse', 'HEAD'))), null, '--no-commit merge');
+});
+
 test('a forged reflog line for a head committed long before the run is rejected (issue #704)', t => {
   const f = fixture(t); const old = '2020-01-01T00:00:00Z';
   fs.writeFileSync(path.join(f.repo, 'f'), 'old\n');
