@@ -77,3 +77,9 @@ test('issue #679: a dotted host:port is redacted even when .digit follows; a dot
   assert.equal(redactTopology('myhost:8000.5', []), 'myhost:8000.5');
   assert.equal(redactTopology('ubuntu:22.04 redis:7000', []), 'ubuntu:22.04 [host]');
 });
+
+test('issue #772: file-name hosts stay kept when .digit follows; over-redaction of dotted version-like tokens is the recorded trade-off', () => {
+  for (const s of ['node.js:20.11', 'build.mjs:42.1', 'app.mjs:120.3']) assert.equal(redactTopology(s, []), s);
+  assert.equal(redactTopology('v1.2:10.5', []), '[host].5');
+  assert.equal(redactTopology('a.b:12345.67', []), '[host].67');
+});
