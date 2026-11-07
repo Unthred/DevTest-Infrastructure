@@ -245,9 +245,12 @@ async function refreshDuringDrag(file) {
 async function tableInPlace() {
   const ctx = await newCtx(); await guard(ctx);
   const page = await ctx.newPage(), errors = []; page.on('pageerror', e => errors.push(String(e.message).slice(0, 200)));
-  await page.goto(url('/reviews.html'), { waitUntil: 'networkidle' });
-  const html = await (await page.request.get(url('/reviews.html'))).text();
-  await page.route(u => u.pathname === '/reviews' && u.searchParams.size > 0, r => r.fulfill({ status: 200, contentType: 'text/html', body: html }));   // the static fixture has no /reviews route
+  // The fixture pages have no table, so serve one page of our own: the reviews fixture with a table region (the markup dashrender table() emits) before the script.
+  const base = await (await ctx.request.get(url('/reviews.html'))).text();
+  const tbl = '<div class="tregion" data-tregion="t1"><form class="tbar" method="get" action="/tbl.html"><input type="search" name="t1.q" aria-label="Filter"><select name="t1.size"><option>25</option></select><span data-tclear></span></form><div data-tdata><table><tbody><tr><td>row</td></tr></tbody></table></div></div>';
+  const html = base.replace('<p id="tznote"', tbl + '<p id="tznote"');
+  await page.route(u => new URL(u.toString()).pathname === '/tbl.html', r => r.fulfill({ status: 200, contentType: 'text/html', body: html }));   // loadTable fetches location.pathname + ?query
+  await page.goto(url('/tbl.html'), { waitUntil: 'networkidle' });
   const region = page.locator('[data-tregion]').first(), tid = await region.getAttribute('data-tregion');
   await page.evaluate(() => { window.__same = 1; history.replaceState({ k: 7 }, '', location.href); });
   const before = await page.evaluate(() => location.href);

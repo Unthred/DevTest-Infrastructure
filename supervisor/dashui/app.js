@@ -356,11 +356,11 @@ if (grid) {
   const defaultW = c => Math.min(colsNow(), Math.max(MIN_W, (Number(c.dataset.span) || 6) * 2));
   const pinnedNow = () => cards().filter(c => c.hasAttribute('data-pin')).map(c => c.dataset.card);   // read each time: a refresh in place may add or remove pinned cards
   function paintFree() {
-    st = withoutPinned(st, pinnedNow());   // whatever put a pinned id into st.hidden (an undo snapshot), it is never painted hidden
+    const shownHidden = withoutPinned(st, pinnedNow()).hidden;   // painted only: st (and so the undo/redo chain) keeps its hidden list; a pinned id there is just not painted hidden
     const cols = colsNow();
     grid.classList.add('free'); grid.style.setProperty('--cols', cols);
     for (const c of cards()) {
-      const id = c.dataset.card, hidden = st.hidden.includes(id);
+      const id = c.dataset.card, hidden = shownHidden.includes(id);
       if (!hidden && !st.pos[id]) { const w = defaultW(c); st.pos[id] = firstFit(st.pos, w, naturalRows(c, w), cols); }
       c.style.removeProperty('--h'); c.style.alignSelf = '';
       c.classList.toggle('lay-hidden', hidden);

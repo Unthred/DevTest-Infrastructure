@@ -141,7 +141,7 @@ test('app.js does not bind the name history (it would hide window.history)', () 
 });
 test('app.js reads the pinned cards on every apply() and every paintFree(), so no restored snapshot paints a pinned card hidden', () => {
   assert.match(appJs, /else st = withoutPinned\(st, pinnedIds\)/);
-  assert.match(appJs, /function paintFree\(\) \{\s*st = withoutPinned\(st, pinnedNow\(\)\)/);
+  assert.match(appJs, /function paintFree\(\) \{\s*const shownHidden = withoutPinned\(st, pinnedNow\(\)\)\.hidden/);
 });
 test('withoutPinned: an undo/redo snapshot with a now-pinned card hidden is cleaned, others are kept', () => {
   const h = history();
@@ -155,6 +155,17 @@ test('withoutPinned: an undo/redo snapshot with a now-pinned card hidden is clea
   assert.equal(withoutPinned(redone, ['x']), redone, 'nothing pinned in the list returns the same object');
   assert.equal(withoutPinned(redone), redone); assert.equal(withoutPinned(null, ['b']), null);
   assert.deepEqual(withoutPinned({ pos: {}, hidden: ['b'] }, ['b']).hidden, []);
+});
+test('painting without a pinned id leaves st alone, so the undo/redo chain still hides the card once it is unpinned (#851)', () => {
+  const h = history();
+  const hiddenState = { pos: { a: R(0, 0, 8, 8) }, hidden: ['b'] }, shownState = { pos: { a: R(0, 0, 8, 8) }, hidden: [] };
+  h.push(hiddenState);
+  let st = h.undo(shownState);                       // undo to the state with b hidden
+  assert.deepEqual(withoutPinned(st, ['b']).hidden, [], 'b is pinned now: painted shown');
+  assert.deepEqual(st.hidden, ['b'], 'st itself is not rewritten by painting');
+  st = h.redo(st);                                   // redo to shown, then undo again while b is unpinned
+  st = h.undo(st);
+  assert.deepEqual(withoutPinned(st, []).hidden, ['b'], 'unpinned: hidden again');
 });
 test('isOldLayout tells the old order/span/h form from the new one', () => {
   assert.equal(isOldLayout({ order: ['a'] }), true); assert.equal(isOldLayout({ span: {} }), true); assert.equal(isOldLayout({ v: 2, order: [] }), false);
