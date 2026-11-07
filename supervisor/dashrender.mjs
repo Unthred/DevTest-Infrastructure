@@ -286,8 +286,15 @@ const allResets = (view, range) => Object.values(view.graphs.allowance).flatMap(
 const allExpected = view => Object.entries(view.graphs.allowance).flatMap(([agent, g]) => (g.expected || []).map(r => ({ ...r, window: `${agent} ${r.window}` })));
 
 // Issue #950: a long text is cut at a word boundary with the whole text behind an expand; a short one is shown whole.
-const clipWords = (t, max) => { t = String(t); if (t.length <= max) return t; const cut = t.slice(0, max), sp = cut.lastIndexOf(' '); return `${(sp > max / 2 ? cut.slice(0, sp) : cut).replace(/[\s,;:|(]+$/, '')}…`; };
+const clipWords = (t, max) => { t = String(t); if (t.length <= max) return t; const cut = t.slice(0, max), sp = cut.lastIndexOf(' ');
+  let end = sp > max / 2 ? sp : t.indexOf(' ', max); if (end < 0) end = t.length; // never cut inside a word: one long token is kept whole
+  return `${t.slice(0, end).replace(/[\s,;:|(]+$/, '')}${end < t.length ? '…' : ''}`; };
 const longText = (t, max = 120) => (String(t).length <= max ? esc(t) : `<details class="long-text"><summary>${esc(clipWords(t, max))}</summary>${esc(t)}</details>`);
+// An idle reason may join several holds with ' | ': one row per hold, each clipped at a word with the whole text behind an expand.
+const idleReasonRows = text => {
+  const parts = String(text).split(/\s+\|\s+/).map(x => x.trim()).filter(Boolean);
+  return parts.length > 1 ? `<div class="hold-list">${parts.map(x => `<div class="hold-row">${longText(x, 160)}</div>`).join('')}</div>` : longText(text, 160);
+};
 const spent = m => (m >= 60 ? `${Math.round(m / 6) / 10} h` : `${Math.round(m)} min`);
 // Hold history for one agent: one row per reason, newest first, with total time and how many separate times, the detail behind a click.
 const holdRows = r => {
@@ -333,7 +340,7 @@ function nowPanel(view, { describe = true, list = null } = {}) {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j));
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${jobRef(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
-      : `<span>Idle: ${a.idleReason ? longText(a.idleReason.text, 160) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
+      : `<span>Idle: ${a.idleReason ? idleReasonRows(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
     return [dli({ cls: `sev-${level}`, key: `agent-${a.name}`, sev: level, name: a.name, age: j?.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div>` })];
   });
   return `${slots}${idleLine}${list ? dlist({ id: list, label: 'Now', noun: 'agents and jobs', rows, sorts: ['default', 'severity', 'age', 'name'], defaultLabel: 'Agent order', compact: false }) : `<ul class="panel-list">${rows.map(r => r.html).join('')}</ul>`}`;

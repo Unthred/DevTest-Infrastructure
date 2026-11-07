@@ -224,7 +224,9 @@ test('issue #813: the key cut stays well below the raw per-reason cut', () => {
 function shortKeyAbsent() { return !('holdKey' in classifyIdle({ states: { codex: 'idle' }, holds: { codex: { a: 'one | two' } } }).codex); }
 
 // ---- issue #950: cards carry structure, not a wall of joined text
-const textBlocks = html => html.replace(/<details[^>]*>[^]*?<\/details>/g, '').replace(/<(script|style)[^]*?<\/\1>/g, '')
+// Only the hidden body of a <details> is dropped; its visible <summary> stays checked.
+const hideBodies = html => html.replace(/<details[^>]*>\s*<summary>([^]*?)<\/summary>[^]*?<\/details>/g, '<span>$1</span>').replace(/<details[^>]*>[^]*?<\/details>/g, '');
+const textBlocks = html => hideBodies(html).replace(/<(script|style)[^]*?<\/\1>/g, '')
   .split(/<\/?(?:div|p|li|ul|section|header|h\d|span class="badge|tr|td|th|summary|form|a class="tbtn)[^>]*>/).map(t => t.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/g, 'x').trim()).filter(Boolean);
 export const MAX_BLOCK = 240;
 
@@ -256,15 +258,19 @@ test('a card never renders one long block of text, and nothing is cut mid-word',
   const holdGroups = Array.from({ length: 30 }, (_, i) => ({ label: `review held: codex is out of allowance ${i}`, detail: reason, minutes: 1164, count: 14, last: i }));
   const long = 'Paused new work: ' + 'twelve open PRs (cap 12) and nothing may start until a few of them merge, '.repeat(6);
   const view = { ...base, capNotes: [long], idleCauses: { agents: { [name]: { idleWithWorkPercent: 40, minutes: { 'named-hold': 300 }, holds, holdGroups } } } };
+  view.agents = view.agents.map((a, i) => i ? a : { ...a, state: 'idle', job: null, jobs: [], idleReason: { text: 'held: review held: codex is out of allowance (codex weekly use 97% >= 95%) | file overlap: waits for PR #7 | implement held: cap of 12 open PRs reached ' + 'and some more words '.repeat(10) } });
   const q = { query: new URLSearchParams(), pathname: '/' };
-  for (const [route, extra] of [[{ page: 'overview' }, q], [{ page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }]]) {
+  for (const [route, extra] of [[{ page: 'overview' }, q], [{ page: 'agents' }, { query: new URLSearchParams(), pathname: '/agents' }], [{ page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }]]) {
     const html = renderRoute(view, route, extra).html;
     for (const t of textBlocks(html)) assert.ok(t.length <= MAX_BLOCK, `block of ${t.length} characters: ${t.slice(0, 80)}`);
-    assert.ok(!/\|/.test(html.replace(/<details[^]*?<\/details>/g, '').replace(/<(script|style)[^]*?<\/\1>/g, '').replace(/<[^>]+>/g, ' ')), 'no joined " | " text outside an expand');
+    assert.ok(!/\|/.test(hideBodies(html).replace(/<(script|style)[^]*?<\/\1>/g, '').replace(/<[^>]+>/g, ' ')), 'no joined " | " text outside an expand');
   }
   const html = renderRoute(view, { page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }).html;
   assert.match(html, /1164 min|19\.4 h, 14 times/);
   assert.match(html, /<summary>Paused new work: [^<]*…<\/summary>/, 'a long note is clipped at a word, the whole text behind it');
+  assert.match(html, /<div class="hold-row">[^<]*file overlap: waits for PR #7/, 'each idle hold is its own row');
+  // negative: the guard sees visible joined text in a summary
+  assert.ok(/\|/.test(hideBodies('<details><summary>a | b…</summary>a | b | c</details>').replace(/<[^>]+>/g, ' ')));
   // negative: the guard itself fails on a wall of text
   assert.ok(textBlocks('<div>' + 'word '.repeat(80) + '</div>').some(t => t.length > MAX_BLOCK));
 });
