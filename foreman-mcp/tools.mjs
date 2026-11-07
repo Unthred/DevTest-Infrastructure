@@ -43,10 +43,12 @@ const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n
 
 const PLAN_CAUTION = 'The circuit breaker is applied by a real tick, not to this plan: plannedActions may include actions a tick would drop.';
 // Issue #675: reports every halted cause (count and entries, not only the oldest) and a failed breaker evaluation.
+// A global halt has no types field: it stops every new job, so say so rather than leave null (issue #753).
+const GLOBAL_TYPES = ['every new job'];
 export function breakerHaltOf(b) {
   const h = b?.halt, error = b?.error ?? null;
   if (!h) return error ? { halted: false, error, note: 'Breaker evaluation failed; existing halts stay in force.' } : { halted: false };
-  return { halted: true, scope: h.scope ?? null, cause: h.cause ?? null, count: h.count ?? 1, entries: (h.entries || []).slice(0, 8).map(e => ({ cause: e.cause ?? null, types: e.types ?? null, since: e.since ?? null })), error, caution: PLAN_CAUTION };
+  return { halted: true, scope: h.scope ?? null, cause: h.cause ?? null, count: h.count ?? 1, entries: (h.entries || []).slice(0, 8).map(e => ({ cause: e.cause ?? null, types: e.types ?? (e.cause === '@global' ? GLOBAL_TYPES : null), since: e.since ?? null })), error, caution: PLAN_CAUTION };
 }
 export function createTools({ source, readHost, readActivity = hostActivity, getPath = null, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
   const calls = [];   // times of recent calls, for the rate limit
@@ -57,7 +59,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
     { name: 'foreman_status', description: 'Foreman health: tick state, installed and main version, role slots, circuit breaker, per-agent allowance mode and idle reason, the planned next actions, running jobs and the count of Needs you items.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => ({
         health: v.health, freshness: v.freshness, tick: { ...v.tick, at: iso(v.tick?.at), lastOkAt: iso(v.tick?.lastOkAt) }, nextTick: v.nextTick, version: v.version, teamEnabled: v.teamEnabled,
-        slots: (v.slots || []).map(s => s.text), capNotes: v.capNotes, breaker: v.breaker ? { halt: v.breaker.halt, global: v.breaker.global ?? null, byCause: (v.breaker.byCause || []).slice(0, 8) } : null,
+        slots: (v.slots || []).map(s => s.text), capNotes: v.capNotes, breaker: v.breaker ? { halt: v.breaker.halt, error: v.breaker.error ?? null, byCause: (v.breaker.byCause || []).slice(0, 8) } : null,
         agents: (v.agents || []).map(a => ({ name: a.name, state: a.state, idle: a.idleReason?.text ?? null })),
         budget: Object.fromEntries(Object.entries(v.budget || {}).map(([k, b]) => [k, { mode: b.mode, reason: b.reason, used: b.used, projected: b.projected }])),
         planned: (v.plan || []).map(a => ({ type: a.type, agent: a.agent ?? null, pr: a.pr ?? null, issue: a.issue ?? null, why: a.why ?? null })),
