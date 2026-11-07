@@ -106,22 +106,42 @@ const urlNumber = (url, kind) => { const m = new RegExp(`/${kind === 'pr' ? 'pul
 export function itemTimeline(view, kind, number, { limit = 60 } = {}) {
   const n = Number(number), v = view || {};
   const pr = kind === 'pr' ? (v.prs || []).find(p => p.number === n) : null;
-  const refs = new Set([n]); if (pr?.issue) refs.add(pr.issue);
+  // A pull request: its own number plus the issue it closes. An issue: its own number plus the pull requests that close it (their jobs, reviews and merge belong to it).
+  const prs = kind === 'pr' ? (pr ? [pr] : []) : (v.prs || []).filter(p => p.issue === n);
+  const refs = new Set([n]); if (pr?.issue) refs.add(pr.issue); for (const p of prs) refs.add(p.number);
+  const prNumbers = new Set(prs.map(p => p.number));
   const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
-  const entries = [];
+  const entries = [], seen = new Set();
+  const jobEntry = j => { const at = Number.isFinite(j.startedAt) ? j.startedAt : j.createdAt; return { atMs: at, type: 'job', what: j.kind, id: j.fullId ?? null, ref: j.ref, agent: j.agent ?? null, status: j.status, durationSeconds: Number.isFinite(j.elapsedMs) ? Math.round(j.elapsedMs / 1000) : null, tokens: j.tokens ?? null, costUsdEquivalent: j.cost ?? null, summary: j.desc ?? null }; };
   for (const j of v.jobs || []) {
     if (!refs.has(j.ref)) continue;
-    const at = Number.isFinite(j.startedAt) ? j.startedAt : j.createdAt;
-    entries.push({ atMs: at, type: 'job', what: j.kind, id: j.fullId ?? null, ref: j.ref, agent: j.agent ?? null, status: j.status, durationSeconds: Number.isFinite(j.elapsedMs) ? Math.round(j.elapsedMs / 1000) : null, tokens: j.tokens ?? null, costUsdEquivalent: j.cost ?? null, summary: j.desc ?? null });
+    if (j.fullId) seen.add(`job:${j.fullId}`);
+    entries.push(jobEntry(j));
+  }
+  // Jobs the view holds per pull request (pr.jobs) can be older than the recent job list.
+  for (const p of prs) for (const j of p.jobs || []) { if (j.fullId && seen.has(`job:${j.fullId}`)) continue; if (j.fullId) seen.add(`job:${j.fullId}`); entries.push(jobEntry({ ref: p.number, ...j })); }
+  // Reviews and the merge come from the pull request's own verdicts and merge time, which the view holds for every pull request; the activity events below add only what these do not cover.
+  for (const p of prs) {
+    for (const x of Array.isArray(p.verdicts) ? p.verdicts : []) {
+      if (!x || !Number.isFinite(x.at)) continue;
+      seen.add(`review:${p.number}:${x.at}`);
+      entries.push({ atMs: x.at, type: 'review', what: String(x.verdict || 'other').toLowerCase(), agent: x.reviewer ?? null, summary: `${x.reviewer ?? 'reviewer'}: ${x.verdict ?? 'verdict'} on #${p.number}${x.head ? ` at ${String(x.head).slice(0, 7)}` : ''}${x.carry ? ' (carried)' : ''}` });
+    }
+    const m = Number.isFinite(p.mergedAt) ? p.mergedAt : Date.parse(p.mergedAt);
+    if (Number.isFinite(m)) { seen.add(`merge:${p.number}:${m}`); entries.push({ atMs: m, type: 'merge', what: 'merged', agent: null, summary: `merged #${p.number}` }); }
   }
   for (const a of v.activity || []) {
-    if (a.kind === 'tick' || urlNumber(a.link, kind) !== n) continue;
-    entries.push({ atMs: a.at, type: a.kind, what: a.outcome ?? null, agent: a.agent ?? null, summary: a.text ?? null });
+    if (a.kind === 'tick') continue;
+    const num = urlNumber(a.link, 'pr'), viaPr = kind === 'pr' ? num === n : prNumbers.has(num);
+    if (!(urlNumber(a.link, kind) === n || viaPr)) continue;
+    if (viaPr && seen.has(`${a.kind}:${num}:${a.at}`)) continue;
+    entries.push({ atMs: a.at, type: a.kind, what: a.outcome ?? null, agent: a.agent ?? null, summary: a.text ?? null, activityRow: true });
   }
   entries.sort((a, b) => (a.atMs ?? 0) - (b.atMs ?? 0));
-  const counts = {}; for (const e of entries) { const k = e.type === 'job' ? `${e.what}Jobs` : `${e.type}s`; counts[k] = (counts[k] || 0) + 1; }
+  // A job from the job list is counted by its kind (implementJobs); an activity row of kind job carries an outcome, not a kind, so it is counted as jobEvents.
+  const counts = {}; for (const e of entries) { const k = e.type === 'job' ? (e.activityRow ? 'jobEvents' : `${e.what}Jobs`) : `${e.type}s`; counts[k] = (counts[k] || 0) + 1; }
   const found = !!pr || (kind === 'issue' && (v.issues || []).some(i => i.number === n)) || entries.length > 0;
   return { kind, number: n, found, ...(pr ? { title: pr.title, status: pr.status, issue: pr.issue ?? null, checks: pr.checks, verdict: pr.verdict, reviewRounds: pr.reviewRounds, fixRounds: pr.fixRounds, rebaseRounds: pr.rebaseRounds } : {}),
-    counts, total: entries.length, shown: Math.min(entries.length, limit), entries: entries.slice(-limit).map(({ atMs, ...e }) => ({ at: iso(atMs), ...e })),
-    note: 'Jobs come from the recent jobs the view holds; reviews and merges from its newest 50 activity events, so an old item can have gaps.' };
+    counts, total: entries.length, shown: Math.min(entries.length, limit), entries: entries.slice(-limit).map(({ atMs, activityRow, ...e }) => ({ at: iso(atMs), ...e })),
+    note: 'Jobs come from the recent jobs the view holds; reviews and merges from the verdicts and merge time of each pull request (plus the activity events of the view, which hold the newest 400 rows), so a job older than the recent job list can still be missing.' };
 }

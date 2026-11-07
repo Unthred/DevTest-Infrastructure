@@ -78,7 +78,7 @@ export function configView({ effective, shippedFile, localOverridePresent = null
 export function testRunsView(root, { limit = 2, now = Date.now(), days = 7 } = {}) {
   const st = testSlotStatus(root, limit, now), since = now - Math.min(30, Math.max(1, Math.trunc(Number(days)) || 7)) * DAY_MS;
   const run = r => ({ slot: r.slot ?? null, label: redact(r.label, 80), since: iso(r.since), runningSeconds: Math.max(0, Math.round((now - r.since) / 1000)) });
-  const events = readTestEvents(root, { since, limit: 50 }), count = k => events.filter(e => e.kind === k).length;
+  const all = readTestEvents(root, { since, limit: Infinity }), events = all.slice(0, 50), count = k => all.filter(e => e.kind === k).length;   // counts over the whole window, only the list is capped
   return {
     slots: { limit: st.limit, inUse: st.running.length, free: Math.max(0, st.limit - st.running.length) },
     running: st.running.map(run), queued: st.waiting.map((w, i) => ({ position: i + 1, label: redact(w.label, 80), since: iso(w.since), waitingSeconds: Math.max(0, Math.round((now - w.since) / 1000)) })), longestWaitSeconds: Math.round(st.longestWaitMs / 1000),
