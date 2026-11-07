@@ -472,8 +472,12 @@ test('a resume request file survives a failed save and is applied by the next ti
   const save = w.team.save; w.team.save = () => { throw new Error('disk full'); };
   assert.throws(() => w.team.applyResumeRequests({}), /disk full/);
   w.team.save = save;
-  const r = {}; w.team.s.breaker.halts[cause] ||= {}; w.team.applyResumeRequests(r);
+  // A fresh team reads the state from disk: the failed save left the halt in place there, and the request is applied against it.
+  const fresh = w.mk();
+  assert.ok(fresh.s.breaker.halts[cause], 'the halt is still on disk after the failed save');
+  const r = {}; fresh.applyResumeRequests(r);
   assert.deepEqual(r.breaker?.resumed?.[0]?.scope, cause, 'the click was not lost');
+  assert.equal(w.mk().s.breaker.halts[cause], undefined, 'the cleared halt is on disk');
   assert.deepEqual(takeBreakerResumeRequests(w.team.root), []);
 });
 

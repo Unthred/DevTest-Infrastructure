@@ -98,6 +98,24 @@ test('a loopback caller that descends from a supervised job is refused; an unide
   assert.equal((await person.click()).status, 303);
 });
 
+// Issue #821: the /proc scan is expensive and synchronous, so a request that is going to be refused anyway must not trigger it, and a
+// refused caller must not use up the cooldown slot.
+test('the peer scan runs only for a request with a valid proof, a halted scope and no cooldown; a refused caller keeps the slot free', async t => {
+  let scans = 0;
+  const s = await serve(t, { peerPid: () => { scans++; return 4242; } });
+  assert.equal((await s.click(CAUSE, { proof: 'wrong' })).status, 403);
+  assert.equal((await s.click('nothing:here')).status, 409);
+  assert.equal(scans, 0, 'no valid proof or unknown scope: no scan');
+  assert.equal((await s.click()).status, 303);
+  assert.equal(scans, 1);
+  assert.match((await s.click()).headers.location, /cooldown/);
+  assert.equal(scans, 1, 'inside the cooldown: no scan');
+  const refused = await serve(t, { peerPid: () => null });
+  assert.equal((await refused.click()).status, 403);
+  assert.equal((await refused.click()).status, 403, 'the second refusal is not a cooldown redirect');
+  assert.deepEqual(takeBreakerResumeRequests(refused.root), []);
+});
+
 test('peer lookup: port pair to socket inode to pid, from /proc text', () => {
   const tcp = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
    0: 0100007F:C350 0100007F:1F90 01 00000000:00000000 00:00000000 00000000     0        0 55555 1 0 0 0
