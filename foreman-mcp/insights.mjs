@@ -85,16 +85,18 @@ export function rebaseStats(view, { splitAt = null, limit = 100 } = {}) {
   const split = splitAt === null ? null : Date.parse(splitAt);
   if (splitAt !== null && !Number.isFinite(split)) throw new Error('splitAt must be an ISO date or time');
   const rows = (view.prs || []).filter(p => p.status === 'merged' && Number.isFinite(p.mergedAt)).map(p => {
-    const first = Math.min(...(p.timeline || []).filter(t => t.text !== 'merged').map(t => t.at).filter(Number.isFinite));
+    // Issue #717: start from the implement time the merge log recorded when there is one (the job list is capped, so the first timeline entry of an older PR is late); else the first recorded activity.
+    const first = Number.isFinite(p.startedAt) ? p.startedAt : Math.min(...(p.timeline || []).filter(t => t.text !== 'merged').map(t => t.at).filter(Number.isFinite));
     // Reviews are verdicts a review produced; a D-025 carried verdict (carry set) is an avoided review and is counted apart.
     const vs = Array.isArray(p.verdicts) ? p.verdicts : null, carried = vs ? vs.filter(v => v && v.carry).length : 0;
-    const reviews = vs ? vs.length - carried : (Number.isFinite(p.reviewRounds) ? p.reviewRounds : 0);
+    const second = Number.isFinite(p.secondOpinionRounds) ? p.secondOpinionRounds : 0;   // issue #717: a second opinion is a review on a head that already has a verdict
+    const reviews = (vs ? vs.length - carried : (Number.isFinite(p.reviewRounds) ? p.reviewRounds : 0)) + second;
     return { pr: p.number, mergedAt: p.mergedAt, rebases: Number.isFinite(p.rebaseRounds) ? p.rebaseRounds : 0, reviews, carried, hours: Number.isFinite(first) && p.mergedAt >= first ? (p.mergedAt - first) / 3600000 : null };
   }).sort((a, b) => b.mergedAt - a.mergedAt);
   const out = { all: summarise(rows) };
   if (split !== null) { out.before = summarise(rows.filter(r => r.mergedAt < split)); out.after = summarise(rows.filter(r => r.mergedAt >= split)); out.splitAt = iso(split); }
   out.recent = rows.slice(0, Math.max(1, Math.min(200, Number(limit) || 100))).map(r => ({ pr: r.pr, mergedAt: iso(r.mergedAt), rebases: r.rebases, reviews: r.reviews, carried: r.carried, openToMergeHours: round1(r.hours) }));
-  out.note = 'Merged pull requests the view still holds. Rebases are the rebase attempts recorded; reviews are the verdicts a review produced (a D-025 carried verdict is not a review; it is counted apart as carried). Open time is measured from the first recorded activity, not the GitHub creation time.';
+  out.note = 'Merged pull requests the view still holds. Rebases are the rebase attempts recorded; reviews are the verdicts a review produced (a D-025 carried verdict is not a review; it is counted apart as carried). Open time runs from the implement time the merge log recorded, else from the first recorded activity (not the GitHub creation time). Limits: only the newest 500 merges are in the merge log, and older merges are absent; where the merge log has no start, the job list (newest 300 jobs) can make the time too short.';
   return out;
 }
 
