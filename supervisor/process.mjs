@@ -108,11 +108,13 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   // Issue #579: a failed checkpoint is recorded with its real (redacted) error and the job carries on; only `checkpointLimit`
   // failures in a row stop it, and then as `checkpoint_failed` (resumable, work kept), never as a manual stop.
   let checkpointFails = 0, checkpointFailed = false;
-  const interval = setInterval(() => { try { checkpoint(root, job, clock); checkpointFails = 0; } catch (error) {
+  // `options.timers` is a test seam so a test can fire checkpoints by hand instead of racing real time (issue #748).
+  const timers = options.timers || { setInterval, clearInterval };
+  const interval = timers.setInterval(() => { try { checkpoint(root, job, clock); checkpointFails = 0; } catch (error) {
     const errorClass = String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48);
     checkpointFails++;
     event(root, job, `checkpoint_failed:${errorClass}:${checkpointFails}:${redact(String(error?.message || error), 200)}`, clock);
-    if (checkpointFails >= (options.checkpointLimit || 5)) { checkpointFailed = true; clearInterval(interval); signalChild('SIGINT'); }
+    if (checkpointFails >= (options.checkpointLimit || 5)) { checkpointFailed = true; timers.clearInterval(interval); signalChild('SIGINT'); }
   } }, options.checkpointMs || 60000);
   try {
     const result = await new Promise(resolve => {
@@ -151,7 +153,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     if (stopping) return { code: 1, event: checkpointFailed ? 'checkpoint_failed' : 'manual_stop' };
     return { code: result.code, event: observed || result.event, resetAt, resetSource, verified };
   } finally {
-    clearInterval(interval);
+    timers.clearInterval(interval);
     process.off('SIGUSR1', onInt); process.off('SIGTERM', onTerm);
   }
 }
