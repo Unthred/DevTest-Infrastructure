@@ -555,3 +555,18 @@ test('the recent rate blends in gradually: no cliff at recent_hours (issue #698)
   assert.ok(at24.projected - at23.projected < 0.3, `${at23.projected} -> ${at24.projected}`);
   assert.ok(at23.projected > 0.3, 'the recent rate already counts at 23h');
 });
+
+test('the blend weight is 0 at recent_hours/2 and 1 from recent_hours, for a non-default recent_hours (issue #698)', () => {
+  const settings = { ...DEFAULT_BUDGET, recent_hours: 12 };
+  const run = elapsedH => {
+    const now = NOW, resetsAt = NOW + (168 - elapsedH) * HOUR;
+    const history = [{ at: now - 3 * HOUR, used: 0.0, resetsAt }, { at: now, used: 0.04, resetsAt }];
+    return assessAgent({ allowance: codexAl(0.04, { resetsAt }), history, settings, now });
+  };
+  const recentRatePerHour = 0.04 / 3;
+  assert.equal(run(6).rateSource, 'window average', 'weight 0 at exactly recent_hours/2');
+  assert.equal(run(5).rateSource, 'window average');
+  assert.ok(run(9).ratePerHour > 0.04 / 9 && run(9).ratePerHour < recentRatePerHour, 'partial weight between the half span and the span');
+  assert.ok(Math.abs(run(12).ratePerHour - recentRatePerHour) < 1e-9, 'weight 1 at recent_hours');
+  assert.ok(Math.abs(run(30).ratePerHour - recentRatePerHour) < 1e-9, 'weight stays 1 after recent_hours');
+});
