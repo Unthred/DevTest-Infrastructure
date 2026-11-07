@@ -13,7 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { readRearm, rearmUpgradeState } from './robust.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
-import { checksState, agentOfBranch, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
+import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
 import { pruneVersions, jobVersions } from './versions.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { redact, redactLong, redactAddresses } from './redact.mjs';
@@ -32,7 +32,8 @@ export const refusalText = (r, localDomains = (process.env.DEVTEST_LOCAL_DOMAINS
   return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => HOST_PORT_SKIP.test(m.replace(/:\d+$/, '')) ? m : '[host]').replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
 };
 export const URGENT_REQUEST_MAX_MS = 24 * 3600 * 1000;   // issue #708: an install-now request nobody spent lapses after a day
-export const MIN_INSTALL_GAP_MS = MIN_INSTALL_GAP_DEFAULT_MINUTES * 60 * 1000;   // issue #695: the batching window; issue #846: 0 by default (opt-in)
+export const MIN_INSTALL_GAP_MS = MIN_INSTALL_GAP_DEFAULT_MINUTES * 60 * 1000;   // issue #695: the shipped batching window
+export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
 // A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
 export const MIN_UPGRADE_INTERVAL_MS = 2 * 60 * 1000;
@@ -266,9 +267,9 @@ export const NEXT_INSTALL_WHY = {
 export const holdOf = (result, s) => (result === 'upgraded' ? { to: s?.pending?.to || null } : null);
 
 export class SelfUpgrade {
-  constructor({ root, deps, clock = { now: () => Date.now() }, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
+  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
     this.lock = lock; this.lockWaitMs = lockWaitMs; this.lockSleep = lockSleep;   // issue #798: lock() returns an unlock function, or null while another process holds upgrade.lock
-    this.root = root; this.d = deps; this.clock = clock; this.minGapMs = minGapMs;   // issue #695: minGapMs is the batching window between installs (0 = off, the default since issue #846; there is no drain)
+    this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs; this.minGapMs = minGapMs;   // issue #136: the configurable drain bound; issue #695: minGapMs is the batching window between installs (0 = off)
     this.dir = path.join(root, 'team');
     this.stateFile = path.join(this.dir, 'self-upgrade.json');
     this.latchFile = path.join(this.dir, 'self-upgrade.latch');       // the homeowner clears the latch by removing this file

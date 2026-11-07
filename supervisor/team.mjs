@@ -92,7 +92,7 @@ export function validateTeamConfig(input) {
   return c;
 }
 
-// Issue #136: how long a hand-install (issue #446, the bootstrap installer) drains running jobs before it goes ahead. Automatic installs no longer drain (issue #846).
+// Issue #136: how long a pending supervisor install drains running jobs (no new job starts) before it goes ahead.
 export const DRAIN_DEFAULT_MINUTES = 30;
 // Batching (issue #695), off since issue #845: with a value above 0 a new install waits this long after the last install finished while work runs or is planned, unless the install is urgent. It helps only if installs themselves become costly (each runs the full tests); 0 = install at the next tick.
 export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 0;
