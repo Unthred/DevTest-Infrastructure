@@ -75,6 +75,15 @@ A failing migration (exception, invalid result, unreadable file) leaves `team.lo
 
 Migrations run under the tick lock, so a cron tick and a manual `team tick` cannot run the same one twice. A recorded failure is cleared when its migration is no longer shipped (a hotfix dropped it, or a rollback went to a version with fewer migrations). On the normal self-upgrade path a failing migration makes the first live tick of the new version fail, so the upgrader rolls back and the previous version keeps ticking; the Needs you item then reads as a skipped tick, not a stopped loop. Decision: a rollback does not undo migrations already applied. The migrated `team.local.json` and the applied number stay, and the backup beside the file is the way back. Migration error text is redacted in Activity as it is in Needs you.
 
+### A change that needs a local setting (issue #853)
+A pull request whose change needs a setting in `team.local.json` to work (a new key, an origin, a path) declares it and ships a migration that applies it at install; "set X after deploy" in a pull request body or a job report is not acceptable on its own, and the review prompt makes a needed setting with no migration and no approval item a blocking finding. "Merged and installed" must mean "working".
+
+- A value that is the same on every host is written by the migration's `migrate()` like any other change.
+- A value that is specific to this host and must not be committed to this public repository (a hostname, an origin, a path) is not hard-coded. The migration exports `settings = [{ key, pr }]` (only keys in the allow-list of `supervisor/localsettings.mjs`; today `dashboard.allowed_origins`). When the migration is applied, Foreman raises exactly one item per key and pull request, "Apply setting <key> = <value> needed by PR #N", kept in `<state root>/team/local-settings.json`. The value is filled in from what Foreman observes (for `dashboard.allowed_origins`: the Origin of the first refused dashboard write after install; later ones do not replace it). Until then the Needs you list says the value is not known yet.
+- The item is approved or rejected with one click on the dashboard (the write route of D-029, never by an agent). On approval the next tick, under the tick lock, writes a mode-600 backup `team.local.json.bak-<timestamp>-setting-<id>`, merges the value, validates the result against the shipped config, writes it atomically, re-reads and parses it (restoring the backup if that check fails) and records the result in the item and in `team/incidents.jsonl`. A failure leaves `team.local.json` as it was and shows a Needs you item for three days. A rejected item is not raised again.
+- Remaining manual steps are listed under a "Homeowner steps" heading in the pull request body or job report. `homeownerSteps(body)` in `supervisor/localsettings.mjs` reads that list; showing it on the pull request and in Needs you until done is not built yet.
+
+
 Shipped: `001-drop-per-agent` removes `limits.per_agent` when `limits.roles` is not set locally, so the shipped roles apply.
 
 ## Foreman unblocks itself (issue #163)

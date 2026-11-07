@@ -81,7 +81,9 @@ export async function runMigrations({ root, dir, validate = () => {}, now = Date
       state.applied = mig.number; state.failed = null;
       saveState(root, { applied: state.applied, failed: null });
       incident(root, now, { result: 'applied', number: mig.number, name: mig.name, description: mod.description.trim().slice(0, 200), changed: backup !== null, ...(backup ? { backup: path.basename(backup) } : {}) });
-      applied.push({ number: mig.number, name: mig.name });
+      // Issue #853: a migration may also declare host-specific settings it needs; the caller raises one approval item for each.
+      const settings = Array.isArray(mod.settings) ? mod.settings.filter(x => x && typeof x.key === 'string' && Number.isSafeInteger(x.pr)).map(x => ({ key: x.key, pr: x.pr })) : [];
+      applied.push({ number: mig.number, name: mig.name, ...(settings.length ? { settings } : {}) });
     } catch (error) { return fail(error); }
   }
   return { applied, failed: null, pending: 0 };

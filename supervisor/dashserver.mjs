@@ -31,6 +31,7 @@ import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
 import { fileURLToPath } from 'node:url';
 import { decide as decideInbox, ID_RE as INBOX_ID } from './inbox.mjs';
+import * as localSettings from './localsettings.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
@@ -162,8 +163,17 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   const q = v => JSON.stringify(String(v ?? '(none)').slice(0, 200));
   const page = (send, code, title, body) => send(code, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>${title}</h1>${body}<p><a href="/">Back to the dashboard</a></p></main></body></html>`);
   const seen = req => `<p>Origin received: <code>${esc(req.headers.origin)}</code><br>Host received: <code>${esc(req.headers.host)}</code></p>`;
+  // Issue #853: when this refused Origin is the one a merged change is waiting to have approved, say so and link to the approval card. The card
+  // is on the listen address, because an approval click from the refused origin would be refused again. Only the first refused Origin after
+  // install fills an awaiting item; the homeowner sees the value before approving.
+  const settingLinkFor = req => {
+    try {
+      const id = localSettings.observeOrigin(root, req.headers.origin, { allowedHost, now: now() });
+      return id ? `<p>This origin is waiting for your approval: <a href="http://${esc(allowedHost)}/#att-inbox-${esc(id)}">open the approval item on the dashboard</a> (use the dashboard's own address) and press Approve to add it to <code>dashboard.allowed_origins</code>.</p>` : '';
+    } catch { return ''; }
+  };
   const refuseHost = (req, send) => { console.error(`dashboard: write refused, unexpected host (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 421, 'Unexpected host', `<p>The dashboard did not accept this action because the request arrived with a Host it does not serve (unexpected host). Nothing was changed.</p>${seen(req)}<p>If a reverse proxy sits in front of this dashboard, it must forward the upstream Host (see docs/supervisor.md).</p>`); };
-  const refuseOrigin = (req, send) => { console.error(`dashboard: write refused (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 403, 'Request refused', `<p>The dashboard did not accept this action because it came from an address that is not allowed (cross-origin request refused). Nothing was changed.</p>${seen(req)}<p>If this is the public address of this dashboard, add that origin to <code>dashboard.allowed_origins</code> in <code>team.local.json</code>.</p>`); };
+  const refuseOrigin = (req, send) => { const settingLink = settingLinkFor(req); console.error(`dashboard: write refused (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 403, 'Request refused', `<p>The dashboard did not accept this action because it came from an address that is not allowed (cross-origin request refused). Nothing was changed.</p>${seen(req)}<p>If this is the public address of this dashboard, add that origin to <code>dashboard.allowed_origins</code> in <code>team.local.json</code>.</p>${settingLink}`); };
   // Issue #830: the other refusals on a write route (access proof, size, inbox not configured) are readable pages too, with the same way back.
   const refuseWith = (send, code, title, text, hint = '') => page(send, code, title, `<p>${text} Nothing was changed.</p>${hint}`);
   const tooLarge = send => refuseWith(send, 413, 'Request too large', 'The request was too large (too large).');
@@ -210,7 +220,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // Inbox (issue #124): Approve or Reject one pending overseer proposal. The same write protection as the other posts (D-029): host, origin, the
   // secret proof, and a short cooldown. The decision is recorded only; the next tick acts on an approval. This route is the only way to approve.
   const inbox = async (req, res, send) => {
-    if (!source().inbox?.dir) return refuseWith(send, 404, 'Inbox not configured', 'The inbox is not configured (the inbox is not configured).');
+    const settingIds = new Set(localSettings.readItems(root).map(i => i.id));   // issue #853: setting items are Foreman's own, kept outside the overseer's directory
+    if (!source().inbox?.dir && !settingIds.size) return refuseWith(send, 404, 'Inbox not configured', 'The inbox is not configured (the inbox is not configured).');
     if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
@@ -221,7 +232,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (!INBOX_ID.test(id) || !['approve', 'reject'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
     const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
-    const r = decideInbox(source().inbox.dir, id, decision, t);
+    const r = settingIds.has(id) ? localSettings.decide(root, id, decision, t) : source().inbox?.dir ? decideInbox(source().inbox.dir, id, decision, t) : { ok: false, reason: 'the inbox is not configured' };
     if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
     try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ }   // the decision starts a pass now
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });

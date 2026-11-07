@@ -25,6 +25,7 @@ import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { sinceView } from './since.mjs';
+import * as localSettings from './localsettings.mjs';
 import { pendingCards as inboxCards, failedCards as failedInboxCards } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
@@ -674,6 +675,13 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
     // Issue #124: each pending inbox item is one Approve/Reject card. Nothing here runs anything; the card posts to the dashboard's own write route.
     if (config.inbox?.dir) for (const card of inboxCards(config.inbox.dir)) attention.push({ id: `inbox-${card.id}`, text: card.broken ? `An inbox item cannot be shown: ${card.broken}` : `Overseer proposal (${card.kind === 'prompt' ? 'run as a job' : 'post as an issue'}): ${card.title}`, ref: null, severity: 'action', inbox: card, action: card.broken ? 'Reject it; the overseer can propose it again.' : card.will });
+    // Issue #853: a merged change that needs a host-specific local setting. The approval card is Foreman's own (not the overseer's inbox), so it
+    // shows with or without an inbox. An item still waiting for its value says what will fill it; a failed one stays visible for three days.
+    try {
+      for (const card of localSettings.cards(root)) attention.push({ id: `inbox-${card.id}`, text: card.title, ref: null, severity: 'action', inbox: card, action: card.will });
+      for (const i of localSettings.waiting(root)) attention.push({ id: `setting-wait-${i.id}`, text: `PR #${i.pr} needs the local setting ${i.key}; its value is not known yet. Foreman fills it from the first refused cross-origin write and then asks you to approve it.`, ref: null, severity: 'warning' });
+      for (const i of localSettings.failed(root, now)) attention.push({ id: `setting-fail-${i.id}`, text: redact(`Applying the local setting ${i.key} needed by PR #${i.pr} failed: ${i.result || 'no reason recorded'}. team.local.json was left as it was.`, 300), ref: null, severity: 'action' });
+    } catch { /* a damaged settings file must not break the page */ }
     // Issue #641: a failed or stopped inbox item has no GitHub notice, so it is one Needs you line (for three days after it failed).
     if (config.inbox?.dir) for (const f of failedInboxCards(config.inbox.dir, now)) attention.push({ id: `inboxfail-${f.id}`, text: `An overseer ${f.kind === 'prompt' ? 'job' : f.kind === 'action' ? 'action' : 'item'} failed${f.job ? ` (job ${f.job})` : ''}: ${f.why}`, ref: null, severity: 'action', action: f.job ? `Look at it with ai-supervisor status ${f.job}; the overseer can read the outcome and propose it again.` : 'The overseer can read the outcome and propose it again. It leaves this list three days after it failed.' });
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
