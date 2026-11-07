@@ -30,7 +30,7 @@ import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_RO
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
 import { fileURLToPath } from 'node:url';
-import { decide as decideInbox, ID_RE as INBOX_ID } from './inbox.mjs';
+import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
@@ -96,7 +96,7 @@ export async function currentView({ root, config, now = Date.now(), tz = default
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
 export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/grid.mjs': ['grid.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
-  '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
+  '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/inbox-ui.mjs': ['inbox-ui.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
@@ -211,7 +211,16 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   };
   // Inbox (issue #124): Approve or Reject one pending overseer proposal. The same write protection as the other posts (D-029): host, origin, the
   // secret proof, and a short cooldown. The decision is recorded only; the next tick acts on an approval. This route is the only way to approve.
-  const inbox = async (req, res, send) => {
+  // Issue #856: the dashboard's script posts with Accept: application/json and gets the outcome as JSON, so a refusal shows on the card instead of a
+  // separate page. Every refusal (host, origin, proof, size, cooldown, item changed) keeps its status code and changes nothing; only the body differs.
+  const inbox = async (req, res, rawSend) => {
+    const json = /application\/json/.test(req.headers.accept || '');
+    const plainOf = html => String(html).replace(/<h1>[^]*?<\/h1>/, '').replace(/<p><a href[^]*$/, '').replace(/<[^>]*>/g, ' ').replace(/&#(\d+);/g, (m, c) => String.fromCharCode(Number(c))).replace(/\s+/g, ' ').trim().slice(0, 300);
+    const send = !json ? rawSend : (code, type, body, headers = {}) => {
+      if (code === 303 && /inbox-cooldown/.test(headers.location || '')) return rawSend(429, 'application/json; charset=utf-8', JSON.stringify({ ok: false, reason: 'That was too soon after the last decision; wait a second and press it again.' }), { 'retry-after': headers['retry-after'] });
+      if (code >= 400) return rawSend(code, 'application/json; charset=utf-8', JSON.stringify({ ok: false, reason: type.startsWith('text/html') ? plainOf(body) : String(body) }));
+      return rawSend(code, type, body, headers);
+    };
     if (!source().inbox?.dir) return refuseWith(send, 404, 'Inbox not configured', 'The inbox is not configured (the inbox is not configured).');
     if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
@@ -220,12 +229,14 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
     if (!proofValid(root, form.get('proof'))) return badProof(send);
     const id = form.get('id') || '', decision = form.get('decision') || '';
-    if (!INBOX_ID.test(id) || !['approve', 'reject'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
+    if (!INBOX_ID.test(id) || !['approve', 'reject', 'undo'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
     const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
-    const r = decideInbox(source().inbox.dir, id, decision, t);
+    const r = decision === 'undo' ? undoInbox(source().inbox.dir, id, t) : decideInbox(source().inbox.dir, id, decision, t);
     if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
-    try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ }   // the decision starts a pass now
+    store.invalidate();   // the next page must show this decision, not the copy built before it
+    if (decision !== 'undo') { try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ } }   // the decision starts a pass now
+    if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:

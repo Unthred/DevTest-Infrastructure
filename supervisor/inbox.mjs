@@ -85,6 +85,18 @@ export function validateItem(raw) {
   return { ok: true, item: Object.fromEntries(allowed.filter(k => raw[k] !== undefined).map(k => [k, raw[k]])) };
 }
 
+// Issue #856: a per-item lock (an exclusive lock file, stale after 10 s) so the dashboard's Undo and the tick's claim never interleave.
+// A held lock makes the caller back off: Undo is refused with "try again", the tick leaves the item for the next pass.
+function withLock(inboxDir, id, fn) {
+  const lock = path.join(dirs(inboxDir).status, `${id}.lock`);
+  let fd = null;
+  for (let i = 0; i < 2 && fd === null; i++) {
+    try { fd = fs.openSync(lock, 'wx'); }
+    catch { try { if (Date.now() - fs.statSync(lock).mtimeMs > 10000) fs.unlinkSync(lock); else break; } catch { /* gone or unreadable */ } }
+  }
+  if (fd === null) return { locked: true };
+  try { return { locked: false, value: fn() }; } finally { try { fs.closeSync(fd); fs.unlinkSync(lock); } catch { /* already removed */ } }
+}
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 function writeAtomic(file, value) {
   const temp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
@@ -178,7 +190,11 @@ export function failedCards(inboxDir, now = Date.now()) {
     });
 }
 
-// The two decisions. Only a pending item can be decided, once; the hash must still match. Returns { ok, reason? }.
+// The two decisions. Only a pending item can be decided, once; the hash must still match. Returns { ok, reason?, state?, decidedAt?, undoUntil? }.
+// Issue #856: the status keeps the decision and the item's title, so the dashboard can show "Approved 06:20" beside it, and an undo
+// window (UNDO_MS) lets a wrong click be taken back while nothing has acted on it.
+export const UNDO_MS = 30000;
+const titleOf = (inboxDir, id) => { const l = loadItem(inboxDir, id); return l.ok ? redactLong(String(l.item.title ?? '').replace(/\s+/g, ' '), LIMITS.title, ' [cut]').trim() : null; };
 export function decide(inboxDir, id, decision, now = Date.now()) {
   if (!['approve', 'reject'].includes(decision)) return { ok: false, reason: 'unknown decision' };
   const s = statusOf(inboxDir, id);
@@ -188,9 +204,46 @@ export function decide(inboxDir, id, decision, now = Date.now()) {
     const l = loadItem(inboxDir, id);
     if (!l.ok) { setStatus(inboxDir, id, { state: 'refused', reason: l.reason }, now); audit(inboxDir, { id, event: 'refused', kind: s.kind, hash: s.hash, reason: l.reason }, now); return { ok: false, reason: l.reason }; }
   }
-  setStatus(inboxDir, id, decision === 'approve' ? { state: 'approved', decidedAt: now } : { state: 'rejected', decidedAt: now, result: 'rejected by the homeowner; nothing was done' }, now);
-  audit(inboxDir, { id, event: decision === 'approve' ? 'approved' : 'rejected', kind: s.kind, hash: s.hash }, now);
-  return { ok: true };
+  const state = decision === 'approve' ? 'approved' : 'rejected';
+  setStatus(inboxDir, id, { state, decision, decidedAt: now, title: titleOf(inboxDir, id), ...(decision === 'reject' ? { result: 'rejected by the homeowner; nothing was done' } : {}) }, now);
+  audit(inboxDir, { id, event: state, kind: s.kind, hash: s.hash }, now);
+  return { ok: true, state, decidedAt: now, undoUntil: now + UNDO_MS };
+}
+// Issue #856: take a decision back. Allowed only inside UNDO_MS of the decision and only while the state is still the one the click wrote
+// (approved or rejected): once the tick has started the job or posted the issue the state has moved on and nothing can be taken back.
+// The item returns to pending as it was; the decision fields are removed.
+export function undo(inboxDir, id, now = Date.now()) {
+  if (!ID_RE.test(String(id))) return { ok: false, reason: 'unknown item' };
+  const r = withLock(inboxDir, id, () => {
+    const file = path.join(dirs(inboxDir).status, `${id}.json`), s = readJson(file);
+    if (!s) return { ok: false, reason: 'unknown item' };
+    if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
+    if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
+    const { decision, decidedAt, title, result, ...rest } = s;
+    writeAtomic(file, { ...rest, state: 'pending', id, updatedAt: now });
+    audit(inboxDir, { id, event: 'undone', kind: s.kind, hash: s.hash }, now);
+    return { ok: true, state: 'pending' };
+  });
+  return r.locked ? { ok: false, reason: 'the item is being acted on; try again in a moment' } : r.value;
+}
+// Issue #856: the tick takes an item before any effect. Under the same lock as undo() it re-reads the on-disk state and moves
+// `from` to patch.state only if the state is still `from`; false means an Undo (or another writer) won and the effect must not happen.
+export function claim(inboxDir, id, from, patch, now = Date.now()) {
+  if (!ID_RE.test(String(id))) return false;
+  const r = withLock(inboxDir, id, () => {
+    if (statusOf(inboxDir, id)?.state !== from) return false;
+    finish(inboxDir, id, patch, now);
+    return true;
+  });
+  return !r.locked && r.value === true;
+}
+// Issue #856: items decided today (the server's calendar day), newest first, for the collapsed "Decided today" list. `undoUntil` is set
+// only while an undo is still possible. Nothing beyond the title kept at decision time is shown.
+export function decidedCards(inboxDir, now = Date.now()) {
+  const day = new Date(now); day.setHours(0, 0, 0, 0);
+  return allStatuses(inboxDir).filter(s => s.decision && Number.isFinite(s.decidedAt) && s.decidedAt >= day.getTime() && s.decidedAt <= now + 60000)
+    .sort((x, y) => y.decidedAt - x.decidedAt).map(s => ({ id: s.id, kind: s.kind || null, title: s.title || null, decision: s.decision, decidedAt: s.decidedAt,
+      undoUntil: ['approved', 'rejected'].includes(s.state) && now - s.decidedAt <= UNDO_MS ? s.decidedAt + UNDO_MS : null }));
 }
 export function approvedItems(inboxDir, kind) {
   return allStatuses(inboxDir).filter(s => s.state === 'approved' && s.kind === kind).sort((a, b) => (a.decidedAt || 0) - (b.decidedAt || 0));
