@@ -385,6 +385,24 @@ test('verdict trust: only the job inbox counts; comment text, wrong head, wrong 
   assert.match(w.calls.comments.at(-1)[1], /^<!-- devtest-verdict v1 job=/);
 });
 
+test('issue #846: a review started on an older install and finished after a newer install is ingested by the new version team tick', async t => {
+  const OLD = 'a'.repeat(40);
+  const w = reviewWorld(t); await w.team.execute((await w.team.plan())[0]);
+  const [id, rec] = Object.entries(w.team.s.jobs)[0];
+  // The job started on the old version: its record names that directory, and it is still running while the install happens.
+  w.jobs.states[id].supervisorVersion = OLD; w.jobs.states[id].status = 'running';
+  await w.team.ingest({ ingested: [] });
+  assert.deepEqual(w.team.s.verdicts, {}); assert.equal(rec.ingested, false);
+  // The old worker finishes against its own directory and leaves the verdict; this tick is the new version's.
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [], commandsRun: ['node --test'] });
+  w.jobs.states[id].status = 'completed';
+  const report = { ingested: [] }; await w.team.ingest(report);
+  assert.equal(w.team.s.verdicts[`10:${H(1)}`].verdict, 'PASS'); assert.equal(w.team.s.verdicts[`10:${H(1)}`].job, id);
+  assert.equal(rec.ingested, true); assert.equal(report.ingested[0].verdict, 'PASS');
+  assert.match(w.calls.comments.at(-1)[1], new RegExp(`^<!-- devtest-verdict v1 job=${id} pr=10 head=${H(1)} verdict=PASS`));
+  assert.equal(w.jobs.states[id].supervisorVersion, OLD);
+});
+
 test('verdict for the wrong head or PR is rejected and never recorded', async t => {
   for (const bad of [{ pr: 10, headSha: H(2) }, { pr: 11, headSha: H(1) }, { verdict: 'MAYBE' }]) {
     const w = reviewWorld(t); await w.team.execute((await w.team.plan())[0]);
