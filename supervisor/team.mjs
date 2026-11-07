@@ -3316,6 +3316,19 @@ export function takeResumeLock(root) {
   fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }), { mode: 0o600 });
   return () => fs.rmSync(dir, { recursive: true, force: true });
 }
+// Issue #867: a homeowner command waits for the tick lock instead of refusing. Returns the release function, or null after timeoutMs.
+// `say` is called once when the wait starts, so the person sees why nothing happens yet.
+export async function tickLockWait(root, { timeoutMs = 300000, pollMs = 500, say = () => {}, sleep = ms => new Promise(r => setTimeout(r, ms)), now = Date.now } = {}) {
+  const deadline = now() + timeoutMs;
+  let release = tickLock(root), told = false;
+  while (!release) {
+    if (now() >= deadline) return null;
+    if (!told) { told = true; say(`a team tick is running; waiting up to ${Math.round(timeoutMs / 1000)}s for it to finish`); }
+    await sleep(pollMs);
+    release = tickLock(root);
+  }
+  return release;
+}
 // Issue #448: the install (self-upgrade) step has its own lock, so its slow test run no longer holds the tick lock.
 export const upgradeLock = root => tickLock(root, 'upgrade.lock');
 export function tickLock(root, name = 'tick.lock') {

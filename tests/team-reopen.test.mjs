@@ -93,9 +93,9 @@ test('issue #495: the CLI parses the issue number and reports the usage error', 
   const run = (...args) => spawnSync(process.execPath, [cli, 'team', ...args], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
   for (const bad of ['abc', '0', '-3', '1.5']) { const r = run('reopen', bad); assert.notEqual(r.status, 0); assert.match(r.stdout + r.stderr, /usage: team reopen ISSUE/); }
   const none = run('reopen'); assert.notEqual(none.status, 0); assert.match(none.stdout + none.stderr, /usage: team reopen ISSUE/);
-  // A held tick lock is reported, not waited for.
+  // A held tick lock is waited for, then reported (issue #867).
   const lock = tickLock(stateRoot(root)); t.after(() => lock && lock());
-  const held = run('reopen', '23'); assert.notEqual(held.status, 0); assert.match(held.stdout + held.stderr, /a team tick is running; retry in a minute/);
+  const held = spawnSync(process.execPath, [cli, 'team', 'reopen', '23'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root, AI_SUPERVISOR_LOCK_WAIT_MS: '300' } }); assert.notEqual(held.status, 0); assert.match(held.stdout + held.stderr, /waiting up to .*was not applied now/s);
 });
 
 test('issue #495: a live rebase job as the real start() records it blocks reopening its own issue', async t => {
