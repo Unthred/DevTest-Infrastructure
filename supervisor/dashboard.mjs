@@ -684,7 +684,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     } catch { /* a damaged settings file must not break the page */ }
     // Issue #853 (requirement 4): manual steps a PR body lists under "Homeowner steps" stay in Needs you until ticked or the PR closes.
     for (const p of c.pulls || []) {
-      const open = localSettings.homeownerSteps(p.body).filter(s => !s.done && !/^(none|n\/a|no|nothing)\.?$/i.test(s.text.trim()));
+      const open = (p.homeownerSteps || []).map(text => ({ text }));
       if (open.length) attention.push({ id: `homeowner-steps-${p.number}`, text: redact(`${names.pr(p.number).text} lists ${open.length} homeowner step${open.length === 1 ? '' : 's'} still to do: ${open.map(s => s.text).join('; ')}`, 400), ref: { kind: 'pull', n: p.number }, severity: 'action', action: 'Do the step, then tick it in the pull request description under "Homeowner steps".' });
     }
     // Issue #641: a failed or stopped inbox item has no GitHub notice, so it is one Needs you line (for three days after it failed).
@@ -897,7 +897,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
       // Issue #717: second-opinion reviews (kept apart from verdicts, one per pr:head) and the implement time from the merge log, for foreman_rebase_stats.
       secondOpinionRounds: secondOpinionsOf(state, n).filter(o => !(o && (o.carry || o.carriedFrom))).length, secondOpinionCarried: secondOpinionsOf(state, n).filter(o => o && (o.carry || o.carriedFrom)).length, startedAt: Number.isFinite(m?.startedAt) ? m.startedAt : null,
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
-      head: p?.headRefOid ?? null, needsHomeowner: (p?.labels || []).includes('needs-homeowner'), mergedAt: m?.mergedAt ?? null,
+      head: p?.headRefOid ?? null, homeownerSteps: p?.homeownerSteps ?? [], needsHomeowner: (p?.labels || []).includes('needs-homeowner'), mergedAt: m?.mergedAt ?? null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,
       timeline: [...vs.map(v => ({ at: v.at, text: `${v.reviewer}${v.model ? ` (${v.model})` : ''}: ${v.verdict} at ${v.head}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length === 1 ? '' : 's'})` : ''}` })),
         ...vs.filter(v => v.carry).map(v => ({ at: v.carry.at ?? v.at, text: `verdict ${carryText(v.carry)}` })), ...(m ? [{ at: m.mergedAt, text: 'merged' }] : []), ...prJobs.map(j => ({ at: j.startedAt, text: `${j.agent}: ${j.kind} job ${j.status}` }))].filter(r => Number.isFinite(r.at)).sort((a, b) => a.at - b.at) };

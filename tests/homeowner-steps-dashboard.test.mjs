@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { buildView } from '../supervisor/dashboard.mjs';
+import { compactPulls } from '../supervisor/dashdata.mjs';
 
 const NOW = 1_800_000_000_000;
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
@@ -18,7 +19,7 @@ async function view(t, pulls) {
   const gh = { listPulls: async () => pulls, getPull: async n => pulls.find(p => p.number === n), listIssues: async () => [], listMergedPulls: async () => [], comment: async () => {}, hasComment: async () => false, findIssueByMarker: async () => null, board: async () => {}, addLabel: async () => {}, removeLabel: async () => {} };
   const jobs = { listActive: async () => [], get: async () => null, create: async () => ({ id: 'x'.repeat(32) }) };
   const team = new Team({ config, root: stateRoot(path.join(dir, 'state')), gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register: '## D-020 — x\n- Status: homeowner-approved\n', clock: { now: () => NOW } });
-  return buildView({ config, root: team.root, jobs: [], events: [], state: team.s, register: '', cache: { tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 }, pulls, issues: [] }, snapshots: [], now: NOW });
+  return buildView({ config, root: team.root, jobs: [], events: [], state: team.s, register: '', cache: { tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 }, pulls: compactPulls(pulls), issues: [] }, snapshots: [], now: NOW });
 }
 
 test('an unticked homeowner step is a Needs you item; ticked, None or absent are not', async t => {
@@ -26,4 +27,12 @@ test('an unticked homeowner step is a Needs you item; ticked, None or absent are
   const ids = v.attention.map(a => a.id).filter(i => i.startsWith('homeowner-steps-'));
   assert.deepEqual(ids, ['homeowner-steps-1']);
   assert.match(v.attention.find(a => a.id === 'homeowner-steps-1').text, /Restart the widget/);
+});
+
+test('the cache keeps the open steps, not the body, and the PR row carries them', async t => {
+  const c = compactPulls([pr(1, '## Homeowner steps\n- [ ] Restart the widget\n- [x] Done\n')]);
+  assert.equal('body' in c[0], false);
+  assert.deepEqual(c[0].homeownerSteps, ['Restart the widget']);
+  const v = await view(t, [pr(1, '## Homeowner steps\n- [ ] Restart the widget\n')]);
+  assert.deepEqual(v.prs.find(p => p.number === 1).homeownerSteps, ['Restart the widget']);
 });

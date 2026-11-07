@@ -12,6 +12,7 @@ import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 import { HOT_WINDOW_MS, archiveSnapshots, recordTimeline } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
+import { homeownerSteps } from './localsettings.mjs';
 import { classifyIdle } from './idlecause.mjs';
 
 // Issue #362: the hot file keeps the last 35 days for the planner; older snapshots rotate into compressed monthly archives and are never deleted.
@@ -97,10 +98,13 @@ export function readSnapshots(root) {
 
 // What the cache keeps of GitHub data: just enough for the planner and the page, nothing else (no bodies, no comments;
 // the issue and PR references parsed from a body are kept instead).
+const openHomeownerSteps = body => homeownerSteps(body).filter(s => !s.done && !/^(none|n\/a|no|nothing)\.?$/i.test(s.text.trim())).slice(0, 10).map(s => redact(s.text, 300));
 export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
   // Issue #430: only the numbers of the issues a PR closes, so a watched issue is followed to a PR whose branch has no issue-<n>.
   closingIssuesReferences: (p.closingIssuesReferences || []).map(r => ({ number: r?.number })).filter(r => Number.isSafeInteger(r.number) && r.number > 0).slice(0, 10),
+  // Issue #853: the unticked steps under a "Homeowner steps" heading, read before the body is dropped.
+  ...(openHomeownerSteps(p.body).length ? { homeownerSteps: openHomeownerSteps(p.body) } : {}),
   labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l?.name)).includes('needs-homeowner') ? ['needs-homeowner'] : [],
   statusCheckRollup: (p.statusCheckRollup || []).slice(0, 40).map(c => ({ name: redact(c.name || c.context || '', 80), status: c.status, conclusion: c.conclusion, state: c.state })) }));
 // The issue a merged PR closed: its closing reference, else the issue-<n> in its branch name (issue #147).
