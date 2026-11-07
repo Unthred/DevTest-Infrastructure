@@ -28,8 +28,10 @@ import { idleReport, renderIdleReport, passStats, renderPassStats } from './idle
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
 import { ghRunner } from './github.mjs';
-import { redact } from './redact.mjs';
+import { redact, redactLong } from './redact.mjs';
 import { saveWork } from './savework.mjs';
+import os from 'node:os';
+import { startInboxTestRun, runLockedInboxTests } from './inboxtests.mjs';
 import { hasProbe, refreshProvider } from './probe.mjs';
 import { probeNow } from './probenow.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
@@ -184,12 +186,32 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   // The allowance inputs are shared with `team status` and the dashboard (issue #121), so all of them plan alike.
   const jobsNow = readJobs(root);
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs: jobsNow, probes: readCache(root)?.probes, snapshots: readSnapshots(root), hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') });
-  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
+  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage, ops: inboxOps(root, registry, config) });
 }
 // Issue #755: counts the gh processes a pass starts (for the pass record), without changing what any call does.
 function countingGh(stats) {
   const base = ghRunner();
   return stats ? (args, input, opts) => { const t = Date.now(); stats.calls++; try { return base(args, input, opts); } finally { stats.ms += Date.now() - t; } } : base;
+}
+// Issue #637: the effects behind the inbox's operation actions. Each is reached only through an approved item; none merges or approves.
+function inboxOps(root, registry, config) {
+  return {
+    restartDashboard: async () => {
+      const { upgrade } = selfUpgradeFor(root, registry), sha = upgrade.d.installed();
+      if (!sha) return { ok: false, reason: 'no installed version is recorded' };
+      const r = await upgrade.d.restartDashboard(sha, { force: true });   // stops, starts, then needs the health check and the settle probes to pass
+      return r.ok && !r.restarted ? { ok: false, reason: r.reason } : r;
+    },
+    retryInstall: async () => {
+      const { upgrade } = selfUpgradeFor(root, registry);
+      if (!upgrade.latch()) throw new SupervisorError('no self-upgrade latch is set; nothing to retry');
+      upgrade.clearLatch(); upgrade.requestInstallNow();
+      return 'latch cleared; the next tick tries the install again without the batching wait';
+    },
+    probe: agent => probeNow({ root, registry, config: loadTeamConfig(teamConfigFile, root), agent }),
+    // The run is slow, so it never runs in the tick (issue #448): a detached runner takes its own lock, and the result file is its record.
+    runTests: (sha, pr) => startInboxTestRun({ root, sha, pr, cli: self, registry: registryOption }),
+  };
 }
 // Model-free allowance probes, one per provider that has one (issue #75), so a paused agent's reading still refreshes.
 // Only a local file read: never a model call. A probe failure only loses this tick's refresh.
@@ -492,6 +514,11 @@ async function main() {
     const server = await serve({ root, config: () => loadTeamConfig(teamConfigFile, root), host: a.host || process.env.DASHBOARD_HOST, port: Number(a.port || process.env.DASHBOARD_PORT || DEFAULT_PORT), evidenceRoot: process.env.DASHBOARD_EVIDENCE_ROOT || undefined });
     console.log(`dashboard listening on http://${server.address().address}:${server.address().port}/ (read-only)`);
     return;   // the server keeps the process alive
+  }
+  if (command === 'inbox-test-run') {   // the detached runner for the inbox action run_tests; holds inbox-tests.lock, never the tick lock
+    const [sha, pr] = a._, config = loadTeamConfig(teamConfigFile, root);
+    await runLockedInboxTests({ root, sha, pr: pr ? Number(pr) : null, cli: self, repoPath: config.repo_path, tmpRoot: config.test_tmp_root || os.tmpdir() });
+    return;
   }
   if (command === 'probe') {
     if (!a._[0]) throw new SupervisorError('usage: probe <agent>');

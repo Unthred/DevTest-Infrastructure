@@ -316,6 +316,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Expiring a halt by time (a halt would end without evidence); letting a job already running at the trip clear it; letting the dashboard edit Foreman's state file directly (two writers); an agent-callable resume.
 - Superseded-by: none
 
+## D-035 — Inbox operation actions: pause work, restart the dashboard, retry an install, one test run, one allowance probe
+- Status: agent-proposal
+- Date: 2026-11-06
+- Source: issue #637; extends D-033
+- Decision: The inbox action kind (D-033) gains `pause_work` and `resume_work` (target `new`), `restart_dashboard` (`dashboard`), `retry_install` (`install`), `run_tests` (the 40-character head of an open Foreman pull request) and `allowance_probe` (a configured agent name). Approval, validation, at-most-once running, the 300-character reason and the audit logs are as for D-033; no item carries a command, path or other argument. Pause stops only new implement and inbox jobs and is kept until resumed. A dashboard restart succeeds only when the server answers and stays up. A test run uses a fresh clone, the test-slot limit, host admission, a maximum runtime and an outer kill, and saves a redacted result. A probe follows the overage rule and a five-minute per-agent limit. None of the actions can merge, approve, write a verdict or bypass a review gate.
+- Rationale: Pausing, restarting, retrying an install, running the suite on a head and reading an allowance each needed a terminal session; each is now one reviewed click with the same safeguards.
+- Rejected: A free-form command; approval through MCP; a pause that ends by itself; a test run outside the test-slot and admission rules.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.

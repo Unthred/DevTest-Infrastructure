@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, items: 60, action: 40, target: 40 };
-const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
+const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/, pause_work: /^new$/, resume_work: /^new$/, restart_dashboard: /^dashboard$/, retry_install: /^install$/, run_tests: /^[0-9a-f]{40}$/, allowance_probe: /^[a-z][a-z0-9_-]{0,29}$/ };   // issue #629: the names Foreman accepts   // items: files in the directory at once (Foreman removes finished ones)
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
 
@@ -34,7 +34,7 @@ export function checkProposal(args) {
   if (/[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
   if (kind === 'action') {
     if (!Object.hasOwn(ACTIONS, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(ACTIONS).join(', ')}` };
-    if (!ACTIONS[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
+    if (!ACTIONS[item.action].test(item.target)) return { ok: false, error: 'target does not fit the action (a pull request or issue number, the 8-character job id, new, dashboard, install, a 40-character commit id, or an agent name)' };
   }
   return { ok: true, item };
 }

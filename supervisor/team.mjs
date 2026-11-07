@@ -35,6 +35,8 @@ const WRITER_KINDS = new Set(['implement', 'continue', 'fix', 'cifix', 'rebase',
 // A reviewer is independent of the writers when, for each, the provider differs or both models are known and differ.
 export const independentOf = (reviewer, writers) => writers.every(w => w.provider !== reviewer.provider || (!!w.model && !!reviewer.model && w.model !== reviewer.model));
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
+const OPS = { pause_work: 1, resume_work: 1, restart_dashboard: 1, retry_install: 1, run_tests: 1, allowance_probe: 1 };
+const PROBE_ACTION_COOLDOWN_MS = 5 * 60 * 1000;
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped']);
 export const MARKER = 'devtest-verdict';
 
@@ -145,7 +147,8 @@ export const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''
 export function capNotes(L, pauseText = null) {
   const sum = ROLES.reduce((n, r) => n + roleCount(L, r), 0), out = [];
   if (Number.isSafeInteger(L?.overall) && L.overall >= 1 && L.overall < sum) out.push(`limits.overall is ${L.overall}, below the ${sum} slots the role counts allow, so at most ${L.overall} jobs run at once`);
-  if (pauseText) out.push(`${pauseText}; no new implement job starts while the open-PR cap (limits.max_open_prs) is reached`);
+  if (pauseText?.startsWith('New work is paused by')) out.push(pauseText);
+  else if (pauseText) out.push(`${pauseText}; no new implement job starts while the open-PR cap (limits.max_open_prs) is reached`);
   return out;
 }
 export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + roleCount(L, r), 0));
@@ -631,7 +634,8 @@ export function readSplitDraft(root, ticket) {
 
 const STALE_MARK_MS = 10 * 60000;   // issue #521
 export class Team {
-  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
+  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined, ops = {} }) {
+    this.ops = ops;   // issue #637: effects of the inbox actions that live outside the team state (dashboard restart, install retry, test run, allowance probe)
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
     this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
     this.c = validateTeamConfig(config); this.root = root; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
@@ -1327,7 +1331,7 @@ export class Team {
     const counted = mine.filter(p => !this.parkedReason(p, issueByNo, prs));
     return counted.length >= cap ? { open: counted.length, cap, ...(mine.length > counted.length ? { parked: mine.length - counted.length } : {}) } : null;
   }
-  pauseText(prs, issues) { const p = this.pauseInfo(prs, issues); return p ? `Paused new work: ${p.open} open PRs (cap ${p.cap})${p.parked ? `; ${p.parked} more waiting on you or an unstarted issue are not counted` : ''}` : null; }
+  pauseText(prs, issues) { if (this.s.workPause) return `New work is paused by the homeowner since ${new Date(this.s.workPause.at).toISOString().slice(0, 16).replace('T', ' ')} UTC: ${redact(this.s.workPause.reason, 300)}`; const p = this.pauseInfo(prs, issues); return p ? `Paused new work: ${p.open} open PRs (cap ${p.cap})${p.parked ? `; ${p.parked} more waiting on you or an unstarted issue are not counted` : ''}` : null; }
   // Issue #320: the cap blocks new work and none of the counted PRs can move on its own (each has a reason that needs the
   // homeowner). Returns the PRs and the cap, or null.
   capDeadlock(prs, issues = this.view?.issues) {
@@ -1344,7 +1348,7 @@ export class Team {
 
   choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
     const L = this.c.limits;
-    const paused = !!this.pauseInfo(prs, [...issueByNo.values()]);
+    const paused = !!this.s.workPause || !!this.pauseInfo(prs, [...issueByNo.values()]);
     // While new work is paused the implementer slot also takes reviews (review independence, D-024, is still checked below).
     const impl = role !== 'reviewer' && role !== 'rebaser', rev = role === 'reviewer' || role === null || (role === 'implementer' && paused && !implementOnly);
     const repair = impl && !implementOnly;
@@ -1782,7 +1786,7 @@ export class Team {
       const k = verdictKey(p.number, p.headRefOid);
       if (agentOfBranch(this.c, p.headRefName) && !p.isDraft && p.mergeable === 'CONFLICTING' && (this.s.rebaseAttempts[k] || 0) < this.c.limits.max_fix_attempts) work.push(`PR #${p.number} conflicts with its base branch`);
     }
-    if (!this.pauseInfo(prs, issues)) for (const [name] of this.agents()) for (const n of this.issuesOf(name)) if (this.implementable(n, prs, issueByNo, () => false)) work.push(`issue #${n} is ready to implement`);
+    if (!this.s.workPause && !this.pauseInfo(prs, issues)) for (const [name] of this.agents()) for (const n of this.issuesOf(name)) if (this.implementable(n, prs, issueByNo, () => false)) work.push(`issue #${n} is ready to implement`);
     if (actions.length || running || !work.length) { if (this.s.idle) { delete this.s.idle; this.save(); } return; }
     const why = [...new Set(Object.values(this.held || {}).flatMap(h => Object.values(h)))].join(' | ').slice(0, 300);
     this.s.idle = { since: this.s.idle?.since ?? this.clock.now(), work: [...new Set(work)].slice(0, 8), reason: why || 'no agent could start it and no hold reason was recorded' };
@@ -1870,7 +1874,7 @@ export class Team {
   inboxDir() { return this.c.inbox?.dir || null; }
   // The oldest approved prompt that has no job yet and is not planned this tick. Read-only (the dashboard calls it through plan()).
   inboxNext() {
-    const dir = this.inboxDir(); if (!dir) return null;
+    const dir = this.inboxDir(); if (!dir || this.s.workPause) return null;   // issue #637: a paused scope starts no inbox job either
     for (const st of inboxStore.approvedItems(dir, 'prompt')) {
       if (this.taken?.has(`inbox:${st.id}`) || Object.values(this.s.jobs).some(j => j.inboxId === st.id)) continue;
       const l = inboxStore.loadItem(dir, st.id);
@@ -1913,6 +1917,7 @@ export class Team {
     return hits[0];
   }
   async applyInboxAction({ action, target, reason }, report) {
+    if (Object.hasOwn(OPS, action)) return this.applyOp(action, target, reason, report);
     const n = Number(target);
     if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
@@ -1938,6 +1943,47 @@ export class Team {
     }
     if (action === 'close_job') return this.closeJob(id, rec, job, reason, log);
     throw new SupervisorError('unknown action');
+  }
+  // Issue #637: the five operations. Each re-checks its target, changes one thing and names it in the unblock log (the inbox audit log has the rest).
+  async applyOp(action, target, reason, report) {
+    const why = `homeowner approved on the dashboard: ${reason}`, log = (what, result) => this.logUnblock(report, { target: 0, tk: 'pull', what, why, result });
+    const need = name => { if (typeof this.ops[name] !== 'function') throw new SupervisorError('this supervisor cannot do that'); return this.ops[name]; };
+    if (action === 'pause_work') {
+      if (this.s.workPause) throw new SupervisorError('new work is already paused');
+      this.s.workPause = { at: this.clock.now(), reason: String(reason).slice(0, 300) }; this.save();
+      log('paused new work', 'paused'); return 'new work is paused; running jobs, reviews and fixes go on';
+    }
+    if (action === 'resume_work') {
+      if (!this.s.workPause) throw new SupervisorError('new work is not paused by the homeowner');
+      delete this.s.workPause; this.save();
+      log('resumed new work', 'resumed'); return 'new work is resumed';
+    }
+    if (action === 'restart_dashboard') {
+      const r = await need('restartDashboard')();
+      if (!r?.ok) throw new SupervisorError(`the dashboard did not stay up: ${redact(String(r?.fail || r?.reason || 'unknown'), 200)}`);
+      log('restarted the dashboard', r.restarted ? 'restarted and answering' : String(r.reason || 'not restarted').slice(0, 100)); return r.restarted ? 'dashboard restarted; it answers and stayed up' : `dashboard not restarted: ${r.reason}`;
+    }
+    if (action === 'retry_install') {
+      const r = await need('retryInstall')();
+      log('cleared the self-upgrade latch and asked for an install retry', r); return r;
+    }
+    if (action === 'allowance_probe') {
+      if (!this.c.agents[target]) throw new SupervisorError(`unknown agent ${target}`);
+      const last = this.s.probeActionAt?.[target] ?? 0, now = this.clock.now();
+      if (now - last < PROBE_ACTION_COOLDOWN_MS) throw new SupervisorError(`${target} was probed less than five minutes ago`);
+      const r = await need('probe')(target);
+      if (!r?.ok) throw new SupervisorError(`the allowance probe of ${target} was refused or empty: ${redact(String(r?.error || 'no reading'), 100)}`);
+      (this.s.probeActionAt ||= {})[target] = now; this.save();
+      log(`probed the allowance of ${target}`, 'reading stored'); return `allowance of ${target} read (${r.source || 'probe'}, ${(r.windows || []).map(w => `${w.type} ${w.utilization}`).join(', ')})`;
+    }
+    // run_tests: the target must be the head of an open Foreman pull request; the run itself (clone, admission, slot, bound, saved result) is the op's.
+    const pr = (await this.gh.listPulls()).find(p => p.headRefOid === target);
+    if (!pr || !agentOfBranch(this.c, pr.headRefName)) throw new SupervisorError('that commit is not the head of an open Foreman pull request');
+    const r = await need('runTests')(target, pr.number);
+    if (r.started) { log(`started a test run on ${shortCommit(target)} of PR #${pr.number}`, 'running apart from the tick'); return `test run started on ${shortCommit(target)}; the result is saved in team/inbox-test-runs/ when it ends`; }
+    log(`ran the test suite on ${shortCommit(target)} of PR #${pr.number}`, r.summary);
+    if (!r.ok) throw new SupervisorError(`tests ${r.summary}`);
+    return `tests passed on ${shortCommit(target)} (${r.summary})`;
   }
   // One more review attempt at the same head, for attempts spent by Foreman's own faults. Only counters that reached the limit move, each by
   // one, so the total stays bounded; refused when the head already has a verdict, a live review, or any attempt left.
