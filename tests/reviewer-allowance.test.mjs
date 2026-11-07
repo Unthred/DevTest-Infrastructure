@@ -42,7 +42,7 @@ const sonnetPr = [pr(10, 'claude/issue-1-x', H(1))], bothWritten = { 10: ['claud
 test('both eligible: the reviewer with the most spare allowance is chosen, whichever provider wrote it', async t => {
   const { acts } = await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 0.55, codex: 1.4 } });
   assert.deepEqual(acts.map(a => a.agent), ['claude']);
-  assert.match(acts[0].why, /claude has the most spare allowance.*claude projected 55%.*codex projected 140%/);
+  assert.match(acts[0].why, /claude has the most spare allowance.*claude estimate 55%.*codex estimate 140%/);
   const flip = await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 1.2, codex: 0.4 } });
   assert.deepEqual(flip.acts.map(a => a.agent), ['codex']);   // no "another provider first" preference any more
 });
