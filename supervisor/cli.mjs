@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, resolveJobId, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
+import * as localSettings from './localsettings.mjs';
 import { recordSkip } from './skips.mjs';
 import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, DEFAULT_REUSE_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
 import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
@@ -256,13 +257,22 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
   }
   try {
     // Issue #153: pending config migrations run once, before the first tick of a new version; a failing one skips this tick (it is retried on the next).
+    let migrated = null;
     if (!dryRun) {
-      const migrated = await runMigrations({ root, dir: migrationsDir, validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), next)) });
+      migrated = await runMigrations({ root, dir: migrationsDir, validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), next)) });
       if (migrated.failed) {
         const error = redact(`config migration ${String(migrated.failed.number).padStart(3, '0')}-${migrated.failed.name} failed: ${migrated.failed.error}`, 300);
         try { recordTick(root, { now: Date.now(), status: 'error', error, jobs: readJobs(root) }); } catch { /* the dashboard record is best effort */ }
         return { skipped: [{ what: 'config migration', reason: error }] };
       }
+    }
+    // Issue #853: a migration that needs a host-specific setting raises one approval item; an approved item is applied here, under the tick lock.
+    if (!dryRun) {
+      const nowMs = Date.now();
+      try {
+        for (const m of migrated?.applied || []) for (const s of m.settings || []) localSettings.raise(root, { key: s.key, pr: s.pr, now: nowMs });
+        localSettings.applyApproved(root, { validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(teamConfigFile, 'utf8')), next)), now: nowMs });
+      } catch (error) { console.error(`ai-supervisor: local setting step failed: ${redact(error?.message || error, 200)}`); }
     }
     const config = loadTeamConfig(teamConfigFile, root);
     const tickStartedAt = Date.now();   // issue #487: tick run time before a job starts is measured from here
