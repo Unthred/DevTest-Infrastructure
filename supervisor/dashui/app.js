@@ -5,7 +5,7 @@ import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnl
 import { initLegends } from './legend.mjs';
 import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { watchLists } from './lists-ui.mjs';
-import { postDecision, runDecision, lowerCount, OUTCOME_LABEL } from './inbox-ui.mjs';
+import { postDecision, runDecision, lowerCount, OUTCOME_TEMPLATE } from './inbox-ui.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -36,11 +36,12 @@ document.addEventListener('submit', async e => {
   await runDecision({ decision, post: () => postInbox(form), ui: {
     error: text => { err.textContent = text || ''; err.hidden = !text; },
     lock: label => { for (const b of btns) { b.disabled = true; if (b !== pressed) b.classList.add('greyed'); } pressed.textContent = label; },
+    settled: text => { for (const b of btns) { b.disabled = true; b.classList.add('greyed'); } pressed.textContent = was; err.textContent = text; err.hidden = false; },
     unlock: () => { for (const b of btns) { b.disabled = false; b.classList.remove('greyed'); } pressed.textContent = was; },
     decided: j => {
       const title = (row.querySelector('.t')?.textContent || '').replace(/\s+/g, ' ').replace(/^\s*action\s*/i, '').trim();
       const out = row.querySelector('.inbox-outcome');
-      out.className = 'inbox-outcome ' + (decision === 'approve' ? 'approved' : 'rejected'); out.setAttribute('data-lms', j.decidedAt); out.setAttribute('data-tonly', ''); out.setAttribute('data-tpl', OUTCOME_LABEL[decision] + ' {t}'); out.hidden = false; localizeTimes(row);
+      out.className = 'inbox-outcome ' + (decision === 'approve' ? 'approved' : 'rejected'); out.setAttribute('data-lms', j.decidedAt); out.setAttribute('data-tonly', ''); out.setAttribute('data-tpl', OUTCOME_TEMPLATE[decision]); out.hidden = false; localizeTimes(row);
       const list = $('.inbox-decided-list'), box = $('.inbox-decided');
       if (!list || !box) return;
       const li = document.createElement('li'); li.dataset.decided = item.dataset.inbox;

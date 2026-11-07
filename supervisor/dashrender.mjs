@@ -351,13 +351,14 @@ const inboxForm = (id, decision, label, cls) => `<form method="post" action="/in
 const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div><div class="inbox-err" role="alert" hidden></div></div>`;
 // Issue #856: what was chosen and when ("Approved 06:20"), shown beside the title. dashui/app.js rewrites the time in the viewer's zone from data-lms.
 const OUTCOME = { approve: ['Approved', 'approved', '✓'], reject: ['Rejected', 'rejected', '✗'] };
-const outcomeSpan = (decision, ms) => { const [label, cls] = OUTCOME[decision] || OUTCOME.reject; return `<span class="inbox-outcome ${cls}" ${lms(ms, `${label} {t}`, true)}>${label} ${esc(utc(ms).slice(11, 16))} UTC</span>`; };
+// Issue #925: an approval nothing has acted on yet says it is waiting for a free slot; once the tick has taken it, it reads plainly "Approved".
+const outcomeSpan = (decision, ms, state) => { const [label, cls] = OUTCOME[decision] || OUTCOME.reject, wait = decision === 'approve' && state === 'approved' ? ', waiting for a free slot' : ''; return `<span class="inbox-outcome ${cls}" ${lms(ms, `${label} {t}${wait}`, true)}>${label} ${esc(utc(ms).slice(11, 16))} UTC${wait}</span>`; };
 const undoForm = c => (c.undoUntil ? `<form method="post" action="/inbox" class="inbox-form inbox-undo" data-undo-until="${Math.round(c.undoUntil)}"><input type="hidden" name="id" value="${esc(c.id)}"><input type="hidden" name="decision" value="undo"><button class="linkbtn" type="submit">Undo</button></form>` : '');
 // The collapsed "Decided today" list (newest first). It is also rendered, hidden and empty, while a proposal is pending, so the script can move a decided card into it.
 function decidedBlock(view) {
   const list = view.panels.inboxDecided || [], pending = view.panels.needsYou.some(a => a.inbox);
   if (!list.length && !pending) return '';
-  const rows = list.map(c => `<li data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${outcomeSpan(c.decision, c.decidedAt)} ${undoForm(c)}</li>`).join('');
+  const rows = list.map(c => `<li data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${outcomeSpan(c.decision, c.decidedAt, c.state)} ${undoForm(c)}</li>`).join('');
   return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary><ul class="inbox-decided-list">${rows}</ul></details>`;
 }
 function needsPanel(view) {
