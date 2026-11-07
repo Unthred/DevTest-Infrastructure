@@ -374,6 +374,13 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   // Issue #303: one item per decision proposal awaiting the homeowner's sign-off, naming the entry and the pull request that adds it.
   for (const p of proposals) add(`decision-proposal-${p.id}-${p.pr}`, `Decision ${p.id} (${redact(p.title, 120)}) is an agent proposal awaiting your sign-off, added by ${names.pr(p.pr).text}`, { kind: 'pull', n: p.pr },
     { tried: 'Agents may only propose decisions; the entry does not bind until you approve it. CI fails any agent PR that marks an entry homeowner-approved without a recorded approval from you.', action: `To approve, comment "homeowner-approval: ${p.id}" on the pull request and set the entry to "Status: homeowner-approved" with its Source linking that comment, or reject the PR.`, links: [{ text: names.pr(p.pr).text, url: web('pull', p.pr) }] });
+  // Issue #855: a step that truly cannot be automated is listed by the PR under "Homeowner steps"; it shows here, not in a job report.
+  for (const [n, h] of Object.entries(state.homeownerSteps || {})) {
+    const pr = Number(n), open = (cache?.pulls || []).some(p => p.number === pr && p.headRefOid === h?.head);
+    if (!open || !Array.isArray(h.steps) || !h.steps.length) continue;
+    add(`homeowner-steps-${pr}`, `${names.pr(pr).text} lists steps only you can do: ${h.steps.slice(0, 3).join('; ')}`, { kind: 'pull', n: pr },
+      { tried: 'The pull request says under "Homeowner steps" that these cannot be automated (they need your credentials or a physical action). Foreman does not defer anything else to you.', action: 'Do the steps after the install, or reject the pull request if one of them could be automated.', links: [{ text: names.pr(pr).text, url: web('pull', pr) }] });
+  }
   // Issue #258: one item per PR that no configured agent can review, with the real reason of each agent.
   for (const u of unreviewed) {
     const what = names.pr(u.pr).text, uniq = x => [...new Set(x)];

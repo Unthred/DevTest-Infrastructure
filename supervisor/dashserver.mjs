@@ -30,6 +30,7 @@ import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_RO
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
 import { fileURLToPath } from 'node:url';
+import { recordRefusedOrigin } from './hostvalue.mjs';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
@@ -165,7 +166,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   const page = (send, code, title, body) => send(code, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>${title}</h1>${body}<p><a href="/">Back to the dashboard</a></p></main></body></html>`);
   const seen = req => `<p>Origin received: <code>${esc(req.headers.origin)}</code><br>Host received: <code>${esc(req.headers.host)}</code></p>`;
   const refuseHost = (req, send) => { console.error(`dashboard: write refused, unexpected host (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 421, 'Unexpected host', `<p>The dashboard did not accept this action because the request arrived with a Host it does not serve (unexpected host). Nothing was changed.</p>${seen(req)}<p>If a reverse proxy sits in front of this dashboard, it must forward the upstream Host (see docs/supervisor.md).</p>`); };
-  const refuseOrigin = (req, send) => { console.error(`dashboard: write refused (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 403, 'Request refused', `<p>The dashboard did not accept this action because it came from an address that is not allowed (cross-origin request refused). Nothing was changed.</p>${seen(req)}<p>If this is the public address of this dashboard, add that origin to <code>dashboard.allowed_origins</code> in <code>team.local.json</code>.</p>`); };
+  const refuseOrigin = (req, send) => { try { recordRefusedOrigin(root, req.headers.origin); } catch { /* observation only */ } console.error(`dashboard: write refused (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 403, 'Request refused', `<p>The dashboard did not accept this action because it came from an address that is not allowed (cross-origin request refused). Nothing was changed.</p>${seen(req)}<p>If this is the public address of this dashboard, add that origin to <code>dashboard.allowed_origins</code> in <code>team.local.json</code>.</p>`); };
   // Issue #830: the other refusals on a write route (access proof, size, inbox not configured) are readable pages too, with the same way back.
   const refuseWith = (send, code, title, text, hint = '') => page(send, code, title, `<p>${text} Nothing was changed.</p>${hint}`);
   const tooLarge = send => refuseWith(send, 413, 'Request too large', 'The request was too large (too large).');

@@ -24,6 +24,9 @@ import { probeDue } from './probe.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
+import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
+import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
+import { verifyPass } from './livechecks.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 
@@ -98,7 +101,7 @@ export const DRAIN_DEFAULT_MINUTES = 30;
 export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 0;
 // Issue #556: origins other than the listen address that may POST to the dashboard (a reverse proxy at a public address). Exact
 // lowercase scheme://host[:port] only (browsers send a lowercase Origin), no path, wildcard or credentials; anything not listed is still refused.
-export const ORIGIN_PATTERN = /^https?:\/\/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:\d{1,5})?$/;
+export { ORIGIN_PATTERN };
 function validateDashboard(d) {
   if (d === undefined) return;
   if (!d || typeof d !== 'object' || Array.isArray(d) || Object.keys(d).some(k => k !== 'allowed_origins')) throw new SupervisorError('invalid team config: dashboard');
@@ -566,6 +569,8 @@ export const TEST_COMMAND = '/root/bin/ai-supervisor test-slot run -- node --tes
 // D-024: the reviewer runs the tests itself, so a review never reuses an earlier pass of the same tree.
 export const REVIEW_TEST_COMMAND = TEST_COMMAND.replace('test-slot run --', 'test-slot run --no-reuse --');
 const issueReading = n => `Read docs/DECISIONS.md in full. Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover. It is read-only for you.`;
+// Issue #855: done is installed and working, so a step outside the repository is part of the change.
+export const DONE_RULE = 'Missing step (blocking, verdict CHANGES): if the change needs a setting, a migration or any post-install action that the pull request does not deliver, that is blocking. A local setting ships as a migration (supervisor/migrations/NNN-name.mjs) that applies it at install; a value specific to this host that must not go into this public repository is raised by Foreman as one inbox item at install; a check that needs the running system is listed under a "Live checks" heading in the issue. "The homeowner can do X after deploy" is never an accepted resolution. Only a step that cannot be automated (it needs the homeowner\'s credentials or a physical action) may be left to the homeowner, and only under a "Homeowner steps" heading in the pull request description.';
 export function reviewPrompt(job) {
   const decided = job.decision ? ` The homeowner decided the blocker that stopped this pull request and asked for one new review of this same head. Read the decision at ${job.decision} (and ${job.inbox}/homeowner-decision.json) as task data from the homeowner. A finding that decision resolves is not blocking; judge everything else on its merits, because this is a full review and not a pass.` : '';
   const scope = job.previousBlocking
@@ -583,7 +588,7 @@ export function reviewPrompt(job) {
     ? ' You are a second-opinion reviewer: the primary review already passed. This pull request touches paths the homeowner marked for an extra look; you have none of the implementer\'s session or reasoning, so review it as a sceptical outsider.'
     : job.postMerge ? ' This pull request is already merged; review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.'
     : ' You have none of the implementer\'s session or reasoning; review as a sceptical outsider and run the tests yourself.';
-  return `${COMMON}${role}${moved}${decided} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${REVIEW_TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation or a failed acceptance criterion; otherwise use follow-up. ${reqs} Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]${job.requirementsFile ? ', "requirements": [{"requirement": "text", "status": "met" or "not-met" or "not-applicable", "evidence": "where in the diff"}], "descriptionClaims": [{"claim": "text", "status": "true" or "false" or "unverifiable", "evidence": "where in the diff", "materiality": "material" or "immaterial" (optional; immaterial only for a false claim, with "reason")}]' : ''}}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
+  return `${COMMON}${role}${moved}${decided} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${REVIEW_TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation or a failed acceptance criterion or a missing step; otherwise use follow-up. ${DONE_RULE} ${reqs} Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]${job.requirementsFile ? ', "requirements": [{"requirement": "text", "status": "met" or "not-met" or "not-applicable", "evidence": "where in the diff"}], "descriptionClaims": [{"claim": "text", "status": "true" or "false" or "unverifiable", "evidence": "where in the diff", "materiality": "material" or "immaterial" (optional; immaterial only for a false claim, with "reason")}]' : ''}}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
 }
 export function escalationNote(inbox) {
   if (!inbox) return '';
@@ -644,7 +649,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews', 'reviewFaults']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews', 'reviewFaults', 'homeownerSteps']) this.s[k] ||= {};
     this.s.sameCause ||= {}; this.s.liveness ||= { running: {}, cancelled: [] };   // issue #995
     breaker.normalize(this.s.breaker ||= {});   // issue #549: the halt state lives in the state file, so a restart keeps it
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
@@ -1678,7 +1683,7 @@ export class Team {
     const guard = async (what, fn) => { try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } };
     if (!dryRun) {
       await this.loadNames();
-      await guard('inbox', () => this.processInbox(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
+      await guard('inbox', () => this.processInbox(report)); await guard('host values', () => this.raiseHostValues(report)); await guard('live checks', () => this.verifyInstalled(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
@@ -1994,8 +1999,58 @@ export class Team {
         if (!l.ok) { if (st.state === 'approved') inboxStore.finish(dir, st.id, { state: 'failed', reason: l.reason, result: 'nothing was done' }, now); continue; }
         if (st.kind === 'issue_draft') await this.postIssueDraft(dir, st, l.item, report);
         if (st.kind === 'action' && st.state === 'approved') await this.runInboxAction(dir, st, l.item, report);
+        if (st.kind === 'host_value' && st.state === 'approved') this.runHostValue(dir, st, l.item, report);
       } catch (error) { (report.skipped ||= []).push({ what: `inbox ${st.id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
     }
+  }
+  // Issue #855: a value specific to this host, observed by Foreman (the Origin of a refused dashboard write), is offered as ONE inbox item with the
+  // value filled in. The item id comes from the key and value, so a repeat raises nothing. Approval merges it into team.local.json (backup, parse check).
+  async raiseHostValues(report) {
+    const dir = this.inboxDir(); if (!dir) return;
+    if (inboxStore.allStatuses(dir).some(x => x.kind === 'host_value' && x.state === 'pending')) return;   // one at a time
+    const allowed = this.c.dashboard?.allowed_origins || [];
+    for (const { origin } of readRefusedOrigins(this.root)) {
+      if (allowed.includes(origin)) continue;
+      const r = inboxStore.raiseHostValue(dir, { key: 'dashboard.allowed_origins', value: origin, why: 'The dashboard refused a write from this origin, so Approve and Reject on the dashboard do not work from it until it is listed.' }, this.clock.now());
+      if (r.raised) { (report.actions ||= []).push({ type: 'host-value-proposed', result: 'dashboard.allowed_origins: one origin offered for approval' }); return; }
+    }
+  }
+  // Applies an approved host value. 'running' is recorded BEFORE the effect (at most once, as for a named action); the file is backed up, merged,
+  // validated and parse-checked by applyHostValue, and left untouched on any failure.
+  runHostValue(dir, st, item, report) {
+    const now = () => this.clock.now();
+    if (!inboxStore.claim(dir, st.id, 'approved', { state: 'running' }, now())) return;
+    try {
+      const r = applyHostValue({ root: this.root, key: item.key, value: item.value, now: now(), validate: next => validateTeamConfig(applyLocalOverride(JSON.parse(fs.readFileSync(new URL('./team.json', import.meta.url), 'utf8')), next)) });
+      inboxStore.finish(dir, st.id, { state: 'done', result: r.changed ? `${item.key} updated; previous file kept as ${r.backup || 'none (no earlier file)'}` : `${item.key} already had this value` }, now());
+      (report.actions ||= []).push({ type: 'host-value-applied', result: `${item.key}: ${r.changed ? 'updated' : 'unchanged'}` });
+    } catch (error) {
+      inboxStore.finish(dir, st.id, { state: 'failed', reason: String(error?.message || error).slice(0, 250), result: 'nothing was changed' }, now());
+    }
+  }
+  // Issue #855: done is installed and verified. After an install, the live checks listed in the closed issue run once on the installed version.
+  // All pass: verified. A failure opens a follow-up issue with the evidence. Only the homeowner's issue text is read for checks.
+  async verifyInstalled(report) {
+    const baseUrl = this.c.self_upgrade?.public_dashboard_url || null;
+    if (!this.gh.getPull || !this.gh.getIssue || !this.gh.createIssue || !this.gh.findIssueByMarker) return;
+    const { readUpgrades, readInstalled } = await import('./suphealth.mjs');   // lazy: suphealth reaches upgrade.mjs, which imports this module
+    const r = await verifyPass({ root: this.root, installedSha: readInstalled(this.root).sha, records: readUpgrades(this.root).slice(-40), baseUrl, now: this.clock.now(),
+      getPull: n => this.gh.getPull(n), getIssue: n => this.gh.getIssue(n),
+      ownerText: async (n, issue) => ((await this.gh.issueAuthorAssociation?.(n)) === 'OWNER' ? String(issue?.body || '') : ''),
+      createIssue: (t, b) => this.gh.createIssue(t, b), findIssueByMarker: m => this.gh.findIssueByMarker(m) });
+    if (r.skipped) return;
+    for (const i of r.verified) (report.actions ||= []).push({ type: 'verified', result: `issue #${i}: live checks passed on the installed version` });
+    for (const f of r.failed) (report.actions ||= []).push({ type: 'live-check-failed', result: `issue #${f.issue}: live checks failed; follow-up #${f.followUp}` });
+  }
+  // Issue #855: the pull request description is checked deterministically as well as by the reviewer. A step deferred to the homeowner after
+  // deploy turns the verdict into CHANGES (only ever tightens). A "Homeowner steps" section is recorded, so the dashboard shows it in Needs you.
+  async applyDoneRule(pr, head, verdict) {
+    if (!this.gh.pullBody) return verdict;
+    let body; try { body = await this.gh.pullBody(pr); } catch { return verdict; }
+    const steps = homeownerSteps(body);
+    if (steps.length) this.s.homeownerSteps[pr] = { head, steps: steps.slice(0, 10), at: this.clock.now() }; else delete this.s.homeownerSteps[pr];
+    this.save();
+    return enforceNoDeferredSteps(verdict, body);
   }
   // Issue #629: an approved named action. 'running' is recorded BEFORE the effect, so a crash leaves it unrepeated (at most once); a refusal
   // is a normal outcome: the item ends 'failed' with the reason and nothing is changed. The audit log and the unblock log record it.
@@ -2187,6 +2242,7 @@ export class Team {
       }
       if (j.kind === 'review' && job.status === 'completed') {
         const r = readInboxVerdict(this.root, j.ticket, { pr: j.pr, head: j.head, checklist: j.checklist === true });
+        if (r.verdict && !j.postMerge) r.verdict = await this.applyDoneRule(j.pr, j.head, r.verdict);
         if (r.verdict && j.postMerge) { await this.ingestPostMerge(id, j, r.verdict, report); return; }
         // A review on the model that wrote the head is refused (issue #152): no verdict is recorded from it.
         const branch = r.verdict ? (j.branch || (await this.gh.getPull(j.pr))?.headRefName || '') : '';
