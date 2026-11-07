@@ -17,6 +17,8 @@ export function pruneLists() {
   for (const el of [...live.keys()]) if (el.isConnected !== true) live.delete(el);
   if (!live.size && typeof removeEventListener === 'function') removeEventListener('pagehide', onHide);
 }
+// Writes every connected list's state now: called just before a refresh in place swaps a card, so the list that replaces it starts from it.
+export function saveLists() { pruneLists(); for (const save of live.values()) save(); }
 function registerSave(el, save) {
   if (typeof addEventListener !== 'function') return;
   addEventListener('pagehide', onHide);   // the same function is added once by the DOM, so repeating it is harmless

@@ -166,9 +166,9 @@ test('/api/next answers running, overdue and the none fallback', async t => {
   assert.equal(none.status, 200); assert.equal(none.body, '<span class="muted">none</span>');
 });
 
-test('docs: the none fallback stays until reload (issue #564)', () => {
+test('docs: the none fallback stays until the next refresh in place (issues #564, #930)', () => {
   const md = fs.readFileSync(new URL('../docs/dashboard.md', import.meta.url), 'utf8');
-  assert.match(md, /keeps showing `none`[^.]*until the page reloads\. It reloads itself every refresh interval/);
+  assert.match(md, /keeps showing `none`[^.]*until the next refresh in place swaps the status bar figures/);
   assert.match(md, /tests\/next-swap-smoke\.mjs/);
 });
 
