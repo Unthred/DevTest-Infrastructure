@@ -97,3 +97,57 @@ test('a job of another provider or without a recorded model proves nothing', asy
   w.team.s.jobs.i1.model = null; w.team.recordHeadWriters(w.gh.pulls);
   assert.equal(w.team.independenceRefusal('claude', 'opus', w.gh.pulls[0]), 'writer unknown');
 });
+
+test('a merge or pull in the job worktree is not authorship: the head stays unknown (issue #704)', async t => {
+  const f = fixture(t); const w0 = f.commit('work');
+  git(f.repo, 'checkout', '-q', '-b', 'side', 'HEAD~1'); fs.writeFileSync(path.join(f.repo, 'g'), 'g\n'); git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-q', '-m', 'side');
+  const win = head => ({ worktree: f.repo, head, from: NOW - 600000, to: NOW + 60000, repoPath: f.repo });
+  git(f.repo, 'merge', '-q', '--no-ff', '-m', 'merge main', 'main');
+  const merged = git(f.repo, 'rev-parse', 'HEAD');
+  assert.match(git(f.repo, 'reflog', '-1', '--format=%gs'), /^merge main: Merge made by/);
+  assert.equal(findWorktreeWriter(win(merged)), null, 'git merge');
+  git(f.repo, 'reset', '-q', '--hard', 'HEAD~1');
+  git(f.repo, 'pull', '-q', '--no-rebase', '--no-ff', '--no-edit', '.', 'main');
+  const pulled = git(f.repo, 'rev-parse', 'HEAD');
+  assert.match(git(f.repo, 'reflog', '-1', '--format=%gs'), /^pull .*: Merge made by/);
+  assert.equal(findWorktreeWriter(win(pulled)), null, 'git pull');
+  assert.ok(w0);
+  // End to end: the merged head has no writer record, so it stays 'writer unknown' for the reviewer.
+  const w = world(t, f.repo, [pr(pulled)]); w.team.recordHeadWriters(w.gh.pulls);
+  assert.equal(w.team.independenceRefusal('claude', 'opus', w.gh.pulls[0]), 'writer unknown');
+});
+
+test('a forged reflog line for a head committed long before the run is rejected (issue #704)', t => {
+  const f = fixture(t); const old = '2020-01-01T00:00:00Z';
+  fs.writeFileSync(path.join(f.repo, 'f'), 'old\n');
+  execFileSync('git', ['-C', f.repo, 'commit', '-q', '-am', 'older'], { env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x.test', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x.test', GIT_AUTHOR_DATE: old, GIT_COMMITTER_DATE: old } });
+  const head = git(f.repo, 'rev-parse', 'HEAD'), prev = git(f.repo, 'rev-parse', 'HEAD~1');
+  const win = { worktree: f.repo, head, from: NOW - 600000, to: NOW + 60000, repoPath: f.repo };
+  assert.equal(findWorktreeWriter(win), null, 'the real entry is also outside the window');
+  fs.appendFileSync(path.join(f.repo, '.git', 'logs', 'HEAD'), `${prev} ${head} a <a@x.test> ${Math.floor(NOW / 1000)} +0000\tcommit: forged\n`);
+  assert.equal(findWorktreeWriter(win), null, 'forged line, but the commit itself is from 2020');
+});
+
+test('a linked worktree: its own reflog is found, the main checkout does not see it, and it survives a checkout (issue #704)', t => {
+  const f = fixture(t); const linked = path.join(f.dir, 'linked');
+  git(f.repo, 'worktree', 'add', '-q', '-b', 'job', linked);
+  fs.writeFileSync(path.join(linked, 'f'), 'job\n'); git(linked, 'commit', '-q', '-am', 'job work');
+  const head = git(linked, 'rev-parse', 'HEAD');
+  const win = worktree => ({ worktree, head, from: NOW - 600000, to: NOW + 60000, repoPath: f.repo });
+  assert.equal(findWorktreeWriter(win(linked))?.head, head);
+  assert.equal(findWorktreeWriter(win(f.repo)), null, 'the main checkout reflog does not hold it');
+  git(linked, 'checkout', '-q', '-b', 'elsewhere', 'main');
+  assert.equal(findWorktreeWriter(win(linked))?.head, head, 'still found after the worktree moves to another branch');
+});
+
+test('a per-tick cache reads each worktree once; a removed worktree is skipped without any git process (issue #704)', async t => {
+  const f = fixture(t); const head = f.commit('work'); const w = world(t, f.repo, [pr(head), { ...pr(head), number: 684, headRefName: 'claude/issue-641-x' }]);
+  let calls = 0; const real = w.team.worktreeWriterOf; w.team.worktreeWriterOf = o => { calls++; return real(o); };
+  w.team.s.jobs.i2 = { ...w.team.s.jobs.i1, inboxId: 'b2c3d4e5' + '0'.repeat(24) };
+  const cache = new Map(); w.team.inboxWritersOf(w.gh.pulls[0], 'claude', cache);
+  const size = cache.size; assert.ok(size > 0); w.team.inboxWritersOf(w.gh.pulls[1], 'claude', cache);
+  assert.equal(cache.size, size, 'the second PR adds no new git reads (same worktree, same head)');
+  calls = 0; w.team.s.jobs.i1.worktree = path.join(f.dir, 'gone'); w.team.s.jobs.i2.worktree = path.join(f.dir, 'gone2');
+  assert.deepEqual(w.team.inboxWritersOf(w.gh.pulls[0], 'claude', new Map()), []);
+  assert.equal(calls, 0, 'removed worktrees never reach the git reader');
+});
