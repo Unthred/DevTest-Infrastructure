@@ -24,7 +24,10 @@ export function splitSteps(body) {
 const NEGATED = /\b(?:no|nothing|none|never|without|not|isn'?t|aren'?t|doesn'?t|don'?t|won'?t|zero)\b/i;
 const stripQuoted = l => l.replace(/`[^`]*`|"[^"]*"|\u201c[^\u201d]*\u201d/g, ' ');
 const sentences = l => stripQuoted(l).split(/(?<=[.!?;])\s+/);
-const defers = l => sentences(l).some(x => DEFERRAL.some(re => re.test(x)) && !NEGATED.test(x));
+// A negation only cancels the deferral when it comes before the homeowner is named ("Nothing is left for the homeowner", "No step for the homeowner");
+// one after it ("the homeowner must set X after deploy, or writes will not work") does not hide the step.
+const negatedBefore = x => { const h = /\bhomeowner\b/i.exec(x); return NEGATED.test(h ? x.slice(0, h.index) : x); };
+const defers = l => sentences(l).some(x => DEFERRAL.some(re => re.test(x)) && !negatedBefore(x));
 export const deferredSteps = body => splitSteps(body).rest.split('\n').map(l => l.trim()).filter(l => l && defers(l)).map(l => l.slice(0, 300));
 export const homeownerSteps = body => splitSteps(body).steps.map(s => s.slice(0, 300));
 

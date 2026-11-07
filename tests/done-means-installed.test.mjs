@@ -176,7 +176,8 @@ test('team: a review verdict is tightened from the PR body at ingestion and Home
 test('the deferral gate ignores negated and quoted sentences and still catches real deferrals', () => {
   for (const ok of ['Nothing is left for the homeowner after deploy.', 'No step for the homeowner after install; the migration applies it.', 'A deferred "homeowner can do X after deploy" turns the verdict into CHANGES.'])
     assert.deepEqual(deferredSteps(ok), [], ok);
-  for (const bad of ['Once deployed, the homeowner must restart the dashboard.', 'The homeowner will add the key post-deploy.', 'The homeowner can set the origin after deploy.'])
+  for (const bad of ['Once deployed, the homeowner must restart the dashboard.', 'The homeowner will add the key post-deploy.', 'The homeowner can set the origin after deploy.',
+    'The homeowner must set dashboard.allowed_origins after deploy, or the dashboard will not accept writes.', "The homeowner should set the origin after deploy if writes don't work.", 'After deploy the homeowner needs to set the origin, nothing else changes.'])
     assert.equal(deferredSteps(bad).length, 1, bad);
 });
 
