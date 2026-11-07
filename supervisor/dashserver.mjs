@@ -30,7 +30,7 @@ import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_RO
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
 import { fileURLToPath } from 'node:url';
-import { decide as decideInbox, ID_RE as INBOX_ID } from './inbox.mjs';
+import { decide as decideInbox, statusOf, ID_RE as INBOX_ID } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
@@ -96,7 +96,7 @@ export async function currentView({ root, config, now = Date.now(), tz = default
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
 export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/grid.mjs': ['grid.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
-  '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
+  '/static/actions.js': ['actions.js', 'text/javascript; charset=utf-8'], '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
@@ -162,7 +162,18 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // both are escaped, and the response is still a 403 that changes nothing.
   const esc = v => String(v ?? '(none)').slice(0, 200).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
   const q = v => JSON.stringify(String(v ?? '(none)').slice(0, 200));
-  const page = (send, code, title, body) => send(code, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><main><h1>${title}</h1>${body}<p><a href="/">Back to the dashboard</a></p></main></body></html>`);
+    // A write answers a script (header x-dashboard-action) with JSON and a browser without script with this styled page; never bare text (issue #933).
+  const plainOf = html => html.replace(/<[^>]*>/g, ' ').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/\s+/g, ' ').trim().slice(0, 300);
+  const page = (send, code, title, body, extra = {}, text = null) => send.script
+    ? send(code, 'application/json; charset=utf-8', JSON.stringify({ ok: false, title, message: text ?? plainOf(body) }), extra)
+    : send(code, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title} · DevTest team</title><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"><script src="/static/early.js"></script></head><body><main id="main" class="action-result"><section class="card"><h1>${title}</h1>${body}<p><a href="/">Back to the dashboard</a></p></section></main></body></html>`, extra);
+  // The shared helper for every write route (issue #933): one place decides how an outcome reaches the browser.
+  const fail = (send, code, title, text, extra = {}) => page(send, code, title, `<p>${esc(text)} Nothing was changed.</p>`, extra, text);
+  const done = (send, { location = '/', message = 'Done.', state = null, noop = false, extra = {} } = {}) => send.script
+    ? send(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, noop, message, state }))
+    : send(303, 'text/html; charset=utf-8', '', { location, ...extra });
+  const retryIn = (slot, t) => String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000)));
+  const tooSoon = (send, notice, slot, t) => send.script ? fail(send, 429, 'Too soon', 'That was done a moment ago. Try again in a few seconds.', { 'retry-after': retryIn(slot, t) }) : done(send, { location: `/?notice=${notice}`, extra: { 'retry-after': retryIn(slot, t) } });
   const seen = req => `<p>Origin received: <code>${esc(req.headers.origin)}</code><br>Host received: <code>${esc(req.headers.host)}</code></p>`;
   const refuseHost = (req, send) => { console.error(`dashboard: write refused, unexpected host (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 421, 'Unexpected host', `<p>The dashboard did not accept this action because the request arrived with a Host it does not serve (unexpected host). Nothing was changed.</p>${seen(req)}<p>If a reverse proxy sits in front of this dashboard, it must forward the upstream Host (see docs/supervisor.md).</p>`); };
   const refuseOrigin = (req, send) => { console.error(`dashboard: write refused (issue #556) origin=${q(req.headers.origin)} host=${q(req.headers.host)} url=${q(req.url)}`); return page(send, 403, 'Request refused', `<p>The dashboard did not accept this action because it came from an address that is not allowed (cross-origin request refused). Nothing was changed.</p>${seen(req)}<p>If this is the public address of this dashboard, add that origin to <code>dashboard.allowed_origins</code> in <code>team.local.json</code>.</p>`); };
@@ -180,13 +191,13 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
     if (!proofValid(root, form.get('proof'))) return badProof(send);
     const at = Number(form.get('at')), t = now(), prev = readLastSeen(root);
-    if (!/^\d{10,15}$/.test(form.get('at') || '') || at > t) return send(400, 'text/plain; charset=utf-8', 'bad time');
+    if (!/^\d{10,15}$/.test(form.get('at') || '') || at > t) return fail(send, 400, 'Bad request', 'The page time was not valid.');
     const slot = reserveCooldown(root, 'mark-read', t, MARK_READ_COOLDOWN_MS);
     // A quick double-click lands back on the dashboard with a notice instead of a bare error page; nothing moved.
-    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=mark-read-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    if (!slot.ok) return tooSoon(send, 'mark-read-cooldown', slot, t);
     writeLastSeen(root, Math.max(at, prev ?? 0));
     store.invalidate();   // issue #467: the redirect page must show this write, not the copy built before it
-    return send(303, 'text/plain; charset=utf-8', 'marked', { location: '/' });
+    return done(send, { message: 'Marked as read.' });
   };
   // Watch (issue #430): the third write. It changes only which changes the dashboard follows; it starts, stops and alters no work.
   // Same host, same origin, one small form post, and the access proof (issue #434) like the other writes. The target must be an issue or PR the tick has seen.
@@ -199,15 +210,15 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (!proofValid(root, form.get('proof'))) return badProof(send);
     const kind = form.get('kind'), action = form.get('action'), raw = form.get('number') || '', number = /^\d{1,7}$/.test(raw) ? Number(raw) : NaN;
     const back = /^\/[A-Za-z0-9/_-]{0,80}$/.test(form.get('back') || '') ? form.get('back') : '/';
-    if (!['issue', 'pr'].includes(kind) || !Number.isSafeInteger(number) || number < 1 || !['watch', 'unwatch', 'pin', 'unpin'].includes(action)) return send(400, 'text/plain; charset=utf-8', 'bad request');
+    if (!['issue', 'pr'].includes(kind) || !Number.isSafeInteger(number) || number < 1 || !['watch', 'unwatch', 'pin', 'unpin'].includes(action)) return fail(send, 400, 'Bad request', 'The request was not understood.');
     if (action === 'watch') {
       const cache = readCache(root) || {}, known = kind === 'issue' ? (cache.issues || []).some(i => i.number === number) : [...(cache.pulls || []), ...(cache.merged || [])].some(p => p.number === number) || (readTeamState(root).mergeLog || []).some(m => m.pr === number);
-      if (!known) return send(404, 'text/plain; charset=utf-8', 'unknown issue or pull request');
+      if (!known) return fail(send, 404, 'Not found', 'That issue or pull request is not known to the dashboard.');
     }
     const r = applyAction(root, { kind, number, action, now: now() });
-    if (!r.ok) return send(409, 'text/plain; charset=utf-8', r.reason);
+    if (!r.ok) return fail(send, 409, 'Not changed', r.reason);
     store.invalidate();   // issue #467: as for Mark as read
-    return send(303, 'text/plain; charset=utf-8', 'ok', { location: back });
+    return done(send, { location: back, message: 'Saved.' });
   };
   // Inbox (issue #124): Approve or Reject one pending overseer proposal. The same write protection as the other posts (D-029): host, origin, the
   // secret proof, and a short cooldown. The decision is recorded only; the next tick acts on an approval. This route is the only way to approve.
@@ -220,13 +231,20 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
     if (!proofValid(root, form.get('proof'))) return badProof(send);
     const id = form.get('id') || '', decision = form.get('decision') || '';
-    if (!INBOX_ID.test(id) || !['approve', 'reject'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
+    if (!INBOX_ID.test(id) || !['approve', 'reject'].includes(decision)) return fail(send, 400, 'Bad request', 'The request was not understood.');
+    // Issue #933: a second click on an item that already has this decision is the item's current state, not an error, and changes nothing.
+    const cur = statusOf(source().inbox.dir, id), asked = decision === 'approve' ? 'approved' : 'rejected';
+    if (cur && ['approved', 'rejected'].includes(cur.state)) {
+      const at = Number.isFinite(cur.decidedAt) ? ` at ${new Date(cur.decidedAt).toISOString().slice(11, 16)} UTC` : '';
+      const label = `${cur.state[0].toUpperCase()}${cur.state.slice(1)}${at}`;
+      return cur.state === asked ? done(send, { message: label, state: cur.state, noop: true }) : fail(send, 409, 'Already decided', `${label}, so it cannot be ${asked} now.`);
+    }
     const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
-    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    if (!slot.ok) return tooSoon(send, 'inbox-cooldown', slot, t);
     const r = decideInbox(source().inbox.dir, id, decision, t);
-    if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
+    if (!r.ok) { releaseCooldown(root, 'inbox', t); return fail(send, 409, 'Not recorded', r.reason); }
     try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ }   // the decision starts a pass now
-    return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
+    return done(send, { message: decision === 'approve' ? 'Approved.' : 'Rejected.', state: asked });
   };
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
@@ -234,16 +252,16 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   const breakerResume = async (req, res, send) => {
     if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
-    if (req.headers['sec-fetch-site'] !== 'same-origin' || req.headers['sec-fetch-user'] !== '?1' || supervised()) return send(403, 'text/plain; charset=utf-8', 'resume needs a person clicking the button');
+    if (req.headers['sec-fetch-site'] !== 'same-origin' || req.headers['sec-fetch-user'] !== '?1' || supervised()) return fail(send, 403, 'Resume refused', 'Resume needs a person clicking the button.');
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
     if (!proofValid(root, form.get('proof'))) return badProof(send);
     const scope = form.get('scope') || '', halts = readTeamState(root)?.breaker || {};
     const known = scope === 'all' ? !!(halts.global || Object.keys(halts.halts || {}).length) : scope === 'global' ? !!halts.global : !!(halts.halts || {})[scope];
-    if (!known) return send(409, 'text/plain; charset=utf-8', 'nothing halted for that scope');
+    if (!known) return fail(send, 409, 'Nothing to resume', 'Nothing is halted for that scope.');
     const t = now(), slot = reserveCooldown(root, 'breaker-resume', t, BREAKER_RESUME_COOLDOWN_MS);
-    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=breaker-resume-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    if (!slot.ok) return tooSoon(send, 'breaker-resume-cooldown', slot, t);
     // Issue #737: a request from this machine must not come from a process that descends from a supervised job, as the CLI route checks
     // its own caller. A caller that cannot be identified is refused rather than assumed to be a person. Issue #821: the lookup scans /proc
     // synchronously (about 180 ms on Tower), so it runs only for a request with a valid proof, a halted scope and no cooldown in force.
@@ -252,16 +270,17 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       const pid = peerPid(req.socket);
       if (!pid || supervised({ env: {}, pid })) {
         releaseCooldown(root, 'breaker-resume', t);
-        return send(403, 'text/plain; charset=utf-8', pid ? 'resume needs a person clicking the button' : 'resume refused: the calling process could not be identified');
+        return fail(send, 403, 'Resume refused', pid ? 'Resume needs a person clicking the button.' : 'The calling process could not be identified.');
       }
     }
     requestBreakerResume(root, scope, t);
     try { wake(root, 'approve', source()); } catch { /* the schedule is the fallback */ }   // the request is applied by the next pass
     store.invalidate();
-    return send(303, 'text/plain; charset=utf-8', 'requested', { location: '/' });
+    return done(send, { message: 'Resume requested; the next pass applies it.' });
   };
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
+    send.script = req.method === 'POST' && req.headers['x-dashboard-action'] === '1';   // issue #933: set by dashui/actions.js
     const [reqPath] = (req.url || '/').split('?');
     if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
     if (req.method === 'POST' && reqPath === '/watch') return watch(req, res, send);
@@ -278,17 +297,17 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       if (!proofValid(root, new URLSearchParams(Buffer.concat(chunks).toString('utf8')).get('proof'))) return badProof(send);
       // Cooldown per agent, kept in the state root. An unknown agent is refused before it takes a slot.
       const agent = probePath[1], at = now();
-      if (!source().agents?.[agent]) return send(404, 'text/plain; charset=utf-8', 'unknown agent');
+      if (!source().agents?.[agent]) return fail(send, 404, 'Not found', 'That agent is not configured.');
       const slot = reserveCooldown(root, `probe:${agent}`, at);
-      if (!slot.ok) return send(429, 'text/plain; charset=utf-8', `too soon, try again at ${new Date(slot.retryAt).toISOString()}\n`, { 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - at) / 1000))) });
+      if (!slot.ok) return fail(send, 429, 'Too soon', `The allowance was read a moment ago. Try again at ${new Date(slot.retryAt).toISOString().slice(11, 16)} UTC.`, { 'retry-after': retryIn(slot, at) });
       try {
         const out = await probe({ root, registry, config: source(), agent, now: at });
         if (out.error === 'overage-risk' || out.error === 'busy') releaseCooldown(root, `probe:${agent}`, at);   // nothing was spent
         store.invalidate();   // issue #467: the page after the probe must show its reading
-        return send(303, 'text/plain; charset=utf-8', out.ok ? 'refreshed\n' : 'no reading\n', { location: `/usage?probe=${out.ok ? 'ok' : 'failed'}` });
+        return out.ok || !send.script ? done(send, { location: `/usage?probe=${out.ok ? 'ok' : 'failed'}`, message: out.ok ? 'Allowance refreshed.' : 'No reading came back.' }) : fail(send, 502, 'No reading', 'The probe ran but no allowance reading came back.');
       } catch (error) {
         releaseCooldown(root, `probe:${agent}`, at);
-        return send(error instanceof SupervisorError ? 404 : 500, 'text/plain; charset=utf-8', error instanceof SupervisorError ? 'unknown agent' : 'probe failed');
+        return error instanceof SupervisorError ? fail(send, 404, 'Not found', 'That agent is not configured.') : fail(send, 500, 'Probe failed', 'The probe failed.');
       }
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain; charset=utf-8', 'read-only dashboard', { allow: 'GET, HEAD' });

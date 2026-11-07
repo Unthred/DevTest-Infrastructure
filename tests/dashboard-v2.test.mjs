@@ -208,7 +208,7 @@ test('Overview: four labelled panels, KPI tiles and charts all link to detail pa
   for (const h of ['>Now<', '>Next<', '>Needs you', '>Warnings']) assert.ok(body.includes(h), h);
   assert.match(body, /<body class="overview">/);
   for (const href of ['/agents', '/work', '/reviews', '/usage', '/system', '/activity']) assert.ok(body.includes(`href="${href}"`), href);
-  assert.doesNotMatch(body, /data-reset-layout/, 'Reset to default is in the layout bar the script adds'); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 3, 'the early dock script, the early layout script and the module');
+  assert.doesNotMatch(body, /data-reset-layout/, 'Reset to default is in the layout bar the script adds'); assert.match(body, /<script type="module" src="\/static\/app\.js"><\/script>/); assert.equal((body.match(/<script/g) || []).length, 4, 'the early dock script, the early layout script, the module and the actions handler');
   assert.match(body, /data-tick-state="(scheduled|starting|overdue)"/);
 });
 test('Needs you lists every needs-homeowner item with what, why, the decision needed, a link and the exact command; Warnings holds the rest', async t => {

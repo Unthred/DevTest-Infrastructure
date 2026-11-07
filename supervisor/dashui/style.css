@@ -433,3 +433,8 @@ body.layout-editing{overscroll-behavior:contain}
 .headline .hl-v,.hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1;text-decoration:none;color:inherit}
 .headline .hl-v:hover{color:var(--link)}
 .headline .hl-trend svg{width:1em;height:1em;vertical-align:-.15em;margin-right:.25em}
+.toasts{position:fixed;right:1rem;bottom:1rem;z-index:50;display:flex;flex-direction:column;gap:.5rem;max-width:min(26rem,calc(100vw - 2rem))}
+.toast{background:var(--surface);color:var(--fg);border:1px solid var(--line);border-left:.35rem solid #2a8f4a;border-radius:.4rem;padding:.6rem 2rem .6rem .8rem;box-shadow:0 2px 10px #0004;position:relative}
+.toast-error{border-left-color:#c0392b}
+.toast-x{position:absolute;top:.15rem;right:.3rem;background:none;border:0;color:inherit;font-size:1.1rem;cursor:pointer}
+.action-result{max-width:40rem;margin:2rem auto;padding:0 1rem}

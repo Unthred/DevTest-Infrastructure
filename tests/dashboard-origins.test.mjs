@@ -131,8 +131,9 @@ test('/inbox: a listed origin still needs the access proof and the expected Host
   assert.equal(inbox.statusOf(s.dir, s.id).state, 'pending');
   assert.equal((await s.post({ origin: PUBLIC })).status, 303);
   const again = await s.post({ origin: PUBLIC, decision: 'reject' });
-  assert.equal(again.status, 303); assert.match(again.headers.location, /inbox-cooldown/);
-  assert.equal(inbox.statusOf(s.dir, s.id).state, 'approved', 'the second click inside the cooldown changed nothing');
+  // Issue #933: an item that is already decided answers with its state (a styled page here), not a cooldown redirect.
+  assert.equal(again.status, 409); assert.match(again.headers['content-type'], /text\/html/); assert.match(again.body, /Approved at/);
+  assert.equal(inbox.statusOf(s.dir, s.id).state, 'approved', 'the second click changed nothing');
 });
 
 // Behind a reverse proxy: forwarding headers are not trusted. Acceptance depends only on Origin (exact match) and the upstream Host.
