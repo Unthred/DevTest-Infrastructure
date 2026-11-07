@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { attribute, createSampler, readProcess, readTable, readingStatus, STALE_AFTER_MS, SAMPLE_TTL_MS } from '../supervisor/procsample.mjs';
+import { attribute, createSampler, deepFreeze, readProcess, readTable, readingStatus, STALE_AFTER_MS, SAMPLE_TTL_MS } from '../supervisor/procsample.mjs';
 import { processesFragment, matchRoute } from '../supervisor/dashrender.mjs';
 import { handler, STATIC } from '../supervisor/dashserver.mjs';
 
@@ -241,4 +241,17 @@ test('issue #639: createJobReader matches readJobs, re-reads only changed record
     fs.rmSync(path.join(dir, 'a.json'));
     assert.equal(read().find(j => j.id === 'a'), undefined, 'a removed record is forgotten');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('issue #792: deepFreeze descends into children of an already-frozen parent, handles cycles and primitives', () => {
+  const child = { n: 1 }, parent = Object.freeze({ child, list: [{ x: 1 }] });
+  assert.equal(Object.isFrozen(child), false);
+  deepFreeze(parent);
+  assert.ok(Object.isFrozen(child) && Object.isFrozen(parent.list) && Object.isFrozen(parent.list[0]));
+  const cyc = { a: {} }; cyc.a.back = cyc;
+  deepFreeze(cyc);
+  assert.ok(Object.isFrozen(cyc) && Object.isFrozen(cyc.a));
+  assert.equal(deepFreeze(5), 5);
+  assert.equal(deepFreeze(null), null);
+  assert.throws(() => { 'use strict'; child.n = 2; }, TypeError);
 });
