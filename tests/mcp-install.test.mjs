@@ -21,12 +21,14 @@ function world({ configured = true, installed = true } = {}) {
   const dir = tmp(), state = path.join(dir, 'state'), inst = path.join(dir, 'inst'), src = path.join(dir, 'src');
   fs.mkdirSync(path.join(src, 'foreman-mcp'), { recursive: true }); fs.mkdirSync(state); fs.mkdirSync(inst);
   fs.writeFileSync(path.join(src, 'foreman-mcp/server.mjs'), 'export const v = 2;\n');
-  fs.writeFileSync(path.join(src, 'foreman-mcp/launcher.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(src, 'foreman-mcp/launcher.sh'), '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(path.join(src, 'foreman-mcp/launcher.sh'), 0o755);
   if (configured) fs.writeFileSync(path.join(state, 'foreman-mcp.install'), `INSTALL_DIR=${inst}\n`);
   if (installed) {
     fs.mkdirSync(path.join(inst, 'foreman-mcp'));
     fs.writeFileSync(path.join(inst, 'foreman-mcp/server.mjs'), 'export const v = 1;\n');
-    fs.writeFileSync(path.join(inst, 'foreman-mcp/launcher.env'), 'NODE_BIN=/x\n'); fs.chmodSync(path.join(inst, 'foreman-mcp/launcher.env'), 0o640);   // explicit chmod: the install precheck runs under umask 077 (#993)
+    fs.writeFileSync(path.join(inst, 'foreman-mcp/launcher.env'), 'NODE_BIN=/x\n');
+    fs.chmodSync(path.join(inst, 'foreman-mcp/launcher.env'), 0o640);   // explicit chmod: the install precheck runs under umask 077 (#993)
     fs.writeFileSync(path.join(inst, 'VERSION'), SH + '\n');
   }
   return { dir, state, inst, src };
