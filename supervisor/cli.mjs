@@ -24,7 +24,7 @@ import { githubClient } from './github.mjs';
 import { changeCheckOf, checkForChanges, ghProbeRunner, loadCache, saveCache, buildCache, cachedGithub } from './ghchange.mjs';
 import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
-import { alertSender, sendDigest } from './alert.mjs';
+import { alertSender, sendDigest, needsLink } from './alert.mjs';
 import { advanceWatchlist, factsFromCache } from './watchlist.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, addPassPhases, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
 import { idleReport, renderIdleReport, passStats, renderPassStats } from './idlecause.mjs';
@@ -317,7 +317,7 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
         try {
           const cache = readCache(root) || {}, state = readTeamState(root), ver = readVersion(root), now = Date.now();
           await advanceWatchlist({ root, cache, state, now, installed: ver?.installed || null, running: runningSha(self), tickOk: tickOutcome(report).status === 'ok',
-            isAncestor: (a, b) => spawnSync('git', ['-C', config.repo_path, 'merge-base', '--is-ancestor', a, b], { encoding: 'utf8' }).status === 0, alert: alertSender(root, config),
+            isAncestor: (a, b) => spawnSync('git', ['-C', config.repo_path, 'merge-base', '--is-ancestor', a, b], { encoding: 'utf8' }).status === 0, alert: alertSender(root, config), needsLink: n => needsLink(config, n),
             factsFor: factsFromCache({ cache, state, now, checksOf: (pull, at) => checksState(pull.statusCheckRollup, retriedIn(state.cancelWatch, pull, at)) }), title: n => `#${n}` });
         } catch (error) { console.error(`ai-supervisor: watchlist step failed: ${error?.name || 'Error'}`); }
         try { await sendDigest(root, config); } catch { /* issue #947: the daily digest is retried on the next tick */ }

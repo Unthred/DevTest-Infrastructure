@@ -36,6 +36,13 @@ function writeState(f, s) { fs.writeFileSync(f.state, JSON.stringify(s), { mode:
 // A key from the text when the caller gave none: digits and hashes removed, so "3 fix rounds" and "4 fix rounds" are one cause.
 const defaultKey = (level, text) => `${level}:${String(text).replace(/[0-9a-f]{7,40}/g, '#').replace(/\d+/g, '#').slice(0, 160)}`;
 
+// The link an action alert carries (issue #947): the issue or pull request that holds the Needs you item (the repository page when there is
+// none), and the dashboard when self_upgrade.public_dashboard_url is configured.
+export function needsLink(config, number = null) {
+  const base = config.self_upgrade?.public_dashboard_url;
+  return `https://github.com/${config.repository}${number != null ? `/issues/${number}` : ''}${base ? ` ${base.replace(/\/+$/, '')}/` : ''}`;
+}
+
 function deliver({ config, notify, run, haveNotify, env }, { subject, text, link, level }) {
   if (config.alerts?.command) { const [program, ...rest] = config.alerts.command; return run(program, rest, { input: text + (link ? `\n${link}` : ''), encoding: 'utf8', timeout: 30000, env }).status === 0; }
   if (haveNotify) return run(notify, ['-e', 'AI agent team', '-s', subject, '-d', (text.slice(0, 450) + (link ? ` ${link}` : '')).slice(0, 500), '-i', level === 'action' ? 'warning' : 'normal'], { encoding: 'utf8', timeout: 30000, env }).status === 0;

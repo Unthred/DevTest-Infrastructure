@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { alertSender, readAlerts, sendDigest, validateAlertsConfig, UNRAID_NOTIFY } from '../supervisor/alert.mjs';
+import { SelfUpgrade, PROBLEM_REPORT_GAP_MS } from '../supervisor/upgrade.mjs';
+import { alertSender, needsLink, readAlerts, sendDigest, validateAlertsConfig, UNRAID_NOTIFY } from '../supervisor/alert.mjs';
 
 const H = 3600000;
 function rig(t, config = {}) {
@@ -31,7 +32,7 @@ test('every alert call in the source names a level (issue #947)', () => {
       if (/^\s*(\/\/|\*)/.test(line) || /async alert\(/.test(line)) return;
       for (const m of line.matchAll(/(?:this\.alert|\bawait alert|\bd\.alert|\bsendAlert)\(/g)) {
         const rest = line.slice(m.index);
-        found.push({ at: `${f}:${i + 1}`, ok: /\{ level: '(action|problem|info)'|\{ level, key \}/.test(rest) || (/this\.alert\(/.test(rest) && /, '(action|problem|info)'\);/.test(rest)) });
+        found.push({ at: `${f}:${i + 1}`, ok: /\{ level: '(action|problem|info)'|\{ level, key[,\s}]/.test(rest) || (/this\.alert\(/.test(rest) && /, '(action|problem|info)'[,)]/.test(rest)) });
       }
     });
   }
@@ -139,3 +140,39 @@ test('the dashboard serves the alert history with level filters, redacted and es
   assert.doesNotMatch(page.body, /<b>reached/); assert.match(page.body, /&lt;b&gt;|&#60;b&#62;/);
 });
 void UNRAID_NOTIFY;
+
+// ---- fix round for the CHANGES verdict on PR #1010
+test('needsLink names the issue or repository and the dashboard when configured (issue #947)', () => {
+  assert.equal(needsLink({ repository: 'o/r' }), 'https://github.com/o/r');
+  assert.equal(needsLink({ repository: 'o/r', self_upgrade: { public_dashboard_url: 'https://d.example/' } }, 5), 'https://github.com/o/r/issues/5 https://d.example/');
+});
+
+test('the self-upgrade action alerts carry a link, and a lasting problem is re-reported so it can be pushed after problem_after_minutes (issue #947)', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alert-up-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const got = []; let now = 1_700_000_000_000;
+  const up = new SelfUpgrade({ root, deps: { config: { agents: {} }, needsLink: () => 'https://dash.example/', alert: async (text, o) => got.push(o) }, clock: { now: () => now } });
+  await up.alert('t:upgrader', 'x', 'action', up.d.needsLink());
+  await up.alert('t:upgrader', 'x', 'action', up.d.needsLink());
+  assert.deepEqual(got, [{ level: 'action', key: 't:upgrader', link: 'https://dash.example/' }], 'an action alert is reported once and with its link');
+  got.length = 0;
+  await up.alert('t:eligibility', 'p', 'problem'); await up.alert('t:eligibility', 'p', 'problem');
+  assert.equal(got.length, 1, 'too soon for another report');
+  now += PROBLEM_REPORT_GAP_MS; await up.alert('t:eligibility', 'p', 'problem');
+  assert.equal(got.length, 2, 'the lasting problem is reported again');
+  await up.alert('t:info', 'i', 'info'); now += 10 * PROBLEM_REPORT_GAP_MS; await up.alert('t:info', 'i', 'info');
+  assert.equal(got.filter(g => g.level === 'info').length, 1, 'info is still reported once');
+});
+
+test('a problem reported repeatedly by the upgrader is pushed once it has lasted, end to end through the sender (issue #947)', async t => {
+  const r = rig(t, { alerts: { push_levels: ['action', 'problem'], problem_after_minutes: 120 } });
+  await r.send('p', { level: 'problem', key: 'k' });
+  for (let i = 0; i < 13; i++) { r.advance(H); await r.send('p', { level: 'problem', key: 'k' }); }
+  assert.equal(r.calls.length, 1, 'pushed once, after two hours');
+});
+
+test('the rebase-lost and review-limit action alerts exist and carry a link (issue #947)', () => {
+  const src = fs.readFileSync(path.resolve('supervisor/team.mjs'), 'utf8');
+  for (const k of ['rebase-lost:', 'rebase-lost-changes:', 'reviewlimit:']) assert.ok(src.includes(k), k);
+  assert.match(src, /alertRebaseLost\(pr, key[\s\S]*?level: 'action', key, link: this\.needsLink\(pr\)/);
+  assert.match(src, /level: 'action', key: `reviewlimit:[^\n]*link: this\.needsLink/);
+});

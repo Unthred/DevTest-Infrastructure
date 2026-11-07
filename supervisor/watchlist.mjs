@@ -124,7 +124,7 @@ export function historyOf(item, f, jobs = []) {
 // ---- the tick: advance the stored list. Everything outside the file is injected so tests need no git, no GitHub and no clock.
 const toMs = v => (Number.isFinite(v) ? v : Number.isFinite(Date.parse(v)) ? Date.parse(v) : null);
 // `factsFor(item, { pr, issue })` supplies the facts for describeWatch. `alert(text)` rejects when delivery fails; the alert is then retried next tick.
-export async function advanceWatchlist({ root, cache = {}, state = {}, now, installed = null, running = null, isAncestor = () => false, tickOk = true, alert, factsFor, title = n => `#${n}` }) {
+export async function advanceWatchlist({ root, cache = {}, state = {}, now, installed = null, running = null, isAncestor = () => false, tickOk = true, alert, needsLink = () => undefined, factsFor, title = n => `#${n}` }) {
   const { items } = readWatchlist(root), patches = new Map(), removed = new Set(), sent = [];
   for (const item of items) {
     const { pr, issue } = resolve(item, { pulls: cache.pulls, merged: cache.merged, mergeLog: state.mergeLog });
@@ -141,7 +141,7 @@ export async function advanceWatchlist({ root, cache = {}, state = {}, now, inst
     // Alerts: exactly once per event, and only when the delivery succeeded (a failed one is retried by the next tick).
     const alerts = { ...(item.alerts || {}) };
     if (view.installedAt && !alerts.done) { try { await alert(`Watched change installed: ${title(view.issue ?? view.pr, f)} is merged and installed (${sha7(view.installedSha)}).`, { level: 'info', key: `watch-done:${view.issue ?? view.pr}` }); alerts.done = now; sent.push('done'); } catch { /* retried */ } }
-    if (d.needs) { if (alerts.needs?.reason !== d.needs) { try { await alert(`Needs the homeowner: watched change ${title(view.issue ?? view.pr, f)} has stopped: ${d.needs}.`, { level: 'action', key: `watch-needs:${view.issue ?? view.pr}:${d.needs}` }); alerts.needs = { reason: d.needs, at: now }; sent.push('needs'); } catch { /* retried */ } } }
+    if (d.needs) { if (alerts.needs?.reason !== d.needs) { try { await alert(`Needs the homeowner: watched change ${title(view.issue ?? view.pr, f)} has stopped: ${d.needs}.`, { level: 'action', key: `watch-needs:${view.issue ?? view.pr}:${d.needs}`, link: needsLink(view.issue ?? view.pr) }); alerts.needs = { reason: d.needs, at: now }; sent.push('needs'); } catch { /* retried */ } } }
     else delete alerts.needs;
     patch.alerts = alerts;
     patches.set(item.id, patch);

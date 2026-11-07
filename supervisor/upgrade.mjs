@@ -13,6 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { makeJobTmp, removeJobTmp, jobTmpRoot, hostPressure, pressureText, leakText } from './jobtmp.mjs';
 import { readRearm, rearmUpgradeState } from './robust.mjs';
+import { needsLink } from './alert.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
@@ -319,12 +320,15 @@ export class SelfUpgrade {
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     fs.appendFileSync(this.recordFile, `${JSON.stringify({ at: this.clock.now(), ...entry })}\n`, { mode: 0o600 });
   }
-  // One alert per key, recorded before delivery so a failing channel cannot cause a repeat every tick.
-  async alert(key, text, level) {
+  // One alert per key, recorded before delivery so a failing channel cannot cause a repeat every tick. A problem is the exception (issue #947):
+  // while the condition lasts it is reported again at most every PROBLEM_REPORT_GAP_MS, so the sender can see that it persists and push it
+  // after alerts.problem_after_minutes; the sender counts the repeats and never pushes the same cause twice. An action alert carries a link.
+  async alert(key, text, level, link) {
     if (!['action', 'problem', 'info'].includes(level)) throw new Error(`upgrade alert ${key} without a level`);
-    if (this.s.alerted[key]) return;
-    this.s.alerted[key] = this.clock.now(); this.save();
-    try { await this.d.alert(text, { level, key }); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
+    const now = this.clock.now(), seen = this.s.alerted[key];
+    if (seen && !(level === 'problem' && now - Number(seen) >= PROBLEM_REPORT_GAP_MS)) return;
+    this.s.alerted[key] = now; this.save();
+    try { await this.d.alert(text, { level, key, ...(link ? { link } : {}) }); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
   }
 
   // Issue #695: when the batching window since the last finished install ends (null = no window: first install, or min_install_gap_minutes 0).
@@ -439,7 +443,7 @@ export class SelfUpgrade {
     if (!rangeNeedsInstall(files)) return 'no-supervisor-change';   // issue #489: only the no-install list exempts a path
     const touched = files.filter(f => BOOTSTRAP_PATHS.includes(f));
     if (touched.length) {
-      await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${target}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically. To install it, paste on Tower: ${this.installCommand(target)} (it pauses starts, drains jobs, installs with validator and tests, checks dry-run, dashboard and the next live tick, rolls back on any failure, and always resumes).`, 'action');
+      await this.alert(`${target}:upgrader`, `Supervisor upgrade to ${target}: needs the homeowner: changes the bootstrap installer (${touched.join(', ')}), which cannot install itself. Not upgraded automatically. To install it, paste on Tower: ${this.installCommand(target)} (it pauses starts, drains jobs, installs with validator and tests, checks dry-run, dashboard and the next live tick, rolls back on any failure, and always resumes).`, 'action', this.d.needsLink?.() || undefined);
       // Issue #265: one record per target (the alert above is already once per target), and one Needs you item until the install moves.
       if (this.s.handDeploy?.to !== target) {
         this.record({ from, to: target, result: 'refused', reason: 'changes the bootstrap installer', files: touched });
@@ -657,7 +661,7 @@ export class SelfUpgrade {
     this.record({ from, to, prs, checks, result: result.ok ? 'rolled_back' : 'rollback_failed', reason: note });
     // A rollback also restarts the dashboard so the badge and the running commit agree (issue #135); jobs are never touched.
     if (result.ok) await this.restartDashboard({ from: to, to: from }, true);
-    await this.alert(`${to}:rolledback`, `Upgrade to ${short(to)} rolled back: ${note}. Automatic upgrades are paused until the homeowner clears ${this.latchFile}.`, 'action');
+    await this.alert(`${to}:rolledback`, `Upgrade to ${short(to)} rolled back: ${note}. Automatic upgrades are paused until the homeowner clears ${this.latchFile}.`, 'action', this.d.needsLink?.() || undefined);
     return result.ok ? 'rolled-back' : 'rollback-failed';
   }
 
@@ -699,6 +703,7 @@ function checkDryRun(r) {
   } catch { return { ok: false, reason: 'dry-run output is not JSON' }; }
   return { ok: true };
 }
+export const PROBLEM_REPORT_GAP_MS = 10 * 60000;
 export function realDeps({ root, config, gh, listActive, verdictFor, independenceApproved = () => false, wrapper = '/root/bin/ai-supervisor', run = defaultRun, sendAlert, sleep = ms => new Promise(r => setTimeout(r, ms)), slotOptions = {} }) {
   const repo = config.repo_path;
   const git = (...a) => { const r = run('git', ['-C', repo, ...a]); if (r.status !== 0) throw new Error(`git ${a[0]} failed`); return r.stdout.trim(); };
@@ -797,6 +802,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     },
     // Issue #946: what tools/install-foreman-mcp.sh recorded for this commit (null when it recorded nothing).
     mcpResult: async sha => { try { const r = JSON.parse(fs.readFileSync(path.join(root, 'team', 'mcp-install.json'), 'utf8')); return r && r.sha === sha ? r : null; } catch { return null; } },
-    alert: sendAlert
+    alert: sendAlert,
+    needsLink: () => needsLink(config)
   };
 }

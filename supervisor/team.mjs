@@ -1048,6 +1048,24 @@ export class Team {
     const base = this.c.self_upgrade?.public_dashboard_url;
     return `https://github.com/${this.c.repository}/issues/${number}${base ? ` ${base.replace(/\/+$/, '')}/` : ''}`;
   }
+  // Issue #947: every review attempt at a head is spent and no verdict exists: only the homeowner can grant another. One action alert per head,
+  // recorded as sent only when the channel accepted it.
+  async alertReviewLimit(report) {
+    if (!this.alert) return;
+    const max = this.c.limits.max_review_attempts;
+    for (const pr of this.view?.prs || []) {
+      if (!agentOfBranch(this.c, pr.headRefName) || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
+      const vk = verdictKey(pr.number, pr.headRefOid), akey = `reviewlimit-alert:${vk}`;
+      if (this.s.verdicts[vk] || this.s.notified[akey]) continue;
+      if (Object.values(this.s.jobs).some(j => j.kind === 'review' && j.pr === pr.number && j.head === pr.headRefOid && !j.ingested)) continue;
+      const counts = this.agents().map(([agent]) => this.s.reviewAttempts[`${vk}:${agent}`] || 0);
+      if (!counts.some(n => n >= max) || counts.some(n => n < max)) continue;
+      try {
+        await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} has used all ${max} review attempts at this head without a verdict. Grant another review attempt or review it by hand. https://github.com/${this.c.repository}/pull/${pr.number}`, { level: 'action', key: `reviewlimit:${pr.number}:${pr.headRefOid}`, link: this.needsLink(pr.number) });
+        this.s.notified[akey] = this.clock.now(); this.save();
+      } catch { (report.skipped ||= []).push({ what: `alert review limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
+    }
+  }
   // A mode change is recorded once and alerted once (retried until the channel accepts it). Only a real tick calls this.
   async updateBudget(report) {
     if (!this.modes) return;
@@ -1716,6 +1734,7 @@ export class Team {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
       await guard('inbox', () => this.processInbox(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
+      await guard('review limit alert', () => this.alertReviewLimit(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     const planSince = Date.now();
@@ -2452,12 +2471,20 @@ export class Team {
       (report.lostChanges ||= []).push({ pr: j.pr, job: id, changes: changes.length });
       await this.postNotice(j.pr, `rebase-lost-changes job=${id}`, `**Needs the homeowner.** ${this.names().job({ id, kind: 'rebase', pr: j.pr }).text} moved this PR from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)}. The commit list is ${check.missing.length ? 'incomplete' : 'complete'}, but ${changes.length} change(s) the PR added at the old head are gone from the new head and are not on \`${j.base || 'main'}\` (or a function is now defined without any use):\n\n${changes.map(c => `- \`${c.file}\`: ${c.kind === 'unreferenced' ? `function \`${c.text}\` is defined but nothing references it` : `\`${c.text}\``}`).join('\n')}\n\nThis is not a conflict-only rebase, and no verdict carries to the new head. Required: restore the lost changes (the old head is still reachable by its id), or confirm each removal is intended, before anything is reviewed or merged.`);
       await this.gh.addLabel(j.pr, 'needs-homeowner');
+      await this.alertRebaseLost(j.pr, `rebase-lost-changes:${id}`, `${changes.length} change(s) the PR added are gone from the new head after the rebase`, report);
     }
     if (!check.missing.length) return changes.length > 0;
     (report.lostCommits ||= []).push({ pr: j.pr, job: id, lost: j.rebase.lost.map(c => c.sha) });
     await this.postNotice(j.pr, `rebase-lost job=${id}`, `**Needs the homeowner.** ${this.names().job({ id, kind: 'rebase', pr: j.pr }).text} moved this PR from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)}, and ${check.missing.length} commit(s) of the old head that are not on \`${j.base || 'main'}\` are not in the result (compared by patch-id):\n\n${j.rebase.lost.map(c => `- ${this.commitRef(c.sha)} ${c.subject}`).join('\n')}\n\nNo verdict carries to the new head. Required: restore the missing commits on the branch (the old head is still reachable by its id) before anything is reviewed or merged.`);
     await this.gh.addLabel(j.pr, 'needs-homeowner');
+    await this.alertRebaseLost(j.pr, `rebase-lost:${id}`, `${check.missing.length} commit(s) of the old head are missing after the rebase`, report);
     return true;
+  }
+  // Issue #947: lost rebase work is an action alert (only the homeowner can restore it). Delivery failure is skipped; the notice above stays.
+  async alertRebaseLost(pr, key, what, report) {
+    if (!this.alert) return;
+    try { await this.alert(`Needs the homeowner: ${this.names().pr(pr).text}: ${what}. Restore them before anything is reviewed or merged. https://github.com/${this.c.repository}/pull/${pr}`, { level: 'action', key, link: this.needsLink(pr) }); }
+    catch { (report.skipped ||= []).push({ what: `alert rebase lost ${pr}`, reason: 'alert delivery failed' }); }
   }
   // Issue #158: a finding of an earlier CHANGES verdict on this PR that was fixed (a fix job ran after it) and then rebased, and that
   // a later review reports again with the same text, is flagged: the fix may have been lost in the rebase.
@@ -3026,7 +3053,7 @@ export class Team {
       const akey = `churn-alert:${pr.number}:${pr.headRefOid}`;   // like the fix-limit alert: recorded as sent only when the channel accepted it
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`, { level: 'action', key: `churn:${pr.number}`, link: this.needsLink(pr.number) });
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`, { level: 'action', key: `churn:${pr.number}:${pr.headRefOid}`, link: this.needsLink(pr.number) });
           this.s.notified[akey] = this.clock.now(); this.save();
         } catch { (report.skipped ||= []).push({ what: `alert churn ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
       }

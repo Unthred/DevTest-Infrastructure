@@ -215,7 +215,7 @@ test('issue #101: a clone failure at install time is retried with backoff, not r
 test('issue #101: a failed validator or test run blocks only that commit, with one alert, until a newer main', async t => {
   const w = world(t, { pre: { ok: false, reason: 'validator: bad' } });
   assert.equal(await w.up.step(), 'precheck-failed'); w.state.now += 100 * ENV_RETRY_MAX_MS;
-  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.alerts().length, 1);
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(new Set(w.alerts()).size, 1);   // re-reported to the sender (#947), one distinct alert
   assert.equal(w.up.s.install.result, 'blocked');
   w.state.target = H('9'); w.state.pre = { ok: true };
   assert.equal(await w.up.step(), 'upgraded');
@@ -503,7 +503,7 @@ test('issue #69/#101: an environmental pre-check failure is retried with backoff
   assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
   w.state.now += 2 * ENV_RETRY_MS - 1; assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'pre').length, 2);
   w.state.now += 1; w.state.pre = { ok: true };
-  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.alerts().filter(a => /pre-check failed/.test(a)).length, 1);
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(new Set(w.alerts().filter(a => /pre-check failed/.test(a))).size, 1);   // a lasting problem is re-reported to the sender (#947), which counts it; one distinct alert
   const g = world(t, { pre: { ok: false, reason: 'tests: 1 failed' } });
   assert.equal(await g.up.step(), 'precheck-failed'); g.state.now += PRECHECK_RETRY_MS - 1; g.state.pre = { ok: true };
   assert.equal(await g.up.step(), 'precheck-failed'); assert.equal(g.log.filter(x => x[0] === 'pre').length, 1);   // latched inside the delay (#581 covers the delayed retry)
@@ -589,7 +589,7 @@ test('issue #101: an install-time test failure blocks only that commit: no rollb
   assert.equal(w.up.s.install.result, 'blocked');
   w.state.now += 5 * 3600000;
   assert.equal(await w.up.step(), 'precheck-failed', 'the same commit stays blocked');
-  assert.equal(w.alerts().filter(a => /install-time check failed/.test(a)).length, 1);
+  assert.equal(new Set(w.alerts().filter(a => /install-time check failed/.test(a))).size, 1);   // re-reported after hours (#947); the sender dedups
 });
 
 test('issue #101: realDeps maps install exit codes 11 and 12 to blocked (no rollback), 13 and others to a plain failure', async t => {
