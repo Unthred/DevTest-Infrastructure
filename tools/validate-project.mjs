@@ -152,11 +152,11 @@ export function validate(root) {
   // Stale review wording (D-024): review independence is by session and model, not by provider, so current instructions must not
   // say "opposite agent". Decision history, the handover, evidence and other historical records are exempt, as are tests.
   const historical = new Set(['docs/DECISIONS.md', 'docs/history.md', 'docs/allowance-evidence.md', 'docs/provider-observations.md', 'docs/ai/CURRENT_HANDOVER.md']);
-  // Also checked: contracts/ and the supervisor sources (agent-facing prompt strings). The phrase may be split across a line break.
+  // Also checked: contracts/ and every supervisor source at any depth, including adapters, dashui and migrations (agent-facing prompt strings). The phrase may be split across a line break.
   const STALE = /opposite[\s-]+agent/i;
   const staleScope = ['AGENTS.md', 'README.md', ...walk(root).map((f) => rel(root, f)).filter((r) =>
     (r.startsWith('docs/') && r.endsWith('.md') && !r.startsWith('docs/evidence/') && !historical.has(r)) ||
-    (r.startsWith('contracts/') && /\.(md|json|mjs)$/.test(r)) || /^supervisor\/[^/]+\.mjs$/.test(r))];
+    (r.startsWith('contracts/') && /\.(md|json|mjs|ya?ml|txt)$/.test(r)) || /^supervisor\/(?:.+\/)?[^/]+\.mjs$/.test(r))];
   for (const doc of staleScope) {
     if (has(doc) && STALE.test(read(root, doc))) add('stale-wording', `${doc} says "opposite agent"; use the D-024 rule (independent review: fresh session, model differs from the head's writer)`);
   }

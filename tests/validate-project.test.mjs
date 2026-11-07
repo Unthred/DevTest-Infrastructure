@@ -176,6 +176,8 @@ test('stale wording: a phrase split across a line break, and contracts/ and supe
   expectFinding((a) => a.write('README.md', a.read('README.md') + '\nthe opposite\nagent reviews\n'), 'stale-wording', 'README.md');
   expectFinding((a) => a.write('contracts/x.md', 'Opposite-Agent\n'), 'stale-wording', 'contracts/x.md');
   expectFinding((a) => a.write('supervisor/prompt-x.mjs', "export const p = 'ask the opposite  agent';\n"), 'stale-wording', 'supervisor/prompt-x.mjs');
+  expectFinding((a) => a.write('supervisor/adapters/sub/p.mjs', '// opposite agent\n'), 'stale-wording', 'supervisor/adapters/sub/p.mjs');
+  expectFinding((a) => a.write('contracts/z.yaml', 'note: opposite agent\n'), 'stale-wording', 'contracts/z.yaml');
   assert.ok(!checks(fixture((a) => a.write('contracts/y.md', 'independent review only\n'))).includes('stale-wording'));
 });
 test('stale wording: decision history, handover and evidence may keep the old phrase', () => {
