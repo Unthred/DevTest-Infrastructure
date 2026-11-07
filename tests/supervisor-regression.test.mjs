@@ -20,7 +20,7 @@ const caps = ['launch', 'resume', 'session_status', 'usage_limit_detection', 're
 
 function fixture(t, autoResume = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-regress-'));
-  // reconcile spawns detached workers (supervisor/cli.mjs) that may still write state as the test ends; retry the removal (ENOTEMPTY race). Retrying hides the race rather than removing it; awaiting worker exit at the source is a later change (issue #735)
+  // reconcile spawns detached workers (supervisor/cli.mjs) that may still write state as the test ends; retry the removal (ENOTEMPTY race). Retrying hides the race rather than removing it; awaiting worker exit at the source is tracked in issue #906
   t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
   const repo = path.join(dir, 'repo'), worktree = path.join(dir, 'wt');
   fs.mkdirSync(repo); git(repo, 'init', '-q', '-b', 'main');

@@ -279,10 +279,11 @@ export function releaseLeases(root, job) {
   if (released) event(root, job, 'leases_released');
   return released;
 }
-export function checkpoint(root, job, clock = realClock, budgetMs = CHECKPOINT_BUDGET_MS) {
+// `hooks.afterGuard` (issue #826) runs once the re-entry guard is set, so a test can nest a call without depending on checkpointInner's internals.
+export function checkpoint(root, job, clock = realClock, budgetMs = CHECKPOINT_BUDGET_MS, hooks = {}) {
   if (gitDeadline !== null) throw new SupervisorError('checkpoint budget already active (checkpoint must stay synchronous and not nest)');
   gitDeadline = Date.now() + budgetMs;
-  try { checkpointInner(root, job, clock); } finally { gitDeadline = null; }
+  try { hooks.afterGuard?.(); checkpointInner(root, job, clock); } finally { gitDeadline = null; }
 }
 function checkpointInner(root, job, clock) {
   const head = git(job.worktree, 'rev-parse', 'HEAD');

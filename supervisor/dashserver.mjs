@@ -226,13 +226,6 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
     if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
     if (req.headers['sec-fetch-site'] !== 'same-origin' || req.headers['sec-fetch-user'] !== '?1' || supervised()) return send(403, 'text/plain; charset=utf-8', 'resume needs a person clicking the button');
-    // Issue #737: a request from this machine must not come from a process that descends from a supervised job, as the CLI route checks
-    // its own caller. A caller that cannot be identified is refused rather than assumed to be a person.
-    if (isLocalPeer(req.socket)) {
-      const pid = peerPid(req.socket);
-      if (!pid) return send(403, 'text/plain; charset=utf-8', 'resume refused: the calling process could not be identified');
-      if (supervised({ env: {}, pid })) return send(403, 'text/plain; charset=utf-8', 'resume needs a person clicking the button');
-    }
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
@@ -242,6 +235,17 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (!known) return send(409, 'text/plain; charset=utf-8', 'nothing halted for that scope');
     const t = now(), slot = reserveCooldown(root, 'breaker-resume', t, BREAKER_RESUME_COOLDOWN_MS);
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=breaker-resume-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    // Issue #737: a request from this machine must not come from a process that descends from a supervised job, as the CLI route checks
+    // its own caller. A caller that cannot be identified is refused rather than assumed to be a person. Issue #821: the lookup scans /proc
+    // synchronously (about 180 ms on Tower), so it runs only for a request with a valid proof, a halted scope and no cooldown in force.
+    // A refused caller gives the slot back so it cannot lock a person out.
+    if (isLocalPeer(req.socket)) {
+      const pid = peerPid(req.socket);
+      if (!pid || supervised({ env: {}, pid })) {
+        releaseCooldown(root, 'breaker-resume', t);
+        return send(403, 'text/plain; charset=utf-8', pid ? 'resume needs a person clicking the button' : 'resume refused: the calling process could not be identified');
+      }
+    }
     requestBreakerResume(root, scope, t);
     try { wake(root, 'approve', source()); } catch { /* the schedule is the fallback */ }   // the request is applied by the next pass
     store.invalidate();

@@ -148,17 +148,19 @@ test('layoutCheck: a 1 px visually-hidden label is not "clipped", but a real cli
   const { layoutCheck } = await import('../browser/layout-check.mjs');
   const rect = (w, h) => () => ({ width: w, height: h, left: 0, right: w, top: 0, bottom: h });
   const mk = (tagName, extra = {}) => ({ nodeType: 1, tagName, children: [], parentElement: null, hasAttribute: () => false, scrollWidth: 78, clientWidth: 1, getBoundingClientRect: rect(1, 1), ...extra });
-  const run = (el, position, clip = 'rect(0px, 0px, 0px, 0px)') => {
+  const run = (el, position, clip = 'rect(0px, 0px, 0px, 0px)', clipPath = 'none') => {
     const body = mk('BODY', { scrollWidth: 0, clientWidth: 0 }); el.parentElement = body; body.children = [el];
     const saved = { document: globalThis.document, getComputedStyle: globalThis.getComputedStyle, scrollTo: globalThis.scrollTo, innerHeight: globalThis.innerHeight };
     globalThis.scrollTo = () => {}; globalThis.innerHeight = 600;
     globalThis.document = { documentElement: { clientWidth: 100, scrollWidth: 100 }, body: { ...body, querySelectorAll: () => [el] }, querySelectorAll: () => [], elementFromPoint: () => null };
-    globalThis.getComputedStyle = () => ({ visibility: 'visible', display: 'block', opacity: '1', overflowX: 'hidden', position, clip, clipPath: 'none', textOverflow: 'clip' });
+    globalThis.getComputedStyle = () => ({ visibility: 'visible', display: 'block', opacity: '1', overflowX: 'hidden', position, clip, clipPath, textOverflow: 'clip' });
     try { return layoutCheck({ touch: false }).filter(f => f.check === 'clipped'); }
     finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete globalThis[k]; else globalThis[k] = v; } }
   };
   assert.equal(run(mk('SPAN'), 'absolute').length, 0);
   assert.equal(run(mk('SPAN'), 'static').length, 1);
   assert.equal(run(mk('SPAN'), 'absolute', 'auto').length, 1, 'a 1 px absolute box without clip is not exempt');
+  assert.equal(run(mk('SPAN'), 'absolute', 'auto', 'inset(50%)').length, 0, 'clip-path alone exempts a 1 px absolute box');
+  assert.equal(run(mk('SPAN'), 'absolute', 'auto', 'none').length, 1, 'clip auto and clip-path none is not exempt');
   assert.equal(run(mk('SPAN', { clientWidth: 40, getBoundingClientRect: rect(40, 20) }), 'absolute').length, 1);
 });

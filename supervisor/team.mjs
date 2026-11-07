@@ -2897,7 +2897,7 @@ export class Team {
         // Issue #741: a job deferred until it aged out of the window never got its stale cause at ingest; record it once now.
         if (j.kind === 'implement' && j.ingested && !j.endedNoPr) await guard(`resume ${id}`, async () => {
           const job = await this.jobs.get(id);
-          if (job && ['completed', 'stopped'].includes(job.status)) { j.settled = true; this.save(); return; }
+          if (!job || ['completed', 'stopped'].includes(job.status)) { j.settled = true; this.save(); return; }   // issue #826: a vanished record is settled too, so it is not looked up on every tick
           if (job && ['blocked', 'failed'].includes(job.status)) { j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() }; this.save(); }
         });
         continue;

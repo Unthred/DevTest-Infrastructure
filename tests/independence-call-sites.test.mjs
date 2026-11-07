@@ -12,8 +12,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// Each permitted owner carries the reason it may bypass independenceRefusal.
-const PERMITTED = {
+// Each permitted owner carries the reason it may bypass independenceRefusal. Owners are keyed by file and name, so a same-named
+// function in another file is not permitted.
+const TEAM = 'supervisor/team.mjs';
+const PERMITTED_BY_NAME = {
   independentOf: {
     independenceRefusal: 'the one check for decisions about an actual review',
     strandsReviewer: 'judges a hypothetical writer set (actual writers plus the one considered), not an actual review',
@@ -26,6 +28,8 @@ const PERMITTED = {
     secondOpinionOwed: 'asks whether the reviewer shares a writer provider to decide if an extra review is owed; the review itself still goes through independenceRefusal',
   },
 };
+const PERMITTED = Object.fromEntries(Object.entries(PERMITTED_BY_NAME)
+  .map(([fn, owners]) => [fn, Object.fromEntries(Object.entries(owners).map(([o, why]) => [`${TEAM}:${o}`, why]))]));
 const NAMES = Object.keys(PERMITTED);
 
 // Replace comments, string contents and regex literals with spaces (newlines kept). A string that is exactly a watched name is kept
@@ -96,12 +100,17 @@ function nameOf(h, inClass) {
 export function callSites(src) {
   const code = blank(src), sites = [], stack = []; // frames: { name, cls }
   const lineAt = (p) => code.slice(0, p).split('\n').length;
-  const headerBefore = (p) => { // text from the previous ; { } at paren depth 0 up to p
+  const inClassBody = () => stack.length > 0 && stack[stack.length - 1].cls;
+  // Text from the previous ; { } at paren depth 0 up to p. In a class body a newline at depth 0 also ends a header, so a class field
+  // written without a semicolon does not become the start of the next method's header.
+  const headerBefore = (p) => {
     let d = 0, k = p - 1;
+    const cls = inClassBody();
+    while (k >= 0 && /\s/.test(code[k])) k--; // a header may end its line before the { on the next
     for (; k >= 0; k--) {
       const ch = code[k];
       if (ch === ')' || ch === ']') d++; else if (ch === '(' || ch === '[') d--;
-      else if (d <= 0 && (ch === ';' || ch === '{' || ch === '}')) break;
+      else if (d <= 0 && (ch === ';' || ch === '{' || ch === '}' || (cls && ch === '\n'))) break;
     }
     return code.slice(k + 1, p);
   };
@@ -109,8 +118,11 @@ export function callSites(src) {
   const re = new RegExp(`(?<![\\w$])(${NAMES.join('|')})(?![\\w$])|[{}]`, 'g');
   let m;
   while ((m = re.exec(code))) {
-    if (m[0] === '{') { const inClass = stack.length > 0 && stack[stack.length - 1].cls; stack.push(nameOf(headerBefore(m.index), inClass) || {}); continue; }
-    if (m[0] === '}') { stack.pop(); continue; }
+    if (m[0] === '{') { stack.push(nameOf(headerBefore(m.index), inClassBody()) || {}); continue; }
+    if (m[0] === '}') {
+      if (!stack.length) throw new Error(`unbalanced braces: unmatched } at line ${lineAt(m.index)}`); // a desync must fail closed
+      stack.pop(); continue;
+    }
     const fn = m[1], before = headerBefore(m.index).trim(), after = code.slice(m.index + fn.length);
     if (/(?:^|\s)(?:function\s*\*?|(?:const|let|var))$/.test(before)) continue; // function or const definition
     if (before === '' || /^(?:(?:static|async|get|set)(?:\s+|$))*\*?$/.test(before)) { // possible method definition: name(...) {
@@ -123,13 +135,14 @@ export function callSites(src) {
     }
     sites.push({ fn, owner: ownerOf(), line: lineAt(m.index), call: /^\s*\(/.test(after) });
   }
+  if (stack.length) throw new Error(`unbalanced braces: ${stack.length} block(s) still open at end of file`);
   return sites;
 }
 
 const files = (dir) => fs.readdirSync(path.join(root, dir), { withFileTypes: true })
   .flatMap(e => e.isDirectory() ? (e.name === 'node_modules' ? [] : files(path.join(dir, e.name))) : /\.(mjs|js)$/.test(e.name) ? [path.join(dir, e.name)] : []);
 
-const permitted = (fn, owner) => Object.hasOwn(PERMITTED[fn], owner);
+const permitted = (fn, owner, file) => Object.hasOwn(PERMITTED[fn], `${file}:${owner}`);
 
 test('issue #651: only the permitted methods reference independentOf or writersOf', () => {
   const bad = [];
@@ -137,7 +150,7 @@ test('issue #651: only the permitted methods reference independentOf or writersO
     if (!fs.existsSync(path.join(root, dir))) continue;
     for (const f of files(dir)) {
       for (const s of callSites(fs.readFileSync(path.join(root, f), 'utf8'))) {
-        if (!permitted(s.fn, s.owner)) bad.push(`${f}:${s.line} ${s.owner} ${s.call ? 'calls' : 'references'} ${s.fn}`);
+        if (!permitted(s.fn, s.owner, f)) bad.push(`${f}:${s.line} ${s.owner} ${s.call ? 'calls' : 'references'} ${s.fn}`);
       }
     }
   }
@@ -153,11 +166,18 @@ test('issue #729: every permitted owner states a reason', () => {
 test('issue #651: the scanner sees the known call sites and rejects an unlisted one', () => {
   const real = callSites(fs.readFileSync(path.join(root, 'supervisor/team.mjs'), 'utf8'));
   for (const [fn, owners] of Object.entries(PERMITTED)) {
-    for (const o of Object.keys(owners)) assert.ok(real.some(s => s.fn === fn && s.owner === o), `${o} should call ${fn}`);
+    for (const key of Object.keys(owners)) {
+      const [file, o] = key.split(':');
+      assert.equal(file, TEAM);
+      assert.ok(real.some(s => s.fn === fn && s.owner === o), `${o} should call ${fn}`);
+    }
   }
   const fake = callSites('export class T {\n  decideReview(pr) {\n    return independentOf({ provider: 1 }, this.writersOf(pr));\n  }\n}\n');
   assert.deepEqual(fake.map(s => [s.fn, s.owner]).sort(), [['independentOf', 'decideReview'], ['writersOf', 'decideReview']]);
-  assert.ok(fake.every(s => !permitted(s.fn, s.owner)));
+  assert.ok(fake.every(s => !permitted(s.fn, s.owner, TEAM)));
+  // Owner matching includes the file: a permitted name in another file is not permitted.
+  assert.ok(permitted('writersOf', 'unblockModels', TEAM));
+  assert.ok(!permitted('writersOf', 'unblockModels', 'tools/other.mjs'));
   // Definitions and comments are not uses.
   assert.deepEqual(callSites('export const independentOf = (a, b) => 1;\n  writersOf(pr) {\n    // independentOf(x) writersOf(y)\n  }\n'), []);
   assert.deepEqual(callSites('export function independentOf(a, b) { return 1; }\nclass T {\n  async writersOf(pr = f()) {\n    return "writersOf(x)";\n  }\n}\n'), []);
@@ -187,4 +207,19 @@ test('issue #729: indirect references are flagged', () => {
   assert.ok(callSites('class T {\n  m(pr) { const w = this.writersOf; }\n}\n').every(s => !s.call));
   // Mentions in unrelated strings and comments are not references.
   assert.deepEqual(fns('const s = "call writersOf later"; // writersOf\n'), []);
+});
+
+test('issue #816: a class field without a semicolon does not rename the next method', () => {
+  const owners = (src) => callSites(src).map(s => s.owner);
+  assert.deepEqual(owners('class T {\n  strandsReviewer = () => 1\n  m() { this.writersOf(1) }\n}\n'), ['m']);
+  assert.deepEqual(owners('class T {\n  x = 1\n  async *g(a,\n    b) { this.writersOf(1) }\n}\n'), ['g']);
+  assert.deepEqual(owners('class T {\n  m(a)\n  {\n    this.writersOf(a);\n  }\n}\n'), ['m']);
+  // Statements inside a method body are not affected by the class-body newline rule.
+  assert.deepEqual(owners('class T {\n  m() {\n    const x =\n      this.writersOf(1);\n  }\n}\n'), ['m']);
+});
+
+test('issue #816: an unbalanced scan fails closed', () => {
+  assert.throws(() => callSites('function f() {\n  writersOf(1);\n'), /unbalanced/);
+  assert.throws(() => callSites('function f() {}\n}\n'), /unbalanced/);
+  assert.doesNotThrow(() => callSites('function f() {\n  if (a) {}\n}\n'));
 });
