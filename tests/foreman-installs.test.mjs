@@ -61,12 +61,11 @@ test('processVersions recognises the real host command lines: dashboard via cli.
   assert.deepEqual(processVersions(proc, { currentSha: C }).map(p => [p.role, p.version]).sort(), [['dashboard', B], ['foreman', C]]);
 });
 
-test('installs reports installed/main, draining, the failing test, a stale process version and redacts', t => {
+test('installs reports installed/main, the failing test, a stale process version and redacts', t => {
   const root = tmp(t); seed(root);
   const proc = fakeProc(t, [[1, ['node', `/r/versions/${A}/supervisor/dashserver.mjs`]], [2, ['node', `/r/versions/${B}/supervisor/cli.mjs`, 'team', 'tick']]]);
   const r = installs(root, { now: 5000, procRoot: proc });
   assert.equal(r.installed, A); assert.equal(r.main, C); assert.equal(r.behind, 2); assert.equal(r.drift, true);
-  assert.deepEqual(r.draining, { to: C, since: new Date(3000).toISOString(), jobsRunning: 2 });
   assert.equal(r.lastInstall.result, 'precheck_failed'); assert.deepEqual(r.lastInstall.failingTests, ['tests/flaky.test.mjs: waits for a socket']); assert.equal(r.lastInstall.retried, true);
   assert.deepEqual(r.processes.map(p => [p.role, p.matchesInstalled]), [['dashboard', true], ['foreman', false]]);
   assert.deepEqual(r.recent.map(x => [x.result, x.failed]), [['upgraded', false], ['precheck_failed', true]], 'newest first');
@@ -76,7 +75,7 @@ test('installs reports installed/main, draining, the failing test, a stale proce
 
 test('installs with no records and no link is empty, not an error', t => {
   const r = installs(tmp(t), { procRoot: '/nonexistent-proc' });
-  assert.equal(r.installed, null); assert.equal(r.draining, null); assert.equal(r.lastInstall, null); assert.deepEqual(r.recent, []); assert.deepEqual(r.processes, []);
+  assert.equal(r.installed, null); assert.equal(r.lastInstall, null); assert.deepEqual(r.recent, []); assert.deepEqual(r.processes, []);
 });
 
 const limits = { ...breaker.BREAKER_DEFAULTS };

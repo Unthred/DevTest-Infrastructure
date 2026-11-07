@@ -322,8 +322,8 @@ function selfUpgradeFor(root, registry) {
   const jobs = realJobs(root, registry);
   return { config, upgrade: new SelfUpgrade({ root, minGapMs: config.self_upgrade?.min_install_gap_minutes != null ? config.self_upgrade.min_install_gap_minutes * 60000 : MIN_INSTALL_GAP_MS, drainMaxMs: config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : QUIET_MAX_WAIT_MS, deps: { ...realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }), plannedWork: () => plannedWorkOf(root) } }) };
 }
-// Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so running jobs
-// can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.
+// Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so the
+// new version starts the next job. `hold` names the pending target; it is null when nothing is waiting.
 async function selfUpgradeBefore(root, registry) {
   // Issue #448: the install step (with its test run) has its own lock, so it never holds the tick lock or stops another tick. While
   // another process installs, this tick starts no new job (the same hold as a pending upgrade), and the reason is shown.

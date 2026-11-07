@@ -1046,7 +1046,7 @@ test('issue #191: after a rolled-back upgrade the hold handed to the team step i
   const r = await free.team.tick({ hold: holdOf('rolled-back', { holding: { to: H(7) } }) });
   assert.equal(r.held, undefined); assert.ok(free.calls.created.length > 0);
   const held = world(t, { issues: [issue(23), issue(2)], pulls: [] });
-  const r2 = await held.team.tick({ hold: holdOf('busy', { holding: { to: H(7) } }) });
+  const r2 = await held.team.tick({ hold: holdOf('upgraded', { pending: { to: H(7) } }) });
   assert.match(r2.held.reason, /upgrade to 7777777 pending/); assert.equal(held.calls.created.length, 0);
 });
 

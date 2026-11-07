@@ -123,8 +123,6 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   for (const p of view.plan) if (p.reassignedFrom) { const e = plan.find(x => x.agent === p.agent && x.ref === (p.issue ?? p.pr)); if (e) e.text += ` (reassigned from ${p.reassignedFrom} for allowance)`; }
 
   // A pending supervisor upgrade holds back new jobs (issue #134); self-upgrade.json is written by the upgrade step.
-  let hold = null;
-  try { const h = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).holding; if (h && typeof h.to === 'string') hold = { to: redact(h.to.slice(0, 7), 12), since: Number.isFinite(h.since) ? h.since : null, jobs: Number.isSafeInteger(h.jobs) ? h.jobs : null, text: `install pending (upgrade to ${redact(h.to.slice(0, 7), 12)}), draining${Number.isSafeInteger(h.jobs) ? ` (${h.jobs} job${h.jobs === 1 ? '' : 's'} running)` : ''}; no new jobs start` }; } catch { /* no state file: nothing is held */ }
   const estimates = { waits: view.estimates.waits.map(w => ({ kind: w.kind, at: w.at, text: redact(w.text, 200) })), items: Object.values(view.estimates.items).map(e => ({ kind: e.kind, ref: e.ref, name: redact(ref(e.kind, e.ref), 300), agent: e.agent, status: e.status, text: redact(e.text, 200), finishP50: e.finish?.p50 ?? null, finishP90: e.finish?.p90 ?? null, waits: e.waits.map(w => redact(w.text, 200)), basis: e.basis.map(b => redact(b, 300)) })) };
   // The installer's last result and next attempt (issue #101), from the same state file.
   let install = null;
@@ -136,7 +134,7 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   } catch { /* no state file: nothing installed by the loop yet */ }
   let installed = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); installed = m ? m[1].slice(0, 7) : null; } catch { /* not a versioned install */ }
-  return { testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), hold, install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
+  return { testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {
@@ -159,7 +157,6 @@ export function renderStatus(s) {
   if (s.install?.tests?.length) out.push(`    failing test${s.install.tests.length === 1 ? '' : 's'}: ${s.install.tests.join('; ')}${s.install.retried ? ' (failed twice, each in a fresh copy)' : ''}`);
   else if (s.install?.retried) out.push('    failed twice, each in a fresh copy');
   if (s.install?.excerpt) for (const l of s.install.excerpt.split('\n')) out.push(`      | ${l}`);
-  if (s.hold) out.push(`  ${s.hold.text.replace(/^install pending/, s.hold.since ? `install pending since ${t(s.hold.since)}` : 'install pending')}`);
   if (s.next.plan.length) for (const p of s.next.plan) out.push(`  ${p.text}${p.estimate ? ` (${p.estimate})` : ''}`);
   for (const w of s.next.waiting) out.push(`  ${w.text}`);
   head('Estimated finish');

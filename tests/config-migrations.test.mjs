@@ -200,16 +200,14 @@ test('issue #191: an invalid team.local.json is a Needs you item while the last 
   const first = configSource(() => { throw new Error('x'); }); assert.throws(() => first(), /x/);
 });
 
-test('issue #191: the dashboard drain text uses the configured time zone, as team status does', async t => {
+test('issue #845: an old holding record in the state file adds no draining item to the dashboard', async t => {
   const { buildView } = await import('../supervisor/dashboard.mjs');
   const NOW = Date.UTC(2026, 10, 3, 12, 0), root = tmp(t);
   fs.mkdirSync(path.join(root, 'team'), { recursive: true });
   fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({ holding: { to: 'b'.repeat(40), since: Date.UTC(2026, 10, 3, 11, 50), jobs: 2 } }));
   const cache = { pulls: [], issues: [], tick: { at: NOW - 1000, status: 'ok', error: null, lastOkAt: NOW - 1000 } };
-  const text = async tz => (await buildView({ config: viewCfg, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW, tz })).attention.find(a => a.id === 'upgrade-hold').text;
-  assert.match(await text('UTC'), /since 2026-11-03 11:50 UTC \(/);
-  assert.match(await text('Asia/Tokyo'), /since 20:50 \(/);
-  assert.doesNotMatch(await text('Asia/Tokyo'), /UTC/);
+  const v = await buildView({ config: viewCfg, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: NOW, tz: 'UTC' });
+  assert.equal(v.attention.find(a => a.id === 'upgrade-hold'), undefined); assert.doesNotMatch(JSON.stringify(v.attention), /draining/);
 });
 
 // ---- issue #315: tick lock around migrations, write-time redaction
