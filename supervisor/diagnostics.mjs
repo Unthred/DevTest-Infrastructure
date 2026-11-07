@@ -113,6 +113,8 @@ function readFileInto(file, size, budget, maxFileBytes = MAX_FILE_BYTES) {
 }
 // status: ok | partial | empty | missing | unreadable. `note` is fixed text; nothing from the log or the OS error text is echoed.
 // `limits` ({ maxFileBytes, maxTotalBytes, maxFiles }) overrides the defaults; tests use it to keep fixtures small.
+// Limits are for tests only: the per-file cache is keyed by path, not by limits, so a call with small limits followed by a default call
+// could reuse a partly read entry. Production callers never pass limits; a test that does must call clearRecorderCache() first.
 export function readRecorder(dir, from, to, limits = {}) {
   const { maxFileBytes = MAX_FILE_BYTES, maxTotalBytes = MAX_TOTAL_BYTES, maxFiles = MAX_RECORDER_FILES } = limits;
   const out = { status: 'ok', note: '', files: 0, samples: 0, skippedLines: 0, hourly: [], days: [] };
