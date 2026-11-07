@@ -36,7 +36,7 @@ import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
-import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
+import { SelfUpgrade, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 import { requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
 
@@ -320,7 +320,7 @@ function selfUpgradeFor(root, registry) {
   const config = loadTeamConfig(teamConfigFile, root);
   const verdictFor = (pr, head) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')).verdicts?.[`${pr}:${head}`] || null; } catch { return null; } };
   const jobs = realJobs(root, registry);
-  return { config, upgrade: new SelfUpgrade({ root, minGapMs: config.self_upgrade?.min_install_gap_minutes != null ? config.self_upgrade.min_install_gap_minutes * 60000 : MIN_INSTALL_GAP_MS, drainMaxMs: config.self_upgrade?.drain_max_minutes != null ? config.self_upgrade.drain_max_minutes * 60000 : QUIET_MAX_WAIT_MS, deps: { ...realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }), plannedWork: () => plannedWorkOf(root) } }) };
+  return { config, upgrade: new SelfUpgrade({ root, minGapMs: config.self_upgrade?.min_install_gap_minutes != null ? config.self_upgrade.min_install_gap_minutes * 60000 : MIN_INSTALL_GAP_MS, deps: { ...realDeps({ root, config, gh: githubClient(config), listActive: jobs.listActive, verdictFor, independenceApproved: () => decisionApproved(readRegister(config) || '', INDEPENDENCE_DECISION), sendAlert: alertSender(root, config) }), plannedWork: () => plannedWorkOf(root) } }) };
 }
 // Runs BEFORE the team step (issue #134): while an upgrade is pending and eligible, the tick starts no new job, so running jobs
 // can drain and the upgrade finds a quiet period. `hold` names the pending target; it is null when nothing is waiting.
@@ -396,7 +396,9 @@ async function main() {
     }
     const job = await createJob(root, spec, registry);
     if (a.foreground) {
-      job.workerPid = process.pid; job.workerStart = processStart(process.pid); saveJob(root, job);
+      job.workerPid = process.pid; job.workerStart = processStart(process.pid);
+    job.supervisorVersion = runningSha(self) || 'source';   // issue #846: the install directory this worker runs from; cleanup keeps it while the job is live
+    saveJob(root, job);
       const result = await drive(root, job, registry, realClock, (c, ad, j, cl) => runProcess(root, j, c, ad, cl), 4, job.postcondition ? (await teamFor(root, registry)).postconditions() : null, async j => (await teamFor(root, registry, undefined, false)).resumeGate()(j));
       result.workerPid = null; result.workerStart = null; saveJob(root, result); print(result);
     }

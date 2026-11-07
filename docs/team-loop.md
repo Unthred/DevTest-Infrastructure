@@ -264,7 +264,7 @@ The five-minute schedule stays as the safety net. On top of it, four local event
 | Work on the pass | On an unchanged pass |
 |---|---|
 | job timeouts, dead-worker detection, lease release, recovery, due restarts (`reconcileOnce`) | runs first, before the check, always |
-| self-upgrade step, `min_install_gap_minutes` batching, hand-install hold, watchdog | runs, untouched (it does not use the cache) |
+| self-upgrade step (side by side, no drain) and version cleanup, hand-install hold, watchdog | runs, untouched (it does not use the cache) |
 | ingest of finished job results, retries that came due, owner-comment scan, inbox proposals, Approve/Reject | run on the local files; their GitHub reads come from the cache, their writes are real |
 | allowance and budget readings, due probes, breaker evaluation and clearing, self-check, idle tracking, stall and stuck-check timers | run against the current clock and local state; stuck-check age is computed from the current time on the cached rollup |
 | dashboard record, snapshot, status issue | written as usual; the data was verified a moment ago |
