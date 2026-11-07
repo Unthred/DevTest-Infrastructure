@@ -5,11 +5,12 @@ const DAY = 24 * 3600000;
 const short = (s, n = 300) => String(s ?? '').slice(0, n);
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 
-// "homeowner-pr-538" -> "homeowner-pr", "job-<hex>" -> "job", "decision-D-024" -> "decision-D", "stale-mark-12" -> "stale-mark".
-// "decision-D-024" stays apart from "decision-D-020" (separate decisions); "pause-claude" and "idle-codex" group as "pause" and "idle".
+// "homeowner-pr-538" -> "homeowner-pr", "job-<hex>" -> "job", "stale-mark-12" -> "stale-mark".
+// "decision-D-024" stays apart from "decision-D-020", and "decision-proposal-D-030-12" -> "decision-proposal-D-030" (one cause per decision, the pull request tail dropped); "pause-claude" and "idle-codex" group as "pause" and "idle".
 export const causeOf = id => {
   const s = String(id || 'unknown');
   if (/^decision-D-\d+$/i.test(s)) return s;
+  const prop = /^(decision-proposal-D-\d+)-\d+$/i.exec(s); if (prop) return prop[1];
   if (/^(pause|idle)-[a-z]\w*$/i.test(s)) return s.split('-')[0];
   return s.replace(/(-[0-9a-f]{6,}|-\d+)+$/i, '') || 'unknown';
 };
@@ -52,7 +53,7 @@ export function mismatches(view, now = Date.now()) {
   // 3. Stale labels: needs-homeowner on a closed issue, or on an open pull request with no Needs you card that is not simply awaiting review.
   for (const i of issues) if (i.state === 'CLOSED' && (i.labels || []).includes('needs-homeowner')) add('stale-label', `issue #${i.number}`, 'closed issue still labelled needs-homeowner', `labels: ${(i.labels || []).join(', ')}`);
   for (const p of prs) if (['open', 'draft'].includes(p.status) && p.needsHomeowner && !cardedPr.has(p.number) && !p.awaitingReview) add('stale-label', `pr #${p.number}`, 'open pull request labelled needs-homeowner with no Needs you item', `status ${p.status}, verdict ${p.verdict ?? 'none'}, checks ${p.checks ?? 'unknown'}`);
-  // 4. Holds kept by old jobs (#583): the card says a stopped job holds the label, but that job is old or a newer job has run on the pull request since.
+  // 4. Holds kept by old jobs (#583): the card says a stopped job holds the label, but that job is old or the pull request head has moved past the job's head.
   for (const a of cards) {
     if (!/^homeowner-pr-/.test(a.id || '')) continue;
     const heldIds = [...String(a.tried || '').matchAll(/\bjob ([0-9a-f]{8})\b/g)].map(m => m[1]); if (!heldIds.length) continue;
@@ -62,7 +63,7 @@ export function mismatches(view, now = Date.now()) {
       const held = jobs.find(j => String(j.fullId || '').startsWith(hid));
       if (!held) { skipped.push(`pr #${cr.n} job ${hid}`); continue; }
       // #583: the label clears once the PR head has moved past the job's head. A newer job on the same head (a review) does not count.
-      if (pr?.head && held.head && pr.head !== held.head) add('hold-by-old-job', `pr #${cr.n}`, `held by job ${hid} although the pull request head has moved past that job's head`, `job head ${String(held.head).slice(0, 7)}, PR head ${String(pr.head).slice(0, 7)}; held job started ${iso(held.startedAt)}`);
+      if (pr?.head && held.head && pr.head !== held.head) add('hold-by-old-job', `pr #${cr.n}`, `held by job ${hid} although the pull request head has moved past that job's head (the hold legitimately stays while that job's worktree has unsaved work, so this can be a hold kept on purpose)`, `job head ${String(held.head).slice(0, 7)}, PR head ${String(pr.head).slice(0, 7)}; held job started ${iso(held.startedAt)}`);
       else if (now - held.startedAt > DAY) add('hold-by-old-job', `pr #${cr.n}`, `held by job ${hid} that started over 24 hours ago`, `held job ${held.status}, started ${iso(held.startedAt)}`);
     }
   }
