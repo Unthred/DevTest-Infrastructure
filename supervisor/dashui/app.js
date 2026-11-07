@@ -24,7 +24,7 @@ watchLists(document.body);
 
 // Inbox decisions (issue #856). The form still works without this script (a plain post and redirect). With it, the click disables both buttons
 // at once, labels the pressed one, shows the outcome and time beside the title, moves the card into "Decided today" and lowers the counts;
-// a refusal re-enables the buttons and shows the reason on the card. The server is the only record: an Undo reloads the page from it.
+// a refusal re-enables the buttons and shows the reason on the card. The server is the only record: an Undo refreshes the page from it in place.
 const postInbox = form => postDecision(fetch.bind(window), form.action, new FormData(form));
 document.addEventListener('submit', async e => {
   const form = e.target.closest?.('form.inbox-form'); if (!form) return;
@@ -33,7 +33,7 @@ document.addEventListener('submit', async e => {
   if (decision === 'undo') {
     const btn = form.querySelector('button'); btn.disabled = true;
     const j = await postInbox(form);
-    if (j.ok) { location.reload(); return; }
+    if (j.ok) { const r = $('.refresh-now'); if (r) r.click(); btn.disabled = false; return; }   // the server record is re-read in place (issue #930)
     btn.disabled = false; btn.textContent = 'Undo refused: ' + j.reason; return;
   }
   const btns = $$('.inbox-form button', item), pressed = form.querySelector('button'), err = $('.inbox-err', item), was = pressed.textContent;
