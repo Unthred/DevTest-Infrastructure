@@ -34,7 +34,7 @@ function world(t) {
   return { root, make, run, read };
 }
 
-test('issue #846: a worker stamps the install directory it runs from, and a resumed worker stamps again', async t => {
+test('issue #846: a worker stamps the install directory it runs from', async t => {
   const w = world(t), job = await w.make(1);
   assert.equal(w.read(job.id).supervisorVersion, undefined);
   const r = w.run(A, ['worker', job.id]); assert.equal(r.status, 0, r.stderr);
