@@ -271,7 +271,7 @@ One example per event type. Ids and times are illustrative.
 
 ### Events the writer rejects
 
-These examples are abbreviated: they omit required envelope fields (`id`, `seq`, `time`, `subject`, and `actor` where absent), so a real submission would also fail for those. Each shows only the reason that matters.
+These examples are abbreviated: they omit required envelope fields (`id`, `seq`, `time`, `subject`, and, except in the second example, `actor`), so a real submission would also fail for those. Each shows only the reason that matters.
 
 ```json
 { "contract": "event.v1", "type": "RunFinished", "payload": { "outcome": "failed", "log": "…full command output…" } }
