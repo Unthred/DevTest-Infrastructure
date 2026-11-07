@@ -634,7 +634,7 @@ const STALE_MARK_MS = 10 * 60000;   // issue #521
 export class Team {
   constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
-    this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
+    this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.heldLane = {}; this.picked = new Set();
     this.c = validateTeamConfig(config); this.root = root; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
@@ -1073,7 +1073,7 @@ export class Team {
     for (const pr of prs) {
       if ((this.s.scanOnlyAnnounced[pr.number] || this.s.scanOnlyRounds[pr.number]) && latestChecks(pr.statusCheckRollup).some(c => checkDone(c) && isSecretScanner({ name: c.name || c.context }) && CHECK_OK.includes(c.conclusion || c.state))) { delete this.s.scanOnlyAnnounced[pr.number]; delete this.s.scanOnlyRounds[pr.number]; }
     }
-    this.modes = this.budgets(); this.held = {}; this.heldPr = {};
+    this.modes = this.budgets(); this.held = {}; this.heldPr = {}; this.heldLane = {};
     await this.loadFiles(prs);
     this.recordHeadWriters(prs);
     this.recordReviewWaits(prs);
@@ -1274,6 +1274,11 @@ export class Team {
     if (!seen.includes(why) && seen.length < 6) seen.push(why);
     h[type] = seen.join(' | ');
     if (pr != null) this.heldPr[`${agent}:${type}:${pr}`] ||= why;
+    else {   // issue #996: a hold that is not about one pull request is the only reason that may be shown on every PR of the lane
+      const L = ((this.heldLane ||= {})[agent] ||= {}), s = L[type] ? L[type].split(' | ') : [];
+      if (!s.includes(why) && s.length < 6) s.push(why);
+      L[type] = s.join(' | ');
+    }
   }
   // Issue #258: open PRs that are ready for a first review but that no configured agent can review now. Each entry names the PR, its
   // head and, per agent, the real reason (its review model is a model that wrote the head, it is out of allowance, or it is waiting

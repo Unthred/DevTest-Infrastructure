@@ -155,7 +155,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     if (!pr.isDraft && checks === 'green' && !v && !team.carryPending(pr)) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
-      queues[reviewer].push({ type: 'review', ref: pr.number, title: titleOfPr(pr), reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : (team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.held?.[reviewer]?.review) ? ` (held: ${team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
+      queues[reviewer].push({ type: 'review', ref: pr.number, title: titleOfPr(pr), reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : (team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.heldLane?.[reviewer]?.review) ? ` (held: ${team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.heldLane[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
     }
   }
   for (const [agent, a] of Object.entries(c.agents)) for (const n of a.issues) {
