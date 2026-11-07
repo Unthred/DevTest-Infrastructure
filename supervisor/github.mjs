@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { SupervisorError } from './core.mjs';
 import { isStatusIssue } from './statusissue.mjs';
 import { redactTopology } from './redact.mjs';
+import { prerequisites } from './team.mjs';
 
 const TRANSIENT = /error connecting to|connection (reset|refused|timed out)|timeout|timed out|temporarily unavailable|\bEOF\b|TLS handshake|HTTP 5\d\d|could not resolve host/i;
 export const isTransient = text => TRANSIENT.test(String(text || ''));
@@ -27,6 +28,7 @@ export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding
 
 export function githubClient(config, gh = ghRunner()) {
   const repo = config.repository;
+  const resolved = new Map();   // closed or deleted prerequisites looked up by number (issue #522)
   const json = args => JSON.parse(gh(args) || 'null');
   const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels,closingIssuesReferences';
   const withLabels = prs => (Array.isArray(prs) ? prs.map(p => ({ ...p, labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l.name)) })) : prs);
@@ -43,11 +45,32 @@ export function githubClient(config, gh = ghRunner()) {
     // The pinned status issue (#358) is Foreman's own output, never work: it is dropped here so no planner or view sees it.
     // Issue #414: every OPEN issue is fetched (up to 1000, its own call), plus the newest 200 of any state for recently closed
     // prerequisites, so a labelled open issue cannot fall out of a 200 cap when newer issues crowd it out.
+    // Issue #522: a prerequisite named by an open issue but outside that list (an older closed issue) is looked up by number. A closed or
+    // deleted one is cached for the life of the client (neither changes back); a failed lookup is returned as state UNKNOWN with the
+    // reason, is not cached (so the next tick retries) and is never taken for open or closed. A deleted issue cannot block, so it is CLOSED.
     listIssues: async () => {
       const list = state => json(['issue', 'list', '--repo', repo, '--state', state, '--limit', state === 'open' ? '1000' : '200', '--json', 'number,title,state,body,labels,createdAt,closedAt']) || [];
       const byNo = new Map();
       for (const i of [...list('open'), ...list('all')]) byNo.set(i.number, i);
-      return [...byNo.values()].filter(i => !isStatusIssue(i)).map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) }));
+      const out = [...byNo.values()].filter(i => !isStatusIssue(i)).map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) }));
+      const wanted = new Set();
+      for (const i of out) if (i.state === 'OPEN') for (const d of config.depends_on_overrides?.[i.number] ?? prerequisites(i.body)) if (Number.isSafeInteger(d) && d > 0 && !byNo.has(d)) wanted.add(d);
+      for (const d of [...wanted].sort((x, y) => x - y)) {
+        let r = resolved.get(d);
+        if (!r) {
+          const gone = { number: d, title: '', state: 'CLOSED', labels: [], body: '', lookedUp: true, notFound: true };
+          try {
+            const i = json(['issue', 'view', String(d), '--repo', repo, '--json', 'number,title,state,labels']);
+            r = i && i.state ? { number: d, title: i.title, state: String(i.state).toUpperCase(), labels: (i.labels || []).map(l => l.name), body: '', lookedUp: true } : gone;
+          } catch (e) {
+            const reason = String(e?.message || e).replace(/^gh issue view failed:\s*/, '').slice(0, 200);
+            r = /could not resolve to an issue|not found|HTTP 404/i.test(reason) ? gone : { number: d, title: '', state: 'UNKNOWN', labels: [], body: '', lookedUp: true, unknownReason: reason };
+          }
+          if (r.state === 'CLOSED') resolved.set(d, r);   // an open one is looked up again (it may close); an unknown one is retried
+        }
+        out.push(r);
+      }
+      return out;
     },
     // One issue by number, for when it is not in the capped list.
     getIssue: async n => { const i = json(['issue', 'view', String(n), '--repo', repo, '--json', 'number,title,state,body,labels']); return i ? { ...i, labels: (i.labels || []).map(l => l.name) } : null; },
