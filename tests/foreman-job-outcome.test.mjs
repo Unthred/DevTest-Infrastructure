@@ -9,7 +9,7 @@ import http from 'node:http';
 import { jobOutcome, discarded, LOG_TAIL_ENTRIES } from '../supervisor/joboutcome.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 import { TranscriptWriter } from '../supervisor/transcript.mjs';
-import { createTools } from '../foreman-mcp/tools.mjs';
+import { createTools, fitItems } from '../foreman-mcp/tools.mjs';
 import { getJson } from '../foreman-mcp/source.mjs';
 
 const ID = 'c'.repeat(32), ID2 = 'd'.repeat(32);
@@ -109,7 +109,7 @@ test('the dashboard routes are GET-only, strict about the id, and end to end thr
 });
 
 test('foreman_discarded with a limit above 50 keeps shown equal to the list and states any cut', async () => {
-  const mk = n => ({ count: n, items: Array.from({ length: n }, (_, i) => ({ job: `j${i}`.padEnd(32, 'a'), at: new Date(1e12 + i).toISOString(), type: 'review', cause: 'review:no-verdict:' + 'x'.repeat(90), agent: 'codex', model: 'gpt-5-codex-long-model-name', pr: 600 + i, issue: 100 + i, tokens: 123456, cost: 1.23 })) });
+  const mk = n => ({ count: n, items: Array.from({ length: n }, (_, i) => ({ job: `j${i}`.padEnd(32, 'a'), at: new Date(1e12 + i).toISOString(), type: 'review', cause: 'review:no-verdict:' + 'x'.repeat(90), agent: 'codex', model: 'gpt-5-codex-long-model-name', pr: 600 + i, issue: 100 + i, tokens: 123456, costUsdEquivalent: 1.23 })) });
   const run = async (n, args) => { const tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0, stale: false }) }, readHost: () => ({}), getPath: async () => mk(n) }); const r = await tools.call('foreman_discarded', args); return { r, d: JSON.parse(r.text) }; };
   // Few enough records: all 200 requested are returned, with no cut.
   const small = await run(30, { limit: 200 }); assert.equal(small.d.items.length, 30); assert.equal(small.d.shown, 30); assert.equal(small.d.truncated, undefined);
@@ -119,6 +119,10 @@ test('foreman_discarded with a limit above 50 keeps shown equal to the list and 
   assert.ok(big.r.text.length <= 24000); assert.equal(big.d.items[0].job, 'j0'.padEnd(32, 'a'), 'newest-first order is kept');
   // A smaller limit that fits is honoured exactly.
   const lim = await run(200, { limit: 10 }); assert.equal(lim.d.items.length, 10); assert.equal(lim.d.shown, 10); assert.equal(lim.d.truncated, undefined);
+  // Null fields are left out; an entry that cannot fit gives zero entries and a note, not an oversize preview.
+  const nn = createTools({ source: { get: async () => ({}) }, readHost: () => ({}), getPath: async () => ({ count: 1, items: [{ job: 'a', model: null, pr: null }] }) });
+  assert.deepEqual(JSON.parse((await nn.call('foreman_discarded', {})).text).items, [{ job: 'a' }]);
+  const huge = fitItems({ items: [{ cause: 'x'.repeat(2000) }] }, 'items', 5, 1000); assert.equal(huge.items.length, 0); assert.equal(huge.shown, 0); assert.match(huge.truncatedNote, /not even one/);
   const desc = createTools({ source: { get: async () => ({}) }, readHost: () => ({}), getPath: async () => mk(1) }).list().find(x => x.name === 'foreman_discarded').description; assert.match(desc, /at most 200/);
 });
 

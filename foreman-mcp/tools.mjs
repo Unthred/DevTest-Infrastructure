@@ -32,10 +32,17 @@ export function fitItems(out, key, limit, max = MAX_TEXT) {
   const build = k => ({ ...out, shown: k, [key]: all.slice(0, k) });
   const fits = k => JSON.stringify(build(k), null, 1).length <= max - 400;
   let n = want;
-  if (!fits(n)) { let lo = 1, hi = n; while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (fits(mid)) lo = mid; else hi = mid - 1; } n = lo; }
+  if (!fits(n)) { let lo = 0, hi = n; while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (fits(mid)) lo = mid; else hi = mid - 1; } n = lo; }
   const r = build(n);
-  if (n < want) { r.truncated = true; r.truncatedNote = `only ${n} of ${want} requested entries fit the output limit; ask for a smaller limit`; }
+  if (n === 0 && want > 0) { r.truncated = true; r.truncatedNote = 'not even one entry fits the output limit'; }
+  else if (n < want) { r.truncated = true; r.truncatedNote = `only ${n} of ${want} requested entries fit the output limit; ask for a smaller limit`; }
   return r;
+}
+
+// Leaves out null fields of each entry so more entries fit the output limit (a missing field means null).
+export function dropNullFields(out, key) {
+  if (!Array.isArray(out?.[key])) return out;
+  return { ...out, [key]: out[key].map(it => (it && typeof it === 'object' ? Object.fromEntries(Object.entries(it).filter(([, v]) => v !== null)) : it)) };
 }
 
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
@@ -111,8 +118,8 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         if (id.length < 32) { const r = await source.get(); const hits = (r.view.jobs || []).filter(j => String(j.fullId || '').startsWith(id)); if (hits.length !== 1) throw new Error(hits.length ? 'that prefix matches more than one job; give more characters' : 'no job with that id in the recent jobs (give the full 32-character id for an older job)'); full = hits[0].fullId; }
         return await getPath(`/api/jobs/${full}/outcome.json`);
       } },
-    { name: 'foreman_discarded', description: 'Every result Foreman threw away in the last 7 days (a review refused at ingestion, a review that ended with no verdict, a job that failed after spending), newest first, with the cause and the cost (usage equivalent, not a charge). Optional limit (default 50, at most 200; if that many would not fit the output limit, fewer are returned and the cut is stated).', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
-      run: async args => { if (!getPath) throw new Error('discarded results are not available on this server'); const out = await getPath('/api/discarded.json'); const limit = num(args.limit, 1, 200, 50); return fitItems(out, 'items', limit); } },
+    { name: 'foreman_discarded', description: 'Every result Foreman threw away in the last 7 days (a review refused at ingestion, a review that ended with no verdict, a job that failed after spending), newest first, with the cause and the cost (usage equivalent, not a charge). Optional limit (default 50, at most 200; if that many would not fit the output limit, fewer are returned and the cut is stated; null fields are left out).', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
+      run: async args => { if (!getPath) throw new Error('discarded results are not available on this server'); const out = await getPath('/api/discarded.json'); const limit = num(args.limit, 1, 200, 50); return fitItems(dropNullFields(out, 'items'), 'items', limit); } },
     { name: 'foreman_installs', description: 'Install history: what is installed against main, the pending install and whether it is draining (jobs still running), the last pre-check failure with the failing test names and excerpt, any rollback latch or refusal, the version each Foreman process (Foreman, dashboard, workers) is running, and recent install records. Optional limit on the records (default 15). Read-only, no model call.', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 40 } }, additionalProperties: false },
       run: async args => { if (!getPath) throw new Error('install history is not available on this server'); const out = await getPath('/api/installs.json'); return { ...out, recent: (out.recent || []).slice(0, num(args.limit, 1, 40, 15)) }; } },
     { name: 'foreman_breaker_history', description: 'Every circuit-breaker trip, newest first: the cause, the wasted jobs and PRs, tokens and cost (usage equivalent, not a charge), when it tripped and when it was cleared (or that it is still halted). Optional limit (default 20). Read-only.', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } }, additionalProperties: false },
