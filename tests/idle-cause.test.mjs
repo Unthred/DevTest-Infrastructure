@@ -186,3 +186,13 @@ test('on an agent card the Now panel shows only that agent\'s idle line; the Ove
   const overview = renderRoute(view, { page: 'overview' }, opts('/')).html;
   for (const n of names) assert.ok(overview.includes(`data-idle-causes="${n}"`));
 });
+
+test('one job type carrying several joined reasons: a figure changing width does not change the cause key (issue #719)', () => {
+  const review = pct => ['review refused: PR #11 needs a fresh session on a different model than the writer of this head, '.padEnd(120, 'x'),
+    'review refused: PR #12 needs a fresh session on a different model than the writer of this head, '.padEnd(120, 'y'),
+    `review held: codex is out of allowance (weekly ${pct}% used, projected 100% before the reset on Sat 06:00, rate source window average)`].join(' | ');
+  assert.ok(review(9).length > 300);
+  const key = pct => holdCause(classifyIdle({ states: { codex: 'idle' }, holds: { codex: { review: review(pct) } } }).codex.hold);
+  assert.equal(key(9), key(10));
+  assert.match(key(9), /review held: codex is out of allowance/);
+});

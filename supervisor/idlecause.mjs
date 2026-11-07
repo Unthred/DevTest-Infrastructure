@@ -40,8 +40,10 @@ export function classifyIdle({ states, heldAgents = null, holds = {}, plan = [] 
     if (heldAgents?.includes(agent)) out[agent] = { cause: 'upgrade' };
     else if (mine) out[agent] = { cause: 'work-planned' };
     else {
-      // Each part is cut on its own, so one long part cannot push the other holds out of the stored text (issue #719).
-      const text = [...new Set(Object.values(holds?.[agent] || {}))].map(t => redact(String(t), 300)).join(' | ');
+      // Each value is itself a ' | '-joined list of reasons (Team.hold), so split it and cut every reason on its own: a figure that
+      // changes width then only moves its own reason's cut, and one long reason cannot push the others out (issue #719).
+      const parts = Object.values(holds?.[agent] || {}).flatMap(t => String(t).split(' | ')).map(t => t.trim()).filter(Boolean);
+      const text = [...new Set(parts.map(t => redact(t, 300)))].join(' | ');
       out[agent] = text ? { cause: 'named-hold', hold: text } : { cause: 'no-eligible-work' };
     }
   }
