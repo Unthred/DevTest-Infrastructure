@@ -13,7 +13,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
 import { readRearm, rearmUpgradeState } from './robust.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
-import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
+import { checksState, agentOfBranch, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
+import { pruneVersions, jobVersions } from './versions.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { redact, redactLong, redactAddresses } from './redact.mjs';
 
@@ -31,8 +32,7 @@ export const refusalText = (r, localDomains = (process.env.DEVTEST_LOCAL_DOMAINS
   return out.replace(/(?<![\w.:/-])[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:\d{2,5}\b/gi, m => HOST_PORT_SKIP.test(m.replace(/:\d+$/, '')) ? m : '[host]').replace(/(?<![\w.:/-])(?:\/[\w.@+-]+){2,}/g, '[path]');
 };
 export const URGENT_REQUEST_MAX_MS = 24 * 3600 * 1000;   // issue #708: an install-now request nobody spent lapses after a day
-export const MIN_INSTALL_GAP_MS = MIN_INSTALL_GAP_DEFAULT_MINUTES * 60 * 1000;   // issue #695: the shipped batching window
-export const QUIET_MAX_WAIT_MS = DRAIN_DEFAULT_MINUTES * 60 * 1000;   // one source of truth: the shipped team default (issue #191)
+export const MIN_INSTALL_GAP_MS = MIN_INSTALL_GAP_DEFAULT_MINUTES * 60 * 1000;   // issue #695: the batching window; issue #846: 0 by default (opt-in)
 // Issue #353: a short cooldown after an install, not an hourly limit. A merged fix installs on the first tick with no running job.
 // A loop is still prevented: an install must be verified by a live tick (or rolled back and latched) before the next one starts.
 export const MIN_UPGRADE_INTERVAL_MS = 2 * 60 * 1000;
@@ -266,9 +266,9 @@ export const NEXT_INSTALL_WHY = {
 export const holdOf = (result, s) => (result === 'upgraded' ? { to: s?.pending?.to || null } : null);
 
 export class SelfUpgrade {
-  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
+  constructor({ root, deps, clock = { now: () => Date.now() }, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
     this.lock = lock; this.lockWaitMs = lockWaitMs; this.lockSleep = lockSleep;   // issue #798: lock() returns an unlock function, or null while another process holds upgrade.lock
-    this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs; this.minGapMs = minGapMs;   // issue #136: the configurable drain bound; issue #695: minGapMs is the batching window between installs (0 = off)
+    this.root = root; this.d = deps; this.clock = clock; this.minGapMs = minGapMs;   // issue #695: minGapMs is the batching window between installs (0 = off, the default since issue #846; there is no drain)
     this.dir = path.join(root, 'team');
     this.stateFile = path.join(this.dir, 'self-upgrade.json');
     this.latchFile = path.join(this.dir, 'self-upgrade.latch');       // the homeowner clears the latch by removing this file
@@ -396,7 +396,26 @@ export class SelfUpgrade {
     const why = NEXT_INSTALL_WHY[result];
     if (why) { this.s.nextInstall = { to: this.s.main?.sha || null, at: null, why, state: result.slice(0, 12) }; this.save(); }
     else if (result !== 'batched' && this.s.nextInstall) { delete this.s.nextInstall; this.save(); }
+    try { this.prune(); } catch { /* issue #846: cleanup is best effort; the next tick tries again */ }
     return result;
+  }
+  // Issue #846: remove side-by-side installs nothing names any more. Runs every tick; logs what it removed. Keeps the current version, the
+  // last good version (the rollback target), a pending install's two versions, any dashboard server's version and every version a live
+  // job record names. It does nothing while the rollback target is not known yet or a live job has no recorded version.
+  prune() {
+    if (typeof this.d.referencedVersions !== 'function') return null;
+    const cur = this.d.installed(); if (!cur) return null;
+    const refs = this.d.referencedVersions();
+    const why = !SHA.test(this.s.lastGood || '') ? 'the rollback target is not recorded yet (set by the next verified install)' : refs.unknown ? 'a live job has no recorded version' : null;
+    if (why) { if (this.s.versionCleanup?.skipped !== why) { this.s.versionCleanup = { at: this.clock.now(), skipped: why }; this.save(); } return { removed: [], skipped: why }; }
+    const keep = new Set([cur, this.s.lastGood, this.s.pending?.from, this.s.pending?.to, this.s.dashboardGood?.version, ...refs.versions].filter(v => SHA.test(v || '')));
+    const out = pruneVersions({ root: this.root, keep, now: this.clock.now() });
+    if (out.removed.length) {
+      this.record({ result: 'versions_removed', removed: out.removed, kept: out.kept });
+      this.s.versionCleanup = { at: this.clock.now(), removed: out.removed.length, kept: out.kept.length };
+      this.save();
+    } else if (this.s.versionCleanup?.skipped) { delete this.s.versionCleanup; this.save(); }
+    return out;
   }
   async stepInner() {
     if (this.latch()) return 'latched';
@@ -573,7 +592,7 @@ export class SelfUpgrade {
       return this.rollback(p.from, p.to, 'no live tick ran under the new version within an hour', p.prs, { ...p.checks, liveTick: 'missing' });
     }
     if (!ok) return this.rollback(p.from, p.to, `live tick failed: ${String(reason || 'error').slice(0, 160)}`, p.prs, { ...p.checks, liveTick: 'failed' });
-    delete this.s.pending; this.s.lastFinishedAt = now; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();
+    delete this.s.pending; this.s.lastFinishedAt = now; this.s.lastGood = p.from; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();
     this.record({ from: p.from, to: p.to, prs: p.prs, checks: { ...p.checks, liveTick: 'ok' }, result: 'verified' });
     await this.restartDashboard(p);
     return 'verified';
@@ -731,6 +750,8 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
   return {
     config,
     installed: () => installedSha(root),
+    // Issue #846: the versions something still uses: live job records, and every running dashboard server.
+    referencedVersions: () => { const j = jobVersions(root); for (const d of findDashboards()) { if (d.version) j.versions.add(d.version); else j.unknown++; } return j; },
     fetchMain: () => { git('fetch', '--quiet', 'origin', 'main'); return git('rev-parse', 'origin/main'); },
     isAncestor: (a, b) => run('git', ['-C', repo, 'merge-base', '--is-ancestor', a, b]).status === 0,
     remoteUrl,

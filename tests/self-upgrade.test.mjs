@@ -997,3 +997,102 @@ test('issue #798: status hides a lapsed homeowner request without changing the s
   w.up.s.urgent = { reason: 'the previous install rolled back', at: w.state.now - 48 * 3600 * 1000 };
   assert.ok(w.up.urgentView(w.state.now));
 });
+
+// ---- issue #846: side-by-side installs, no drain, cleanup of versions nothing names
+import { pruneVersions, jobVersions } from '../supervisor/versions.mjs';
+const V = c => c.repeat(40);
+const OLD = Date.now() - 3600000 * 24;
+function versionRoot(t, shas, jobs = []) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ver-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const sha of shas) { const d = path.join(root, 'versions', sha); fs.mkdirSync(path.join(d, 'supervisor'), { recursive: true }); fs.writeFileSync(path.join(d, 'supervisor/cli.mjs'), '//'); fs.utimesSync(d, OLD / 1000, OLD / 1000); }
+  fs.mkdirSync(path.join(root, 'jobs'), { recursive: true });
+  jobs.forEach((j, i) => fs.writeFileSync(path.join(root, 'jobs', `${i}.json`), JSON.stringify(j)));
+  return root;
+}
+const present = root => fs.readdirSync(path.join(root, 'versions')).sort();
+
+test('issue #846: cleanup removes versions nothing names, and keeps current, last good, and the version a live job names', async t => {
+  const root = versionRoot(t, [V('1'), V('2'), V('3'), V('4'), V('5')], [
+    { status: 'running', supervisorVersion: V('2') }, { status: 'completed', supervisorVersion: V('3') }, { status: 'paused_limit', supervisorVersion: V('4') }]);
+  const w = world(t, {}); w.deps.installed = () => V('1'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } });
+  up.s.lastGood = V('5');
+  const out = up.prune();
+  assert.deepEqual(out.removed, [V('3')]);                          // only the completed job's version is unreferenced
+  assert.deepEqual(present(root), [V('1'), V('2'), V('4'), V('5')]);
+  const log = fs.readFileSync(path.join(root, 'team/upgrades.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(log.at(-1).result, 'versions_removed'); assert.deepEqual(log.at(-1).removed, [V('3')]);
+  // the job ends: its version goes on the next tick; current and the rollback target stay whatever else happens
+  fs.writeFileSync(path.join(root, 'jobs/0.json'), JSON.stringify({ status: 'completed', supervisorVersion: V('2') }));
+  fs.writeFileSync(path.join(root, 'jobs/2.json'), JSON.stringify({ status: 'stopped', supervisorVersion: V('4') }));
+  assert.deepEqual(up.prune().removed.sort(), [V('2'), V('4')]);
+  assert.deepEqual(present(root), [V('1'), V('5')]);
+  assert.deepEqual(up.prune().removed, []);
+});
+
+test('issue #846: a paused or blocked job keeps its version; a pending install keeps both of its versions', async t => {
+  const root = versionRoot(t, [V('1'), V('2'), V('3'), V('4'), V('5'), V('6')], [{ status: 'paused_manual', supervisorVersion: V('2') }, { status: 'blocked', supervisorVersion: V('3') }]);
+  const w = world(t, {}); w.deps.installed = () => V('1'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } });
+  up.s.lastGood = V('1'); up.s.pending = { from: V('4'), to: V('5') };
+  assert.deepEqual(up.prune().removed, [V('6')]);
+  assert.deepEqual(present(root), [V('1'), V('2'), V('3'), V('4'), V('5')]);
+});
+
+test('issue #846: nothing is removed while the rollback target is unknown or a live job has no recorded version', async t => {
+  const root = versionRoot(t, [V('1'), V('2')], []);
+  const w = world(t, {}); w.deps.installed = () => V('1'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } });
+  assert.match(up.prune().skipped, /rollback target/); assert.deepEqual(present(root), [V('1'), V('2')]);
+  up.s.lastGood = V('1'); fs.writeFileSync(path.join(root, 'jobs/x.json'), JSON.stringify({ status: 'running' }));
+  assert.match(up.prune().skipped, /no recorded version/); assert.deepEqual(present(root), [V('1'), V('2')]);
+  fs.writeFileSync(path.join(root, 'jobs/x.json'), '{not json');   // an unreadable record counts as a reference
+  assert.match(up.prune().skipped, /no recorded version/);
+  fs.rmSync(path.join(root, 'jobs/x.json'));
+  assert.deepEqual(up.prune().removed, [V('2')]);
+});
+
+test('issue #846: pruneVersions never touches a symlink, a fresh directory or a name that is not a full sha', async t => {
+  const root = versionRoot(t, [V('1'), V('2')]);
+  fs.symlinkSync(path.join(root, 'versions', V('1')), path.join(root, 'versions', V('a')));
+  fs.mkdirSync(path.join(root, 'versions', 'notasha')); fs.mkdirSync(path.join(root, 'versions', V('b')));   // fresh: mtime is now
+  fs.symlinkSync('versions/' + V('1'), path.join(root, 'current'));
+  const out = pruneVersions({ root, keep: new Set([V('1')]) });
+  assert.deepEqual(out.removed, [V('2')]);
+  assert.deepEqual(present(root), ['notasha', V('1'), V('a'), V('b')].sort());
+  assert.equal(fs.readlinkSync(path.join(root, 'current')), 'versions/' + V('1'));
+});
+
+test('issue #846: a verified install records the previous version as the rollback target; a rollback does not move it', async t => {
+  const w = world(t, {}); await w.up.step();
+  assert.equal(await w.up.verifyPending({ running: TO, ok: true }), 'verified'); assert.equal(w.up.s.lastGood, FROM);
+});
+
+test('issue #846: a job started before an install finishes from its own version and its record is read by the new one', async t => {
+  // The worker records the directory it runs from; the new version keeps it, reads the same record, and the old worker keeps running there.
+  const root = versionRoot(t, [V('1'), V('2')], [{ status: 'running', supervisorVersion: V('1'), id: 'a' }]);
+  const w = world(t, { active: 1 }); w.deps.installed = () => V('2'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } }); up.s.lastGood = V('2');
+  assert.deepEqual(up.prune().removed, []);                          // V1 is not current and not the rollback target, but a running job is on it
+  assert.ok(fs.existsSync(path.join(root, 'versions', V('1'), 'supervisor/cli.mjs')));
+  const job = JSON.parse(fs.readFileSync(path.join(root, 'jobs/0.json'), 'utf8')); assert.equal(job.supervisorVersion, V('1'));   // the new version reads the record as is
+  fs.writeFileSync(path.join(root, 'jobs/0.json'), JSON.stringify({ ...job, status: 'completed' }));   // the old worker finished and saved its verdict
+  assert.deepEqual(up.prune().removed, [V('1')]);
+});
+
+test('issue #846: the wait shown on the dashboard is a rule, never a clock time, and none is shown when nothing waits', async t => {
+  const w = world(t, { verdicts: {} });                              // not reviewed
+  assert.equal(await w.up.step(), 'not-eligible');
+  assert.equal(w.up.s.nextInstall.at, null); assert.match(w.up.s.nextInstall.why, /independent PASS review with green CI/);
+  w.state.verdicts[`7:${H('d')}`] = { verdict: 'PASS', reviewer: 'codex' }; w.up.s.alerted = {};
+  assert.equal(await w.up.step(), 'upgraded'); assert.equal(w.up.s.nextInstall, undefined);
+  assert.equal(await w.up.step(), 'awaiting-verification'); assert.match(w.up.s.nextInstall.why, /verified/);
+  assert.equal(await w.up.verifyPending({ running: TO, ok: true }), 'verified');
+  w.state.installed = TO; w.state.now += 3 * MIN_UPGRADE_INTERVAL_MS; assert.equal(await w.up.step(), 'current'); assert.equal(w.up.s.nextInstall, undefined);
+});
+
+test('issue #846: the worker stamps the install directory it runs from on its job record', () => {
+  const src = fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8');
+  assert.match(src, /job\.supervisorVersion = runningSha\(self\) \|\| 'source'/);
+  assert.equal(runningSha(`/x/versions/${V('a')}/supervisor/cli.mjs`), V('a')); assert.equal(runningSha('/repo/supervisor/cli.mjs'), null);
+});
