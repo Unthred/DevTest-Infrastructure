@@ -2726,9 +2726,10 @@ export class Team {
       const n = Number(k), issue = issueByNo.get(n), re = new RegExp(`/issue-${n}(\\D|$)`);
       if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || live.has(n)) continue;
       if (prs.some(p => agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName))) continue;
-      // Issue #976: the work landed under another merged pull request whose title says it closes, fixes, resolves or implements this issue
-      // (or whose closing references name it, already covered by `delivered`): the hold is not a fault, so it is recorded and not raised.
-      const via = (this.merged || []).find(m => new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|implement(?:s|ed)?)\\s+#${n}\\b`, 'i').test(String(m.title || '')));
+      // Issue #976: the work landed under another merged pull request that references this issue (`#N` in its title, an issue-N branch, or
+      // the issue it closed): the hold is not a fault, so it is recorded and not raised. A pull request never counts for its own number.
+      const refRe = new RegExp(`(^|[^\\w/])#${n}(?!\\d)`);
+      const via = (this.merged || []).find(m => m.number !== n && (refRe.test(String(m.title || '')) || re.test(String(m.headRefName || '')) || m.issue === n));
       if (via) { (this.s.staleCleared ||= {})[n] = { pr: via.number, at: this.clock.now() }; continue; }
       if (closed === null) { try { closed = (await this.gh.listClosedPulls?.()) ?? false; } catch { closed = false; } }
       if (closed) {

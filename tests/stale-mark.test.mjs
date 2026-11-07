@@ -170,12 +170,31 @@ test('resumeTransient: an aged-out job with a missing record is settled; a runni
   assert.ok(looked.includes(live), 'the running job still is');
 });
 
-test('issue #976: a merged PR whose title says it fixes the issue clears the hold with a record; an unrelated mention does not', async t => {
+test('issue #976: a merged PR whose title says it fixes the issue clears the hold with a record; an unrelated number does not', async t => {
   const w = world(t, { merged: [{ number: 500, title: 'Dashboard: fixes #23 for good', headRefName: 'codex/other', closingIssuesReferences: [] }], closed: [] });
   await w.team.plan();
   assert.deepEqual(w.team.stale, {});
   assert.equal(w.team.s.staleCleared[23].pr, 500);
-  const n = world(t, { merged: [{ number: 501, title: 'Follow-up to #23, see also #230', headRefName: 'codex/other', closingIssuesReferences: [] }], closed: [] });
+  const n = world(t, { merged: [{ number: 501, title: 'Follow-up to #230, see also #2', headRefName: 'codex/other', closingIssuesReferences: [] }], closed: [] });
   await n.team.plan();
-  assert.deepEqual(Object.keys(n.team.stale), ['23'], 'a plain mention is not delivery');
+  assert.deepEqual(Object.keys(n.team.stale), ['23'], 'a different issue number is not delivery');
+});
+
+// Issue #976 review: a reference in a merged title clears the hold, and the dashboard (cache-backed, no tick) agrees.
+test('a merged PR that references the issue as (#N) clears the hold; a different number or the PR itself does not', async t => {
+  const hit = world(t, { merged: [{ number: 500, title: 'Dashboard: more things (#23)', headRefName: '' }], closed: [] });
+  await hit.team.plan();
+  assert.deepEqual(hit.team.stale, {}); assert.equal(hit.team.s.staleCleared[23].pr, 500);
+  const other = world(t, { merged: [{ number: 501, title: 'Something (#230)', headRefName: '' }, { number: 23, title: 'self', headRefName: '' }], closed: [] });
+  await other.team.plan();
+  assert.ok(other.team.stale[23]);
+});
+
+test('dashboard: a hold cleared by a merged PR title is not an Inbox item, from the cached merged title or the recorded clearance', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-dash2-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); fs.chmodSync(root, 0o700);
+  const cache = { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: [], issues: [{ number: 23, title: 'A', state: 'OPEN', body: '', labels: [] }], merged: [{ number: 500, title: 'Dashboard: fixes #23 for good', mergedAt: '2026-11-07T00:00:00Z' }] };
+  const view = state => buildView({ config: cfg(), root, jobs: [], events: [], state, cache, snapshots: [], now: NOW });
+  assert.ok(!(await view({ implemented: { 23: MARKED } })).attention.some(a => a.id === 'stale-mark-23'), 'title from the cache');
+  assert.ok(!(await view({ implemented: { 23: MARKED }, staleCleared: { 23: { pr: 9, at: NOW } } })).attention.some(a => a.id === 'stale-mark-23'), 'recorded clearance');
+  assert.ok((await buildView({ config: cfg(), root, jobs: [], events: [], state: { implemented: { 23: MARKED } }, cache: { ...cache, merged: [] }, snapshots: [], now: NOW })).attention.some(a => a.id === 'stale-mark-23'));
 });
