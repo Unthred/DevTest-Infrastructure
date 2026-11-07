@@ -246,10 +246,11 @@ test('Next panel shows the dispatcher plan and a live countdown to the next tick
   // NOW is exactly on a cron slot, so the slot after the last tick (12:59) is just due: the tick is starting (grace before overdue) (the countdown states are tested in dashboard-next-tick.test.mjs)
   assert.match(body, new RegExp(`data-overdue="${Math.floor((NOW - 60000) / 300000) * 300000 + 300000}"`)); assert.match(body, /data-tick-state="starting"><span data-overdue="\d+">tick due, starting<\/span>/);
   const bar = body.slice(body.indexOf('class="statusbar"'), body.indexOf('<nav class="nav"'));
-  for (const w of ['Overall health', 'Last tick', 'Tick ok', 'Next', 'Data', 'Fresh', 'Team loop', 'Enabled', 'Version', 'Deploy needed']) assert.ok(bar.includes(w), w);
-  assert.match(bar, /1m ago/); assert.match(bar, /badge sev-warning[^>]*>[\s\S]*1111111 → 2222222/);
+  for (const w of ['Overall health', 'Last tick', 'Tick ok', 'Next']) assert.ok(bar.includes(w), w);
+  for (const w of ['Team loop', 'Deploy needed']) assert.ok(!bar.includes(w), `${w} moved to the System page (issue #924)`);
+  assert.match(bar, /1m ago/); assert.match(body.slice(body.indexOf('</header>')), /Overview/);
   const offline = (await (await serve(t, { cache: { ...cache(), tick: undefined } })).get('/')).body;
-  assert.match(offline, /No tick yet/); assert.match(offline, /sev-action[^>]*>[\s\S]*No data/);
+  assert.match(offline, /No tick yet/); assert.match(offline, /No tick yet/);
 });
 test('version drift: parsed from the self-upgrade records only; installed means the last upgraded or verified commit', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ver-')); fs.mkdirSync(path.join(root, 'team'));

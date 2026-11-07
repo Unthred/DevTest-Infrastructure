@@ -232,7 +232,7 @@ a[title]{cursor:help}
 @media (max-width:640px){.trunc{max-width:34ch}.issue-story .trunc{max-width:100%}}
 
 /* issue #140: app bar carries the back button and page title; a gap before stacked card groups */
-.statusbar .pagehead{margin:0;flex:1 1 auto;min-width:0}.statusbar h1{font-size:var(--fs-lg);margin:0}
+.statusbar h1{font-size:var(--fs-lg);margin:0;flex:1 1 auto;min-width:0}
 .cards.stacked{margin-top:var(--sp3)}
 
 /* ---- issue #61: collapsing cards, back to top, clickable status pills, highlighted targets */
@@ -287,9 +287,7 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .agent-badge .ab-role::before,.agent-badge .ab-state::before{content:"\00b7";margin-right:var(--sp1)}
 @media(min-width:1100px){
   .statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}
-  .statusbar>*{flex:none;white-space:nowrap}.statusbar>.pagehead{flex:1 1 100%;min-width:0;white-space:normal}
-  .statusbar .pagehead h1{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .brand{margin-right:0}
+  .statusbar>*{flex:none;white-space:nowrap}.statusbar>h1{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
 /* 1100-1439px: the full bar is wider than the viewport, so the stat labels go first (values keep their badges and titles), then the role below 1280px */
 @media(min-width:1100px) and (max-width:1439px){.statusbar{gap:var(--sp2)}.statusbar .stat .k{display:none}}
@@ -298,7 +296,7 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 @media(max-width:639px){
   .statusbar{display:grid;grid-template-columns:1fr auto;align-items:center}
   .statusbar>.brand{grid-column:1}.statusbar>.theme{grid-column:2;grid-row:1}
-  .statusbar>.pagehead{grid-column:1/-1}
+  .statusbar>h1{grid-column:1/-1}
   .statusbar>.agent-lines{grid-column:1/-1}
   .agent-lines ul{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr))}
   .agent-badge{justify-content:space-between;min-height:44px;padding:0 var(--sp3)}
@@ -444,3 +442,27 @@ body.layout-editing{overscroll-behavior:contain}
 .inbox-decided-list li{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2)}.inbox-decided-list .inbox-title{overflow-wrap:anywhere}
 .inbox-undo{display:inline;margin:0}.linkbtn{font:inherit;background:none;border:0;padding:0 var(--sp1);color:var(--link);text-decoration:underline;cursor:pointer;min-height:36px}
 @media(max-width:640px){.inbox-form{flex:1 1 auto}.inbox-form .btn{width:100%;justify-content:center}.linkbtn{min-height:44px;min-width:44px}.inbox-decided summary{min-height:44px}}
+
+/* ---- issue #924: right-aligned app bar, breadcrumb strip below it, sticky option, resizable vertical menu */
+.statusbar>.theme,.statusbar>.stickybtn{margin-left:0}
+.statusbar>h1{margin-right:auto}.brand{margin-right:var(--sp3)}
+.stickybtn{background:none;border:1px solid var(--line);color:var(--fg);border-radius:var(--r-sm);min-width:44px;min-height:44px;cursor:pointer}
+.stickybtn[aria-pressed=true]{background:var(--link);color:var(--surface);border-color:var(--link)}
+.crumbstrip{display:flex;align-items:center;gap:var(--sp3);flex-wrap:wrap;padding:var(--sp1) var(--sp4);background:var(--surface);border-bottom:1px solid var(--line)}
+html[data-sticky=on] .statusbar{position:sticky;top:0;z-index:40}
+html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h));z-index:39}
+.nav-resize{display:none}
+@media(min-width:640px){
+  html[data-dock=left] body,html[data-dock=right] body{grid-template-columns:var(--nav-w,13rem) minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr)}
+  html[data-dock=right] body{grid-template-columns:minmax(0,1fr) var(--nav-w,13rem)}
+  html[data-rail=collapsed][data-dock=left] body{grid-template-columns:auto minmax(0,1fr)}html[data-rail=collapsed][data-dock=right] body{grid-template-columns:minmax(0,1fr) auto}
+  html[data-dock=left] .crumbstrip,html[data-dock=right] .crumbstrip{grid-column:1/-1;grid-row:2}
+  html[data-dock=left] .nav,html[data-dock=right] .nav,html[data-dock=left] main,html[data-dock=right] main{grid-row:3}
+  html[data-dock=left] .nav,html[data-dock=right] .nav{position:sticky;top:0;max-height:100vh;overflow-x:hidden;overflow-y:auto}
+  html[data-sticky=on][data-dock=left] .nav,html[data-sticky=on][data-dock=right] .nav{top:var(--bar-real,var(--bar-h));max-height:calc(100vh - var(--bar-real,var(--bar-h)))}
+  html[data-dock=left] .nav-resize,html[data-dock=right] .nav-resize{display:block;position:absolute;top:0;bottom:0;width:8px;cursor:col-resize;touch-action:none;z-index:2}
+  html[data-dock=left] .nav-resize{right:-4px}html[data-dock=right] .nav-resize{left:-4px}
+  html[data-rail=collapsed] .nav-resize{display:none!important}
+  .nav-resize:hover,.nav-resize:focus-visible,.nav-resize.drag{background:var(--link);opacity:.5}
+}
+@media(max-width:639px){.stickybtn,.nav-resize{display:none!important}}

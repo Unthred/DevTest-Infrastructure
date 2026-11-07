@@ -621,6 +621,33 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
   });
 }
 
+// sticky app bar and resizable vertical menu (issue #924); both remembered per viewer
+{
+  const NAVW = { min: 140, max: 480, def: 208 };
+  const clampW = n => Math.min(NAVW.max, Math.max(NAVW.min, Math.round(n)));
+  const sticky = $('#sticky'), bar = $('.statusbar');
+  const applySticky = () => { const on = store.get('dash.sticky') === true; if (on) root.dataset.sticky = 'on'; else delete root.dataset.sticky; sticky?.setAttribute('aria-pressed', String(on)); };
+  const measure = () => { if (bar) root.style.setProperty('--bar-real', bar.offsetHeight + 'px'); };
+  applySticky(); measure(); addEventListener('resize', measure);
+  sticky?.addEventListener('click', () => { store.set('dash.sticky', store.get('dash.sticky') !== true); applySticky(); });
+  const sep = $('[data-nav-resize]'), nav = $('#nav');
+  const setW = (n, save) => { const w = clampW(n); root.style.setProperty('--nav-w', w + 'px'); sep?.setAttribute('aria-valuenow', String(w)); if (save) store.set('dash.navw', w); };
+  const saved = store.get('dash.navw'); if (typeof saved === 'number') setW(saved, false);
+  if (sep) { sep.setAttribute('aria-valuemin', String(NAVW.min)); sep.setAttribute('aria-valuemax', String(NAVW.max)); }
+  sep?.addEventListener('keydown', e => {
+    const cur = nav.getBoundingClientRect().width, dir = root.dataset.dock === 'right' ? -1 : 1;
+    const to = { ArrowLeft: cur - 16 * dir, ArrowRight: cur + 16 * dir, Home: NAVW.def }[e.key]; if (to === undefined) return;
+    e.preventDefault(); setW(to, true);
+  });
+  sep?.addEventListener('pointerdown', e => {
+    e.preventDefault(); sep.setPointerCapture(e.pointerId); sep.classList.add('drag');
+    const left = nav.getBoundingClientRect().left, right = nav.getBoundingClientRect().right, rightDock = root.dataset.dock === 'right';
+    const move = ev => setW(rightDock ? right - ev.clientX : ev.clientX - left, false);
+    const end = ev => { sep.removeEventListener('pointermove', move); sep.removeEventListener('pointerup', end); sep.removeEventListener('pointercancel', end); sep.classList.remove('drag'); setW(rightDock ? right - ev.clientX : ev.clientX - left, ev.type === 'pointerup'); if (ev.type === 'pointercancel') { const s2 = store.get('dash.navw'); if (typeof s2 === 'number') setW(s2, false); else root.style.removeProperty('--nav-w'); } };
+    sep.addEventListener('pointermove', move); sep.addEventListener('pointerup', end); sep.addEventListener('pointercancel', end);
+  });
+}
+
 // remembered time range, per viewer (issue #140). The server renders the default (7d) when the address has no range; the saved choice is
 // applied by reloading once with it in the address, and a click on a range saves it.
 {
