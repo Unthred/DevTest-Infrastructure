@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
-import { takeBreakerResumeRequests } from './breakerresume.mjs';
+import { takeBreakerResumeRequests, discardBreakerResumeRequests } from './breakerresume.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as breaker from './breaker.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
@@ -1715,12 +1715,13 @@ export class Team {
   }
   // Issue #626: apply the Resume clicks the dashboard left (it never edits this state itself). Scopes that no longer exist are ignored.
   applyResumeRequests(report) {
-    const reqs = takeBreakerResumeRequests(this.root);
+    const reqs = takeBreakerResumeRequests(this.root, { consume: false });
     for (const r of reqs) {
       const cleared = breaker.resume(this.s.breaker, r.scope, this.clock.now());
       if (cleared.length) (report.breaker ||= {}).resumed = [...((report.breaker || {}).resumed || []), { scope: r.scope, cleared, by: 'dashboard' }];
     }
-    if (reqs.length) this.save();
+    // The request files go only after the state is saved: if the save throws, the next tick applies the clicks again (issue #737).
+    if (reqs.length) { this.save(); discardBreakerResumeRequests(reqs); }
   }
   // Issue #549: clear one cause, 'global' or 'all'. Reached only from the homeowner's CLI (see cli.mjs), never from a job.
   breakerResume(scope) {

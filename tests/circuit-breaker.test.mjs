@@ -427,3 +427,41 @@ test('a review halt can clear itself through the planner: a review of another PR
   assert.deepEqual(Object.values(c.halts)[0].subjects, ['pr:10', 'pr:11']);
   assert.ok(B.blocks(c, L, { type: 'review', pr: 11 })); assert.equal(B.blocks(c, L, { type: 'review', pr: 12 }), null);
 });
+
+// Issue #737
+test('a halt recorded before subjects existed keeps holding the whole type after evaluate, instead of an empty list', () => {
+  const cheap = { usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 0.1 } }, s = B.emptyState();
+  for (const pr of [10, 11, 12]) { const j = blocked(cheap); B.record(s, waste(j, { pr }), NOW); }
+  const cause = 'review:blocked:postcondition_not_met';
+  B.evaluate(s, L, NOW);
+  assert.equal(s.halts[cause], undefined, 'three different pull requests do not trip it');
+  s.halts[cause] = { cause, since: NOW - 1000, trippedBy: 'count', jobs: 3, tokens: 0, cost: 0, prs: [10, 11, 12], issues: [], types: ['review'], jobIds: [] };
+  B.evaluate(s, L, NOW);
+  assert.equal(s.halts[cause].subjects, undefined, 'no empty list is invented');
+  assert.ok(B.blocks(s, L, { type: 'review', pr: 99 }), 'the old whole-type hold still applies');
+});
+
+test('a continue job carrying both pr and issue is held when either subject is held', () => {
+  const s = B.emptyState();
+  for (let i = 0; i < 3; i++) { const j = blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 0.1 } }); B.record(s, waste(j, { pr: null, issue: 7 }), NOW); }
+  B.evaluate(s, L, NOW);
+  const h = Object.values(s.halts)[0];
+  assert.deepEqual(h.subjects, ['issue:7']);
+  const type = h.types[0];
+  assert.ok(B.blocks(s, L, { type, pr: 50, issue: 7 }), 'issue-scoped halt holds a job that also has a pr');
+  assert.equal(B.blocks(s, L, { type, pr: 50, issue: 8 }), null, 'unrelated pr and issue still run');
+});
+
+test('a resume request file survives a failed save and is applied by the next tick', async t => {
+  const w = world(t);
+  for (const id of ['r1', 'r2', 'r3']) reviewBlocked(w, id, 40);
+  await w.team.ingest({ ingested: [], skipped: [] }); w.team.applyBreaker([], {});
+  const cause = 'review:blocked:postcondition_not_met';
+  requestBreakerResume(w.team.root, cause, NOW + 1);
+  const save = w.team.save; w.team.save = () => { throw new Error('disk full'); };
+  assert.throws(() => w.team.applyResumeRequests({}), /disk full/);
+  w.team.save = save;
+  const r = {}; w.team.s.breaker.halts[cause] ||= {}; w.team.applyResumeRequests(r);
+  assert.deepEqual(r.breaker?.resumed?.[0]?.scope, cause, 'the click was not lost');
+  assert.deepEqual(takeBreakerResumeRequests(w.team.root), []);
+});

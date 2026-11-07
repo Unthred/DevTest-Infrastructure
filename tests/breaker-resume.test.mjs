@@ -14,7 +14,7 @@ import { JOB_MARKER, underSupervisedJob } from '../supervisor/breaker.mjs';
 const CAUSE = 'review:blocked:postcondition_not_met';
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [10] } } };
-async function serve(t, { halted = true, supervised = () => false } = {}) {
+async function serve(t, { halted = true, supervised = () => false, peerPid = () => 4242 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash626-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
   const at = Date.now() - 60000;
@@ -23,7 +23,7 @@ async function serve(t, { halted = true, supervised = () => false } = {}) {
   fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ breaker: { waste: {}, halts: halted ? { [CAUSE]: halt } : {}, global: null, clearedAt: {} } }));
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
   const port = server.address().port, clock = { now: Date.now() };
-  server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => clock.now, supervised }));
+  server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => clock.now, supervised, peerPid }));
   const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => { const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject); r.end(body); });
   // What a browser sends for a click on a form button on the dashboard itself.
   const click = (scope = CAUSE, { proof = writeToken(root), origin = `http://127.0.0.1:${port}`, person = true } = {}) => req('POST', '/breaker-resume', {
@@ -81,4 +81,37 @@ test('a dashboard running under a supervised job refuses, even with a correct pr
 
 test('the default guard is the supervised-job check (the job marker in the environment)', () => {
   assert.equal(underSupervisedJob({ env: { [JOB_MARKER]: '1' } }), true);
+});
+
+// Issue #737: the peer of the request is checked, not only the dashboard's own process.
+import { inodeOf, pidOfInode, isLocalPeer } from '../supervisor/peerpid.mjs';
+test('a loopback caller that descends from a supervised job is refused; an unidentifiable caller is refused; a person passes', async t => {
+  const asked = [];
+  const s = await serve(t, { peerPid: () => 777, supervised: o => { asked.push(o?.pid); return o?.pid === 777; } });
+  assert.equal((await s.click()).status, 403);
+  assert.deepEqual(takeBreakerResumeRequests(s.root), []);
+  assert.ok(asked.includes(777));
+  const unknown = await serve(t, { peerPid: () => null });
+  assert.equal((await unknown.click()).status, 403);
+  assert.deepEqual(takeBreakerResumeRequests(unknown.root), []);
+  const person = await serve(t, { peerPid: () => 4242 });
+  assert.equal((await person.click()).status, 303);
+});
+
+test('peer lookup: port pair to socket inode to pid, from /proc text', () => {
+  const tcp = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:C350 0100007F:1F90 01 00000000:00000000 00:00000000 00000000     0        0 55555 1 0 0 0
+   1: 0100007F:1F90 0100007F:C350 01 00000000:00000000 00:00000000 00000000     0        0 66666 1 0 0 0
+`;
+  const read = p => { if (p === '/proc/net/tcp') return tcp; throw new Error('none'); };
+  assert.equal(inodeOf(0xC350, 0x1F90, { read }), '55555');
+  assert.equal(inodeOf(1234, 0x1F90, { read }), null);
+  const list = p => p === '/proc' ? ['1', 'self', '300', '301'] : p === '/proc/300/fd' ? ['0'] : p === '/proc/301/fd' ? ['0', '3'] : (() => { throw new Error('x'); })();
+  const link = p => p === '/proc/301/fd/3' ? 'socket:[55555]' : 'pipe:[1]';
+  assert.equal(pidOfInode('55555', { list, link }), 301);
+  assert.equal(pidOfInode('99', { list, link }), null);
+  assert.equal(pidOfInode('55555', { list: () => { throw new Error('denied'); }, link }), null);
+  assert.equal(isLocalPeer({ remoteAddress: '127.0.0.1', localAddress: '10.0.0.5' }), true);
+  assert.equal(isLocalPeer({ remoteAddress: '::ffff:10.0.0.5', localAddress: '10.0.0.5' }), true);
+  assert.equal(isLocalPeer({ remoteAddress: '10.0.0.9', localAddress: '10.0.0.5' }), false);
 });
