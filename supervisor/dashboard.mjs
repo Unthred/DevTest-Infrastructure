@@ -636,8 +636,9 @@ export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.
       return { agent: redact(agent, 20), model: r.model ? redact(r.model, 40) : null, kind: r.kind || null, ref, refType, name: ref == null ? null : redact((refType === 'PR' ? names.pr(ref) : names.issue(ref)).text, 200) };
     });
     const label = SLOT_LABEL[role];
-    const text = held.length ? `${label}: ${held.map(h => [h.agent, h.model, h.name, h.kind ? SLOT_WHAT[h.kind] || h.kind : null].filter(Boolean).join(' · ')).join('; ')}` : `${label}: idle`;
-    return { role, label, capacity: roleCount(config.limits, role), held, text };
+    const parts = held.map(h => [h.agent, h.model, h.name, h.kind ? SLOT_WHAT[h.kind] || h.kind : null].filter(Boolean).join(' · '));
+    const text = held.length ? `${label}: ${parts.join('; ')}` : `${label}: idle`;
+    return { role, label, capacity: roleCount(config.limits, role), held, parts, text };
   });
 }
 

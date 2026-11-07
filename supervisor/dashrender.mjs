@@ -315,7 +315,7 @@ const kpi = ({ id, label, value, href, spark = '', span = 2, sub = '' }) => `<a 
 // ---- the four panels (Overview top) and the status bar
 function nowPanel(view, { describe = true, list = null } = {}) {
   const now = view.generatedAt;
-  const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${esc(x.text)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}${(view.capNotes || []).map(n => `<div class="cap-note">Held down: ${longText(n)}</div>`).join('')}${Object.entries(view.budget || {}).filter(([, b]) => b.known).map(([n, b]) => `<div class="rate-note">${esc(n)}: ${Number.isFinite(b.ratePerHour) ? `${(b.ratePerHour * 100).toFixed(2)}% of the week per hour, ` : ''}estimate ${Number.isFinite(b.projected) ? `${Math.round(b.projected * 100)}%` : 'unknown'} at reset</div>`).join('')}</div>`;
+  const slots = `<div class="sub slots">${(view.slots || []).map(x => `<div>${x.parts?.length > 1 ? `${esc(x.label)}:${x.parts.map(t => `<div class="hold-row">${longText(t, 160)}</div>`).join('')}` : longText(x.text, 160)}${x.capacity > 1 ? ` (${x.held.length} of ${x.capacity})` : ''}</div>`).join('')}${(view.capNotes || []).map(n => `<div class="cap-note">Held down: ${longText(n)}</div>`).join('')}${Object.entries(view.budget || {}).filter(([, b]) => b.known).map(([n, b]) => `<div class="rate-note">${esc(n)}: ${Number.isFinite(b.ratePerHour) ? `${(b.ratePerHour * 100).toFixed(2)}% of the week per hour, ` : ''}estimate ${Number.isFinite(b.projected) ? `${Math.round(b.projected * 100)}%` : 'unknown'} at reset</div>`).join('')}</div>`;
   // Issue #213: one card per running or paused job (role, model, item, elapsed); an agent with none gets one idle/blocked/unknown card.
   // The description is the link text, once; the agent card passes describe:false and gets a plain id link (issue #421).
   const jobRef = (id, name) => (describe ? named(jobPath(id), REFS.job[String(id).slice(0, 8)], name || `job ${String(id).slice(0, 8)}`) : named(jobPath(id), null, `job ${String(id).slice(0, 8)}`));
@@ -340,7 +340,7 @@ function nowPanel(view, { describe = true, list = null } = {}) {
     if (a.jobs?.length) return a.jobs.map(j => jobItem(a, j));
     const j = a.job, level = stateSev[a.state] || 'info';
     const what = j ? `${jobRef(j.id)} · attempt ${Number(j.attempts)} · ${a.state === 'paused' ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}` : `elapsed ${esc(dur(j.elapsedMs))}`}${j.fullId ? ` · ${watchLink(j.fullId, a.state === 'running' ? 'Watch live' : 'Transcript')}` : ''}`
-      : `<span>Idle: ${a.idleReason ? idleReasonRows(a.idleReason.text) : 'nothing to do'}</span> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
+      : `<div>Idle: ${a.idleReason ? idleReasonRows(a.idleReason.text) : 'nothing to do'}</div> ${(a.idleReason?.links || []).map(l => ext(l.url, l.text)).join(' ')}`;
     return [dli({ cls: `sev-${level}`, key: `agent-${a.name}`, sev: level, name: a.name, age: j?.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${stateBadge(a.state)}</div><div>${what}</div>` })];
   });
   return `${slots}${idleLine}${list ? dlist({ id: list, label: 'Now', noun: 'agents and jobs', rows, sorts: ['default', 'severity', 'age', 'name'], defaultLabel: 'Agent order', compact: false }) : `<ul class="panel-list">${rows.map(r => r.html).join('')}</ul>`}`;

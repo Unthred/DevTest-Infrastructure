@@ -257,7 +257,9 @@ test('a card never renders one long block of text, and nothing is cut mid-word',
   const holds = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`${reason} | file overlap ${i}`, 12]));
   const holdGroups = Array.from({ length: 30 }, (_, i) => ({ label: `review held: codex is out of allowance ${i}`, detail: reason, minutes: 1164, count: 14, last: i }));
   const long = 'Paused new work: ' + 'twelve open PRs (cap 12) and nothing may start until a few of them merge, '.repeat(6);
-  const view = { ...base, capNotes: [long], idleCauses: { agents: { [name]: { idleWithWorkPercent: 40, minutes: { 'named-hold': 300 }, holds, holdGroups } } } };
+  const parts = [1, 2, 3].map(i => `codex · gpt · ${'a long issue title '.repeat(5)}${i} · implementing`);
+  const slots = [{ role: 'implement', label: 'Implement', capacity: 3, held: parts.map(() => ({})), parts, text: 'Implement: ' + parts.join('; ') }];
+  const view = { ...base, slots, capNotes: [long], idleCauses: { agents: { [name]: { idleWithWorkPercent: 40, minutes: { 'named-hold': 300 }, holds, holdGroups } } } };
   view.agents = view.agents.map((a, i) => i ? a : { ...a, state: 'idle', job: null, jobs: [], idleReason: { text: 'held: review held: codex is out of allowance (codex weekly use 97% >= 95%) | file overlap: waits for PR #7 | implement held: cap of 12 open PRs reached ' + 'and some more words '.repeat(10) } });
   const q = { query: new URLSearchParams(), pathname: '/' };
   for (const [route, extra] of [[{ page: 'overview' }, q], [{ page: 'agents' }, { query: new URLSearchParams(), pathname: '/agents' }], [{ page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }]]) {
@@ -268,6 +270,7 @@ test('a card never renders one long block of text, and nothing is cut mid-word',
   const html = renderRoute(view, { page: 'agent', id: name }, { query: new URLSearchParams(), pathname: '/agents/' + name }).html;
   assert.match(html, /1164 min|19\.4 h, 14 times/);
   assert.match(html, /<summary>Paused new work: [^<]*…<\/summary>/, 'a long note is clipped at a word, the whole text behind it');
+  assert.equal((html.match(/<div class="hold-row">[^<]*implementing/g) || []).length, 3, 'each held slot of a role is its own row');
   assert.match(html, /<div class="hold-row">[^<]*file overlap: waits for PR #7/, 'each idle hold is its own row');
   // negative: the guard sees visible joined text in a summary
   assert.ok(/\|/.test(hideBodies('<details><summary>a | b…</summary>a | b | c</details>').replace(/<[^>]+>/g, ' ')));
