@@ -8,6 +8,7 @@ import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
+import { hostView } from './hostgate.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
@@ -774,6 +775,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
       budget,
+      host: hostView(team.s.hostGate, team.hostGateConfig(), now),   // issue #972
       attention,
       robustness: robustnessView(state, team, jobs, now),
       breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL },

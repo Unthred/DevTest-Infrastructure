@@ -13,6 +13,7 @@ import { takeHomeownerRequests, discardHomeownerRequest } from './homeownerqueue
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as robust from './robust.mjs';
 import * as breaker from './breaker.mjs';
+import { normalizeHostGate, DEFAULT_HOST_GATE, stepGate, hostRefusal } from './hostgate.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
 import { validateResourceConfig } from './resources.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, isOpusModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
@@ -74,6 +75,7 @@ export function validateTeamConfig(input) {
   try { validateChangeCheck(c.change_check); } catch (error) { throw new SupervisorError(error.message); }   // issue #755
   try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
   validateDashboard(c.dashboard);
+  if (c.host_gate !== undefined) c.host_gate = normalizeHostGate(c.host_gate);   // issue #972: absent = the defaults, applied only where a host sampler is given
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
   if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir' || k === 'max_pending') && (c.inbox.max_pending === undefined || (Number.isSafeInteger(c.inbox.max_pending) && c.inbox.max_pending >= 1 && c.inbox.max_pending <= 200)))) throw new SupervisorError('invalid inbox: { dir: absolute path, max_pending?: 1-200 }');   // issue #124
@@ -234,7 +236,7 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard', 'host_gate'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
@@ -242,6 +244,7 @@ export function applyLocalOverride(shipped, local) {
   if ('reports_dir' in local) { if (typeof local.reports_dir !== 'string' || !path.isAbsolute(local.reports_dir)) throw new SupervisorError('invalid team.local.json: reports_dir must be an absolute path'); out.reports_dir = local.reports_dir; }   // issue #882
   if ('test_resources' in local) out.test_resources = validateResourceConfig(local.test_resources);
   if ('change_check' in local) { try { validateChangeCheck(local.change_check); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } out.change_check = { ...(out.change_check || {}), ...local.change_check }; }   // issue #755
+  if ('host_gate' in local) out.host_gate = normalizeHostGate({ ...(out.host_gate || {}), ...local.host_gate });   // issue #972
   if ('inbox' in local) out.inbox = local.inbox;   // issue #642: validated like the shipped key by validateTeamConfig, which loadTeamConfig runs on the merged result
   if ('breaker' in local) { try { out.breaker = validateBreakerConfig({ ...(out.breaker || {}), ...local.breaker }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }
   if ('dashboard' in local) { validateDashboard(local.dashboard); out.dashboard = { ...local.dashboard }; }
@@ -673,7 +676,8 @@ export function readSplitDraft(root, ticket) {
 
 const STALE_MARK_MS = 10 * 60000;   // issue #521
 export class Team {
-  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, sessionWriterOf = findSessionWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined, hostPressure: pressureReader = null }) {
+  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, sessionWriterOf = findSessionWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined, hostPressure: pressureReader = null, hostSample = null }) {
+    this.hostSample = hostSample;   // issue #972: () => host figures (see hostgate.mjs); absent, the host gate is not applied here and only the stored latch is read
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
     this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.sessionWriterOf = sessionWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
     this.c = validateTeamConfig(config); this.root = root; this.pressureReader = pressureReader; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
@@ -691,6 +695,14 @@ export class Team {
     this.s.unblock.log ||= [];
   }
   save() { atomicJson(this.file, this.s); }
+  // Issue #972: sample the host once per plan and step the latches. Starts are held; running jobs are never touched. A sampler that
+  // throws leaves the last latch as it was (a failed reading must neither start nor stop a hold).
+  hostGateConfig() { return this.c.host_gate ?? DEFAULT_HOST_GATE; }
+  refreshHostGate() {
+    if (!this.hostSample) return;
+    try { this.s.hostGate = stepGate(this.s.hostGate, this.hostSample(), this.hostGateConfig(), this.clock.now()); } catch { /* keep the last latch */ }
+  }
+  hostRefusal(type) { return hostRefusal(this.s.hostGate, type); }
   // Model and effort for one job (issue #64). Escalation: an earlier attempt of the same work ended incomplete on the cheaper
   // model, or the PR has drawn CHANGES twice. Allowance: reported weekly use at or above the threshold keeps the cheap model
   // for everything but implement/continue. Both reasons are stored on the job. Invalid values degrade to the CLI default.
@@ -1077,6 +1089,7 @@ export class Team {
       if ((this.s.scanOnlyAnnounced[pr.number] || this.s.scanOnlyRounds[pr.number]) && latestChecks(pr.statusCheckRollup).some(c => checkDone(c) && isSecretScanner({ name: c.name || c.context }) && CHECK_OK.includes(c.conclusion || c.state))) { delete this.s.scanOnlyAnnounced[pr.number]; delete this.s.scanOnlyRounds[pr.number]; }
     }
     this.modes = this.budgets(); this.held = {}; this.heldPr = {};
+    this.refreshHostGate();
     await this.loadFiles(prs);
     this.recordHeadWriters(prs);
     this.recordReviewWaits(prs);
@@ -1392,7 +1405,7 @@ export class Team {
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
     // chosen instead. The reason is kept for the dashboard and `team status`.
     const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent], planned: this.plannedUse[agent] } : B0, owed = B ? this.pendingReviews(agent, prs) : 0;
-    const allow = type => { const r = admits(B, type, owed); if (!r.ok) this.hold(agent, type, r.why); return r.ok; };
+    const allow = (type, gate = type) => { const r = admits(B, type, owed); if (!r.ok) { this.hold(agent, type, r.why); return false; } const h = this.hostRefusal(gate); if (h) { this.hold(agent, type, h); return false; } return true; };
     // Issue #971: an approved overseer prompt has its own lane. It is planned only for the inbox role (or an unscoped probe), never from the
     // implementer slot, and it does not wait for the open-PR cap. Allowance, usage-limit, model and breaker rules still apply.
     if (role === 'inbox' || role === null) {
@@ -1400,7 +1413,7 @@ export class Team {
       if (approved) {
         const m = this.modelFor({ agent, key: 'wb:implement' }, 'implement', {}, true);
         if (m.writeRefusal?.startsWith('no permitted writer')) this.hold(agent, 'inbox', m.writeRefusal);
-        else if (!this.limitedOf(agent).out && allow('implement')) return { type: 'inbox', key: approved.id, inboxId: approved.id, title: approved.item.title };
+        else if (!this.limitedOf(agent).out && allow('implement', 'inbox')) return { type: 'inbox', key: approved.id, inboxId: approved.id, title: approved.item.title };
       }
       if (role === 'inbox') return null;
     }
@@ -3651,6 +3664,8 @@ export class Team {
         for (const a of await this.jobs.listActive()) if (a.id !== job.id && ['queued', 'running'].includes(a.status)) { const rec = await this.jobs.get(a.id); others.push({ id: a.id, kind: rec?.kind ?? this.s.jobs[a.id]?.kind, provider: a.provider ?? rec?.provider ?? this.c.agents[this.s.jobs[a.id]?.agent]?.provider }); }
         const d = resumeDecision({ job, others, limits: this.c.limits, nameOf: o => { const r = this.s.jobs[o.id] || {}; return `${r.agent || 'a'} ${o.kind || 'job'} on ${r.pr != null ? 'PR #' + r.pr : r.issue != null ? 'issue #' + r.issue : o.id.slice(0, 8)}`; } });
         if (!d.go) { release(); return d; }
+        const hostWhy = this.hostRefusal(job.kind);   // issue #972: a resume is a start; the stored host latch holds it too
+        if (hostWhy) { release(); return { go: false, reason: hostWhy, retryMs: 60000 }; }
         return { go: true, release };
       } catch (error) { release(); throw error; }
     };

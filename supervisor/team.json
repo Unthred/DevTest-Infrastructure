@@ -6,6 +6,7 @@
   "worktree_base": "/mnt/user/projects",
   "access": { "mode": "full", "decision": "D-020" },
   "out_of_allowance": { "weekly_at": 0.995 },
+  "host_gate": { "enabled": true, "hold": { "swap_percent": 85, "memory_available_mb": 4096, "load_per_core": 1.5 }, "resume": { "swap_percent": 75, "memory_available_mb": 5120, "load_per_core": 1.2 }, "hard_hold": { "swap_percent": 95, "memory_available_mb": 2048, "load_per_core": 2.5 }, "hard_resume": { "swap_percent": 90, "memory_available_mb": 3072, "load_per_core": 2.0 } },
   "limits": { "roles": { "implementer": 1, "reviewer": 1 }, "max_review_attempts": 2, "max_fix_attempts": 2, "max_open_prs": 8, "chain_seconds": 0, "chain_passes": 3,"unblock": { "per_pr": 4, "per_day": 12, "cooldown_ms": 600000 } },
   "models": {
     "allowance_threshold": 0.8,

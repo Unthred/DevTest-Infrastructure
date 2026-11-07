@@ -302,3 +302,16 @@ An approved overseer prompt (D-031) runs in a lane of its own, so it never waits
 - **Order guard.** Keywords cannot tell which prompt changes queue order or config ("Swap 940 and 935", "Skip 935"), so the guard fails safe: while any prompt is approved but not started, or running (including one the fast start path began during a pass and the next pass has not adopted yet), no new implement job is handed out (the hold reads "waiting for an inbox prompt that changes queue order or config"), so the change applies before the next implement pick. Reviews, fixes and rebases are unaffected. A job record older than twice the time cap no longer holds. The fast start path (`startApprovedNow`) follows the same lane rule as the planner: the inbox slot count only, not the implementer slots, `limits.overall` or the open-PR pause. The queue view lists an approved prompt as "Inbox lane".
 - **Time cap.** `limits.inbox_max_minutes` (default 15, 1 to 720). A running inbox job past it (running time only; a usage-limit pause does not count and a resumed job counts again from the resume) is stopped once; its item ends `failed` with the cap named.
 - **Visible.** The item reads queued for the inbox lane, then running in the inbox lane, with the time it waited (`lane`, `waitedMs`, `startedAt` in its status file). The slots list and job cards show an "Inbox lane" role.
+
+## Host check before a start (issue #972)
+
+Foreman reads Tower's `/proc` once per planning pass (swap used, memory available, 5-minute load average per core) and holds new starts while the host is overloaded. It never stops a running job for host load. Two levels, each with a hold and a lower resume threshold so it does not flap (`host_gate` in `team.json`, overridable in `team.local.json`; defaults shown):
+
+| Level | Holds | Hold when | Resume when (all of) |
+| --- | --- | --- | --- |
+| start | implement, continue | swap ≥ 85%, or memory available < 4 GB, or load/core > 1.5 | swap < 75%, memory ≥ 5 GB, load/core ≤ 1.2 |
+| hard | review, fix, CI fix, rebase, approved inbox prompts (and everything at the start level) | swap ≥ 95%, or memory < 2 GB, or load/core > 2.5 | swap < 90%, memory ≥ 3 GB, load/core ≤ 2.0 |
+
+A held job shows its reason in the queue and Needs-you text, for example `held: swap 94% ≥ 85%`; between the hold and resume thresholds it reads `held: swap 80%, resumes below 75%`. The Overview has a "Tower host" card: each figure coloured (green normal, amber past a start threshold or still recovering, red past a hard threshold), what is held and for how long. A resume of a job paused on a usage limit is held the same way. An unreadable figure never holds anything, and `"enabled": false` switches the check off. Only `foreman tick` samples the host; the dashboard shows the latest stored reading and its age.
+
+`foreman_host` (MCP) now returns `cores`, `containers` (memory and swap per Docker container from the cgroup files: short container id and main process name, no Docker socket) and `activity.topProcessesByMemory.topSwapHolders` (the processes holding the most swap, each with its container id). All read-only.

@@ -366,6 +366,15 @@ function nextPanel(view) {
   return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? dlist({ id: 'next', label: 'Next', noun: 'planned items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Run order' }) : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 // Issue #549: the circuit breaker's status on the Overview, and the wasted usage by cause. Cost is the CLI's own estimate, not a cash charge.
+// Issue #972: host state with status colours, and what is held for it and for how long.
+function hostCard(view) {
+  const h = view.host;
+  if (!h) return '';
+  const rows = h.figures.map(f => `<tr><td>${esc(f.label)}</td><td>${badge(f.sev, f.text, '', false)}</td></tr>`).join('');
+  const holds = [['New implement jobs', h.start], ['Reviews, fixes and inbox prompts', h.hard]].map(([name, l]) => `<p class="sev-${l.held ? 'action' : 'ok'}">${esc(name)}: ${l.held ? `<strong>${esc(l.reason)}</strong> (held for ${esc(dur(l.heldMs))})` : 'allowed'}</p>`).join('');
+  const type = h.hard.held ? 'action' : h.start.held ? 'warning' : 'ok';
+  return card({ id: 'host', title: 'Tower host', span: 3, body: `<table><tbody>${rows}</tbody></table>${h.enabled ? holds : '<p class="sub">The host check is switched off.</p>'}<p class="sub">Running jobs are never stopped for host load; only new starts wait. Read ${esc(dur(h.ageMs))} ago.</p>`, href: '/system', cls: 'panel', type });
+}
 function breakerCard(view) {
   const b = view.breaker;
   if (!b || (!b.halt && !b.byCause.length && !b.error)) return '';
@@ -569,6 +578,7 @@ function overview(view, query) {
   const panels = [
     breakerCard(view),
     robustnessCard(view),
+    hostCard(view),
     card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view, { list: 'now' }), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),

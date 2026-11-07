@@ -44,6 +44,7 @@ import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
 import { dirLock, requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
+import { readHostFigures } from './hostgate.mjs';
 
 const self = fileURLToPath(import.meta.url);
 function args(list) {
@@ -196,7 +197,7 @@ async function teamFor(root, registry, config = loadTeamConfig(teamConfigFile, r
   // The allowance inputs are shared with `team status` and the dashboard (issue #121), so all of them plan alike.
   const jobsNow = readJobs(root);
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs: jobsNow, probes: readCache(root)?.probes, snapshots: readSnapshots(root), hadLimit: id => readEvents(root, [id]).some(e => e.kind === 'usage_limit') });
-  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage });
+  return new Team({ config, root, gh: wrapGh(githubClient(config, countingGh(ghStats))), jobs: realJobs(root, registry), git: realGit(config.repo_path), register, alert: alertSender(root, config), providerModels, allowanceOf, limitedOf, usage, hostSample: () => readHostFigures() });
 }
 // Issue #755: counts the gh processes a pass starts (for the pass record), without changing what any call does.
 function countingGh(stats) {

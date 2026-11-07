@@ -2,6 +2,7 @@
 // and /proc. Nothing here writes anywhere, takes a lock or calls a model.
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 
 export const VIEW_TIMEOUT_MS = 10000;
 export const VIEW_MAX_BYTES = 48 * 1024 * 1024;
@@ -54,6 +55,7 @@ export function readHost({ proc = '/proc', fsRead = fs.readFileSync } = {}) {
   const swapTotal = mb('SwapTotal'), swapFree = mb('SwapFree');
   const psi = (read(`${proc}/pressure/memory`, fsRead) || '').split('\n').filter(Boolean).slice(0, 2);
   const out = {
+    cores: coreCount(proc, fsRead),
     load: { one: Number(la[0]) || null, five: Number(la[1]) || null, fifteen: Number(la[2]) || null },
     memoryMb: { total: mb('MemTotal'), available: mb('MemAvailable'), free: mb('MemFree'), cached: mb('Cached') },
     swapMb: { total: swapTotal, free: swapFree, used: swapTotal != null && swapFree != null ? swapTotal - swapFree : null, usedPercent: swapTotal ? Math.round(((swapTotal - swapFree) / swapTotal) * 1000) / 10 : null },
@@ -62,6 +64,27 @@ export function readHost({ proc = '/proc', fsRead = fs.readFileSync } = {}) {
   return out;
 }
 
+// Issue #972: the CPU core count (the overseer needs it for load per core), from /proc/cpuinfo, then the runtime. Null when neither answers.
+function coreCount(proc, fsRead) {
+  const n = ((read(`${proc}/cpuinfo`, fsRead) || '').match(/^processor\s*:/gm) || []).length;
+  if (n > 0) return n;
+  try { const c = os.cpus().length; return c > 0 ? c : null; } catch { return null; }
+}
+// Issue #972: memory and swap held by each Docker container, from the cgroup files (memory.current, memory.swap.current) that any
+// account may read; no Docker socket and no container name (config files are root only), so a container is its short id plus the name
+// of its main process. Biggest first; at most `count` rows. Null when the cgroup tree has no docker directory.
+export function containerMemory({ cgroupRoot = '/sys/fs/cgroup', fsRead = fs.readFileSync, readDir = fs.readdirSync, count = 15 } = {}) {
+  let ids; try { ids = readDir(`${cgroupRoot}/docker`).filter(n => /^[a-f0-9]{64}$/.test(n)); } catch { return null; }
+  const num = f => { const t = String(read(f, fsRead) ?? '').trim(); return /^\d+$/.test(t) ? Number(t) : null; };
+  const rows = [];
+  for (const id of ids) {
+    const dir = `${cgroupRoot}/docker/${id}`, mem = num(`${dir}/memory.current`); if (mem === null) continue;
+    const swap = num(`${dir}/memory.swap.current`), pid = (read(`${dir}/cgroup.procs`, fsRead) || '').split('\n')[0];
+    rows.push({ container: id.slice(0, 12), memoryMb: Math.round(mem / 1048576), swapMb: swap === null ? null : Math.round(swap / 1048576), mainProcess: /^\d+$/.test(pid) ? (read(`/proc/${pid}/comm`, fsRead) || '').trim().slice(0, 32) || null : null });
+  }
+  rows.sort((a, b) => (b.memoryMb + (b.swapMb || 0)) - (a.memoryMb + (a.swapMb || 0)) || a.container.localeCompare(b.container));
+  return { count: rows.length, top: rows.slice(0, count), note: 'Resident memory and swap per container from the cgroup files; a container has no name here (the container list needs the Docker socket), so match the short id with docker ps on Tower.' };
+}
 // Issue #636: swap activity, disk wait and the top processes by memory, from /proc only. Rates need two readings, so this waits `intervalMs`
 // between them. Only the kernel's short process name is read (never a command line, which can hold secrets). Anything unreadable is null.
 const DISK = /^(sd[a-z]+|vd[a-z]+|hd[a-z]+|nvme\d+n\d+|md\d+(?:p\d+)?)$/;
@@ -82,8 +105,10 @@ export function topProcesses({ proc = '/proc', fsRead = fs.readFileSync, readDir
     const rss = kb('VmRSS'); if (!Number.isFinite(rss)) continue;   // kernel threads have none
     rows.push({ pid: Number(pid), name: (/^Name:\s*(.*)$/m.exec(text)?.[1] || '').slice(0, 32), rssMb: Math.round(rss / 1024), swapMb: Number.isFinite(kb('VmSwap')) ? Math.round(kb('VmSwap') / 1024) : null });
   }
+  const containerOf = pid => /(?:^|[/-])docker[-/]([a-f0-9]{64})/.exec(read(`${proc}/${pid}/cgroup`, fsRead) || '')?.[1]?.slice(0, 12) ?? null;   // issue #972: which container a swap holder belongs to
+  const holders = rows.filter(r => r.swapMb > 0).sort((a, b) => b.swapMb - a.swapMb || a.pid - b.pid).slice(0, count).map(r => ({ ...r, container: containerOf(r.pid) }));
   rows.sort((a, b) => b.rssMb - a.rssMb || a.pid - b.pid);
-  return { processCount: names.length, top: rows.slice(0, count), note: 'By resident memory. Only the short process name is read, never the command line.' };
+  return { processCount: names.length, top: rows.slice(0, count), topSwapHolders: holders, swapHeldByListedMb: holders.reduce((n, r) => n + r.swapMb, 0), note: 'By resident memory. Only the short process name is read, never the command line.' };
 }
 export async function hostActivity({ proc = '/proc', fsRead = fs.readFileSync, readDir = fs.readdirSync, intervalMs = 500, sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
   const a = counters(proc, fsRead); const t0 = Date.now(); await sleep(intervalMs); const b = counters(proc, fsRead); const secs = Math.max(0.001, (Date.now() - t0) / 1000);
