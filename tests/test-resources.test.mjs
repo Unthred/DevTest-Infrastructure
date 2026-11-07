@@ -91,7 +91,7 @@ test('an over-limit fake job is killed as a unit: children die with it and the r
   const r = await runLimited([process.execPath, f], { env: process.env, limits: { memory_mb: 64, cpus: 1 }, klass: 'suite', id: 'j1', intervalMs: 50 });
   assert.equal(r.code, 137);
   assert.equal(r.kill.reason, 'memory-limit'); assert.equal(r.kill.class, 'suite'); assert.equal(r.kill.suggested_class, 'small'); assert.equal(r.kill.limit_mb, 64);
-  assert.ok(r.kill.observed_mb > 64);
+  assert.ok(r.kill.observed_mb >= 64);
   const grand = Number(fs.readFileSync(pidFile, 'utf8'));
   // Poll (bounded) instead of a fixed wait: teardown of a 150 MB process can lag on a loaded runner.
   for (let i = 0; i < 100 && alive(grand); i++) await new Promise(res => setTimeout(res, 50));

@@ -183,7 +183,8 @@ test('gateJob (issue #736): the gate directory is removed on every exit path, an
   const c1 = spawn(g1.argv[0], g1.argv.slice(1), { stdio: 'ignore' }); const d1 = new Promise(r => c1.on('exit', r)); g1.open(); await d1;
   assert.equal(fsm.existsSync(dirOf(g1)), false, 'removed after the gate opened');
   const dead = spawnSync('true'); const g2 = gateJob(cmd, { runnerPid: dead.pid });
-  assert.equal(spawnSync(g2.argv[0], g2.argv.slice(1)).status, 125); assert.equal(fsm.existsSync(dirOf(g2)), false, 'removed when the runner is gone');
+  const r2 = spawnSync(g2.argv[0], g2.argv.slice(1), { encoding: 'utf8' });
+  assert.equal(r2.status, 125); assert.equal(r2.stderr, '', 'no /proc error text on stderr'); assert.equal(fsm.existsSync(dirOf(g2)), false, 'removed when the runner is gone');
   const g3 = gateJob(cmd, { maxWaitS: 0.2 });
   assert.equal(spawnSync(g3.argv[0], g3.argv.slice(1)).status, 125); assert.equal(fsm.existsSync(dirOf(g3)), false, 'removed on timeout');
   const parent = spawn(process.execPath, ['-e', "const c=require('child_process').spawn('true');console.log(c.pid);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20000)"], { stdio: ['ignore', 'pipe', 'ignore'] });
