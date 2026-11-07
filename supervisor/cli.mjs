@@ -551,6 +551,7 @@ async function main() {
       return;
     }
     if (a._[0] === 'request-review') {   // issue #366: the homeowner asks for one new review of the same head, citing the decision
+      if (!/^\d+$/.test(String(a._[1] ?? '')) || typeof a._[2] !== 'string' || !a._[2]) throw new SupervisorError('usage: team request-review PR DECISION_LINK');
       const release = await homeownerLock(root, 'request-review', queueOf(root, 'request-review', [a._[1], a._[2]]));
       try { console.log(JSON.stringify(await (await teamFor(root, registry)).requestReReview(a._[1], a._[2]))); } finally { release(); }
       return;

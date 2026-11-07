@@ -3343,7 +3343,7 @@ export async function tickLockWait(root, { timeoutMs = 300000, pollMs = 500, say
   let release = tickLock(root), told = false;
   while (!release) {
     if (now() >= deadline) return null;
-    if (!told) { told = true; say(`a team tick is running; waiting up to ${Math.round(timeoutMs / 1000)}s for it to finish`); }
+    if (!told) { told = true; say(`a team tick is running; waiting up to ${Math.max(1, Math.round(timeoutMs / 1000))}s for it to finish`); }
     await sleep(pollMs);
     release = tickLock(root);
   }

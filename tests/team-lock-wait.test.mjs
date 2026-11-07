@@ -77,3 +77,9 @@ test('issue #867: the tick applies a queued reopen, discards a refused one, and 
   assert.equal(report.notified.length, 1); assert.match(report.skipped[0].reason, /not found/);
   assert.deepEqual(takeHomeownerRequests(root), [], 'applied, refused and malformed files are all gone');
 });
+
+test('issue #867: a malformed request-review is refused up front, not queued', t => {
+  const dir = tmp(t), root = stateRoot(dir), held = tickLock(root); t.after(() => held());
+  const r = spawnSync(process.execPath, [cli, 'team', 'request-review'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: dir, AI_SUPERVISOR_LOCK_WAIT_MS: '200' } });
+  assert.notEqual(r.status, 0); assert.match(r.stdout + r.stderr, /usage: team request-review/); assert.doesNotMatch(r.stdout + r.stderr, /queued/);
+});
