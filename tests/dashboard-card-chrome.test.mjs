@@ -40,6 +40,12 @@ test('the summary shows only while rolled up; lists scroll inside the card; wide
   assert.match(css, /\.cards\.free \.dl-scroll\{max-height:none;flex:1 1 0;[^}]*overflow-y:auto\}/);
   assert.match(css, /\.card>\.panel-list\{max-height:[^;]+;overflow-y:auto/);
   assert.match(css, /\.card\{container:card\/inline-size\}/);
-  assert.match(css, /@container card \(min-width:46rem\)\{\s*\.dl-scroll,\.card>\.panel-list\{display:grid;grid-template-columns:repeat\(2,/);
+  assert.match(css, /@container card \(min-width:46rem\)\{\s*\.card>\.dlist>\.dl-scroll,\.card>\.panel-list\{display:grid;grid-template-columns:repeat\(2,/);
   assert.doesNotMatch(css, /@container card \(max-width[^)]*\)\{[^}]*grid-template-columns:repeat\(2/, 'narrow cards stay single-column');
+});
+
+test('the two-column reflow applies only to a list that is a direct card child, never to narrow sub-lists inside a wide card', () => {
+  const block = css.match(/@container card \(min-width:46rem\)\{([^}]*)\}/)[1];
+  assert.doesNotMatch(block, /(^|[\s,{])\.dl-scroll/, 'a bare .dl-scroll selector would split the Since card sub-lists');
+  assert.match(block, /\.card>\.dlist>\.dl-scroll/);
 });
