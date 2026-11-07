@@ -79,7 +79,7 @@ export function tableChange(current, id, set) {
   return q.toString();
 }
 // Trailing-edge debounce with an injectable clock so the behaviour can be tested without waiting.
-export function debounce(fn, ms, timers = { set: setTimeout, clear: clearTimeout }) {
+export function debounce(fn, ms, timers = { set: (f, ms) => setTimeout(f, ms), clear: (t) => clearTimeout(t) }) {
   let t = null;
   const run = (...a) => { if (t !== null) timers.clear(t); t = timers.set(() => { t = null; fn(...a); }, ms); };
   run.cancel = () => { if (t !== null) timers.clear(t); t = null; };

@@ -3,7 +3,7 @@
 // scroll restoration (all saved per breakpoint, in this browser only). Its one write is the inbox decision (issue #856: Approve, Reject, Undo post to /inbox with the page's access proof); its only other network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends } from './legend.mjs';
-import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved } from './grid.mjs';
+import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { watchLists } from './lists-ui.mjs';
 import { postDecision, runDecision, lowerCount, OUTCOME_LABEL } from './inbox-ui.mjs';
 
@@ -397,11 +397,13 @@ if (grid) {
     return rowsFor(px);
   }
   const defaultW = c => Math.min(colsNow(), Math.max(MIN_W, (Number(c.dataset.span) || 6) * 2));
+  const pinnedNow = () => cards().filter(c => c.hasAttribute('data-pin')).map(c => c.dataset.card);   // read each time: a refresh in place may add or remove pinned cards
   function paintFree() {
+    const shownHidden = withoutPinned(st, pinnedNow()).hidden;   // painted only: st (and so the undo/redo chain) keeps its hidden list; a pinned id there is just not painted hidden
     const cols = colsNow();
     grid.classList.add('free'); grid.style.setProperty('--cols', cols);
     for (const c of cards()) {
-      const id = c.dataset.card, hidden = st.hidden.includes(id);
+      const id = c.dataset.card, hidden = shownHidden.includes(id);
       if (!hidden && !st.pos[id]) { const w = defaultW(c); st.pos[id] = firstFit(st.pos, w, naturalRows(c, w), cols); }
       c.style.removeProperty('--h'); c.style.alignSelf = '';
       c.classList.toggle('lay-hidden', hidden);
@@ -409,9 +411,9 @@ if (grid) {
     }
   }
   function apply() {
-    const pinnedIds = cards().filter(c => c.hasAttribute('data-pin')).map(c => c.dataset.card);   // read each time: a refresh in place may add or remove pinned cards
+    const pinnedIds = pinnedNow();
     if (!editing) st = bpNow() === 'phone' ? null : sanitizeLayout(store.get(key()), ids(), colsNow(), pinnedIds);
-    else if (st) st.hidden = st.hidden.filter(id => !pinnedIds.includes(id));
+    else st = withoutPinned(st, pinnedIds);
     if (st) paintFree(); else paintFlow();
     renderBar();
   }

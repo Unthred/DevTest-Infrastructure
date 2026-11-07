@@ -118,6 +118,9 @@ export function sanitizeLayout(saved, ids, cols, pinnedIds = []) {
   for (const id of hidden) delete pos[id];
   return { pos: settleAll(pos), hidden };
 }
+// A free layout with the pinned cards taken out of `hidden`. Used wherever a layout is restored or repainted (a refresh in place may
+// pin a card that an undo snapshot still has hidden). Returns the same object when nothing changes.
+export const withoutPinned = (st, pinnedIds = []) => (st && st.hidden.some(i => pinnedIds.includes(i)) ? { ...st, hidden: st.hidden.filter(i => !pinnedIds.includes(i)) } : st);
 export const isOldLayout = saved => isObj(saved) && saved.v !== 2 && (Array.isArray(saved.order) || isObj(saved.span) || isObj(saved.h));
 export const toSaved = (st, collapsed = []) => ({ v: 2, pos: st.pos, hidden: st.hidden, collapsed });
 

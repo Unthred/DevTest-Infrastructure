@@ -141,6 +141,13 @@ async function scenario(p, file) {
   await card(hideId).scrollIntoViewIfNeeded();
   await card(hideId).locator('.lay-hide').click();
   check(`${L}: Hide removes the card`, !(await card(hideId).isVisible()));
+  // #851: a card that becomes pinned (a refresh in place can add data-pin) must not come back hidden from an undo/redo snapshot
+  await page.evaluate(i => document.getElementById('c-' + i).setAttribute('data-pin', ''), hideId);
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+Shift+z');   // redo restores the snapshot that has it hidden
+  check(`${L}: redo does not hide a card that is pinned now`, await card(hideId).isVisible() && !(await card(hideId).evaluate(c => c.classList.contains('lay-hidden'))));
+  await page.evaluate(i => document.getElementById('c-' + i).removeAttribute('data-pin'), hideId);
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+Shift+z');   // an unpinned card is hidden again by the same redo
+  check(`${L}: once not pinned, undo/redo hides it again`, !(await card(hideId).isVisible()));
   const hiddenN = await bar.locator('.lay-hiddens [data-n]').textContent();
   check(`${L}: the hidden cards list counts it`, hiddenN === '1', hiddenN);
   const others = await geo(page);
@@ -234,6 +241,28 @@ async function refreshDuringDrag(file) {
   await ctx.close();
 }
 
+// #61 / #851: the script's own in-place table update (app.js loadTable) ends with history.replaceState; drive it for real.
+async function tableInPlace() {
+  const ctx = await newCtx(); await guard(ctx);
+  const page = await ctx.newPage(), errors = []; page.on('pageerror', e => errors.push(String(e.message).slice(0, 200)));
+  // The fixture pages have no table, so serve one page of our own: the reviews fixture with a table region (the markup dashrender table() emits) before the script.
+  const base = await (await ctx.request.get(url('/reviews.html'))).text();
+  const tbl = '<div class="tregion" data-tregion="t1"><form class="tbar" method="get" action="/tbl.html"><input type="search" name="t1.q" aria-label="Filter"><select name="t1.size"><option>25</option></select><span data-tclear></span></form><div data-tdata><table><tbody><tr><td>row</td></tr></tbody></table></div></div>';
+  const html = base.replace('<p id="tznote"', tbl + '<p id="tznote"');
+  await page.route(u => new URL(u.toString()).pathname === '/tbl.html', r => r.fulfill({ status: 200, contentType: 'text/html', body: html }));   // loadTable fetches location.pathname + ?query
+  await page.goto(url('/tbl.html'), { waitUntil: 'networkidle' });
+  const region = page.locator('[data-tregion]').first(), tid = await region.getAttribute('data-tregion');
+  await page.evaluate(() => { window.__same = 1; history.replaceState({ k: 7 }, '', location.href); });
+  const before = await page.evaluate(() => location.href);
+  await region.locator('input[type=search]').fill('zzz');
+  await page.waitForFunction(id => location.search.includes(id + '.q=zzz'), tid, { timeout: 5000 }).catch(() => {});
+  const r = await page.evaluate(() => ({ href: location.href, search: location.search, same: window.__same, state: history.state }));
+  check('table: a search changes the address in place (app.js replaceState)', r.href !== before && r.search.includes(tid + '.q=zzz'), JSON.stringify(r));
+  check('table: and does it without reloading the page, keeping the history state', r.same === 1 && r.state && r.state.k === 7, JSON.stringify(r));
+  check('table: no script errors', errors.length === 0, errors.join(';'));
+  await ctx.close();
+}
+
 async function phone() {
   const ctx = await browser.newContext({ ...PROFILES['phone-390'], serviceWorkers: 'block', locale: 'en-GB', timezoneId: 'UTC' }); await guard(ctx);
   const page = await ctx.newPage(), errors = []; page.on('pageerror', e => errors.push(String(e.message).slice(0, 200)));
@@ -259,6 +288,7 @@ try {
   for (const [p, file] of PAGES) await scenario(p, file);
   await legacy('overview', '/overview.html'); await legacy('usage', '/usage.html');
   if (bp === 'desktop') await refreshDuringDrag('/overview-fast.html'); else await refreshDuringDrag('/overview-fast.html');
+  await tableInPlace();
   if (bp === 'desktop') await phone();
 } catch (e) { check(`the scenario ran to the end (${String(e.stack).slice(0, 600)})`, false); } finally { await browser.close(); server.close(); }
 const result = { profile, ok: checks.every(c => c.ok), failed: checks.filter(c => !c.ok), checks };
