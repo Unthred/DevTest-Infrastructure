@@ -573,3 +573,28 @@ test('issue #632: the 5 Nov shape (answers once, fails probes while alive, then 
   const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start: (...a) => { starts++; start(...a); }, startOld: () => {}, sleep: async () => {}, tries: 3, settleMs: 0, settleMaxMs: 10000, settleProbeMs: 1000, health: async () => seq[Math.min(n++, seq.length - 1)], logTail: () => '' });
   assert.equal(r.ok, true); assert.equal(starts, 1);
 });
+
+test('issue #725: the pre-answer loop is bounded by the overall deadline even when every probe hangs', async t => {
+  const { proc, kill, start } = fakeStartKit(t);
+  let starts = 0;
+  const t0 = Date.now();
+  const health = () => new Promise(r => setTimeout(r, 5000, false));
+  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start: (...a) => { starts++; start(...a); }, startOld: () => {}, sleep: async () => {}, tries: 50, restartMaxMs: 300, recoverMaxMs: 200, health, logTail: () => '' });
+  assert.equal(r.ok, false); assert.equal(r.cause, 'unresponsive');
+  assert.equal(starts, 1, 'no second attempt after the deadline');
+  assert.ok(Date.now() - t0 < 1500, `took ${Date.now() - t0} ms`);
+});
+
+test('issue #725: recovery of the old version has its own budget after the deadline is used up', async t => {
+  const { proc, kill, start } = fakeStartKit(t);
+  let oldStarted = false;
+  const health = () => (oldStarted ? Promise.resolve(true) : new Promise(r => setTimeout(r, 5000, false)));
+  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start, startOld: () => { oldStarted = true; }, sleep: async () => {}, tries: 50, restartMaxMs: 200, recoverMaxMs: 2000, health, logTail: () => '' });
+  assert.equal(r.ok, false); assert.equal(r.recovered, true);
+});
+
+test('issue #725: a normal restart within the deadline is unaffected', async t => {
+  const { proc, kill, start } = fakeStartKit(t);
+  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start, startOld: () => {}, sleep: async () => {}, tries: 3, settleMs: 0, restartMaxMs: 5000, health: async () => true, logTail: () => '' });
+  assert.equal(r.ok, true);
+});
