@@ -329,7 +329,8 @@ export class SelfUpgrade {
     try { return { held: true, value: fn() }; } finally { unlock(); }
   }
   rereadState() {
-    try { this.s = { ...this.s, ...JSON.parse(fs.readFileSync(this.stateFile, 'utf8')) }; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    // Built from the file alone: a key the daemon deleted since this object was built must not come back on save.
+    try { this.s = { alerted: {}, prechecked: {}, ...JSON.parse(fs.readFileSync(this.stateFile, 'utf8')) }; } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   // Main as seen now: a live fetch, falling back to the main recorded at the last tick (which can be one tick old); null if neither is known.
   currentMain() {
@@ -366,7 +367,7 @@ export class SelfUpgrade {
   noteHandInstalled() {
     const apply = () => { this.rereadState(); this.s.lastFinishedAt = this.clock.now(); delete this.s.urgent; delete this.s.nextInstall; this.save(); };
     // Issue #798: under upgrade.lock, so no tick is mid-step with an older copy. If the lock stays busy the update still goes ahead (the
-    // reread keeps it a field-level change of the latest file); losing it would leave the batching window wrong.
+    // reread builds the state from the latest file, then the note sets its own fields); losing it would leave the batching window wrong.
     if (!this.withStateLock(apply).held) apply();
   }
 

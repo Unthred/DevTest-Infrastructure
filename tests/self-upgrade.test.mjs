@@ -1006,6 +1006,16 @@ test('issue #798: state updates reread under upgrade.lock, keep a tick\'s newer 
   w.state.now += MIN; w.up.noteHandInstalled(); assert.equal(JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')).lastFinishedAt, w.state.now);
 });
 
+test('issue #798: a stale copy does not restore keys another process deleted when the hand-install note lands', async t => {
+  const w = world(t); await finished(w);
+  w.up.s.pending = { sha: H('9') }; w.up.s.refusal = { from: 'x' }; w.up.s.waitingFor = 'y'; w.up.save();
+  const other = JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8')); delete other.pending; delete other.refusal; delete other.waitingFor; fs.writeFileSync(w.up.stateFile, JSON.stringify(other));
+  w.state.now += MIN; w.up.noteHandInstalled();
+  const saved = JSON.parse(fs.readFileSync(w.up.stateFile, 'utf8'));
+  for (const k of ['pending', 'refusal', 'waitingFor']) assert.equal(saved[k], undefined, k);
+  assert.equal(saved.lastFinishedAt, w.state.now);
+});
+
 test('issue #798: status hides a lapsed homeowner request without changing the state, and shows a rollback urgency', async t => {
   const w = world(t); await finished(w);
   w.up.s.urgent = { reason: 'homeowner request', at: w.state.now - 25 * 3600 * 1000 };
