@@ -232,6 +232,12 @@ test('issue #639: createJobReader matches readJobs, re-reads only changed record
     assert.equal(read().filter(j => j.unreadable).length, 2, 'unparseable records are kept as unreadable');
     fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify({ id: 'a', status: 'completed', pad: 'xx' }));
     assert.equal(read().find(j => j.id === 'a').status, 'completed', 'a changed record is re-read');
+    const cached = read().find(j => j.id === 'a');
+    assert.throws(() => { cached.status = 'x'; }, TypeError, 'a cached job cannot be mutated');
+    fs.writeFileSync(path.join(dir, 'n.json'), JSON.stringify({ id: 'n', nested: { v: 1 } }));
+    assert.throws(() => { read().find(j => j.id === 'n').nested.v = 2; }, TypeError, 'nested values are frozen too');
+    assert.throws(() => { read().find(j => j.unreadable).file = 'z'; }, TypeError, 'unreadable placeholders are frozen');
+    assert.equal(read().find(j => j.id === 'a').status, 'completed', 'a rejected mutation leaves the cache intact');
     fs.rmSync(path.join(dir, 'a.json'));
     assert.equal(read().find(j => j.id === 'a'), undefined, 'a removed record is forgotten');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
