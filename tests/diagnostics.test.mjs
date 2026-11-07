@@ -145,12 +145,13 @@ test('recorder: over the file limit the newest files are kept and the oldest dro
 test('recorder: the per-call size budget is spent on the newest files first', t => {
   clearRecorderCache();
   const dir = tmp(t);
-  // Seven full-size days (29 Oct to 4 Nov), one distinct load each: 7 x 8 MiB is over the 48 MiB budget, so the oldest day gets what is left.
+  // Seven days (29 Oct to 4 Nov), one distinct load each, with a small injected budget of 5.5 files' worth, so the oldest days get what is left.
+  const FILE_CAP = 64 * 1024, limits = { maxFileBytes: FILE_CAP, maxTotalBytes: Math.floor(FILE_CAP * 5.5) };
   for (let day = 29; day <= 35; day++) {
     const d = day > 31 ? day - 31 : day, mo = day > 31 ? '11' : '10', dd = String(d).padStart(2, '0'), line = host(`2026-${mo}-${dd}T09:00:00Z`, day, 1, 1, 1) + '\n';
-    fs.writeFileSync(path.join(dir, `host-2026${mo}${dd}.jsonl`), line.repeat(Math.floor(MAX_FILE_BYTES / line.length)));
+    fs.writeFileSync(path.join(dir, `host-2026${mo}${dd}.jsonl`), line.repeat(Math.floor(FILE_CAP / line.length)));
   }
-  const r = readRecorder(dir, FROM, NOW);
+  const r = readRecorder(dir, FROM, NOW, limits);
   assert.equal(r.status, 'partial'); assert.match(r.note, /per-call size limit/);
   assert.ok(r.days.find(d => d.day === '2026-11-04').samples > 0, 'today is read');
   const n = day => r.days.find(d => d.day === day).samples;
