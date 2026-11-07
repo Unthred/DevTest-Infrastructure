@@ -25,6 +25,7 @@ import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { sinceView } from './since.mjs';
+import { readSnoozed } from './dashwrite.mjs';
 import { buildInbox, actionCount as inboxActionCount, SECTIONS as INBOX_SECTIONS } from './inboxsections.mjs';
 import { autoPostSummary, DEFAULT_AUTO_POST_PER_DAY, pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
@@ -714,7 +715,10 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       const dl = team.capDeadlock(c.pulls || [], c.issues || []);
       if (dl) attention.push({ id: 'cap-deadlock', text: `New work is stuck at the open-PR cap (${dl.cap}) and none of these ${dl.prs.length} open PRs can move on its own: ${dl.prs.map(n => '#' + n).join(', ')}.`, ref: null, severity: 'action', action: 'Choose one: merge or close one of these PRs, resolve what each is waiting on, or raise limits.max_open_prs in team.local.json.' }); }
     // Issue #521: an issue marked implemented whose pull request was closed unmerged (or never opened) cannot start by itself.
-    for (const e of Object.values(team.stale || {})) if (!state.staleCleared?.[e.issue]) attention.push({ id: `stale-mark-${e.issue}`, text: redact(`Issue #${e.issue}: ${team.staleText(e.issue).replace(/^stuck: /, '')}.`, 300), ref: { kind: 'issue', n: e.issue }, since: e.markedAt, severity: 'action', action: `If it should be implemented again, run: team reopen ${e.issue}. Otherwise close the issue or leave it.` });
+    // Issue #976: one grouped item, with bulk actions (reopen, close as done, keep holding) on the selected issues; a hold the tick cleared or the homeowner kept is not listed.
+    { const holds = Object.values(team.stale || {}).filter(e => !state.staleCleared?.[e.issue] && !state.staleKept?.[e.issue]).sort((a, b) => a.issue - b.issue);
+      if (holds.length) attention.push({ id: 'inbox-holds', text: redact(`${holds.length} issue${holds.length === 1 ? '' : 's'} marked implemented with no PR: ${holds.map(e => '#' + e.issue).join(', ')}. Foreman will not start them again.`, 600), ref: null, since: Math.min(...holds.map(e => e.markedAt)), severity: 'action',
+        action: 'Select the issues, then reopen them for implementation, close them as done, or keep holding.', holds: holds.slice(0, 50).map(e => ({ issue: e.issue, why: redact(team.staleText(e.issue).replace(/^stuck: /, ''), 200) })) }); }
     // Issue #630: mismatches between Foreman's records and GitHub or the running jobs that it cannot fix safely; one item each while it lasts.
     for (const it of team.selfCheckItems?.() || []) attention.push({ id: it.id, text: redact(it.text, 400), ref: Number.isSafeInteger(it.ref) ? { kind: 'pull', n: it.ref } : it.ref, since: it.since, severity: 'action', action: it.action });
     // Issue #995: a job type that failed again with the same cause stops and waits here, using no more tokens.
@@ -918,11 +922,12 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const tickAt = cache.tick?.at ?? null;
   const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
-  const consolidated = consolidateNeedsYou(attention, { cache, overrides: config.depends_on_overrides });
+  const snoozed = root ? readSnoozed(root, now) : {};
+  const consolidated = consolidateNeedsYou(attention.filter(a => !(snoozed[a.id] > now)), { cache, overrides: config.depends_on_overrides });
   const autoLimit = config.inbox?.auto_post_issue_drafts_per_day ?? DEFAULT_AUTO_POST_PER_DAY;
   const autoSummary = config.inbox?.dir ? autoPostSummary(config.inbox.dir, now, autoLimit) : null;
   const sectionRank = id => INBOX_SECTIONS.findIndex(x => x.id === id);
-  const inboxView = buildInbox(consolidated.needsYou, { auto: autoSummary ? { limit: autoSummary.limit, posted: autoSummary.posted } : null });
+  const inboxView = buildInbox(consolidated.needsYou, { auto: autoSummary ? { limit: autoSummary.limit, posted: autoSummary.posted } : null, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null });
   const needsYou = inboxView.items.map((a, i) => ({ a, i })).sort((x, y) => sectionRank(x.a.section) - sectionRank(y.a.section) || x.i - y.i).map(({ a }) => a).map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);
@@ -933,7 +938,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     health: healthOf({ attention, states, teamEnabled, needsYouCount: inboxActionCount(inboxView) }), freshness: freshness(tickAt, now),
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inbox: { sections: inboxView.sections, total: inboxView.total, autoPost: inboxView.autoPost }, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inbox: { snoozed: attention.filter(a => a.severity === 'action' && snoozed[a.id] > now).length, sections: inboxView.sections, total: inboxView.total, autoPost: inboxView.autoPost }, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };

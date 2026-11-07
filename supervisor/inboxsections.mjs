@@ -14,12 +14,13 @@ const clean = t => String(t ?? '').replace(/\s+/g, ' ').trim();
 const first = t => clean(t).split(/(?<=[.!?])\s/)[0].slice(0, 200);
 
 // auto: { limit, posted } when issue drafts post without a click; the pending draft items then belong to "Handled automatically".
-export function classifyItem(item, { auto = null } = {}) {
+export function classifyItem(item, { auto = null, nextTickAt = null, room = Infinity } = {}) {
   const id = String(item.id || ''), blocks = Number.isFinite(item.blocks) ? item.blocks : 0;
   const inboxKind = item.inboxKind || item.inbox?.kind || null;
-  if (item.inbox && inboxKind === 'issue_draft' && auto && auto.limit > 0 && auto.posted < auto.limit)
-    return { section: 'auto', rule: `Issue drafts post without a click up to ${auto.limit} a day (${auto.posted} of ${auto.limit} posted today).`,
+  if (item.inbox && inboxKind === 'issue_draft' && auto && auto.limit > 0 && auto.posted < auto.limit && room > 0)
+    return { section: 'auto', actsAt: Number.isFinite(nextTickAt) ? nextTickAt : null, undo: 'Reject it before then to stop it; after it posts, close the issue.', rule: `Issue drafts post without a click up to ${auto.limit} a day (${auto.posted} of ${auto.limit} posted today).`,
       recommend: { action: 'none', label: 'No action needed', why: 'It posts on the next tick; Reject it now if it should not be posted.' } };
+
   if (item.inbox) {
     const broken = !!item.inbox.broken || /cannot be shown/.test(item.text || '');
     const draft = inboxKind === 'issue_draft';
@@ -33,6 +34,7 @@ export function classifyItem(item, { auto = null } = {}) {
 }
 function recommendFor(id, item) {
   const act = first(item.action || item.decision);
+  if (id === 'inbox-holds') return { action: 'reopen', label: 'Reopen for implementation', why: 'These issues are open but marked implemented with no pull request, so Foreman will never start them again; select which to reopen, close as done, or keep holding.' };
   if (id.startsWith('stale-mark')) return { action: 'reopen', label: 'Reopen for implementation', why: 'The issue is open but marked implemented with no pull request, so Foreman will never start it again.' };
   if (id.startsWith('homeowner-pr') || id.startsWith('decision-proposal')) return { action: 'review', label: 'Review and decide', why: act || 'A merge or decision is yours; the typed-number confirmation stays.' };
   if (id.startsWith('breaker')) return { action: 'review', label: 'Check, then resume', why: act || 'Foreman stopped new work of this type to limit wasted usage.' };
@@ -40,8 +42,10 @@ function recommendFor(id, item) {
 }
 
 // Items in, sections out. Order inside a section keeps the incoming order (blocking first, then oldest).
-export function buildInbox(items, { auto = null } = {}) {
-  const tagged = items.map(it => ({ ...it, ...classifyItem(it, { auto }) }));
+export function buildInbox(items, { auto = null, nextTickAt = null } = {}) {
+  // Only as many drafts as the daily limit has room for belong to "Handled automatically"; the rest wait for a click and count in the badge.
+  let room = auto && auto.limit > 0 ? auto.limit - auto.posted : 0;
+  const tagged = items.map(it => { const isDraft = it.inbox && (it.inboxKind || it.inbox?.kind) === 'issue_draft'; const c = classifyItem(it, { auto, nextTickAt, room }); if (isDraft && c.section === 'auto') room--; return { ...it, ...c }; });
   const sections = SECTIONS.map(s => { const list = tagged.filter(t => t.section === s.id); return { ...s, count: list.length, ids: list.map(t => t.id) }; });
   return { items: tagged, sections, total: tagged.length, autoPost: auto && auto.limit > 0 ? { posted: auto.posted, limit: auto.limit } : null };
 }

@@ -32,7 +32,8 @@ import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
 import { fileURLToPath } from 'node:url';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
-import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
+import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS, SNOOZE_COOLDOWN_MS, snoozeItem } from './dashwrite.mjs';
+import { queueHomeownerRequest } from './homeownerqueue.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
 import { isLocalPeer, peerPid as defaultPeerPid } from './peerpid.mjs';
@@ -240,6 +241,39 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
+  // Issue #976: Snooze one Inbox item, and bulk actions on the grouped "marked implemented with no PR" item. Same protection as the other posts
+  // (host, origin, proof, cooldown). Snooze hides the item for a fixed time. A bulk action only queues one request per issue; the tick applies it.
+  const readForm = async (req, send, limit = 2048) => {
+    if (req.headers.host !== allowedHost) { refuseHost(req, send); return null; }
+    if (!originAllowed(req)) { refuseOrigin(req, send); return null; }
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > limit) { tooLarge(send); return null; } chunks.push(c); }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    if (!proofValid(root, form.get('proof'))) { badProof(send); return null; }
+    return form;
+  };
+  const snooze = async (req, res, send) => {
+    const form = await readForm(req, send); if (!form) return;
+    const t = now(), slot = reserveCooldown(root, 'snooze', t, SNOOZE_COOLDOWN_MS);
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': '1' });
+    const r = snoozeItem(root, form.get('id') || '', Number(form.get('hours')), t);
+    if (!r.ok) { releaseCooldown(root, 'snooze', t); return send(400, 'text/plain; charset=utf-8', r.reason); }
+    store.invalidate();
+    return send(303, 'text/plain; charset=utf-8', 'snoozed', { location: '/' });
+  };
+  const holds = async (req, res, send) => {
+    const form = await readForm(req, send); if (!form) return;
+    const decision = form.get('decision'), command = { reopen: 'reopen', close: 'close-done', keep: 'keep-hold' }[decision];
+    const issues = [...new Set(form.getAll('issue').filter(x => /^\d{1,7}$/.test(x)).map(Number))].slice(0, 50);
+    const marked = readTeamState(root)?.implemented || {};
+    if (!command || !issues.length || issues.some(n => !marked[n])) return send(400, 'text/plain; charset=utf-8', 'bad request');
+    const t = now(), slot = reserveCooldown(root, 'holds', t, 2000);
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': '2' });
+    for (const n of issues) queueHomeownerRequest(root, command, [String(n)], t);
+    store.invalidate();
+    try { wake(root, 'approve', source()); } catch { /* the schedule is the fallback */ }
+    return send(303, 'text/plain; charset=utf-8', 'queued', { location: '/' });
+  };
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
   // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
@@ -278,6 +312,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
     if (req.method === 'POST' && reqPath === '/watch') return watch(req, res, send);
     if (req.method === 'POST' && reqPath === '/inbox') return inbox(req, res, send);
+    if (req.method === 'POST' && reqPath === '/snooze') return snooze(req, res, send);
+    if (req.method === 'POST' && reqPath === '/holds') return holds(req, res, send);
     if (req.method === 'POST' && reqPath === '/breaker-resume') return breakerResume(req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.

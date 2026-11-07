@@ -245,7 +245,8 @@ export function undo(inboxDir, id, now = Date.now()) {
     if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
     if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
     const { decision, decidedAt, title, result, auto, ...rest } = s;
-    writeAtomic(file, { ...rest, state: 'pending', id, updatedAt: now });
+    // Issue #976: an undone auto-approval stays pending until a click; autoApproveDrafts skips it, so the undo is not overridden at once.
+    writeAtomic(file, { ...rest, ...(auto ? { autoHold: true } : {}), state: 'pending', id, updatedAt: now });
     audit(inboxDir, { id, event: 'undone', kind: s.kind, hash: s.hash }, now);
     return { ok: true, state: 'pending' };
   });
@@ -282,7 +283,7 @@ export function autoPostedToday(inboxDir, now = Date.now()) {
 export function autoApproveDrafts(inboxDir, now = Date.now(), limit = DEFAULT_AUTO_POST_PER_DAY) {
   if (!Number.isSafeInteger(limit) || limit <= 0) return { approved: 0 };
   let room = limit - autoPostedToday(inboxDir, now), approved = 0;
-  const pending = allStatuses(inboxDir).filter(s => s.state === 'pending' && s.kind === 'issue_draft').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const pending = allStatuses(inboxDir).filter(s => s.state === 'pending' && s.kind === 'issue_draft' && !s.autoHold).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   for (const s of pending) {
     if (room <= 0) break;
     const r = decide(inboxDir, s.id, 'approve', now);

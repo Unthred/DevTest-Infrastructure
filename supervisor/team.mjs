@@ -1856,6 +1856,8 @@ export class Team {
       const what = `queued ${r.command} ${r.args.join(' ')}`.slice(0, 120);
       try {
         if (r.command === 'reopen') await this.reopen(Number(r.args[0]));
+        else if (r.command === 'keep-hold') this.keepHold(Number(r.args[0]));
+        else if (r.command === 'close-done') await this.closeDone(Number(r.args[0]));
         else if (r.command === 'accept-split') await this.acceptSplit(Number(r.args[0]));
         else await this.requestReReview(r.args[0], r.args[1]);
         (report.notified ||= []).push({ queuedHomeownerRequest: what, applied: true });
@@ -2721,16 +2723,26 @@ export class Team {
     if (!marks.length) return;
     const live = new Set(active.map(j => this.s.jobs[j.id]?.issue).filter(Number.isSafeInteger));
     for (const j of Object.values(this.s.jobs)) if (!j.ingested && Number.isSafeInteger(j.issue)) live.add(j.issue);
-    let closed = null;
+    let closed = null, searched = 0;
     for (const [k, at] of marks) {
       const n = Number(k), issue = issueByNo.get(n), re = new RegExp(`/issue-${n}(\\D|$)`);
+      if (this.s.staleKept?.[n]) continue;   // issue #976: the homeowner chose to keep holding it
+      if (issue?.state === 'CLOSED') { if (!this.s.staleCleared?.[n]) (this.s.staleCleared ||= {})[n] = { reason: 'the issue is closed', at: this.clock.now() }; continue; }
       if (!issue || issue.state !== 'OPEN' || this.delivered?.has(n) || live.has(n)) continue;
       if (prs.some(p => agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName))) continue;
       // Issue #976: the work landed under another merged pull request that references this issue (`#N` in its title, an issue-N branch, or
       // the issue it closed): the hold is not a fault, so it is recorded and not raised. A pull request never counts for its own number.
       const refRe = new RegExp(`(^|[^\\w/])#${n}(?!\\d)`);
       const via = (this.merged || []).find(m => m.number !== n && (refRe.test(String(m.title || '')) || re.test(String(m.headRefName || '')) || m.issue === n));
-      if (via) { (this.s.staleCleared ||= {})[n] = { pr: via.number, at: this.clock.now() }; continue; }
+      if (via) { (this.s.staleCleared ||= {})[n] = { pr: via.number, reason: 'the work landed under a merged pull request', at: this.clock.now() }; continue; }
+      // The list of merged pull requests is the newest 100, so an old hold (#9, #10, #107) is looked up by search: at most 5 a tick, each issue once a day.
+      const checked = (this.s.staleChecked ||= {});
+      if (this.gh.searchMergedPulls && searched < 5 && (checked[n] === undefined || this.clock.now() - checked[n] >= 24 * 3600000)) {
+        searched++; checked[n] = this.clock.now();
+        let found = []; try { found = (await this.gh.searchMergedPulls(n)) || []; } catch { found = []; }
+        const hit = found.find(m => m.number !== n && (refRe.test(String(m.title || '')) || refRe.test(String(m.body || '')) || re.test(String(m.headRefName || ''))));
+        if (hit) { (this.s.staleCleared ||= {})[n] = { pr: hit.number, reason: 'the work landed under a merged pull request', at: this.clock.now() }; continue; }
+      }
       if (closed === null) { try { closed = (await this.gh.listClosedPulls?.()) ?? false; } catch { closed = false; } }
       if (closed) {
         const found = closed.filter(p => !p.mergedAt && agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName)).map(p => p.number);
@@ -2746,6 +2758,17 @@ export class Team {
     return `stuck: marked implemented but ${e.prs.length ? e.prs.map(x => `PR #${x}`).join(', ') + ' closed unmerged' : 'it has no open or merged pull request'}, so Foreman will not start it again`;
   }
 
+  // Issue #976: bulk actions on holds of the form "marked implemented with no pull request". Only an issue that really is marked is touched.
+  keepHold(n) {
+    if (!this.s.implemented[n]) throw new SupervisorError(`issue #${n} is not marked implemented; nothing to keep`);
+    (this.s.staleKept ||= {})[n] = this.clock.now(); this.save();
+  }
+  async closeDone(n) {
+    if (!this.s.implemented[n]) throw new SupervisorError(`issue #${n} is not marked implemented; refusing to close it`);
+    if (typeof this.gh.closeIssue !== 'function') throw new SupervisorError('this supervisor cannot close an issue');
+    await this.gh.closeIssue(n, 'Closed as done from the dashboard Inbox: the work was marked implemented and the homeowner confirmed it needs no further pull request.');
+    (this.s.staleCleared ||= {})[n] = { reason: 'closed as done by the homeowner', at: this.clock.now() }; this.save();
+  }
   // Issue #490: `team reopen ISSUE` clears the "implemented" mark of one issue so the planner can start an implement job again, e.g. after
   // its only pull request was closed unmerged and the homeowner re-scoped it. Refused unless the issue is open, was marked, has no open
   // pull request (any agent's branch) and no job that is still live. The caller holds the tick lock; the audit record is the unblock log.

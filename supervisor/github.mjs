@@ -34,6 +34,9 @@ export function githubClient(config, gh = ghRunner()) {
     listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),
     listLabels: async () => (json(['label', 'list', '--repo', repo, '--limit', '200', '--json', 'name']) || []).map(l => l.name),
     listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,mergeCommit,closingIssuesReferences']),
+    // Issue #976: merged pull requests that mention an issue, beyond the newest 100 (an old "implemented" hold).
+    searchMergedPulls: async n => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); return json(['pr', 'list', '--repo', repo, '--state', 'merged', '--search', `#${n}`, '--limit', '20', '--json', 'number,title,body,headRefName']) || []; },
+    closeIssue: async (n, body) => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'close', String(n), '--repo', repo, '--comment', redactTopology(body)], undefined, { retry: false }); },
     listClosedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'closed', '--limit', '100', '--json', 'number,headRefName,mergedAt']),   // closed, not merged (issue #521)
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
     // Check runs of any app (issue #142), including third-party checks such as GitGuardian that gh run view cannot show.

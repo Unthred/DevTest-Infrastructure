@@ -87,3 +87,21 @@ test('mcp: foreman_inbox exists and foreman_needs_you stays as an alias returnin
   assert.equal(JSON.stringify(a).includes('inboxItems'), true);
   assert.ok(!tools.list().find(x => x.name === 'foreman_inbox').description.includes('Needs you items'));
 });
+
+test('issue #976: only as many drafts as the daily room belong to Handled automatically, and each carries its timer', async () => {
+  const { buildInbox } = await import('../supervisor/inboxsections.mjs');
+  const d = n => ({ id: `inbox-${n}`, text: 'x', inbox: { kind: 'issue_draft' }, inboxKind: 'issue_draft' });
+  const r = buildInbox([d(1), d(2), d(3)], { auto: { limit: 2, posted: 1 }, nextTickAt: Date.UTC(2026, 10, 7, 12, 0) });
+  assert.deepEqual(r.items.map(i => i.section), ['auto', 'wait', 'wait']);
+  assert.equal(r.items[0].actsAt, Date.UTC(2026, 10, 7, 12, 0));
+});
+
+test('issue #976: an undone auto-approved draft stays pending and is not approved again', t => {
+  const dir = tmp(t), id = drop(dir, draft(1));
+  inbox.scan(dir, NOW); inbox.autoApproveDrafts(dir, NOW, 5);
+  assert.equal(inbox.undo(dir, id, NOW + 1000).ok, true);
+  assert.equal(inbox.statusOf(dir, id).state, 'pending');
+  assert.deepEqual(inbox.autoApproveDrafts(dir, NOW + 2000, 5), { approved: 0 });
+  assert.equal(inbox.statusOf(dir, id).state, 'pending');
+  assert.equal(inbox.decide(dir, id, 'approve', NOW + 3000).ok, true, 'a click still approves it');
+});

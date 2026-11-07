@@ -68,8 +68,8 @@ test('dashboard: Inbox names the issue and the reopen action; the queue and esti
   const cache = { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: [], issues: [{ number: 23, title: 'A', state: 'OPEN', body: '', labels: [] }, { number: 24, title: 'B', state: 'OPEN', body: '', labels: [] }] };
   const state = { implemented: { 23: MARKED }, closedUnmerged: { 23: [411] } };
   const v = await buildView({ config: cfg(), root, jobs: [], events: [], state, cache, snapshots: [], now: NOW });
-  const item = v.attention.find(a => a.id === 'stale-mark-23');
-  assert.ok(item); assert.match(item.text, /#23.*PR #411 closed unmerged/); assert.match(item.action, /team reopen 23/);
+  const item = v.attention.find(a => a.id === 'inbox-holds');
+  assert.ok(item); assert.match(item.text, /#23/); assert.match(item.holds[0].why, /PR #411 closed unmerged/); assert.match(item.action, /reopen/);
   const q = Object.values(v.queues).flat().find(x => x.type === 'issue' && x.ref === 23);
   assert.match(q.reason, /^stuck: /); assert.equal(q.next, false);
   const est = v.estimates.items['issue:23'];
@@ -77,7 +77,7 @@ test('dashboard: Inbox names the issue and the reopen action; the queue and esti
   assert.ok(v.plan.some(a => a.issue === 24), 'the later item starts');
   // not stale for a merged one
   const merged = await buildView({ config: cfg(), root, jobs: [], events: [], state, cache: { ...cache, delivered: [23] }, snapshots: [], now: NOW });
-  assert.ok(!merged.attention.some(a => a.id === 'stale-mark-23'));
+  assert.ok(!merged.attention.some(a => a.id === 'inbox-holds'));
 });
 
 // Issue #597: a later completed ingest clears endedNoPr; a transient stop awaiting its one resume is not surfaced before it.
@@ -194,7 +194,49 @@ test('dashboard: a hold cleared by a merged PR title is not an Inbox item, from 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-dash2-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); fs.chmodSync(root, 0o700);
   const cache = { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: [], issues: [{ number: 23, title: 'A', state: 'OPEN', body: '', labels: [] }], merged: [{ number: 500, title: 'Dashboard: fixes #23 for good', mergedAt: '2026-11-07T00:00:00Z' }] };
   const view = state => buildView({ config: cfg(), root, jobs: [], events: [], state, cache, snapshots: [], now: NOW });
-  assert.ok(!(await view({ implemented: { 23: MARKED } })).attention.some(a => a.id === 'stale-mark-23'), 'title from the cache');
-  assert.ok(!(await view({ implemented: { 23: MARKED }, staleCleared: { 23: { pr: 9, at: NOW } } })).attention.some(a => a.id === 'stale-mark-23'), 'recorded clearance');
-  assert.ok((await buildView({ config: cfg(), root, jobs: [], events: [], state: { implemented: { 23: MARKED } }, cache: { ...cache, merged: [] }, snapshots: [], now: NOW })).attention.some(a => a.id === 'stale-mark-23'));
+  assert.ok(!(await view({ implemented: { 23: MARKED } })).attention.some(a => a.id === 'inbox-holds'), 'title from the cache');
+  assert.ok(!(await view({ implemented: { 23: MARKED }, staleCleared: { 23: { pr: 9, at: NOW } } })).attention.some(a => a.id === 'inbox-holds'), 'recorded clearance');
+  assert.ok((await buildView({ config: cfg(), root, jobs: [], events: [], state: { implemented: { 23: MARKED } }, cache: { ...cache, merged: [] }, snapshots: [], now: NOW })).attention.some(a => a.id === 'inbox-holds'));
+});
+
+// Issue #976 review round: older merged PRs by search, closed issues, the grouped item, bulk actions, snooze.
+test('an old merged PR beyond the newest 100 is found by search, once a day per issue', async t => {
+  const w = world(t, { closed: [] }); let calls = 0;
+  w.gh.searchMergedPulls = async n => { calls++; return [{ number: 90, title: 'Old work (#' + n + ')', body: '', headRefName: '' }]; };
+  await w.team.plan();
+  assert.deepEqual(w.team.stale, {}); assert.equal(w.team.s.staleCleared[23].pr, 90); assert.equal(calls, 1);
+  const none = world(t, { closed: [] }); let c2 = 0; none.gh.searchMergedPulls = async () => { c2++; return []; };
+  await none.team.plan(); await none.team.plan();
+  assert.ok(none.team.stale[23]); assert.equal(c2, 1, 'a negative result is not searched again the same day');
+});
+
+test('a closed issue clears the hold with a recorded reason', async t => {
+  const w = world(t, { closed: [] }); w.gh.issues[0].state = 'CLOSED';
+  await w.team.plan();
+  assert.deepEqual(w.team.stale, {}); assert.match(w.team.s.staleCleared[23].reason, /closed/);
+});
+
+test('keep-hold and close-done act only on a marked issue', async t => {
+  const w = world(t, { closed: [] }); const closed = [];
+  w.gh.closeIssue = async (n, body) => closed.push([n, body]);
+  await w.team.plan(); assert.ok(w.team.stale[23]);
+  w.team.keepHold(23); await w.team.plan(); assert.deepEqual(w.team.stale, {});
+  await w.team.closeDone(23); assert.equal(closed[0][0], 23);
+  await assert.rejects(() => w.team.closeDone(24), /not marked implemented/);
+  assert.throws(() => w.team.keepHold(24), /not marked implemented/);
+});
+
+test('dashboard: holds are one grouped Inbox item with bulk actions; a snoozed item leaves the count', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-grp-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); fs.chmodSync(root, 0o700);
+  const w = world(t, { closed: [] }); w.team.s.implemented[24] = MARKED; await w.team.plan();
+  const cache = { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls: [], issues: w.gh.issues, merged: [] };
+  const view = () => buildView({ config: cfg(), root, jobs: [], events: [], state: w.team.s, cache, snapshots: [], now: NOW, team: w.team });
+  const v = await view();
+  const g = v.panels.needsYou.filter(a => a.id === 'inbox-holds');
+  assert.equal(g.length, 1); assert.deepEqual(g[0].holds.map(h => h.issue), [23, 24]); assert.match(g[0].text, /^2 issues marked implemented with no PR/);
+  assert.equal(g[0].section, 'wait');
+  const { snoozeItem } = await import('../supervisor/dashwrite.mjs');
+  assert.ok(snoozeItem(root, 'inbox-holds', 24, NOW).ok);
+  assert.ok(!(await view()).panels.needsYou.some(a => a.id === 'inbox-holds'));
+  assert.equal(snoozeItem(root, 'x', 5, NOW).ok, false);
 });

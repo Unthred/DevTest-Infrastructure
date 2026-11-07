@@ -45,3 +45,16 @@ export function releaseCooldown(root, key, now) {
   const all = readCooldowns(root); if (all[key] !== now) return;
   delete all[key]; atomicJson(cooldownFile(root), all);
 }
+
+// Issue #976: Snooze hides one Inbox item for a fixed time. Kept in the state root next to the cooldowns; it changes no Foreman state and the item returns by itself.
+export const SNOOZE_HOURS = [1, 24, 168];
+export const SNOOZE_COOLDOWN_MS = 1000;
+const snoozeFile = root => path.join(dashDir(root), 'snoozed.json');
+export function readSnoozed(root, now = Date.now()) {
+  try { const v = JSON.parse(fs.readFileSync(snoozeFile(root), 'utf8')); return v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([, until]) => Number.isFinite(until) && until > now)) : {}; } catch { return {}; }
+}
+export function snoozeItem(root, id, hours, now = Date.now()) {
+  if (!/^[A-Za-z0-9._:-]{1,120}$/.test(String(id)) || !SNOOZE_HOURS.includes(hours)) return { ok: false, reason: 'bad request' };
+  const all = readSnoozed(root, now); all[id] = now + hours * 3600000; atomicJson(snoozeFile(root), all);
+  return { ok: true, until: all[id] };
+}

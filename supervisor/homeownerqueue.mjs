@@ -5,7 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { atomicJson } from './core.mjs';
 
-export const QUEUED_COMMANDS = ['reopen', 'accept-split', 'request-review'];
+export const QUEUED_COMMANDS = ['reopen', 'accept-split', 'request-review', 'close-done', 'keep-hold'];
 const queueDir = root => path.join(root, 'homeowner-requests');
 
 export function queueHomeownerRequest(root, command, args, at) {
