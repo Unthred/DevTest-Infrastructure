@@ -283,3 +283,16 @@ The five-minute schedule stays as the safety net. On top of it, four local event
 - A PASS review's non-blocking findings are not given an issue each. They are added to one open issue per area (the top-level directory holding most of the PR's changed files; `general` if the file list is unreadable), marked `devtest-followup-batch v1 area=<area>`. A later review of the same area updates that issue; a finding already listed is not repeated, and a review job is never added twice. A new batch issue is opened only when a reviewer-written follow-up is in it; a list of only immaterial description-claim notes joins an existing batch and otherwise stays on the review comment. Because one issue holds the area's follow-ups, one implementer run clears several.
 - A fix-round re-review first judges whether each previous blocking finding is resolved. A new blocking finding is allowed only for a real defect in lines the fix changed; anything else is a follow-up.
 - Churn: when the last two re-reviews of a PR each drew blocking findings that repeat nothing from the round before, Foreman starts no further fix job for it and raises one Needs you item (the needs-homeowner flag and a PR notice) with the three rounds side by side. A new head that is reviewed PASS clears it. At the fix limit the ordinary fix-limit item applies instead.
+
+## Host check before a start (issue #972)
+
+Foreman reads Tower's `/proc` once per planning pass (swap used, memory available, 5-minute load average per core) and holds new starts while the host is overloaded. It never stops a running job for host load. Two levels, each with a hold and a lower resume threshold so it does not flap (`host_gate` in `team.json`, overridable in `team.local.json`; defaults shown):
+
+| Level | Holds | Hold when | Resume when (all of) |
+| --- | --- | --- | --- |
+| start | implement, continue | swap ≥ 85%, or memory available < 4 GB, or load/core > 1.5 | swap < 75%, memory ≥ 5 GB, load/core ≤ 1.2 |
+| hard | review, fix, CI fix, rebase, approved inbox prompts (and everything at the start level) | swap ≥ 95%, or memory < 2 GB, or load/core > 2.5 | swap < 90%, memory ≥ 3 GB, load/core ≤ 2.0 |
+
+A held job shows its reason in the queue and Needs-you text, for example `held: swap 94% ≥ 85%`; between the hold and resume thresholds it reads `held: swap 80%, resumes below 75%`. The Overview has a "Tower host" card: each figure coloured (green normal, amber past a start threshold or still recovering, red past a hard threshold), what is held and for how long. A resume of a job paused on a usage limit is held the same way. An unreadable figure never holds anything, and `"enabled": false` switches the check off. Only `foreman tick` samples the host; the dashboard shows the latest stored reading and its age.
+
+`foreman_host` (MCP) now returns `cores`, `containers` (memory and swap per Docker container from the cgroup files: short container id and main process name, no Docker socket) and `activity.topProcessesByMemory.topSwapHolders` (the processes holding the most swap, each with its container id). All read-only.
