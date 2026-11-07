@@ -435,7 +435,7 @@ if (grid) {
   hint.dataset.hint = '';
   bar.append(editBtn, tools, hiddenBox, hint, mk('span', { className: 'lay-live' }));
   $('.lay-live', bar).setAttribute('role', 'status'); $('.lay-live', bar).setAttribute('aria-live', 'polite');
-  if (grid.querySelector('[data-move]')) grid.before(bar);   // only grids that have movable cards
+  if (cards().length) grid.before(bar);   // every grid with cards gets the editor (issue #929), whether or not the card has phone move buttons
   const live = $('.lay-live', bar);
   const say = t => { live.textContent = ''; setTimeout(() => { live.textContent = t; }, 30); };
   const btn = n => $(`[data-lay=${n}]`, bar);
@@ -476,7 +476,7 @@ if (grid) {
         c.tabIndex = 0; c.setAttribute('aria-roledescription', 'movable card'); c.setAttribute('aria-describedby', 'lay-help');
         for (const f of $$('a,button,input,select,textarea,summary,[tabindex]', c)) if (f !== c) { f.dataset.layTi = f.getAttribute('tabindex') ?? ''; f.tabIndex = -1; }
         if (canHide(c.dataset.card, c.hasAttribute('data-pin'))) {
-          const h = document.createElement('button'); h.type = 'button'; h.className = 'lay-hide'; h.textContent = 'Hide'; h.setAttribute('aria-label', `Hide ${titleOf(c)}`); h.addEventListener('click', () => hideCard(c.dataset.card)); c.append(h);
+          const h = document.createElement('button'); h.type = 'button'; h.className = 'lay-hide'; h.textContent = 'Hide'; h.setAttribute('aria-label', `Hide ${titleOf(c)}`); h.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); hideCard(c.dataset.card); }); c.append(h);   // a card that is itself a link (a KPI) must not follow it
         }
       } else {
         $('.lay-hide', c)?.remove(); c.style.cursor = '';
@@ -550,14 +550,15 @@ if (grid) {
     const ghost = document.createElement('div'); ghost.className = 'lay-ghost'; ghost.hidden = true; grid.append(ghost);
     act = { c, id: c.dataset.card, edge: edgeAt(c.getBoundingClientRect(), e.clientX, e.clientY, 10), x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, scroll0: scrollY, pid: e.pointerId, base: JSON.parse(JSON.stringify(st)), from: { ...st.pos[c.dataset.card] }, ghost };
     c.classList.add('lay-active');
-    scrollTimer = setInterval(() => { if (!act) return; const d = act.y > innerHeight - 48 ? 18 : act.y < 48 ? -18 : 0; if (d) { scrollBy(0, d); showPreview(); } }, 40);
+    // edge scrolling is gentle and proportional: the nearer the pointer is to the window edge, the faster, and nothing in the middle
+    scrollTimer = setInterval(() => { if (!act) return; const z = 36, d = act.y > innerHeight - z ? Math.ceil((act.y - (innerHeight - z)) / z * 14) : act.y < z ? -Math.ceil((z - act.y) / z * 14) : 0; if (d) { scrollBy(0, d); showPreview(); } }, 30);
   });
   grid.addEventListener('pointermove', e => {
     if (!editing) return;
-    if (act) { act.x = e.clientX; act.y = e.clientY; showPreview(); return; }
+    if (act) { act.x = e.clientX; act.y = e.clientY; if (!act.raf) act.raf = requestAnimationFrame(() => { if (act) { act.raf = 0; showPreview(); } }); return; }   // one preview per frame, always from the latest pointer position
     const c = e.target.closest?.('.card[data-card]'); if (c) c.style.cursor = CURSORS[edgeAt(c.getBoundingClientRect(), e.clientX, e.clientY, 10)] || '';
   });
-  grid.addEventListener('pointerup', () => finishAct(true));
+  grid.addEventListener('pointerup', e => { if (act) { act.x = e.clientX; act.y = e.clientY; showPreview(); } finishAct(true); });   // land where the pointer is, not where the last frame was
   grid.addEventListener('pointercancel', () => finishAct(false));
   grid.addEventListener('dragstart', e => { if (editing) e.preventDefault(); });
   grid.addEventListener('click', e => { if (editing && !e.target.closest('.lay-hide')) e.preventDefault(); }, true);

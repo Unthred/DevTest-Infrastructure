@@ -237,7 +237,7 @@ test('#140 title and Back live in the app bar; one h1; no gap-less Supervisor st
     if (u !== '/') assert.match(bar, /data-back/, u);
   }
   assert.match(css, /main\{width:100%/, 'main keeps the same width on every page, also in the flex docks');
-  assert.match(css, /\.cards\.stacked\{margin-top/); assert.match((await s.get('/supervisor')).body, /<div class="cards stacked">/);
+  assert.match(css, /\.cards\.stacked\{margin-top/); assert.doesNotMatch((await s.get('/supervisor')).body, /<div class="cards stacked">/, 'Recent ticks and Leases are in the one layout grid (issue #929), so there is no second stack to leave a gap');
 });
 
 test('issue #263: inherited names are not time ranges', async () => {

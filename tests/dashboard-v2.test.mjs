@@ -626,3 +626,35 @@ test('handler refuses the statfs test seam together with offload, and accepts ea
   assert.throws(() => handler({ ...base, offload: true, statfs: () => ({}) }), /statfs.*offload/);
   assert.equal(typeof handler({ ...base, statfs: () => ({}) }), 'function');
 });
+
+// issue #929: the layout editor covers every page with cards. Every card is a direct part of one layout grid, and the editor is added
+// to every grid that has a card (not only ones with phone move buttons), so no page or card lacks Edit layout.
+test('every card on every page sits inside a layout grid, and the editor is not gated on movable cards', async t => {
+  const s = await serve(t, { jobs: [jb()], cache: cache(), state: { verdicts: {}, jobs: {} } });
+  const urls = ['/', '/agents', '/agents/claude', '/work', '/work/pr/41', '/work/issue/30', '/work/job/' + 'a'.repeat(32), '/activity', '/activity?by=issue', '/usage', '/reviews', '/system', '/diagnostics', '/supervisor', '/supervisor/ticks', '/supervisor/upgrades', '/work/issue/99999'];
+  const inGrids = html => {   // the number of data-card elements inside <div class="cards" data-layout> blocks, found by balancing div tags
+    let n = 0, grids = 0;
+    for (const m of html.matchAll(/<div class="cards[^"]*" data-layout="[^"]*">/g)) {
+      grids++; let depth = 1, i = m.index + m[0].length; const start = i;
+      for (const tag of html.slice(i).matchAll(/<div\b|<\/div>/g)) { depth += tag[0] === '</div>' ? -1 : 1; if (!depth) { n += (html.slice(start, i + tag.index).match(/\sdata-card="/g) || []).length; break; } }
+    }
+    return { n, grids };
+  };
+  let covered = 0;
+  for (const u of urls) {
+    const r = await s.get(u); if (r.status !== 200 && r.status !== 404) continue;
+    const total = (r.body.match(/\sdata-card="/g) || []).length, { n, grids } = inGrids(r.body);
+    assert.equal(n, total, `${u}: every card is inside a layout grid`);
+    assert.equal((r.body.match(/<div class="cards[ "]/g) || []).length, grids, `${u}: no card grid without data-layout`);
+    if (total) covered++;
+  }
+  assert.ok(covered >= 12, 'most pages were really checked');
+  for (const page of ['/work', '/supervisor', '/diagnostics']) assert.ok((await s.get(page)).body.includes('data-layout="' + page.slice(1) + '"'), page);
+  const work = (await s.get('/work')).body, sup = (await s.get('/supervisor')).body;
+  for (const id of ['issues', 'excluded', 'prs']) assert.match(work, new RegExp(`data-card="${id}"`));
+  for (const id of ['h-recent', 'h-leases-table']) assert.match(sup, new RegExp(`data-card="${id}"`));
+  const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /querySelector\('\[data-move\]'\)\) grid\.before\(bar\)/, 'the editor must not depend on phone move buttons');
+  assert.match(app, /if \(cards\(\)\.length\) grid\.before\(bar\)/);
+  assert.match(app, /lay-hide[^\n]*addEventListener\('click', e => \{ e\.preventDefault\(\); e\.stopPropagation\(\)/, 'Hide never follows a card that is a link');
+});
