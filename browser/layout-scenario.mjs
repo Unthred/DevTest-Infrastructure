@@ -245,6 +245,12 @@ async function phone() {
   const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
   check('phone: no horizontal page scroll', w[0] <= w[1], w.join('>'));
   check('phone: the move earlier / later buttons are available', await page.locator('[data-move]').first().isVisible());
+  // behaviour-level guard for #765: a module binding named history would hide window.history in app.js
+  const hist = await page.evaluate(() => ({ sr: history.scrollRestoration, fns: typeof history.replaceState === 'function' && typeof history.back === 'function' }));
+  check('history: scrollRestoration is manual, so app.js still talks to window.history', hist.sr === 'manual' && hist.fns, JSON.stringify(hist));
+  await page.goto(url('/overview.html?x=1'), { waitUntil: 'load' });
+  const kept = await page.evaluate(() => { history.replaceState({ k: 1 }, '', location.href); return !!(history.state && history.state.k === 1); });
+  check('history: replaceState on the page keeps its state', kept);
   check('phone: no script errors', errors.length === 0, errors.join(';'));
   await ctx.close();
 }

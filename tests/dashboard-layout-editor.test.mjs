@@ -132,6 +132,16 @@ test('app.js does not bind the name history (it would hide window.history)', () 
   const imp = src.match(/import \{([^}]*)\} from '\.\/grid\.mjs'/)[1].split(',').map(x => x.trim());
   assert.ok(!imp.includes('history'), 'import history as layoutHistory');
   assert.ok(!/\b(const|let|var|function)\s+history\b/.test(src));
+  // any other binding (parameter, destructuring, catch, import from another module): outside strings and comments, the bare
+  // word history may only be used as history.x, or be the one import 'history as layoutHistory'
+  const code = src.replace(/\/\/.*$/gm, '').replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"/g, "''");
+  const bare = [...code.matchAll(/(?<![.\w$])history\b(?!\s*\.)/g)].map(m => code.slice(m.index, m.index + 24));
+  assert.deepEqual(bare, ['history as layoutHistory'], 'only the aliased import may name history without a member access');
+  assert.match(src, /history\.scrollRestoration\s*=\s*'manual'/);
+});
+test('app.js reads the pinned cards on every apply(), also while editing', () => {
+  assert.match(appJs, /else if \(st\) st\.hidden = st\.hidden\.filter\(id => !pinnedIds\.includes\(id\)\)/);
+  assert.deepEqual(sanitizeLayout({ v: 2, pos: {}, hidden: ['a', 'b'] }, ['a', 'b'], 24, ['a', 'b']).hidden, []);
 });
 test('isOldLayout tells the old order/span/h form from the new one', () => {
   assert.equal(isOldLayout({ order: ['a'] }), true); assert.equal(isOldLayout({ span: {} }), true); assert.equal(isOldLayout({ v: 2, order: [] }), false);
