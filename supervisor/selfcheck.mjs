@@ -40,7 +40,7 @@ export function selfCheck({ state, prs = [], issues = [], active = [], aliveById
     if (j.kind !== 'review' || !j.ingested || j.postMerge || j.secondOpinion || j.exceptionStage || !Number.isSafeInteger(j.pr) || !j.head) continue;
     if (j.refusal === 'independence' || j.refusal === 'exception-model') continue;   // the refused-verdict card names these
     const key = `${j.pr}:${j.head}`;
-    if (seen.has(key) || openAt.get(j.pr) !== j.head || recorded.has(key) || state.refusedReviews?.[key] || state.reviewRefusals?.[j.key]) continue;
+    if (seen.has(key) || openAt.get(j.pr) !== j.head || recorded.has(key) || state.refusedReviews?.[key] || state.reviewRefusals?.[j.key] || state.reviewFaults?.[j.key]) continue;
     if ((state.reviewAttempts?.[j.key] || 0) < maxReviewAttempts) continue;   // an attempt is left: the planner retries
     seen.add(key);
     items.push({ id: `selfcheck-review-${j.pr}`, kind: 'review-no-verdict', ref: j.pr, text: `The review of PR #${j.pr} at ${String(j.head).slice(0, 7)} (job ${String(id).slice(0, 8)}) finished but no verdict was recorded${j.refusal ? ` (${redact(j.refusal, 60)})` : ''}, and its attempts are used.`,

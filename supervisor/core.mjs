@@ -327,7 +327,9 @@ export function prompt(job, resume = false, seed = null) {
   if (job.handover) head += ` Read the handover at ${job.handover} and update it only when the approved actions permit edits.`;
   if (resume) head += ` Resume the SAME issue and worktree. Read issue, Git state and handover before changing anything. Last checkpoint HEAD: ${job.checkpoint?.head || 'unknown'}. Avoid duplicate actions.`;
   // Issue #550: the retry of an attempt whose post-condition failed is told why (for a verdict, the exact validation error).
-  if (resume && job.incompleteReason?.cause === 'postcondition_not_met' && job.incompleteReason.detail) head += ` Your previous attempt ended incomplete: ${job.incompleteReason.detail} Fix exactly that and finish.`;
+  // Issue #756: a fault in Foreman's own validator is not the reviewer's to fix; say so instead of telling the reviewer to correct it.
+  if (resume && job.incompleteReason?.cause === 'postcondition_not_met' && String(job.incompleteReason.detail || '').startsWith('validator fault:')) head += " Foreman's own check of your previous verdict failed, which is not a mistake in your work. Do the review again from the start and write the verdict file as instructed.";
+  else if (resume && job.incompleteReason?.cause === 'postcondition_not_met' && job.incompleteReason.detail) head += ` Your previous attempt ended incomplete: ${job.incompleteReason.detail} Fix exactly that and finish.`;
   if (seed) head += `\n\n${seed}`;
   return head + '\n\n' + job.prompt;
 }

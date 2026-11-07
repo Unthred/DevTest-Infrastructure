@@ -152,7 +152,7 @@ function registerRepo(t) {
   return d;
 }
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
-async function serve(t, { jobs = [], cache, state, snapshots, upgrades, repo } = {}) {
+async function serve(t, { jobs = [], cache, state, snapshots, upgrades, repo, statfs = () => ({ bavail: 5e8, blocks: 1e9, bsize: 4096 }) } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash2-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'jobs'), { recursive: true }); fs.mkdirSync(path.join(root, 'dashboard'), { recursive: true }); fs.mkdirSync(path.join(root, 'team'), { recursive: true });
   for (const j of jobs) fs.writeFileSync(path.join(root, 'jobs', `${j.id}.json`), JSON.stringify(j));
@@ -161,7 +161,7 @@ async function serve(t, { jobs = [], cache, state, snapshots, upgrades, repo } =
   if (snapshots) fs.writeFileSync(path.join(root, 'dashboard', 'snapshots.jsonl'), snapshots.map(s => JSON.stringify(s)).join('\n') + '\n');
   if (upgrades) fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), upgrades.map(s => JSON.stringify(s)).join('\n') + '\n');
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
-  const port = server.address().port; server.on('request', handler({ root, config: repo ? { ...config, repo_path: repo } : config, host: '127.0.0.1', port, now: () => NOW }));
+  const port = server.address().port; server.on('request', handler({ root, config: repo ? { ...config, repo_path: repo } : config, host: '127.0.0.1', port, now: () => NOW, statfs }));
   return { get: p => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p, headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject)) };
 }
 const jb = (over = {}) => ({ id: 'a'.repeat(32), provider: 'claude', kind: 'implement', issue: 30, branch: 'claude/issue-30-x', status: 'running', createdAt: NOW - 600000, updatedAt: NOW - 1000, lastProgress: NOW - 1000, attempts: 2, usage: { inputTokens: 900, outputTokens: 100, costUsdEstimate: 0.5 }, ...over });

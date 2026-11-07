@@ -452,6 +452,9 @@ test('#631: the review job carries a short repair task, and the retry of a refus
   assert.match(spec.repairPrompt, /repair the verdict file/); assert.match(spec.repairPrompt, /do not run tests/);
   assert.ok(spec.repairPrompt.includes(spec.postcondition.ticket), 'it names the verdict file of this review');
   assert.ok(spec.repairPrompt.length < spec.prompt.length / 2, 'much shorter than the review');
+  // issue #756: a fresh session never saw the original instructions, so the checklist shapes are spelled out
+  for (const w of ['requirement,', 'met|not-met|not-applicable', 'descriptionClaims', 'true|false|unverifiable', 'materiality']) assert.ok(spec.repairPrompt.includes(w), w);
+  assert.doesNotMatch(spec.repairPrompt, /as in your original instructions/);
   const job = { role: 'devtest', issue: 77, worktree: '/w', scope: 's', allowedActions: ['read'], prompt: spec.prompt, repairPrompt: spec.repairPrompt, incompleteReason: { cause: 'postcondition_not_met', detail: `${VERDICT_REFUSED} verdict has an unknown field`, attempt: 1 } };
   const retry = prompt(job, true);
   assert.match(retry, /verdict has an unknown field/); assert.match(retry, /repair the verdict file/);
@@ -548,4 +551,12 @@ test('#678: a Dockerfile suffix needs a slashed path; root Dockerfile fails safe
   assert.equal(isTrivialSlip('adds 2 lines and improves ci.'), false);
   assert.equal(isTrivialSlip('adds 2 lines in tests/fix.retry.'), false);
   assert.equal(isTrivialSlip('adds 2 lines in notdockerfile'), false);
+});
+
+test('#756: a validator fault is not retried with "fix exactly that"; a refused verdict still is', async t => {
+  const w = reqWorld(t); const { spec } = await startReview(w);
+  const job = d => ({ role: 'devtest', issue: 77, worktree: '/w', scope: 's', allowedActions: ['read'], prompt: spec.prompt, incompleteReason: { cause: 'postcondition_not_met', detail: d, attempt: 1 } });
+  const fault = prompt(job(`${VALIDATOR_FAULT} TypeError`), true);
+  assert.doesNotMatch(fault, /Fix exactly that/); assert.match(fault, /not a mistake in your work/); assert.ok(fault.includes(spec.prompt));
+  assert.match(prompt(job('the post-condition did not hold'), true), /Fix exactly that/);
 });
