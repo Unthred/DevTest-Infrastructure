@@ -80,7 +80,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
           const out = { kind, number: n };
           const queueItems = Object.entries(v.queues || {}).flatMap(([agent, items]) => (items || []).filter(i => i.ref === n && (kind === 'pr' ? ['pr', 'review'].includes(i.type) : i.type === 'issue')).map(i => ({ agent, type: i.type, order: i.order ?? null, next: !!i.next, reason: i.reason })));
           out.queue = queueItems;
-          out.needsYou = (v.attention || []).filter(a => a.ref?.n === n && (kind === 'pr' ? a.ref?.kind === 'pr' : a.ref?.kind === 'issue')).map(a => ({ text: a.text, tried: a.tried, action: a.action, severity: a.severity }));
+          out.needsYou = (v.attention || []).filter(a => a.ref?.n === n && (kind === 'pr' ? a.ref?.kind === 'pull' : a.ref?.kind === 'issue')).map(a => ({ text: a.text, tried: a.tried, action: a.action, severity: a.severity }));
           if (kind === 'pr') { const p = (v.prs || []).find(x => x.number === n); out.found = !!p; if (p) out.pr = { title: p.title, status: p.status, head: p.head, checks: p.checks, verdict: p.verdict, awaitingReview: p.awaitingReview, reviewRounds: p.reviewRounds, fixRounds: p.fixRounds, rebaseRounds: p.rebaseRounds, needsHomeowner: p.needsHomeowner, issue: p.issue, jobs: (p.jobs || []).slice(0, 8) }; }
           else { const i = (v.issues || []).find(x => x.number === n); out.found = !!i || queueItems.length > 0; if (i) out.issue = { title: i.title, state: i.state, labels: i.labels }; out.excluded = (v.excluded || []).filter(e => e.number === n); out.waits = (v.panels?.later || []).filter(l => l.number === n).map(l => ({ waits: l.waits, ends: l.ends })); }
           return out;

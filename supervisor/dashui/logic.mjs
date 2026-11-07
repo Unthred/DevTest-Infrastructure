@@ -119,11 +119,11 @@ export function versionStatus(v) {
 
 // ---- header status pills (issue #61): where each pill leads. #att-<id> is an attention item, #c-<id> a card; the target is
 // highlighted with :target. Returns an href per pill.
-export function pillLinks({ health, attention = [], version } = {}) {
+export function pillLinks({ health, attention = [], needsYou, version } = {}) {
   const first = re => attention.find(a => re.test(String(a.id)));
   const att = a => (a ? `/system#att-${a.id}` : '/system');
   let healthHref = '/agents';
-  if (health?.state === 'needs_you') healthHref = att(attention.find(a => a.severity === 'action'));
+  if (health?.state === 'needs_you') healthHref = att(Array.isArray(needsYou) ? needsYou[0] : attention.find(a => a.severity === 'action'));
   else if (health?.state === 'stuck') healthHref = first(/^tick-stale/) ? '/supervisor#c-h-tick' : att(first(/^idle/));
   else if (health?.state === 'paused' || health?.state === 'unknown') healthHref = first(/^(pause|idle)/) ? att(first(/^(pause|idle)/)) : '/agents';
   return { health: healthHref, tick: '/supervisor#c-h-tick', data: '/supervisor#c-h-tick', team: '/system#c-sys', version: versionStatus(version).href };
