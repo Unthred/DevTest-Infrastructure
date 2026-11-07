@@ -10,6 +10,7 @@ import { checksState, retriedIn, prerequisites, pullPrerequisites } from './team
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
+import { readMcpInstall } from './mcpinstall.mjs';
 import { HOT_WINDOW_MS, archiveSnapshots, recordTimeline } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
 import { classifyIdle } from './idlecause.mjs';
@@ -264,5 +265,6 @@ export function readVersion(root, { running = codeVersion(), now = Date.now() } 
   let nextTryAt = null; const l = upgradeState?.lastUpgradeAt; if (Number.isFinite(l) && l + MIN_UPGRADE_INTERVAL_MS > now) nextTryAt = l + MIN_UPGRADE_INTERVAL_MS;
   // Issue #695: when merged work is installed next, or why it waits; written by the upgrader, shown as "Next install". Merged is not installed.
   let nextInstall = null; const ni = upgradeState?.nextInstall; if (ni && installed !== main && typeof ni.why === 'string') nextInstall = { at: Number.isFinite(ni.at) ? ni.at : null, why: ni.why.slice(0, 200), state: String(ni.state || '').slice(0, 12) };
-  return { nextInstall, installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, nextTryAt: installed === main ? null : nextTryAt, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
+  const mcp = readMcpInstall(root, installed || null);   // issue #946: absent unless the MCP server is set up for automatic installs
+  return { ...(mcp ? { mcp } : {}), nextInstall, installed: String(installed).slice(0, 40), main: String(main).slice(0, 40), drift: !!installed && installed !== main, behind: installed === main ? 0 : behind, nextTryAt: installed === main ? null : nextTryAt, running: run, result: String(last?.result || '').slice(0, 24), at: last?.at ?? null };
 }
