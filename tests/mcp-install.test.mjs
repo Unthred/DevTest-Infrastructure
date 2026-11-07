@@ -21,12 +21,14 @@ function world({ configured = true, installed = true } = {}) {
   const dir = tmp(), state = path.join(dir, 'state'), inst = path.join(dir, 'inst'), src = path.join(dir, 'src');
   fs.mkdirSync(path.join(src, 'foreman-mcp'), { recursive: true }); fs.mkdirSync(state); fs.mkdirSync(inst);
   fs.writeFileSync(path.join(src, 'foreman-mcp/server.mjs'), 'export const v = 2;\n');
-  fs.writeFileSync(path.join(src, 'foreman-mcp/launcher.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(src, 'foreman-mcp/launcher.sh'), '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(path.join(src, 'foreman-mcp/launcher.sh'), 0o755);
   if (configured) fs.writeFileSync(path.join(state, 'foreman-mcp.install'), `INSTALL_DIR=${inst}\n`);
   if (installed) {
     fs.mkdirSync(path.join(inst, 'foreman-mcp'));
     fs.writeFileSync(path.join(inst, 'foreman-mcp/server.mjs'), 'export const v = 1;\n');
-    fs.writeFileSync(path.join(inst, 'foreman-mcp/launcher.env'), 'NODE_BIN=/x\n', { mode: 0o640 });
+    fs.writeFileSync(path.join(inst, 'foreman-mcp/launcher.env'), 'NODE_BIN=/x\n');
+    fs.chmodSync(path.join(inst, 'foreman-mcp/launcher.env'), 0o640);   // explicit chmod: the install precheck runs under umask 077 (#993)
     fs.writeFileSync(path.join(inst, 'VERSION'), SH + '\n');
   }
   return { dir, state, inst, src };
@@ -80,7 +82,7 @@ test('install: skipped without a configuration file or without a hand-installed 
 test("install: Tower's layout (server in srv/, VERSION inside it with a note line) updates and keeps the note", () => {
   const w = world({ installed: false });
   const srv = path.join(w.inst, 'srv'); fs.mkdirSync(srv);
-  fs.writeFileSync(path.join(srv, 'server.mjs'), 'export const v = 1;\n'); fs.writeFileSync(path.join(srv, 'launcher.env'), 'NODE_BIN=/x\n', { mode: 0o640 });
+  fs.writeFileSync(path.join(srv, 'server.mjs'), 'export const v = 1;\n'); fs.writeFileSync(path.join(srv, 'launcher.env'), 'NODE_BIN=/x\n'); fs.chmodSync(path.join(srv, 'launcher.env'), 0o640);
   fs.writeFileSync(path.join(srv, 'VERSION'), SH + '\ncopied by hand on 6 Nov\n');
   fs.writeFileSync(path.join(srv, 'launcher.env.bak-1'), 'OLD=1\n');
   fs.writeFileSync(path.join(w.state, 'foreman-mcp.install'), `INSTALL_DIR=${w.inst}\nSERVER_DIR=srv\nVERSION_FILE=srv/VERSION\n`);
@@ -150,4 +152,16 @@ test('plan: a change under foreman-mcp/ on this branch is in the upgrade plan', 
   if (!base) return;
   const changed = g(['diff', '--name-only', base, 'HEAD']).stdout.split('\n').filter(f => f.startsWith('foreman-mcp/'));
   if (changed.length) { assert.equal(rangeNeedsInstall(changed), true); assert.equal(mcpNeedsInstall(changed), true); }
+});
+
+test('install: keeps launcher.env at 0640 and sets the other modes when the caller runs under umask 077 (#993)', () => {
+  const old = process.umask(0o077);
+  try {
+    const w = world();
+    const r = install(w.src, SH2, w.state);
+    assert.equal(r.status, 0, r.err);
+    assert.equal(fs.statSync(path.join(w.inst, 'foreman-mcp/launcher.env')).mode & 0o777, 0o640);
+    assert.equal(fs.statSync(path.join(w.inst, 'foreman-mcp/server.mjs')).mode & 0o777, 0o644);
+    assert.equal(fs.statSync(path.join(w.inst, 'foreman-mcp/launcher.sh')).mode & 0o777, 0o755);
+  } finally { process.umask(old); }
 });
