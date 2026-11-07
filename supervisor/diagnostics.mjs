@@ -89,11 +89,11 @@ function addSample(hours, rec) {
   return true;
 }
 // Reads the new bytes of one file (never more than the per-file cap). Returns { bytes, skipped, truncated }.
-function readFileInto(file, size, budget) {
+function readFileInto(file, size, budget, maxFileBytes = MAX_FILE_BYTES) {
   let e = cache.get(file);
   if (!e || size < e.consumed) { e = { size: 0, consumed: 0, hours: new Map() }; cache.set(file, e); }
   let start = e.consumed, truncated = false;
-  const cap = Math.min(MAX_FILE_BYTES, budget);
+  const cap = Math.min(maxFileBytes, budget);
   if (size - start > cap) { start = size - cap; truncated = true; }     // too much new data: the newest part only
   if (size <= start) return { bytes: 0, skipped: 0, truncated };
   const buf = Buffer.alloc(size - start);
@@ -112,7 +112,9 @@ function readFileInto(file, size, budget) {
   return { bytes: buf.length, skipped, truncated };
 }
 // status: ok | partial | empty | missing | unreadable. `note` is fixed text; nothing from the log or the OS error text is echoed.
-export function readRecorder(dir, from, to) {
+// `limits` ({ maxFileBytes, maxTotalBytes, maxFiles }) overrides the defaults; tests use it to keep fixtures small.
+export function readRecorder(dir, from, to, limits = {}) {
+  const { maxFileBytes = MAX_FILE_BYTES, maxTotalBytes = MAX_TOTAL_BYTES, maxFiles = MAX_RECORDER_FILES } = limits;
   const out = { status: 'ok', note: '', files: 0, samples: 0, skippedLines: 0, hourly: [], days: [] };
   let names;
   try { names = fs.readdirSync(dir); } catch (error) {
@@ -121,15 +123,15 @@ export function readRecorder(dir, from, to) {
   }
   const first = dayStart(from);
   const wanted = names.filter(n => { const m = FILE.exec(n); return m && Date.UTC(+m[1], +m[2] - 1, +m[3]) >= first && Date.UTC(+m[1], +m[2] - 1, +m[3]) <= to; }).sort().reverse();
-  const notes = []; let budget = MAX_TOTAL_BYTES, bad = 0;
-  if (wanted.length > MAX_RECORDER_FILES) { wanted.length = MAX_RECORDER_FILES; notes.push('Only the newest log files were read (file limit).'); }
+  const notes = []; let budget = maxTotalBytes, bad = 0;
+  if (wanted.length > maxFiles) { wanted.length = maxFiles; notes.push('Only the newest log files were read (file limit).'); }
   const seen = new Set(), hours = new Map();
   for (const n of wanted) {
     const file = path.join(dir, n); seen.add(file);
     try {
       const st = fs.statSync(file);
       if (!st.isFile()) { bad++; continue; }
-      const r = readFileInto(file, st.size, budget); budget -= r.bytes; out.skippedLines += r.skipped;
+      const r = readFileInto(file, st.size, budget, maxFileBytes); budget -= r.bytes; out.skippedLines += r.skipped;
       if (r.truncated) notes.push('A large log file was read from its newest part only (size limit).');
       if (budget <= 0) { notes.push('The read stopped at the per-call size limit.'); }
       out.files++;
