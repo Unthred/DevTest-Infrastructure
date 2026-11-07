@@ -5,7 +5,7 @@
 # `INSTALL_DIR=/absolute/path`, written by the homeowner; without that file nothing is installed (result "skipped"). The copy lives at
 # <INSTALL_DIR>/foreman-mcp with the commit in <INSTALL_DIR>/VERSION (the layout of docs/foreman-mcp.md). launcher.env is local
 # configuration: it is carried over from the previous copy and never replaced. Code is root-owned, dirs 0755, files 0644, launcher.sh 0755,
-# so the restricted account only reads it. The swap is two renames; on any failure the previous copy is put back and the exit is 1.
+# so the restricted account only reads it. Other local files in the live directory are carried over. The swap is two renames; on any failure the previous copy is put back and the exit is 1.
 # Result: one JSON line on stdout and in <state>/team/mcp-install.json: skipped | unchanged | installed | failed.
 set -uo pipefail
 umask 022
@@ -33,7 +33,12 @@ live="$dir/$sname"; vfile="$dir/$vrel"
 vin=""; case "$vfile" in "$live"/*) vin=${vfile#"$live"/};; esac   # the version file lives inside the server directory
 new="$dir/.foreman-mcp.new-$commit"; prev="$dir/.foreman-mcp.prev-$commit"
 rm -rf "$new" "$prev"
-same() { if [ -n "$vin" ]; then diff -r -x launcher.env -x "$(basename "$vin")" "$1" "$2" >/dev/null 2>&1; else diff -r -x launcher.env "$1" "$2" >/dev/null 2>&1; fi; }
+# same SRC TARGET: TARGET holds everything in SRC unchanged. Extra local files only in TARGET (launcher.env backups and the like) are allowed.
+same() {
+  local out rc; out=$(diff -rq -x launcher.env ${vin:+-x "$(basename "$vin")"} "$1" "$2" 2>&1); rc=$?
+  [ "$rc" = 0 ] && return 0; [ "$rc" = 1 ] || return 1
+  ! printf '%s\n' "$out" | grep -qv "^Only in $2"
+}
 # write_version [FILE]: the commit on line 1; further lines of the old file (free-text notes) are kept.
 write_version() {
   local target=${1:-$vfile} t; t="$(dirname "$target")/.VERSION.tmp"
@@ -46,8 +51,12 @@ fi
 fail() { rm -rf "$new"; [ -d "$prev" ] && [ ! -e "$live" ] && mv "$prev" "$live"; result failed "$1"; exit 1; }
 cp -a "$src_root/foreman-mcp" "$new" || fail 'copy failed'
 rm -f "$new/launcher.env"
+# Local files that are not part of foreman-mcp/ (launcher.env backups, notes) are carried over, never deleted by the swap.
+(cd "$live" && find . \( -type f -o -type l \) ! -name launcher.env -print0) | while IFS= read -r -d '' f; do
+  [ -e "$new/$f" ] || [ -L "$new/$f" ] || { mkdir -p "$new/$(dirname "$f")" && cp -a "$live/$f" "$new/$f"; } || exit 1
+done || fail 'could not carry local files over'
 [ ! -f "$live/launcher.env" ] || cp -p "$live/launcher.env" "$new/launcher.env" || fail 'could not carry launcher.env over'
-find "$new" -type d -exec chmod 755 {} + && find "$new" -type f ! -name launcher.env -exec chmod 644 {} + && chmod 755 "$new/launcher.sh" || fail 'chmod failed'
+find "$new" -type d -exec chmod 755 {} + && find "$new" -type f ! -name 'launcher.env*' -exec chmod 644 {} + && chmod 755 "$new/launcher.sh" || fail 'chmod failed'
 [ "$(id -u)" != 0 ] || chown -R root:root "$new" || fail 'chown failed'
 # launcher.env keeps its previous owner, group and mode (it may be readable by the account only through its group).
 [ ! -f "$live/launcher.env" ] || { chown --reference="$live/launcher.env" "$new/launcher.env" 2>/dev/null; chmod --reference="$live/launcher.env" "$new/launcher.env" 2>/dev/null; }
