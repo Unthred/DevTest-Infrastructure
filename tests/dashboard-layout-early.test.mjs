@@ -163,7 +163,9 @@ test('every page hides until local time is applied, then shows final text: no vi
   const src = fs.readFileSync(new URL('../supervisor/dashrender.mjs', import.meta.url), 'utf8');
   assert.ok(src.indexOf('</main><p id="tznote"') > 0 && src.indexOf('</p><script src="/static/layout-early.js">') > 0, 'note and times are final before the reveal');
   const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
-  assert.match(css, /html\.tzp body \{ visibility: hidden; animation: tzreveal 0s linear 2s forwards/, 'hidden until revealed, with a CSS fallback');
+  const fb = /html\.tzp body \{ visibility: hidden; animation: tzreveal 0s linear (\d+(?:\.\d+)?)s forwards/.exec(css);
+  assert.ok(fb, 'hidden until revealed, with a CSS fallback');
+  assert.ok(Number(fb[1]) >= 10, 'the fallback waits long enough that a slow layout-early.js does not flash UTC text first (issue #839)');
   // Simulate the page: <html> .tzp from early.js, then layout-early.js, then app.js's own localizeTimes. Record every visible text change.
   const ms = Date.UTC(2026, 6, 1, 12, 30), tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const cl = new Set(), visible = () => !cl.has('tzp'), changes = [];
