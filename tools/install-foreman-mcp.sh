@@ -22,12 +22,23 @@ conf="$state/foreman-mcp.install"
 [ -f "$conf" ] || { result skipped 'no foreman-mcp.install file: the MCP server is not set up for automatic installs'; exit 0; }
 dir=$(sed -n 's/^INSTALL_DIR=//p' "$conf" | head -n 1)
 [[ "$dir" == /* && "$dir" != *..* && ! -L "$dir" && -d "$dir" ]] || { result failed 'INSTALL_DIR is not an existing absolute directory'; exit 1; }
-live="$dir/foreman-mcp"
-[ -d "$live" ] && [ ! -L "$live" ] || { result skipped 'foreman-mcp is not installed by hand yet; nothing to update'; exit 0; }
+# Optional layout keys: SERVER_DIR names the live server directory inside INSTALL_DIR (default foreman-mcp; Tower uses srv, where
+# launcher.sh sits) and VERSION_FILE the version file relative to INSTALL_DIR (default VERSION; Tower keeps it in srv/).
+sname=$(sed -n 's/^SERVER_DIR=//p' "$conf" | head -n 1); sname=${sname:-foreman-mcp}
+vrel=$(sed -n 's/^VERSION_FILE=//p' "$conf" | head -n 1); vrel=${vrel:-VERSION}
+[[ "$sname" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*$ && "$vrel" =~ ^[A-Za-z0-9._/-]+$ && "$vrel" != /* && "$vrel" != *..* ]] || { result failed 'SERVER_DIR or VERSION_FILE is not a plain relative name'; exit 1; }
+live="$dir/$sname"; vfile="$dir/$vrel"
+# Automatic installs are configured, so a missing copy is a failure that alerts, never a quiet skip.
+[ -d "$live" ] && [ ! -L "$live" ] || { result failed "the configured server directory $sname does not exist in INSTALL_DIR; nothing to update"; exit 1; }
+vin=""; case "$vfile" in "$live"/*) vin=${vfile#"$live"/};; esac   # the version file lives inside the server directory
 new="$dir/.foreman-mcp.new-$commit"; prev="$dir/.foreman-mcp.prev-$commit"
 rm -rf "$new" "$prev"
-same() { diff -r -x launcher.env "$1" "$2" >/dev/null 2>&1; }
-write_version() { printf '%s\n' "$commit" > "$dir/.VERSION.tmp" && chmod 644 "$dir/.VERSION.tmp" && mv -f "$dir/.VERSION.tmp" "$dir/VERSION"; }
+same() { if [ -n "$vin" ]; then diff -r -x launcher.env -x "$(basename "$vin")" "$1" "$2" >/dev/null 2>&1; else diff -r -x launcher.env "$1" "$2" >/dev/null 2>&1; fi; }
+# write_version [FILE]: the commit on line 1; further lines of the old file (free-text notes) are kept.
+write_version() {
+  local target=${1:-$vfile} t; t="$(dirname "$target")/.VERSION.tmp"
+  { printf '%s\n' "$commit"; [ -f "$vfile" ] && sed -n '2,$p' "$vfile"; } > "$t" && chmod 644 "$t" && mv -f "$t" "$target"
+}
 if same "$src_root/foreman-mcp" "$live"; then
   write_version || { result failed 'could not record VERSION'; exit 1; }
   result unchanged 'foreman-mcp/ already matches this commit'; exit 0
@@ -38,12 +49,15 @@ rm -f "$new/launcher.env"
 [ ! -f "$live/launcher.env" ] || cp -p "$live/launcher.env" "$new/launcher.env" || fail 'could not carry launcher.env over'
 find "$new" -type d -exec chmod 755 {} + && find "$new" -type f ! -name launcher.env -exec chmod 644 {} + && chmod 755 "$new/launcher.sh" || fail 'chmod failed'
 [ "$(id -u)" != 0 ] || chown -R root:root "$new" || fail 'chown failed'
+# launcher.env keeps its previous owner, group and mode (it may be readable by the account only through its group).
+[ ! -f "$live/launcher.env" ] || { chown --reference="$live/launcher.env" "$new/launcher.env" 2>/dev/null; chmod --reference="$live/launcher.env" "$new/launcher.env" 2>/dev/null; }
+[ -z "$vin" ] || write_version "$new/$vin" || fail 'could not record VERSION'
 same "$src_root/foreman-mcp" "$new" || fail 'copy differs from the reviewed commit'
 command -v node >/dev/null 2>&1 && { node --check "$new/server.mjs" >/dev/null 2>&1 || fail 'server.mjs does not parse'; }
 mv "$live" "$prev" || fail 'could not move the previous copy aside'
 mv "$new" "$live" || { mv "$prev" "$live"; fail 'could not move the new copy into place'; }
 same "$src_root/foreman-mcp" "$live" || { rm -rf "$live"; mv "$prev" "$live"; fail 'installed copy differs from the reviewed commit; previous copy restored'; }
-write_version || { rm -rf "$live"; mv "$prev" "$live"; fail 'could not record VERSION; previous copy restored'; }
+[ -n "$vin" ] || write_version || { rm -rf "$live"; mv "$prev" "$live"; fail 'could not record VERSION; previous copy restored'; }
 rm -rf "$prev"
 result installed 'foreman-mcp/ updated'
 exit 0

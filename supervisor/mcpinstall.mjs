@@ -8,6 +8,13 @@ const SHA = /^[0-9a-f]{40}$/;
 export const MCP_PATHS = ['foreman-mcp/'];
 export const mcpNeedsInstall = files => (files || []).some(f => typeof f === 'string' && MCP_PATHS.some(p => f.startsWith(p)));
 
+// VERSION_FILE=relative/path in the same file moves the version file (default VERSION); its first line is the commit.
+export function mcpVersionFile(root) {
+  const dir = mcpInstallDir(root); if (!dir) return null;
+  let rel = 'VERSION';
+  try { const m = /^VERSION_FILE=([A-Za-z0-9._/-]+)$/m.exec(fs.readFileSync(path.join(root, 'foreman-mcp.install'), 'utf8')); if (m && !m[1].startsWith('/') && !m[1].includes('..')) rel = m[1]; } catch { /* default */ }
+  return path.join(dir, rel);
+}
 export function mcpInstallDir(root) {
   try {
     const m = /^INSTALL_DIR=(\/[^\n]*)$/m.exec(fs.readFileSync(path.join(root, 'foreman-mcp.install'), 'utf8'));
@@ -18,7 +25,7 @@ export function mcpInstallDir(root) {
 export function readMcpInstall(root, foremanSha = null) {
   const dir = mcpInstallDir(root);
   if (!dir) return null;
-  let installed = null; try { const v = fs.readFileSync(path.join(dir, 'VERSION'), 'utf8').trim(); installed = SHA.test(v) ? v : null; } catch { /* not installed */ }
+  let installed = null; try { const v = fs.readFileSync(mcpVersionFile(root), 'utf8').split('\n')[0].trim(); installed = SHA.test(v) ? v : null; } catch { /* not installed */ }
   let last = null;
   try {
     const r = JSON.parse(fs.readFileSync(path.join(root, 'team', 'mcp-install.json'), 'utf8'));

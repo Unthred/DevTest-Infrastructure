@@ -550,7 +550,7 @@ export class SelfUpgrade {
       if (!changed) return;   // nothing in foreman-mcp/ moved and the installer recorded nothing: no news
       r = { result: 'failed', reason: 'the installer left no result for this commit' };
     }
-    if (r.result === 'skipped' && !changed) return;
+    if (r.result === 'skipped' && !changed) return;   // not configured (a configured but missing copy is "failed", which alerts)
     this.s.mcp = { sha: target, result: r.result, reason: String(r.reason || '').slice(0, 200), at: this.clock.now() };
     this.save();
     this.record({ from, to: target, result: r.result === 'failed' ? 'mcp_install_failed' : 'mcp_install', reason: this.s.mcp.reason, mcpChanged: changed });

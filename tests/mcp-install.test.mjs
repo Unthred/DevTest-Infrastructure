@@ -69,11 +69,28 @@ test('install: a failing copy keeps the previous one working and reports failure
 test('install: skipped without a configuration file or without a hand-installed copy; bad install dir fails', () => {
   const nc = world({ configured: false }); assert.equal(install(nc.src, SH2, nc.state).out.result, 'skipped');
   const w = world({ installed: false });
-  assert.equal(install(w.src, SH2, w.state).out.result, 'skipped');
+  const miss = install(w.src, SH2, w.state);
+  assert.equal(miss.status, 1, 'configured but no live copy is a failure, so it alerts'); assert.equal(miss.out.result, 'failed');
   assert.equal(fs.existsSync(path.join(w.inst, 'foreman-mcp')), false, 'nothing is created');
   const b = world(); fs.writeFileSync(path.join(b.state, 'foreman-mcp.install'), 'INSTALL_DIR=relative/path\n');
   assert.equal(install(b.src, SH2, b.state).status, 1);
   assert.equal(spawnSync('bash', [path.join(REPO, 'tools/install-foreman-mcp.sh'), b.src, 'nothex'], { encoding: 'utf8' }).status, 2);
+});
+
+test("install: Tower's layout (server in srv/, VERSION inside it with a note line) updates and keeps the note", () => {
+  const w = world({ installed: false });
+  const srv = path.join(w.inst, 'srv'); fs.mkdirSync(srv);
+  fs.writeFileSync(path.join(srv, 'server.mjs'), 'export const v = 1;\n'); fs.writeFileSync(path.join(srv, 'launcher.env'), 'NODE_BIN=/x\n', { mode: 0o640 });
+  fs.writeFileSync(path.join(srv, 'VERSION'), SH + '\ncopied by hand on 6 Nov\n');
+  fs.writeFileSync(path.join(w.state, 'foreman-mcp.install'), `INSTALL_DIR=${w.inst}\nSERVER_DIR=srv\nVERSION_FILE=srv/VERSION\n`);
+  const r = install(w.src, SH2, w.state);
+  assert.equal(r.status, 0, r.err); assert.equal(r.out.result, 'installed');
+  assert.equal(fs.readFileSync(path.join(srv, 'server.mjs'), 'utf8'), 'export const v = 2;\n');
+  assert.equal(fs.readFileSync(path.join(srv, 'VERSION'), 'utf8'), SH2 + '\ncopied by hand on 6 Nov\n');
+  assert.equal(fs.readFileSync(path.join(srv, 'launcher.env'), 'utf8'), 'NODE_BIN=/x\n');
+  assert.deepEqual(fs.readdirSync(w.inst), ['srv'], 'no staging directories left behind');
+  assert.equal(install(w.src, SH2, w.state).out.result, 'unchanged');
+  assert.deepEqual(readMcpInstall(w.state, SH2), { installed: SH2, drift: false, last: readMcpInstall(w.state, SH2).last });
 });
 
 test('readers: installed commit, drift against Foreman, last result', () => {
