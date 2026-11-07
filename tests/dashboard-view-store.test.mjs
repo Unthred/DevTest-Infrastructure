@@ -279,3 +279,11 @@ test('page-data tooltip: a failed rebuild wins over behindWrite', () => {
   assert.match(html, /last rebuild failed \(boom\)/);
   assert.doesNotMatch(html, /before the latest change/);
 });
+
+test('page-data tooltip: behindWrite and stale-not-refreshing use the same "new copy is built on the next request" wording (issue #834)', () => {
+  const phrase = /a new copy is built on the next request/;
+  assert.match(pageDataStat({ pageData: { ageMs: 2000, stale: true, behindWrite: true, refreshing: false } }), phrase);
+  assert.match(pageDataStat({ pageData: { ageMs: 40000, stale: true, refreshing: false } }), phrase);
+  assert.doesNotMatch(pageDataStat({ pageData: { ageMs: 40000, stale: true, refreshing: true } }), phrase);
+  assert.doesNotMatch(pageDataStat({ pageData: { ageMs: 1000 } }), phrase);
+});
