@@ -618,3 +618,11 @@ test('#583 the PR card names the job holding needs-homeowner and the command tha
   const plain = await needsOf(await serve(t, { cache: calmCache({ labels: ['needs-homeowner'] }), state: { fixAttempts: {}, verdicts: {}, jobs: {} } }));
   assert.doesNotMatch(plain.panels.needsYou.find(c => c.id === 'homeowner-pr-41').action, /supervisor resume/);
 });
+
+test('handler refuses the statfs test seam together with offload, and accepts each alone (issue #841)', async () => {
+  const { handler } = await import('../supervisor/dashserver.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-offload-'));
+  const base = { root, config: {}, host: '127.0.0.1', port: 0 };
+  assert.throws(() => handler({ ...base, offload: true, statfs: () => ({}) }), /statfs.*offload/);
+  assert.equal(typeof handler({ ...base, statfs: () => ({}) }), 'function');
+});

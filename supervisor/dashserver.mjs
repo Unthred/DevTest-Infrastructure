@@ -144,6 +144,8 @@ const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, beh
 export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
   // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
   // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
+  // `statfs` is a test seam reaching only the in-process build; the worker build cannot receive a function, so refuse the combination (issue #841).
+  if (offload && statfs) throw new Error('handler: the statfs option is not supported with offload: true');
   const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
   const store = createViewStore({ build: worker ? worker.build : o => currentView(statfs ? { ...o, statfs } : o), ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now(),
     rebuildOpts: o => ({ ...o, now: now(), config: source(), configError: source.invalid }) });   // the timer rebuilds with the current time and config, not the last request's
