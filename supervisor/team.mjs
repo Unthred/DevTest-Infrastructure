@@ -1563,6 +1563,8 @@ export class Team {
     return null;
   }
   // Rank of a PR in the rebase / merge order (issue #326): the position of its issue in agents.<name>.issues, Infinity when not queued.
+  // Issue #804: the index is taken in the PR author's own list, so PRs by different agents compare unrelated positions; ties fall back to the PR
+  // number. Deliberate: one ordering shared by rebaseDeferred and rebaseNotNext (#326), so it stays consistent.
   queueRank(p) {
     const m = /\/issue-(\d+)(\D|$)/.exec(p.headRefName || ''), ag = agentOfBranch(this.c, p.headRefName);
     const i = m && ag ? this.issuesOf(ag).indexOf(Number(m[1])) : -1;

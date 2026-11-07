@@ -250,6 +250,8 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
 // x = { tried, action, links: [{ text, url }] }. Same shape as the event-log cards of #100/#106 will use.
 const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'string').slice(0, 6).map(l => ({ text: redact(String(l.text), 140), url: l.url }));
 // Issue #296: one line for a carried verdict: old head, new head and the evidence it was carried on.
+// Issue #804: the second opinions recorded for a PR (one per pr:head); a carried one (D-025) is an avoided review, not a review.
+const secondOpinionsOf = (state, n) => Object.entries(state.secondOpinions || {}).filter(([k]) => k.startsWith(`${n}:`)).map(([, v]) => v);
 export const carryText = c => `carried from ${sha7(c.oldHead)} to ${sha7(c.newHead)} over a clean rebase: ${c.evidence?.resolvedConflicts === false ? 'no conflict resolved' : 'conflict check not met'}, ${c.evidence?.patchUnchanged === true ? 'patch unchanged' : 'patch not shown unchanged'}, CI ${c.evidence?.ci || 'unknown'}`;
 // Issue #303: proposals that open pull requests add to the register and that main does not have yet. Never throws: an unreadable head adds none.
 export function pendingProposals(config, pulls, mainRegister, read = readHeadRegister) {
@@ -880,7 +882,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
       checks: p ? checksState(p.statusCheckRollup, retriedIn(state.cancelWatch, p, now)) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length, carry: p && key ? carryRecordOf(state.verdicts?.[key], p) : null,
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       // Issue #717: second-opinion reviews (kept apart from verdicts, one per pr:head) and the implement time from the merge log, for foreman_rebase_stats.
-      secondOpinionRounds: Object.keys(state.secondOpinions || {}).filter(k => k.startsWith(`${n}:`)).length, startedAt: Number.isFinite(m?.startedAt) ? m.startedAt : null,
+      secondOpinionRounds: secondOpinionsOf(state, n).filter(o => !(o && (o.carry || o.carriedFrom))).length, secondOpinionCarried: secondOpinionsOf(state, n).filter(o => o && (o.carry || o.carriedFrom)).length, startedAt: Number.isFinite(m?.startedAt) ? m.startedAt : null,
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
       head: p?.headRefOid ?? null, needsHomeowner: (p?.labels || []).includes('needs-homeowner'), mergedAt: m?.mergedAt ?? null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,
