@@ -8,8 +8,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { processInfo } from './core.mjs';
 
-export function runnerGone(pid, start) {
-  const info = processInfo(pid);
+// An unreadable /proc/<pid>/stat means "gone" only when the runner's start time was read at launch (so /proc works here). With no recorded
+// start time (no readable /proc: not Linux, or hidepid) fall back to process.kill(pid, 0), as the older watchdog did (issue #695).
+function pidExists(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
+export function runnerGone(pid, start, readInfo = processInfo) {
+  const info = readInfo(pid);
+  if (!info && start == null) return !pidExists(pid);
   return !info || info.state === 'Z' || info.state === 'X' || (start != null && info.start !== start);
 }
 

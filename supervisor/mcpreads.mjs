@@ -3,6 +3,9 @@
 // difference from the shipped default (foreman_config). They only read and make no model call.
 import fs from 'node:fs';
 import { redact, KEY } from './redact.mjs';
+import { readCache, readSnapshots } from './dashdata.mjs';
+import { testSlotStatus, readTestEvents } from './testslots.mjs';
+import { readSkips } from './skips.mjs';
 
 const DAY_MS = 86400000;
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
@@ -67,5 +70,38 @@ export function configView({ effective, shippedFile, localOverridePresent = null
     note: 'The configuration Foreman uses now: shipped team.json plus the team.local.json override. Secret-named keys and alert command arguments are removed and every string is redacted.',
     localOverridePresent, ...(configError ? { configError: redact(configError, 300), configErrorNote: 'The local file is invalid; this is the last good configuration.' } : {}),
     shippedReadable: !!shipped, differsFromShipped: diff.length, differences: diff.slice(0, 200), effective: clean,
+  };
+}
+
+// Issue #636: test-slot use and the refused, timed-out, killed and orphaned runs (foreman_tests), and recent ticks (foreman_ticks).
+// Both are read from records Foreman already keeps; the MCP account cannot read the state root, so the dashboard's GET handler serves them.
+export function testRunsView(root, { limit = 2, now = Date.now(), days = 7 } = {}) {
+  const st = testSlotStatus(root, limit, now), since = now - Math.min(30, Math.max(1, Math.trunc(Number(days)) || 7)) * DAY_MS;
+  const run = r => ({ slot: r.slot ?? null, label: redact(r.label, 80), since: iso(r.since), runningSeconds: Math.max(0, Math.round((now - r.since) / 1000)) });
+  const events = readTestEvents(root, { since, limit: 50 }), count = k => events.filter(e => e.kind === k).length;
+  return {
+    slots: { limit: st.limit, inUse: st.running.length, free: Math.max(0, st.limit - st.running.length) },
+    running: st.running.map(run), queued: st.waiting.map((w, i) => ({ position: i + 1, label: redact(w.label, 80), since: iso(w.since), waitingSeconds: Math.max(0, Math.round((now - w.since) / 1000)) })), longestWaitSeconds: Math.round(st.longestWaitMs / 1000),
+    sinceDays: Math.round((now - since) / DAY_MS), counts: { refused: count('refused'), timeout: count('timeout'), killed: count('killed'), orphaned: count('orphaned') },
+    events: events.map(e => ({ at: iso(e.at), kind: e.kind, label: redact(e.label, 80), reason: redact(e.reason, 200) })),
+    note: 'Refused, timed-out, killed and orphaned runs are recorded from the time this record was introduced (issue #636); earlier ones are not in it. Orphaned means processes of a test run survived SIGKILL.',
+  };
+}
+
+// Recent ticks, newest first, from the dashboard's tick snapshots. Only the last tick keeps its error text (the cache holds one); older error ticks show their status.
+export function ticksView(root, { limit = 20, now = Date.now() } = {}) {
+  const n = Math.min(100, Math.max(1, Math.trunc(Number(limit)) || 20)), cache = readCache(root);
+  const snaps = readSnapshots(root).filter(s => s.at <= now).sort((a, b) => b.at - a.at).slice(0, n);
+  const skipped = readSkips(root, now - 24 * 3600000);
+  return {
+    shown: snaps.length,
+    ticks: snaps.map(s => ({
+      at: iso(s.at), status: s.status, trigger: s.trigger ?? 'schedule', durationSeconds: Number.isFinite(s.startedAt) && s.startedAt <= s.at ? Math.round((s.at - s.startedAt) / 100) / 10 : null,
+      error: cache?.tick?.at === s.at && cache.tick.error ? redact(cache.tick.error, 300) : null, noop: !!s.noop, ingested: s.ingested || 0, ghCalls: s.ghCalls ?? null,
+      actions: (s.plan || []).slice(0, 12).map(a => ({ type: a.type, agent: a.agent ?? null, ref: a.ref ?? null })), actionCount: (s.plan || []).length,
+      ...(s.check ? { check: { result: s.check.result, reason: redact(s.check.reason, 160) } } : {}),
+    })),
+    skippedTicks: { last24Hours: skipped.length, recent: skipped.slice(-10).reverse().map(x => ({ at: iso(x.at), reason: redact(x.reason, 200) })) },
+    note: 'A skipped tick did not run because a previous one held the lock. Duration is from the tick start to its record; ticks from before the start time was recorded show none.',
   };
 }

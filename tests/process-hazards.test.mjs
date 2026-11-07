@@ -131,10 +131,19 @@ test('runnerGone: a live runner with its own start time is not gone; a different
   assert.equal(runnerGone(c.pid, '1'), true);
 });
 
+test('runnerGone without /proc (issue #695): with no recorded start time it falls back to kill(pid, 0); with one, unreadable means gone', async () => {
+  const noProc = () => null;
+  assert.equal(runnerGone(process.pid, null, noProc), false, 'a live PID is not gone when /proc is unreadable and no start was recorded');
+  const c = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise(r => c.on('exit', r));
+  assert.equal(runnerGone(c.pid, null, noProc), true, 'a dead PID is gone');
+  assert.equal(runnerGone(process.pid, '123', noProc), true, 'a recorded start time but unreadable stat: gone');
+});
+
 test('the watchdog kills the job group when the runner PID has been reused, and leaves it alone while the runner start time matches', async t => {
   const wdPath = new URL('../supervisor/watchdog.mjs', import.meta.url).pathname;
   const mkGroup = () => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
-  const spawnDog = (g, start) => spawn(process.execPath, [wdPath, String(process.pid), start, String(g.pid), '0', '100'], { detached: true, stdio: 'ignore' });
+  const spawnDog = (g, start) => spawn(process.execPath, [wdPath, String(process.pid), start, String(g.pid), String(Date.now() + 30000), '100'], { detached: true, stdio: 'ignore' });
   const good = mkGroup(), reused = mkGroup(); const dogs = [];
   t.after(() => { for (const p of [good, reused, ...dogs]) { try { process.kill(-p.pid, 'SIGKILL'); } catch { /* gone */ } } });
   const self = processInfo(process.pid).start;

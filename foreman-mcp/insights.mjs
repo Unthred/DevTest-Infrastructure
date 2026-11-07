@@ -80,3 +80,29 @@ export function rebaseStats(view, { splitAt = null, limit = 100 } = {}) {
   out.note = 'Merged pull requests the view still holds. Rebases are the rebase attempts recorded; reviews are the verdicts a review produced (a D-025 carried verdict is not a review; it is counted apart as carried). Open time is measured from the first recorded activity, not the GitHub creation time.';
   return out;
 }
+
+// Issue #636: one pull request or issue across jobs, reviews and rebases, oldest first, from the dashboard view. For a pull request the jobs of
+// the issue it closes are included too (the implementation that made it). Read-only.
+const urlNumber = (url, kind) => { const m = new RegExp(`/${kind === 'pr' ? 'pull' : 'issues'}/(\\d+)$`).exec(String(url?.url || url || '')); return m ? Number(m[1]) : null; };
+export function itemTimeline(view, kind, number, { limit = 60 } = {}) {
+  const n = Number(number), v = view || {};
+  const pr = kind === 'pr' ? (v.prs || []).find(p => p.number === n) : null;
+  const refs = new Set([n]); if (pr?.issue) refs.add(pr.issue);
+  const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+  const entries = [];
+  for (const j of v.jobs || []) {
+    if (!refs.has(j.ref)) continue;
+    const at = Number.isFinite(j.startedAt) ? j.startedAt : j.createdAt;
+    entries.push({ atMs: at, type: 'job', what: j.kind, id: j.fullId ?? null, ref: j.ref, agent: j.agent ?? null, status: j.status, durationSeconds: Number.isFinite(j.elapsedMs) ? Math.round(j.elapsedMs / 1000) : null, tokens: j.tokens ?? null, costUsdEquivalent: j.cost ?? null, summary: j.desc ?? null });
+  }
+  for (const a of v.activity || []) {
+    if (a.kind === 'tick' || urlNumber(a.link, kind) !== n) continue;
+    entries.push({ atMs: a.at, type: a.kind, what: a.outcome ?? null, agent: a.agent ?? null, summary: a.text ?? null });
+  }
+  entries.sort((a, b) => (a.atMs ?? 0) - (b.atMs ?? 0));
+  const counts = {}; for (const e of entries) { const k = e.type === 'job' ? `${e.what}Jobs` : `${e.type}s`; counts[k] = (counts[k] || 0) + 1; }
+  const found = !!pr || (kind === 'issue' && (v.issues || []).some(i => i.number === n)) || entries.length > 0;
+  return { kind, number: n, found, ...(pr ? { title: pr.title, status: pr.status, issue: pr.issue ?? null, checks: pr.checks, verdict: pr.verdict, reviewRounds: pr.reviewRounds, fixRounds: pr.fixRounds, rebaseRounds: pr.rebaseRounds } : {}),
+    counts, total: entries.length, shown: Math.min(entries.length, limit), entries: entries.slice(-limit).map(({ atMs, ...e }) => ({ at: iso(atMs), ...e })),
+    note: 'Jobs come from the recent jobs the view holds; reviews and merges from its newest 50 activity events, so an old item can have gaps.' };
+}

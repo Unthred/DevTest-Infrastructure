@@ -3,7 +3,8 @@
 // directory and nothing else (issue #124); it cannot approve, run or change anything. No tool takes a lock, reads a transcript or calls a model.
 import { redact, redactDeep } from './redact.mjs';
 import { createInbox } from './inbox.mjs';
-import { mismatches, needsYouGroups, rebaseStats } from './insights.mjs';
+import { mismatches, needsYouGroups, rebaseStats, itemTimeline } from './insights.mjs';
+import { hostActivity } from './source.mjs';
 
 export const MAX_TEXT = 24000;      // characters of one tool result
 export const CALLS_PER_MINUTE = 30; // rate limit for all tools together
@@ -23,6 +24,20 @@ export function bounded(value, max = MAX_TEXT) {
   return text.length > max ? JSON.stringify({ truncated: true, preview: text.slice(0, max - 100) }) : text;
 }
 
+// Keeps the first `limit` entries of out[key], then as many as fit the output limit, so `shown` always equals the list length
+// and a cut is stated (bounded() would otherwise halve the list after `shown` was set).
+export function fitItems(out, key, limit, max = MAX_TEXT) {
+  const all = Array.isArray(out?.[key]) ? out[key] : [];
+  const want = Math.min(all.length, limit);
+  const build = k => ({ ...out, shown: k, [key]: all.slice(0, k) });
+  const fits = k => JSON.stringify(build(k), null, 1).length <= max - 400;
+  let n = want;
+  if (!fits(n)) { let lo = 1, hi = n; while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (fits(mid)) lo = mid; else hi = mid - 1; } n = lo; }
+  const r = build(n);
+  if (n < want) { r.truncated = true; r.truncatedNote = `only ${n} of ${want} requested entries fit the output limit; ask for a smaller limit`; }
+  return r;
+}
+
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : dflt; };
 
@@ -33,7 +48,7 @@ export function breakerHaltOf(b) {
   if (!h) return error ? { halted: false, error, note: 'Breaker evaluation failed; existing halts stay in force.' } : { halted: false };
   return { halted: true, scope: h.scope ?? null, cause: h.cause ?? null, count: h.count ?? 1, entries: (h.entries || []).slice(0, 8).map(e => ({ cause: e.cause ?? null, types: e.types ?? null, since: e.since ?? null })), error, caution: PLAN_CAUTION };
 }
-export function createTools({ source, readHost, getPath = null, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
+export function createTools({ source, readHost, readActivity = hostActivity, getPath = null, reports = null, inbox = createInbox({ dir: null }), now = Date.now }) {
   const calls = [];   // times of recent calls, for the rate limit
   const withView = async fn => { const r = await source.get(); return { ...fn(r.view), viewAgeSeconds: Math.round(r.ageMs / 1000), ...(r.stale ? { stale: true, staleBecause: r.error } : {}) }; };
   const reviewQueues = view => Object.fromEntries(Object.entries(view.queues || {}).map(([agent, items]) => [agent, (items || []).filter(i => i.type === 'review').sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.ref - b.ref).map(i => ({ order: i.order ?? null, pr: i.ref, next: !!i.next, title: i.title, reason: i.reason }))]));
@@ -81,9 +96,9 @@ export function createTools({ source, readHost, getPath = null, reports = null, 
       }) },
     { name: 'foreman_plan', description: 'What the planner would do, as the dashboard recomputes it per request from the last tick\'s cached GitHub data (not a live dry run, and before the circuit breaker is applied): planned actions, why work waits, the open-PR cap and the next tick time. breakerHalt says when the breaker has halted jobs, in which case plannedActions may list actions a real tick would drop.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => ({ plannedActions: v.plan || [], breakerHalt: breakerHaltOf(v.breaker), nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [], note: 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.' })) },
-    { name: 'foreman_host', description: 'Tower load average, memory and swap, from /proc.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      run: () => ({ ...readHost(), readAt: iso(now()) }) },
-    { name: 'foreman_reports', description: 'Reports that hand-run sessions left for the overseer. With no name: the list (name, time, size), newest first. With a name: that one report as text (redacted, truncated if long). Reads one fixed folder only.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'a report name from the list, for example speedup.md' } }, additionalProperties: false },
+    { name: 'foreman_host', description: 'Tower load average, memory and swap, plus (sampled over about half a second) swap in and out per second, disk wait (CPU iowait, blocked processes, busy percent per disk) and the top processes by memory with their swap, all from /proc. Short process names only, never command lines.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      run: async () => { const base = readHost(); return { ...base, activity: await Promise.resolve().then(() => readActivity()).catch(() => null), readAt: iso(now()) }; } },
+    { name: 'foreman_reports', description: 'Reports that hand-run sessions left for the overseer. With no name: the list (name, time, size, and whether it carries the finished marker), newest first. With a name: that one report as text (redacted, truncated if long), headed STATUS: finished or STATUS: UNFINISHED. A report is finished only when its last line is <!-- foreman-report: finished -->; one without it may be half written. Reads one fixed folder only.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'a report name from the list, for example speedup.md' } }, additionalProperties: false },
       run: args => { if (!reports) throw new Error('reports are not available on this server'); return args.name === undefined ? reports.list() : reports.read(args.name, MAX_TEXT - 400); } },
     { name: 'foreman_job_outcome', description: 'One job: what it was asked to do, what it did (tool counts, last message), whether any work was pushed (evidence), how it ended (status, post-condition and why not), its cost, and a redacted log tail. Give the full job id or a unique prefix of at least 6 characters (see foreman_jobs). Read-only, no model call.', inputSchema: { type: 'object', properties: { id: { type: 'string', minLength: 6, maxLength: 32, pattern: '^[a-f0-9]{6,32}$' } }, required: ['id'], additionalProperties: false },
       run: async args => {
@@ -94,8 +109,8 @@ export function createTools({ source, readHost, getPath = null, reports = null, 
         if (id.length < 32) { const r = await source.get(); const hits = (r.view.jobs || []).filter(j => String(j.fullId || '').startsWith(id)); if (hits.length !== 1) throw new Error(hits.length ? 'that prefix matches more than one job; give more characters' : 'no job with that id in the recent jobs (give the full 32-character id for an older job)'); full = hits[0].fullId; }
         return await getPath(`/api/jobs/${full}/outcome.json`);
       } },
-    { name: 'foreman_discarded', description: 'Every result Foreman threw away in the last 7 days (a review refused at ingestion, a review that ended with no verdict, a job that failed after spending), newest first, with the cause and the cost (usage equivalent, not a charge). Optional limit (default 50).', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
-      run: async args => { if (!getPath) throw new Error('discarded results are not available on this server'); const out = await getPath('/api/discarded.json'); const limit = num(args.limit, 1, 200, 50); return { ...out, shown: Math.min(out.items?.length || 0, limit), items: (out.items || []).slice(0, limit) }; } },
+    { name: 'foreman_discarded', description: 'Every result Foreman threw away in the last 7 days (a review refused at ingestion, a review that ended with no verdict, a job that failed after spending), newest first, with the cause and the cost (usage equivalent, not a charge). Optional limit (default 50, at most 200; if that many would not fit the output limit, fewer are returned and the cut is stated).', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
+      run: async args => { if (!getPath) throw new Error('discarded results are not available on this server'); const out = await getPath('/api/discarded.json'); const limit = num(args.limit, 1, 200, 50); return fitItems(out, 'items', limit); } },
     { name: 'foreman_installs', description: 'Install history: what is installed against main, the pending install and whether it is draining (jobs still running), the last pre-check failure with the failing test names and excerpt, any rollback latch or refusal, the version each Foreman process (Foreman, dashboard, workers) is running, and recent install records. Optional limit on the records (default 15). Read-only, no model call.', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 40 } }, additionalProperties: false },
       run: async args => { if (!getPath) throw new Error('install history is not available on this server'); const out = await getPath('/api/installs.json'); return { ...out, recent: (out.recent || []).slice(0, num(args.limit, 1, 40, 15)) }; } },
     { name: 'foreman_breaker_history', description: 'Every circuit-breaker trip, newest first: the cause, the wasted jobs and PRs, tokens and cost (usage equivalent, not a charge), when it tripped and when it was cleared (or that it is still halted). Optional limit (default 20). Read-only.', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } }, additionalProperties: false },
@@ -116,6 +131,16 @@ export function createTools({ source, readHost, getPath = null, reports = null, 
         }])),
         thresholds: cfg?.effective?.budget ? { enabled: cfg.effective.budget.enabled ?? null, highWater: cfg.effective.budget.high_water ?? null, highWaterMinHours: cfg.effective.budget.high_water_min_hours ?? null, exhaustedAt: cfg.effective.budget.exhausted_at ?? null, recentHours: cfg.effective.budget.recent_hours ?? null, canTakeOver: cfg.effective.budget.can_take_over ?? null } : null,
         note: 'Figures are the provider\'s own allowance readings; job costs are usage equivalents, not charges.' })); } },
+    { name: 'foreman_tests', description: 'Test-slot use: slots in use and free, the runs holding a slot, the queue with how long each waits, and the last 7 days of refused runs (no headroom or no free slot in time), timed-out runs, memory-killed runs and orphaned processes (survived SIGKILL), with the reason. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      run: async () => { if (!getPath) throw new Error('test-slot figures are not available on this server'); return getPath('/api/tests.json'); } },
+    { name: 'foreman_ticks', description: 'Recent Foreman ticks, newest first: when, what started it, duration, status, the actions planned, errors, GitHub calls and no-op passes; plus the ticks skipped in the last 24 hours with the reason. Optional limit (default 20, at most 100). Read-only.', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } }, additionalProperties: false },
+      run: async args => { if (!getPath) throw new Error('tick records are not available on this server'); return getPath(`/api/ticks.json?limit=${num(args.limit, 1, 100, 20)}`); } },
+    { name: 'foreman_item_timeline', description: 'One pull request or issue across its jobs, reviews, fixes, rebases and merge, oldest first, with agent, status, duration and cost (usage equivalent, not a charge). For a pull request the jobs of its issue are included. Optional limit (default 60, at most 200). Read-only.', inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['pr', 'issue'] }, number: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, required: ['kind', 'number'], additionalProperties: false },
+      run: args => {
+        const n = Number(args.number), kind = args.kind;
+        if (!Number.isInteger(n) || n < 1 || !['pr', 'issue'].includes(kind)) throw new Error('give kind "pr" or "issue" and a positive integer number');
+        return withView(v => itemTimeline(v, kind, n, { limit: num(args.limit, 1, 200, 60) }));
+      } },
     { name: 'foreman_mismatches', description: 'Records that disagree with reality, read from the dashboard view: an issue recorded as implemented with no pull request or job, a review that finished with no verdict recorded, stale needs-homeowner labels, and holds kept by old jobs. Each has the evidence. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => mismatches(v, now())) },
     { name: 'foreman_needs_you', description: 'The Needs you items grouped by cause, with the count, the pull requests or issues involved and the action asked for each group, so a cluster of one cause shows as one decision. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },

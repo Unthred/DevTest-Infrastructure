@@ -8,6 +8,26 @@ import { processStart } from './core.mjs';
 import { startGroupWatchdog, gateJob } from './watchdog.mjs';
 
 export const DEFAULT_TEST_SLOTS = 2;
+// Issue #636: refused, timed-out and orphaned test runs were only printed to stderr; they are now also kept (bounded) so foreman_tests can show them.
+const EVENT_KINDS = new Set(['refused', 'timeout', 'orphaned', 'killed']);
+export const testEventsFile = root => path.join(root, 'team', 'test-events.jsonl');
+export function recordTestEvent(root, { kind, label: name, reason = '', at = Date.now() }) {
+  if (!EVENT_KINDS.has(kind)) return;
+  try {
+    const file = testEventsFile(root); fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    let size = 0; try { size = fs.statSync(file).size; } catch { /* new file */ }
+    if (size > 512 * 1024) { try { fs.renameSync(file, `${file}.old`); } catch { /* keep appending */ } }   // one generation kept
+    fs.appendFileSync(file, JSON.stringify({ at, kind, label: label(name), reason: String(reason).replace(/[^\x20-\x7e]/g, '').slice(0, 200) }) + '\n', { mode: 0o600 });
+  } catch { /* the stderr line is the other record */ }
+}
+export function readTestEvents(root, { since = 0, limit = 50 } = {}) {
+  const rows = [];
+  for (const file of [`${testEventsFile(root)}.old`, testEventsFile(root)]) {
+    let text; try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) { try { const e = JSON.parse(line); if (e && Number.isFinite(e.at) && e.at >= since && EVENT_KINDS.has(e.kind)) rows.push({ at: e.at, kind: e.kind, label: label(e.label), reason: String(e.reason || '').slice(0, 200) }); } catch { /* skip a damaged line */ } }
+  }
+  return rows.sort((a, b) => b.at - a.at).slice(0, limit);
+}
 const dirOf = root => path.join(root, 'team', 'test-slots');
 const alive = o => Boolean(o) && processStart(o.pid) === o.start;
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
