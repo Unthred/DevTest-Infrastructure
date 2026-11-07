@@ -146,7 +146,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else if (checks === 'none') reason = 'no CI checks reported';
     else if (!v && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'pending') reason = `re-review requested by the homeowner (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}); waiting for a reviewer on a different model for ${sha7(pr.headRefOid)}`;
     else if (v?.verdict === 'CHANGES' && team.reReviewOf?.(pr.number, pr.headRefOid)?.status === 'done') reason = `the requested re-review (decision ${team.reReviewOf(pr.number, pr.headRefOid).decision}) also gave CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; waiting for the homeowner`;
-    else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; ${team.fixCount(pr.number) >= c.limits.max_fix_attempts && !planned.has(`${author}:fix:${pr.number}`) ? `fix limit reached (${c.limits.max_fix_attempts} rounds): Foreman has stopped fixing this PR and needs the homeowner` : `fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`}`;
+    else if (v?.verdict === 'CHANGES') reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; ${team.fixCount(pr.number) >= c.limits.max_fix_attempts && !planned.has(`${author}:fix:${pr.number}`) && !team.escalationPending(pr.number, pr) ? `fix limit reached (${c.limits.max_fix_attempts} rounds): Foreman has stopped fixing this PR and needs the homeowner` : `fix ${planned.has(`${author}:fix:${pr.number}`) ? 'is next' : 'waits for a free slot'}`}`;
     else if (v?.verdict === 'PASS' && v.carriedFrom && !team.carryOk(v, pr)) reason = `PASS carried from ${sha7(v.carriedFrom)} but its record does not match this head; not merged`;
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}${v.carry ? ` (${carryText(v.carry)})` : ''}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
     else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}${noReviewer.get(pr.number) ? `; no reviewer can take it: ${noReviewer.get(pr.number)}` : ''}`;
@@ -702,7 +702,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     // Issue #630: mismatches between Foreman's records and GitHub or the running jobs that it cannot fix safely; one item each while it lasts.
     for (const it of team.selfCheckItems?.() || []) attention.push({ id: it.id, text: redact(it.text, 400), ref: Number.isSafeInteger(it.ref) ? { kind: 'pull', n: it.ref } : it.ref, since: it.since, severity: 'action', action: it.action });
     // Issue #547: a finished review whose verdict was refused at ingestion (writer unknown, or the reviewer's model wrote the head).
-    for (const r of team.refusedVerdicts(c.pulls || [])) attention.push({ id: `noreviewer-refused-${r.pr}`, text: redact(`The review of PR #${r.pr} at ${String(r.head).slice(0, 7)} (job ${String(r.job).slice(0, 8)}, ${r.agent} on ${r.model || 'its default model'}) finished but its verdict was not recorded: ${r.text}. Verdict file: ${r.file}${r.kept ? keptText(r.kept) : ''}`, 1400), ref: r.pr, severity: 'action', action: r.reason === 'writer unknown' ? `Have a reviewer on another provider review PR #${r.pr} at this head, or push a new head through a Foreman job and have that new head reviewed; this refused verdict is not recorded.` : `Have a different model review PR #${r.pr} at this head (the refused verdict in the file above is not recorded and is not trusted).` });
+    for (const r of team.refusedVerdicts(c.pulls || [])) attention.push({ id: `noreviewer-refused-${r.pr}`, text: redact(`The review of PR #${r.pr} at ${String(r.head).slice(0, 7)} (job ${String(r.job).slice(0, 8)}, ${r.agent} on ${r.model || 'its default model'}) finished but its verdict was not recorded: ${r.text}. Verdict file: ${r.file}${r.kept ? keptText(r.kept) : ''}`, 1400), ref: { kind: 'pull', n: r.pr }, severity: 'action', action: r.reason === 'writer unknown' ? `Have a reviewer on another provider review PR #${r.pr} at this head, or push a new head through a Foreman job and have that new head reviewed; this refused verdict is not recorded.` : `Have a different model review PR #${r.pr} at this head (the refused verdict in the file above is not recorded and is not trusted).` });
     // Issue #326: queued or conflicting work, but nothing planned or started for idle_minutes; clears when a job starts.
     { const idle = team.idleItem(now); if (idle) attention.push({ id: 'foreman-idle', text: redact(`Foreman has work waiting but has started nothing for ${idle.minutes} minutes: ${idle.work.join('; ')}. Reason: ${idle.reason}`, 600), ref: null, severity: 'action', action: 'Resolve what is holding the work (allowance, review independence, a conflict Foreman cannot rebase) or start it by hand.' }); }
     // Issue #193: say which job records make an agent Unknown, so nobody has to hunt through jobs/.
@@ -800,7 +800,7 @@ const NEXT_STEP = {
 };
 const COMMANDS = { 'tick-failed': 'ai-supervisor team tick --dry-run', 'upgrade-latched': 'ai-supervisor self-upgrade clear-latch' };
 export function healthOf({ attention, states, teamEnabled, needsYouCount }) {
-  const open = Number.isSafeInteger(needsYouCount) ? needsYouCount : attention.filter(a => a.severity === 'action').length;   // one shared count: the consolidated list's length   // issue #141: the header shows how many
+  const open = Number.isSafeInteger(needsYouCount) ? needsYouCount : attention.filter(a => a.severity === 'action').length;   // one shared count: the consolidated list's length (issue #141: the header shows how many)
   if (open) return { state: 'needs_you', label: `Needs you (${open})`, count: open, severity: 'action' };
   if (attention.some(a => /^(tick-stale|idle)/.test(a.id))) return { state: 'stuck', label: 'Stuck', severity: 'warning' };
   if (Object.values(states).some(s => s.state === 'unknown')) return { state: 'unknown', label: 'Unknown', severity: 'warning' };
@@ -896,7 +896,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const tickAt = cache.tick?.at ?? null;
   const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
-  const consolidated = consolidateNeedsYou(attention, { cache, now });
+  const consolidated = consolidateNeedsYou(attention, { cache, overrides: config.depends_on_overrides });
   const needsYou = consolidated.needsYou.map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);

@@ -395,7 +395,7 @@ export function pageDataStat(view) {
 function statusBar(view, route, head = '') {
   const now = view.generatedAt, t = view.tick, fr = view.freshness, v = view.version;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
-  const L = pillLinks({ health: view.health, attention: view.attention, version: v }), vs = versionStatus(v);
+  const L = pillLinks({ health: view.health, attention: view.attention, needsYou: view.panels?.needsYou, version: v }), vs = versionStatus(v);
   const pill = (href, inner, why) => `<a class="pill" href="${esc(href)}" title="${esc(why)}">${inner}</a>`;
   return `<header class="statusbar" role="banner"><div class="brand">${icon('pulse')} DevTest team</div>${head}
 ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}

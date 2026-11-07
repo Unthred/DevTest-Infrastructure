@@ -6,6 +6,7 @@
 //   - Order: what blocks the most other work first, then the oldest.
 // Pure: no I/O. The caller supplies the attention items and the lists it already holds.
 import { redact } from './redact.mjs';
+import { prerequisites } from './team.mjs';
 
 // Lower is more specific: the primary cause of a merged item is the lowest-ranked one present.
 const RANK = ['breaker', 'fixlimit', 'reviewlimit', 'reviewrefused', 'noreviewer-refused', 'noreviewer', 'selfcheck', 'homeowner-pr', 'decision-proposal', 'stalled', 'job', 'homeowner', 'split', 'prclosed', 'rebase-lost', 'stale-mark', 'ci'];
@@ -17,7 +18,7 @@ const refKey = ref => (ref && ref.kind && Number.isSafeInteger(ref.n) ? `${ref.k
 // A stall item lists PRs; Foreman progresses by itself unless a reason says the homeowner must act.
 export const needsHomeowner = item => item.homeowner !== false;
 
-export function consolidateNeedsYou(attention, { cache = {}, now = Date.now() } = {}) {
+export function consolidateNeedsYou(attention, { cache = {}, overrides = {} } = {}) {
   const pulls = Array.isArray(cache.pulls) ? cache.pulls : null, issues = Array.isArray(cache.issues) && cache.issues.length ? cache.issues : null;
   const openPr = pulls ? new Set(pulls.map(p => p.number)) : null;
   const issueState = issues ? new Map(issues.map(i => [i.number, i])) : null;
@@ -37,24 +38,27 @@ export function consolidateNeedsYou(attention, { cache = {}, now = Date.now() } 
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(a);
   }
-  const dependants = n => (issues || []).filter(i => i.state === 'OPEN' && (i.prerequisites || []).includes(n)).length;
+  // Prerequisites come from the issue body (the GitHub cache carries no parsed list) unless depends_on_overrides names them.
+  const depsOf = i => overrides?.[i.number] ?? i.prerequisites ?? prerequisites(i.body);
+  const dependantsOfIssue = n => (issues || []).filter(i => i.state === 'OPEN' && depsOf(i).includes(n)).length;
+  // A pull request blocks what the issue it closes blocks.
+  const closedBy = n => { const p = (pulls || []).find(x => x.number === n); const m = p?.closingIssuesReferences?.[0]?.number ?? Number(/\/issue-(\d+)(\D|$)/.exec(p?.headRefName || '')?.[1]); return Number.isSafeInteger(m) ? m : null; };
+  const dependants = ref => ref.kind === 'pull' ? (closedBy(ref.n) == null ? 0 : dependantsOfIssue(closedBy(ref.n))) : dependantsOfIssue(ref.n);
   for (const [k, list] of groups) {
     list.sort((x, y) => rankOf(x.id) - rankOf(y.id));
-    const [primary, ...rest] = list, causes = list.map(cause);
+    const [primary] = list, causes = list.map(cause);
     const actions = [...new Set(list.map(x => x.action).filter(Boolean))];
     const since = list.map(x => x.since).filter(Number.isFinite).sort((p, q) => p - q)[0] ?? null;
     out.push({ ...primary, text: redact(list.length > 1 ? `${primary.text} (${list.length} causes)` : primary.text, 400),
       action: actions.length > 1 ? redact(`${actions[0]} Also open: ${actions.slice(1).map(s => s.replace(/\s+/g, ' ').slice(0, 120)).join(' | ')}`, 600) : primary.action,
       links: [...new Map(list.flatMap(x => x.links || []).map(l => [l.url, l])).values()].slice(0, 6),
-      causes, count: list.length, since, blocks: dependants(primary.ref.n) });
-    void rest;
+      causes, count: list.length, since, blocks: dependants(primary.ref) });
   }
   // Most blocking first, then oldest (unknown age last), then number for a stable order.
   out.sort((a, b) => b.blocks - a.blocks || (a.since ?? Infinity) - (b.since ?? Infinity) || (a.ref?.n ?? 0) - (b.ref?.n ?? 0) || a.id.localeCompare(b.id));
-  void now;
   return { needsYou: out, notices, dropped };
 }
 const cause = a => ({ id: a.id, text: redact(a.text, 300), ...(a.action ? { action: redact(a.action, 300) } : {}), ...(Number.isFinite(a.since) ? { since: a.since } : {}) });
 
-// The one count. Every surface (status bar, health card, MCP status, drill-down title, status issue) reads this.
+// The one count: the consolidated list's length, with the health count as the fallback.
 export const needsYouCount = view => (Array.isArray(view?.panels?.needsYou) ? view.panels.needsYou.length : Number.isSafeInteger(view?.health?.count) ? view.health.count : 0);

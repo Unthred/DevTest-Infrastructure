@@ -100,3 +100,24 @@ test('one shared count: health, label, list and the MCP reading agree', async t 
   const src = fs.readFileSync(new URL('../foreman-mcp/tools.mjs', import.meta.url), 'utf8');
   assert.ok(!/needsYouCount: \(v\.attention/.test(src), 'the MCP status does not count attention items');
 });
+
+// Issue #759: review follow-ups.
+test('blocks counts dependants from issue bodies, overrides, and through the issue a PR closes', () => {
+  const c = { pulls: [{ number: 20, headRefName: 'claude/issue-7-x' }, { number: 21, headRefName: 'claude/issue-8-x' }],
+    issues: [{ number: 5, state: 'OPEN', body: 'Prerequisites: #7' }, { number: 6, state: 'OPEN', body: '' }, { number: 7, state: 'OPEN', body: '' }, { number: 8, state: 'OPEN', body: '' }] };
+  const run = overrides => consolidateNeedsYou([item('homeowner-8', { kind: 'issue', n: 8 }, { since: 1 }), item('homeowner-7', { kind: 'issue', n: 7 }, { since: 2 }), item('fixlimit-20', { kind: 'pull', n: 20 }, { since: 3 }), item('fixlimit-21', { kind: 'pull', n: 21 }, { since: 0 })], { cache: c, overrides }).needsYou;
+  const r = run({});
+  assert.deepEqual(r.map(x => [x.id, x.blocks]), [['homeowner-7', 1], ['fixlimit-20', 1], ['fixlimit-21', 0], ['homeowner-8', 0]]);
+  const o = run({ 5: [8] }); assert.equal(o.find(x => x.id === 'homeowner-8').blocks, 1); assert.equal(o.find(x => x.id === 'homeowner-7').blocks, 0);
+});
+test('a refused verdict shares the one item with other causes on the same PR', () => {
+  const r = consolidateNeedsYou([item('fixlimit-5', { kind: 'pull', n: 5 }), item('noreviewer-refused-5', { kind: 'pull', n: 5 })], { cache });
+  assert.equal(r.needsYou.length, 1); assert.equal(r.needsYou[0].count, 2); assert.ok(r.needsYou[0].blocks < 1e6);
+  assert.equal(consolidateNeedsYou([item('noreviewer-refused-99', { kind: 'pull', n: 99 })], { cache }).dropped.length, 1);
+  assert.match(fs.readFileSync(new URL('../supervisor/dashboard.mjs', import.meta.url), 'utf8'), /noreviewer-refused-\$\{r\.pr\}[^\n]*ref: \{ kind: 'pull', n: r\.pr \}/);
+});
+test('the header pill links to the first consolidated item', async () => {
+  const { pillLinks } = await import('../supervisor/dashui/logic.mjs');
+  const href = pillLinks({ health: { state: 'needs_you' }, attention: [{ id: 'prclosed-9', severity: 'action' }], needsYou: [{ id: 'homeowner-3' }, { id: 'ci-4' }] }).health;
+  assert.equal(href, '/system#att-homeowner-3');
+});
