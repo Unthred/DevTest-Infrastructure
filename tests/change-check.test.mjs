@@ -376,7 +376,7 @@ test('real process: a replay pass that did something enters the chain window, an
   assert.equal(w.issueReads(), i0, 'the replay pass read no issue list');
   await new Promise(r => setTimeout(r, 3000));   // the replay pass is in the chain window by now (poll 1 s, window 60 s)
   assert.equal(child.exitCode, null, 'the pass is still waiting in the chain window');
-  const j2 = JSON.parse(fs.readFileSync(file, 'utf8')); j2.status = 'completed'; fs.writeFileSync(file, JSON.stringify(j2));   // the job ends
+  const j2 = JSON.parse(fs.readFileSync(file, 'utf8')); j2.status = 'completed'; fs.writeFileSync(file + '.tmp', JSON.stringify(j2)); fs.renameSync(file + '.tmp', file);   // the job ends; atomic, so the polling pass never reads a half-written file
   await done;   // the pass is not clean (it has a skipped item), so its exit status is not the point
   assert.ok(w.issueReads() > i0, 'the chained pass read the issue list live, not from the replayed cache');
   const snap = readSnapshots(w.root).at(-1); assert.equal(snap.check.result, 'unchanged'); assert.notEqual(snap.noop, true);
