@@ -487,8 +487,8 @@ export const ROOT_FILES = new Set(['.gitignore', 'agents.md', 'claude.md', 'read
 const FILE_EXT = /\.(?:mjs|cjs|js|ts|json|jsonl|md|yml|yaml|sh|cs|csproj|sln|txt|toml|html|css|ps1|patch|diff|conf|ini|cfg)$|\/dockerfile(?:\.[\w-]+)?$/;
 // Issue #678: a Dockerfile suffix is accepted only on a slashed path (docker/Dockerfile.retry); a bare "dockerfile.retry" is refused like any other unlisted bare token. A bare root "Dockerfile" stays refused (this repository has none, and tests pin ROOT_FILES to real root files).
 // Issue #588: the extension list applies to slashed tokens too (so "tests/fix.retry" is not a path), and ".." is refused anywhere in the token (so "docs/a..b.md" is not).
-const isRepoFile = w => /^[\w./-]*\.\w+$/.test(w) && noDotSegments(w) && !w.includes('..') && (w.includes('/') ? TOP_LEVEL_DIRS.has(w.split('/')[0]) && FILE_EXT.test(w) : ROOT_FILES.has(w) || FILE_EXT.test(w));
 // Issue #650: known, accepted limit. The check is lexical and never looks at the file system, so a bare name with a listed extension ("disable.sh") passes even when no such file exists. tests/review-requirements.test.mjs pins this (#592); tightening it means inverting that test on purpose.
+const isRepoFile = w => /^[\w./-]*\.\w+$/.test(w) && noDotSegments(w) && !w.includes('..') && (w.includes('/') ? TOP_LEVEL_DIRS.has(w.split('/')[0]) && FILE_EXT.test(w) : ROOT_FILES.has(w) || FILE_EXT.test(w));
 // Issue #617: a path token such as ".github/workflows/ci.yml" must not trip MATERIAL_TOPIC on its "ci" segment; only whole tokens that are repo files are blanked, so wording around them is still checked.
 const withoutRepoFiles = claim => claim.split(/(\s+)/).map(t => { const w = t.toLowerCase().replace(/^[,;:()'"`]+|[,;:()'"`.]+$/g, ''); return w && isRepoFile(w) ? ' ' : t; }).join('');
 export function isTrivialSlip(claim) {
