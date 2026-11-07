@@ -3,6 +3,7 @@
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
 import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { PINNED } from './dashui/grid.mjs';
+import { CARD_IDS, CARD_TITLES, WINDOWS } from './headline.mjs';
 import { resultSeverity, tickLine } from './suphealth.mjs';
 import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
@@ -56,9 +57,10 @@ export function matchRoute(pathname) {
   if (p === '/activity/timeline') return { page: 'timeline' };
   if (p === '/supervisor/ticks') return { page: 'ticks' };
   if (p === '/supervisor/upgrades') return { page: 'upgrades' };
+  if ((m = /^\/headline\/([a-z-]{1,20})$/.exec(p)) && CARD_IDS.includes(m[1])) return { page: 'headline', id: m[1] };
   return null;
 }
-const parentOf = page => ({ processes: 'system', agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity', evidence: 'system', 'evidence-run': 'system' })[page] || page;
+const parentOf = page => ({ processes: 'system', agent: 'agents', pr: 'work', issue: 'work', job: 'work', watch: 'work', ticks: 'supervisor', upgrades: 'supervisor', timeline: 'activity', headline: 'overview', evidence: 'system', 'evidence-run': 'system' })[page] || page;
 
 // ---- icons: authored for this project (24x24, 2px stroke); no third-party icon set is bundled
 const ICONS = {
@@ -440,6 +442,46 @@ function watchingCard(view) {
   const body = list.length ? dlist({ id: 'watching', label: 'Watching', noun: 'watched items', rows: list.map(item), listCls: 'watch-list', sorts: ['severity', 'age', 'number', 'name', 'default'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'Order added' }) : empty('Nothing watched', 'Press Watch on any issue or pull request to follow it from start to installed.', 'info');
   return card({ id: 'watching', title: `Watching${list.length ? ` (${list.length})` : ''}`, span: 12, movable: false, body, cls: 'panel watching', type: 'panel' });
 }
+// ---- Issue #866: headline progress numbers (top of the Overview) and the drill-down behind each.
+const pctText = n => (Number.isFinite(n) ? `${dec1(n)}%` : 'no data');
+const signed = n => (n > 0 ? `+${num(n)}` : n < 0 ? `\u2212${num(-n)}` : '0');
+const HEADLINE = {
+  issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` }),
+  processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play` }),
+  'merge-rate': c => ({ big: Number.isFinite(c.value) ? `${dec1(Math.round(c.value * 100) / 100)}/h` : 'no data', sub: `${c.merged} merged` }),
+  'first-pass': c => ({ big: pctText(c.value), sub: c.reviewed ? `${c.approved} of ${c.reviewed} approved on the first review` : 'no first reviews' }),
+  rounds: c => ({ big: Number.isFinite(c.value) ? dec1(c.value) : 'no data', sub: `${c.merged} merged (review, fix and rebase rounds)` }),
+  tokens: c => ({ big: Number.isFinite(c.value) ? num(c.value) : 'unknown', sub: `${c.withKnownTokens} of ${c.merged} merged with known usage; usage equivalent, not a cash charge` }),
+  waste: c => ({ big: num(c.value), sub: c.topCause ? `top cause: ${c.topCause.cause} (${num(c.topCause.tokens)})` : 'no wasted jobs' }),
+  rejects: c => ({ big: String(c.value), sub: `${c.changes} CHANGES, ${c.blocked} blocked` }),
+};
+const trendText = (c, name) => (c.direction === null ? (c.previousNote ? 'no previous period to compare' : `no previous ${name} figure`) : c.direction === 'flat' ? `unchanged from the previous ${name}` : `${c.direction} ${num(Math.abs(c.delta))} from the previous ${name}`);
+function headlineCards(view) {
+  const h = view.headline;
+  if (!h) return '';
+  return CARD_IDS.map(id => {
+    const rows = Object.keys(WINDOWS).map(name => {
+      const c = h.windows[name].cards[id], t = HEADLINE[id](c);
+      return `<div class="hl-row" data-window="${esc(name)}"><span class="hl-w">${esc(name === '24h' ? 'Last 24 hours' : 'Last 7 days')}</span><a class="hl-v" href="${esc(`/headline/${id}?window=${name}`)}">${esc(t.big)}</a><span class="sub">${esc(t.sub)}</span><span class="sub hl-trend" data-dir="${esc(c.direction || '')}">${icon(c.direction === 'up' ? 'up' : c.direction === 'down' ? 'down' : 'sort')}${esc(trendText(c, name === '24h' ? '24 hours' : '7 days'))}</span></div>`;
+    }).join('');
+    const extra = id === 'issues' ? `<p class="sub">${h.openNow} open now</p>` : '';
+    return card({ id: `hl-${id}`, title: CARD_TITLES[id], span: 3, href: `/headline/${id}`, cls: 'panel headline', type: 'panel', body: rows + extra });
+  }).join('');
+}
+function headlinePage(view, query, path, route) {
+  const h = view.headline, id = route.id;
+  if (!h || !CARD_IDS.includes(id)) return null;
+  const name = Object.hasOwn(WINDOWS, query.get('window')) ? query.get('window') : '24h', c = h.windows[name].cards[id], t = HEADLINE[id](c);
+  const switcher = `<div class="ranges" role="group" aria-label="Period">${Object.keys(WINDOWS).map(w => `<a href="${esc(withQuery(path, query, { window: w, 'hl.page': null }))}"${w === name ? ' aria-current="true"' : ''}>${w}</a>`).join('')}</div>`;
+  const summary = card({ id: 'hl-sum', title: CARD_TITLES[id], span: 12, movable: false, tools: switcher, cls: 'panel', type: 'panel',
+    body: `<p class="hl-v-big">${esc(t.big)}</p><p class="sub">${esc(t.sub)}. ${esc(trendText(c, name === '24h' ? '24 hours' : '7 days'))}.</p><p class="sub">${esc(h.note)}</p>${c.count > c.shown ? `<p class="sub">The table shows the newest ${c.shown} of ${c.count}.</p>` : ''}` });
+  const link = r => (r.kind === 'pr' ? prLink(r.ref) : r.kind === 'issue' ? issueLink(r.ref) : r.kind === 'job' ? esc(`job ${r.ref}`) : esc(String(r.ref)));
+  const rows = c.items.map(r => ({ ...r, item: `${r.kind} ${r.ref}` }));
+  const t2 = card({ id: 'hl-items', title: 'Items behind the number', span: 12, movable: false, body: table({ id: 'hl', path, query, noun: 'items', rows, searchKeys: ['item', 'title', 'detail'], totals: { item: 'count', tokens: 'sum' },
+    cols: [{ key: 'item', label: 'Item', html: link }, { key: 'title', label: 'What' }, { key: 'detail', label: 'Detail' }, { key: 'at', label: 'When', num: true, html: r => lt(r.at) }, { key: 'tokens', label: 'Tokens (usage equivalent)', num: true, html: r => (Number.isFinite(r.tokens) ? num(r.tokens) : '<span class="muted">unknown</span>') }],
+    emptyState: empty('Nothing in this period', 'No items behind this number.') }) });
+  return { title: CARD_TITLES[id], crumbs: [['/', 'Overview'], [null, CARD_TITLES[id]]], body: grid('headline', summary + t2) };
+}
 function overview(view, query) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
   const now = view.generatedAt;
@@ -469,7 +511,7 @@ function overview(view, query) {
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
-  return { title: 'Overview', body: `${grid('overview', watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
+  return { title: 'Overview', body: `${grid('overview', headlineCards(view) + watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
 }
 
 function agentsPage(view, query, path) {
@@ -897,7 +939,7 @@ function processesPage(view, query, pathname, route) {
   return { title: agent ? `Processes: ${agent}` : 'Processes', crumbs: agent ? [['/system', 'System'], ['/system/processes', 'Processes'], [null, agent]] : [['/system', 'System'], [null, 'Processes']], bodyClass: 'procs',
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
-const PAGES = { processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 export const PAGE_NAMES = Object.keys(PAGES);
 

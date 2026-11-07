@@ -1,6 +1,7 @@
 // View model of the team dashboard (issue #32). Pure functions over data the tick already stored: supervisor job records,
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
+import { headlineStats } from './headline.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
 import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
@@ -728,6 +729,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {
       ...extra,
+      // Issue #866: the headline progress numbers, from the same records the rest of the view uses.
+      headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), now }),
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),
       estimates,
@@ -890,7 +893,8 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const issues = (cache.issues || []).slice().sort((a, b) => a.number - b.number).map(i => {
     const deps = i.prerequisites || [];
     return { number: i.number, name: redact(names.issue(i.number).text, 300), title: i.title, state: i.state, agent: agentNames.find(n => config.agents[n].issues.includes(i.number)) || null, needsHomeowner: (i.labels || []).includes('needs-homeowner'),
-      dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || excludedBy.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [] };
+      dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || excludedBy.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [],
+      createdAt: Number.isFinite(Date.parse(i.createdAt)) ? Date.parse(i.createdAt) : null, closedAt: Number.isFinite(Date.parse(i.closedAt)) ? Date.parse(i.closedAt) : null };
   });
   const issueTimelines = issueTimelinesOf({ jobs, state, names, jobRows, cache });
   const tickAt = cache.tick?.at ?? null;
