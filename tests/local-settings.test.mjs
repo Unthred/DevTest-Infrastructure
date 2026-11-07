@@ -145,3 +145,9 @@ test('homeownerSteps reads the list under the heading and stops at the next head
   assert.deepEqual(ls.homeownerSteps(body), [{ text: 'Run `foo`', done: false }, { text: 'Done thing', done: true }, { text: 'Numbered', done: false }]);
   assert.deepEqual(ls.homeownerSteps('Homeowner steps are none'), []); assert.deepEqual(ls.homeownerSteps(null), []);
 });
+
+test('writer prompts require the Homeowner steps heading', async () => {
+  const t = await import('../supervisor/team.mjs');
+  const job = { pr: 7, head: 'a'.repeat(40), branch: 'b', repository: 'o/r', issue: 3, checks: [] };
+  assert.match(t.implementPrompt(job), /"Homeowner steps" heading/); assert.match(t.fixPrompt(job), /"Homeowner steps" heading/);
+});
