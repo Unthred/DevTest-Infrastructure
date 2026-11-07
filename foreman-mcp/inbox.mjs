@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 
-export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, items: 60, action: 40, target: 40 };
+export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
@@ -41,14 +41,26 @@ export function checkProposal(args) {
 
 export function createInbox({ dir }) {
   const items = dir ? path.join(dir, 'items') : null, status = dir ? path.join(dir, 'status') : null;
+  // Issue #943: counted the way Foreman counts. Waiting = items Foreman holds as pending (from status/) plus item files it has not picked up yet.
+  // Finished items (done, rejected, refused, failed) do not count, whatever files remain. The limit is the one Foreman published in status/limits.json.
+  function waiting() {
+    let names; try { names = fs.readdirSync(items); } catch { throw new Error('the inbox directory is not available'); }
+    let pending = 0, unpicked = 0;
+    for (const n of names) {
+      const m = /^([a-f0-9]{32})\.json$/.exec(n); if (!m) continue;
+      let s = null; try { s = JSON.parse(fs.readFileSync(path.join(status, `${m[1]}.json`), 'utf8')); } catch { /* none yet */ }
+      if (!s) unpicked++; else if (s.state === 'pending') pending++;
+    }
+    let limit = LIMITS.waiting; try { const l = JSON.parse(fs.readFileSync(path.join(status, 'limits.json'), 'utf8')).pending; if (Number.isSafeInteger(l) && l >= 1 && l <= 200) limit = l; } catch { /* default */ }
+    return { pending, unpicked, total: pending + unpicked, limit };
+  }
   return {
     enabled: !!dir,
     propose(args) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       const c = checkProposal(args);
       if (!c.ok) throw new Error(c.error);
-      let count = 0; try { count = fs.readdirSync(items).length; } catch { throw new Error('the inbox directory is not available'); }
-      if (count >= LIMITS.items) throw new Error('the inbox is full; wait for the homeowner to decide the waiting items');
+      const w = waiting(); if (w.total >= w.limit) throw new Error(`the inbox is full: ${w.total} items are waiting (${w.pending} for the homeowner's decision, ${w.unpicked} not yet picked up by Foreman); the limit is ${w.limit}. Wait for the homeowner to decide some`);
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
       fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
       return { id, state: 'submitted', note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.' };

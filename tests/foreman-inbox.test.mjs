@@ -158,10 +158,65 @@ test('the proposal tools are listed only with an inbox, are not marked read-only
   assert.equal(tools.find(x => x.name === 'foreman_proposal_status').annotations.readOnlyHint, true);
   assert.ok(!tools.some(x => /approve|reject|decide|run/i.test(x.name)));
 });
-test('the inbox is full: the server refuses more files than the cap', async t => {
-  const dir = makeInbox(t); for (let i = 0; i < 60; i++) drop(dir, GOOD);
-  const r = await createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: createInbox({ dir }) }).call('foreman_propose', GOOD);
-  assert.equal(r.isError, true); assert.match(r.text, /full/);
+const propose = (dir, args = GOOD) => createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: createInbox({ dir }) }).call('foreman_propose', args);
+test('the inbox is full: the 31st waiting item is refused at submit time with the count (issue #943)', async t => {
+  const dir = makeInbox(t); for (let i = 0; i < 30; i++) drop(dir, GOOD);
+  const r = await propose(dir);
+  assert.equal(r.isError, true); assert.match(r.text, /full: 30 items are waiting/); assert.match(r.text, /limit is 30/);
+  assert.equal(fs.readdirSync(path.join(dir, 'items')).length, 30);
+});
+test('finished items do not count at submit time; pending and unpicked ones do (issue #943)', async t => {
+  const dir = makeInbox(t);
+  for (let i = 0; i < 80; i++) { const id = drop(dir, GOOD); fs.writeFileSync(path.join(dir, 'status', id + '.json'), JSON.stringify({ id, state: ['done', 'rejected', 'refused', 'failed'][i % 4] })); }
+  assert.equal((await propose(dir)).isError, false);
+  for (let i = 0; i < 28; i++) { const id = drop(dir, GOOD); fs.writeFileSync(path.join(dir, 'status', id + '.json'), JSON.stringify({ id, state: i % 2 ? 'pending' : 'approved' })); }
+  assert.equal((await propose(dir)).isError, false);   // 1 new + 14 pending, approved ones are not waiting: still room
+  for (let i = 0; i < 20; i++) drop(dir, GOOD);
+  const r = await propose(dir); assert.equal(r.isError, true); assert.match(r.text, /full: 3\d items are waiting/);
+});
+test('the submit-time limit follows the one Foreman publishes (issue #943)', async t => {
+  const dir = makeInbox(t); fs.writeFileSync(path.join(dir, 'status', 'limits.json'), JSON.stringify({ pending: 2 }));
+  drop(dir, GOOD); drop(dir, GOOD);
+  const r = await propose(dir); assert.equal(r.isError, true); assert.match(r.text, /limit is 2/);
+  fs.writeFileSync(path.join(dir, 'status', 'limits.json'), 'garbage'); assert.equal((await propose(dir)).isError, false);
+});
+test('Foreman removes the item file once an item is done, failed or refused; a rejected one only after the undo window (issue #943)', t => {
+  const dir = makeInbox(t), now = 1e12, items = () => fs.readdirSync(path.join(dir, 'items'));
+  const bad = drop(dir, 'not json'), ok = drop(dir, GOOD), rej = drop(dir, DRAFT), fin = drop(dir, { ...GOOD, title: 'second' });
+  inbox.scan(dir, now);
+  assert.equal(inbox.statusOf(dir, bad).state, 'refused'); assert.ok(!items().includes(bad + '.json'));
+  inbox.decide(dir, rej, 'reject', now); inbox.decide(dir, fin, 'approve', now); inbox.decide(dir, ok, 'approve', now);
+  inbox.finish(dir, fin, { state: 'done', result: 'ok' }, now); inbox.finish(dir, ok, { state: 'failed', reason: 'x' }, now);
+  assert.deepEqual(items(), [rej + '.json']);
+  assert.equal(inbox.undo(dir, rej, now + 1000).ok, true);   // the rejected item could still be put back
+  inbox.decide(dir, rej, 'reject', now + 2000);
+  inbox.scan(dir, now + 3000); assert.deepEqual(items(), [rej + '.json']);
+  inbox.scan(dir, now + 2000 + inbox.UNDO_MS + 1); assert.deepEqual(items(), []);
+  assert.equal(inbox.statusOf(dir, rej).state, 'rejected');   // the history stays
+});
+test('80 proposals submitted and decided leave the inbox able to accept more (issue #943)', async t => {
+  const dir = makeInbox(t), now = 1e12;
+  for (let round = 0; round < 4; round++) {
+    for (let i = 0; i < 20; i++) assert.equal((await propose(dir, { ...GOOD, title: `r${round} ${i}` })).isError, false);
+    inbox.scan(dir, now + round);
+    for (const s of inbox.allStatuses(dir).filter(x => x.state === 'pending')) inbox.decide(dir, s.id, 'reject', now + round);
+    inbox.scan(dir, now + round + inbox.UNDO_MS + 5);
+  }
+  assert.equal((await propose(dir)).isError, false);
+  assert.ok(fs.readdirSync(path.join(dir, 'items')).length <= 1);
+});
+test('scan: a configured maxPending caps pickup and is published for the MCP server; refusals group into one Needs you line (issue #943)', t => {
+  const dir = makeInbox(t), now = 1e12;
+  const ids = Array.from({ length: 20 }, (_, i) => drop(dir, { ...GOOD, title: `d ${i}` }));
+  inbox.scan(dir, now, { maxPending: 25 });
+  assert.equal(ids.filter(id => inbox.statusOf(dir, id).state === 'pending').length, 20);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'status', 'limits.json'), 'utf8')), { pending: 25 });
+  assert.deepEqual(inbox.refusedGroups(dir, now), []);
+  const more = Array.from({ length: 7 }, (_, i) => drop(dir, { ...GOOD, title: `e ${i}` }));
+  inbox.scan(dir, now + 1000, { maxPending: 25 });
+  assert.equal(more.filter(id => inbox.statusOf(dir, id).state === 'refused').length, 2);
+  const g = inbox.refusedGroups(dir, now + 2000); assert.equal(g.length, 1); assert.equal(g[0].count, 2); assert.match(g[0].reason, /25 items are already waiting/);
+  assert.deepEqual(inbox.refusedGroups(dir, now + 4 * 86400000), []);
 });
 test('under the launcher permission flags the MCP process can write items/ and nothing else; it cannot approve (status/) or write elsewhere', async t => {
   const dir = makeInbox(t), other = tmp(t), log = tmp(t);
@@ -356,7 +411,7 @@ test('team: an issue draft is never posted on a failed final check (secret or at
 test('config: inbox must be { dir: absolute path }', () => {
   const base = teamCfg('/x');
   assert.doesNotThrow(() => validateTeamConfig(base));
-  for (const bad of [{ dir: 'rel' }, { dir: '/x', extra: 1 }, 'x', [], { dir: 5 }]) assert.throws(() => validateTeamConfig({ ...base, inbox: bad }), /invalid inbox/);
+  for (const bad of [{ dir: 'rel' }, { dir: '/x', extra: 1 }, 'x', [], { dir: 5 }, { dir: '/x', max_pending: 0 }, { dir: '/x', max_pending: 'a' }, { dir: '/x', max_pending: 201 }]) assert.throws(() => validateTeamConfig({ ...base, inbox: bad }), /invalid inbox/);
   const { inbox: _, ...none } = base; assert.doesNotThrow(() => validateTeamConfig(none));
 });
 
@@ -612,4 +667,14 @@ test('team: an Undo between the tick snapshot and the effect wins; nothing is po
   const w3 = world(t); const id3 = approve(w3, DRAFT); const lock = path.join(w3.dir, 'status', `${id3}.lock`); fs.writeFileSync(lock, '');
   assert.match(inbox.undo(w3.dir, id3, 3).reason, /try again/); assert.equal(inbox.claim(w3.dir, id3, 'approved', { state: 'posting' }, 4), false);
   assert.equal(inbox.statusOf(w3.dir, id3).state, 'approved');
+});
+test('dashboard: refusals after pickup are one grouped Needs you line per reason (issue #943)', async t => {
+  const dir = makeInbox(t), ids = Array.from({ length: 5 }, (_, i) => drop(dir, { ...GOOD, title: `g ${i}` }));
+  const s = await serve(t, dir), now = s.clock.now;
+  inbox.scan(dir, now, { maxPending: 3 });
+  const lines = async () => JSON.parse((await s.get('/api/view.json')).body).panels.needsYou.filter(x => x.id.startsWith('inboxrefused-'));
+  const found = await lines();
+  assert.equal(found.length, 1); assert.match(found[0].text, /^2 overseer proposals were refused: 3 items are already waiting/);
+  assert.equal(ids.filter(id => inbox.statusOf(dir, id).state === 'pending').length, 3);
+  s.clock.now = now + inbox.FAILED_SHOW_MS + 5000; assert.equal((await lines()).length, 0);
 });
