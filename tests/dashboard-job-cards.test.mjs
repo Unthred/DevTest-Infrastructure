@@ -44,3 +44,10 @@ test('a paused job gets a card but does not count as running', async () => {
   const v = await view([job('a', { status: 'paused_limit', lastEvent: 'usage_limit' })]), html = renderPage(v);
   assert.equal(cards(html), 1); assert.equal(kpi(html, 'k-active'), '0 / 2');
 });
+
+// Issue #699: a job row carries the head recorded in team state (core job records have none), so hold-by-old-job can compare heads.
+test('view job rows take head from team state, not from the core job record', async () => {
+  const H = 'c'.repeat(40);
+  const v = await view([job('a')], { jobs: { ['a'.repeat(32)]: { kind: 'implement', agent: 'claude', issue: 30, head: H } } });
+  assert.equal(v.jobs.find(j => j.fullId === 'a'.repeat(32)).head, H);
+});
