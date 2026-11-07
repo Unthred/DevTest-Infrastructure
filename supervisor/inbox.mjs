@@ -19,6 +19,7 @@ export const ACTIONS = {
   resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
 };
 const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
+// title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 10, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'] };
@@ -40,6 +41,10 @@ const SECRET_RULES = [
   /\b(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|credential)s?["']?\s*[:=]\s*["']?(?!\[)[^\s"',;&]{6,}/i,
   /\b(?![0-9a-f]{40}\b)(?![0-9a-f]{64}\b)[A-Za-z0-9_-]{40,}\b/,
 ];
+// issue #802: file content (a saved worktree) is scanned without the generic long-token rule (the last one), which flags ordinary
+// content such as a package-lock.json integrity hash. Every credential-shaped rule still applies.
+const FILE_SECRET_RULES = SECRET_RULES.slice(0, -1);
+export const secretShapedInFile = text => FILE_SECRET_RULES.some(re => re.test(String(text ?? '')));
 const ATTRIBUTION_RULES = [
   /\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i,
   /\bco-authored-by:/i,

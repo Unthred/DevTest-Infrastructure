@@ -556,3 +556,40 @@ test('issue #713: saveWork refuses secret-shaped content, publishes nothing, com
   assert.equal(g(bare, 'branch', '--list', 'saved/*'), ''); assert.equal(g(main, 'rev-list', '--count', 'HEAD'), '1');
   assert.match(g(main, 'status', '--porcelain'), /\?\? notes\.txt/);
 });
+
+// Issue #802: saveWork scan gaps, found in review of PR #800.
+function saveRig(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'save802-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const g = (cwd, ...a) => { const r = spawnSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@localhost', ...a], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  const bare = path.join(root, 'remote.git'), main = path.join(root, 'main');
+  spawnSync('git', ['init', '-q', '--bare', '-b', 'main', bare]); spawnSync('git', ['init', '-q', '-b', 'main', main]);
+  fs.writeFileSync(path.join(main, 'a.txt'), 'one\n'); g(main, 'add', '-A'); g(main, 'commit', '-q', '-m', 'base'); g(main, 'remote', 'add', 'origin', bare); g(main, 'push', '-q', 'origin', 'main');
+  return { g, bare, main };
+}
+const refused = async (main, re = /secret-shaped/) => { const { saveWork } = await import('../supervisor/savework.mjs'); await assert.rejects(saveWork(main, { branch: 'b', id: 'abcd1234' }), re); };
+test('issue #802: a secret in a committed, unpushed commit is refused and nothing is published', async t => {
+  const { g, bare, main } = saveRig(t);
+  fs.writeFileSync(path.join(main, 'old.txt'), `token=${hex(12)}\n`); g(main, 'add', '-A'); g(main, 'commit', '-q', '-m', 'oops');
+  fs.writeFileSync(path.join(main, 'clean.txt'), 'fine\n');
+  await refused(main, /old\.txt holds secret-shaped/);
+  assert.equal(g(bare, 'branch', '--list', 'saved/*'), '');
+});
+test('issue #802: an added line that starts with "++" is scanned, and a binary file is scanned as text', async t => {
+  const { g, bare, main } = saveRig(t);
+  fs.writeFileSync(path.join(main, 'plus.txt'), `++token=${hex(12)}\n`);
+  await refused(main); g(main, 'reset', '-q'); fs.rmSync(path.join(main, 'plus.txt'));
+  fs.writeFileSync(path.join(main, 'blob.bin'), Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.from(`\ntoken=${hex(12)}\n`), Buffer.from([0, 255])]));
+  await refused(main, /blob\.bin/);
+  assert.equal(g(bare, 'branch', '--list', 'saved/*'), '');
+});
+test('issue #802: a package-lock integrity hash is saved; a refusal keeps what the agent had staged', async t => {
+  const { saveWork } = await import('../supervisor/savework.mjs');
+  const { g, bare, main } = saveRig(t);
+  const integrity = 'sha512-' + Buffer.from(hex(60)).toString('base64');
+  fs.writeFileSync(path.join(main, 'package-lock.json'), `{"integrity": "${integrity}"}\n`);
+  const r = await saveWork(main, { branch: 'b', id: 'abcd1234' });
+  assert.match(r.ref, /^saved\/abcd1234/); assert.ok(g(bare, 'ls-tree', '-r', '--name-only', r.ref).includes('package-lock.json'));
+  fs.writeFileSync(path.join(main, 'x'), 'staged\n'); g(main, 'add', 'x'); fs.writeFileSync(path.join(main, 'bad.txt'), `token=${hex(12)}\n`);
+  await refused(main);
+  assert.match(g(main, 'status', '--porcelain'), /^A  x$/m); assert.match(g(main, 'status', '--porcelain'), /\?\? bad\.txt/);
+});
