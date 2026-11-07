@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { COLS, MAX_H, MIN_H, MIN_W, PINNED, ROW_GAP, ROW_PITCH, ROW_PX, UNDO_LIMIT, bottom, canHide, cleanRect, compact, dragRect, edgeAt, firstFit, fromBoxes, history, isOldLayout, overlaps, placeCard, resizeRect, rowsFor, sanitizeLayout, settleAll, toSaved } from '../supervisor/dashui/grid.mjs';
+import { COLS, MAX_H, MIN_H, MIN_W, PINNED, ROW_GAP, ROW_PITCH, ROW_PX, UNDO_LIMIT, bottom, canHide, cleanRect, compact, dragRect, edgeAt, firstFit, fromBoxes, history, isOldLayout, overlaps, placeCard, resizeRect, rowsFor, sanitizeLayout, settleAll, toSaved, withoutPinned } from '../supervisor/dashui/grid.mjs';
 
 const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
 const appJs = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
@@ -139,9 +139,22 @@ test('app.js does not bind the name history (it would hide window.history)', () 
   assert.deepEqual(bare, ['history as layoutHistory'], 'only the aliased import may name history without a member access');
   assert.match(src, /history\.scrollRestoration\s*=\s*'manual'/);
 });
-test('app.js reads the pinned cards on every apply(), also while editing', () => {
-  assert.match(appJs, /else if \(st\) st\.hidden = st\.hidden\.filter\(id => !pinnedIds\.includes\(id\)\)/);
-  assert.deepEqual(sanitizeLayout({ v: 2, pos: {}, hidden: ['a', 'b'] }, ['a', 'b'], 24, ['a', 'b']).hidden, []);
+test('app.js reads the pinned cards on every apply() and every paintFree(), so no restored snapshot paints a pinned card hidden', () => {
+  assert.match(appJs, /else st = withoutPinned\(st, pinnedIds\)/);
+  assert.match(appJs, /function paintFree\(\) \{\s*st = withoutPinned\(st, pinnedNow\(\)\)/);
+});
+test('withoutPinned: an undo/redo snapshot with a now-pinned card hidden is cleaned, others are kept', () => {
+  const h = history();
+  h.push({ pos: { a: R(0, 0, 8, 8) }, hidden: ['b', 'c'] });   // an earlier state with b hidden
+  const redone = h.undo({ pos: { a: R(0, 0, 8, 8) }, hidden: ['c'] });   // restoring it (undo or redo alike)
+  assert.deepEqual(redone.hidden, ['b', 'c']);
+  const cleaned = withoutPinned(redone, ['b']);
+  assert.deepEqual(cleaned.hidden, ['c'], 'b is pinned now, c still hidden');
+  assert.deepEqual(redone.hidden, ['b', 'c'], 'the snapshot itself is not mutated');
+  assert.deepEqual(cleaned.pos, redone.pos);
+  assert.equal(withoutPinned(redone, ['x']), redone, 'nothing pinned in the list returns the same object');
+  assert.equal(withoutPinned(redone), redone); assert.equal(withoutPinned(null, ['b']), null);
+  assert.deepEqual(withoutPinned({ pos: {}, hidden: ['b'] }, ['b']).hidden, []);
 });
 test('isOldLayout tells the old order/span/h form from the new one', () => {
   assert.equal(isOldLayout({ order: ['a'] }), true); assert.equal(isOldLayout({ span: {} }), true); assert.equal(isOldLayout({ v: 2, order: [] }), false);
