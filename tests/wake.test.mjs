@@ -349,3 +349,35 @@ test('the wake path adds no repeated reads: a pass that finds nothing to do read
   w.run(['reconcile', '--wake', 'job-end']); const total = w.issueReads();
   assert.equal(total - scheduled, scheduled, 'one fresh read per pass for either trigger, nothing extra and nothing cached');
 });
+
+// ---- issue #711: review follow-ups
+test('release leaves a lock directory that is no longer this process\'s own (issue #711)', t => {
+  const root = tmp(t), release = dirLock(root, 'z.lock'), dir = path.join(root, 'team', 'z.lock');
+  fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid + 1, start: 'someone-else' }));
+  release(); assert.ok(fs.existsSync(dir), 'a foreign directory survives release');
+});
+test('a failed restore never deletes the live owner\'s directory; a later contender sweeps it once the owner is gone (issue #711)', t => {
+  const root = tmp(t), dir = path.join(root, 'team', 'w.lock'), aside = `${dir}.stale-1-0`;
+  fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+  // a live owner's directory sits under a private name, as after a failed restore
+  fs.mkdirSync(aside); fs.writeFileSync(path.join(aside, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }));
+  const got = dirLock(root, 'w.lock'); assert.equal(typeof got, 'function'); got();
+  assert.ok(fs.existsSync(aside), 'live owner kept');
+  fs.writeFileSync(path.join(aside, 'owner.json'), JSON.stringify({ pid: 2 ** 22 + 91, start: 'gone' }));
+  dirLock(root, 'w.lock')(); assert.ok(!fs.existsSync(aside), 'dead owner swept');
+});
+test('an unknown --wake value is rejected (issue #711)', t => {
+  const bad = spawnSync(process.execPath, [path.join(here, '..', 'supervisor', 'cli.mjs'), 'reconcile', '--wake', 'bogus', '--state-root', tmp(t)], { encoding: 'utf8' });
+  assert.notEqual(bad.status, 0); assert.match(bad.stderr, /unknown --wake value/);
+});
+test('wakeEnv fills a missing HOME and PATH and sets the state root (issue #711)', async () => {
+  const { wakeEnv } = await import('../supervisor/wake.mjs');
+  const e = wakeEnv('/r', { FOO: '1' }); assert.equal(e.HOME, '/root'); assert.match(e.PATH, /\/usr\/bin/); assert.equal(e.AI_SUPERVISOR_STATE_ROOT, '/r'); assert.equal(e.FOO, '1');
+  assert.equal(wakeEnv('/r', { HOME: '/h', PATH: '/p' }).PATH, '/p');
+});
+test('recordWakePass appends one line and keeps the last 200 (issue #711)', async t => {
+  const { recordWakePass } = await import('../supervisor/wake.mjs'), root = tmp(t);
+  for (let i = 0; i < 205; i++) recordWakePass(root, { i });
+  const lines = fs.readFileSync(path.join(root, 'team', 'wake-passes.log'), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 200); assert.equal(JSON.parse(lines.at(-1)).i, 204);
+});

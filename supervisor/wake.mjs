@@ -43,18 +43,30 @@ function writeWake(root, s) {
 
 const ownerOf = dir => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'owner.json'), 'utf8')); } catch { return null; } };
 const live = o => !!o && Number.isFinite(o.pid) && processStart(o.pid) === o.start;
+// Release removes the lock only while it is still this process's own: after a takeover mishap the directory may belong to someone else.
+function releaseOwned(dir) {
+  const o = ownerOf(dir);
+  if (o && o.pid === process.pid && o.start === processStart(process.pid)) fs.rmSync(dir, { recursive: true, force: true });
+}
+// Private `.stale-*` directories left by a failed restore are removed once their owner is gone.
+function sweepAside(dir) {
+  const base = path.basename(dir) + '.stale-', parent = path.dirname(dir);
+  let names; try { names = fs.readdirSync(parent).filter(n => n.startsWith(base)); } catch { return; }
+  for (const n of names) { const d = path.join(parent, n); if (!live(ownerOf(d))) fs.rmSync(d, { recursive: true, force: true }); }
+}
 // A directory lock owned by this process, stale when the owner is gone. The directory appears with its owner file already inside (built
 // under a private name and renamed into place), so a contender never sees a lock without an owner and mistakes it for a stale one
 // (reviewed on PR #525). Returns a release function, or null while another live process holds it.
 export function dirLock(root, name, now = Date.now()) {
   const dir = path.join(root, 'team', name);
   fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
+  sweepAside(dir);
   for (let attempt = 0; attempt < 3; attempt++) {
     const mine = `${dir}.new-${process.pid}-${attempt}`;
     fs.rmSync(mine, { recursive: true, force: true });
     fs.mkdirSync(mine, { mode: 0o700 });
     fs.writeFileSync(path.join(mine, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid), at: now }), { mode: 0o600 });
-    try { fs.renameSync(mine, dir); return () => fs.rmSync(dir, { recursive: true, force: true }); }
+    try { fs.renameSync(mine, dir); return () => releaseOwned(dir); }
     catch (error) {
       fs.rmSync(mine, { recursive: true, force: true });
       if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error;
@@ -65,7 +77,9 @@ export function dirLock(root, name, now = Date.now()) {
     const aside = `${dir}.stale-${process.pid}-${attempt}`;
     try { fs.renameSync(dir, aside); } catch { continue; }
     const moved = ownerOf(aside);
-    if (live(moved)) { try { fs.renameSync(aside, dir); } catch { fs.rmSync(aside, { recursive: true, force: true }); } return null; }
+    // If the way back is taken meanwhile (a third contender filled the slot), the moved directory still belongs to a live owner: it is never
+    // deleted here (issue #711). It stays under its private name, and the next contender's sweep removes it once its owner is gone.
+    if (live(moved)) { try { fs.renameSync(aside, dir); } catch { /* left in place, see above */ } return null; }
     fs.rmSync(aside, { recursive: true, force: true });
   }
   return null;
@@ -129,8 +143,22 @@ export const workerArgs = ({ self, id, root, registry, defaultRegistry }) => [se
 
 // Start one detached pass runner on the installed code. Used by the supervisor CLI and by the dashboard server (which has no listening
 // port of its own to add: the wake is a local process start).
+// The environment of a woken pass: the requester's, with HOME and PATH made safe when the requester (a dashboard started by hand) lacks them,
+// as the gated cron script pins them (issue #40). Nothing else is added.
+export function wakeEnv(root, env = process.env) {
+  return { ...env, HOME: env.HOME || '/root', PATH: env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', AI_SUPERVISOR_STATE_ROOT: root };
+}
+// One line per woken pass in team/wake-passes.log (kept to the last 200 lines). Never the reconcile.log, which has a fixed format. Best effort.
+export function recordWakePass(root, entry) {
+  try {
+    const file = path.join(root, 'team', 'wake-passes.log');
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    let lines = []; try { lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); } catch { /* none yet */ }
+    lines.push(JSON.stringify(entry)); fs.writeFileSync(file, lines.slice(-200).join('\n') + '\n', { mode: 0o600 });
+  } catch { /* a log failure never stops a pass */ }
+}
 export function spawnDetachedPass({ root, reason, self, registry = null, spawnFn = spawn }) {
-  const child = spawnFn(process.execPath, wakeArgs({ target: wakeTarget({ root, self }), reason, root, registry }), { detached: true, stdio: 'ignore', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root } });
+  const child = spawnFn(process.execPath, wakeArgs({ target: wakeTarget({ root, self }), reason, root, registry }), { detached: true, stdio: 'ignore', env: wakeEnv(root) });
   child.on?.('error', () => {}); child.unref?.();
 }
 // A new overseer proposal arrives as a file in <inbox>/items/ (the existing write route, foreman-mcp/inbox.mjs). The dashboard server, which

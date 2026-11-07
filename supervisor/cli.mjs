@@ -34,7 +34,7 @@ import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
-import { requestWake, spawnDetachedPass, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
+import { requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -607,7 +607,8 @@ async function main() {
   if (command === 'reconcile' || command === 'daemon') {
     if (command === 'reconcile') {
       // Issue #406: one pass at a time, scheduled or woken (supervisor/wakepass.mjs). A scheduled fire that finds a pass running queues one more.
-      const out = await drivePass({ root, wake: a.wake && typeof a.wake === 'string' ? a.wake : null, spawnFollowUp: why => spawnPass(root, why), runPass: async pass => {
+      if (a.wake !== undefined && !(typeof a.wake === 'string' && TRIGGERS.includes(a.wake))) throw new SupervisorError(`unknown --wake value; use one of: ${TRIGGERS.join(', ')}`);
+      const out = await drivePass({ root, wake: a.wake || null, spawnFollowUp: why => spawnPass(root, why), runPass: async pass => {
         // Issue #448: the script no longer serialises whole runs, so recovery takes its own lock; a run that finds it held skips recovery.
         const unlockRecover = tickLock(root, 'reconcile.lock');
         let result;
@@ -629,6 +630,7 @@ async function main() {
         if (before.result === 'upgraded') wakeNextJob(root, 'install');
         return result;
       } });
+      if (a.wake) recordWakePass(root, { at: Date.now(), wake: a.wake, ran: out.ran, trigger: out.trigger || null, followUp: out.followUp || null, skipped: out.skipped || null, exit: process.exitCode || 0 });
       console.log(JSON.stringify(out.ran ? out.result : { skipped: out.skipped })); return;
     }
     // Run under a host service or tmux supervisor pane; this loop never invokes a model itself.
