@@ -31,16 +31,16 @@ test('mismatches: each of the four kinds is found, and a healthy view finds none
   assert.equal(mismatches(view(), NOW).count, 0);
   const v = view();
   v.issues = [{ number: 10, state: 'OPEN', reason: 'started earlier; no PR yet', labels: [] }, { number: 11, state: 'OPEN', reason: 'started earlier; no PR yet', labels: [] }, { number: 12, state: 'CLOSED', labels: ['needs-homeowner'] }, { number: 13, state: 'CLOSED', labels: [] }];
-  v.prs = [{ number: 20, status: 'open', issue: 11, needsHomeowner: false }, { number: 21, status: 'open', needsHomeowner: true, awaitingReview: false }, { number: 22, status: 'open', needsHomeowner: true, awaitingReview: true }, { number: 1, status: 'open', needsHomeowner: true, jobs: [{ fullId: NEW }] }];
-  v.jobs = [{ fullId: OLD, startedAt: NOW - 3600000, status: 'stopped' }, { fullId: NEW, startedAt: NOW - 60000, status: 'running', ref: 1 }];
-  v.panels.needsYou.push(card('reviewrefused-30', 30), card('noreviewer-refused-31', 31));
+  v.prs = [{ number: 20, status: 'open', issue: 11, needsHomeowner: false }, { number: 21, status: 'open', needsHomeowner: true, awaitingReview: false }, { number: 22, status: 'open', needsHomeowner: true, awaitingReview: true }, { number: 1, status: 'open', needsHomeowner: true, head: 'f'.repeat(40), jobs: [{ fullId: NEW }] }];
+  v.jobs = [{ fullId: OLD, startedAt: NOW - 3600000, status: 'stopped', head: 'e'.repeat(40) }, { fullId: NEW, startedAt: NOW - 60000, status: 'running', ref: 1 }];
+  v.panels.needsYou.push(card('reviewrefused-30', 30), card('noreviewer-refused-31', 31, { ref: 31 }));
   v.panels.needsYou[0] = card('homeowner-pr-1', 1, { tried: `Foreman labelled this PR needs-homeowner because job ${OLD.slice(0, 8)} stopped` });
   const m = mismatches(v, NOW), by = k => m.items.filter(i => i.kind === k).map(i => i.ref);
   assert.deepEqual(by('implemented-without-pr'), ['issue #10'], 'issue 11 has a PR; 13 is not flagged');
   assert.deepEqual(by('finished-not-recorded'), ['pr #30', 'pr #31']);
   assert.deepEqual(by('stale-label').sort(), ['issue #12', 'pr #21'], 'a PR awaiting review (22) or with a card (1) is not stale');
   assert.deepEqual(by('hold-by-old-job'), ['pr #1']);
-  assert.match(m.items.find(i => i.kind === 'hold-by-old-job').what, /newer job/);
+  assert.match(m.items.find(i => i.kind === 'hold-by-old-job').what, /head has moved/);
 });
 
 test('mismatches: a hold by a job over 24 hours old with no newer job is found; a recent one is not', () => {
@@ -109,4 +109,32 @@ test('rebase stats (#633): carried verdicts are not reviews; the merge entry is 
   assert.equal(s.all.reviews.total, 2); assert.equal(s.all.reviews.carriedTotal, 6);
   assert.equal(s.all.openToMergeHours.measured, 1, 'a PR whose only entry is the merge has no duration');
   assert.equal(s.all.openToMergeHours.median, 6);
+});
+
+test('a bare numeric ref (noreviewer-refused) is read as a pull request in both tools', () => {
+  const v = view(); v.panels.needsYou.push(card('noreviewer-refused-31', 31, { ref: 31 }));
+  assert.deepEqual(mismatches(v, NOW).items.filter(i => i.kind === 'finished-not-recorded').map(i => i.ref), ['pr #31']);
+  assert.ok(needsYouGroups(v).groups.find(g => g.cause === 'noreviewer-refused').refs.includes('pr #31'));
+});
+
+test('causeOf keeps decisions apart and merges agent-suffixed ids', () => {
+  assert.notEqual(causeOf('decision-D-020'), causeOf('decision-D-024'));
+  assert.equal(causeOf('pause-claude'), causeOf('pause-codex')); assert.equal(causeOf('idle-claude'), 'idle');
+  assert.equal(causeOf('homeowner-pr-538'), 'homeowner-pr');
+});
+
+test('hold-by-old-job: a newer job on the same head does not overtake the hold; a moved head does; an unknown held job is reported', () => {
+  const v = view(), H = 'e'.repeat(40);
+  v.prs = [{ number: 1, status: 'open', needsHomeowner: true, head: H, jobs: [{ fullId: NEW }] }];
+  v.panels.needsYou[0] = card('homeowner-pr-1', 1, { tried: `because job ${OLD.slice(0, 8)} stopped` });
+  v.jobs = [{ fullId: OLD, startedAt: NOW - 3600000, status: 'stopped', head: H }, { fullId: NEW, startedAt: NOW - 60000, status: 'done', head: H }];
+  assert.equal(mismatches(v, NOW).count, 0, 'a newer review job on the same head is not an overtake');
+  v.prs[0].head = 'f'.repeat(40); assert.equal(mismatches(v, NOW).items.filter(i => i.kind === 'hold-by-old-job').length, 1);
+  v.jobs = []; const m = mismatches(v, NOW); assert.equal(m.count, 0); assert.equal(m.notChecked.length, 1);
+});
+
+test('stale-label: an issue card with the same number does not hide a labelled PR', () => {
+  const v = view(); v.panels.needsYou = [card('homeowner-77', 77, { ref: { kind: 'issue', n: 77 } })];
+  v.prs = [{ number: 77, status: 'open', needsHomeowner: true, awaitingReview: false }];
+  assert.deepEqual(mismatches(v, NOW).items.filter(i => i.kind === 'stale-label').map(i => i.ref), ['pr #77']);
 });
