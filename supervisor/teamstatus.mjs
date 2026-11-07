@@ -134,7 +134,8 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   } catch { /* no state file: nothing installed by the loop yet */ }
   let installed = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); installed = m ? m[1].slice(0, 7) : null; } catch { /* not a versioned install */ }
-  return { testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
+  const robustness = view.robustness;
+  return { robustness, testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {
@@ -163,6 +164,13 @@ export function renderStatus(s) {
   if (!s.estimates.items.length) out.push('  nothing queued');
   for (const e of s.estimates.items) out.push(`  ${e.name} (${e.agent}): ${e.text}${e.waits.length ? ` [${e.waits.join('; ')}]` : ''}`);
   for (const w of s.estimates.waits) out.push(`  wait: ${w.text}`);
+  if (s.robustness) {
+    head('Job liveness and retries');
+    out.push(`  jobs with no activity for ${s.robustness.limitMinutes} minutes are cancelled and requeued`);
+    for (const j of s.robustness.running) out.push(`  job ${j.id} (${j.kind || 'job'}): last activity ${j.idleMs == null ? 'unknown' : `${mins(j.idleMs)} min ago`}`);
+    for (const r of s.robustness.retries) out.push(`  ${r.key}: ${r.count} attempt${r.count === 1 ? '' : 's'} with cause ${r.cause}${r.capped ? ' (stopped, in Needs you)' : ''}`);
+    if (s.robustness.rearm) out.push(`  re-armed after ${s.robustness.rearm.scopes.join(', ')} cleared: ${s.robustness.rearm.items.join(', ')}`);
+  }
   head('Problems');
   if (!s.problems.length) out.push('  none');
   for (const p of s.problems) out.push(`  - ${p.text}`);

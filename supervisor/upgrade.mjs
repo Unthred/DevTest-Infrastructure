@@ -11,6 +11,7 @@ import os from 'node:os';
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
+import { readRearm, rearmUpgradeState } from './robust.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
@@ -402,6 +403,8 @@ export class SelfUpgrade {
     if (this.s.pending) return 'awaiting-verification';
     const from = this.d.installed();
     if (!from) return 'not-versioned';
+    // Issue #995: a halt or breaker that cleared re-arms every wait, the install's included, so nothing waits on a backoff earned before the recovery.
+    { const re = rearmUpgradeState(this.s, readRearm(this.root), this.clock.now()); if (re.length) { this.s.rearmed = { at: this.clock.now(), items: re }; this.save(); } }
     if (this.s.lastUpgradeAt && this.clock.now() - this.s.lastUpgradeAt < MIN_UPGRADE_INTERVAL_MS) {
       // Issue #331: the rate limit holds back the upgrade, not the display. Refresh main every tick so the header never claims "Up to date" on a stale ref.
       if (!(this.s.fetchRetryAt && this.clock.now() < this.s.fetchRetryAt)) { try { this.noteMain(from, this.d.fetchMain()); } catch { const n = (this.s.fetchFailures || 0) + 1; this.s.fetchFailures = n; this.s.fetchRetryAt = this.clock.now() + envBackoffMs(n); this.save(); /* display only: back off like the upgrade path */ } }

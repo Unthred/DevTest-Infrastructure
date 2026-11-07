@@ -9,7 +9,7 @@ import { redact } from './redact.mjs';
 import { prerequisites, pullPrerequisites } from './team.mjs';
 
 // Lower is more specific: the primary cause of a merged item is the lowest-ranked one present.
-const RANK = ['breaker', 'fixlimit', 'reviewlimit', 'reviewrefused', 'noreviewer-refused', 'noreviewer', 'selfcheck', 'homeowner-pr', 'decision-proposal', 'stalled', 'job', 'homeowner', 'split', 'prclosed', 'rebase-lost', 'stale-mark', 'ci'];
+const RANK = ['breaker', 'fixlimit', 'retrycap', 'reviewlimit', 'reviewrefused', 'noreviewer-refused', 'noreviewer', 'selfcheck', 'homeowner-pr', 'decision-proposal', 'stalled', 'job', 'homeowner', 'split', 'prclosed', 'rebase-lost', 'stale-mark', 'ci'];
 const rankOf = id => { const i = RANK.findIndex(p => id === p || id.startsWith(p + '-')); return i < 0 ? RANK.length : i; };
 // Items about the whole system block everything: they sort ahead of any single pull request or issue.
 const SYSTEM_BLOCKS = 1e6;

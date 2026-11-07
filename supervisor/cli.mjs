@@ -5,6 +5,8 @@ import { queueHomeownerRequest } from './homeownerqueue.mjs';
 import { resumeAllowed } from './breaker.mjs';
 import { rangeEqual } from './rangediff.mjs';
 import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
+import { transcriptFile } from './transcript.mjs';
+import { transcriptMtime } from './robust.mjs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -126,11 +128,12 @@ function realJobs(root, registry) {
       startWorker(root, id, registry);
     },
     // Issue #629: the homeowner's approved stop, the same steps as `ai-supervisor stop ID`
-    stop: async id => {
+    transcriptMtime: async id => transcriptMtime(transcriptFile(root, id)),   // issue #995: the job's heartbeat
+    stop: async (id, reason = 'manual_stop') => {
       const job = readJob(root, id);
       if (terminal.has(job.status)) throw new SupervisorError('terminal job cannot be stopped');
       if (job.workerPid && processStart(job.workerPid) === job.workerStart) process.kill(job.workerPid, 'SIGTERM');
-      transition(root, job, 'stopped', 'manual_stop');
+      transition(root, job, 'stopped', /^[a-z_]{1,32}$/.test(reason) ? reason : 'manual_stop');
     },
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
@@ -143,6 +146,8 @@ function realGit(repoPath) {
     // issue #158: the commits a rebase carried and the ones it dropped (by patch-id), checked again by the dispatcher after the job
     checkRebase: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return checkRebase({ repoPath, base, oldHead, newHead }); },
     // issue #302: true only when git can prove the worktree has no uncommitted work (tracked or untracked); anything else is false/null
+    // issue #995: a read-only dry-run merge (no worktree, no ref changes); conflicts is true when git reports a conflict
+    mergeProbe: async ({ branch, base }) => { git('fetch', '--quiet', 'origin'); const r = spawnSync('git', ['-C', repoPath, 'merge-tree', '--write-tree', '--quiet', `origin/${base}`, `origin/${branch}`], { encoding: 'utf8', timeout: 120000 }); if (r.status === 0) return { conflicts: false }; if (r.status === 1) return { conflicts: true }; return null; },
     isClean: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 ? r.stdout.trim() === '' : null; },
     // issue #610: the branch the worktree has checked out (null when detached or unknown)
     currentBranch: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null; },

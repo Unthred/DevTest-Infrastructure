@@ -435,6 +435,17 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   return items;
 }
 
+// Issue #995: job liveness (limit and last activity per running job), retry counts by cause, and what a recovery re-armed.
+export function robustnessView(state, team, jobs, now) {
+  const live = team.livenessView?.() || { limitMs: 0, running: {}, cancelled: [] };
+  const running = (jobs || []).filter(j => j.status === 'running').map(j => {
+    const id = String(j.id).slice(0, 8), at = live.running?.[id]?.lastActivityAt ?? null;
+    return { id, kind: j.kind ?? null, lastActivityAt: at, idleMs: Number.isFinite(at) ? Math.max(0, now - at) : null };
+  });
+  const retries = Object.entries(state.sameCause || {}).map(([k, v]) => ({ key: k, cause: v.cause, count: v.count, capped: (team.retryCapItems?.() || []).some(i => i.subject === k.slice(k.indexOf(':') + 1) && i.type === k.slice(0, k.indexOf(':'))) }));
+  const rearm = state.rearm || null, up = (() => { try { return JSON.parse(fs.readFileSync(path.join(team.root || '', 'team', 'self-upgrade.json'), 'utf8')).rearmed || null; } catch { return null; } })();
+  return { limitMinutes: Math.round((live.limitMs || 0) / 60000), running, cancelled: (live.cancelled || []).slice(-5), retries, rearm: rearm ? { at: rearm.at, scopes: rearm.scopes, items: [...(rearm.items || []), ...(up?.items || [])] } : null };
+}
 // Issue #259: PRs that made no progress past the limit. Read from the stored result of the tick's stall check, so a PR that has since
 // moved, merged or closed is dropped here at once. PRs stalled for the same set of reasons share one item, and a PR that already has an
 // item of its own (any item whose ref is that PR, or the decision hold) gets none. A failed check is its own item.
@@ -705,6 +716,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     for (const e of Object.values(team.stale || {})) attention.push({ id: `stale-mark-${e.issue}`, text: redact(`Issue #${e.issue}: ${team.staleText(e.issue).replace(/^stuck: /, '')}.`, 300), ref: { kind: 'issue', n: e.issue }, since: e.markedAt, severity: 'action', action: `If it should be implemented again, run: team reopen ${e.issue}. Otherwise close the issue or leave it.` });
     // Issue #630: mismatches between Foreman's records and GitHub or the running jobs that it cannot fix safely; one item each while it lasts.
     for (const it of team.selfCheckItems?.() || []) attention.push({ id: it.id, text: redact(it.text, 400), ref: Number.isSafeInteger(it.ref) ? { kind: 'pull', n: it.ref } : it.ref, since: it.since, severity: 'action', action: it.action });
+    // Issue #995: a job type that failed again with the same cause stops and waits here, using no more tokens.
+    for (const it of team.retryCapItems?.() || []) attention.push({ id: it.id, text: redact(`${it.type} on #${it.subject} stopped after ${it.attempts} attempts with the same cause (${it.cause}); Foreman starts no more until the head changes or you decide.`, 400), ref: { kind: ['implement', 'continue'].includes(it.type) ? 'issue' : 'pull', n: Number(it.subject) }, since: it.since, severity: 'action', action: 'Fix the cause or reopen the item by hand' });
     // Issue #547: a finished review whose verdict was refused at ingestion (writer unknown, or the reviewer's model wrote the head).
     for (const r of team.refusedVerdicts(c.pulls || [])) attention.push({ id: `noreviewer-refused-${r.pr}`, text: redact(`The review of PR #${r.pr} at ${String(r.head).slice(0, 7)} (job ${String(r.job).slice(0, 8)}, ${r.agent} on ${r.model || 'its default model'}) finished but its verdict was not recorded: ${r.text}. Verdict file: ${r.file}${r.kept ? keptText(r.kept) : ''}`, 1400), ref: { kind: 'pull', n: r.pr }, severity: 'action', action: r.reason === 'writer unknown' ? `Have a reviewer on another provider review PR #${r.pr} at this head, or push a new head through a Foreman job and have that new head reviewed; this refused verdict is not recorded.` : `Have a different model review PR #${r.pr} at this head (the refused verdict in the file above is not recorded and is not trusted).` });
     // Issue #326: queued or conflicting work, but nothing planned or started for idle_minutes; clears when a job starts.
@@ -743,6 +756,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
       budget,
       attention,
+      robustness: robustnessView(state, team, jobs, now),
       breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL },
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots: history?.chartSnapshots || snapshots, now, windowMs: history?.chartSnapshots ? Infinity : 30 * DAY }),
