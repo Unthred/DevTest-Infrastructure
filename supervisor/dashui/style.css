@@ -102,6 +102,16 @@ figure.chart svg{width:100%;height:auto;display:block;flex:none}
 .chart .gridline{stroke:var(--line);stroke-width:1}.chart .ax{fill:var(--mut);font-size:11px}
 .chart .reset{stroke:var(--action);stroke-dasharray:4 4;opacity:.7}.chart .reset.expected{stroke:var(--mut);stroke-dasharray:2 5}
 .chart [data-series].off{display:none}
+/* alternative styles (issue #926): each layer lists the styles that draw it; legend position is a per-figure choice */
+.chart [data-ly]{display:none}
+.chart[data-style=line] [data-ly~=line],.chart[data-style=area] [data-ly~=area],.chart[data-style=step] [data-ly~=step],.chart[data-style=stack] [data-ly~=stack],.chart[data-style=bars] [data-ly~=bars]{display:inline}
+.chart [data-series].off [data-ly]{display:none!important}
+.chart-opts{display:flex;flex-wrap:wrap;gap:var(--sp2);margin-bottom:var(--sp2);font-size:var(--fs-xs);color:var(--mut)}
+.chart-opts select{font:inherit;color:var(--fg);background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:2px 6px;min-height:28px}
+figure.chart[data-legend=top]{flex-direction:column-reverse}figure.chart[data-legend=top] .legend{margin:0 0 var(--sp2)}
+figure.chart[data-legend=right]{flex-direction:row;align-items:flex-start;gap:var(--sp2)}figure.chart[data-legend=right] svg{flex:1 1 0;min-width:0}
+figure.chart[data-legend=right] .legend{flex-direction:column;flex-wrap:nowrap;margin:0}
+figure.chart[data-legend=hidden] .legend{display:none}
 .chart .pt{opacity:0}.chart .pt:hover,.chart .pt:focus{opacity:1}
 .legend{display:flex;flex-wrap:wrap;gap:var(--sp2);margin-top:var(--sp2)}
 .legend button{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:var(--fs-xs);color:var(--fg);background:var(--surface2);border:1px solid var(--line);border-radius:999px;padding:4px 12px;min-height:32px;cursor:pointer}

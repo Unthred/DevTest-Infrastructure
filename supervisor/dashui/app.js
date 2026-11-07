@@ -3,6 +3,7 @@
 // scroll restoration (all saved per breakpoint, in this browser only). Its one write is the inbox decision (issue #856: Approve, Reject, Undo post to /inbox with the page's access proof); its only other network read is the same-origin GET /api/next (the app bar's Next element), polled while a tick is due or running.
 import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnly, applyLayout, breakpointOf, copyFeedback, copyMethods, debounce, dockFromPoint, effectiveDock, mergeTableParams, moveItem, restorableScroll, sanitizeCollapsed, showBackToTop, tableChange, toggleCollapsed } from './logic.mjs';
 import { initLegends } from './legend.mjs';
+import { initChartOptions } from './chartopts.mjs';
 import { COLS, MIN_W, ROW_PITCH, canHide, compact, dragRect, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { watchLists } from './lists-ui.mjs';
 import { postDecision, runDecision, lowerCount, OUTCOME_TEMPLATE } from './inbox-ui.mjs';
@@ -106,6 +107,7 @@ tickClock(); setInterval(tickClock, 1000);
 // kept per viewer and page in localStorage and re-applied after the page's own refresh; "Reset layout" clears it.
 const legendKey = 'dash.legend.' + location.pathname;
 initLegends({ document, store, legendKey });
+initChartOptions({ document, store });   // style and legend position per chart (issue #926)
 
 // expand a chart card to a modal
 let scrim = null;
@@ -620,6 +622,33 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
   });
 }
 
+// Changing the range on a chart updates the chart cards in place (issue #926): fetch the same page, swap each chart card's title, range
+// selector and chart, and keep the scroll position. Any failure falls back to a normal navigation, which restores the scroll position.
+let rangeSeq = 0;
+async function loadRange(url) {
+  const seq = ++rangeSeq, y = scrollY, target = url.pathname + url.search;
+  try {
+    const res = await fetch(target, { headers: { accept: 'text/html' }, credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    if (seq !== rangeSeq) return;   // a newer choice superseded this one
+    const fresh = [...doc.querySelectorAll('.card.chart-card')];
+    const swaps = $$('.card.chart-card').map(c => [c, fresh.find(n => n.dataset.card === c.dataset.card)]).filter(([, n]) => n && $('header', n));
+    if (!swaps.some(([c, n]) => $('.ranges', c) && $('.ranges', n))) throw new Error('no range selector');
+    for (const [c, n] of swaps) {
+      $('h2', c).textContent = $('h2', n).textContent;
+      const sel = $('.ranges', c), nsel = $('.ranges', n); if (sel && nsel) sel.replaceWith(nsel);
+      const head = $('header', c); while (head.nextSibling) head.nextSibling.remove();
+      for (let el = $('header', n).nextSibling; el; el = el.nextSibling) c.append(el.cloneNode(true));
+      initLegends({ document, root: c, store, legendKey });
+      initChartOptions({ document, root: c, store });
+      localizeTimes(c);
+    }
+    history.replaceState(history.state, '', target + url.hash);
+    if (scrollY !== y) scrollTo(scrollX, y);
+  } catch { if (seq === rangeSeq) fallbackNavigate(target); }
+}
+
 // remembered time range, per viewer (issue #140). The server renders the default (7d) when the address has no range; the saved choice is
 // applied by reloading once with it in the address, and a click on a range saves it.
 {
@@ -628,6 +657,14 @@ $('[data-nav-collapse]')?.addEventListener('click', () => { store.set('dash.navr
     const want = chooseRange(store.get('dash.range'), q.get('range'));
     if (!q.has('range') && want !== cur && links.some(a => a.textContent.trim() === want)) { q.set('range', want); location.replace(location.pathname + '?' + q + location.hash); }
     for (const a of links) a.addEventListener('click', () => store.set('dash.range', a.textContent.trim()));
+    // a range link inside a chart card updates the charts in place instead of reloading (issue #926); delegated, as the links are swapped
+    document.addEventListener('click', e => {
+      const a = e.target.closest?.('.chart-card [aria-label="Time range"] a[href]');
+      if (!a || e.defaultPrevented || e.button > 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const u = new URL(a.href, location.href); if (u.origin !== location.origin || u.pathname !== location.pathname) return;
+      store.set('dash.range', a.textContent.trim());
+      e.preventDefault(); loadRange(u);
+    });
     if (q.has('range') && cur) store.set('dash.range', cur);
   }
 }
