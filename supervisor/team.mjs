@@ -510,7 +510,7 @@ const verdictKey = (pr, head) => `${pr}:${head}`;
 
 export function validateVerdict(v, expect) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return 'verdict is not an object';
-  if (Object.keys(v).some(k => !['pr', 'headSha', 'verdict', 'findings', 'commandsRun', 'requirements', 'descriptionClaims'].includes(k))) return 'verdict has an unknown field';
+  if (Object.keys(v).some(k => !VERDICT_FIELDS.includes(k))) return 'verdict has an unknown field';
   if (v.pr !== expect.pr) return 'verdict is for a different PR';
   if (!SHA.test(v.headSha || '') || v.headSha !== expect.head) return 'verdict is for a different head';
   if (!['PASS', 'CHANGES'].includes(v.verdict)) return 'verdict must be PASS or CHANGES';
@@ -578,17 +578,71 @@ const materialFalse = claims => claims.filter(c => c.status === 'false' && c.mat
 const checklistText = v => (v.requirements ? `\n\nRequirements:\n${v.requirements.map(r => `- **${r.status}**: ${r.requirement} — ${r.evidence}`).join('\n') || '_none_'}\n\nPull request description claims:\n${v.descriptionClaims.map(c => `- **${c.status}**: ${c.claim} — ${c.evidence}`).join('\n') || '_none_'}\n\n` : '');
 export const VERDICT_REFUSED = 'verdict refused:';
 export const VALIDATOR_FAULT = 'validator fault:';
-export function readInboxVerdict(root, ticket, expect) {
-  if (!/^[a-f0-9]{32}$/.test(ticket || '')) return { error: 'invalid ticket' };
-  const file = path.join(root, 'team', 'inbox', ticket, 'verdict.json');
-  let v;
-  try { v = JSON.parse(fs.readFileSync(file, 'utf8')); }
-  catch (error) { return { error: error.code === 'ENOENT' ? 'no verdict file' : 'unreadable verdict file' }; }
+// Issue #1056: the one code path that judges a verdict file. Ingest and `ai-supervisor verdict-check` both call it, so they cannot drift.
+// Returns { verdict } when the file is valid (after any mechanical repair), else { error } naming the first failing field.
+export const VERDICT_FIELDS = ['pr', 'headSha', 'verdict', 'findings', 'commandsRun', 'requirements', 'descriptionClaims'];
+const editDistance = (a, b) => {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+};
+// Issue #1056: a mechanical, unambiguous repair of a top-level verdict object. Only two kinds exist: a short or upper-case headSha that is
+// a prefix of the reviewed head (at least 7 hex digits), and an unknown field name that is a case/punctuation variant of, or one edit away
+// from, exactly one known field that is not already present. Nothing about the verdict's meaning, findings or status is ever changed, and the
+// caller applies a repair only when the repaired file then passes full validation.
+export function repairVerdict(v, expect) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return { v, repairs: [] };
+  const out = { ...v }, repairs = [];
+  const norm = k => k.toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const k of Object.keys(v)) {
+    if (VERDICT_FIELDS.includes(k)) continue;
+    const near = VERDICT_FIELDS.filter(f => !(f in v) && !(f in out) && (norm(f) === norm(k) || editDistance(norm(f), norm(k)) === 1));
+    const exact = near.filter(f => norm(f) === norm(k));
+    const pick = exact.length === 1 ? exact : near;
+    if (pick.length === 1) { out[pick[0]] = out[k]; delete out[k]; repairs.push(`field ${k.slice(0, 40)} renamed to ${pick[0]}`); }
+  }
+  const h = out.headSha;
+  if (typeof h === 'string' && h !== expect.head && /^[0-9a-fA-F]{7,39}$/.test(h) && SHA.test(expect.head || '') && expect.head.startsWith(h.toLowerCase())) {
+    out.headSha = expect.head; repairs.push(`headSha ${h.slice(0, 12)} expanded to the reviewed head`);
+  }
+  return { v: out, repairs };
+}
+function judgeVerdict(raw, expect) {
+  let v = raw, error;
   // Issue #631: an exception inside the validator is Foreman's own fault, not the reviewer's; it is named so it is not charged to the pull request.
-  let error;
   try { v = reclassifyFalseClaims(v); error = validateVerdict(v, expect); }
   catch (e) { return { error: VALIDATOR_FAULT + ' ' + String(e?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48), fault: true }; }
   return error ? { error } : { verdict: v };
+}
+export function checkVerdictFile(file, expect, { repair = false } = {}) {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { return { error: error.code === 'ENOENT' ? 'no verdict file' : 'unreadable verdict file' }; }
+  const first = judgeVerdict(raw, expect);
+  if (!first.error || first.fault) return first;
+  const fixed = repairVerdict(raw, expect);
+  if (!fixed.repairs.length) return first;
+  const second = judgeVerdict(fixed.v, expect);
+  if (second.error) return first;   // a repair that does not make the file valid is not applied
+  if (repair) {
+    try {
+      const dir = path.dirname(file);
+      fs.copyFileSync(file, path.join(dir, 'verdict.original.json'));
+      fs.writeFileSync(file, JSON.stringify(fixed.v, null, 2) + '\n');
+      fs.writeFileSync(path.join(dir, 'verdict.repairs.json'), JSON.stringify({ repairs: fixed.repairs }) + '\n');
+    } catch { return first; }   // if the repair cannot be recorded, it is not applied
+  }
+  return { ...second, repairs: fixed.repairs };
+}
+export function readInboxVerdict(root, ticket, expect) {
+  if (!/^[a-f0-9]{32}$/.test(ticket || '')) return { error: 'invalid ticket' };
+  const file = path.join(root, 'team', 'inbox', ticket, 'verdict.json');
+  const r = checkVerdictFile(file, expect, { repair: true });
+  if (r.verdict && !r.repairs) {   // a repair made by the post-condition earlier is already on disk; keep reporting it
+    try { const prior = JSON.parse(fs.readFileSync(path.join(path.dirname(file), 'verdict.repairs.json'), 'utf8')); if (Array.isArray(prior.repairs)) r.repairs = prior.repairs.map(x => String(x).slice(0, 200)).slice(0, 10); } catch { /* none */ }
+  }
+  return r;
 }
 // Issue #631: what can still be read from a verdict file the validator refused: its verdict word and well-formed findings, redacted and
 // bounded. Nothing here is trusted or posted as a verdict; it only lets the homeowner see what the reviewer found.
@@ -643,7 +697,7 @@ export function reviewPrompt(job) {
     ? ' You are a second-opinion reviewer: the primary review already passed. This pull request touches paths the homeowner marked for an extra look; you have none of the implementer\'s session or reasoning, so review it as a sceptical outsider.'
     : job.postMerge ? ' This pull request is already merged; review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.'
     : ' You have none of the implementer\'s session or reasoning; review as a sceptical outsider and run the tests yourself.';
-  return `${COMMON}${role}${moved}${decided} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${REVIEW_TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation, ${STANDARDS_BLOCKING} or a failed acceptance criterion or a missing step; otherwise use follow-up. ${DONE_RULE} ${reqs} Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]${job.requirementsFile ? ', "requirements": [{"requirement": "text", "status": "met" or "not-met" or "not-applicable", "evidence": "where in the diff"}], "descriptionClaims": [{"claim": "text", "status": "true" or "false" or "unverifiable", "evidence": "where in the diff", "materiality": "material" or "immaterial" (optional; immaterial only for a false claim, with "reason")}]' : ''}}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
+  return `${COMMON}${role}${moved}${decided} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${REVIEW_TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation, ${STANDARDS_BLOCKING} or a failed acceptance criterion or a missing step; otherwise use follow-up. ${DONE_RULE} ${reqs} Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]${job.requirementsFile ? ', "requirements": [{"requirement": "text", "status": "met" or "not-met" or "not-applicable", "evidence": "where in the diff"}], "descriptionClaims": [{"claim": "text", "status": "true" or "false" or "unverifiable", "evidence": "where in the diff", "materiality": "material" or "immaterial" (optional; immaterial only for a false claim, with "reason")}]' : ''}}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. After writing it, run /root/bin/ai-supervisor verdict-check ${job.inbox}/verdict.json --pr ${job.pr} --head ${job.head}${job.requirementsFile ? ' --checklist' : ''} (the exact validation the dispatcher applies) and fix every error it prints, then run it again until it prints OK, before you finish; a verdict the dispatcher rejects wastes the whole review. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
 }
 export function escalationNote(inbox) {
   if (!inbox) return '';
@@ -2490,8 +2544,9 @@ export class Team {
           // A second opinion never replaces the primary PASS; its CHANGES does (the fix loop then runs as for any rejected head).
           if (j.secondOpinion) { this.s.secondOpinions[verdictKey(j.pr, j.head)] = entry; if (r.verdict.verdict === 'CHANGES') this.s.verdicts[verdictKey(j.pr, j.head)] = entry; }
           else { this.s.verdicts[verdictKey(j.pr, j.head)] = entry; this.finishReReview(j.pr, j.head, entry); }
+          if (r.repairs?.length) j.verdictRepairs = r.repairs;
           j.ingested = true; this.save();
-          report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });
+          report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict, ...(r.repairs?.length ? { repaired: r.repairs } : {}) });
           return;
         } else { j.refusal = breaker.verdictErrorCode(r.error); report.ingested.push({ job: id, pr: j.pr, error: r.error }); }
       }

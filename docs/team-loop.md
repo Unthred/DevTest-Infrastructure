@@ -314,3 +314,11 @@ An attempt is a real try at the work. A job stopped by a sign-in problem, a laun
 - **The homeowner hears once.** One Needs you item per parked agent (`agentfault-<agent>`), raised only when the fault has lasted 30 minutes. It names the cause, since when, the items waiting and the fix (for a sign-in problem: sign the named CLI in on Tower), and clears itself when the check passes.
 - **Install.** Retry caps whose cause is an infrastructure cause (`auth_error`, `preflight_failed`, `network_error`, `usage_limit`, `transient_rate_limit`) are cleared once, one report line each (`infraCapsCleared`).
 - **Status.** `foreman_status` (`infraFaults`) and the dashboard's robustness view list fault counts, parked agents and recent faults apart from the work failure causes.
+
+## Check the verdict before the review ends (issue #1056)
+
+A review whose verdict file ingest rejects used to end blocked and be rerun in full. Three changes stop that loss:
+
+- `ai-supervisor verdict-check FILE --pr N --head SHA [--checklist]` runs exactly the validation ingest runs (`checkVerdictFile` in `supervisor/team.mjs`, the one shared code path: fields, headSha, requirements, descriptionClaims). It prints `OK`, or the first error with the field named and exits 1. Like `rebase-prepare`, its flags may be added to but not renamed.
+- The review prompt tells the reviewer to run it after writing `verdict.json` and to fix every error before finishing.
+- When ingest still rejects a file and the fix is mechanical and unambiguous, Foreman repairs it locally before any second agent run: a headSha that is a prefix (at least 7 hex digits) of the reviewed head is expanded, and an unknown top-level field that is a case/punctuation variant of, or one edit away from, exactly one known missing field is renamed. A repair is applied only if the repaired file then passes full validation; findings, status and verdict are never altered. The original is kept as `verdict.original.json`, the repairs are listed in `verdict.repairs.json`, and the ingest report and job record (`verdictRepairs`) name them. Anything ambiguous is refused as before.

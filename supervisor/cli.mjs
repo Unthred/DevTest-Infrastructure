@@ -20,7 +20,7 @@ import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, record
 import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
 import { acquireTestSlot, recordTestEvent, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup, formatRuntime } from './testslots.mjs';
 import { upgradeLock } from './team.mjs';
-import { Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, tickLockWait, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
+import { checkVerdictFile, Team, checksState, retriedIn, loadTeamConfig, validateTeamConfig, applyLocalOverride, tickLock, tickLockWait, decisionApproved, INDEPENDENCE_DECISION } from './team.mjs';
 import { githubClient } from './github.mjs';
 import { changeCheckOf, checkForChanges, ghProbeRunner, loadCache, saveCache, buildCache, cachedGithub } from './ghchange.mjs';
 import { publishStatusIssue } from './statusissue.mjs';
@@ -52,7 +52,7 @@ function args(list) {
     const arg = list[i];
     if (!arg.startsWith('--')) { out._.push(arg); continue; }
     const key = arg.slice(2);
-    if (['auto-resume', 'foreground', 'force', 'dry-run', 'json', 'no-github', 'no-reuse'].includes(key)) out[key] = true;
+    if (['auto-resume', 'foreground', 'force', 'dry-run', 'json', 'no-github', 'no-reuse', 'checklist'].includes(key)) out[key] = true;
     else if (key === 'no-auto-resume') out[key] = false;
     else out[key] = list[++i];
   }
@@ -388,8 +388,16 @@ async function main() {
   const registry = path.resolve(a.registry || defaultRegistry);
   registryOption = a.registry ? registry : null;   // only an operator-given registry is passed on (issue #406)
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
+    console.log('ai-supervisor verdict-check FILE --pr N --head SHA [--checklist]\n  dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
     return;
+  }
+  // Issue #1056: the same validation ingest runs on a verdict file, so a reviewer can fix an error before the job ends.
+  if (command === 'verdict-check') {
+    const file = a._?.[0];
+    if (!file || !Number.isSafeInteger(Number(a.pr)) || !/^[0-9a-f]{40}$/.test(a.head || '')) throw new SupervisorError('usage: verdict-check FILE --pr N --head FULL_SHA [--checklist]');
+    const r = checkVerdictFile(path.resolve(file), { pr: Number(a.pr), head: a.head, checklist: a.checklist === true });
+    if (r.error) { console.error(`verdict-check: ${r.error}`); process.exitCode = 1; return; }
+    console.log(r.repairs?.length ? `OK (the dispatcher would repair: ${r.repairs.join('; ')}; fix the file anyway)` : 'OK'); return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
   if (command === 'rebase-prepare') {

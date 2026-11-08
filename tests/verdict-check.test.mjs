@@ -1,0 +1,94 @@
+// Issue #1056: verdict-check and ingest share one validation path; mechanical repairs; the prompt asks for the check.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { checkVerdictFile, readInboxVerdict, repairVerdict, validateVerdict, reviewPrompt } from '../supervisor/team.mjs';
+
+const HEAD = 'a1b2c3d4e5'.repeat(4);
+const good = () => ({ pr: 7, headSha: HEAD, verdict: 'PASS', findings: [], commandsRun: ['node --test'] });
+const expect = { pr: 7, head: HEAD, checklist: false };
+const tmp = () => fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'vc-'));
+const write = (obj) => { const d = tmp(); const f = path.join(d, 'verdict.json'); fs.writeFileSync(f, typeof obj === 'string' ? obj : JSON.stringify(obj)); return f; };
+const cli = (f, extra = []) => spawnSync(process.execPath, ['supervisor/cli.mjs', 'verdict-check', f, '--pr', '7', '--head', HEAD, ...extra], { encoding: 'utf8' });
+
+test('a valid file passes and an invalid file fails naming the field', () => {
+  assert.ok(checkVerdictFile(write(good()), expect).verdict);
+  assert.match(checkVerdictFile(write({ ...good(), commandsRun: [] }), expect).error, /commandsRun/);
+  assert.match(checkVerdictFile(write({ ...good(), verdict: 'MAYBE' }), expect).error, /verdict must be/);
+  assert.match(checkVerdictFile(write({ ...good(), pr: 8 }), expect).error, /different PR/);
+  assert.equal(checkVerdictFile(write('{nope'), expect).error, 'unreadable verdict file');
+});
+
+test('the CLI and the ingest read agree on a fixture set', () => {
+  const fixtures = [good(), { ...good(), commandsRun: [] }, { ...good(), headSha: 'f'.repeat(40) }, { ...good(), extra: 1 }, { ...good(), headSha: HEAD.slice(0, 8) },
+    { pr: 7, headSha: HEAD, verdict: 'PASS', findings: [], commandsRun: ['x'], requirement: [] }];
+  for (const v of fixtures) {
+    const f = write(v), copy = write(v);
+    const c = cli(f);
+    const ticket = 'e'.repeat(32), root = tmp();
+    fs.mkdirSync(path.join(root, 'team', 'inbox', ticket), { recursive: true });
+    fs.copyFileSync(copy, path.join(root, 'team', 'inbox', ticket, 'verdict.json'));
+    const r = readInboxVerdict(root, ticket, expect);
+    assert.equal(c.status === 0, !r.error, JSON.stringify(v));
+    if (r.error) assert.ok(c.stderr.includes(r.error));
+  }
+});
+
+test('verdict-check does not rewrite the file it checks', () => {
+  const f = write({ ...good(), headSha: HEAD.slice(0, 8) });
+  const before = fs.readFileSync(f, 'utf8');
+  const r = checkVerdictFile(f, expect);
+  assert.ok(r.verdict && r.repairs.length);
+  assert.equal(fs.readFileSync(f, 'utf8'), before);
+});
+
+test('a short headSha is repaired by ingest, recorded, and keeps the original', () => {
+  const ticket = 'd'.repeat(32), root = tmp(), dir = path.join(root, 'team', 'inbox', ticket);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'verdict.json'), JSON.stringify({ ...good(), headSha: HEAD.slice(0, 9).toUpperCase() }));
+  const r = readInboxVerdict(root, ticket, expect);
+  assert.equal(r.verdict.headSha, HEAD);
+  assert.match(r.repairs[0], /headSha/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'verdict.json'), 'utf8')).headSha, HEAD);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'verdict.original.json'), 'utf8')).headSha, HEAD.slice(0, 9).toUpperCase());
+  // a second read (ingest after the post-condition) still reports the repair
+  assert.ok(readInboxVerdict(root, ticket, expect).repairs.length);
+});
+
+test('a field-name typo is repaired; ambiguous or wrong cases are not', () => {
+  assert.ok(checkVerdictFile(write({ pr: 7, headSha: HEAD, verdict: 'PASS', findings: [], commandRun: ['x'] }), expect).repairs[0].includes('commandsRun'));
+  assert.ok(checkVerdictFile(write({ pr: 7, headsha: HEAD, verdict: 'PASS', findings: [], commandsRun: ['x'] }), expect).repairs[0].includes('headSha'));
+  // a headSha for a different head is never repaired
+  assert.match(checkVerdictFile(write({ ...good(), headSha: 'deadbeef' }), expect).error, /different head/);
+  // too short a prefix
+  assert.match(checkVerdictFile(write({ ...good(), headSha: HEAD.slice(0, 5) }), expect).error, /different head/);
+  // unknown field with no near match
+  assert.match(checkVerdictFile(write({ ...good(), banana: 1 }), expect).error, /unknown field/);
+  // the target field is already present: renaming would clobber it
+  assert.match(checkVerdictFile(write({ ...good(), commandRun: ['y'] }), expect).error, /unknown field/);
+  // a repair that does not make the file valid is not applied
+  assert.match(checkVerdictFile(write({ pr: 7, headSha: HEAD, verdict: 'PASS', findings: [], commandRun: [] }), expect).error, /unknown field/);
+});
+
+test('repairVerdict never touches the verdict word or findings', () => {
+  const v = { ...good(), verdict: 'pass' };
+  assert.deepEqual(repairVerdict(v, expect).repairs, []);
+  assert.match(validateVerdict(v, expect), /PASS or CHANGES/);
+});
+
+test('the CLI prints OK or the error and sets the exit code', () => {
+  assert.equal(cli(write(good())).status, 0);
+  const bad = cli(write({ ...good(), commandsRun: [] }));
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /commandsRun/);
+  assert.notEqual(spawnSync(process.execPath, ['supervisor/cli.mjs', 'verdict-check'], { encoding: 'utf8' }).status, 0);
+});
+
+test('the review prompt requires running verdict-check', () => {
+  const p = reviewPrompt({ pr: 7, head: HEAD, branch: 'b', repository: 'o/r', inbox: '/i', requirementsFile: '/i/req.md' });
+  assert.match(p, /ai-supervisor verdict-check \/i\/verdict\.json --pr 7 --head a1b2c3d4e5/);
+  assert.match(p, /--checklist/);
+});

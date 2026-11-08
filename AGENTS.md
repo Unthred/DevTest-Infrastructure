@@ -45,4 +45,4 @@ node tools/ci/check-size.mjs
 ```
 
 ## Map
-[`README.md`](README.md) · [`docs/cooperative-work.md`](docs/cooperative-work.md) · [`docs/architecture.md`](docs/architecture.md) · [`docs/agent-provider-contract.md`](docs/agent-provider-contract.md) · [`contracts/`](contracts/)
+[`README.md`](README.md) · [`docs/team-loop.md`](docs/team-loop.md) (reviewer verdict check, issue #1056) · [`docs/cooperative-work.md`](docs/cooperative-work.md) · [`docs/architecture.md`](docs/architecture.md) · [`docs/agent-provider-contract.md`](docs/agent-provider-contract.md) · [`contracts/`](contracts/)
