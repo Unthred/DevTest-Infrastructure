@@ -42,6 +42,8 @@ export function initList(el, store = sessionStorage) {
   const openKeys = () => [...ul.querySelectorAll('details[open]')].map(detailKey).filter(Boolean).slice(0, 200);
 
   function apply({ keepScroll = true } = {}) {
+    // A row removed from the page (decided in bulk) leaves the list's state too, or the next search change would bring it back.
+    if (el.isConnected) for (let n = rows.length - 1; n >= 0; n--) if (!rows[n].li.isConnected) rows.splice(n, 1);
     const top = ul.scrollTop;
     const v = listView(rows, st);
     // Reorder only when the order changed, so the browser keeps focus, scroll and open details of rows that stay.
@@ -75,6 +77,7 @@ export function initList(el, store = sessionStorage) {
   putBack(); if (typeof requestAnimationFrame === 'function') { requestAnimationFrame(() => { putBack(); requestAnimationFrame(putBack); }); }
   if (typeof addEventListener === 'function') addEventListener('load', putBack, { once: true });
 
+  el.addEventListener('dl-rows-changed', () => apply());
   input?.addEventListener('input', () => { st.q = input.value.slice(0, 200); ul.scrollTop = 0; apply(); save(); });
   input?.addEventListener('keydown', e => { if (e.key === 'Escape' && st.q) { e.preventDefault(); st.q = ''; apply(); save(); } });
   clear?.addEventListener('click', () => { st.q = ''; apply(); save(); input?.focus(); });

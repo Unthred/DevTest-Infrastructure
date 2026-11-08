@@ -66,17 +66,24 @@ document.addEventListener('submit', async e => {
 });
 // Issue #884: bulk Approve / Reject of the ticked rows. Only rows the search shows count; the server decides each item on its own and answers with a
 // result per item, so a refused one keeps its row and says why. Without this script the form still posts (every ticked box, then a redirect).
+// Ticked ids are kept here, not only in the checkboxes: a refresh in place (every 60 s) swaps in fresh rows, which arrive unticked.
+const ticked = new Set();
 const boxState = () => $$('input.inbox-check').map(b => ({ value: b.value, checked: b.checked, disabled: b.disabled, visible: !b.closest('li')?.hidden }));
 const syncBulk = () => {
-  const n = pickedIds(boxState()).length;
+  const boxes = $$('input.inbox-check'), present = new Set(boxes.map(b => b.value));
+  for (const id of [...ticked]) if (!present.has(id)) ticked.delete(id);   // a row that left the page is no longer selected
+  for (const b of boxes) { const want = ticked.has(b.value) && !b.disabled; if (b.checked !== want) b.checked = want; }
+  const n = pickedIds(boxState()).length, shown = boxes.filter(b => !b.disabled && !b.closest('li')?.hidden);
+  for (const c of $$('input.inbox-checkall')) { const all = shown.length > 0 && shown.every(b => b.checked); if (c.checked !== all) c.checked = all; }
   for (const f of $$('form.inbox-bulk')) for (const b of $$('button[name=decision]', f)) { const t = bulkLabel(b.value === 'approve' ? 'Approve' : 'Reject', n); if (b.textContent !== t) b.textContent = t; if (b.disabled !== (n === 0)) b.disabled = n === 0; }
 };
 document.addEventListener('change', e => {
   const t = e.target;
-  if (t.matches?.('input.inbox-checkall')) for (const b of $$('input.inbox-check')) b.checked = t.checked && !b.closest('li')?.hidden;
+  if (t.matches?.('input.inbox-checkall')) for (const b of $$('input.inbox-check')) { const on = t.checked && !b.closest('li')?.hidden && !b.disabled; if (on) ticked.add(b.value); else ticked.delete(b.value); }
+  else if (t.matches?.('input.inbox-check')) { if (t.checked) ticked.add(t.value); else ticked.delete(t.value); }
   if (t.matches?.('input.inbox-check, input.inbox-checkall')) syncBulk();
 });
-document.addEventListener('input', e => { if (e.target.matches?.('.dl-q')) setTimeout(() => { for (const b of $$('input.inbox-check')) if (b.closest('li')?.hidden) b.checked = false; syncBulk(); }, 0); });
+document.addEventListener('input', e => { if (e.target.matches?.('.dl-q')) setTimeout(() => { for (const b of $$('input.inbox-check')) if (b.closest('li')?.hidden) ticked.delete(b.value); syncBulk(); }, 0); });
 syncBulk();
 if (typeof MutationObserver === 'function') new MutationObserver(syncBulk).observe(document.body, { childList: true, subtree: true });   // a refresh in place brings the rows back unticked
 document.addEventListener('submit', async e => {
@@ -90,7 +97,7 @@ document.addEventListener('submit', async e => {
   if (!j.ok || !Array.isArray(j.results)) { msg.textContent = `Not recorded: ${j.reason || 'the dashboard refused it'}`; syncBulk(); return; }
   for (const r of j.results) {
     const li = $(`input.inbox-check[value="${r.id}"]`)?.closest('li'); if (!li) continue;
-    if (r.ok) li.remove(); else { const err = $('.inbox-err', li); if (err) { err.textContent = `Not recorded: ${r.reason}`; err.hidden = false; } }
+    if (r.ok) { const list = li.closest('.dlist'); ticked.delete(r.id); li.remove(); list?.dispatchEvent(new CustomEvent('dl-rows-changed')); } else { const err = $('.inbox-err', li); if (err) { err.textContent = `Not recorded: ${r.reason}`; err.hidden = false; } }
   }
   msg.textContent = bulkSummary(decision, j.results);
   for (const h of $$('#h-inbox')) h.textContent = lowerCount(h.textContent, j.results.filter(r => r.ok).length);

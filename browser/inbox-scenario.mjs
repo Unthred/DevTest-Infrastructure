@@ -89,12 +89,18 @@ try {
   check('searching unticks the rows it hides and keeps the shown ones', (await page.locator('input.inbox-check:checked').count()) === 2 && (await page.locator('li:not([hidden]) input.inbox-check:checked').count()) === 2 && /Approve selected \(2\)/.test(await approveAll.textContent()), await approveAll.textContent());
   await page.locator('input.inbox-checkall').uncheck(); await page.locator('input.inbox-checkall').check();
   check('Select all shown ticks only the two shown rows', (await page.locator('input.inbox-check:checked').count()) === 2);
+  // a refresh in place swaps in fresh, unticked rows: the selection and the Select all box must survive it
+  await page.evaluate(() => { for (const b of document.querySelectorAll('input.inbox-check')) { const c = b.cloneNode(true); c.checked = false; b.replaceWith(c); } });
+  await page.waitForTimeout(100);
+  check('the ticks survive a refresh in place, and Select all shown still matches them', (await page.locator('input.inbox-check:checked').count()) === 2 && /Approve selected \(2\)/.test(await approveAll.textContent()) && (await page.locator('input.inbox-checkall').isChecked()), await approveAll.textContent());
   await approveAll.click();
   await page.waitForFunction(() => /refused/.test(document.querySelector('.inbox-bulk-msg')?.textContent || ''));
   check('the bulk post carried the proof, the ids of the two shown rows only, and the decision', posts.length === 1 && posts[0].decision === 'approve' && posts[0].bulk === '1' && posts[0].proof === 'fixture-proof' && posts[0].ids.length === 2 && posts[0].ids.includes(B2) && posts[0].ids.includes(D4), JSON.stringify(posts));
   const msg = await page.locator('.inbox-bulk-msg').textContent();
   check('the bar reports what was recorded and what was refused, with the reason', /Approved 1\./.test(msg) && /1 refused: the item is already approved/.test(msg), msg);
   check('the recorded row left the list; the refused row stays and says why', (await page.locator('[data-dlist="inbox"] > .dl-scroll > li').count()) === 6 && /Not recorded: the item is already approved/.test(await page.locator('.inbox-err:visible').first().textContent()));
+  await L.locator('.dl-clear').click();
+  check('after a bulk decision, clearing the search does not bring the decided row back', (await visible()) === 6 && (await rows.count()) === 6 && /^6 proposals/.test(await foot.textContent()), `${await visible()} / ${await foot.textContent()}`);
   await page.screenshot({ path: path.join(out, `${name}.png`), fullPage: true });
   // the Overview: one summary line in Needs you and no proposal body there
   await page.goto(url('/overview.html'), { waitUntil: 'networkidle' });
