@@ -1738,7 +1738,7 @@ test('issue #881: a rate limit pauses board moves until the reset, then the miss
   assert.deepEqual(w.team.s.board.pending, {}); assert.equal(w.team.s.board.pausedUntil, undefined);
 });
 
-test('issue #881: the client looks up each issue's item directly (never lists the board) and caches ids; a rate limit reports the GraphQL reset', async () => {
+test('issue #881: the client looks up the item of each issue directly (never lists the board) and caches ids; a rate limit reports the GraphQL reset', async () => {
   const seen = []; let limit = false;
   const gh = ghRunner((args) => { seen.push(args);
     if (args[0] === 'api' && args[1] === 'rate_limit') return { status: 0, stdout: JSON.stringify({ limit: 5000, reset: 4000 }), stderr: '' };
