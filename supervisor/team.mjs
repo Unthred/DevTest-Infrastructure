@@ -291,6 +291,8 @@ export function decisionInfo(registerText, id) {
 // Until then D-021/D-011 stand: a merge needs a reviewer other than the author, and queued post-merge reviews are kept.
 export const INDEPENDENCE_DECISION = 'D-024';
 // The choices offered at the fix limit, on every path (card, PR notice, alert). No paid option, and no move to a stronger model.
+// Issue #1048: the decision for a PR holding a carried CHANGES (no fix commit has answered it; it is held from rebase and review).
+export const CARRIED_HOLD_OPTIONS = 'finish it with a named list of the findings to fix, restart it smaller, or close it';
 export const FIX_LIMIT_OPTIONS = 'wait for another agent to be able to review (allowance reset), split the PR into smaller pieces, change the approach, or fix it by hand (raising `max_fix_attempts` in team.local.json only allows more rounds on the same model)';
 // Issue #303: D-025 (a PASS carries across a clean, unchanged, green rebase) binds only once the homeowner approves it. See ENFORCED_DECISIONS.
 export const CARRY_DECISION = 'D-025';
@@ -3022,7 +3024,7 @@ export class Team {
       const akey = `churn-alert:${pr.number}:${pr.headRefOid}`;   // like the fix-limit alert: recorded as sent only when the channel accepted it
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${FIX_LIMIT_OPTIONS}.`);
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
           this.s.notified[akey] = this.clock.now(); this.save();
         } catch { (report.skipped ||= []).push({ what: `alert churn ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
       }
@@ -3050,7 +3052,7 @@ export class Team {
           this.s.notified[nkey] = this.clock.now(); this.save();
           try {
             await this.flag(pr.number, { key: 'fixlimit', kind: 'fixlimit', head: pr.headRefOid, tk: 'pull' });
-            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads)${round} have not cleared ${this.rejectionCause(pr)} on this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it.${this.carriedHold(pr) ? ' The CHANGES verdict was carried across a rebase from an earlier head (no fix commit has answered it), so the PR is held from rebase and review until you decide.' : ''} Required: decide which: ${FIX_LIMIT_OPTIONS}.`);
+            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads)${round} have not cleared ${this.rejectionCause(pr)} on this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it.${this.carriedHold(pr) ? ' The CHANGES verdict was carried across a rebase from an earlier head (no fix commit has answered it), so the PR is held from rebase and review until you decide.' : ''} Required: decide which: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
           } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
           (report.notified ||= []).push({ pr: pr.number, fixLimit: true });
         });
@@ -3183,7 +3185,7 @@ export class Team {
     }
   }
   // Fix limit (issue #163 part 3): one final round per PR, a fresh session on the same model, with the full review history.
-  canEscalate(pr, prObj = null) { return !this.s.unblock.escalated[pr] && !this.unblockRoom(pr) && !(prObj && this.writeBlock(prObj)); }
+  canEscalate(pr, prObj = null) { return !this.s.unblock.escalated[pr] && !this.unblockRoom(pr) && !(prObj && (this.writeBlock(prObj) || this.carriedHold(prObj))); }   // issue #1048: a held PR runs no final round, fix or CI fix
   escalationPending(pr, prObj = null) {
     return this.canEscalate(pr, prObj) || Object.values(this.s.jobs).some(j => j.pr === pr && j.escalated && !j.ingested);
   }

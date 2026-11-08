@@ -311,3 +311,21 @@ test('#1048 at the fix limit a carried CHANGES holds the PR (no rebase, no final
   w.team.s.fixAttempts[`10:${H(1)}`] = 1;
   assert.equal(w.team.carriedHold({ number: 10, headRefOid: H(2) }), false);
 });
+
+test('#1048 a held PR with red CI starts no CI-fix round, is not awaiting a final round, and is offered the three decisions', async t => {
+  const red = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'ci' }];
+  const { w } = await rebasedChanges(t, true, { pr: { statusCheckRollup: red } });
+  w.team.s.fixAttempts[`10:${H(1)}`] = 2;
+  const p = w.gh.pulls[0];
+  assert.equal(w.team.carriedHold(p), true);
+  assert.equal(w.team.canEscalate(10, p), false);
+  assert.equal(w.team.escalationPending(10, p), false);
+  const acts = await w.team.plan();
+  assert.equal(acts.find(a => a.agent === 'claude' && a.type === 'cifix'), undefined);
+  assert.equal(acts.find(a => a.agent === 'codex'), undefined);
+  await w.team.notifyFixLimit({});
+  const n = w.calls.comments.filter(c => /fix rounds/.test(c[1]));
+  assert.equal(n.length, 1);
+  assert.match(n[0][1], /named list of the findings to fix, restart it smaller, or close it/);
+  assert.doesNotMatch(n[0][1], /wait for another agent/);
+});
