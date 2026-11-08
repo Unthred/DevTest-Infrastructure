@@ -5,16 +5,16 @@
 const fileOf = unit => unit.split('::')[0];
 
 function grew(now, before) {
-  return now.size > before.size || (now.excess ?? 0) > (before.excess ?? 0);
+  return now.size > before.size;
 }
 
 function shrank(now, before) {
-  return now.size < before.size || (now.excess ?? 0) < (before.excess ?? 0);
+  return now.size < before.size;
 }
 
-const entry = o => ({ kind: o.kind, threshold: o.threshold, size: o.size, ...(o.excess !== undefined ? { excess: o.excess } : {}) });
+const entry = o => ({ kind: o.kind, threshold: o.threshold, size: o.size });
 
-// current: [{ unit, kind, threshold, size, excess?, line }]; baseline: { units: { [unit]: {kind, threshold, size, excess?} } }.
+// current: [{ unit, kind, threshold, size, line }]; baseline: { units: { [unit]: {kind, threshold, size} } }.
 export function compare(current, baseline) {
   const known = baseline.units || {};
   const failures = [];

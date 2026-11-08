@@ -75,7 +75,10 @@ test('unbalanced and unterminated source is a parse error', () => {
 
 test('measureFile reports only units over their threshold, a long line and the file length', () => {
   const r = measureFile('a.mjs', `${fn('small', 50)}${fn('big', 51)}const x = '${'y'.repeat(170)}';\n`);
-  assert.deepEqual(r.over.map(o => o.unit), ['a.mjs::long-lines', 'a.mjs::function:big']);
+  const units = r.over.map(o => o.unit);
+  assert.equal(units.length, 2);
+  assert.ok(units.includes('a.mjs::function:big'));
+  assert.ok(units.some(u => /^a\.mjs::long-line:/.test(u)));
   const many = measureFile('b.mjs', 'function p(a, b, c, d, e, f, g) {\n}\n');
   assert.equal(many.over[0].unit, 'b.mjs::function:p::params');
   assert.equal(measureFile('c.mjs', 'x;\n'.repeat(500)).over.length, 0);
@@ -87,7 +90,7 @@ test('a line over 160 characters is reported', t => {
   const root = tree(t, { 'a.mjs': `const x = '${'z'.repeat(200)}';\n` });
   const r = check(root);
   assert.equal(r.code, 0, 'a new long line in a healthy file is only a warning');
-  assert.match(r.text, /a\.mjs::long-lines/);
+  assert.match(r.text, /a\.mjs::long-line:/);
   assert.match(r.text, /warning/);
 });
 
@@ -156,7 +159,7 @@ test('a baselined file that grows, and a baselined long line that gets longer, f
   fs.appendFileSync(path.join(root, 'a.mjs'), 'const b = 2;\n');
   assert.match(check(root).text, /a\.mjs::file .*FAIL/);
   fs.writeFileSync(path.join(root, 'a.mjs'), bigFile(`const x = '${'z'.repeat(250)}';\n`));
-  assert.match(check(root).text, /a\.mjs::long-lines .*FAIL/);
+  assert.match(check(root).text, /a\.mjs::long-line:[0-9a-f]+ .*FAIL/);
 });
 
 test('compare is pure: unchanged sizes give no failures, warnings or shrinks', () => {
@@ -178,15 +181,38 @@ test('the CLI exits 1 on a failure and 2 on a bad argument', t => {
   assert.equal(spawnSync('node', [CLI, '--nope']).status, 2);
 });
 
-test('the committed baseline passes on this repository and records the measured figures', () => {
+test('a new long line in a healthy file that already has long lines warns without failing', t => {
+  const old = `const old = '${'z'.repeat(200)}';\n`;
+  const root = tree(t, { 'a.mjs': old });
+  check(root, '--init-baseline');
+  fs.writeFileSync(path.join(root, 'a.mjs'), `${old}const fresh = '${'q'.repeat(300)}';\n`);
+  const r = check(root);
+  assert.equal(r.code, 0, r.text);
+  assert.match(r.text, /warning/);
+});
+
+test('growth of a baselined long line fails even when another long line is removed or shortened', t => {
+  const long = (name, n) => `const ${name} = '${'z'.repeat(n)}';\n`;
+  const root = tree(t, { 'a.mjs': long('first', 300) + long('second', 200) });
+  check(root, '--init-baseline');
+  fs.writeFileSync(path.join(root, 'a.mjs'), long('second', 240));
+  assert.equal(check(root).code, 1, 'removing one line must not pay for lengthening another');
+  fs.writeFileSync(path.join(root, 'a.mjs'), long('first', 260) + long('second', 240));
+  assert.match(check(root).text, /second|long-line/);
+  assert.equal(check(root).code, 1);
+});
+
+test('the committed baseline passes on this repository and stays at or below the measured figures', () => {
   const r = spawnSync('node', [CLI, '--root', REPO], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stdout);
   const base = JSON.parse(fs.readFileSync(path.join(REPO, 'tools/ci/size-baseline.json'), 'utf8'));
+  // Upper bounds, so a committed shrink stays green. Measured on main 4312c5c (issue #1067): team.mjs 3652 lines, 155 methods,
+  // 244 lines over 200 characters and 42 over 400; dashrender.mjs 1039 lines, 55 over 400. The bounds below add the merges since.
   const team = base.files['supervisor/team.mjs'];
-  assert.deepEqual([team.methods, team.linesOver200, team.linesOver400], [155, 244, 42]);
-  assert.ok(team.lines >= 3652 && team.lines <= 3660, 'main had 3652 lines; this change adds one import line');
-  assert.equal(base.files['supervisor/dashrender.mjs'].lines, 1039);
-  assert.equal(base.files['supervisor/dashrender.mjs'].linesOver400, 55);
+  assert.ok(team.lines <= 3680 && team.methods <= 156 && team.linesOver200 <= 255 && team.linesOver400 <= 43, JSON.stringify(team));
+  assert.ok(team.lines >= 1000, 'the baseline records team.mjs');
+  const dash = base.files['supervisor/dashrender.mjs'];
+  assert.ok(dash.lines <= 1039 && dash.linesOver400 <= 55, JSON.stringify(dash));
 });
 
 test('the review prompt names the new blocking class and the fix and implement prompts name the check', () => {

@@ -3,6 +3,8 @@
 // and classifies each "{" from the tokens before it. Arrow functions with an expression body have no braces and are not measured as
 // functions (the line-length check still sees them). Any unbalanced or unterminated construct raises an error that names the file.
 
+import { createHash } from 'node:crypto';
+
 export const THRESHOLDS = { function: 50, class: 400, file: 500, razor: 250, params: 6, line: 160 };
 
 const CONTROL = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 'await']);
@@ -237,6 +239,20 @@ export function longLines(text, limit = THRESHOLDS.line) {
   return out;
 }
 
+// One unit per long line, keyed by the start of its text so a line keeps its identity when other lines move or change.
+// A line whose start is edited is a new unit; a repeated start gets an ordinal.
+function longLineKeys(text, long) {
+  const rows = text.split('\n');
+  const seen = new Map();
+  return long.map(l => {
+    const start = rows[l.line - 1].trim().slice(0, 60);
+    const hash = createHash('sha1').update(start).digest('hex').slice(0, 8);
+    const n = (seen.get(hash) || 0) + 1;
+    seen.set(hash, n);
+    return { key: `long-line:${hash}${n > 1 ? `#${n}` : ''}`, length: l.length, line: l.line };
+  });
+}
+
 // All measurements for one file as a flat list of units over their threshold, plus per-file stats.
 export function measureFile(name, text) {
   const isJs = /\.(mjs|js|cjs)$/.test(name);
@@ -245,9 +261,8 @@ export function measureFile(name, text) {
   const over = [];
   const fileLimit = name.endsWith('.razor') ? THRESHOLDS.razor : THRESHOLDS.file;
   if (lines > fileLimit) over.push({ unit: `${name}::file`, kind: 'file', threshold: fileLimit, size: lines, line: 1 });
-  if (long.length) {
-    const excess = long.reduce((a, l) => a + l.length - THRESHOLDS.line, 0);
-    over.push({ unit: `${name}::long-lines`, kind: 'long-lines', threshold: THRESHOLDS.line, size: long.length, excess, line: long[0].line });
+  for (const l of longLineKeys(text, long)) {
+    over.push({ unit: `${name}::${l.key}`, kind: 'long-line', threshold: THRESHOLDS.line, size: l.length, line: l.line });
   }
   let methods = 0;
   if (isJs) {
