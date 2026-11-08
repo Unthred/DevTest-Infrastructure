@@ -139,7 +139,17 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         if (args.contains !== undefined) q.set('contains', String(args.contains).slice(0, 200));
         if (args.delivered !== undefined) q.set('delivered', String(args.delivered));
         q.set('limit', String(limit));
-        return fitItems(dropNullFields(await getPath('/api/alerts.json?' + q), 'alerts'), 'alerts', limit);
+        const out = dropNullFields(await getPath('/api/alerts.json?' + q), 'alerts');
+        // The alerts get their room first: halve the groups until the requested alerts (up to 20) fit with them.
+        if (Array.isArray(out?.groups)) {
+          const need = Math.min(limit, Array.isArray(out.alerts) ? out.alerts.length : 0, 20);
+          const total = out.groupCount ?? out.groups.length;
+          const room = g => fitItems({ ...out, groups: g }, 'alerts', need).shown >= need;
+          let g = out.groups;
+          while (g.length > 0 && !room(g)) g = g.slice(0, Math.floor(g.length / 2));
+          if (g.length < out.groups.length) { out.groups = g; out.groupsTruncated = true; out.groupCount = total; }
+        }
+        return fitItems(out, 'alerts', limit);
       } },
     { name: 'foreman_config', description: 'The configuration Foreman uses now (shipped team.json plus the team.local.json override) with secrets removed, and a list of every setting that differs from the shipped default. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { if (!getPath) throw new Error('the configuration is not available on this server'); return getPath('/api/config.json'); } },

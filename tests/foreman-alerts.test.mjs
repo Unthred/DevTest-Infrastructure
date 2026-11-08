@@ -99,3 +99,15 @@ test('end to end: GET-only route, the tool, filters, errors, and an unchanged lo
   assert.equal((await createTools({ source: { get: async () => ({}) }, readHost: () => ({}) }).call('foreman_alerts')).isError, true, 'no dashboard address');
   assert.equal(fs.readFileSync(path.join(root, 'team', 'alerts.jsonl'), 'utf8'), before, 'log untouched');
 });
+
+test('foreman_alerts keeps room for individual alerts when the groups are large', async () => {
+  const groups = Array.from({ length: 50 }, (_, i) => ({ pattern: 'p'.repeat(300) + i, count: 2, example: 'e'.repeat(300), firstAt: 'x', lastAt: 'y' }));
+  const alerts = Array.from({ length: 30 }, (_, i) => ({ at: 't' + i, text: 'a'.repeat(300), delivered: true }));
+  const tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), getPath: async () => ({ alerts, groups, groupCount: 50, perDay: [] }) });
+  const r = await tools.call('foreman_alerts', { limit: 30 });
+  assert.equal(r.isError, false);
+  const v = JSON.parse(r.text);
+  assert.ok(v.alerts.length >= 20, `alerts shown: ${v.alerts.length}`);
+  assert.equal(v.groupCount, 50);
+  assert.equal(v.groupsTruncated, true);
+});
