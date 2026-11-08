@@ -88,13 +88,7 @@ test('a rebase whose patch changed, whose comparison failed or errored carries n
   }
 });
 
-test('a CHANGES verdict, a head that did not change, or an incomplete rebase job never carries', async t => {
-  const w = world(t, { pulls: [pr(10, 'claude/issue-5-x', H(2))], equal: true });
-  w.team.s.verdicts[`10:${H(1)}`] = { ...PASS, verdict: 'CHANGES' };
-  w.team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 10, head: H(1), base: 'main', ingested: false, at: 1 };
-  w.jobs.states.r1 = { status: 'completed' };
-  await w.team.ingest({ ingested: [], skipped: [] });
-  assert.equal(w.team.s.verdicts[`10:${H(2)}`], undefined);
+test('a head that did not change, or an incomplete rebase job never carries', async t => {
   const same = world(t, { pulls: [pr(10, 'claude/issue-5-x', H(1))], equal: true });
   same.team.s.verdicts[`10:${H(1)}`] = { ...PASS };
   same.team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 10, head: H(1), base: 'main', ingested: false, at: 1 };
@@ -251,4 +245,91 @@ test('issue #290: a second-opinion PASS carries with the primary PASS; one with 
   const so = w.team.s.secondOpinions[`10:${H(2)}`];
   assert.equal(so.verdict, 'PASS'); assert.equal(so.carry.newHead, H(2)); assert.equal(so.carriedFrom, H(1));
   assert.equal(w.team.carryOk(so, { headRefOid: H(2) }), true); assert.equal(w.team.carryOk(so, { headRefOid: H(3) }), false);
+});
+
+// ---- issue #1048: a CHANGES verdict carries across a clean rebase until a fix lands
+const CHANGES = { verdict: 'CHANGES', reviewer: 'codex', job: 'j1', findings: [{ kind: 'blocking', text: 'fix the thing' }, { kind: 'follow-up', text: 'tidy' }], commandsRun: ['x'], at: 1 };
+async function rebasedChanges(t, equal, o = {}) {
+  const w = world(t, { pulls: [pr(10, 'claude/issue-5-x', H(2), o.pr)], equal, resolved: o.resolved ?? false, register: o.register });
+  w.gh.addLabel = async () => {};
+  w.team.s.verdicts[`10:${H(1)}`] = { ...CHANGES };
+  w.team.s.jobs.r1 = { kind: 'rebase', agent: 'claude', pr: 10, head: H(1), base: 'main', ingested: false, at: 1 };
+  w.jobs.states.r1 = { status: 'completed' };
+  const report = { ingested: [], skipped: [] };
+  await w.team.ingest(report);
+  return { w, report };
+}
+
+test('#1048 CHANGES then a clean rebase carries the verdict and findings, queues no review and stays in the fix lane', async t => {
+  const { w, report } = await rebasedChanges(t, true);
+  const v = w.team.s.verdicts[`10:${H(2)}`];
+  assert.equal(v.verdict, 'CHANGES'); assert.equal(v.carriedFrom, H(1)); assert.deepEqual(v.findings, CHANGES.findings);
+  assert.equal(v.carry.oldHead, H(1)); assert.equal(v.carry.newHead, H(2));
+  assert.deepEqual(report.carried, [{ pr: 10, head: H(2), carried: true, verdict: 'CHANGES' }]);
+  assert.equal(w.calls.comments.length, 1); assert.match(w.calls.comments[0][1], /Verdict carried: CHANGES/);
+  const acts = await w.team.plan();
+  assert.equal(acts.find(a => a.agent === 'codex')?.type, undefined);   // no review for the reviewer
+  assert.equal(acts.find(a => a.agent === 'claude')?.type, 'fix');      // the author is in the fix lane
+  await w.team.ingest({ ingested: [], skipped: [] });
+  assert.equal(w.calls.comments.length, 1);
+});
+
+test('#1048 a carried CHANGES does not wait for CI or approval of D-025, and is not counted as a second CHANGES or a second review round', async t => {
+  const { w } = await rebasedChanges(t, true, { pr: { statusCheckRollup: [{ status: 'IN_PROGRESS', conclusion: '' }] }, register: '' });
+  const v = w.team.s.verdicts[`10:${H(2)}`];
+  assert.equal(v.verdict, 'CHANGES'); assert.notEqual(v.carry.evidence.ci, 'green');
+  assert.equal(w.team.reviewHistory(10).length, 1);
+});
+
+test('#1048 CHANGES then a rebase that resolved a conflict, changed the patch or lost changes carries nothing and a review is queued', async t => {
+  for (const o of [{ equal: true, resolved: true }, { equal: false }, { equal: new Error('boom') }, { equal: true, resolved: 'unknown' }]) {
+    const { w } = await rebasedChanges(t, o.equal, { resolved: o.resolved });
+    assert.equal(w.team.s.verdicts[`10:${H(2)}`], undefined);
+    assert.equal((await w.team.plan()).find(a => a.agent === 'codex')?.type, 'review');
+  }
+});
+
+test('#1048 CHANGES then a fix commit (not a rebase) queues a fix-round re-review', async t => {
+  const { w } = await rebasedChanges(t, true);
+  // the author's fix lands: a new head with no verdict is reviewed again
+  w.gh.pulls = [pr(10, 'claude/issue-5-x', H(3))];
+  const a = (await w.team.plan()).find(x => x.agent === 'codex');
+  assert.equal(a?.type, 'review'); assert.equal(a.head, H(3));
+});
+
+test('#1048 at the fix limit a carried CHANGES holds the PR (no rebase, no final round, no review) and the homeowner is asked once', async t => {
+  const { w } = await rebasedChanges(t, true, { pr: { mergeable: 'CONFLICTING' } });
+  w.team.s.fixAttempts[`10:${H(1)}`] = 2;
+  assert.equal(w.team.carriedHold({ number: 10, headRefOid: H(2) }), true);
+  const acts = await w.team.plan();
+  assert.equal(acts.find(a => a.agent === 'claude'), undefined);   // neither rebase nor fix
+  assert.equal(acts.find(a => a.agent === 'codex'), undefined);    // no review
+  await w.team.notifyFixLimit({}); await w.team.notifyFixLimit({});
+  const n = w.calls.comments.filter(c => /fix rounds/.test(c[1]));
+  assert.equal(n.length, 1); assert.match(n[0][1], /carried across a rebase/);
+  // negative: below the limit the same PR is not held
+  w.team.s.fixAttempts[`10:${H(1)}`] = 1;
+  assert.equal(w.team.carriedHold({ number: 10, headRefOid: H(2) }), false);
+});
+
+test('#1048 a held PR with red CI starts no CI-fix round, is not awaiting a final round, and is offered the three decisions', async t => {
+  const red = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'ci' }];
+  const { w } = await rebasedChanges(t, true, { pr: { statusCheckRollup: red } });
+  w.team.s.fixAttempts[`10:${H(1)}`] = 2;
+  const p = w.gh.pulls[0];
+  assert.equal(w.team.carriedHold(p), true);
+  assert.equal(w.team.canEscalate(10, p), false);
+  assert.equal(w.team.escalationPending(10, p), false);
+  const acts = await w.team.plan();
+  assert.equal(acts.find(a => a.agent === 'claude' && a.type === 'cifix'), undefined);
+  assert.equal(acts.find(a => a.agent === 'codex'), undefined);
+  const alerts = []; w.team.alert = async m => { alerts.push(m); };
+  await w.team.notifyFixLimit({});
+  const n = w.calls.comments.filter(c => /fix rounds/.test(c[1]));
+  assert.equal(n.length, 1);
+  assert.match(n[0][1], /named list of the findings to fix, restart it smaller, or close it/);
+  assert.doesNotMatch(n[0][1], /wait for another agent/);
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /named list of the findings to fix/);
+  assert.doesNotMatch(alerts[0], /wait for another agent/);
 });
