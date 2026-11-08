@@ -26,11 +26,7 @@ import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { wakeView } from './wake.mjs';
 import { sinceView } from './since.mjs';
-<<<<<<< HEAD
-import { markDuplicates as markInboxDuplicates, pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards } from './inbox.mjs';
-=======
-import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
->>>>>>> origin/main
+import { markDuplicates as markInboxDuplicates, pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
