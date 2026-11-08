@@ -6,7 +6,7 @@ import { SupervisorError } from './core.mjs';
 // Alerts (#47, #50, #947). Every alert is appended to <state root>/team/alerts.jsonl with its level and delivery result.
 // Every call names a level (a call without one is refused, and a test scans the source for it):
 //   action  Foreman has stopped and only the homeowner can unblock it. Pushed: "Tower | Foreman needs you".
-//   problem something failed but Foreman is retrying or working around it. Pushed only after the same cause has lasted
+//   problem something failed but Foreman is retrying or working around it. Pushed (default) only after the same cause has lasted
 //           alerts.problem_after_minutes, and only when "problem" is in alerts.push_levels: "Tower | Foreman problem".
 //   info    upgraded, installed, allowance mode. Never pushed; collected into a daily digest (sendDigest).
 // The same cause (its key) is sent once and not repeated while it lasts; repeats only increment a count that the digest shows.
@@ -15,7 +15,7 @@ import { SupervisorError } from './core.mjs';
 // (delivered=false and an error), so callers see that nothing reached the channel and can retry.
 export const UNRAID_NOTIFY = '/usr/local/emhttp/plugins/dynamix/scripts/notify';
 export const LEVELS = Object.freeze(['action', 'problem', 'info']);
-export const DEFAULT_PUSH_LEVELS = Object.freeze(['action']);
+export const DEFAULT_PUSH_LEVELS = Object.freeze(['action', 'problem'])   // a problem is pushed only once it has lasted problem_after_minutes;
 export const DEFAULT_PROBLEM_AFTER_MINUTES = 120;
 export const CAUSE_QUIET_MS = 24 * 3600 * 1000;   // a cause that has not been reported for this long is over; the next report is new
 export const DIGEST_GAP_MS = 24 * 3600 * 1000;
@@ -50,12 +50,12 @@ function deliver({ config, notify, run, haveNotify, env }, { subject, text, link
 }
 
 export function alertSender(root, config, { notify = UNRAID_NOTIFY, run = spawnSync, now = () => Date.now() } = {}) {
-  return async (text, { level, key, link } = {}) => {
+  return async (text, { level, key, link, fresh = false } = {}) => {
     if (!LEVELS.includes(level)) throw new SupervisorError(`alert without a valid level (${LEVELS.join(', ')}): ${String(text).slice(0, 80)}`);
     const f = files(root); fs.mkdirSync(f.dir, { recursive: true, mode: 0o700 });
     const at = now(), cause = key ? `${level}:${key}` : defaultKey(level, text), st = readState(f), c = st.causes[cause];
     const push = config.alerts?.push_levels || DEFAULT_PUSH_LEVELS, afterMs = (config.alerts?.problem_after_minutes ?? DEFAULT_PROBLEM_AFTER_MINUTES) * 60000;
-    const lasting = c && at - c.last < CAUSE_QUIET_MS;
+    const lasting = c && at - c.last < CAUSE_QUIET_MS && !(fresh && level === 'action');   // fresh: the caller tracks its own once-only state and re-armed this alert, so it is a new stoppage
     const entry = lasting ? { ...c, last: at, count: c.count + 1 } : { first: at, last: at, count: 1, pushedAt: null };
     const log = rec => fs.appendFileSync(f.log, JSON.stringify({ at, level, cause, count: entry.count, text, ...(link ? { link } : {}), ...rec }) + '\n', { mode: 0o600 });
     // Already delivered for this cause and it still lasts: counted, not sent again.

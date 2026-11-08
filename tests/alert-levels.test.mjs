@@ -71,9 +71,12 @@ test('a failed delivery is not recorded as sent and is retried (issue #947)', as
 });
 
 test('a problem is pushed only after it has lasted, and only when configured (issue #947)', async t => {
-  const off = rig(t); off.advance(0);
+  const off = rig(t, { alerts: { push_levels: ['action'] } }); off.advance(0);
   for (let i = 0; i < 3; i++) { await off.send('retrying', { level: 'problem', key: 'p' }); off.advance(5 * H); }
-  assert.equal(off.calls.length, 0, 'default pushes action only');
+  assert.equal(off.calls.length, 0, 'problem not configured: not pushed');
+  const dflt = rig(t); dflt.advance(0);
+  for (let i = 0; i < 20; i++) { await dflt.send('retrying', { level: 'problem', key: 'p' }); dflt.advance(10 * 60000); }
+  assert.equal(dflt.calls.length, 1, 'default config pushes a persisting problem once');
   const on = rig(t, { alerts: { push_levels: ['action', 'problem'], problem_after_minutes: 60 } });
   await on.send('retrying', { level: 'problem', key: 'p' }); assert.equal(on.calls.length, 0, 'first sight is not pushed');
   on.advance(30 * 60000); await on.send('retrying', { level: 'problem', key: 'p' }); assert.equal(on.calls.length, 0);
@@ -173,6 +176,15 @@ test('a problem reported repeatedly by the upgrader is pushed once it has lasted
 test('the rebase-lost and review-limit action alerts exist and carry a link (issue #947)', () => {
   const src = fs.readFileSync(path.resolve('supervisor/team.mjs'), 'utf8');
   for (const k of ['rebase-lost:', 'rebase-lost-changes:', 'reviewlimit:']) assert.ok(src.includes(k), k);
-  assert.match(src, /alertRebaseLost\(pr, key[\s\S]*?level: 'action', key, link: this\.needsLink\(pr\)/);
-  assert.match(src, /level: 'action', key: `reviewlimit:[^\n]*link: this\.needsLink/);
+  assert.match(src, /alertRebaseLost\(pr, key[\s\S]*?level: 'action', fresh: true, key, link: this\.needsLink\(pr\)/);
+  assert.match(src, /level: 'action', fresh: true, key: `reviewlimit:[^\n]*link: this\.needsLink/);
+});
+
+test('a re-armed action alert is pushed again within 24 h (issue #947)', async t => {
+  const r = rig(t); r.advance(0);
+  await r.send('stopped', { level: 'action', key: 'fixlimit:5', fresh: true }); r.advance(3 * H);
+  await r.send('stopped', { level: 'action', key: 'fixlimit:5', fresh: true });
+  assert.equal(r.calls.length, 2);
+  r.advance(H); await r.send('stopped', { level: 'action', key: 'x' }); r.advance(H); await r.send('stopped', { level: 'action', key: 'x' });
+  assert.equal(r.calls.length, 3, 'without fresh a repeat is still suppressed');
 });

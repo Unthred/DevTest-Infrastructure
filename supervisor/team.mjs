@@ -1061,7 +1061,7 @@ export class Team {
       const counts = this.agents().map(([agent]) => this.s.reviewAttempts[`${vk}:${agent}`] || 0);
       if (!counts.some(n => n >= max) || counts.some(n => n < max)) continue;
       try {
-        await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} has used all ${max} review attempts at this head without a verdict. Grant another review attempt or review it by hand. https://github.com/${this.c.repository}/pull/${pr.number}`, { level: 'action', key: `reviewlimit:${pr.number}:${pr.headRefOid}`, link: this.needsLink(pr.number) });
+        await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} has used all ${max} review attempts at this head without a verdict. Grant another review attempt or review it by hand. https://github.com/${this.c.repository}/pull/${pr.number}`, { level: 'action', fresh: true, key: `reviewlimit:${pr.number}:${pr.headRefOid}`, link: this.needsLink(pr.number) });
         this.s.notified[akey] = this.clock.now(); this.save();
       } catch { (report.skipped ||= []).push({ what: `alert review limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
     }
@@ -2483,7 +2483,7 @@ export class Team {
   // Issue #947: lost rebase work is an action alert (only the homeowner can restore it). Delivery failure is skipped; the notice above stays.
   async alertRebaseLost(pr, key, what, report) {
     if (!this.alert) return;
-    try { await this.alert(`Needs the homeowner: ${this.names().pr(pr).text}: ${what}. Restore them before anything is reviewed or merged. https://github.com/${this.c.repository}/pull/${pr}`, { level: 'action', key, link: this.needsLink(pr) }); }
+    try { await this.alert(`Needs the homeowner: ${this.names().pr(pr).text}: ${what}. Restore them before anything is reviewed or merged. https://github.com/${this.c.repository}/pull/${pr}`, { level: 'action', fresh: true, key, link: this.needsLink(pr) }); }
     catch { (report.skipped ||= []).push({ what: `alert rebase lost ${pr}`, reason: 'alert delivery failed' }); }
   }
   // Issue #158: a finding of an earlier CHANGES verdict on this PR that was fixed (a fix job ran after it) and then rebased, and that
@@ -2679,7 +2679,7 @@ export class Team {
     await this.postNotice(target, `lease holder=${id || 'unknown'}`, text);
     await this.gh.addLabel(target, 'needs-homeowner');
     this.s.notified[key] = this.clock.now(); this.save();
-    if (this.alert) { try { await this.alert(`Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600), { level: 'action', key, link: this.needsLink(target) }); } catch { (report.skipped ||= []).push({ what: 'alert lease holder', reason: 'alert delivery failed' }); } }
+    if (this.alert) { try { await this.alert(`Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600), { level: 'action', fresh: true, key, link: this.needsLink(target) }); } catch { (report.skipped ||= []).push({ what: 'alert lease holder', reason: 'alert delivery failed' }); } }
   }
   // A notice carries a stable marker and is never retried blindly: if GitHub accepted an earlier attempt but the response
   // was lost, the marker is already there and nothing is posted twice (same approach as verdict ingestion).
@@ -3053,7 +3053,7 @@ export class Team {
       const akey = `churn-alert:${pr.number}:${pr.headRefOid}`;   // like the fix-limit alert: recorded as sent only when the channel accepted it
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`, { level: 'action', key: `churn:${pr.number}:${pr.headRefOid}`, link: this.needsLink(pr.number) });
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`, { level: 'action', fresh: true, key: `churn:${pr.number}:${pr.headRefOid}`, link: this.needsLink(pr.number) });
           this.s.notified[akey] = this.clock.now(); this.save();
         } catch { (report.skipped ||= []).push({ what: `alert churn ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
       }
@@ -3090,7 +3090,7 @@ export class Team {
       // alert is retried on the next tick; a failing channel never undoes the notice.
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`, { level: 'action', key: `fixlimit:${pr.number}`, link: this.needsLink(pr.number) });
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`, { level: 'action', fresh: true, key: `fixlimit:${pr.number}`, link: this.needsLink(pr.number) });
           this.s.notified[akey] = this.clock.now(); this.save();
         } catch { (report.skipped ||= []).push({ what: `alert fix-limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
       }
@@ -3140,7 +3140,7 @@ export class Team {
     try {
       await this.flag(target, { key: `limit:${room.key}`, kind: 'limit', tk });
       await this.postNotice(target, `unblock-limit ${room.key}`, `**Needs the homeowner.** Foreman stopped unblocking by itself: it reached ${room.text}. Nothing further is retried, resumed or escalated automatically for this scope until the limit resets (day) or you raise it in team.local.json. Required: look at what is stuck (#${target}) and decide.`);
-      if (this.alert) { try { await this.alert(`Needs the homeowner: Foreman reached ${room.text}; automatic unblocking has stopped. #${target}`, { level: 'action', key: `limit:${room.key}`, link: this.needsLink(target) }); } catch { (report.skipped ||= []).push({ what: 'alert unblock limit', reason: 'alert delivery failed' }); } }
+      if (this.alert) { try { await this.alert(`Needs the homeowner: Foreman reached ${room.text}; automatic unblocking has stopped. #${target}`, { level: 'action', fresh: true, key: `limit:${room.key}`, link: this.needsLink(target) }); } catch { (report.skipped ||= []).push({ what: 'alert unblock limit', reason: 'alert delivery failed' }); } }
     } catch (error) { delete u.limit[room.key]; this.save(); throw error; }
     (report.notified ||= []).push({ target, unblockLimit: room.key });
   }
