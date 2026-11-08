@@ -1738,7 +1738,7 @@ test('issue #881: a rate limit pauses board moves until the reset, then the miss
   assert.deepEqual(w.team.s.board.pending, {}); assert.equal(w.team.s.board.pausedUntil, undefined);
 });
 
-test('issue #881: the client lists the board once and caches item ids; a rate limit reports the GraphQL reset', async () => {
+test('issue #881: the client looks up each issue's item directly (never lists the board) and caches ids; a rate limit reports the GraphQL reset', async () => {
   const seen = []; let limit = false;
   const gh = ghRunner((args) => { seen.push(args);
     if (args[0] === 'api' && args[1] === 'rate_limit') return { status: 0, stdout: JSON.stringify({ limit: 5000, reset: 4000 }), stderr: '' };
@@ -1753,4 +1753,6 @@ test('issue #881: the client lists the board once and caches item ids; a rate li
   await assert.rejects(c.board(99, 'done'), /not found on the project board/);   // a missing item is a failure, not a silent success
   limit = true;
   await assert.rejects(c.board(7, 'done'), e => e.rateLimitedUntil === 4000000);
+  // a rate limit on the direct lookup itself (an uncached issue) also reports the reset
+  await assert.rejects(c.board(55, 'done'), e => e.rateLimitedUntil === 4000000);
 });
