@@ -112,3 +112,18 @@ test('not writable, simulated so it also runs as root: the plain reason is given
   const fsApi = { ...fs, accessSync: () => { throw denied; } };
   assert.throws(() => reportsDir({ env: {}, configured: dir, fsApi }), /not writable by this user/);
 });
+
+test('report-save refuses blank input (stdin from /dev/null, whitespace only, marker only) and keeps an earlier report', t => {
+  const base = tmp(t), dir = path.join(base, 'r'), state = path.join(base, 'st'); fs.mkdirSync(dir); fs.mkdirSync(state, { mode: 0o700 });
+  const env = { AI_SUPERVISOR_REPORTS_DIR: dir };
+  assert.equal(run(['report-save', 'a.md', '-'], { env, state, input: 'real content' }).status, 0);
+  const before = fs.readFileSync(path.join(dir, 'a.md'), 'utf8');
+  const e = { ...process.env, ...env };
+  const devNull = spawnSync(process.execPath, [cli, 'report-save', 'a.md', '--state-root', state], { env: e, stdio: [fs.openSync('/dev/null', 'r'), 'pipe', 'pipe'], encoding: 'utf8' });
+  assert.equal(devNull.status, 3); assert.match(devNull.stderr, /empty/);
+  for (const input of ['', '  \n\t\n', FINISHED_MARKER + '\n']) {
+    const r = run(['report-save', 'a.md', '-'], { env, state, input }); assert.equal(r.status, 3, input); assert.match(r.stderr, /empty/);
+  }
+  assert.equal(fs.readFileSync(path.join(dir, 'a.md'), 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(dir), ['a.md']);
+});

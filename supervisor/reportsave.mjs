@@ -32,7 +32,8 @@ export function checkReportName(name) {
 export function saveReport(dir, name, text, { fsApi = fs } = {}) {
   checkReportName(name);
   if (redact(text) !== text) throw new SupervisorError('the report contains secret-shaped text (a token, key, password or credential in a URL); remove it and save again. Nothing was written');
-  let body = text.replace(/\s+$/, '');
+  let body = text.trimEnd();   // linear time, unlike a trailing-whitespace regex
+  if (!body || body === FINISHED_MARKER) throw new SupervisorError('the report is empty (no text came in; give a FILE or pipe the text in). Nothing was written, so any earlier report of this name is unchanged');
   if (body.split('\n').pop().trim() !== FINISHED_MARKER) body += `\n\n${FINISHED_MARKER}`;
   body += '\n';
   if (Buffer.byteLength(body) > REPORT_MAX_BYTES) throw new SupervisorError(`the report is larger than ${REPORT_MAX_BYTES / 1024} KB, the most the reader will show; shorten it`);
