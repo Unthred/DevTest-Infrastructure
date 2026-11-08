@@ -1,5 +1,5 @@
 // Issue #1056: verdict-check and ingest share one validation path; mechanical repairs; the prompt asks for the check.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,7 +10,9 @@ import { checkVerdictFile, readInboxVerdict, repairVerdict, validateVerdict, rev
 const HEAD = 'a1b2c3d4e5'.repeat(4);
 const good = () => ({ pr: 7, headSha: HEAD, verdict: 'PASS', findings: [], commandsRun: ['node --test'] });
 const expect = { pr: 7, head: HEAD, checklist: false };
-const tmp = () => fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'vc-'));
+const made = [];
+const tmp = () => { const d = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'vc-')); made.push(d); return d; };
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 const write = (obj) => { const d = tmp(); const f = path.join(d, 'verdict.json'); fs.writeFileSync(f, typeof obj === 'string' ? obj : JSON.stringify(obj)); return f; };
 const cli = (f, extra = []) => spawnSync(process.execPath, ['supervisor/cli.mjs', 'verdict-check', f, '--pr', '7', '--head', HEAD, ...extra], { encoding: 'utf8' });
 
