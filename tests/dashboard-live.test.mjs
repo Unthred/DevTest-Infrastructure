@@ -25,7 +25,7 @@ const cache = (tick = { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NO
     { number: 41, title: 'Alpha pull', headRefName: 'claude/issue-30-x', headRefOid: H(1), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] },
     { number: 42, title: 'Beta pull', headRefName: 'codex/issue-2-y', headRefOid: H(2), baseRefName: 'main', isDraft: true, mergeable: 'MERGEABLE', statusCheckRollup: [] }],
   issues: [{ number: 30, title: 'Thirty', state: 'OPEN', labels: [], prerequisites: [5] }, { number: 5, title: 'Five', state: 'OPEN', labels: [], prerequisites: [] }] });
-async function serve(t, { link, tick, upgrades = [], latch } = {}) {
+async function serve(t, { link, tick, upgrades = [], latch, dashboard } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash61-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify(cache(tick)));
@@ -33,7 +33,7 @@ async function serve(t, { link, tick, upgrades = [], latch } = {}) {
   if (upgrades.length) fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), upgrades.map(u => JSON.stringify(u)).join('\n') + '\n');
   if (latch) fs.writeFileSync(path.join(root, 'team', 'self-upgrade.latch'), JSON.stringify(latch));
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
-  const port = server.address().port, clock = { now: NOW }; server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => clock.now }));
+  const port = server.address().port, clock = { now: NOW }; server.on('request', handler({ root, config: dashboard ? { ...config, dashboard } : config, host: '127.0.0.1', port, now: () => clock.now }));
   const post = (p, body, { origin = `http://127.0.0.1:${port}`, host = `127.0.0.1:${port}` } = {}) => new Promise((resolve, reject) => { const r = http.request({ host: '127.0.0.1', port, path: p, method: 'POST', headers: { host, ...(origin ? { origin } : {}), 'content-type': 'application/x-www-form-urlencoded' } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject); r.end(body); });
   return { root, clock, post, get: p => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p, headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject)) };
 }
