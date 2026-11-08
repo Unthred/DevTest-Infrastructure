@@ -123,6 +123,16 @@ test('a Claude run that ends with a result line (type not first) closes stdin an
   assert.equal(result.code, 0);
 });
 
+test('a result line longer than the 16 KiB line cut still closes stdin and exits', async t => {
+  const s = sandbox(t, [], 'fix', { fix: 10 }, { userMessage: claude.userMessage });
+  s.spec.prompt = 'p';
+  const job = await createJob(s.root, s.spec, s.registry);
+  const script = path.join(path.dirname(s.registry), 'agent.mjs');
+  fs.writeFileSync(script, `console.log(${JSON.stringify(assistant('a', 5000))});console.log(JSON.stringify({ duration_api_ms: 5, type: 'result', subtype: 'success', result: 'x'.repeat(20000) }));process.stdin.resume();process.stdin.on('end', () => process.exit(0));setTimeout(() => process.exit(9), 8000);`);
+  const result = await s.run(job);
+  assert.equal(result.code, 0);
+});
+
 test('a run under its budget is not stopped and records turns and first-turn size', async t => {
   const s = sandbox(t, [assistant('a', 5000), assistant('b', 5200)], 'fix', { fix: 10 });
   s.spec.prompt = 'p';

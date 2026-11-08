@@ -96,7 +96,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
       if (verdict === 'remind') { event(root, job, `turn_reminder:${job.turns.count}/${limit}`, clock); if (typeof adapter.userMessage === 'function') { try { child.stdin.write(adapter.userMessage(`Turn budget: you have used ${job.turns.count} of ${limit} turns. Finish now: commit, push and report. Do not start new investigation.`)); } catch { /* stdin already closed */ } } }
       else if (verdict === 'stop') { turnStop = true; event(root, job, `turn_budget:${job.turns.count}/${limit}`, clock); saveJob(root, job, clock); signalChild('SIGINT'); }
     }
-    if (typeof adapter.userMessage === 'function' && isResultLine(line)) child.stdin.end();
+    if (typeof adapter.userMessage === 'function' && isResultLine(raw)) child.stdin.end();
     const result = adapter.observe(line, clock.now());
     if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
     record(stream, line, result);

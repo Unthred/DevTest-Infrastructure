@@ -4,6 +4,7 @@ import { requestBreakerResume } from './breakerresume.mjs';
 import { queueHomeownerRequest } from './homeownerqueue.mjs';
 import { resumeAllowed } from './breaker.mjs';
 import { rangeEqual } from './rangediff.mjs';
+import { jobCheck } from './jobcheck.mjs';
 import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
 import { transcriptFile } from './transcript.mjs';
 import { transcriptMtime } from './robust.mjs';
@@ -388,8 +389,14 @@ async function main() {
   const registry = path.resolve(a.registry || defaultRegistry);
   registryOption = a.registry ? registry : null;   // only an operator-given registry is passed on (issue #406)
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  job-check --worktree DIR (validator + full suite in one step)\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
     return;
+  }
+  // issue #1057: validator and full suite in one command for fix, cifix, implement and review jobs
+  if (command === 'job-check') {
+    if (!a.worktree) throw new SupervisorError('usage: job-check --worktree DIR');
+    const result = await jobCheck({ worktree: path.resolve(a.worktree), cli: fileURLToPath(import.meta.url) });
+    console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 3; return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
   if (command === 'rebase-prepare') {
