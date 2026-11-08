@@ -30,7 +30,7 @@ function runInstall(env) {
   assert.equal(r.status, 0, `installer failed (status ${r.status}, signal ${r.signal}, error ${r.error}): ${r.stderr}`);
 }
 test('User Scripts reconciliation install and rollback preserve all existing schedules', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron-'));
+  const root = tmpDir('supervisor-cron-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'scripts'));
   const existing = { '/existing/script': { script: '/existing/script', frequency: 'custom', id: 'other', custom: '17 6 * * *' } };
@@ -52,7 +52,7 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
 });
 // ---- issue #35: the generated script must work under cron's empty environment and never fail silently
 function cronWorld(t, { nodeBody } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron35-'));
+  const root = tmpDir('supervisor-cron35-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, 'fakebin'), plugin = path.join(root, 'plugin');
   fs.mkdirSync(bin); fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
@@ -111,7 +111,7 @@ test('issue #35 installing refuses when a required binary cannot be found for th
 });
 
 test('issue #35 reconcile exits nonzero when the team tick fails, so the generated script logs a failing rc', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-rc35-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = tmpDir('supervisor-rc35-'); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
   writeExe(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n');
   fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
@@ -188,7 +188,7 @@ test('issue #40 the gate script alone: exit 1 on a failing step, 2 on bad argume
 });
 
 test('issue #40 real cli: preflight names a failing gh, an unreadable register and a missing provider, from any cwd, and exits 3', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-pf40-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = tmpDir('supervisor-pf40-'); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
   writeExe(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n');
   // git: --version style calls succeed, but reading the register from origin/main fails (the false pass at 97f0227)
@@ -234,4 +234,16 @@ test('issue #581 a tick that always fails is attempted exactly twice', t => {
   const r = spawnSync('bash', [install], { env: { ...w.env, GATE_LOG: gl, VERIFY_RETRY_DELAY: '0' }, encoding: 'utf8' });
   assert.equal(r.status, 2); assert.match(r.stderr, /boom/);
   assert.equal(fs.readFileSync(gl + '.c', 'utf8').trim().split('\n').length, 2);
+});
+
+// Flaky leak seen in CI (supervisor-cron35-*): a late write could recreate a fixture root after its t.after cleanup ran. Fixture roots
+// now come from tmpDir(), whose process-exit hook removes them again, so nothing is left for the test-guard to report.
+test('a fixture root recreated after its t.after cleanup is still removed when the test process exits', t => {
+  const base = tmpDir('supervisor-cron35-base-');
+  const helper = new URL('./helpers/tmp.mjs', import.meta.url).href;
+  const code = `import { tmpDir } from ${JSON.stringify(helper)}; import fs from 'node:fs'; const d = tmpDir('supervisor-cron35-');
+    fs.rmSync(d, { recursive: true, force: true }); fs.mkdirSync(d + '/logs', { recursive: true });`;   // removed, then recreated by a "late" writer
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, TMPDIR: base }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(fs.readdirSync(base), []);
 });
