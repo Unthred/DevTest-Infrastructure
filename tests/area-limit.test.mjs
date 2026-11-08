@@ -147,3 +147,14 @@ test('the dashboard shows open PRs per area and the limit', async t => {
   assert.deepEqual(v.areas.areas.map(a => [a.area, a.open, a.full]), [['supervisor', 3, true]]);
   assert.match(renderPage(v), /Open PRs per area[\s\S]*3 of 3/);
 });
+
+test('foreman_headline carries open PRs per area; absent view data gives null', async () => {
+  const { createTools } = await import('../foreman-mcp/tools.mjs');
+  const areas = { limit: 3, areas: [{ area: 'supervisor', open: 3, full: true, refs: ['PR 1001'] }] };
+  const mk = view => createTools({ source: { get: async () => ({ view, ageMs: 0, stale: false }) }, readHost: () => ({}), now: () => 1_800_000_000_000 });
+  const headline = { windows: { '24h': { cards: {} }, '7d': { cards: {} } } };
+  const withAreas = JSON.parse((await mk({ headline, areas }).call('foreman_headline', {})).text);
+  assert.deepEqual(withAreas.openPrsPerArea, areas);
+  const without = JSON.parse((await mk({ headline }).call('foreman_headline', {})).text);
+  assert.equal(without.openPrsPerArea, null);
+});
