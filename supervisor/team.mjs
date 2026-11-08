@@ -1404,7 +1404,7 @@ export class Team {
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || this.churned(pr.number)) continue;   // issue #864: churn stops the fix loop
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
-      if ((escalated && (!this.canEscalate(pr.number, pr) || this.carriedHold(pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // issue #318: a listed PR never escalates; it stops with one Needs you item
+      if ((escalated && (!this.canEscalate(pr.number, pr) || this.carriedHold(pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // an escalating PR stops with one Needs you item
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
     }

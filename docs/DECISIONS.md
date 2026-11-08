@@ -251,7 +251,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rationale: 2 Nov: five long-open PRs need a stronger first look than a single D-024 review gives, and a normal review of an Opus-written PR is refused by D-024.
 - Accepted risk: for these PRs the Opus review of its own earlier commits is covered only by the narrower Sonnet commit review; a PR on a branch whose author is not the configured agent is repaired on that author's default models.
 - Rejected: A per-PR switch that skips review; a path-based `second_opinion` (it cannot name PRs or relax D-024); Opus writing fixes.
-- Withdrawn: issue #1070. Never approved, and every entry expired 9 Nov 2026; `review_exception` with its code path, tests and docs is removed. The entry stays as history, binds nothing, and needs no superseding entry.
+- Withdrawn: issue #1070. Never approved, and every entry expires 9 Nov 2026; `review_exception` with its code path, tests and docs is removed. The entry stays as history, binds nothing, and needs no superseding entry.
 - Superseded-by: none
 
 ## D-028 — Docker smokes run on Tower only; hosted CI is static; no dependency bots

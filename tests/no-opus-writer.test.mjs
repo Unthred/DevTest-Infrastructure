@@ -119,7 +119,4 @@ test('an unpinned writer is never pinned to a review model of its agent (D-026)'
   const only = world(t, { fix: { effort: 'high' }, review: fable, review_candidates: [fable] });
   only.providerModels.claude = { ...manifests.claude, aliases: ['fable', 'opus'] };
   assert.match(only.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer.*review model/);
-  // the exception path pins with the same check
-  only.exceptionFor = () => ({ agent: 'claude', commit_review: { effort: 'medium' }, full_review: S });
-  assert.match(only.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer/);
 });
