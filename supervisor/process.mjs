@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { billingRisk, limitFromAllowance } from './allowance.mjs';
+import { recordTurn, turnFromLine, turnLimit } from './turns.mjs';
 import { addUsage, sessionFromLine, usageFromLine } from './usage.mjs';
 import { begin as beginSession, recordUsage, seed as sessionSeed, touch } from './session.mjs';
 import { redact } from './redact.mjs';
@@ -47,7 +48,8 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     if (!/^\s*[{\[]/.test(line)) return 'non-json';
     try { const t = JSON.parse(line)?.type; return /^[A-Za-z0-9_.-]{1,40}$/.test(String(t)) ? `json:${t}` : 'json'; } catch { return 'json-truncated'; }
   };
-  let cause = null;
+  let cause = null, turnStop = false;
+  const turnState = {}, limit = turnLimit(config, job.kind);
   const observeEvent = (result, stream = 'stdout', line = '') => {
     if (result.event) event(root, job, `classified:${result.event}:${stream}:${lineClass(line)}`, clock);
     if (result.allowance) allowance = result.allowance;
@@ -84,6 +86,11 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     usage = addUsage(usage, usageFromLine(line));
     touch(job, clock);
     const sessionUsage = sessionFromLine(line); if (sessionUsage) recordUsage(job, sessionUsage);
+    if (!turnStop) {   // issue #1057: count the turn, remind once at 80% of the kind's budget, stop at 100%
+      const verdict = recordTurn(job, turnFromLine(line, turnState), limit);
+      if (verdict === 'remind') event(root, job, `turn_reminder:${job.turns.count}/${limit}`, clock);
+      else if (verdict === 'stop') { turnStop = true; event(root, job, `turn_budget:${job.turns.count}/${limit}`, clock); saveJob(root, job, clock); signalChild('SIGINT'); }
+    }
     const result = adapter.observe(line, clock.now());
     if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
     record(stream, line, result);
@@ -153,6 +160,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     const current = readJob(root, job.id);
     if (current.status === 'paused_manual' || current.status === 'stopped') job.status = current.status;
     job.childPid = null; job.childStart = null; job.childEndedAt = clock.now(); saveJob(root, job, clock);
+    if (stopping && turnStop && !checkpointFailed) return { code: 1, event: 'turn_budget' };
     if (stopping) return { code: 1, event: checkpointFailed ? 'checkpoint_failed' : 'manual_stop' };
     return { code: result.code, event: observed || result.event, resetAt, resetSource, verified };
   } finally {

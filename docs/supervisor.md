@@ -109,3 +109,12 @@ A dashboard write (Watch, Mark as read, Refresh allowance, Approve or Reject on 
 
 ### Merged, installed and verified (issue #855)
 The team tick runs three things for this rule. `raiseHostValues` offers one inbox item (`host_value`, raised only by Foreman) for the first Origin the dashboard refused that is not in `dashboard.allowed_origins`; the dashboard records refused origins in `<state root>/team/refused-origins.json` (well-formed origins only, newest ten). `runHostValue` applies an approved item with a backup, a validation of the merged configuration and a parse check. `verifyInstalled` reads the completed installs in `team/upgrades.jsonl`, takes the issues each pull request closes, and runs their `## Live checks` against `self_upgrade.public_dashboard_url`; results are kept in `<state root>/team/verification.json` (`verified` or `failed` with the follow-up issue number). Without that URL nothing is run and the issue stays at installed. Stages and rules for authors: [team-loop.md](team-loop.md#done-is-installed-and-verified-not-merged-issue-855).
+
+## Turns per job and the turn budget (issue #1057)
+
+Each turn re-reads the whole first-turn prompt and tool set, so the number of turns, not the files an agent reads, drives a job's input tokens. The supervisor now counts them.
+
+- **Recorded.** `job.turns` holds `count` (model responses: a Claude assistant message id counted once, or a Codex `turn.completed`) and `firstTurnInput` (input tokens of the first turn, cache reads and writes included; a resumed attempt does not overwrite it). `jobOutcome` (the Foreman MCP job record) returns it as `turns`. `turnsByKind(jobs)` in `supervisor/turns.mjs` gives mean turns and mean first-turn input per job kind for the Usage page and `foreman_jobs`.
+- **Budget per kind** (`DEFAULT_TURN_BUDGET`): review 40, fix and cifix 35, implement 60, rebase 50. They sit above the measured means (review 16, fix 13, implement 19, rebase 25, 8 Nov 2026), so a normal job is not cut; tighten them from the p90 once `turns` data exists. A kind with no entry has no budget.
+- **At 80%** the event `turn_reminder:<n>/<limit>` is recorded once. A headless `--print` run has no input channel after the prompt, so the reminder cannot be sent to the agent mid-run; it is a recorded signal only.
+- **At 100%** the event `turn_budget:<n>/<limit>` is recorded and the run is sent SIGINT. The job ends `failed` with `incompleteReason.cause = turn_budget` (not retried automatically), and the work already committed or checkpointed is kept.

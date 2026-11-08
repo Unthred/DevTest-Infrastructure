@@ -46,6 +46,7 @@ export function jobOutcome(root, id) {
     // Evidence about pushed work, stated as evidence: the record has no remote check. A local commit that was never pushed shows as headMovedLocally with no push command.
     pushed: { headAtStart: startHead ? String(startHead).slice(0, 12) : null, lastCheckpointHead: nowHead ? String(nowHead).slice(0, 12) : null, headMovedLocally: startHead && nowHead ? startHead !== nowHead : null, uncommittedFiles: Array.isArray(cp?.status) ? cp.status.length : null, pushCommandsInLog: pushCommands,
       note: 'Evidence only: Foreman does not check the remote here. Compare with the pull request head (foreman_why_blocked).' },
+    turns: job.turns ? { count: job.turns.count ?? 0, firstTurnInputTokens: job.turns.firstTurnInput ?? null, reminded: job.turns.reminded === true, stoppedAtBudget: job.turns.stopped === true } : null,
     cost: { tokens: job.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : null, usdEquivalent: Number.isFinite(job.usage?.costUsdEstimate) ? job.usage.costUsdEstimate : null },
     events: readEventNames(root, id).map(e => ({ at: iso(e.at), kind: e.kind })),
     logTail: entries.slice(-LOG_TAIL_ENTRIES).map(e => ({ seq: e.seq, kind: e.kind, text: redact(`${e.tool ? e.tool + ': ' : ''}${e.text || e.detail || ''}`, LOG_ENTRY_CHARS) })),
