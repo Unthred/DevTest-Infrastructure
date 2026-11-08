@@ -91,7 +91,7 @@ test('stopGroup on a finished group is a no-op that reports clean', async () => 
 test('test-slot run --max-minutes stops the run, its grandchildren and returns non-zero; SIGTERM to the runner stops the group too', async t => {
   const state = tmp(t), pidFile = path.join(state, 'gc'), fake = path.join(state, 'node');
   fs.writeFileSync(fake, `#!/bin/sh\nsleep 300 &\necho $! > ${pidFile}\nwait\n`, { mode: 0o755 });
-  const env = { ...process.env, AI_SUPERVISOR_TEST_GRACE_MS: '300' };
+  const env = { ...process.env, AI_SUPERVISOR_TEST_GRACE_MS: '300', TMPDIR: state };   // the runner's guard folder lands in the test's own folder (issue #1007)
   const r = spawnSync(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, '--max-minutes', '0.02', '--no-reuse', '--', fake, 'x'], { encoding: 'utf8', timeout: 30000, env, cwd: state });
   assert.notEqual(r.status, 0); assert.match(r.stderr, /maximum runtime/);
   const gone = Number(fs.readFileSync(pidFile, 'utf8'));
@@ -108,7 +108,7 @@ test('test-slot run --max-minutes stops the run, its grandchildren and returns n
 test('a SIGKILLed test-slot runner does not orphan the job group: the watchdog kills it', async t => {
   const state = tmp(t), pidFile = path.join(state, 'gc'), fake = path.join(state, 'node');
   fs.writeFileSync(fake, `#!/bin/sh\nsleep 300 &\necho $! > ${pidFile}\nwait\n`, { mode: 0o755 });
-  const runner = spawn(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, '--no-reuse', '--', fake, 'x'], { stdio: 'ignore', cwd: state });
+  const runner = spawn(process.execPath, [cli, 'test-slot', 'run', '--state-root', state, '--no-reuse', '--', fake, 'x'], { stdio: 'ignore', cwd: state, env: { ...process.env, TMPDIR: state } });
   t.after(() => { try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ } });
   assert.ok(await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', 15000));
   const gc = Number(fs.readFileSync(pidFile, 'utf8'));

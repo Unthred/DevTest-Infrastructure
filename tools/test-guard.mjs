@@ -13,6 +13,8 @@ export function runGuarded(cmd, { base = os.tmpdir(), env = process.env, stdio =
     const r = spawnSync(cmd[0], cmd.slice(1), { stdio, env: { ...env, TMPDIR: tmp } });
     const left = fs.readdirSync(tmp).sort();
     const status = r.status ?? 1;
+    if (r.error) console.error(`test-guard: could not run ${cmd[0]}: ${r.error.code || r.error.message}`);
+    else if (r.signal) console.error(`test-guard: ${cmd[0]} was stopped by ${r.signal}`);
     return { status, left, exit: status !== 0 ? status : left.length ? 1 : 0 };
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
