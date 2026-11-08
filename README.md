@@ -47,7 +47,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 | [contracts/](contracts/) | Machine-readable CLI and provider contracts, with examples |
 
 ## Validation
-`node tools/validate-project.mjs` checks required files, the decision register, the handover, entry points, contracts, secrets, Docker-socket/privileged use and image pinning. `node --test "tests/**/*.test.mjs"` runs it against good and deliberately broken fixtures. CI runs both.
+`node tools/validate-project.mjs` checks required files, the decision register, the handover, entry points, contracts, secrets, Docker-socket/privileged use and image pinning. `node --test "tests/**/*.test.mjs"` runs it against good and deliberately broken fixtures. CI runs both, the tests under `node tools/test-guard.mjs -- ...`, which sets TMPDIR to a fresh folder and fails the run if a test leaves anything in it (issue #1007).
 
 Before each substantive report, record progress in the PR description and issue comments (feature branches never edit the handover, D-023; it is updated on main after merge). Record source, CI, deployed and verified states separately.
 

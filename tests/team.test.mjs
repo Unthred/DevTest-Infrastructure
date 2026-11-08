@@ -1026,6 +1026,21 @@ test('lean launch: the Claude manifest drops MCP servers (manifest only, D-012);
   assert.ok(!JSON.stringify(m('codex')).includes('mcp'));
 });
 
+test('host pressure (issue #1007): over 80% disk holds new starts, keeps merges and raises one Inbox item; recovery resumes starts', async t => {
+  const mk = hostPressure => world(t, { issues: [issue(23), issue(2)], pulls: [pr(10, 'codex/issue-2-x', H(1))], teamOpts: { hostPressure } });
+  const full = mk(() => ({ hold: true, reasons: ['the root volume is 91% full'], top: [{ path: '/tmp/devtest-validate-x', bytes: 9e9 }] }));
+  full.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };
+  const r = await full.team.tick();
+  assert.deepEqual(r.actions.map(a => a.type), ['merge']); assert.deepEqual(full.calls.created, []);
+  assert.match(r.held.reason, /host pressure: the root volume is 91% full/);
+  assert.match(full.team.selfCheckItems().find(i => i.id === 'selfcheck-host-pressure').text, /91% full/);
+  const ok = mk(() => ({ hold: false, reasons: [], top: [] }));
+  const stale = path.join(ok.team.root, 'tmp', 'job-dead'); fs.mkdirSync(stale, { recursive: true }); fs.writeFileSync(path.join(stale, 'f'), 'x'.repeat(3000)); fs.utimesSync(stale, new Date(-8 * 3600000), new Date(-8 * 3600000));   // the test clock reads 1000 ms
+  const r2 = await ok.team.tick();
+  assert.equal(r2.tempSwept.folders, 1); assert.ok(!fs.existsSync(stale));
+  assert.equal(r2.held, undefined); assert.ok(ok.calls.created.length > 0); assert.equal(ok.team.selfCheckItems().some(i => i.id === 'selfcheck-host-pressure'), false);
+});
+
 test('hold (issue #134): a pending upgrade starts no job, reports the hold, and still merges; without a hold dispatch is unchanged', async t => {
   const mk = () => world(t, { issues: [issue(23), issue(2)], pulls: [pr(10, 'codex/issue-2-x', H(1))] });
   const held = mk(); held.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };

@@ -1,6 +1,6 @@
 // Issue #415: a conflict rebase must not silently drop a change inside a commit (PR #222: `runDueProbes` kept, its call dropped).
 // Real git (bare remote + independent clones, D-011) for the comparison and the guarded push; fake GitHub for the dispatcher.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -156,7 +156,10 @@ function resolveList(r, text) {
   return oldHead;
 }
 const cliPath = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
-const runPush = (r, oldHead) => { try { return { code: 0, out: execFileSync(process.execPath, [cliPath, 'rebase-push', '--worktree', r.agent, '--branch', 'feat', '--base', 'main', '--old', oldHead], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, out: e.stdout }; } };
+const rlsrRoots = [];   // issue #1007: removed after the run
+after(() => { for (const d of rlsrRoots) fs.rmSync(d, { recursive: true, force: true }); });
+const rlsrRoot = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')); rlsrRoots.push(d); return d; };
+const runPush = (r, oldHead) => { try { return { code: 0, out: execFileSync(process.execPath, [cliPath, 'rebase-push', '--worktree', r.agent, '--branch', 'feat', '--base', 'main', '--old', oldHead], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: rlsrRoot() }, stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, out: e.stdout }; } };
 
 test('a union of both sides\' list items is not lost, and rebase-push pushes it', t => {
   const r = listRepo(t); const oldHead = resolveList(r, 'export const KEYS = [\n  "a", "refusedReviews", "reviewRefusals",\n];\nconst z = 1;\n');
@@ -228,6 +231,6 @@ test('a merged line that is new in the resolution and holds the PR\'s tokens in 
 
 test('rebase-prepare prints oldHead so the agent can pass it to rebase-push', t => {
   const r = listRepo(t);
-  const out = execFileSync(process.execPath, [cliPath, 'rebase-prepare', '--worktree', r.agent, '--branch', 'feat'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const out = execFileSync(process.execPath, [cliPath, 'rebase-prepare', '--worktree', r.agent, '--branch', 'feat'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: rlsrRoot() }, stdio: ['ignore', 'pipe', 'pipe'] });
   assert.match(JSON.parse(out).oldHead, /^[0-9a-f]{40}$/);
 });

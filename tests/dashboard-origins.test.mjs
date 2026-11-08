@@ -1,4 +1,5 @@
 // Issue #556: the three dashboard writes accept the listen-address origin and the origins listed in dashboard.allowed_origins, and no other.
+import { removeLater } from './_tmp-leaks.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,10 +19,10 @@ async function serve(t, dashboard = { allowed_origins: [PUBLIC] }) {
   for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d));
   fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ mergeLog: [] }));
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, pulls: [], issues: [{ number: 10, title: 'Ten', state: 'OPEN', labels: [] }], merged: [] }));
-  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => new Promise(r => { server.close(r); server.closeAllConnections(); })); removeLater(root); // the server may keep writing to root after the test ends (issue #1007)
   const port = server.address().port, probes = [];
   const cfg = dashboard === null ? base : { ...base, dashboard };
-  server.on('request', handler({ root, config: cfg, host: '127.0.0.1', port, now: () => NOW, probe: async o => { probes.push(o.agent); return { ok: true }; } }));
+  server.on('request', handler({ wake: () => {}, root, config: cfg, host: '127.0.0.1', port, now: () => NOW, probe: async o => { probes.push(o.agent); return { ok: true }; } }));
   const proof = `proof=${writeToken(root)}`;
   // The Host is always the listen address, as a reverse proxy that forwards the upstream Host presents it.
   const call = (p, origin, body, extra = {}) => new Promise((resolve, reject) => {
@@ -94,9 +95,9 @@ async function serveInbox(t, dashboard = { allowed_origins: [PUBLIC] }) {
   const id = 'ab'.repeat(16); fs.writeFileSync(path.join(dir, 'items', `${id}.json`), JSON.stringify({ kind: 'prompt', title: 'Tidy the docs index', prompt: 'Fix the broken link in docs/README.md.' })); inbox.scan(dir, NOW);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inboxroot556-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d));
-  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => new Promise(r => { server.close(r); server.closeAllConnections(); })); removeLater(root); // the server may keep writing to root after the test ends (issue #1007)
   const port = server.address().port;
-  server.on('request', handler({ root, config: { ...base, inbox: { dir }, ...(dashboard ? { dashboard } : {}) }, host: '127.0.0.1', port, now: () => NOW }));
+  server.on('request', handler({ wake: () => {}, root, config: { ...base, inbox: { dir }, ...(dashboard ? { dashboard } : {}) }, host: '127.0.0.1', port, now: () => NOW }));
   const post = ({ origin, proof = writeToken(root), host = `127.0.0.1:${port}`, decision = 'approve' }) => new Promise((resolve, reject) => {
     const r = http.request({ host: '127.0.0.1', port, path: '/inbox', method: 'POST', headers: { host, 'content-type': 'application/x-www-form-urlencoded', ...(origin === undefined ? {} : { origin }) } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); });
     r.on('error', reject); r.end(`id=${id}&decision=${decision}&proof=${proof}`);

@@ -1,6 +1,7 @@
 // Issue #856: the dashboard inbox shows what was chosen. Decision state and undo (store), the JSON answers of the write route, the
 // "Decided today" list and the count on the page, and the browser logic (both buttons off at once, a refusal giving them back).
 // Fixtures are built at run time; no model is called.
+import { removeLater } from './_tmp-leaks.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -24,9 +25,9 @@ const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path:
 async function serve(t, inboxDir) {
   const root = tmp(t, 'dash856-'); for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: Date.now() - 60000, status: 'ok', lastOkAt: Date.now() - 60000 }, fetchedAt: Date.now() - 60000, pulls: [], issues: [{ number: 10, title: 'Ten', state: 'OPEN', labels: [] }] }));
-  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => new Promise(r => { server.close(r); server.closeAllConnections(); })); removeLater(root); // the server may keep writing to root after the test ends (issue #1007)
   const port = server.address().port, clock = { now: Date.now() };
-  server.on('request', handler({ root, config: { ...config, inbox: { dir: inboxDir } }, host: '127.0.0.1', port, now: () => clock.now }));
+  server.on('request', handler({ wake: () => {}, root, config: { ...config, inbox: { dir: inboxDir } }, host: '127.0.0.1', port, now: () => clock.now }));
   const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => { const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject); r.end(body); });
   const post = (id, decision, { proof = writeToken(root), origin = `http://127.0.0.1:${port}`, json = true } = {}) => req('POST', '/inbox', { headers: { ...(origin ? { origin } : {}), ...(json ? { accept: 'application/json' } : {}), 'content-type': 'application/x-www-form-urlencoded' }, body: `id=${id}&decision=${decision}&proof=${proof}` });
   return { root, clock, get: p => req('GET', p), post };

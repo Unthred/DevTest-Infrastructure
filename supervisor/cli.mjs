@@ -14,6 +14,7 @@ import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, Wo
 import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
+import { guardTmp, leakText } from './jobtmp.mjs';
 import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, DEFAULT_REUSE_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
 import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
 import { acquireTestSlot, recordTestEvent, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup, formatRuntime } from './testslots.mjs';
@@ -485,23 +486,27 @@ async function main() {
     const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
     if (!release) { console.error('waited too long for a free test slot'); recordTestEvent(root, { kind: 'refused', label: a.label || cmd.join(' '), reason: 'waited too long for a free test slot' }); process.exitCode = 3; return; }
     const id = `${Date.now()}-${process.pid}`;
+    // Issue #1007: the suite runs with a fresh TMPDIR; anything left in it after a passing run turns the result into a failure.
+    const guard = guardTmp(testEnv(process.env, cfg.test_tmp_root));
+    const leakCheck = code => { const left = guard.finish(); if (code === 0 && left.length) { console.error(`test-slot: ${leakText(left)}`); recordTestEvent(root, { kind: 'leak', label: a.label || cmd.join(' '), reason: leakText(left).slice(0, 300) }); return 1; } return code; };
     if (grant.limits) {
       // A memory-limited job runs through the resource runner (own group, cgroup wrapper, memory watchdog).
-      const { code, kill } = await runLimited(cmd, { env: testEnv(process.env, cfg.test_tmp_root), limits: grant.limits, klass, id, wrapper: cgroupWrapper(grant, id, { available: fs.existsSync('/run/systemd/system') }) });
+      const { code, kill } = await runLimited(cmd, { env: guard.env, limits: grant.limits, klass, id, wrapper: cgroupWrapper(grant, id, { available: fs.existsSync('/run/systemd/system') }) });
       if (kill) {
         console.error(`test-slot: ${kill.note}`); recordTestEvent(root, { kind: 'killed', label: a.label || cmd.join(' '), reason: kill.note });
         try { fs.mkdirSync(path.join(root, 'team'), { recursive: true }); fs.appendFileSync(path.join(root, 'team', 'test-job-results.jsonl'), JSON.stringify({ at: new Date().toISOString(), label: a.label || null, ...kill }) + '\n'); } catch { /* the stderr line above is the record */ }
       }
-      release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
+      const final = leakCheck(code);
+      release(); if (final === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = final; return;
     }
     // Own process group, a maximum runtime, and the whole group is stopped (TERM, then KILL) on timeout, signal or exit.
     const maxMinutes = Number(a['max-minutes']);
     const maxRuntimeMs = Number.isFinite(maxMinutes) && maxMinutes > 0 ? maxMinutes * 60000 : DEFAULT_MAX_RUNTIME_MS;
-    const run = await runInGroup(cmd, { env: testEnv(process.env, cfg.test_tmp_root), maxRuntimeMs, graceMs: Number(process.env.AI_SUPERVISOR_TEST_GRACE_MS) || 5000 });
+    const run = await runInGroup(cmd, { env: guard.env, maxRuntimeMs, graceMs: Number(process.env.AI_SUPERVISOR_TEST_GRACE_MS) || 5000 });
     if (run.timedOut) console.error(`test-slot: stopped after the maximum runtime of ${formatRuntime(maxRuntimeMs)} (process group terminated)`);
     if (run.timedOut) recordTestEvent(root, { kind: 'timeout', label: a.label || cmd.join(' '), reason: `stopped after the maximum runtime of ${formatRuntime(maxRuntimeMs)}` });
     if (run.leftover) { console.error('test-slot: WARNING processes of the test run survived SIGKILL'); recordTestEvent(root, { kind: 'orphaned', label: a.label || cmd.join(' '), reason: 'processes of the test run survived SIGKILL' }); }
-    const code = run.code;
+    const code = leakCheck(run.code);
     release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
   }
   if (command === 'dashboard') {

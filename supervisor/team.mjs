@@ -2,8 +2,10 @@
 // here. Models run only inside supervised jobs that the dispatcher creates through the existing supervisor.
 // Provider-agnostic (D-012): agents and their providers come from team.json; nothing here names Claude or Codex.
 import { selfCheck, applySelfCheck } from './selfcheck.mjs';
+import { sweepJobTmp, hostPressure, pressureText } from './jobtmp.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
 import { takeBreakerResumeRequests, discardBreakerResumeRequests } from './breakerresume.mjs';
@@ -561,7 +563,8 @@ export function reclassifyFalseClaims(v) {
 // Lean job context (issue #109): AGENTS.md is already loaded by the CLI, so no prompt asks for it; each job reads only what it needs.
 const SAFETY = 'Work only in your assigned worktree. Never merge, deploy, reboot Tower, change production Home Assistant, purchase anything or disclose a secret. The dispatcher, not you, merges.';
 const HANDOVER_UPDATE = 'Do not edit docs/ai/CURRENT_HANDOVER.md on this branch (D-023): CI fails a branch that does. Put progress and the four completion states in the pull request description or an issue comment instead.';
-const COMMON = SAFETY + ' ' + HANDOVER_UPDATE;
+const TEMP_RULE = 'Use $TMPDIR (a per-job folder on the cache drive that is removed when you finish) for every scratch copy, clone and temporary file, never /tmp directly (issue #1007).';
+const COMMON = SAFETY + ' ' + HANDOVER_UPDATE + ' ' + TEMP_RULE;
 // Issue #448: the full suite runs through the test-slot queue (limits.test_slots at once on Tower); failures are still printed in full.
 export const TEST_COMMAND = '/root/bin/ai-supervisor test-slot run -- node --test --test-reporter=dot "tests/**/*.test.mjs"';
 // D-024: the reviewer runs the tests itself, so a review never reuses an earlier pass of the same tree.
@@ -635,10 +638,10 @@ export function readSplitDraft(root, ticket) {
 
 const STALE_MARK_MS = 10 * 60000;   // issue #521
 export class Team {
-  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, sessionWriterOf = findSessionWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined }) {
+  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, sessionWriterOf = findSessionWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined, hostPressure: pressureReader = null }) {
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
     this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.sessionWriterOf = sessionWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
-    this.c = validateTeamConfig(config); this.root = root; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
+    this.c = validateTeamConfig(config); this.root = root; this.pressureReader = pressureReader; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
     this.dir = path.join(root, 'team');
     this.file = path.join(this.dir, 'state.json');
     this.s = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {};
@@ -1694,6 +1697,8 @@ export class Team {
     if (!dryRun) await this.rearmOnRecovery(report);
     actions = this.applyRetryCap(actions, report);   // issue #995
     if (!dryRun) await guard('job liveness', () => this.livenessSweep(report));
+    if (!dryRun) await guard('temp sweep', () => this.sweepTemp(report));
+    if (!dryRun) await guard('host pressure', async () => { this.hostPressureState = this.hostPressureNow(); });
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
     if (!dryRun) await guard('self-check', () => this.runSelfCheck(report));
     if (!dryRun) await guard('review exceptions', () => this.endExceptions(report));
@@ -1702,6 +1707,14 @@ export class Team {
       report.held = { reason: `upgrade to ${String(hold.to || '').slice(0, 7) || 'a newer supervisor'} pending`, actions: actions.filter(a => a.type !== 'merge').length,
         agents: [...new Set(actions.filter(a => a.type !== 'merge' && a.agent).map(a => a.agent))] };   // issue #487: the hold belongs to these agents only
       actions = actions.filter(a => a.type === 'merge');
+    }
+    // Issue #1007: with the root volume or swap nearly full no new job starts (merges are not jobs); the Inbox item names the top consumers.
+    if (!dryRun) {
+      const pressure = this.hostPressureState || { hold: false, reasons: [] };
+      if (pressure.hold) {
+        report.held = { ...(report.held || {}), reason: `host pressure: ${pressure.reasons.join(' and ')}`, actions: actions.filter(a => a.type !== 'merge').length };
+        actions = actions.filter(a => a.type === 'merge');
+      }
     }
     report.actions = actions;
     report.holds = JSON.parse(JSON.stringify(this.held || {}));   // issue #487: the planner's per-agent hold texts, for the idle-cause record
@@ -1722,13 +1735,22 @@ export class Team {
     return report;
   }
 
+  // Issue #1007 (seams for tests): the host check and the sweep of job scratch folders.
+  hostPressureNow() { if (typeof this.pressureReader !== 'function' && process.env.NODE_TEST_CONTEXT) return { hold: false, reasons: [] }; return typeof this.pressureReader === 'function' ? this.pressureReader() : hostPressure({ dirs: [os.tmpdir(), path.join(this.root || '', 'tmp')] }); }
+  async sweepTemp(report) {
+    const root = this.root; if (!root) return;
+    const owned = (await this.jobs.listActive()).map(j => j.id);
+    const r = sweepJobTmp(root, { ownedIds: owned, now: this.clock.now(), logFile: path.join(root, 'team', 'temp-sweeps.jsonl') });
+    if (r.removed.length) report.tempSwept = { folders: r.removed.length, freedMB: Math.round(r.bytes / 1048576) };
+  }
+
   // Issue #630: compare Foreman's records with the lists this tick already read and with the running jobs. Reads only (no model, no extra
   // GitHub call); the one safe fix is applied and logged, the rest become Needs you items (see selfcheck.mjs). A failure is reported, never fatal.
   async runSelfCheck(report) {
     if (!this.view) return;
     const active = await this.jobs.listActive(), aliveById = {};
     if (typeof this.jobs.alive === 'function') for (const a of active) if (a.status === 'running') { try { const job = await this.jobs.get(a.id); aliveById[a.id] = job ? !!(await this.jobs.alive(job)) : false; } catch { /* unknown: raise nothing */ } }
-    const result = selfCheck({ state: this.s, prs: this.view.prs, issues: this.view.issues, active, aliveById, stale: this.stale, maxReviewAttempts: this.c.limits.max_review_attempts, now: this.clock.now() });
+    const result = selfCheck({ pressure: this.hostPressureState?.hold ? { text: pressureText(this.hostPressureState) } : null, state: this.s, prs: this.view.prs, issues: this.view.issues, active, aliveById, stale: this.stale, maxReviewAttempts: this.c.limits.max_review_attempts, now: this.clock.now() });
     const applied = applySelfCheck(this.s, result, this.clock.now());
     this.save();
     if (applied.length) report.selfChecked = applied.map(f => f.what);
