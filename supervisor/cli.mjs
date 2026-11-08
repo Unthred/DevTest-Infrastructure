@@ -388,7 +388,7 @@ async function main() {
   const registry = path.resolve(a.registry || defaultRegistry);
   registryOption = a.registry ? registry : null;   // only an operator-given registry is passed on (issue #406)
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -443,6 +443,21 @@ async function main() {
         const job = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
         console.log(`${job.id} ${job.provider} #${job.issue} ${job.status} attempts=${job.attempts}`);
       }
+    }
+    return;
+  }
+  // Issue #882: where hand-run sessions leave reports for the overseer (read by foreman_reports). Exit 3 with a plain reason when it cannot be used.
+  if (command === 'reports-dir' || command === 'report-save') {
+    const { reportsDir, saveReport, readReportInput, checkReportName } = await import('./reportsave.mjs');   // loaded here only: it shares the reader's rules from ../foreman-mcp, which other copies of supervisor/ (tests) lack
+    try {
+      const cfg = (() => { try { return loadTeamConfig(teamConfigFile, root); } catch { return {}; } })();
+      if (command === 'report-save') checkReportName(a._[0]);
+      const dir = reportsDir({ configured: cfg.reports_dir });
+      if (command === 'reports-dir') { console.log(dir); return; }
+      console.log(saveReport(dir, a._[0], readReportInput(a._[1])));
+    } catch (error) {
+      if (!(error instanceof SupervisorError)) throw error;
+      console.error(`${command}: ${error.message}`); process.exitCode = 3;
     }
     return;
   }

@@ -58,6 +58,7 @@ export function validateTeamConfig(input) {
   if ('test_reuse_hours' in L && !(Number.isSafeInteger(L.test_reuse_hours) && L.test_reuse_hours >= 0 && L.test_reuse_hours <= 720)) throw new SupervisorError('invalid team limit: test_reuse_hours');
   if ('test_concurrency' in L && !(Number.isSafeInteger(L.test_concurrency) && L.test_concurrency >= 1 && L.test_concurrency <= 32)) throw new SupervisorError('invalid team limit: test_concurrency');
   if ('test_tmp_root' in c && !(typeof c.test_tmp_root === 'string' && path.isAbsolute(c.test_tmp_root))) throw new SupervisorError('invalid team config: test_tmp_root must be an absolute path');
+  if ('reports_dir' in c && !(typeof c.reports_dir === 'string' && path.isAbsolute(c.reports_dir))) throw new SupervisorError('invalid team config: reports_dir must be an absolute path');   // issue #882
   if ('test_resources' in c) validateResourceConfig(c.test_resources);
   if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');
   if ('chain_poll_seconds' in L && !(typeof L.chain_poll_seconds === 'number' && L.chain_poll_seconds >= 1 && L.chain_poll_seconds <= 300)) throw new SupervisorError('invalid team limit: chain_poll_seconds');
@@ -221,11 +222,12 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'test_resources', 'inbox', 'change_check', 'dashboard'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
   if ('test_tmp_root' in local) { if (typeof local.test_tmp_root !== 'string' || !path.isAbsolute(local.test_tmp_root)) throw new SupervisorError('invalid team.local.json: test_tmp_root must be an absolute path'); out.test_tmp_root = local.test_tmp_root; }
+  if ('reports_dir' in local) { if (typeof local.reports_dir !== 'string' || !path.isAbsolute(local.reports_dir)) throw new SupervisorError('invalid team.local.json: reports_dir must be an absolute path'); out.reports_dir = local.reports_dir; }   // issue #882
   if ('test_resources' in local) out.test_resources = validateResourceConfig(local.test_resources);
   if ('change_check' in local) { try { validateChangeCheck(local.change_check); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } out.change_check = { ...(out.change_check || {}), ...local.change_check }; }   // issue #755
   if ('inbox' in local) out.inbox = local.inbox;   // issue #642: validated like the shipped key by validateTeamConfig, which loadTeamConfig runs on the merged result
