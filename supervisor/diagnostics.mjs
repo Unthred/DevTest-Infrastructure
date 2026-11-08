@@ -176,3 +176,34 @@ export function buildDiagnostics({ jobs = [], snapshots = [], verdicts = {}, age
     idle: idleHistory({ jobs, snapshots: snaps, agents, from, to }), passes: passStats(snaps, from, to), wake, lastPass: lastPassOf(snaps),
     recorder: recorderDir ? readRecorder(recorderDir, from, to) : { status: 'missing', note: 'No recorder log folder is configured.', files: 0, samples: 0, hourly: [], days: [] } };
 }
+
+// ---- Issue #1093: disk samples written by the disk recording issue, one JSON line per sample:
+// {"at": <epoch ms>, "volumes": [{"path", "usedBytes", "totalBytes", "status"}], "tmpEntries": <n>}.
+// Bounded read: only the last DISK_SAMPLE_MAX_BYTES of the file, only the last 7 days. status: ok | empty | missing | unreadable.
+export const DISK_SAMPLE_DAYS = 7;
+export const DISK_SAMPLE_MAX_BYTES = 4 * 1048576;
+const nonNeg = n => Number.isFinite(n) && n >= 0;
+export function readDiskSamples(file, now = Date.now(), maxBytes = DISK_SAMPLE_MAX_BYTES) {
+  const out = { status: 'ok', samples: [] };
+  let text;
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size, start = Math.max(0, size - maxBytes), buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start); text = buf.toString('utf8');
+      if (start > 0) text = text.slice(text.indexOf('\n') + 1);   // the first line is cut
+    } finally { fs.closeSync(fd); }
+  } catch (error) { return { ...out, status: error?.code === 'ENOENT' ? 'missing' : 'unreadable' }; }
+  const from = now - DISK_SAMPLE_DAYS * DAY_MS;
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    let r; try { r = JSON.parse(line); } catch { continue; }
+    if (!nonNeg(r?.at) || r.at < from || r.at > now + DAY_MS || !Array.isArray(r.volumes)) continue;
+    const volumes = r.volumes.filter(v => typeof v?.path === 'string' && v.path).slice(0, 32).map(v => (v.status === 'ok' && nonNeg(v.usedBytes) && nonNeg(v.totalBytes) && v.totalBytes > 0
+      ? { path: v.path.slice(0, 120), usedBytes: v.usedBytes, totalBytes: v.totalBytes, status: 'ok' } : { path: v.path.slice(0, 120), usedBytes: null, totalBytes: null, status: 'unreadable' }));
+    out.samples.push({ at: r.at, volumes, tmpEntries: nonNeg(r.tmpEntries) ? r.tmpEntries : null });
+  }
+  out.samples.sort((a, b) => a.at - b.at);
+  if (!out.samples.length) out.status = 'empty';
+  return out;
+}
