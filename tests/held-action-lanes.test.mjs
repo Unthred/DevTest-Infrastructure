@@ -82,3 +82,11 @@ test('clear_retry_cap removes only the capped records of that pull request; refu
   await assert.rejects(w.team.applyInboxAction({ action: 'clear_retry_cap', target: '99', reason: 'x' }, {}), /not open/);
   assert.deepEqual(rebases(await w.team.plan()), [1]);
 });
+test('clear_retry_cap also frees a rebase whose attempts are used up (real attempt counts)', async t => {
+  const w = world(t, { roles: { implementer: 1, reviewer: 1, rebaser: 1 }, pulls: [conflicting(1)] });
+  cap(w, 1, conflicting(1).headRefOid);
+  w.team.s.rebaseAttempts[`1:${conflicting(1).headRefOid}`] = 2;
+  assert.deepEqual(rebases(await w.team.plan()), [], 'capped and out of attempts');
+  await w.team.applyInboxAction({ action: 'clear_retry_cap', target: '1', reason: 'fixed' }, {});
+  assert.deepEqual(rebases(await w.team.plan()), [1], 'planned again after the clear');
+});

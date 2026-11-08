@@ -1335,7 +1335,7 @@ export class Team {
       }
       if (exhausted || !reasons.length) continue;
       const conflicting = pr.mergeable === 'CONFLICTING';
-      out.push({ pr: pr.number, head: pr.headRefOid, reasons, tried, unblock, waits, conflicting, ...(this.agents().some(([a]) => this.writerUnknown(pr, this.c.agents[a].provider)) ? { writerUnknown: true } : {}), ...(conflicting ? { rebaseAttempts: this.s.rebaseAttempts[key] || 0, maxRebase: this.c.limits.max_fix_attempts } : {}) });
+      out.push({ pr: pr.number, head: pr.headRefOid, reasons, tried, unblock, waits, conflicting, ...(this.agents().some(([a]) => this.writerUnknown(pr, this.c.agents[a].provider)) ? { writerUnknown: true } : {}), ...(conflicting ? { rebaseAttempts: this.s.rebaseAttempts[key] || 0, maxRebase: this.c.limits.max_fix_attempts, ...(robust.capped(this.s, { type: 'rebase', subject: pr.number, head: pr.headRefOid }, robust.sameCauseCap(this.c.limits)) ? { rebaseCapped: true } : {}) } : {}) });
     }
     return out;
   }
@@ -2198,6 +2198,11 @@ export class Team {
     const keys = Object.entries(this.s.sameCause || {}).filter(([k, v]) => k.slice(k.indexOf(':') + 1) === String(n) && v.count >= cap).map(([k]) => k);
     if (!keys.length) throw new SupervisorError(`PR #${n} has no retry cap in place; nothing to clear`);
     for (const k of keys) delete this.s.sameCause[k];
+    // A capped rebase has also spent its attempts, and choose() skips a rebase at the limit; lower that counter by one (as grantReviewAttempt does) so it is planned again.
+    if (keys.some(k => k.startsWith('rebase:')) && SHA.test(pr.headRefOid)) {
+      const rk = verdictKey(n, pr.headRefOid), max = this.c.limits.max_fix_attempts;
+      if ((this.s.rebaseAttempts[rk] || 0) >= max) this.s.rebaseAttempts[rk] = max - 1;
+    }
     this.save();
     this.logUnblock({}, { target: n, tk: 'pull', what: 'cleared the retry cap', why: `homeowner approved on the dashboard: ${reason}`, result: keys.join(', ') });
     return `PR #${n}: retry cap cleared for ${keys.map(k => k.slice(0, k.indexOf(':'))).join(', ')}`;
