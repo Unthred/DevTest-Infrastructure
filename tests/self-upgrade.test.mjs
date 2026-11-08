@@ -733,8 +733,9 @@ test('issue #412: realDeps maps the installer report (exit 11) to a named, block
   assert.deepEqual(r.tests, ['alpha works', 'beta works']); assert.equal(r.reason, 'tests failed: alpha works; beta works'); assert.match(r.excerpt, /not ok 2/);
 });
 
-test('issue #448: an unwritable state root makes the install check an environmental failure, not a thrown error', async () => {
-  const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'slot-blocked-')), 'file'); fs.writeFileSync(blocker, ''); // a root under a plain file cannot hold a slot directory, as any user
+test('issue #448: an unwritable state root makes the install check an environmental failure, not a thrown error', async t => {
+  const blockerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'slot-blocked-')); t.after(() => fs.rmSync(blockerDir, { recursive: true, force: true }));
+  const blocker = path.join(blockerDir, 'file'); fs.writeFileSync(blocker, ''); // a root under a plain file cannot hold a slot directory, as any user
   const none = realDeps({ root: blocker, config: { repo_path: '/x', agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
   const res = await none.preChecks('a'.repeat(40));
   assert.equal(res.ok, false); assert.equal(res.environmental, true); assert.match(res.reason, /test slot unavailable/);
@@ -1030,13 +1031,13 @@ test('issue #846: cleanup removes versions nothing names, and keeps current, las
   assert.deepEqual(up.prune().removed, []);
 });
 
-test('issue #846: a paused or blocked job keeps its version; a pending install keeps both of its versions', async t => {
+test('issue #846: a paused job keeps its version, a blocked one does not; a pending install keeps both of its versions', async t => {
   const root = versionRoot(t, [V('1'), V('2'), V('3'), V('4'), V('5'), V('6')], [{ status: 'paused_manual', supervisorVersion: V('2') }, { status: 'blocked', supervisorVersion: V('3') }]);
   const w = world(t, {}); w.deps.installed = () => V('1'); w.deps.referencedVersions = () => jobVersions(root);
   const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } });
   up.s.lastGood = V('1'); up.s.pending = { from: V('4'), to: V('5') };
-  assert.deepEqual(up.prune().removed, [V('6')]);
-  assert.deepEqual(present(root), [V('1'), V('2'), V('3'), V('4'), V('5')]);
+  assert.deepEqual(up.prune().removed, [V('3'), V('6')]);
+  assert.deepEqual(present(root), [V('1'), V('2'), V('4'), V('5')]);
 });
 
 test('issue #846: nothing is removed while the rollback target is unknown or a live job has no recorded version', async t => {
@@ -1049,6 +1050,15 @@ test('issue #846: nothing is removed while the rollback target is unknown or a l
   fs.writeFileSync(path.join(root, 'jobs/x.json'), '{not json');   // an unreadable record counts as a reference
   assert.match(up.prune().skipped, /no recorded version/);
   fs.rmSync(path.join(root, 'jobs/x.json'));
+  assert.deepEqual(up.prune().removed, [V('2')]);
+});
+
+test('issue #846: legacy unstamped blocked, queued, paused and completed records do not hold cleanup off', async t => {
+  const root = versionRoot(t, [V('1'), V('2')], [{ status: 'blocked' }, { status: 'blocked' }, { status: 'queued' }, { status: 'paused_manual' }, { status: 'completed' }]);
+  const w = world(t, {}); w.deps.installed = () => V('1'); w.deps.referencedVersions = () => jobVersions(root);
+  const up = new SelfUpgrade({ root, deps: w.deps, clock: { now: () => Date.now() } });
+  up.s.lastGood = V('1');
+  assert.equal(jobVersions(root).unknown, 0);
   assert.deepEqual(up.prune().removed, [V('2')]);
 });
 
