@@ -13,6 +13,7 @@ import { modeLine } from './budget.mjs';
 import { makeNamer } from './naming.mjs';
 import { agentLine } from './agentline.mjs';
 import { testSlotStatus, DEFAULT_TEST_SLOTS } from './testslots.mjs';
+import { summarize as failCausesOf } from './failcause.mjs';
 import { readSkips, SKIP_WINDOW_MS } from './skips.mjs';
 import { formatLocal, localStamps } from './dashui/logic.mjs';
 
@@ -135,7 +136,8 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   let installed = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); installed = m ? m[1].slice(0, 7) : null; } catch { /* not a versioned install */ }
   const robustness = view.robustness;
-  return { robustness, testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
+  const failCauses = failCausesOf(state.failCauses, { now });
+  return { failCauses, robustness, testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {
@@ -171,6 +173,10 @@ export function renderStatus(s) {
     for (const r of s.robustness.retries) out.push(`  ${r.key}: ${r.count} attempt${r.count === 1 ? '' : 's'} with cause ${r.cause}${r.capped ? ' (stopped, in Needs you)' : ''}`);
     if (s.robustness.rearm) out.push(`  re-armed after ${s.robustness.rearm.scopes.join(', ')} cleared: ${s.robustness.rearm.items.join(', ')}`);
   }
+  head('Why jobs failed');
+  const fcRows = (s.failCauses?.week || []).filter(r => r.jobs > 0).slice(0, 5);
+  if (!fcRows.length) out.push('  no failed jobs in the last 7 days');
+  for (const r of fcRows) out.push(`  ${r.label}: ${r.jobs} job${r.jobs === 1 ? '' : 's'}, ${r.tokens} tokens, about $${r.cost} (${[...r.prs.map(n => `PR #${n}`), ...r.issues.map(n => `issue #${n}`)].join(', ') || 'no item'})`);
   head('Problems');
   if (!s.problems.length) out.push('  none');
   for (const p of s.problems) out.push(`  - ${p.text}`);

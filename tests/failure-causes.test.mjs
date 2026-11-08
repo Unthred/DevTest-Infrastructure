@@ -159,3 +159,14 @@ test('an ordinary ticket or login word is not identity evidence', async () => {
   const c = F.classifyFailure({ job: { status: 'failed', incompleteReason: { cause: 'postcondition_not_met', detail: 'the ticket PR has no new commit' } }, entry: {}, events: [], host: null, repeats: 0, openPrerequisites: [] });
   assert.notEqual(c.cause, 'identity_evidence');
 });
+
+test('team status lists the failure causes of the week', async () => {
+  const { buildStatus, renderStatus } = await import('../supervisor/teamstatus.mjs');
+  const { validateTeamConfig } = await import('../supervisor/team.mjs');
+  const NOW = Date.parse('2026-11-08T12:00:00Z');
+  const rec = { job: 'j1', cause: 'environment', detail: 'disk full', at: NOW - 3600000, tokens: 1200, cost: 0.5, issue: 7, pr: null, type: 'implement' };
+  const state = { failCauses: { records: { j1: rec }, drafted: {} } };
+  const s = await buildStatus({ config: validateTeamConfig(config()), root: '/nonexistent', jobs: [], events: [], state, cache: { issues: [], pulls: [], merged: [] }, snapshots: [], leases: [], now: NOW, tz: 'UTC' });
+  assert.equal(s.failCauses.week[0].cause, 'environment');
+  assert.match(renderStatus(s), /Why jobs failed[\s\S]*1 job, 1200 tokens, about \$0\.5 \(issue #7\)/);
+});
