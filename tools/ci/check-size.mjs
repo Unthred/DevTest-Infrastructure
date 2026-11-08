@@ -51,6 +51,14 @@ function table(rows) {
   return [fmt(head), w.map(n => '-'.repeat(n)).join('-|-'), ...body.map(fmt)].join('\n');
 }
 
+// The table always lists the baselined files over the file threshold, so a PR with no change still shows unit, threshold, before, after.
+function unchangedFiles(result, rows) {
+  const listed = new Set(rows.map(r => r.unit));
+  return Object.entries(result.units)
+    .filter(([unit, u]) => u.kind === 'file' && !listed.has(unit))
+    .map(([unit, u]) => ({ unit, threshold: u.threshold, before: u.size, size: u.size, result: 'unchanged' }));
+}
+
 function annotate(level, r, text) {
   const file = r.unit.split('::')[0];
   return process.env.GITHUB_ACTIONS ? `::${level} file=${file},line=${r.line}::${text}` : `${level}: ${r.unit} (line ${r.line}): ${text}`;
@@ -90,7 +98,9 @@ export function run(argv, out = console.log) {
     ...result.warnings.map(r => ({ ...r, result: 'warning (new, file not already over)' })),
     ...result.shrinks.map(r => ({ ...r, result: 'smaller' })),
   ];
-  out(rows.length ? table(rows) : 'size check: no unit grew, crossed a threshold or shrank');
+  const tableRows = [...rows, ...unchangedFiles(result, rows)];
+  out(table(tableRows));
+  if (!rows.length) out('size check: no unit grew, crossed a threshold or shrank');
   for (const r of result.failures) {
     out(annotate('error', r, `${r.reason}: ${r.before} -> ${r.size} (threshold ${r.threshold}); put new behaviour in a new focused unit`));
   }
@@ -103,7 +113,7 @@ export function run(argv, out = console.log) {
     else { out('Updated baseline (commit it with this change; node tools/ci/check-size.mjs --update-baseline writes it):'); out(formatBaseline(next)); }
   }
   out(`size check: ${result.failures.length} failure(s), ${result.warnings.length} warning(s), ${result.shrinks.length} smaller`);
-  if (process.env.GITHUB_STEP_SUMMARY && rows.length) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Size check\n\n\`\`\`\n${table(rows)}\n\`\`\`\n`);
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Size check\n\n\`\`\`\n${table(tableRows)}\n\`\`\`\n`);
   return result.failures.length ? 1 : 0;
 }
 

@@ -202,6 +202,32 @@ test('growth of a baselined long line fails even when another long line is remov
   assert.equal(check(root).code, 1);
 });
 
+test('deleting a line that shares its start with another long line does not fail as growth', t => {
+  const same = n => `const dup = '${'z'.repeat(n)}';\n`;
+  const root = tree(t, { 'a.mjs': same(200) + same(260) });
+  check(root, '--init-baseline');
+  fs.writeFileSync(path.join(root, 'a.mjs'), same(260));
+  assert.equal(check(root).code, 0, check(root).text);
+});
+
+test('renaming the start of a long line in a file over the file threshold, without growth, passes', t => {
+  const long = (name, n) => `const ${name} = '${'z'.repeat(n)}';\n`;
+  const root = tree(t, { 'a.mjs': bigFile(long('first', 200)) });
+  check(root, '--init-baseline');
+  fs.writeFileSync(path.join(root, 'a.mjs'), bigFile(long('rename', 199)));
+  assert.equal(check(root).code, 0, check(root).text);
+  check(root, '--update-baseline');
+  assert.equal(check(root).code, 0);
+});
+
+test('the table is printed even when no unit changed', t => {
+  const root = tree(t, { 'a.mjs': bigFile('') });
+  check(root, '--init-baseline');
+  const r = check(root);
+  assert.match(r.text, /unit\s+\| threshold \| before \| after/);
+  assert.match(r.text, /a\.mjs::file .*unchanged/);
+});
+
 test('the committed baseline passes on this repository and stays at or below the measured figures', () => {
   const r = spawnSync('node', [CLI, '--root', REPO], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stdout);

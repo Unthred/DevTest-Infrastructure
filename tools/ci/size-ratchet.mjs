@@ -12,6 +12,43 @@ function shrank(now, before) {
   return now.size < before.size;
 }
 
+// A long line's key (start-of-text hash plus an ordinal) shifts when a line is deleted or its start is edited. Pair each current
+// long line with a baseline one without trusting the ordinal: first by equal hash, longest with longest, then the leftovers in the
+// same file, longest with longest. A line paired this way fails only if it is longer than its partner.
+const isLong = o => o.kind === 'long-line';
+const hashOf = unit => unit.replace(/#\d+$/, '');
+
+function pairGroup(nows, befores, alias) {
+  const byLen = (a, b) => b.size - a.size;
+  nows.sort(byLen);
+  befores.sort(byLen);
+  const n = Math.min(nows.length, befores.length);
+  for (let i = 0; i < n; i++) alias.set(nows[i].unit, befores[i].unit);
+  return { nows: nows.slice(n), befores: befores.slice(n) };
+}
+
+function pairLongLines(current, known) {
+  const alias = new Map();
+  const files = new Map();
+  const slot = f => files.get(f) || files.set(f, { nows: [], befores: [] }).get(f);
+  for (const now of current.filter(isLong)) slot(fileOf(now.unit)).nows.push(now);
+  for (const [unit, b] of Object.entries(known)) if (isLong(b)) slot(fileOf(unit)).befores.push({ unit, size: b.size });
+  for (const { nows, befores } of files.values()) {
+    const groups = new Map();
+    const group = h => groups.get(h) || groups.set(h, { nows: [], befores: [] }).get(h);
+    for (const o of nows) group(hashOf(o.unit)).nows.push(o);
+    for (const o of befores) group(hashOf(o.unit)).befores.push(o);
+    const left = { nows: [], befores: [] };
+    for (const g of groups.values()) {
+      const rest = pairGroup(g.nows, g.befores, alias);
+      left.nows.push(...rest.nows);
+      left.befores.push(...rest.befores);
+    }
+    pairGroup(left.nows, left.befores, alias);
+  }
+  return alias;
+}
+
 const entry = o => ({ kind: o.kind, threshold: o.threshold, size: o.size });
 
 // current: [{ unit, kind, threshold, size, line }]; baseline: { units: { [unit]: {kind, threshold, size} } }.
@@ -22,9 +59,11 @@ export function compare(current, baseline) {
   const shrinks = [];
   const next = {};
   const seen = new Set();
+  const alias = pairLongLines(current, known);
   for (const now of current) {
-    seen.add(now.unit);
-    const before = known[now.unit];
+    const baseKey = alias.get(now.unit) || now.unit;
+    seen.add(baseKey);
+    const before = known[baseKey];
     if (before) {
       if (grew(now, before)) failures.push({ ...now, before: before.size, reason: 'grew' });
       else if (shrank(now, before)) shrinks.push({ ...now, before: before.size });
