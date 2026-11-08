@@ -204,3 +204,36 @@ test('buildView: PRs opened comes from the cached createdAt and cost includes th
   assert.equal(w.throughput.opened, 2);   // PR 9 from createdAt, merged PR 8 from its implement job
   assert.equal(w.cost.value, 6);
 });
+
+// Issue #879 review follow-ups.
+test('first-pass and rejects read the verdict archive when the live verdict was deleted or replaced', () => {
+  // PR 20's live verdict is a later PASS on head b (the first review, CHANGES on head a, was deleted at a re-review); the archive still holds it.
+  const pr = { number: 20, title: 'twenty', status: 'open', verdicts: [v('PASS', ago(2), { head: 'b'.repeat(40) })] };
+  const archive = [
+    { id: 'verdict:20:a', kind: 'verdict', pr: 20, head: 'a'.repeat(40), at: ago(5), verdict: 'CHANGES', reviewer: 'codex' },
+    { id: 'verdict:20:b', kind: 'verdict', pr: 20, head: 'b'.repeat(40), at: ago(2), verdict: 'PASS', reviewer: 'codex' },
+    { id: 'verdict:secondOpinion:20:c', kind: 'verdict', pr: 20, head: 'c'.repeat(40), at: ago(1), verdict: 'CHANGES', detail: 'second opinion' },
+  ];
+  const without = headlineStats({ prs: [pr], now: NOW }).windows['24h'].cards;
+  assert.deepEqual([without['first-pass'].approved, without['first-pass'].reviewed, without.rejects.changes], [1, 1, 0], 'live only: the true first review is missing');
+  const withArchive = headlineStats({ prs: [pr], verdictArchive: archive, now: NOW }).windows['24h'].cards;
+  assert.deepEqual([withArchive['first-pass'].approved, withArchive['first-pass'].reviewed, withArchive.rejects.changes], [0, 1, 1], 'archived first review CHANGES counts; the second-opinion stage entry is not a first review');
+});
+test('a carried live verdict is never counted from the archive either', () => {
+  const pr = { number: 21, title: 'x', status: 'open', verdicts: [v('PASS', ago(3), { head: 'a'.repeat(40) }), v('PASS', ago(1), { head: 'b'.repeat(40), carry: { at: ago(1) } })] };
+  const archive = [{ id: 'verdict:21:b', kind: 'verdict', pr: 21, head: 'b'.repeat(40), at: ago(1), verdict: 'PASS' }, { id: 'verdict:21:a', kind: 'verdict', pr: 21, head: 'a'.repeat(40), at: ago(3), verdict: 'PASS' }];
+  const c = headlineStats({ prs: [pr], verdictArchive: archive, now: NOW }).windows['24h'].cards['first-pass'];
+  assert.equal(c.reviewed, 1); assert.equal(c.items[0].at, ago(3));
+});
+test('rejects count each blocked transition at the time it was blocked, even if the job resumed', () => {
+  const resumed = { id: 'd'.repeat(32), kind: 'fix', status: 'running', createdAt: ago(30), updatedAt: ago(0.5), blockedAt: [ago(10), ago(30)] };
+  const d = headlineStats({ jobs: [resumed], now: NOW }).windows['24h'].cards.rejects;
+  assert.deepEqual([d.blocked, d.items[0].at], [1, ago(10)], 'only the block inside the window; a running job is not counted by its updatedAt');
+  assert.equal(headlineStats({ jobs: [resumed], now: NOW }).windows['7d'].cards.rejects.blocked, 2);
+  assert.equal(headlineStats({ jobs: [{ id: 'e'.repeat(32), kind: 'fix', status: 'running', updatedAt: ago(1) }], now: NOW }).windows['24h'].cards.rejects.blocked, 0);
+});
+test('processed shows opened-in-period as a second figure on the card', async () => {
+  const view = await overviewView(); view.headline = stats();
+  const html = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(), pathname: '/' }).html;
+  assert.match(html, /2 closed of 4 in play \(2 open at the start \+ 2 opened in the period\)/);
+});

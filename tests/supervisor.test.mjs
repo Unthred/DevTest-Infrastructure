@@ -562,3 +562,17 @@ test('without an open prerequisite the same stops stay incomplete and context_to
   const inc = await drive(g.root, job2, g.registry, clock, async () => ({ code: 0 }), 4, async () => false);
   assert.equal(inc.status, 'blocked'); assert.equal(inc.lastEvent, 'incomplete');
 });
+
+test('a transition to blocked records when, and the record survives a resume (issue #879)', async t => {
+  const { transition } = await import('../supervisor/core.mjs');
+  const f = fixture(t), job = await createJob(f.root, f.spec, f.registry);
+  transition(f.root, job, 'running', 'started');
+  assert.equal(readJob(f.root, job.id).blockedAt, undefined, 'other statuses record nothing');
+  transition(f.root, job, 'blocked', 'incomplete');
+  const first = readJob(f.root, job.id).blockedAt;
+  assert.equal(first.length, 1); assert.ok(Number.isFinite(first[0]));
+  transition(f.root, job, 'running', 'started');
+  transition(f.root, job, 'blocked', 'retry_exhausted');
+  assert.equal(readJob(f.root, job.id).blockedAt.length, 2);
+  assert.equal(readJob(f.root, job.id).blockedAt[0], first[0]);
+});

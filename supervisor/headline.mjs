@@ -22,25 +22,40 @@ const item = (kind, ref, title, at, detail, tokens = null) => ({ kind, ref, titl
 const cap = items => items.sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, MAX_ITEMS);
 
 // A verdict a review produced (a D-025 carried verdict is an avoided review, not a review).
-const realVerdicts = p => (Array.isArray(p.verdicts) ? p.verdicts : []).filter(v => v && !v.carry && fin(v.at)).sort((a, b) => a.at - b.at);
+// Issue #879: team.mjs deletes a verdict on a re-review request or a requirements change and a second-opinion CHANGES overwrites the same
+// key, so the live per-head verdicts alone can lose a PR's true first review. The verdict archive (the history timeline, first write per
+// pr:head wins) is merged in: for each head the archived verdict is preferred, a live one fills the heads the archive has not seen.
+const realVerdicts = (p, archive) => {
+  const live = (Array.isArray(p.verdicts) ? p.verdicts : []).filter(v => v && typeof v === 'object');
+  const carried = new Set(live.filter(v => v.carry || v.carriedFrom).map(v => v.head));
+  const byHead = new Map();
+  for (const a of archive?.get(p.number) || []) if (fin(a.at) && !a.detail && !carried.has(a.head) && !byHead.has(a.head)) byHead.set(a.head, a);
+  const out = live.filter(v => !v.carry && !v.carriedFrom && fin(v.at) && !byHead.has(v.head));
+  return [...byHead.values(), ...out].sort((a, b) => a.at - b.at);
+};
 const reviewsOf = p => (Array.isArray(p.verdicts) ? realVerdicts(p).length : (fin(p.reviewRounds) ? p.reviewRounds : 0)) + (fin(p.secondOpinionRounds) ? p.secondOpinionRounds : 0);
 const roundsOf = p => reviewsOf(p) + (fin(p.fixRounds) ? p.fixRounds : 0) + (fin(p.rebaseRounds) ? p.rebaseRounds : 0);
 
 // One card's figures for one period [from, to].
-function period({ issues, prs, jobs, waste }, from, to, spanMs) {
+function period({ issues, prs, jobs, waste, archive }, from, to, spanMs) {
   const issueMs = issues.map(i => ({ ...i, c: ms(i.createdAt), x: ms(i.closedAt) }));
   const opened = issueMs.filter(i => inside(i.c, from, to)), closed = issueMs.filter(i => i.x !== null && inside(i.x, from, to) && i.state !== 'OPEN');
   const openAtStart = issueMs.filter(i => fin(i.c) && i.c <= from && (i.state === 'OPEN' || !fin(i.x) || i.x > from)).length;
   const total = openAtStart + opened.length;
   const merged = prs.filter(p => p.status === 'merged' && inside(p.mergedAt, from, to));
-  const cohort = prs.map(p => ({ p, first: realVerdicts(p)[0] })).filter(({ first }) => first && inside(first.at, from, to));
+  const cohort = prs.map(p => ({ p, first: realVerdicts(p, archive)[0] })).filter(({ first }) => first && inside(first.at, from, to));
   const approved = cohort.filter(({ first }) => first.verdict === 'PASS');
   const known = merged.filter(p => fin(p.tokens));
   const wasted = waste.filter(w => inside(w.at, from, to));
   const byCause = new Map(); for (const w of wasted) byCause.set(w.cause || 'unknown', (byCause.get(w.cause || 'unknown') || 0) + (fin(w.tokens) ? w.tokens : 0));
   const top = [...byCause].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] || null;
-  const changes = prs.flatMap(p => realVerdicts(p).filter(v => v.verdict === 'CHANGES' && inside(v.at, from, to)).map(v => ({ p, v })));
-  const blocked = jobs.filter(j => j.status === 'blocked' && inside(fin(j.updatedAt) ? j.updatedAt : j.createdAt, from, to));
+  const changes = prs.flatMap(p => realVerdicts(p, archive).filter(v => v.verdict === 'CHANGES' && inside(v.at, from, to)).map(v => ({ p, v })));
+  // Issue #879: each time a job became blocked is recorded (job.blockedAt), so a job blocked in the period and resumed later still counts, at the
+  // time it was blocked. A job without the record (older than that field) that is blocked now falls back to its last update.
+  const blockedEvents = jobs.flatMap(j => {
+    const at = Array.isArray(j.blockedAt) ? j.blockedAt.filter(fin) : [];
+    return (at.length ? at : j.status === 'blocked' ? [fin(j.updatedAt) ? j.updatedAt : j.createdAt] : []).filter(t => inside(t, from, to)).map(t => ({ j, t }));
+  });
   const hours = spanMs / HOUR;
   const openedPrs = prs.filter(p => inside(ms(p.openedAt), from, to));
   const implemented = jobs.filter(j => j.kind === 'implement' && j.status === 'completed' && inside(ms(j.updatedAt), from, to));
@@ -65,16 +80,18 @@ function period({ issues, prs, jobs, waste }, from, to, spanMs) {
       items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, fin(p.costUsd) ? `merged, $${round(p.costUsd)} (implement, review, fix and rebase jobs)` : 'merged, cost unknown', p.tokens))), count: merged.length },
     waste: { value: sum(wasted, w => w.tokens), jobs: wasted.length, costUsdEquivalent: round(sum(wasted, w => w.cost)), topCause: top ? { cause: top[0], tokens: top[1] } : null, unit: 'tokens',
       items: cap(wasted.map(w => item(w.pr ? 'pr' : w.issue ? 'issue' : 'job', w.pr ?? w.issue ?? String(w.job || '').slice(0, 8), w.cause, w.at, `${w.agent || 'unknown agent'}, job ${String(w.job || '').slice(0, 8)}`, w.tokens))), count: wasted.length },
-    rejects: { value: changes.length + blocked.length, changes: changes.length, blocked: blocked.length, unit: 'rejects',
+    rejects: { value: changes.length + blockedEvents.length, changes: changes.length, blocked: blockedEvents.length, unit: 'rejects',
       items: cap([...changes.map(({ p, v }) => item('pr', p.number, p.title, v.at, `CHANGES from ${v.reviewer || 'a reviewer'}`)),
-        ...blocked.map(j => item('job', String(j.id || '').slice(0, 8), `${j.kind || 'job'} job blocked`, fin(j.updatedAt) ? j.updatedAt : j.createdAt, `issue/PR ${j.issue ?? 'unknown'}`, fin(j.usage?.inputTokens) ? j.usage.inputTokens + (j.usage.outputTokens || 0) : null))]), count: changes.length + blocked.length },
+        ...blockedEvents.map(({ j, t }) => item('job', String(j.id || '').slice(0, 8), `${j.kind || 'job'} job blocked`, t, `issue/PR ${j.issue ?? 'unknown'}`, fin(j.usage?.inputTokens) ? j.usage.inputTokens + (j.usage.outputTokens || 0) : null))]), count: changes.length + blockedEvents.length },
   };
   return cards;
 }
 
-// issues: { number, title, state, createdAt, closedAt }; prs: dashboard view PR rows; jobs: supervisor job records; wasteRecords: breaker waste entries.
-export function headlineStats({ issues = [], prs = [], jobs = [], wasteRecords = [], now = Date.now() } = {}) {
-  const inputs = { issues, prs, jobs, waste: wasteRecords.filter(w => w && typeof w === 'object' && fin(w.at)) };
+// issues: { number, title, state, createdAt, closedAt }; prs: dashboard view PR rows; jobs: supervisor job records; wasteRecords: breaker waste entries; verdictArchive: history timeline entries (kind 'verdict').
+export function headlineStats({ issues = [], prs = [], jobs = [], wasteRecords = [], verdictArchive = [], now = Date.now() } = {}) {
+  const archive = new Map();
+  for (const a of Array.isArray(verdictArchive) ? verdictArchive : []) if (a && a.kind === 'verdict' && Number.isSafeInteger(a.pr)) archive.set(a.pr, [...(archive.get(a.pr) || []), a]);
+  const inputs = { issues, prs, jobs, archive, waste: wasteRecords.filter(w => w && typeof w === 'object' && fin(w.at)) };
   const openNow = issues.filter(i => i.state === 'OPEN').length;
   const closedHeld = issues.filter(i => i.state !== 'OPEN').length;
   const windows = {};

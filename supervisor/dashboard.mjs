@@ -2,6 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
 import { headlineStats } from './headline.mjs';
+import { readTimeline } from './history.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
 import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
@@ -748,7 +749,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     return {
       ...extra,
       // Issue #866: the headline progress numbers, from the same records the rest of the view uses.
-      headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), now }),
+      headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), verdictArchive: (() => { try { return readTimeline(root).filter(e => e.kind === 'verdict'); } catch { return []; } })(), now }),
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),
       estimates,

@@ -506,7 +506,7 @@ const pctText = n => (Number.isFinite(n) ? `${dec1(n)}%` : 'no data');
 const signed = n => (n > 0 ? `+${num(n)}` : n < 0 ? `\u2212${num(-n)}` : '0');
 const HEADLINE = {
   issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` }),
-  processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play` }),
+  processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play (${c.openAtStart} open at the start + ${c.opened} opened in the period)` }),
   throughput: c => ({ big: Number.isFinite(c.openedPerHour) ? `${dec1(c.openedPerHour)} PRs opened/h` : 'no data', sub: `${dec1(c.mergedPerHour)} merged/h, ${dec1(c.implementedPerHour)} issues implemented/h (${c.opened} opened, ${c.merged} merged, ${c.implemented} implemented)` }),
   cost: c => ({ big: Number.isFinite(c.value) ? `$${c.value.toFixed(2)}` : 'unknown', sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),
   'merge-rate': c => ({ big: Number.isFinite(c.value) ? `${dec1(Math.round(c.value * 100) / 100)}/h` : 'no data', sub: `${c.merged} merged` }),

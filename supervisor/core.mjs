@@ -340,7 +340,9 @@ export function safeEnvironment(source = process.env, allowlist = null) {
   return env;
 }
 export function transition(root, job, status, kind, clock = realClock) {
-  job.status = status; job.lastEvent = kind; saveJob(root, job, clock);
+  job.status = status; job.lastEvent = kind;
+  if (status === 'blocked') job.blockedAt = [...(Array.isArray(job.blockedAt) ? job.blockedAt : []), clock.now()].slice(-20);   // issue #879: when it was blocked, kept after a resume
+  saveJob(root, job, clock);
   event(root, job, job.status === status ? kind : 'transition_ignored', clock);
   // Issue #80: a terminal job holds no lease; a stale one would stall every later job on the same worktree.
   if (terminal.has(job.status)) {
