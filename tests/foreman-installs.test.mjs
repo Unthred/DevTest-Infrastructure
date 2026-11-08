@@ -159,6 +159,17 @@ test('processVersions takes the cli role from the subcommand position, not a lat
   assert.deepEqual(processVersions(proc).map(p => [p.pid, p.role]), [[31, 'supervisor-cli'], [32, 'worker']].sort((a, b) => a[1].localeCompare(b[1])));
 });
 
+test('processVersions maps team and reconcile in subcommand position to foreman, but not a later argument', t => {
+  const proc = fakeProc(t, [
+    [41, ['node', `/r/versions/${A}/supervisor/cli.mjs`, 'team', 'run']],
+    [42, ['node', `/r/versions/${A}/supervisor/cli.mjs`, 'reconcile', 'tick']],
+    [43, ['node', `/r/versions/${A}/supervisor/cli.mjs`, 'status', 'team']],
+    [44, ['node', `/r/versions/${A}/supervisor/cli.mjs`, 'status', 'reconcile']],
+  ]);
+  assert.deepEqual(processVersions(proc).map(p => [p.pid, p.role]), [[41, 'foreman'], [42, 'foreman'], [43, 'supervisor-cli'], [44, 'supervisor-cli']]
+    .sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]));
+});
+
 test('installs validates refusal.from as a commit SHA, like to', t => {
   const root = tmp(t); seed(root);
   const file = path.join(root, 'team', 'self-upgrade.json'), su = JSON.parse(fs.readFileSync(file, 'utf8'));
