@@ -798,3 +798,10 @@ test('#977: the short id still resolves once Foreman has finished the item and d
   assert.equal(s.id, r.id); assert.equal(s.state, 'done'); assert.equal(s.issue, 4242);
   assert.throws(() => ib.status('abcdef01'), /no such item/);
 });
+
+test('issue #972: an approved resume_job is a start, refused with the host reason while the host gate holds; the job stays resumable', async t => {
+  const w = actionWorld(t); w.team.s.jobs[JOB].head = HEAD2;
+  w.team.hostRefusal = () => 'held: swap 99% >= 95%';
+  const r = await runAction(w, act('resume_job', JOB.slice(0, 8)));
+  assert.equal(r.state, 'failed'); assert.match(r.reason, /held: swap 99%/); assert.equal(w.calls.resumed.length, 0);
+});

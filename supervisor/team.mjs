@@ -1750,7 +1750,11 @@ export class Team {
     }
     // Issue #1007: with the root volume or swap nearly full no new job starts (merges are not jobs); the Inbox item names the top consumers.
     if (!dryRun) {
-      const pressure = this.hostPressureState || { hold: false, reasons: [] };
+      // Issue #972: with the host gate on, swap is judged by its configured levels (start and hard), not by the fixed 90% of this older check.
+      const raw = this.hostPressureState || { hold: false, reasons: [] };
+      const gateOn = !!(this.hostSample && this.hostGateConfig()?.enabled);
+      const reasons = gateOn ? (raw.reasons || []).filter(r => !/^swap is /.test(r)) : (raw.reasons || []);
+      const pressure = { ...raw, reasons, hold: reasons.length > 0 };
       if (pressure.hold) {
         report.held = { ...(report.held || {}), reason: `host pressure: ${pressure.reasons.join(' and ')}`, actions: actions.filter(a => a.type !== 'merge').length };
         actions = actions.filter(a => a.type === 'merge');
@@ -2237,6 +2241,8 @@ export class Team {
       const pr = rec.pr != null ? (await this.gh.listPulls()).find(p => p.number === rec.pr) : null;
       if (rec.pr != null && (!pr || (rec.head && pr.headRefOid !== rec.head))) throw new SupervisorError(`PR #${rec.pr} is closed or has a newer head, so job ${target} cannot be resumed to any purpose; close it instead`);
       if (this.limitedOf(rec.agent)?.out) throw new SupervisorError(`${rec.agent} is out of allowance; resume it after the reset`);
+      const hostWhy = this.hostRefusal(rec.kind);   // issue #972: a resume is a start; refused with the host reason, the job stays resumable
+      if (hostWhy) throw new SupervisorError(hostWhy);
       if (breaker.blocks(this.s.breaker, this.c.breaker, { type: rec.kind, issue: rec.issue ?? null })) throw new SupervisorError(`the circuit breaker has halted new ${rec.kind} jobs; resume the breaker first`);   // issue #713: same rule as resumeTransient (issue #549)
       if (await this.providerRoleFull(job.provider ?? this.c.agents[rec.agent]?.provider, roleOfType(rec.kind))) throw new SupervisorError('the provider has no free slot for this role right now');
       rec.ingested = false; this.save();
