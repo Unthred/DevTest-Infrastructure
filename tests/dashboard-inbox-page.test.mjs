@@ -88,7 +88,7 @@ test('the search text of a row is title, short id, full id, kind and why: each f
   assert.deepEqual(find('zebra'), [], 'the body is not searched');
   assert.deepEqual(find('nothing like this'), []);
   assert.deepEqual(find('RETIRE   the'), [ids[1]], 'case and spacing do not matter');
-  // curly quotes, dashes: a title typed with straight characters still matches (punctuation folding, issue #977; the cause of the reported Needs you miss is not established, see the pull request)
+  // curly quotes, dashes: a title typed with straight characters still matches (punctuation folding, issue #977). This is a regression guard on the Inbox rows; the cause of the Needs you miss reported in #884 is not established (see the pull request).
   const curly = drop(dir, PROMPT('Don’t block – retry later', 'x')); inbox.scan(dir, Date.now());
   const page2 = (await s.get('/inbox')).body;
   assert.equal(filterListRows([{ text: searchOf(rowOf(page2, curly)), num: null }], "don't block - retry").length, 1);
