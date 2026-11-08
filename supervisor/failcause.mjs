@@ -30,7 +30,7 @@ const MEM_TEXT = /\bENOMEM\b|out of memory|\bOOM\b|oom-kill|cannot allocate memo
 const NET_TEXT = /\bECONNRESET\b|\bECONNREFUSED\b|\bENOTFOUND\b|\bETIMEDOUT\b|\bEAI_AGAIN\b|\bENETUNREACH\b|network is unreachable|temporary failure in name resolution/i;
 const PREREQ_TEXT = /prerequisite|blocked by #\d+|depends on #\d+|waits? for #\d+|is not (?:done|closed) yet|not yet (?:merged|closed|implemented)/i;
 const HOMEOWNER_TEXT = /homeowner (?:decision|approval|must|needs|has to)|needs the homeowner|decision needed|awaiting the homeowner/i;
-const IDENTITY_TEXT = /writer record|no writer|writer evidence|identity|ticket|credential|login|not logged in|unauthori[sz]ed|\b401\b|\b403\b/i;
+const IDENTITY_TEXT = /writer record|no writer|writer evidence|identity (?:check|mismatch|missing|not)|credentials?\b|not logged in|login (?:failed|required)|unauthori[sz]ed|\b401\b|\b403\b/i;
 const FIXLIMIT_TEXT = /fix limit|fix rounds|max_fix_attempts|still rejected/i;
 
 const num = v => (Number.isFinite(v) && v >= 0 ? v : 0);

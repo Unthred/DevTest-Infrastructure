@@ -154,3 +154,8 @@ test('the dashboard view and the read-only tool carry the per-cause figures', as
   const out = await tools.call('foreman_failure_causes', { days: 3 }); assert.equal(out.isError, false); assert.equal(JSON.parse(out.text).week[0].cause, 'wedged');
   assert.equal((await tools.call('foreman_status')).isError, false);
 });
+
+test('an ordinary ticket or login word is not identity evidence', async () => {
+  const c = F.classifyFailure({ job: { status: 'failed', incompleteReason: { cause: 'postcondition_not_met', detail: 'the ticket PR has no new commit' } }, entry: {}, events: [], host: null, repeats: 0, openPrerequisites: [] });
+  assert.notEqual(c.cause, 'identity_evidence');
+});

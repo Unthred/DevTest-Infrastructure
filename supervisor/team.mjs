@@ -2356,10 +2356,10 @@ export class Team {
       const b = this.s.breaker, recorded = [this.s.verdicts, this.s.secondOpinions, this.s.exceptionReviews].some(m => Object.values(m || {}).some(v => v?.job === id));
       const w = breaker.wasteOf({ id, entry: j, job, verdictRecorded: recorded, refusal: j.refusal || null });
       j.wasteChecked = true;
-      await this.recordFailureCause(id, j, job, w, report, recorded);
       // Issue #626: a completed job that was not waste is a success; it ends the halt of its type if it began after the halt.
       if (!w && job.status === 'completed' && !j.refusal) { breaker.noteSuccess(b, { job: id, type: typeOfKind(j.kind || job.kind || ''), pr: j.pr ?? null, issue: j.issue ?? null, created: job.createdAt, at: job.updatedAt }, this.clock.now()); const cleared = breaker.succeeded(b, { type: typeOfKind(j.kind || job.kind || ''), createdAt: job.createdAt }, this.clock.now()); if (cleared.length) (report.breaker ||= {}).cleared = cleared; }
       if (w && breaker.record(b, w, this.clock.now())) (report.wasted ||= []).push({ job: id.slice(0, 8), cause: w.cause, cost: w.cost });
+      try { await this.recordFailureCause(id, j, job, w, report, recorded); } catch (error) { (report.skipped ||= []).push({ what: `failure cause ${id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
       this.save();
     } catch (error) { this.breakerFailed(error, report); }
   }
@@ -2371,7 +2371,7 @@ export class Team {
     let host = null; try { host = this.hostReader(this.root); } catch { /* the readings stay absent */ }
     let events = []; try { events = this.eventKinds(this.root, id); } catch { /* none */ }
     const issueNo = j.issue ?? job.issue ?? null;
-    let issueList = this.view?.issues; if (!issueList && issueNo != null) { try { issueList = await this.gh.listIssues(); } catch { issueList = []; } }   // one read, only for a failed job with an issue
+    let issueList = this.view?.issues || this.nameView?.issues; if (!issueList && issueNo != null) { try { issueList = await this.gh.listIssues(); } catch { issueList = []; } }   // reuses the tick's issue read; lists only when none is held
     const view = new Map((issueList || []).map(i => [i.number, i]));
     const issue = issueNo != null ? view.get(issueNo) : null;
     const openPrerequisites = issue ? (this.c.depends_on_overrides?.[issueNo] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => view.get(d)?.state === 'OPEN') : [];
