@@ -1705,3 +1705,50 @@ test('#864 no churn stop when findings repeat, after one new round only, or when
   await rep.team.notifyChurn({}); assert.equal(rep.calls.comments.filter(c => /different set/.test(c[1])).length, 0);
   assert.equal((await rep.team.plan()).filter(a => a.type === 'fix').length, 1);
 });
+
+test('issue #881: a board failure after a merge is a warning; the label and comment still happen and the tick is not failed', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(2)] });
+  w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude', job: 'j' };
+  w.gh.board = async () => { throw new Error('gh project item-list failed: boom'); };
+  const act = { ...(await w.team.plan()).find(a => a.type === 'merge'), interim: true, reviewer: 'claude', job: 'j' };
+  const report = {};
+  await w.team.execute(act, report);   // does not throw
+  assert.deepEqual(w.calls.labels, [[10, 'post-merge-review']]);
+  assert.equal(w.calls.comments.length, 1);
+  assert.match(report.warnings[0].warning, /board update for #2 \(done\) failed: .*boom/);
+  assert.deepEqual(w.team.s.board.pending, { 2: 'done' });
+  assert.equal(report.skipped, undefined);   // nothing skipped, so tickOutcome stays ok
+});
+
+test('issue #881: a rate limit pauses board moves until the reset, then the missed moves are replayed', async t => {
+  const w = world(t, { issues: [issue(23)] });
+  let now = 1000, limited = true; const edits = [];
+  w.team.clock = { now: () => now };
+  w.gh.board = async (n, s) => { if (limited) { const e = new Error('gh project item-list failed: GraphQL: API rate limit exceeded'); e.rateLimitedUntil = 5000; throw e; } edits.push([n, s]); };
+  const report = {};
+  assert.equal(await w.team.moveBoard(23, 'in_progress', report), false);
+  assert.match(report.warnings[0].warning, /paused until \d\d:\d\d UTC/);
+  assert.equal(w.team.s.board.pausedUntil, 5000);
+  let calls = 0; const real = w.gh.board; w.gh.board = async (...a) => { calls++; return real(...a); };
+  await w.team.moveBoard(5, 'done', {});      // paused: no GitHub call at all
+  assert.equal(calls, 0); assert.deepEqual(w.team.s.board.pending, { 23: 'in_progress', 5: 'done' });
+  limited = false; now = 3000; await w.team.flushBoard({});   // before the reset: still nothing
+  assert.equal(calls, 0);
+  now = 5001; await w.team.flushBoard({});
+  assert.deepEqual(edits, [[5, 'done'], [23, 'in_progress']].sort((a, b) => a[0] - b[0]));
+  assert.deepEqual(w.team.s.board.pending, {}); assert.equal(w.team.s.board.pausedUntil, undefined);
+});
+
+test('issue #881: the client lists the board once and caches item ids; a rate limit reports the GraphQL reset', async () => {
+  const seen = []; let limit = false;
+  const gh = ghRunner((args) => { seen.push(args);
+    if (args[0] === 'api') return { status: 0, stdout: JSON.stringify({ limit: 5000, reset: 4000 }), stderr: '' };
+    if (limit) return { status: 1, stdout: '', stderr: 'GraphQL: API rate limit exceeded' };
+    return { status: 0, stdout: args[1] === 'item-list' ? JSON.stringify({ items: [{ id: 'I7', content: { number: 7 } }, { id: 'I8', content: { number: 8 } }] }) : '', stderr: '' }; });
+  const c = githubClient(config(), gh);
+  await c.board(7, 'done'); await c.board(8, 'in_review'); await c.board(7, 'in_review');
+  assert.equal(seen.filter(a => a[1] === 'item-list').length, 1);
+  assert.equal(seen.filter(a => a[1] === 'item-edit').length, 3);
+  limit = true;
+  await assert.rejects(c.board(7, 'done'), e => e.rateLimitedUntil === 4000000);
+});
