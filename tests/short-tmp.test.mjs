@@ -21,3 +21,11 @@ test('a short TMPDIR is used as it is', () => {
   try { withTmpdir(dir, () => { const d = shortMkdtemp('x-'); try { assert.ok(d.startsWith(dir)); } finally { fs.rmSync(d, { recursive: true, force: true }); } }); }
   finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Guard: the files that build Unix socket paths or depend on a traversable project root must keep using the short root.
+for (const file of ['browser-capture', 'browser', 'cli', 'docker-runner', 'ha-readonly', 'responsive']) {
+  test(`${file}.test.mjs builds its fixtures through shortMkdtemp`, () => {
+    const src = fs.readFileSync(new URL(`./${file}.test.mjs`, import.meta.url), 'utf8');
+    assert.match(src, /shortMkdtemp\(/);
+  });
+}
