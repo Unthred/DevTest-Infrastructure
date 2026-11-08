@@ -31,6 +31,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 | Document | Purpose |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Components, tracks, storage, security model |
+| [docs/coding-standards.md](docs/coding-standards.md) | Coding standards for maintainability and architecture; applies to every change (issue #1066) |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Binding decisions, status, rejected alternatives, open questions |
 | [docs/cli-contract.md](docs/cli-contract.md) | `dev-test` commands, exit codes, result schema, setup and policy (issue #8: `bin/dev-test`, `cli/`) |
 | [docs/blazor-demo.md](docs/blazor-demo.md) | Blazor end-to-end demonstration (`tools/blazor-demo.mjs`) and applying the runner to other projects (issue #11) |
