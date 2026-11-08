@@ -7,7 +7,7 @@ import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
 import { homeownerQuestion } from './homeowner-question.mjs';
-import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
+import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
@@ -170,9 +170,10 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     const moved = Object.values(S.jobs || {}).find(j => j.kind === 'implement' && j.issue === n && j.reassignedFrom === agent);
     const mode = team.modes?.[agent];
     const running = activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n);
-    let reason;
+    let reason, waits;
     if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
     else if (open.length) reason = `blocked by ${open.map(d => names.issue(d).text).join(', ')}`;
+    else if ((waits = waitingOnRefs(issue, byNo, prs, S.waitingOn?.[n]?.items || [])).length) reason = `waiting on ${waits.map(d => names.issue(d).text).join(', ')}`;   // issue #1023
     else if (running) reason = 'being implemented now';
     else if (hasPr) reason = 'PR open';
     else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; ${names.pr(prOf.number).text} open` : ''}`;
@@ -578,14 +579,14 @@ export function describeFor(j, { names, state }) {
 const modelOf = j => (j ? [j.provider || 'unknown provider', j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
 // Raw events kept before idle ticks collapse (issue #76): idle ticks are the bulk of the history and fold into a few rows.
 export const ACTIVITY_LIMIT = 400;
-const OUTCOME = { created: 'queued', started: 'started', completed: 'completed', usage_limit: 'paused', manual_pause: 'paused', transient_rate_limit: 'paused', recovered: 'recovered', incomplete: 'blocked', retry_exhausted: 'blocked', blocked: 'blocked', crash: 'failed', auth_error: 'failed', approval_required: 'blocked', manual_stop: 'stopped', checkpoint_failed: 'failed' };
+const OUTCOME = { created: 'queued', started: 'started', completed: 'completed', usage_limit: 'paused', manual_pause: 'paused', transient_rate_limit: 'paused', recovered: 'recovered', incomplete: 'blocked', waiting_on: 'waiting', retry_exhausted: 'blocked', blocked: 'blocked', crash: 'failed', auth_error: 'failed', approval_required: 'blocked', manual_stop: 'stopped', checkpoint_failed: 'failed' };
 function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names, root }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: (kind === 'pull' ? names.pr(n) : names.issue(n)).text } : null);
   const jobLink = j => (['implement', 'continue'].includes(j.kind) ? link('issue', j.issue) : link('pull', j.issue));
   const agentName = j => Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
-  const eventNames = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand', checkpoint_failed: 'stopped: progress checkpoint failed' };
+  const eventNames = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', waiting_on: 'waiting on an open prerequisite', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand', checkpoint_failed: 'stopped: progress checkpoint failed' };
   for (const e of events) {
     if (!eventNames[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover', 'checkpoint_failed'].includes(e.kind)) continue;
     const j = jobById.get(e.job); if (!j) continue;

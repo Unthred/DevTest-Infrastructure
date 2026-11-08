@@ -468,3 +468,13 @@ test('second-opinion rounds (#804): a carried second opinion is not a review and
   const none = await view(t, { cache: { tick: okTick(), pulls: [pr(60, 'claude/issue-30-x', H3)], issues: [issue(30)] } });
   assert.deepEqual([none.prs.find(p => p.number === 60).secondOpinionRounds, none.prs.find(p => p.number === 60).secondOpinionCarried], [0, 0]);
 });
+
+test('queue reasons: a prose dependency on an open PR reads "waiting on" it, and a reported wait does too (issue #1023)', async t => {
+  const cache = { tick: okTick(), issues: [issue(30, 'OPEN', 'Depends on #11.'), issue(2, 'OPEN', 'Do after PR 11 merges'), issue(3)],
+    pulls: [pr(11, 'claude/issue-5-x', H(1), { statusCheckRollup: [{ status: 'IN_PROGRESS' }] })] };
+  const v = await view(t, { cache, state: { implemented: {}, jobs: {}, waitingOn: { 3: { items: [11], job: 'x', at: 1 } } } });
+  const q = (agent, ref) => v.queues[agent].find(i => i.ref === ref)?.reason;
+  for (const n of [30, 2, 3]) assert.match(q('claude', n) ?? q('codex', n), /^waiting on PR #11 pr 11$|^waiting on #11/, `issue ${n}`);
+  const merged = await view(t, { cache: { ...cache, pulls: [] }, state: { implemented: {}, jobs: {}, waitingOn: { 3: { items: [11], job: 'x', at: 1 } } } });
+  for (const n of [30, 2, 3]) assert.doesNotMatch(merged.queues.claude.find(i => i.ref === n)?.reason ?? merged.queues.codex.find(i => i.ref === n)?.reason ?? '', /waiting on/);
+});

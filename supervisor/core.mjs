@@ -8,7 +8,7 @@ import { limitFromAllowance } from './allowance.mjs';
 import { redact } from './redact.mjs';
 
 export const defaultRegistry = new URL('./providers.json', import.meta.url).pathname;
-export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped']);
+export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 export const allowedActions = new Set(['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue', 'update_handover']);
 export class SupervisorError extends Error {}
 // A lease is held by another job (issue #302). `holder` is that job's id (null when the lease file is unreadable); whether the
@@ -399,6 +399,8 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
         catch (error) { event(root, job, `postcondition_exception:${String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 48)}`, clock); met = false; }
       }
       if (met) { transition(root, job, 'completed', 'completed', clock); return job; }
+      // Issue #1023: a run that stopped on a prerequisite that is still open is waiting, not incomplete: no retry, no blocked mark.
+      if (Array.isArray(job.waitingOn) && job.waitingOn.length) { delete job.postconditionDetail; transition(root, job, 'waiting_on', 'waiting_on', clock); return job; }
       // Issue #460: say why the attempt was incomplete (the checker may name the detail on job.postconditionDetail).
       job.incompleteReason = { cause: 'postcondition_not_met', detail: String(job.postconditionDetail || 'the post-condition did not hold').slice(0, 400), attempt: job.attempts }; delete job.postconditionDetail;
       if ((job.incompleteRetries || 0) < 1) { job.incompleteRetries = (job.incompleteRetries || 0) + 1; job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
@@ -436,6 +438,11 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
     // Issue #244: an implement job whose issue overflowed the context is not restarted with the same scope; every restart would
     // fail the same way. It stops as `context_too_large` and the team loop drafts a split of the issue instead.
     if (result.event === 'context_limit' && job.kind === 'implement') {
+      // Issue #1023: the words "context window" in the output are not proof; a stop on an open prerequisite is never context_too_large.
+      if (job.postcondition && typeof checkPostcondition === 'function') {
+        try { await checkPostcondition(job); } catch { /* the stop is judged without it */ }
+        if (Array.isArray(job.waitingOn) && job.waitingOn.length) { delete job.postconditionDetail; transition(root, job, 'waiting_on', 'waiting_on', clock); return job; }
+      }
       transition(root, job, 'blocked', 'context_too_large', clock); return job;
     }
     if (result.event === 'context_limit' && restartable() && job.attempts < maxAttempts) {
