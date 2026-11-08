@@ -105,6 +105,12 @@ test('#1070 R1: a PR no reviewer can review now (attempts used, the other review
   // the other reviewer out of allowance and this one's attempts used: nobody can review it either
   const w2 = world(t, [pr(543, 'codex/issue-2-a', H(3))], { setup: team => { team.s.reviewAttempts[`543:${H(3)}:claude`] = 2; team.limitedOf = a => ({ out: a === 'codex' }); } });
   assert.deepEqual(w2.team.reviewQueue('claude', [pr(543, 'codex/issue-2-a', H(3))]), []);
+  // a reviewer in budget mode 'waiting' has no allowance either: the PR leaves the ranking and is raised as unreviewable
+  const p4 = [pr(545, 'codex/issue-2-a', H(5))];
+  const w4 = world(t, p4, { setup: team => { team.modes = { claude: { mode: 'waiting', reason: 'paid overage in use' }, codex: { mode: 'normal' } }; team.s.reviewAttempts[`545:${H(5)}:codex`] = 2; } });
+  assert.deepEqual(w4.team.reviewQueue('claude', p4), []);
+  const un = w4.team.unreviewable(p4);
+  assert.equal(un.length, 1); assert.equal(un[0].pr, 545); assert.ok(un[0].reasons.some(r => r.startsWith('claude: waiting for a reset')));
   // a PR with an agent that can still review it stays ranked
   const w3 = world(t, [pr(544, 'codex/issue-2-a', H(4))], { setup: team => { team.s.reviewAttempts[`544:${H(4)}:codex`] = 2; } });
   assert.deepEqual(w3.team.reviewQueue('claude', [pr(544, 'codex/issue-2-a', H(4))]).map(r => r.pr.number), [544]);

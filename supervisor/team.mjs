@@ -1515,7 +1515,7 @@ export class Team {
   // or no independent reviewer) rather than shown as next.
   reviewableNow(pr) {
     const key = verdictKey(pr.number, pr.headRefOid);
-    return this.agents().some(([n]) => (this.s.reviewAttempts[`${key}:${n}`] || 0) < this.c.limits.max_review_attempts && !this.reviewRefusal(n, pr, `${key}:${n}`) && !this.limitedOf(n).out);
+    return this.agents().some(([n]) => (this.s.reviewAttempts[`${key}:${n}`] || 0) < this.c.limits.max_review_attempts && !this.reviewRefusal(n, pr, `${key}:${n}`) && !this.limitedOf(n).out && this.modes?.[n]?.mode !== 'waiting');
   }
   // `planning` keeps the unreviewable PRs so choose() still records each agent's hold reason for them; the ranking shown to a person leaves them out.
   reviewQueue(agent, prs, { planning = false } = {}) {
