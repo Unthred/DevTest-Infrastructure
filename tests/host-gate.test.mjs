@@ -173,3 +173,17 @@ test('swap holders: processes sorted by swap with their container, from /proc on
   const r = topProcesses({ proc: '/pr', readDir: () => ['1', '2', '3'], fsRead: f => { if (f in files) return files[f]; throw new Error('ENOENT'); } });
   assert.deepEqual(r.topSwapHolders.map(h => [h.name, h.swapMb, h.container]), [['big', 100, 'cccccccccccc'], ['small', 1, null]]);
 });
+
+test('tick: swap between 90% and the configured hard level no longer hits the fixed #1007 swap filter; reviews start, and a higher hard level applies', async t => {
+  const { hostPressure } = await import('../supervisor/jobtmp.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hostgate-tick-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const swapPercent = 92;
+  const gh = { listPulls: async () => [pull], getPull: async n => (n === 50 ? pull : null), listIssues: async () => [], listMergedPulls: async () => [] };
+  const jobs = { listActive: async () => [], get: async () => null, stop: async () => {} };
+  const team = new Team({ config: cfg(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git: { worktreeFor: async () => null }, register: '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n', clock: { now: () => 1000 },
+    hostSample: () => fig({ swapPercent }), hostPressure: () => hostPressure({ disk: { percent: 10 }, swap: { percent: swapPercent }, dirs: [] }) });
+  team.runAction = async () => {};
+  const report = await team.tick();
+  assert.deepEqual(report.actions.map(a => a.type), ['review']);
+  assert.ok(!report.held || !/host pressure/.test(report.held.reason || ''), 'the old swap filter does not hold it');
+});
