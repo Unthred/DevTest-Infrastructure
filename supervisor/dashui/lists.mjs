@@ -61,3 +61,11 @@ export function footerText(rows, shownRows, noun = 'items', filtered = false) {
 export const noMatchText = q => `Nothing matches “${String(q).trim().slice(0, 60)}”.`;
 export const searchVisible = total => total >= LIST_MIN_SEARCH;
 export const sortsVisible = sorts => sorts.length > 1;
+
+// Issue #976: pagination. A list longer than one page shows LIST_PAGE_SIZE rows at a time with Previous / Next; the footer keeps the totals.
+export const LIST_PAGE_SIZE = 25;
+export const pageCount = (n, size = LIST_PAGE_SIZE) => Math.max(1, Math.ceil(n / size));
+export const clampPage = (page, n, size = LIST_PAGE_SIZE) => Math.min(Math.max(0, Number.isFinite(page) ? Math.floor(page) : 0), pageCount(n, size) - 1);
+// The rows of one page of an already filtered and sorted list.
+export const pageRows = (rows, page, size = LIST_PAGE_SIZE) => rows.slice(clampPage(page, rows.length, size) * size, (clampPage(page, rows.length, size) + 1) * size);
+export const pageText = (page, n, size = LIST_PAGE_SIZE) => `Page ${clampPage(page, n, size) + 1} of ${pageCount(n, size)}`;

@@ -2,7 +2,7 @@
 // Progressive enhancement: without this script a list still shows and scrolls (the server renders the default order and the footer).
 // State (search text, sort, direction, scroll position inside the list, open <details>) is kept per page and list in sessionStorage
 // and is re-applied to any list that appears, including one swapped in by an in-place refresh (PR #531), before the browser paints.
-import { DIRECTION_WORDS, footerText, listView, noMatchText, sanitizeListState } from './lists.mjs';
+import { DIRECTION_WORDS, LIST_PAGE_SIZE, clampPage, footerText, listView, noMatchText, pageCount, pageRows, pageText, sanitizeListState } from './lists.mjs';
 
 const keyOf = id => `dash.dl.${location.pathname}.${id}`;
 const num = v => (v === undefined || v === '' ? null : Number(v));
@@ -35,7 +35,15 @@ export function initList(el, store = sessionStorage) {
   const rows = lis.map((li, n) => ({ i: num(li.dataset.i) ?? n, li, sev: li.dataset.sev || null, num: num(li.dataset.num), name: li.dataset.name || null, age: num(li.dataset.age), text: li.textContent.replace(/\s+/g, ' ') }));
   const st = sanitizeListState(readStore(store, id), { sorts, defaultSort, searchable: !!input });
   const words = k => (k === 'default' ? [defaultLabel, 'Reversed'] : DIRECTION_WORDS[k]);
-  let saveTimer = 0;
+  let saveTimer = 0, page = 0;
+  // Pagination (issue #976): created here, so without script the whole list still shows and scrolls.
+  let pager = null;
+  if (rows.length > LIST_PAGE_SIZE) {
+    pager = document.createElement('div'); pager.className = 'dl-pager'; pager.innerHTML = '<button type="button" class="btn dl-prev">Previous</button><span class="sub dl-page" role="status"></span><button type="button" class="btn dl-next">Next</button>';
+    ul.after(pager);
+    pager.querySelector('.dl-prev').addEventListener('click', () => { page--; ul.scrollTop = 0; apply(); });
+    pager.querySelector('.dl-next').addEventListener('click', () => { page++; ul.scrollTop = 0; apply(); });
+  }
   const save = () => writeStore(store, id, { q: st.q, key: st.key, dir: st.dir, top: ul.scrollTop, open: openKeys() });
   const saveSoon = () => { clearTimeout(saveTimer); saveTimer = setTimeout(save, 150); };
   const detailKey = d => { const li = d.closest('.dl-scroll > li'); /* the row, not a step's nested li.wstep (no data-key) */ return li ? `${li.dataset.key || ''}|${d.closest('[data-step]')?.dataset.step || ''}` : ''; };
@@ -47,7 +55,13 @@ export function initList(el, store = sessionStorage) {
     // Reorder only when the order changed, so the browser keeps focus, scroll and open details of rows that stay.
     const want = v.order.map(r => r.li), have = [...ul.children];
     if (want.some((n, i) => n !== have[i])) { const frag = document.createDocumentFragment(); for (const n of want) frag.append(n); ul.append(frag); }
-    const visible = new Set(v.shown.map(r => r.li));
+    page = clampPage(page, v.shown.length);
+    const visible = new Set((pager ? pageRows(v.shown, page) : v.shown).map(r => r.li));
+    if (pager) {
+      pager.hidden = v.shown.length <= LIST_PAGE_SIZE;
+      pager.querySelector('.dl-page').textContent = pageText(page, v.shown.length);
+      pager.querySelector('.dl-prev').disabled = page <= 0; pager.querySelector('.dl-next').disabled = page >= pageCount(v.shown.length) - 1;
+    }
     for (const r of rows) r.li.hidden = !visible.has(r.li);
     if (input && input.value !== st.q) input.value = st.q;
     if (clear) clear.hidden = !st.q;
@@ -75,10 +89,10 @@ export function initList(el, store = sessionStorage) {
   putBack(); if (typeof requestAnimationFrame === 'function') { requestAnimationFrame(() => { putBack(); requestAnimationFrame(putBack); }); }
   if (typeof addEventListener === 'function') addEventListener('load', putBack, { once: true });
 
-  input?.addEventListener('input', () => { st.q = input.value.slice(0, 200); ul.scrollTop = 0; apply(); save(); });
+  input?.addEventListener('input', () => { page = 0; st.q = input.value.slice(0, 200); ul.scrollTop = 0; apply(); save(); });
   input?.addEventListener('keydown', e => { if (e.key === 'Escape' && st.q) { e.preventDefault(); st.q = ''; apply(); save(); } });
   clear?.addEventListener('click', () => { st.q = ''; apply(); save(); input?.focus(); });
-  select?.addEventListener('change', () => { st.key = select.value; st.dir = st.key === defaultSort.key ? defaultSort.dir : (st.key === 'default' ? 'asc' : st.key === 'severity' ? 'desc' : 'asc'); ul.scrollTop = 0; apply(); save(); });
+  select?.addEventListener('change', () => { page = 0; st.key = select.value; st.dir = st.key === defaultSort.key ? defaultSort.dir : (st.key === 'default' ? 'asc' : st.key === 'severity' ? 'desc' : 'asc'); ul.scrollTop = 0; apply(); save(); });
   dirBtn?.addEventListener('click', () => { st.dir = st.dir === 'desc' ? 'asc' : 'desc'; ul.scrollTop = 0; apply(); save(); });
   ul.addEventListener('scroll', saveSoon, { passive: true });
   ul.addEventListener('toggle', saveSoon, true);

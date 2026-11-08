@@ -371,6 +371,9 @@ html:not(.js) .dl-bar{display:none}
 .dl-clear .icon{width:14px;height:14px}
 .dl-dir{min-height:32px;padding:2px 8px;font-size:var(--fs-sm);gap:var(--sp1)}
 .dl-dir .icon{width:14px;height:14px}
+.dl-pager{display:flex;align-items:center;justify-content:space-between;gap:var(--sp2);margin-top:var(--sp2)}
+.dl-pager[hidden]{display:none}
+.dl-pager .btn{min-height:32px}
 .dl-none{margin:var(--sp2) 0}
 .dl-foot{margin-top:var(--sp2);display:flex;flex-wrap:wrap;gap:var(--sp2);min-height:1.4em}
 /* a card the viewer resized, or expanded, gives its list the extra room (the list then scrolls inside the card's own height) */
@@ -484,3 +487,12 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 @media print{.refresh-box{display:none}}
 
 .inbox-id code{font-weight:600}.inbox-kind{color:var(--mut);font-size:.9em}
+
+/* Issue #976: Inbox on a phone: one column, full-width controls, 44px touch targets, no sideways scroll. */
+@media (max-width:640px){
+  .inbox-sections{display:flex;flex-direction:column;gap:var(--sp1)}
+  .inbox-chip{display:block}
+  .dl-pager .btn,.dlist .acts .btn,.dlist .acts button,.dlist form button{min-height:44px}
+  .dlist .acts,.dlist form{display:flex;flex-wrap:wrap;gap:var(--sp2)}
+  .dlist li{overflow-wrap:anywhere}
+}

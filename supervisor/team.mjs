@@ -2748,6 +2748,14 @@ export class Team {
         const found = closed.filter(p => !p.mergedAt && agentOfBranch(this.c, p.headRefName) && re.test(p.headRefName)).map(p => p.number);
         if (found.length) (this.s.closedUnmerged ||= {})[n] = found; else if (this.s.closedUnmerged) delete this.s.closedUnmerged[n];
       }
+      // Issue #976, cause of the pile of holds: the mark is set when an implement job is created, so a job that fails before opening a pull request
+      // leaves a mark nothing ever clears. Such a mark (job failed, no PR ever closed unmerged) is released once automatically, so the issue is
+      // tried again; a second failure, a closed PR or a leftover worktree keeps the hold for the homeowner. Recorded in staleRetried.
+      const endedWhy = ended.get(n);
+      if (endedWhy?.status === 'failed' && this.git.leftoversFor && !(this.s.closedUnmerged?.[n] || []).length && !this.s.staleRetried?.[n]) {
+        (this.s.staleRetried ||= {})[n] = this.clock.now();
+        try { await this.reopen(n, 'the implement job failed before opening a pull request; retried once automatically'); continue; } catch { /* stays a hold for the homeowner */ }
+      }
       this.stale[n] = { issue: n, markedAt: at, prs: this.s.closedUnmerged?.[n] || [], ended: ended.get(n) || null };
     }
     if (this.s.closedUnmerged) for (const k of Object.keys(this.s.closedUnmerged)) if (!this.stale[k]) delete this.s.closedUnmerged[k];

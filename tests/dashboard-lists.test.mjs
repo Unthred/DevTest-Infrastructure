@@ -245,3 +245,15 @@ test('browser: one pagehide listener saves connected lists; a detached list is p
     assert.equal(hooks.length, 0, 'listener removed once no list is live');
   } finally { globalThis.addEventListener = saved.add; globalThis.removeEventListener = saved.remove; }
 });
+
+test('issue #976: pagination helpers page a long list and clamp the page', async () => {
+  const { LIST_PAGE_SIZE, pageCount, pageRows, clampPage, pageText } = await import('../supervisor/dashui/lists.mjs');
+  const rows = Array.from({ length: LIST_PAGE_SIZE * 2 + 3 }, (_, i) => ({ i }));
+  assert.equal(pageCount(rows.length), 3);
+  assert.equal(pageRows(rows, 0).length, LIST_PAGE_SIZE);
+  assert.equal(pageRows(rows, 2).length, 3);
+  assert.equal(clampPage(9, rows.length), 2);
+  assert.equal(clampPage(-1, rows.length), 0);
+  assert.equal(pageText(1, rows.length), 'Page 2 of 3');
+  assert.equal(pageCount(0), 1);
+});

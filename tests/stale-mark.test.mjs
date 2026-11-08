@@ -21,7 +21,7 @@ function world(t, { open = [], merged = [], closed = [{ number: 411, headRefName
     listPulls: async () => gh.prs, getPull: async () => null, listIssues: async () => gh.issues, board: async () => {}, listMergedPulls: async () => merged,
     listClosedPulls: async () => closed, comment: async () => {}, addLabel: async () => {}, removeLabel: async () => {} };
   const jobs = { listActive: async () => [], get: async () => null, create: async () => ({ id: 'b'.repeat(32) }) };
-  const team = new Team({ config: cfg(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register: REGISTER, clock: { now: () => NOW } });
+  const team = new Team({ config: cfg(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null, leftoversFor: async () => [] }, register: REGISTER, clock: { now: () => NOW } });
   team.s.implemented[23] = markedAt; team.save();
   return { gh, team };
 }
@@ -239,4 +239,27 @@ test('dashboard: holds are one grouped Inbox item with bulk actions; a snoozed i
   assert.ok(snoozeItem(root, 'inbox-holds', 24, NOW).ok);
   assert.ok(!(await view()).panels.needsYou.some(a => a.id === 'inbox-holds'));
   assert.equal(snoozeItem(root, 'x', 5, NOW).ok, false);
+});
+
+test('issue #976 cause: a mark left by a failed implement job is released once automatically; a second failure stays a hold', async t => {
+  const w = world(t, { closed: [] });
+  const failed = { kind: 'implement', agent: 'claude', key: '23', issue: 23, ingested: true, at: 1, endedNoPr: { status: 'failed', event: 'x', at: 1 } };
+  w.team.s.jobs['d'.repeat(32)] = failed; w.team.save();
+  await w.team.plan();
+  assert.equal(w.team.s.implemented[23], undefined, 'the mark is released');
+  assert.deepEqual(w.team.stale, {});
+  assert.ok(w.team.s.staleRetried[23]);
+  w.team.s.implemented[23] = MARKED;   // the retry started and failed again
+  await w.team.plan();
+  assert.equal(w.team.s.implemented[23], MARKED);
+  assert.ok(w.team.stale[23], 'now a hold for the homeowner');
+});
+
+test('issue #976 cause: a blocked job or a closed-unmerged PR is never retried automatically', async t => {
+  const blocked = world(t, { closed: [] });
+  blocked.team.s.jobs['d'.repeat(32)] = { kind: 'implement', agent: 'claude', key: '23', issue: 23, ingested: true, at: 1, endedNoPr: { status: 'blocked', event: 'x', at: 1 } };
+  await blocked.team.plan(); assert.equal(blocked.team.s.implemented[23], MARKED); assert.ok(blocked.team.stale[23]);
+  const rejected = world(t);
+  rejected.team.s.jobs['d'.repeat(32)] = { kind: 'implement', agent: 'claude', key: '23', issue: 23, ingested: true, at: 1, endedNoPr: { status: 'failed', event: 'x', at: 1 } };
+  await rejected.team.plan(); assert.equal(rejected.team.s.implemented[23], MARKED);
 });
