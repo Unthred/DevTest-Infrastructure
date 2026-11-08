@@ -173,7 +173,7 @@ test('script: a refusal saying the item is already decided keeps the buttons off
   assert.equal(r.ok, false);
   assert.deepEqual(log, [['error', null], ['lock', 'Approved ✓'], ['settled', 'Already decided: it is already approved. Nothing was changed.']]);
   assert.ok(!log.some(x => x[0] === 'unlock' || x[0] === 'decided'));
-  assert.ok(OUTCOME_TEMPLATE.approve.endsWith('waiting for a free slot') && OUTCOME_TEMPLATE.reject === 'Rejected {t}');
+  assert.ok(OUTCOME_TEMPLATE.approve.endsWith('queued for the inbox lane') && OUTCOME_TEMPLATE.reject === 'Rejected {t}');
 });
 test('route: a second click on an approved item is refused and changes nothing; once the tick took it the row reads plain Approved', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)); inbox.scan(dir, 1000); const s = await serve(t, dir);
@@ -234,4 +234,13 @@ test('#977: search finds an item by short id, full id, title and body, and ignor
   assert.deepEqual(ids("don't stall"), [0], 'straight apostrophe finds a curly one'); assert.deepEqual(ids('Don’t stall'), [0]);
   assert.deepEqual(ids('stall - fix'), [0], 'a hyphen finds an em dash'); assert.deepEqual(ids('stall – fix'), [0]); assert.deepEqual(ids('retries'), [1]);
   assert.deepEqual(ids('nomatch'), []);
+});
+
+test('#971: the queue view lists an approved prompt in the inbox lane, on the work page and the agent page', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD(7)); inbox.scan(dir, Date.now() - 5000);
+  const s = await serve(t, dir); assert.equal((await s.post(a, 'approve')).status, 200);
+  const q = Object.values((await view(s)).queues).flat().filter(e => e.type === 'inbox');
+  assert.equal(q.length, 1); assert.equal(q[0].title, 'Tidy docs 7'); assert.match(q[0].reason, /inbox lane/);
+  assert.match((await s.get('/work')).body, /Inbox lane<\/[a-z]+> Tidy docs 7/);
+  assert.match((await s.get('/agents/claude')).body, /Inbox lane: Tidy docs 7/);
 });

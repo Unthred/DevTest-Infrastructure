@@ -389,13 +389,13 @@ test('team: the order guard holds new implement work while an order-changing pro
   const mk = item => { const w = world(t, { agents }); w.gh.listIssues = async () => [{ number: 5, title: 'five', state: 'OPEN', body: '', labels: [] }]; if (item) approve(w, item); return w; };
   const implementing = async w => (await w.team.plan()).some(a => a.type === 'implement');
   assert.equal(await implementing(mk(null)), true, 'baseline: the issue is implemented');
-  for (const text of ['Move issue 940 ahead of 935', 'Put #940 first in the implement list', 'Do issue 12 before issue 7.', 'Swap 940 and 935 so 940 goes next']) {
+  for (const text of ['Move issue 940 ahead of 935', 'Put #940 first in the implement list', 'Do issue 12 before issue 7.', 'Swap 940 and 935 so 940 goes next', 'Swap 940 and 935', 'Make 940 the next issue', 'Change the implement list to 12, 13, 9', 'Skip 935 for now', 'Bring 940 forward', 'Prefer issue 940 over 935', 'Add 940 to the list for claude']) {
     const w = mk({ ...GOOD, title: 'Change picks', prompt: text }); const pl = await w.team.plan();
     assert.ok(pl.some(a => a.type === 'inbox') && !pl.some(a => a.type === 'implement'), `holds implement work: ${text}`);
   }
-  assert.equal(orderSensitive({ title: 'Tidy', prompt: 'Fix the typo in README in order to read better' }), false, '"in order to" is not an order change');
   const plain = mk({ ...GOOD, title: 'Tidy the docs', prompt: 'Fix a typo in the README.' });
-  assert.equal(await implementing(plain), true, 'a harmless prompt does not hold implement work');
+  assert.equal(await implementing(plain), false, 'fail safe: no approved prompt is known to be harmless, so every one holds until it has run');
+  assert.equal(orderSensitive({ title: 'x', prompt: 'y' }), true);
   const order = mk({ ...GOOD, title: 'Reorder the issue queue', prompt: 'Put issue 9 before issue 5 in team.json.' });
   const plan = await order.team.plan();
   assert.ok(plan.some(a => a.type === 'inbox'), 'the reorder prompt is planned'); assert.ok(!plan.some(a => a.type === 'implement'), 'new implement work waits behind it');
@@ -422,6 +422,17 @@ test('team: the inbox time cap stops a prompt job that ran too long, once, and m
   // an implement job past 15 minutes is never touched by the inbox cap
   const x = world(t); x.jobs.stop = async y => stopped.push(y); x.jobs.listActive = async () => [{ id: 'c'.repeat(32), status: 'running', provider: 'claude' }]; x.team.s.jobs['c'.repeat(32)] = { kind: 'implement', agent: 'claude', key: '1', issue: 1, ingested: false, at: 0 };
   x.team.clock.now = () => 3 * 3600000; await x.team.enforceInboxCap(rep()); assert.equal(stopped.length, 1);
+});
+test('team: the inbox time cap counts running time only: a usage-limit pause does not count, and a resumed job starts again from the resume', async t => {
+  const w = world(t, { limits: { ...LANE, inbox_max_minutes: 15 } }); approve(w, GOOD);
+  await w.team.runAction((await w.team.plan()).find(a => a.type === 'inbox'), rep());
+  const [jobId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox'); const stopped = []; let status = 'running';
+  w.jobs.stop = async x => { stopped.push(x); }; w.jobs.listActive = async () => [{ id: jobId, status, provider: 'claude' }];
+  const at = ms => { w.team.clock.now = () => rec.at + ms; return w.team.enforceInboxCap(rep()); };
+  await at(5 * 60000); status = 'paused_limit'; await at(6 * 60000); await at(3 * 3600000);
+  status = 'running'; await at(3 * 3600000 + 60000); assert.deepEqual(stopped, [], 'just resumed after a long pause: not stopped');
+  await at(3 * 3600000 + 9 * 60000); assert.deepEqual(stopped, [], '5 + 9 minutes of running is inside the cap');
+  await at(3 * 3600000 + 12 * 60000); assert.deepEqual(stopped, [jobId], 'over 15 minutes of running time: stopped');
 });
 test('team: a paused-on-limit inbox job holds no inbox slot, and resumes only into a free one regardless of the overall cap', () => {
   const L = { roles: { implementer: 1, reviewer: 1 }, overall: 2 }, job = { id: 'a', kind: 'inbox', provider: 'claude' };

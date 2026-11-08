@@ -26,7 +26,7 @@ import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { wakeView } from './wake.mjs';
 import { sinceView } from './since.mjs';
-import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards } from './inbox.mjs';
+import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -186,6 +186,13 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else if (busy(agent)) reason = 'ready; waits behind the running job';
     else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? names.issue(ahead.issue).text : names.pr(ahead.pr).text}` : 'ready; waits for a free slot'; }
     queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason, next: planned.has(`${agent}:implement:${n}`) });
+  }
+  // Issue #971: an approved prompt waits in the inbox lane, shown in the queue of the agent the planner picked (the first agent when none).
+  const inboxDir = c.inbox?.dir, inboxPlan = plan.find(a => a.type === 'inbox');
+  if (inboxDir) for (const st of approvedInboxItems(inboxDir, 'prompt')) {
+    if (Object.values(S.jobs).some(j => j.inboxId === st.id)) continue;
+    const owner = inboxPlan && queues[inboxPlan.agent] ? inboxPlan.agent : Object.keys(queues)[0]; if (!owner) continue;
+    queues[owner].push({ type: 'inbox', ref: 0, title: st.title || 'approved prompt', reason: `approved prompt in the inbox lane${inboxPlan?.inboxId === st.id ? ' (starts this tick)' : ' (waits for the inbox slot)'}; waited ${Math.max(0, Math.round((now - (st.decidedAt || now)) / 1000))} s`, next: inboxPlan?.inboxId === st.id });
   }
   // Issue #405: reviews are listed in the order the planner takes them (closest to merge, then age), with the reason.
   for (const [reviewer, q] of Object.entries(queues)) {
