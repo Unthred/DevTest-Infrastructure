@@ -131,6 +131,7 @@ function redactClip(value, max, secrets) {
 export function sanitizeEntry(entry, secrets = []) {
   const kind = KINDS.includes(entry?.kind) ? entry.kind : 'log';
   const out = { kind, text: redactClip(entry?.text ?? '', ENTRY_TEXT_MAX, secrets) };
+  if (typeof entry?.callId === 'string' && entry.callId) out.callId = entry.callId.replace(/[^A-Za-z0-9_:.-]/g, '').slice(0, 80);   // issue #1084: pairs a result with its call
   if (typeof entry?.tool === 'string') out.tool = redactText(entry.tool, secrets).slice(0, 80);
   if (typeof entry?.detail === 'string' && entry.detail) out.detail = redactClip(entry.detail, ENTRY_DETAIL_MAX, secrets);
   if (typeof entry?.stream === 'string') out.stream = entry.stream === 'stderr' ? 'stderr' : 'stdout';
@@ -159,7 +160,7 @@ export class TranscriptWriter {
   // The output of a secret read has no shape to match, so a result is dropped whole when its call was a secret read. Calls and
   // results are paired by id (Claude tool_use_id, Codex item id), so parallel and out-of-order results stay correct. Fail closed: a
   // result whose id was never seen as a call, or that has no id, is redacted too (this includes the result of an id-less call).
-  // The id is used here only and is not stored.
+  // The id is stored (sanitised) so a later reader can pair results with calls.
   guardSecretRead(entry) {
     // The evidence line is the raw stream line of the same result, so it is blanked too.
     const hidden = '[redacted: output of a secret read]';

@@ -173,7 +173,7 @@ export function renderStatus(s) {
     for (const r of s.robustness.retries) out.push(`  ${r.key}: ${r.count} attempt${r.count === 1 ? '' : 's'} with cause ${r.cause}${r.capped ? ' (stopped, in Needs you)' : ''}`);
     if (s.robustness.rearm) out.push(`  re-armed after ${s.robustness.rearm.scopes.join(', ')} cleared: ${s.robustness.rearm.items.join(', ')}`);
   }
-  if (s.agentErrors) out.push('', `In-job agent errors, last 24 hours: ${s.agentErrors.errors}, about ${s.agentErrors.tokensLost.toLocaleString('en-US')} tokens lost (${s.agentErrors.recovered} recovered)`);
+  if (s.agentErrors) out.push('', `In-job agent errors, last 24 hours: ${s.agentErrors.errors}, about ${s.agentErrors.tokensLost.toLocaleString('en-US')} tokens lost${s.agentErrors.tokensUnknown ? ` (${s.agentErrors.tokensUnknown} with no token figure)` : ''} (${s.agentErrors.recovered} recovered)`);
   head('Problems');
   if (!s.problems.length) out.push('  none');
   for (const p of s.problems) out.push(`  - ${p.text}`);

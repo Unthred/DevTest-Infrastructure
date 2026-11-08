@@ -30,24 +30,32 @@ function writeTranscript(root, id, steps) {
 const STEPS = [
   { cmd: 'cat /mnt/user/projects/A-1/docs/missing.md', fail: true, out: 'cat: /mnt/user/projects/A-1/docs/missing.md: No such file or directory' },
   { usage: 500 },
-  { tool: 'Read', cmd: '/mnt/user/projects/A-1/docs/other.md', out: 'contents' },
   { cmd: 'gh pr view 1012 --json state', fail: true, out: `Exit code 1\nHTTP 401: Bad credentials token=${GH}` },
   { usage: 300 },
   { cmd: 'gh pr view 1013 --json state', fail: true, out: 'Exit code 1\nHTTP 401: Bad credentials' },
   { usage: 200 },
+  { cmd: 'gh api repos/o/r/pulls/1013', out: '{}' },
   { cmd: 'git status', out: 'clean' },
 ];
 
-test('extraction: a failed step then the method that worked, with type, excerpt and tokens lost', t => {
+test('extraction: a failed step then the different method that worked, with type, excerpt and tokens lost', t => {
   const root = tmp(t); writeTranscript(root, ID, STEPS);
   const errors = extractErrors(readTranscript(root, ID).entries);
   assert.equal(errors.length, 3);
   const [first] = errors;
   assert.equal(first.tool, 'Bash'); assert.equal(first.method, 'Bash: cat <path>'); assert.equal(first.type, 'file_not_found');
-  assert.equal(first.recovered, true); assert.equal(first.recoveredBy, 'Read: <path>'); assert.equal(first.tokensLost, 500);
+  assert.equal(first.recovered, false, 'an unrelated later success (git status) is not a recovery'); assert.equal(first.recoveredBy, null);
   assert.match(first.excerpt, /No such file/);
   assert.ok(errors.every(e => ERROR_TYPES.includes(e.type)));
-  assert.equal(errors[1].type, 'auth'); assert.equal(errors[1].recoveredBy, 'Bash: git status');
+  assert.equal(errors[1].type, 'auth'); assert.equal(errors[1].recovered, true); assert.equal(errors[1].recoveredBy, 'Bash: gh api <path>');
+  assert.equal(errors[1].recoveredWithSameMethod, false); assert.equal(errors[1].tokensLost, 500); assert.equal(errors[2].tokensLost, 200);
+});
+
+test('a retry of the same method that then works is a retry, not a different method', () => {
+  const e = extractErrors([
+    { kind: 'tool_call', callId: 'a', tool: 'Bash', text: 'npm run build' }, { kind: 'tool_result', callId: 'a', error: true, text: 'Exit code 1\nboom' },
+    { kind: 'tool_call', callId: 'b', tool: 'Bash', text: 'npm run build' }, { kind: 'tool_result', callId: 'b', text: 'ok' }]);
+  assert.equal(e[0].recovered, true); assert.equal(e[0].recoveredWithSameMethod, true); assert.equal(e[0].recoveredBy, null);
 });
 
 test('grouping: the same failing command on different ids gives one normalised method and the repeat is flagged', t => {
@@ -61,7 +69,7 @@ test('grouping: the same failing command on different ids gives one normalised m
 });
 
 test('classification covers the fixed list and unrecovered errors record no recovery', t => {
-  for (const [text, type] of [['permission denied', 'permission_refused'], ['command timed out after 120s', 'timeout'], ['bash: foo: command not found', 'command_not_found'], ['HTTP 429 rate limit', 'rate_limit'], ['Exit code 2\nboom', 'command_failed'], ['weird', 'tool_error']]) assert.equal(classifyError(text), type);
+  for (const [text, type] of [['permission denied', 'permission_refused'], ['Permission for this command was denied. Ask the user.', 'permission_refused'], ['InputValidationError: Monitor failed: timeout_ms must be positive', 'tool_error'], ['command timed out after 120s', 'timeout'], ['bash: foo: command not found', 'command_not_found'], ['HTTP 429 rate limit', 'rate_limit'], ['Exit code 2\nboom', 'command_failed'], ['weird', 'tool_error']]) assert.equal(classifyError(text), type);
   const root = tmp(t); writeTranscript(root, ID, [{ cmd: 'make all', fail: true, out: 'Exit code 2\nboom' }]);
   const [e] = extractErrors(readTranscript(root, ID).entries);
   assert.equal(e.recovered, false); assert.equal(e.recoveredBy, null); assert.equal(e.type, 'command_failed');
@@ -78,8 +86,6 @@ test('redaction: a secret-shaped value in the message never reaches the stored r
   // extraction itself redacts a secret shape in the excerpt even when the caller passes no list
   const e = extractErrors([{ kind: 'tool_call', seq: 1, tool: 'Bash', text: 'x' }, { kind: 'tool_result', seq: 2, error: true, text: `Exit code 1\nAuthorization: Bearer ${GH}abcdef` }]);
   assert.ok(!JSON.stringify(e).includes(GH));
-  // idempotent: a second call neither rewrites nor throws
-  assert.equal(await recordJobErrors({ root, id: ID, jobs: { get: async () => ({}) }, now: Date.now() }), null);
 });
 
 test('retention: records older than the period are removed automatically, newer ones stay', async t => {
@@ -104,7 +110,7 @@ test('groups by method and type with filters; totals for team status; MCP tool r
   await recordJobErrors({ root, id: ID2, jobs: { get: async () => ({ kind: 'review', provider: 'codex' }) }, entry: { agent: 'codex' }, now: now - 3 * DAY, secrets: [GH] });
   const all = agentErrorGroups(root, { now, days: 7 });
   const gh = all.groups.find(g => g.method === 'Bash: gh pr view <n> --json state');
-  assert.equal(gh.count, 4); assert.equal(gh.jobs, 2); assert.deepEqual(gh.agents, ['claude', 'codex']); assert.equal(gh.tokensLost, 2 * (500 + 200));   // per job: 1012 recovered by git status after 300+200, 1013 after 200
+  assert.equal(gh.count, 4); assert.equal(gh.jobs, 2); assert.deepEqual(gh.agents, ['claude', 'codex']); assert.equal(gh.tokensLost, 2 * (500 + 200));
   const only = agentErrorGroups(root, { now, days: 7, agent: 'codex' }); assert.equal(only.errors, 3);
   assert.equal(agentErrorGroups(root, { now, days: 7, kind: 'review' }).errors, 3);
   assert.equal(agentErrorGroups(root, { now, days: 1 }).errors, 3, 'the day filter drops the older job');
@@ -123,4 +129,66 @@ test('groups by method and type with filters; totals for team status; MCP tool r
   const bad = await tools.call('foreman_agent_errors', { agent: '../../etc' }); assert.equal(JSON.parse(bad.text).errors, 6, 'an unsafe filter is ignored, not applied');
   const post = await new Promise(res => { const q = http.request({ host: '127.0.0.1', port, path: '/api/agent-errors.json', method: 'POST', headers: { host: `127.0.0.1:${port}` } }, x => { x.resume(); res(x.statusCode); }); q.end(); });
   assert.notEqual(post, 200);
+});
+
+// Real adapter streams, written the way the dispatcher writes them.
+import * as codex from '../supervisor/adapters/codex.mjs';
+import * as claude from '../supervisor/adapters/claude.mjs';
+import { renderStatus } from '../supervisor/teamstatus.mjs';
+function feed(root, id, adapter, lines) {
+  const w = new TranscriptWriter(root, id, { secrets: [] }), state = {};
+  for (const l of lines) for (const e of adapter.transcript(JSON.stringify(l), state) || []) w.append(e);
+}
+const shell = (id, command, code, out) => [{ type: 'item.started', item: { id, type: 'command_execution', command } }, { type: 'item.completed', item: { id, type: 'command_execution', command, exit_code: code, aggregated_output: out } }];
+
+test('Codex: calls without a result entry do not shift later results, wrappers are unwrapped, tokens are unknown not zero', t => {
+  const root = tmp(t);
+  feed(root, ID, codex, [
+    { type: 'item.completed', item: { type: 'file_change', changes: [{ kind: 'update', path: '/mnt/x/a.mjs' }] } },
+    ...shell('i1', '/bin/bash -lc "cd \\"/mnt/x\\" && npm run build"', 1, 'boom'),
+    ...shell('i2', '/bin/bash -lc "rm -rf nope && git push"', 1, 'fatal'),
+    { type: 'turn.completed', usage: { input_tokens: 900, output_tokens: 100 } }]);
+  const e = extractErrors(readTranscript(root, ID).entries);
+  assert.equal(e.length, 2);
+  assert.equal(e[0].tool, 'shell'); assert.equal(e[0].method, 'shell: cd <str> && npm run build'); assert.equal(e[1].method, 'shell: rm -rf nope && git push');
+  assert.equal(e[0].recovered, false); assert.equal(e[0].tokensLost, null); assert.equal(e[1].tokensLost, null);
+});
+
+test('Claude: out-of-order parallel results pair by id; an unrelated read is not a recovery', t => {
+  const root = tmp(t);
+  const use = (id, name, input) => ({ type: 'assistant', message: { id: 'm' + id, content: [{ type: 'tool_use', id, name, input }], usage: { input_tokens: 10, output_tokens: 5 } } });
+  const res = (id, text, err) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: text, is_error: err }] } });
+  feed(root, ID, claude, [use('t1', 'Bash', { command: 'node --test foo.test.mjs' }), use('t2', 'Read', { file_path: '/mnt/y/z.md' }), res('t2', 'text', false), res('t1', 'Exit code 1\nfail', true)]);
+  const e = extractErrors(readTranscript(root, ID).entries);
+  assert.equal(e.length, 1); assert.match(e[0].method, /node --test/); assert.equal(e[0].tool, 'Bash'); assert.equal(e[0].recovered, false);
+  assert.ok(e[0].tokensLost === null || e[0].tokensLost >= 0);
+});
+
+test('grouping: test files, d.ts files, line ranges, hyphenated ids and different shell wrappers', () => {
+  const n = c => normalizeMethod('Bash', c);
+  assert.equal(n('node --test a.test.mjs'), n('node --test b.test.mjs'));
+  assert.equal(n('cat foo.d.ts'), n('cat bar.d.ts'));
+  assert.equal(n('sed -n 10,20p x.md'), n('sed -n 30,40p y.md'));
+  assert.equal(n('ai test job-a1b2c3'), n('ai test job-d4e5f6'));
+  assert.notEqual(normalizeMethod('shell', '/bin/bash -lc "npm run build"'), normalizeMethod('shell', '/bin/bash -lc "git push"'));
+});
+
+test('a resumed job is recorded again from the whole transcript; a missing transcript writes nothing; the excess is counted', async t => {
+  const root = tmp(t);
+  writeTranscript(root, ID, [{ cmd: 'first-attempt', fail: true, out: 'Exit code 1\nx' }]);
+  await recordJobErrors({ root, id: ID, jobs: null, now: Date.now(), secrets: [] });
+  const w = new TranscriptWriter(root, ID, { secrets: [] }); w.append({ kind: 'tool_call', callId: 'z', tool: 'Bash', text: 'second-attempt' }); w.append({ kind: 'tool_result', callId: 'z', error: true, text: 'Exit code 1\ny' });
+  const rec = await recordJobErrors({ root, id: ID, jobs: null, now: Date.now(), secrets: [] });
+  assert.deepEqual(rec.errors.map(e => e.method), ['Bash: first-attempt', 'Bash: second-attempt']);
+  assert.equal(await recordJobErrors({ root, id: ID2, jobs: null, now: Date.now() }), null);
+  assert.ok(!fs.existsSync(path.join(errorsDir(root), `${ID2}.json`)));
+  const many = Array.from({ length: 45 }, (_, i) => ({ cmd: `c${i}x`, fail: true, out: 'Exit code 1\nx' }));
+  writeTranscript(root, ID2, many);
+  const r2 = await recordJobErrors({ root, id: ID2, jobs: null, now: Date.now(), secrets: [] });
+  assert.equal(r2.errors.length, 40); assert.equal(r2.dropped, 5);
+});
+
+test('team status line shows the count, the tokens lost and the errors with no token figure', () => {
+  const out = renderStatus({ agentErrors: { errors: 4, tokensLost: 1200, tokensUnknown: 2, recovered: 1 }, problems: [], pulls: [], mergedToday: [], next: { plan: [], waiting: [] }, agents: [], slots: [], notes: [], schedule: {}, reviewOrder: [], estimates: { items: [], waits: [] }, robustness: null, needsYou: [], generatedAt: Date.now(), timeZone: 'UTC' });
+  assert.match(out, /In-job agent errors, last 24 hours: 4, about 1,200 tokens lost \(2 with no token figure\) \(1 recovered\)/);
 });
