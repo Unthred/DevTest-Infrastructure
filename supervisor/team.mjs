@@ -31,6 +31,7 @@ import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
+import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -76,6 +77,7 @@ export function validateTeamConfig(input) {
   try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
   validateDashboard(c.dashboard);
   try { c.display = validateDisplay(c.display); } catch (error) { throw new SupervisorError(error.message); }   // issue #1097
+  try { validateHealthConfig(c.health); } catch (error) { throw new SupervisorError(error.message); }   // issue #1092
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
   if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir' || k === 'max_pending') && (c.inbox.max_pending === undefined || (Number.isSafeInteger(c.inbox.max_pending) && c.inbox.max_pending >= 1 && c.inbox.max_pending <= 200)))) throw new SupervisorError('invalid inbox: { dir: absolute path, max_pending?: 1-200 }');   // issue #124
@@ -1731,6 +1733,7 @@ export class Team {
     actions = this.applyRetryCap(actions, report);   // issue #995
     if (!dryRun) await guard('job liveness', () => this.livenessSweep(report));
     if (!dryRun) await guard('temp sweep', () => this.sweepTemp(report));
+    if (!dryRun && this.root) await guard('disk samples', async () => recordDiskSample({ root: this.root, now: this.clock.now(), volumes: this.c.health?.volumes ?? DEFAULT_VOLUMES }));
     if (!dryRun) await guard('host pressure', async () => { this.hostPressureState = this.hostPressureNow(); });
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
     if (!dryRun) await guard('self-check', () => this.runSelfCheck(report));

@@ -39,6 +39,7 @@
     "claude": { "provider": "claude", "branch_prefix": "claude/", "issues": [] },
     "codex": { "provider": "codex", "branch_prefix": "codex/", "issues": [] }
   },
+  "health": { "volumes": ["/", "/tmp", "/mnt/cache", "/mnt/user"] },
   "depends_on_overrides": {},
   "board": {
     "owner": "Unthred", "number": 13,
