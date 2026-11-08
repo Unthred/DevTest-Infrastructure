@@ -510,7 +510,8 @@ const verdictKey = (pr, head) => `${pr}:${head}`;
 
 export function validateVerdict(v, expect) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return 'verdict is not an object';
-  if (Object.keys(v).some(k => !VERDICT_FIELDS.includes(k))) return 'verdict has an unknown field';
+  const unknownKeys = Object.keys(v).filter(k => !VERDICT_FIELDS.includes(k));
+  if (unknownKeys.length) return `verdict has an unknown field: ${unknownKeys.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 30)).join(', ')}${unknownKeys.length > 3 ? ', ...' : ''}`;
   if (v.pr !== expect.pr) return 'verdict is for a different PR';
   if (!SHA.test(v.headSha || '') || v.headSha !== expect.head) return 'verdict is for a different head';
   if (!['PASS', 'CHANGES'].includes(v.verdict)) return 'verdict must be PASS or CHANGES';

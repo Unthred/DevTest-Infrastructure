@@ -68,9 +68,9 @@ test('a field-name typo is repaired; ambiguous or wrong cases are not', () => {
   // too short a prefix
   assert.match(checkVerdictFile(write({ ...good(), headSha: HEAD.slice(0, 5) }), expect).error, /different head/);
   // unknown field with no near match
-  assert.match(checkVerdictFile(write({ ...good(), banana: 1 }), expect).error, /unknown field/);
+  assert.match(checkVerdictFile(write({ ...good(), banana: 1 }), expect).error, /unknown field: banana$/);
   // the target field is already present: renaming would clobber it
-  assert.match(checkVerdictFile(write({ ...good(), commandRun: ['y'] }), expect).error, /unknown field/);
+  assert.match(checkVerdictFile(write({ ...good(), commandRun: ['y'] }), expect).error, /unknown field: commandRun$/);
   // a repair that does not make the file valid is not applied
   assert.match(checkVerdictFile(write({ pr: 7, headSha: HEAD, verdict: 'PASS', findings: [], commandRun: [] }), expect).error, /unknown field/);
 });
