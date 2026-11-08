@@ -112,7 +112,7 @@ test('sanitizeLayout: bad or old saved data falls back safely', () => {
   const ids = ['a', 'b', 'c'];
   for (const bad of [null, undefined, 0, 'x', [], {}, { v: 1, pos: {} }, { v: 3, pos: {} }, { v: 2 }, { v: 2, pos: [] }, { v: 2, pos: 'x' }, { order: ['a'], span: { a: 6 }, h: { a: 200 } }]) assert.equal(sanitizeLayout(bad, ids, 24), null, JSON.stringify(bad));
   const out = sanitizeLayout({ v: 2, pos: { a: R(0, 0, 8, 8), b: R(1.5, 0, 8, 8), c: 'x', gone: R(0, 0, 8, 8) }, hidden: ['c', 'zzz', 7, 'c'] }, ids, 24);
-  assert.deepEqual(out, { pos: { a: R(0, 0, 8, 8) }, hidden: ['c'] }, 'unknown cards and bad rectangles dropped, hidden cleaned and de-duplicated');
+  assert.deepEqual(out, { pos: { a: R(0, 0, 8, 8) }, hidden: ['c'], groups: [] }, 'unknown cards and bad rectangles dropped, hidden cleaned and de-duplicated');
   const cl = sanitizeLayout({ v: 2, pos: { a: R(-5, -5, 999, 2), b: R(0, 0, 4, 4) }, hidden: [] }, ids, 12);
   assert.deepEqual(cl.pos.a, R(0, 0, 12, MIN_H)); assert.ok(noOverlap(cl.pos), 'overlapping saved rectangles are settled');
 });
@@ -172,8 +172,8 @@ test('isOldLayout tells the old order/span/h form from the new one', () => {
   assert.equal(isOldLayout(null), false); assert.equal(isOldLayout({ collapsed: ['a'] }), false);
 });
 test('toSaved / sanitizeLayout round trip and keep collapsed out of the free state', () => {
-  const st = { pos: { a: R(0, 0, 8, 8) }, hidden: [] }, saved = toSaved(st, ['a']);
-  assert.deepEqual(saved, { v: 2, pos: st.pos, hidden: [], collapsed: ['a'] });
+  const st = { pos: { a: R(0, 0, 8, 8) }, hidden: [], groups: [] }, saved = toSaved(st, ['a']);
+  assert.deepEqual(saved, { v: 2, pos: st.pos, hidden: [], groups: [], collapsed: ['a'] });
   assert.deepEqual(sanitizeLayout(JSON.parse(JSON.stringify(saved)), ['a'], 24), st);
 });
 
@@ -240,9 +240,9 @@ test('free layout content adapts and is never cut off: cards scroll, charts and 
 });
 test('layout mode: the whole card is the handle, contents are inert, a phone gets no editor', () => {
   assert.match(css, /\.cards\.editing>\.card>\*\{pointer-events:none\}/);
-  assert.match(css, /\.wide-only,\.layoutbar\{display:none!important\}/);
+  assert.match(css, /\.wide-only,\.layoutbar,\.barbtn\{display:none!important\}/);
   assert.match(css, /@media\(min-width:640px\)\{\[data-move\]\{display:none\}\}/, 'the earlier/later buttons are for the phone only');
-  for (const w of ['Edit layout', 'Done', 'Undo', 'Redo', 'Tidy up', 'Reset to default', 'Hidden cards']) assert.ok(appJs.includes(w), w);
+  for (const w of ['Edit layout', 'Done', 'Undo', 'Redo', 'Tidy up', 'Reset to default', 'Group', 'Ungroup', 'Cards (']) assert.ok(appJs.includes(w), w);
   assert.match(appJs, /bpNow\(\) === 'phone'/);
 });
 test('the periodic refresh never runs while the layout is being edited, so a drag or an unsaved change is not lost', () => {

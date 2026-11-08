@@ -448,26 +448,26 @@ export function nextTickHtml(view, now) {
   // scheduled: the script counts down, then turns the count into "overdue by" and reveals the last tick time
   return `<b data-tick-state="scheduled"><span data-countdown="${n.at}">in ${esc(clock(n.at - now))}</span><span data-after hidden>${last}</span></b>`;
 }
-const agentStat = view => `<div class="stat agent-lines" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
+const agentStat = view => `<div class="stat agent-lines" data-bar="agents" data-bar-name="Agents" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
 // Issue #467: how old the prepared copy behind this page is. Never shown as current once it is old or its rebuild failed.
 export function pageDataStat(view) {
   const d = view.pageData; if (!d || !Number.isFinite(d.ageMs)) return '';
   const secs = Math.round(d.ageMs / 1000), age = secs < 60 ? `${secs} s` : `${Math.round(secs / 60)} min`;
   const why = d.failed ? `The last rebuild failed (${d.failed}); this is the last good copy.` : d.behindWrite ? 'This copy was prepared before the latest change and does not show it yet; a new copy is built on the next request.' : d.stale ? (d.refreshing ? 'This copy is older than expected and is being rebuilt.' : 'This copy is older than expected; a new copy is built on the next request.') : 'Pages are served from a copy prepared in the background.';
-  return `<div class="stat" data-page-data="${d.stale ? 'stale' : 'ok'}" title="${esc(why)}"><span class="k">Page data</span>${d.stale ? badge('warning', `Stale · ${age} old`) : `<span>${esc(age)} old</span>`}</div>`;
+  return `<div class="stat" data-bar="page-data" data-bar-name="Page data" data-page-data="${d.stale ? 'stale' : 'ok'}" title="${esc(why)}"><span class="k">Page data</span>${d.stale ? badge('warning', `Stale · ${age} old`) : `<span>${esc(age)} old</span>`}</div>`;
 }
 function statusBar(view, route, head = '', crumbs = '') {
   const now = view.generatedAt, t = view.tick;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
   const L = pillLinks({ health: view.health, attention: view.attention, needsYou: view.panels?.needsYou, version: view.version });
   const pill = (href, inner, why) => `<a class="pill" href="${esc(href)}" title="${esc(why)}">${inner}</a>`;
-  return `<header class="statusbar" role="banner"><div class="brand">${icon('pulse')} DevTest team</div>${head}
-${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
+  return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} DevTest team</div>${head}
+${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" data-bar="health" data-bar-name="Health" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
 ${agentStat(view)}
-<div class="stat"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
-<div class="stat"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
+<div class="stat" data-bar="last-tick" data-bar-name="Last tick"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
+<div class="stat" data-bar="next-tick" data-bar-name="Next tick"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
 ${pageDataStat(view)}
-<button class="stickybtn wide-only" id="sticky" type="button" aria-pressed="false" aria-label="Keep the app bar at the top while scrolling" title="Keep the app bar at the top while scrolling">${icon('pin')}</button><button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>${crumbs}
+<button class="barbtn wide-only" id="barEdit" type="button" aria-pressed="false" title="Rearrange, remove and add app bar items">Edit bar</button><button class="stickybtn wide-only" id="sticky" type="button" aria-pressed="false" aria-label="Keep the app bar at the top while scrolling" title="Keep the app bar at the top while scrolling">${icon('pin')}</button><button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>${crumbs}
 <nav class="nav" id="nav" aria-label="Pages"><button type="button" class="dock-handle wide-only" data-dock-handle aria-label="Dock the navigation: arrow keys move it to a screen edge, Home resets it" title="Drag to a screen edge to dock the navigation, or use the arrow keys">${icon('drag')}</button>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<div class="nav-resize wide-only" role="separator" aria-orientation="vertical" tabindex="0" data-nav-resize aria-label="Resize the menu: arrow keys change its width, Home resets it" title="Drag to resize the menu"></div><button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
 }
 

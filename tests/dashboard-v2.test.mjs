@@ -295,7 +295,7 @@ test('phone design: tables carry labels for card layout, tap-to-expand rows, bot
   assert.match((await s.get('/work')).body, /<tr tabindex="0">/);
   const css = (await s.get('/static/style.css')).body;
   assert.match(css, /@media\(max-width:639px\)[\s\S]*\.nav\{position:fixed;bottom:0/); assert.match(css, /min-height:44px;min-width:44px/); assert.match(css, /td::before\{content:attr\(data-label\)/);
-  assert.match(css, /\.wide-only,\.layoutbar\{display:none!important\}/, 'no layout editor on a phone');
+  assert.match(css, /\.wide-only,\.layoutbar,\.barbtn\{display:none!important\}/, 'no layout editor on a phone');
   for (const bp of ['@media(min-width:1100px)', '@media(max-width:1099px)', '@media(max-width:639px)', 'prefers-reduced-motion:reduce', 'prefers-color-scheme:dark', ':root[data-theme=dark]', ':focus-visible']) assert.ok(css.includes(bp), bp);
   assert.doesNotMatch(css, /@import|url\(|https?:\/\//);
 });
