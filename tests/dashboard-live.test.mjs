@@ -260,6 +260,17 @@ test('a latch shows one Needs you item with a Clear latch button and no shell co
   assert.ok(!JSON.parse((await none.get('/api/view.json')).body).panels.needsYou.some(a => a.id === 'upgrade-latched'));
   assert.ok(!(await none.get('/')).body.includes('/clear-latch'));
 });
+test('the Clear latch form is not matched by the inbox submit listener in app.js, and every form that is has a decision field', async t => {
+  const s = await serve(t, { link: H(5), latch: { at: NOW - 1000, from: H(5), to: H(6), reason: 'x' } });
+  const html = (await s.get('/')).body, forms = [...html.matchAll(/<form\b[^>]*>/g)].map(m => m[0]);
+  const latch = forms.filter(f => f.includes('action="/clear-latch"'));
+  assert.equal(latch.length, 1);
+  // app.js cancels the submit of every form.inbox-form and reads form.elements.decision.value; this form has no decision field.
+  assert.ok(!/class="[^"]*\binbox-form\b/.test(latch[0]), 'a form without a decision field must not use the inbox-form class');
+  const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  assert.match(app, /closest\?\.\('form\.inbox-form'\)/);
+  assert.match(app, /'clear-latch-cooldown'/);
+});
 test('POST /clear-latch: wrong proof, foreign origin or wrong host change nothing; the right proof removes the latch once and records it', async t => {
   const s = await serve(t, { link: H(5), latch: { at: NOW - 1000, from: H(5), to: H(6), reason: 'x' } });
   const { writeToken } = await import('../supervisor/dashwrite.mjs');

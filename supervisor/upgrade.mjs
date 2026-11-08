@@ -48,7 +48,8 @@ export const ENV_RETRY_MAX_MS = 4 * 60 * 60 * 1000;
 // Issue #581: a commit refused by a failed check gets one more attempt after this delay without waiting for main to move
 // (a check that fails only under load is not a defect of the commit). A second failure latches it until a newer main.
 // Issue #692: a live tick that fails only because GitHub could not be reached says nothing about the new code. It is retried with the same
-// bounded backoff and never rolls back or latches; the install stays pending until a live tick passes or fails for a real reason.
+// bounded backoff and does not roll back or latch; the install stays pending until a live tick passes, fails for a real reason, or
+// GitHub-only failures last LIVE_RETRY_MAX_MS (24 h), when it rolls back and latches with that stated reason.
 // Only text that names GitHub (the host, or a failed gh/git call) counts; a bare ECONNREFUSED or ETIMEDOUT from other code is a real fault.
 const GH_ANCHOR = /github\.com|^\s*(?:gh|git)\b[^:\n]*\bfailed:/i;
 const GH_TRANSPORT = /error connecting to|could not resolve host|tcp connect error|\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EOF)\b|network is unreachable|no route to host|connection (?:timed out|reset by peer|refused)|i\/o timeout|TLS handshake timeout|context deadline exceeded|Client\.Timeout|dial tcp|proxyconnect|failed to connect to|temporary failure in name resolution/i;
@@ -595,7 +596,8 @@ export class SelfUpgrade {
       this.record({ from: p.from, to: p.to, prs: p.prs, checks: { ...p.checks, liveTick: 'retry' }, result: 'live_tick_retry', reason: why, attempts });
       return 'awaiting-verification';
     }
-    if (!ok) return this.rollback(p.from, p.to, `live tick failed: ${String(reason || 'error').slice(0, 160)}`, p.prs, { ...p.checks, liveTick: 'failed' });
+    const real = all.find(r => !isGithubConnectionError(r)) ?? reason;   // name the first fault that is not a connection error
+    if (!ok) return this.rollback(p.from, p.to, `live tick failed: ${String(real || 'error').slice(0, 160)}`, p.prs, { ...p.checks, liveTick: 'failed' });
     delete this.s.pending; this.s.lastFinishedAt = now; this.noteInstall({ result: 'verified', sha: p.to, reason: null }); this.save();
     this.record({ from: p.from, to: p.to, prs: p.prs, checks: { ...p.checks, liveTick: 'ok' }, result: 'verified' });
     await this.restartDashboard(p);

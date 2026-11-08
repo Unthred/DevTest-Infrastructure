@@ -828,7 +828,7 @@ document.documentElement.classList.remove('tzp');   // normally already removed 
 
 try {
   const u = new URL(location.href);
-  if (u.searchParams.get('notice') === 'mark-read-cooldown' && history.replaceState) {
+  if (['mark-read-cooldown', 'clear-latch-cooldown'].includes(u.searchParams.get('notice')) && history.replaceState) {
     u.searchParams.delete('notice');
     history.replaceState(history.state, '', u.pathname + u.search + u.hash);
   }

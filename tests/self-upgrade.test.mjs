@@ -1061,6 +1061,7 @@ test('issue #692: a real fault anywhere in the tick, or a lasting outage, still 
   const w = world(t); await w.up.step();
   assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR, reasons: [GH_ERR, "TypeError: Cannot read properties of undefined (reading 'x')"] }), 'rolled-back');
   assert.ok(w.up.latch());
+  assert.match(w.up.latch().reason, /TypeError: Cannot read properties/, 'the latch reason names the real fault, not the connection error');
   const v = world(t); await v.up.step();
   assert.equal(await v.up.verifyPending({ running: TO, ok: false, reason: 'connect ECONNREFUSED 127.0.0.1:80' }), 'rolled-back');
   const o = world(t); await o.up.step();
