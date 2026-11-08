@@ -99,7 +99,7 @@ export function reviewModelsOf(table) {
 
 // CHANGES verdicts are keyed `<pr>:<head>`; two on one PR (across heads) mark its repair jobs as a repeat (a fresh session with the findings; no stronger model since issue #316).
 export function repeatedChanges(verdicts, pr) {
-  return Object.entries(verdicts || {}).filter(([k, v]) => k.startsWith(`${pr}:`) && v.verdict === 'CHANGES').length >= 2;
+  return Object.entries(verdicts || {}).filter(([k, v]) => k.startsWith(`${pr}:`) && v.verdict === 'CHANGES' && !v.carriedFrom).length >= 2;
 }
 export const isRepair = type => REPAIR_TYPES.has(type);
 

@@ -6,10 +6,11 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { shortMkdtemp } from './_short-tmp.mjs';
 import { capture, isAllowedSocket, EXIT } from '../browser/capture.mjs';
 
 function world(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-capture-'));
+  const dir = shortMkdtemp('devtest-capture-');
   const sockets = path.join(dir, 't'), out = path.join(dir, 'out');
   fs.mkdirSync(sockets); fs.mkdirSync(out);
   const server = net.createServer(c => c.end()).listen(path.join(sockets, 'fixture.sock'));

@@ -5,10 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { RunnerError, assertContainerCanRead, containerCanRead, buildPlanForVerifiedPaths, cleanupContainer, releaseVolumes, sweepStaleVolumes, containerState, createPlan, dockerEnvironment, ownedContainer, prepareDirectories, runContainer, validateLock } from '../docker/runner.mjs';
+import { shortMkdtemp } from './_short-tmp.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-docker-fixture-'));
+  const root = shortMkdtemp('devtest-docker-fixture-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, 'project'), storage = path.join(root, 'storage');
   fs.mkdirSync(project); fs.mkdirSync(storage, { mode: 0o700 });
@@ -333,7 +334,7 @@ test('sweep reports a per-device failure without touching anything else, and a s
 
 // PR #29 review: a 0700 project directory (a mktemp -d clone) made every browser run fail inside the container as exit 2.
 test('containerCanRead: the container user needs r-x on the project and --x on its ancestors; mode bits only', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-perm-'));
+  const root = shortMkdtemp('devtest-perm-');
   t.after(() => { fs.chmodSync(root, 0o755); fs.rmSync(root, { recursive: true, force: true }); });
   const project = path.join(root, 'p'); fs.mkdirSync(project);
   const other = { uid: 99, gid: 100 };

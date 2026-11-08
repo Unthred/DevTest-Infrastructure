@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { main } from '../cli/main.mjs';
 import { parseArgs, parseDuration, UsageError, COMMANDS } from '../cli/args.mjs';
 import { REPO_ROOT } from '../cli/config.mjs';
+import { shortMkdtemp } from './_short-tmp.mjs';
 import { buildPlanForVerifiedPaths } from '../docker/runner.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
@@ -14,7 +15,7 @@ const limits = { cpus: 1, memoryMb: 1024, pids: 128, shmMb: 64, timeoutMs: 12000
 const sink = () => { const chunks = []; return { write: (c) => chunks.push(c), text: () => chunks.join('') }; };
 
 function sandbox(t, extra = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-cli-')));
+  const root = fs.realpathSync(shortMkdtemp('dtc-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const storage = path.join(root, 's'); fs.mkdirSync(storage, { mode: 0o700 });
   const project = path.join(root, 'proj'); fs.mkdirSync(project);

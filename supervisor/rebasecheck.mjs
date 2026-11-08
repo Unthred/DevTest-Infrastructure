@@ -40,7 +40,7 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
   // date and subject, so a commit with no patch-id match is paired with an unused new commit of the same identity.
   // Known limits (issue #164, pinned by tests, all fail safe): the fallback proves presence, not that the content survived a
   // resolution; each new commit pairs at most once, so identical-identity twins need two new commits; --reset-author-date,
-  // --ignore-date, squashes and commits emptied by a resolution (git drops them) are reported missing, unless the new base already holds their change, even next to another main edit (issue #640).
+  // --ignore-date, squashes and commits emptied by a resolution (git drops them) are reported missing, unless the new base already holds their change, even next to another main edit (issue #640); a block main also placed at the same spot while rewriting BOTH neighbouring lines is reported (issue #875).
   const used = new Set();
   const unmatched = [];
   for (const c of old) {
@@ -85,7 +85,11 @@ function changedLinesOnBase(run, sha, base) {
       else if (line.startsWith('@@')) header = false;
       if (header) continue;
     }
-    if (line.startsWith('@@')) { cur = { file, removed: [], added: [] }; hunks.push(cur); continue; }
+    if (line.startsWith('@@')) {
+      const m = /^@@ -(\d+)(?:,(\d+))? /.exec(line);
+      cur = { file, removed: [], added: [], oldStart: m ? Number(m[1]) : null, oldCount: m ? (m[2] === undefined ? 1 : Number(m[2])) : null };
+      hunks.push(cur); continue;
+    }
     if (!cur) continue;
     if (line.startsWith('-')) cur.removed.push(line.slice(1).trim());
     else if (line.startsWith('+')) cur.added.push(line.slice(1).trim());
@@ -98,13 +102,67 @@ function changedLinesOnBase(run, sha, base) {
     if (!lines.length) return false;
     if (!h.added.some(meaningful) && !h.removed.some(meaningful)) return false;
     if (h.added.some(meaningful)) {
+      // Issue #875: the block must also sit where the hunk maps to, not merely appear somewhere (the same line added elsewhere).
+      const want = hunkAnchors(readParentLines(run, sha, h.file), h);
+      if (!want) return false;
+      const map = parentToBase(run, sha, base, h.file);   // where main left the parent's anchor lines; null = unknown
+      if (!map) return false;
+      const pB = want.prevIdx === null ? null : map(want.prevIdx), nB = want.nextIdx === null ? null : map(want.nextIdx);
+      if (pB === null && nB === null) return false;      // both anchors rewritten by main: cannot place the block, so refuse
       let found = false;
-      for (let i = 0; i + h.added.length <= lines.length && !found; i++) found = h.added.every((t, k) => lines[i + k] === t);
+      for (let i = 0; i + h.added.length <= lines.length && !found; i++) {
+        if (!h.added.every((t, k) => lines[i + k] === t)) continue;
+        // The neighbour must be the very base line the parent's neighbour maps to (not merely the same text elsewhere in the file);
+        // main may have edited one neighbour, so either unchanged one anchors the block.
+        const prev = nearestMeaningfulIdx(lines, i - 1, -1), next = nearestMeaningfulIdx(lines, i + h.added.length, 1);
+        found = (pB !== null && prev === pB) || (nB !== null && next === nB);
+      }
       if (!found) return false;
     }
     for (const t of h.removed.filter(meaningful)) if (!h.added.includes(t) && lines.includes(t)) return false;
   }
   return true;
+}
+
+// Issue #875: the nearest line with a letter or digit, going from index `from` by `step` (-1 up, 1 down); null at the file edge.
+function nearestMeaningful(lines, from, step) {
+  for (let i = from; i >= 0 && i < lines.length; i += step) if (meaningful(lines[i])) return lines[i];
+  return null;
+}
+function nearestMeaningfulIdx(lines, from, step) {
+  for (let i = from; i >= 0 && i < lines.length; i += step) if (meaningful(lines[i])) return i;
+  return null;
+}
+// Issue #875: maps a 0-based line index of `file` at the commit's parent to its index on the base, through the parent-to-base diff;
+// null for a line main changed or removed. Returns null (not a function) when the diff cannot be read.
+function parentToBase(run, sha, base, file) {
+  let d;
+  try { d = run(['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', `${sha}^`, base, '--', file]).split('\n'); } catch { return null; }
+  if (d.length > MAX_DIFF_LINES) return null;
+  const hs = [];
+  for (const l of d) {
+    const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(l);
+    if (m) hs.push({ os: Number(m[1]), oc: m[2] === undefined ? 1 : Number(m[2]), nc: m[4] === undefined ? 1 : Number(m[4]) });
+  }
+  return idx => {
+    const n = idx + 1; let off = 0;
+    for (const h of hs) {
+      if (h.oc > 0 && n >= h.os && n < h.os + h.oc) return null;
+      if ((h.oc === 0 ? h.os : h.os + h.oc - 1) < n) off += h.nc - h.oc;
+    }
+    return n + off - 1;
+  };
+}
+function readParentLines(run, sha, file) {
+  try { return readLines(run, `${sha}^`, file); } catch { return null; }
+}
+// The unchanged lines either side of a -U0 hunk in the commit's parent: { prev, next }, or null when they cannot be known
+// (unparsed header, unreadable parent, or nothing meaningful on either side: too weak to anchor, so the guard refuses).
+function hunkAnchors(parent, h) {
+  if (!parent || h.oldStart === null || h.oldCount === null) return null;
+  const first = h.oldCount === 0 ? h.oldStart : h.oldStart - 1;   // 0-based index of the first removed line, or where a pure add goes
+  const prevIdx = nearestMeaningfulIdx(parent, first - 1, -1), nextIdx = nearestMeaningfulIdx(parent, first + h.oldCount, 1);
+  return prevIdx === null && nextIdx === null ? null : { prevIdx, nextIdx };
 }
 
 // Count rule (review of PR #683): a line the commit adds may already exist in the file, so "it appears in the base" does not show the

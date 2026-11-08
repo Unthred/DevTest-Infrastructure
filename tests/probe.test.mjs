@@ -78,7 +78,7 @@ test('a probe run stores allowance fields only: source probe, no message text, n
   assert.equal(latestAllowance([], { claude: record }).claude.source, 'probe');
 });
 test('the probe runs outside any repository: its working directory is an empty temporary directory', async () => {
-  const script = `const fs=require('fs'),os=require('os');if(process.cwd().startsWith(os.tmpdir())&&fs.readdirSync('.').length===0&&!fs.existsSync('.git'))console.log(${JSON.stringify(eventLine(0.2))});`;
+  const script = `const fs=require('fs');if([${JSON.stringify(os.tmpdir())},${JSON.stringify(fs.realpathSync(os.tmpdir()))}].some(d=>process.cwd().startsWith(d))&&fs.readdirSync('.').length===0&&!fs.existsSync('.git'))console.log(${JSON.stringify(eventLine(0.2))});`;
   assert.ok(await runProbeCommand({ spec: claudeSpec(script), adapter: claudeAdapter, config, now: NOW }));
   const cwdBefore = process.cwd(); assert.equal(process.cwd(), cwdBefore);
 });
