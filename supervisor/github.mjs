@@ -5,6 +5,7 @@ import { isStatusIssue } from './statusissue.mjs';
 import { redactTopology } from './redact.mjs';
 
 const TRANSIENT = /error connecting to|connection (reset|refused|timed out)|timeout|timed out|temporarily unavailable|\bEOF\b|TLS handshake|HTTP 5\d\d|could not resolve host/i;
+export const isRateLimit = text => /rate limit/i.test(String(text || ''));
 export const isTransient = text => TRANSIENT.test(String(text || ''));
 const realSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
@@ -27,6 +28,7 @@ export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding
 
 export function githubClient(config, gh = ghRunner()) {
   const repo = config.repository;
+  const boardItems = new Map();
   const json = args => JSON.parse(gh(args) || 'null');
   const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels,closingIssuesReferences,createdAt';
   const withLabels = prs => (Array.isArray(prs) ? prs.map(p => ({ ...p, labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l.name)) })) : prs);
@@ -86,12 +88,29 @@ export function githubClient(config, gh = ghRunner()) {
     removeLabel: async (n, label) => { gh(['issue', 'edit', String(n), '--repo', repo, '--remove-label', label]); },
     rerunRun: async runId => { if (!/^\d+$/.test(String(runId))) throw new SupervisorError('invalid run id'); gh(['run', 'rerun', String(runId), '--repo', repo], undefined, { retry: false }); },
     merge: async (n, head) => { gh(['pr', 'merge', String(n), '--repo', repo, '--merge', '--match-head-commit', head]); },
+    // Issue #881: issue -> project item id is cached, and a miss looks up that one issue's item directly. A rate-limit failure carries the reset time
+    // (`error.rateLimitedUntil`, ms) so the caller can pause board updates until then; any other failure is a plain error.
     board: async (issue, status) => {
       const b = config.board; if (!b || !b.options?.[status]) return;
-      const items = json(['project', 'item-list', String(b.number), '--owner', b.owner, '--format', 'json', '--limit', '200']);
-      const item = items?.items?.find(i => i.content?.number === issue);
-      if (!item) return;
-      gh(['project', 'item-edit', '--id', item.id, '--project-id', b.project_id, '--field-id', b.status_field_id, '--single-select-option-id', b.options[status]]);
+      try {
+        let id = boardItems.get(issue);
+        if (!id) {
+          // A direct lookup of this one issue's project item: no whole-board listing, so no 200-item cap on a large board.
+          const [owner, name] = repo.split('/');
+          const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){projectItems(first:50){nodes{id project{id}}}}}}';
+          const found = json(['api', 'graphql', '-f', `query=${q}`, '-F', `o=${owner}`, '-F', `r=${name}`, '-F', `n=${issue}`]);
+          id = (found?.data?.repository?.issue?.projectItems?.nodes || []).find(n => n?.project?.id === b.project_id)?.id;
+          if (!id) throw new SupervisorError(`issue #${issue} was not found on the project board`);   // a warning and a retry, never a silent success
+          boardItems.set(issue, id);
+        }
+        try { gh(['project', 'item-edit', '--id', id, '--project-id', b.project_id, '--field-id', b.status_field_id, '--single-select-option-id', b.options[status]]); }
+        catch (error) { if (!isRateLimit(error.message)) boardItems.delete(issue); throw error; }   // a stale id is looked up again next time
+      } catch (error) {
+        if (!isRateLimit(error.message)) throw error;
+        let reset = null;
+        try { const s = Number(JSON.parse(gh(['api', 'rate_limit', '--jq', '.resources.graphql']) || 'null')?.reset); if (Number.isFinite(s) && s > 0) reset = s * 1000; } catch { /* the REST limit is separate; fall back below */ }
+        const e = new SupervisorError(error.message); e.rateLimitedUntil = reset ?? Date.now() + 15 * 60000; throw e;
+      }
     }
   };
 }

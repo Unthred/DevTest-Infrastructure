@@ -673,7 +673,7 @@ export class Team {
     this.nameView = null;   // titles read at the start of a tick for names only; never counts as fresh dashboard data
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
-    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews', 'reviewFaults', 'waitingOn']) this.s[k] ||= {};
+    for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews', 'reviewFaults', 'waitingOn', 'board']) this.s[k] ||= {};
     this.s.sameCause ||= {}; this.s.liveness ||= { running: {}, cancelled: [] };   // issue #995
     breaker.normalize(this.s.breaker ||= {});   // issue #549: the halt state lives in the state file, so a restart keeps it
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
@@ -1715,6 +1715,7 @@ export class Team {
     if (!dryRun) {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
       await guard('inbox', () => this.processInbox(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
+      await guard('board catch-up', () => this.flushBoard(report));
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
@@ -3384,6 +3385,31 @@ export class Team {
   archiveOverflow(which, entries) { try { archiveOverflow(this.root, which, entries); } catch (error) { console.error(`ai-supervisor: ${which} archive failed: ${error?.name || 'Error'}`); } }
   archiveVerdict(key, v, stage) { try { archiveVerdict(this.root, key, v, stage); } catch (error) { console.error(`ai-supervisor: verdict archive failed: ${error?.name || 'Error'}`); } }
 
+  // Issue #881: a board move is best effort. A failure is a tick warning naming the issue and status, never an action failure, and the steps after it
+  // still run. After a GitHub rate limit, moves are held (state.board.pending, newest status per issue) until the reset time GitHub reported, then
+  // flushBoard() replays them so the board catches up.
+  async moveBoard(issue, status, report = {}) {
+    const b = (this.s.board ||= {}); b.pending ||= {};
+    const now = this.clock.now();
+    if (Number.isFinite(b.pausedUntil) && now < b.pausedUntil) { b.pending[issue] = status; this.save(); return false; }
+    try { await this.gh.board(issue, status); delete b.pending[issue]; return true; }
+    catch (error) {
+      b.pending[issue] = status;
+      if (Number.isFinite(error?.rateLimitedUntil)) {
+        b.pausedUntil = error.rateLimitedUntil;
+        (report.warnings ||= []).push({ warning: `board update for #${issue} (${status}) held: GitHub rate limit; board updates are paused until ${new Date(b.pausedUntil).toISOString().slice(11, 16)} UTC` });
+      } else (report.warnings ||= []).push({ warning: `board update for #${issue} (${status}) failed: ${String(error?.message || error).slice(0, 160)}; it is retried next tick` });
+      this.save(); return false;
+    }
+  }
+  async flushBoard(report) {
+    const b = this.s.board; if (!b?.pending) return;
+    if (Number.isFinite(b.pausedUntil)) { if (this.clock.now() < b.pausedUntil) return; delete b.pausedUntil; this.save(); }
+    for (const [issue, status] of Object.entries(b.pending).slice(0, 20)) {
+      if (!(await this.moveBoard(Number(issue), status, report))) { if (Number.isFinite(b.pausedUntil)) break; }
+    }
+  }
+
   async execute(act, report = {}) {
     if (act.type === 'merge') {
       // D-021 (applies only while D-024 is not approved): an interim merge owes a post-merge review by a reviewer on another model. Recorded before the merge, so a
@@ -3402,7 +3428,7 @@ export class Team {
       this.archiveOverflow('merge', this.s.mergeLog.slice(0, -500)); this.s.mergeLog = this.s.mergeLog.slice(-500);
       if (issue) {
         await this.gh.comment(issue, `${this.names().pr(act.pr).text} merged at ${this.commitRef(act.head)} by the dispatcher. Gates: ${act.exception ? 'REVIEW EXCEPTION (D-027) used: two PASSes on this head; ' : ''}${act.interim ? 'interim (D-021) ' : ''}PASS from \`${act.reviewer}\` (job ${String(act.job).slice(0, 8)}) recorded for this exact head, all checks green, mergeable.${act.interim ? ' A post-merge review by a reviewer on another model follows.' : ''} Merged is not deployed or verified working.`);
-        await this.gh.board(issue, act.base === 'main' ? 'done' : 'in_review');
+        await this.moveBoard(issue, act.base === 'main' ? 'done' : 'in_review', report);
       }
       if (act.interim) await this.gh.addLabel(act.pr, 'post-merge-review');
       return;
@@ -3500,7 +3526,7 @@ export class Team {
       spec = { ...common, kind: 'implement', worktree: wt, issue: act.issue, scope: `Implement issue #${act.issue} on ${branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
         prompt: implementPrompt({ issue: act.issue, branch, reassignedFrom: act.reassignedFrom, waitingFile: path.join(waitDir, 'waiting-on.json') }), postcondition: { kind: 'pr_opened', branch, ticket } };
       meta = { issue: act.issue, branch, ...(act.reassignedFrom ? { reassignedFrom: act.reassignedFrom, reassignReason: String(act.reassignReason || '').slice(0, 300) } : {}) };
-      bump = async () => { this.s.implemented[act.issue] = this.clock.now(); delete this.s.waitingOn[act.issue]; await this.gh.board(act.issue, 'in_progress'); };
+      bump = async () => { this.s.implemented[act.issue] = this.clock.now(); delete this.s.waitingOn[act.issue]; await this.moveBoard(act.issue, 'in_progress', report); };
     }
     Object.assign(spec, this.modelFor(act, spec.kind, report));
     if (spec.writeRefusal) { (report.warnings ||= []).push({ agent: act.agent, kind: spec.kind, warning: `job not started: ${spec.writeRefusal}` }); return; }

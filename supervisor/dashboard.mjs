@@ -319,6 +319,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   if (!t) add('no-tick', 'No tick has ever been recorded: the dispatcher has not run since the dashboard was installed.');
   else {
     if (t.status === 'error') add('tick-failed', `Last tick failed at ${tmark(t.at)}: ${t.error || 'no detail recorded'}`);
+    // Issue #881: a GitHub rate limit pauses project board moves; it is a notice, not a failed tick.
+    if (Number.isFinite(state.board?.pausedUntil) && state.board.pausedUntil > now) add('board-paused', `Board updates paused until ${tmark(state.board.pausedUntil)} (GitHub rate limit); ${Object.keys(state.board.pending || {}).length} move(s) will be applied afterwards.`);
     if (teamEnabled !== false && t.status !== 'disabled' && now - t.at > STALE_TICK_MS) add('tick-stale', `No tick for ${Math.round((now - t.at) / 60000)} minutes (last ${tmark(t.at)}); the reconcile cron may have stopped.`);
   }
   const maxFix = limits.max_fix_attempts, maxReview = limits.max_review_attempts;
