@@ -31,7 +31,7 @@ export function wasteByCause(state, { now = Date.now(), days = 7 } = {}) {
   const dayOut = m => {
     const all = sorted(m); if (all.length <= PER_DAY) return all;
     const rest = all.slice(PER_DAY);
-    return [...all.slice(0, PER_DAY), { cause: `(${rest.length} other causes)`, jobs: rest.reduce((n, c) => n + c.jobs, 0), tokens: rest.reduce((n, c) => n + c.tokens, 0), costUsdEquivalent: round2(rest.reduce((n, c) => n + c.costUsdEquivalent, 0)), remainder: true }];
+    return [...all.slice(0, PER_DAY), { cause: `(${rest.length} other ${rest.length === 1 ? 'cause' : 'causes'})`, jobs: rest.reduce((n, c) => n + c.jobs, 0), tokens: rest.reduce((n, c) => n + c.tokens, 0), costUsdEquivalent: round2(rest.reduce((n, c) => n + c.costUsdEquivalent, 0)), remainder: true }];
   };
   const sum = k => rows.reduce((n, w) => n + (Number.isFinite(w[k]) ? w[k] : 0), 0);
   return {
@@ -42,14 +42,17 @@ export function wasteByCause(state, { now = Date.now(), days = 7 } = {}) {
 }
 
 // ---- configuration ----
-// Whole name segments only (camelCase and _ - . split): webhook_secret, githubToken and api_key match; chain_passes does not. A token(s) segment next to a
-// quantity word (max_tokens, tokens_by_model) names a count, not a secret, so it is kept. Over-redaction hides a difference; this keeps it visible.
+// Whole name segments (camelCase and _ - . split): webhook_secret, githubToken and api_key match; chain_passes does not. A secret word glued to another
+// word with no separator (webhooksecret, authtoken, dbpassword, passphrase) also matches, because hand-written files do that. Only the plural `tokens`
+// segment next to a quantity word (max_tokens, tokens_by_model) names a count and is kept; a singular token next to one (token_by_agent,
+// session_token_limit) may be a credential and is removed. Over-redaction hides a difference; a leaked credential is worse.
 const SECRET_KEY = new RegExp(`(?:^|_)${KEY}(?:_|$)`, 'i');
-const COUNT_KEY = new RegExp(`(?:^|_)${KEY.replace('|token|', '|')}(?:_|$)`, 'i');
+const GLUED_SECRET = /[a-z0-9](?:secret|password|passwd|passphrase|token|apikey|accesskey|privatekey)s?$/;
 const QUANTITY = /(?:^|_)(?:max|min|num|count|limit|total|by|per)(?:_|$)/;
 const isSecretKey = key => {
   const n = String(key).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  return (QUANTITY.test(n) ? COUNT_KEY : SECRET_KEY).test(n);
+  const segments = n.split('_'), counted = QUANTITY.test(n) ? segments.filter(x => x !== 'tokens') : segments;
+  return SECRET_KEY.test(counted.join('_')) || /(?:^|_)passphrases?(?:_|$)/.test(n) || segments.some(x => GLUED_SECRET.test(x));
 };
 // Every string passes through the shared redaction; a key that names a secret loses its value; an alert command keeps its program only.
 export function scrubConfig(value, key = '', depth = 0) {
