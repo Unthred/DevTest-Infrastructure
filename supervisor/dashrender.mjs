@@ -293,7 +293,7 @@ function card({ id, title, span = 6, body, href, tools = '', cls = '', movable =
 <span class="tools">${tools}<button class="tbtn" type="button" data-collapse aria-expanded="true" aria-label="Collapse ${esc(title)}" title="Collapse or expand (or double-click the header)" hidden>${icon('down')}</button>${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}</section>`;
 }
 const grid = (layout, cards, cls = '') => `<div class="cards ${cls}" data-layout="${esc(layout)}">${cards}</div>`;
-const kpi = ({ id, label, value, href, spark = '', span = 2 }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div><div class="spark-slot">${spark}</div></a>`;
+const kpi = ({ id, label, value, href, spark = '', span = 2, sub = '' }) => `<a class="card kpi" data-card="${esc(id)}" data-type="kpi" data-span="${span}" style="--span:${span}" href="${esc(href)}"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div>${sub ? `<div class="sub kpi-sub">${esc(sub)}</div>` : ''}<div class="spark-slot">${spark}</div></a>`;
 
 // ---- the four panels (Overview top) and the status bar
 function nowPanel(view, { describe = true, list = null } = {}) {
@@ -303,7 +303,7 @@ function nowPanel(view, { describe = true, list = null } = {}) {
   // The description is the link text, once; the agent card passes describe:false and gets a plain id link (issue #421).
   const jobRef = (id, name) => (describe ? named(jobPath(id), REFS.job[String(id).slice(0, 8)], name || `job ${String(id).slice(0, 8)}`) : named(jobPath(id), null, `job ${String(id).slice(0, 8)}`));
   const jobItem = (a, j) => {
-    const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : j.role === 'rebaser' ? 'Rebaser' : 'Implementer';
+    const level = j.paused ? 'warning' : 'info', role = j.role === 'reviewer' ? 'Reviewer' : j.role === 'rebaser' ? 'Rebaser' : j.role === 'inbox' ? 'Inbox lane' : 'Implementer';
     const when = j.paused ? `paused (${esc(j.lastEvent)})${j.nextAttemptAt ? `, retry ${esc(inFuture(j.nextAttemptAt, now))}` : ''}`+ (j.resumeWait ? `; ${esc(j.resumeWait)}` : '') : `elapsed ${esc(dur(j.elapsedMs))}`;
     return dli({ cls: `sev-${level}`, extra: `data-job-card="${esc(j.id)}"`, key: `job-${j.id}`, sev: level, name: a.name, age: j.elapsedMs, inner: `<div class="t">${agentTag(a.name, view)} ${badge('info', role)} ${stateBadge(j.paused ? 'paused' : 'running')}</div><div>${j.model ? `${esc(j.model)} · ` : ''}${jobRef(j.id, j.name)} · attempt ${Number(j.attempts)} · ${when}${j.fullId ? ` · ${watchLink(j.fullId, j.paused ? 'Transcript' : 'Watch live')}` : ''}</div>` });
   };
@@ -402,13 +402,14 @@ const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.w
 // Issue #856: what was chosen and when ("Approved 06:20"), shown beside the title. dashui/app.js rewrites the time in the viewer's zone from data-lms.
 const OUTCOME = { approve: ['Approved', 'approved', '✓'], reject: ['Rejected', 'rejected', '✗'] };
 // Issue #925: an approval nothing has acted on yet says it is waiting for a free slot; once the tick has taken it, it reads plainly "Approved".
-const outcomeSpan = (decision, ms, state) => { const [label, cls] = OUTCOME[decision] || OUTCOME.reject, wait = decision === 'approve' && state === 'approved' ? ', waiting for a free slot' : ''; return `<span class="inbox-outcome ${cls}" ${lms(ms, `${label} {t}${wait}`, true)}>${label} ${esc(utc(ms).slice(11, 16))} UTC${wait}</span>`; };
+// Issue #971: a prompt is queued for, then running in, the inbox lane; the time it waited is shown.
+const outcomeSpan = (decision, ms, state, c = {}) => { const [label, cls] = OUTCOME[decision] || OUTCOME.reject, laneWait = c.lane === 'inbox' && Number.isFinite(c.waitedMs) ? ` (waited ${dur(c.waitedMs)})` : '', wait = c.lane === 'inbox' && decision === 'approve' && (state === 'approved' || state === 'running') ? (state === 'approved' ? `, queued for the inbox lane${laneWait}` : `, running in the inbox lane${laneWait}`) : decision === 'approve' && state === 'approved' ? ', waiting for a free slot' : ''; return `<span class="inbox-outcome ${cls}" ${lms(ms, `${label} {t}${wait}`, true)}>${label} ${esc(utc(ms).slice(11, 16))} UTC${wait}</span>`; };
 const undoForm = c => (c.undoUntil ? `<form method="post" action="/inbox" class="inbox-form inbox-undo" data-undo-until="${Math.round(c.undoUntil)}"><input type="hidden" name="id" value="${esc(c.id)}"><input type="hidden" name="decision" value="undo"><button class="linkbtn" type="submit">Undo</button></form>` : '');
 // The collapsed "Decided today" list (newest first). It is also rendered, hidden and empty, while a proposal is pending, so the script can move a decided card into it.
 function decidedBlock(view) {
   const list = view.panels.inboxDecided || [], pending = view.panels.needsYou.some(a => a.inbox);
   if (!list.length && !pending) return '';
-  const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state)} ${undoForm(c)}</li>`).join('');
+  const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state, c)} ${undoForm(c)}</li>`).join('');
   return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary><ul class="inbox-decided-list">${rows}</ul></details>`;
 }
 function needsPanel(view) {
@@ -431,7 +432,7 @@ function warningsPanel(view) {
 // (it lives once, on the Now card); several jobs show a count instead of a role.
 const agentBadge = a => {
   const jobs = a.jobs?.length ? a.jobs : a.job ? [a.job] : [];
-  const mid = jobs.length > 1 ? `${jobs.length} jobs` : jobs.length === 1 ? (jobs[0].role === 'reviewer' ? 'Reviewer' : jobs[0].role === 'rebaser' ? 'Rebaser' : 'Implementer') : '';
+  const mid = jobs.length > 1 ? `${jobs.length} jobs` : jobs.length === 1 ? (jobs[0].role === 'reviewer' ? 'Reviewer' : jobs[0].role === 'rebaser' ? 'Rebaser' : jobs[0].role === 'inbox' ? 'Inbox lane' : 'Implementer') : '';
   const st = ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[a.state] || a.state;
   const label = [a.name, mid, st].filter(Boolean).join(' · ');
   return `<li><a class="agent-badge sev-${esc(stateSev[a.state] || 'info')}" href="/agents/${esc(encodeURIComponent(a.name))}" data-agent="${esc(a.name)}" data-state="${esc(a.state)}" aria-label="${esc(label)}" title="${esc(label)}"><b class="ab-name">${esc(a.name)}</b>${mid ? `<span class="ab-role">${esc(mid)}</span>` : ''}<span class="ab-state">${esc(st)}</span></a></li>`;
@@ -448,26 +449,26 @@ export function nextTickHtml(view, now) {
   // scheduled: the script counts down, then turns the count into "overdue by" and reveals the last tick time
   return `<b data-tick-state="scheduled"><span data-countdown="${n.at}">in ${esc(clock(n.at - now))}</span><span data-after hidden>${last}</span></b>`;
 }
-const agentStat = view => `<div class="stat agent-lines" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
+const agentStat = view => `<div class="stat agent-lines" data-bar="agents" data-bar-name="Agents" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
 // Issue #467: how old the prepared copy behind this page is. Never shown as current once it is old or its rebuild failed.
 export function pageDataStat(view) {
   const d = view.pageData; if (!d || !Number.isFinite(d.ageMs)) return '';
   const secs = Math.round(d.ageMs / 1000), age = secs < 60 ? `${secs} s` : `${Math.round(secs / 60)} min`;
   const why = d.failed ? `The last rebuild failed (${d.failed}); this is the last good copy.` : d.behindWrite ? 'This copy was prepared before the latest change and does not show it yet; a new copy is built on the next request.' : d.stale ? (d.refreshing ? 'This copy is older than expected and is being rebuilt.' : 'This copy is older than expected; a new copy is built on the next request.') : 'Pages are served from a copy prepared in the background.';
-  return `<div class="stat" data-page-data="${d.stale ? 'stale' : 'ok'}" title="${esc(why)}"><span class="k">Page data</span>${d.stale ? badge('warning', `Stale · ${age} old`) : `<span>${esc(age)} old</span>`}</div>`;
+  return `<div class="stat" data-bar="page-data" data-bar-name="Page data" data-page-data="${d.stale ? 'stale' : 'ok'}" title="${esc(why)}"><span class="k">Page data</span>${d.stale ? badge('warning', `Stale · ${age} old`) : `<span>${esc(age)} old</span>`}</div>`;
 }
 function statusBar(view, route, head = '', crumbs = '') {
   const now = view.generatedAt, t = view.tick;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
   const L = pillLinks({ health: view.health, attention: view.attention, needsYou: view.panels?.needsYou, version: view.version });
   const pill = (href, inner, why) => `<a class="pill" href="${esc(href)}" title="${esc(why)}">${inner}</a>`;
-  return `<header class="statusbar" role="banner"><div class="brand">${icon('pulse')} DevTest team</div>${head}
-${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
+  return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} DevTest team</div>${head}
+${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" data-bar="health" data-bar-name="Health" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
 ${agentStat(view)}
-<div class="stat"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
-<div class="stat"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
+<div class="stat" data-bar="last-tick" data-bar-name="Last tick"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
+<div class="stat" data-bar="next-tick" data-bar-name="Next tick"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
 ${pageDataStat(view)}
-<button class="stickybtn wide-only" id="sticky" type="button" aria-pressed="false" aria-label="Keep the app bar at the top while scrolling" title="Keep the app bar at the top while scrolling">${icon('pin')}</button><button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>${crumbs}
+<button class="barbtn wide-only" id="barEdit" type="button" aria-pressed="false" title="Rearrange, remove and add app bar items">Edit bar</button><button class="stickybtn wide-only" id="sticky" type="button" aria-pressed="false" aria-label="Keep the app bar at the top while scrolling" title="Keep the app bar at the top while scrolling">${icon('pin')}</button><button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Theme">${icon('moon')}</button></header>${crumbs}
 <nav class="nav" id="nav" aria-label="Pages"><button type="button" class="dock-handle wide-only" data-dock-handle aria-label="Dock the navigation: arrow keys move it to a screen edge, Home resets it" title="Drag to a screen edge to dock the navigation, or use the arrow keys">${icon('drag')}</button>${NAV.map(([page, href, label, ic]) => `<a href="${href}"${route.page === page || parentOf(route.page) === page ? ' aria-current="page"' : ''}>${icon(ic)}<span>${esc(label)}</span></a>`).join('')}<div class="nav-resize wide-only" role="separator" aria-orientation="vertical" tabindex="0" data-nav-resize aria-label="Resize the menu: arrow keys change its width, Home resets it" title="Drag to resize the menu"></div><button class="nav-collapse wide-only" type="button" data-nav-collapse aria-pressed="false" title="Collapse or expand the navigation rail">${icon('rail')}<span>Collapse</span></button></nav>`;
 }
 
@@ -507,6 +508,8 @@ const signed = n => (n > 0 ? `+${num(n)}` : n < 0 ? `\u2212${num(-n)}` : '0');
 const HEADLINE = {
   issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` }),
   processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play` }),
+  throughput: c => ({ big: Number.isFinite(c.openedPerHour) ? `${dec1(c.openedPerHour)} PRs opened/h` : 'no data', sub: `${dec1(c.mergedPerHour)} merged/h, ${dec1(c.implementedPerHour)} issues implemented/h (${c.opened} opened, ${c.merged} merged, ${c.implemented} implemented)` }),
+  cost: c => ({ big: Number.isFinite(c.value) ? `$${c.value.toFixed(2)}` : 'unknown', sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),
   'merge-rate': c => ({ big: Number.isFinite(c.value) ? `${dec1(Math.round(c.value * 100) / 100)}/h` : 'no data', sub: `${c.merged} merged` }),
   'first-pass': c => ({ big: pctText(c.value), sub: c.reviewed ? `${c.approved} of ${c.reviewed} approved on the first review` : 'no first reviews' }),
   rounds: c => ({ big: Number.isFinite(c.value) ? dec1(c.value) : 'no data', sub: `${c.merged} merged (review, fix and rebase rounds)` }),
@@ -541,6 +544,20 @@ function headlinePage(view, query, path, route) {
     emptyState: empty('Nothing in this period', 'No items behind this number.') }) });
   return { title: CARD_TITLES[id], crumbs: [['/', 'Overview'], [null, CARD_TITLES[id]]], body: grid('headline', summary + t2) };
 }
+// Issue #928: the queue tile's split. 'issue' entries are implement work and 'review' entries are reviews; a pull request entry is a fix (CHANGES, red CI, draft), a rebase (conflict or not mergeable) or just waiting (CI pending, merge on the next tick).
+export function queueSplit(view) {
+  const n = { implement: 0, review: 0, fix: 0, rebase: 0, waiting: 0, total: 0 };
+  for (const q of Object.values(view.queues || {})) for (const e of q) {
+    n.total++;
+    if (e.type === 'issue') n.implement++;
+    else if (e.type === 'review') n.review++;
+    else if (/rebase|conflict|not mergeable/i.test(e.reason || '')) n.rebase++;
+    else if (/CHANGES|CI failing|draft|fix/i.test(e.reason || '')) n.fix++;
+    else n.waiting++;
+  }
+  return n;
+}
+const queueSub = (view, running) => { const n = queueSplit(view); return `${n.implement} implement, ${n.review} review, ${n.fix} fix, ${n.rebase} rebase${n.waiting ? `, ${n.waiting} waiting on CI or merge` : ''}; ${running} running now`; };
 function overview(view, query) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
   const now = view.generatedAt;
@@ -562,10 +579,10 @@ function overview(view, query) {
     kpi({ id: 'k-active', label: 'Jobs running', value: view.agents.some(a => a.state === 'unknown') ? `? / ${view.capacity ?? view.agents.length}` : `${active} / ${view.capacity ?? view.agents.length}`, href: '/agents' }),
     kpi({ id: 'k-avail', label: 'Agents available', value: view.agents.some(a => a.state === 'unknown') ? '?' : `${available} / ${view.agents.length}`, href: '/agents' }),
     kpi({ id: 'k-prs', label: 'Open pull requests', value: String(open.length), href: '/work', spark: sparkline(daily) }),
-    kpi({ id: 'k-queue', label: 'Queued items', value: String(Object.values(view.queues).reduce((s, q) => s + q.length, 0)), href: '/work' }),
+    kpi({ id: 'k-queue', label: 'Queued items', value: String(queueSplit(view).total), sub: queueSub(view, active), href: '/work' }),
     kpi({ id: 'k-reviews', label: 'Reviews recorded', value: String(verdicts.length), href: '/reviews' }),
     kpi({ id: 'k-tokens', label: 'Tokens recorded', value: tokens ? num(tokens) : 'unknown', href: '/usage' }),
-    kpi({ id: 'k-fresh', label: 'Data age', value: view.freshness.ageMs === null ? 'none' : dur(view.freshness.ageMs), href: '/system' })
+    kpi({ id: 'k-fresh', label: 'Data age', value: view.freshness.ageMs === null ? 'none' : dur(view.freshness.ageMs), sub: 'how old the GitHub data behind this page is', href: '/system' })
   ].join('');
   const charts = [
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
@@ -603,7 +620,7 @@ function agentDetail(view, query, path, route) {
   const queueRows = q.map(i => ({ ...i, next: i.next ? 'next' : '' }));
   const cur = a.job ? card({ id: 'cur', title: 'Current job', span: 12, movable: false, body: nowPanel({ ...view, agents: [a] }) }) : card({ id: 'cur', title: 'Current job', span: 12, movable: false, body: nowPanel({ ...view, agents: [a] }) });
   const queue = card({ id: 'queue', title: `Queue (${q.length})`, span: 12, movable: false, body: table({ id: 'q', path, query, noun: 'queue items', rows: queueRows, searchKeys: ['title', 'reason', 'type'],
-    cols: [{ key: 'next', label: 'Next', html: r => (r.next ? badge('info', 'Next') : '') }, { key: 'type', label: 'Type' }, { key: 'ref', label: 'Item', num: true, html: r => (r.type === 'issue' ? issueLink(r.ref) : prLink(r.ref)) }, { key: 'est', label: 'Est. finish', html: r => { const e = r.type === 'review' ? null : estFor(view, r.type === 'issue' ? 'issue' : 'pr', r.ref); return e && !(e.status === 'estimated' && !meaningfulRange(e, view.generatedAt)) ? `<span title="${esc((e.basis || []).join('\n'))}" data-est="${esc(e.status)}">${esc(e.text)}</span>` : ''; } }, { key: 'reason', label: 'Reason', more: true }],
+    cols: [{ key: 'next', label: 'Next', html: r => (r.next ? badge('info', 'Next') : '') }, { key: 'type', label: 'Type' }, { key: 'ref', label: 'Item', num: true, html: r => (r.type === 'inbox' ? `Inbox lane: ${esc(r.title)}` : r.type === 'issue' ? issueLink(r.ref) : prLink(r.ref)) }, { key: 'est', label: 'Est. finish', html: r => { const e = r.type === 'review' || r.type === 'inbox' ? null : estFor(view, r.type === 'issue' ? 'issue' : 'pr', r.ref); return e && !(e.status === 'estimated' && !meaningfulRange(e, view.generatedAt)) ? `<span title="${esc((e.basis || []).join('\n'))}" data-est="${esc(e.status)}">${esc(e.text)}</span>` : ''; } }, { key: 'reason', label: 'Reason', more: true }],
     totals: { next: 'count' }, emptyState: empty('Queue is empty', 'No work is waiting for this agent.', 'check') }) });
   const hist = card({ id: 'hist', title: `Job history (${jobs.length})`, span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: jobs, searchKeys: ['id', 'kind', 'status', 'branch', 'desc'], cols: jobCols(view, { agent: false }).map(c => ({ ...c, total: undefined })), totals: jobTotals,
     emptyState: empty('No jobs yet', 'This agent has not run a job.', 'list') }) });
@@ -630,7 +647,7 @@ function jobDetail(view, query, path, route) {
 }
 const showChip = (path, query, key, value, text) => (query.get(key) === value ? `<p class="chips"><span class="chip on">${esc(text)}</span> <a class="btn" href="${esc(withQuery(path, query, { [key]: null }))}">Show all</a></p>` : '');
 function workPage(view, query, path) {
-  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)} ${watchBtn(view, i.type === 'issue' ? 'issue' : 'pr', i.ref, '/work')}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz, view.generatedAt)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
+  const queues = Object.entries(view.queues).map(([name, items]) => card({ id: `wq-${name}`, title: `Queue: ${name}`, span: 6, movable: true, type: 'queue', body: items.length ? `<ul class="panel-list">${items.slice(0, 8).map(i => `<li class="sev-${i.next ? 'info' : 'ok'}"><div class="t">${i.next ? badge('info', 'Next') + ' ' : ''}${i.type === 'inbox' ? `${badge('info', 'Inbox lane')} ${esc(i.title)}` : `${i.type === 'issue' ? issueLink(i.ref) : prLink(i.ref)} ${watchBtn(view, i.type === 'issue' ? 'issue' : 'pr', i.ref, '/work')}`}</div><div class="sub">${esc(i.reason)}</div>${i.type === 'review' || i.type === 'inbox' ? '' : estHtml(estFor(view, i.type === 'issue' ? 'issue' : 'pr', i.ref), view.tz, view.generatedAt)}</li>`).join('')}</ul>${items.length > 8 ? `<p class="sub">+${items.length - 8} more on <a href="/agents/${encodeURIComponent(name)}">the agent page</a></p>` : ''}` : empty('Queue is empty', 'Nothing is waiting for this agent.', 'check') })).join('');
   const issues = card({ id: 'issues', title: 'Issues', span: 12, movable: false, body: showChip(path, query, 'issues.show', 'blocked', 'Showing only open issues blocked by dependencies') + table({ id: 'issues', path, query, noun: 'issues', rows: view.issues.filter(i => query.get('issues.show') !== 'blocked' || (i.state === 'OPEN' && i.blockedBy.length)).map(i => ({ ...i, blockers: i.blockedBy.length, need: i.needsHomeowner ? 'yes' : '' })), searchKeys: ['name', 'title', 'agent', 'number', 'state', 'reason'],
     cols: [{ key: 'number', label: 'Issue', num: true, html: r => `${issueLink(r.number)} ${watchBtn(view, 'issue', r.number, path)}` }, { key: 'state', label: 'State' }, { key: 'agent', label: 'Agent', html: r => agentTag(r.agent, view) },
       { key: 'blockers', label: 'Blockers', num: true, html: r => (r.blockedBy.length ? r.blockedBy.map(issueLink).join(', ') : '–') }, { key: 'reason', label: 'Status', more: true }],
@@ -929,7 +946,7 @@ function diagnosticsPage(view, query, path, route) {
   const idle = card({ id: 'diag-idle', title: 'Idle time by cause, per day', span: 12, movable: false, body: `<p class="sub">The same measure as the Agents page (idle with work available), one row per agent and day.</p>${plainTable(['Day', 'Agent', 'Busy', 'Idle with work', 'Share of day', 'Waiting for tick', 'Tick run', 'Upgrade', 'Named hold'], idleRows, 'Idle time by cause per day')}` });
   // Issue #406: passes by what started them, and the wake cap. A dropped request is said plainly; the schedule is the fallback.
   const ps = d.passes, wk = d.wake;
-  const wakeCard = ps ? card({ id: 'diag-passes', title: 'Passes by trigger', span: 12, movable: false, body: `${wk?.capHit ? `<p class="sub" data-diag-wake-cap role="alert"><strong>Wake cap reached:</strong> ${esc(wk.droppedLastHour)} request${wk.droppedLastHour === 1 ? '' : 's'} dropped in the last hour (${esc(wk.acceptedLastHour)} of ${esc(wk.cap)} used). Work waits for the five-minute schedule until the hour rolls over.</p>` : wk ? `<p class="sub" data-diag-wake>Event wakes in the last hour: ${esc(wk.acceptedLastHour)} of ${esc(wk.cap)} allowed. The five-minute schedule always runs as well.</p>` : ''}<p class="sub">${esc(ps.total)} passes in the last ${esc(d.retentionDays)} days, ${esc(ps.didNothing)} did nothing. ${ps.unlabelled ? `${esc(ps.unlabelled)} were recorded before triggers were kept and are counted as scheduled. ` : ''}A pass that did nothing planned no action. ${ps.noop ? `${esc(ps.noop)} of them ended early because GitHub was unchanged (median ${ps.seconds?.medianNoop == null ? 'n/a' : esc(Math.round(ps.seconds.medianNoop)) + ' s'} against ${ps.seconds?.medianDidNothingFull == null ? 'n/a' : esc(Math.round(ps.seconds.medianDidNothingFull)) + ' s'} for a full pass that did nothing).` : 'None ended early as unchanged yet.'}</p>${plainTable(['Trigger', 'Passes', 'Started something', 'Did nothing', 'Ended early (unchanged)'], Object.entries(ps.byTrigger).map(([k, v]) => [k, v.passes, v.startedSomething, v.didNothing, v.noop || 0]), 'Passes by trigger')}` }) : '';
+  const wakeCard = ps ? card({ id: 'diag-passes', title: 'Passes by trigger', span: 12, movable: false, body: `${wk?.capHit ? `<p class="sub" data-diag-wake-cap role="alert"><strong>Wake cap reached:</strong> ${esc(wk.droppedLastHour)} request${wk.droppedLastHour === 1 ? '' : 's'} dropped in the last hour (${esc(wk.acceptedLastHour)} of ${esc(wk.cap)} used). Work waits for the five-minute schedule until the hour rolls over.</p>` : wk ? `<p class="sub" data-diag-wake>Event wakes in the last hour: ${esc(wk.acceptedLastHour)} of ${esc(wk.cap)} allowed. The five-minute schedule always runs as well.</p>` : ''}${d.lastPass ? `<p class="sub" data-diag-last-pass>Last pass (${esc(d.lastPass.trigger)}): ${esc(d.lastPass.seconds)} s${d.lastPass.phases.length ? `; ${d.lastPass.phases.map(([k, s]) => `${esc(k)} ${esc(s)} s`).join(', ')}` : ''}.</p>` : ''}${wk?.pending ? `<p class="sub" data-diag-wake-pending>Waiting for the running pass: ${esc(wk.pending.reasons.join(', '))}${wk.pending.ageSeconds == null ? '' : ` (waiting ${esc(wk.pending.ageSeconds)} s)`}.</p>` : ''}<p class="sub">${esc(ps.total)} passes in the last ${esc(d.retentionDays)} days, ${esc(ps.didNothing)} did nothing. ${ps.unlabelled ? `${esc(ps.unlabelled)} were recorded before triggers were kept and are counted as scheduled. ` : ''}A pass that did nothing planned no action. ${ps.noop ? `${esc(ps.noop)} of them ended early because GitHub was unchanged (median ${ps.seconds?.medianNoop == null ? 'n/a' : esc(Math.round(ps.seconds.medianNoop)) + ' s'} against ${ps.seconds?.medianDidNothingFull == null ? 'n/a' : esc(Math.round(ps.seconds.medianDidNothingFull)) + ' s'} for a full pass that did nothing).` : 'None ended early as unchanged yet.'}</p>${plainTable(['Trigger', 'Passes', 'Started something', 'Did nothing', 'Ended early (unchanged)'], Object.entries(ps.byTrigger).map(([k, v]) => [k, v.passes, v.startedSomething, v.didNothing, v.noop || 0]), 'Passes by trigger')}` }) : '';
   const r = d.recorder, problem = r.status === 'missing' || r.status === 'unreadable' || r.status === 'empty';
   const kb = n => `${Math.round(n / 1048576 * 10) / 10} GiB`;
   const rec = card({ id: 'diag-recorder', title: 'Load, swap and disk wait from the memory flight recorder', span: 12, movable: false, body: `<p class="sub" data-diag-recorder="${esc(r.status)}">${problem ? '' : `${esc(r.samples)} samples from ${esc(r.files)} log file${r.files === 1 ? '' : 's'}. `}${r.note ? esc(r.note) : ''}</p>${problem ? empty(r.status === 'empty' ? 'No recorder samples in this window' : r.status === 'missing' ? 'Recorder logs not found' : 'Recorder logs not readable', 'The rest of this page does not depend on them.', 'warn')

@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { shortMkdtemp } from './_short-tmp.mjs';
 import { isReadOnlyMethod, wsFrameDecision, installInteractionGuard, MUTATING_SELECTOR, NAVIGATION_SELECTOR, GUARDED_EVENTS, PAGE_SETS, HA_PROFILES, haOutcome, renderHaReport } from '../browser/ha-readonly-lib.mjs';
 import { evaluateLiveGate, LIVE_HOST } from '../browser/ha-live-gate.mjs';
 import { parseHaArguments, run, loadSession, EXIT } from '../browser/ha-readonly.mjs';
@@ -103,7 +104,7 @@ test('arguments: clicking is refused on the live page set', () => {
 
 // ---- wrapper against a fake Playwright ----
 function world(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-ha-'));
+  const dir = shortMkdtemp('devtest-ha-');
   const sockets = path.join(dir, 't'), out = path.join(dir, 'out');
   fs.mkdirSync(sockets); fs.mkdirSync(out);
   const server = net.createServer((c) => c.end()).listen(path.join(sockets, 'page.sock'));

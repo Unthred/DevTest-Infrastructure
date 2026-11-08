@@ -7,7 +7,7 @@ import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
 import { homeownerQuestion } from './homeowner-question.mjs';
-import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
+import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
@@ -25,8 +25,9 @@ import { hasProbe } from './probe.mjs';
 import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
+import { wakeView } from './wake.mjs';
 import { sinceView } from './since.mjs';
-import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards } from './inbox.mjs';
+import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -170,9 +171,10 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     const moved = Object.values(S.jobs || {}).find(j => j.kind === 'implement' && j.issue === n && j.reassignedFrom === agent);
     const mode = team.modes?.[agent];
     const running = activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n);
-    let reason;
+    let reason, waits;
     if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
     else if (open.length) reason = `blocked by ${open.map(d => names.issue(d).text).join(', ')}`;
+    else if ((waits = waitingOnRefs(issue, byNo, prs, S.waitingOn?.[n]?.items || [])).length) reason = `waiting on ${waits.map(d => names.issue(d).text).join(', ')}`;   // issue #1023
     else if (running) reason = 'being implemented now';
     else if (hasPr) reason = 'PR open';
     else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; ${names.pr(prOf.number).text} open` : ''}`;
@@ -185,6 +187,13 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else if (busy(agent)) reason = 'ready; waits behind the running job';
     else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? names.issue(ahead.issue).text : names.pr(ahead.pr).text}` : 'ready; waits for a free slot'; }
     queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason, next: planned.has(`${agent}:implement:${n}`) });
+  }
+  // Issue #971: an approved prompt waits in the inbox lane, shown in the queue of the agent the planner picked (the first agent when none).
+  const inboxDir = c.inbox?.dir, inboxPlan = plan.find(a => a.type === 'inbox');
+  if (inboxDir) for (const st of approvedInboxItems(inboxDir, 'prompt')) {
+    if (Object.values(S.jobs).some(j => j.inboxId === st.id)) continue;
+    const owner = inboxPlan && queues[inboxPlan.agent] ? inboxPlan.agent : Object.keys(queues)[0]; if (!owner) continue;
+    queues[owner].push({ type: 'inbox', ref: 0, title: st.title || 'approved prompt', reason: `approved prompt in the inbox lane${inboxPlan?.inboxId === st.id ? ' (starts this tick)' : ' (waits for the inbox slot)'}; waited ${Math.max(0, Math.round((now - (st.decidedAt || now)) / 1000))} s`, next: inboxPlan?.inboxId === st.id });
   }
   // Issue #405: reviews are listed in the order the planner takes them (closest to merge, then age), with the reason.
   for (const [reviewer, q] of Object.entries(queues)) {
@@ -304,7 +313,7 @@ export function heldIssues({ cache, state = {}, splitting = new Set(), pauseText
   }
   return out;
 }
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), withheld = new Map(), proposals = [], fixCount, excluded = [], pauseText = null }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), held = new Set(), withheld = new Map(), proposals = [], fixCount, excluded = [], pauseText = null }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}), ...(Number.isFinite(x.since) ? { since: x.since } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
@@ -318,6 +327,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   if (!t) add('no-tick', 'No tick has ever been recorded: the dispatcher has not run since the dashboard was installed.');
   else {
     if (t.status === 'error') add('tick-failed', `Last tick failed at ${tmark(t.at)}: ${t.error || 'no detail recorded'}`);
+    // Issue #881: a GitHub rate limit pauses project board moves; it is a notice, not a failed tick.
+    if (Number.isFinite(state.board?.pausedUntil) && state.board.pausedUntil > now) add('board-paused', `Board updates paused until ${tmark(state.board.pausedUntil)} (GitHub rate limit); ${Object.keys(state.board.pending || {}).length} move(s) will be applied afterwards.`);
     if (teamEnabled !== false && t.status !== 'disabled' && now - t.at > STALE_TICK_MS) add('tick-stale', `No tick for ${Math.round((now - t.at) / 60000)} minutes (last ${tmark(t.at)}); the reconcile cron may have stopped.`);
   }
   const maxFix = limits.max_fix_attempts, maxReview = limits.max_review_attempts;
@@ -357,7 +368,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     prCarded.add(pr.number);
     const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: names.job(j).text, url: names.job(j).url }))];
     if (fixLimit) add(`fixlimit-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix})`, { kind: 'pull', n: pr.number },
-      { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR. Each round was a fresh session on the same model; the final round could split out-of-scope findings. Foreman never moves a fix to a stronger model.${withheld.get(pr.number) ? ` No further round can run because ${withheld.get(pr.number)}.` : ''}`, action: `Choose one: ${FIX_LIMIT_OPTIONS}. Remove the needs-homeowner label when done.`, links });
+      { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR.${held.has(pr.number) ? ' The CHANGES verdict was carried across a rebase and no fix commit has answered it, so the PR is held from rebase and review until you decide.' : ''} Each round was a fresh session on the same model; the final round could split out-of-scope findings. Foreman never moves a fix to a stronger model.${withheld.get(pr.number) ? ` No further round can run because ${withheld.get(pr.number)}.` : ''}`, action: held.has(pr.number) ? `Choose one: ${CARRIED_HOLD_OPTIONS}. The hold ends on a new head, a raised max_fix_attempts, a closed PR or a requested re-review; removing the needs-homeowner label does not release it.` : `Choose one: ${FIX_LIMIT_OPTIONS}. Remove the needs-homeowner label when done.`, links });
     else if (refusal) add(`reviewrefused-${pr.number}`, `${names.pr(pr.number).text}: the review's verdict file was refused (${refusal.error})${reviewLimit ? `, and the review limit of ${maxReview} attempts is reached` : ''}`, { kind: 'pull', n: pr.number },
       { tried: `A review job finished without a valid verdict file (${refusal.count} time${refusal.count === 1 ? '' : 's'} at this head), so no verdict reached GitHub. The reason: ${refusal.error}. The refused file is ${refusal.file}. A refused file records no verdict, so it does not use up the review attempts unless the refusals pass the review limit.`, action: `Read the verdict file and the review job ${String(refusal.job).slice(0, 8)} output, then review the PR by hand or push a new head to start a fresh review; remove the needs-homeowner label when done.`, links });
     else if (reviewLimit) add(`reviewlimit-${pr.number}`, `${names.pr(pr.number).text} could not be reviewed within ${maxReview} attempts`, { kind: 'pull', n: pr.number },
@@ -585,14 +596,14 @@ export function describeFor(j, { names, state }) {
 const modelOf = j => (j ? [j.provider || 'unknown provider', j.model || 'CLI default', j.effort || 'default effort'].map(x => redact(String(x), 40)).join(' · ') : null);
 // Raw events kept before idle ticks collapse (issue #76): idle ticks are the bulk of the history and fold into a few rows.
 export const ACTIVITY_LIMIT = 400;
-const OUTCOME = { created: 'queued', started: 'started', completed: 'completed', usage_limit: 'paused', manual_pause: 'paused', transient_rate_limit: 'paused', recovered: 'recovered', incomplete: 'blocked', retry_exhausted: 'blocked', blocked: 'blocked', crash: 'failed', auth_error: 'failed', approval_required: 'blocked', manual_stop: 'stopped', checkpoint_failed: 'failed' };
+const OUTCOME = { created: 'queued', started: 'started', completed: 'completed', usage_limit: 'paused', manual_pause: 'paused', transient_rate_limit: 'paused', recovered: 'recovered', incomplete: 'blocked', waiting_on: 'waiting', retry_exhausted: 'blocked', blocked: 'blocked', crash: 'failed', auth_error: 'failed', approval_required: 'blocked', manual_stop: 'stopped', checkpoint_failed: 'failed' };
 function activity({ config, jobs, events, state, cache, snapshots, now, incidents = [], names, root }) {
   const repo = config.repository, rows = [];
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const link = (kind, n) => (n ? { url: `https://github.com/${repo}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`, text: (kind === 'pull' ? names.pr(n) : names.issue(n)).text } : null);
   const jobLink = j => (['implement', 'continue'].includes(j.kind) ? link('issue', j.issue) : link('pull', j.issue));
   const agentName = j => Object.entries(config.agents).find(([, a]) => a.provider === j.provider)?.[0] || j.provider;
-  const eventNames = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand', checkpoint_failed: 'stopped: progress checkpoint failed' };
+  const eventNames = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', recovered: 'job recovered', incomplete: 'ended without its post-condition', waiting_on: 'waiting on an open prerequisite', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', manual_stop: 'stopped by hand', checkpoint_failed: 'stopped: progress checkpoint failed' };
   for (const e of events) {
     if (!eventNames[e.kind] && !['blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover', 'checkpoint_failed'].includes(e.kind)) continue;
     const j = jobById.get(e.job); if (!j) continue;
@@ -632,8 +643,8 @@ const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.
 export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: the real tick would refuse to launch jobs.';
 // Role slots (issue #148): who holds the implementer and reviewer slot right now, with the model and the work. A job the dispatcher has
 // no record of (started by hand) counts against the implementer slot, as the planner counts it.
-const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer', rebaser: 'Rebaser' };
-const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
+const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer', rebaser: 'Rebaser', inbox: 'Inbox lane' };
+const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI', inbox: 'running an approved prompt' };
 export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.repository, stateJobs: state.jobs, titles: state.titles })) {
   return ROLES.map(role => {
     const held = jobs.filter(j => ((ACTIVE.includes(j.status) && j.status !== 'paused_limit') || isUnknownJob(j)) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {
@@ -689,7 +700,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       return base;
     });
     const pauseText = team.pauseText(c.pulls || [], c.issues || []);
-    const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), held: new Set((c.pulls || []).filter(p => team.carriedHold(p)).map(p => p.number)), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
     // Issue #124: each pending inbox item is one Approve/Reject card. Nothing here runs anything; the card posts to the dashboard's own write route.
     if (config.inbox?.dir) for (const card of inboxCards(config.inbox.dir)) attention.push({ id: `inbox-${card.id}`, inboxId: card.id, inboxKind: card.kind, text: card.broken ? `An inbox item cannot be shown: ${card.broken}` : `Overseer proposal (${card.kind === 'prompt' ? 'run as a job' : 'post as an issue'}): ${card.title}`, ref: null, severity: 'action', inbox: card, action: card.broken ? 'Reject it; the overseer can propose it again.' : card.will });
@@ -902,6 +913,10 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     const p = (cache.pulls || []).find(x => x.number === n), vs = verdictRows.filter(v => v.pr === n), m = merged.get(n);
     const rel = Object.entries(state.jobs || {}).filter(([, tj]) => tj.pr === n).map(([id]) => jobById.get(id)).filter(Boolean);
     const relIds = new Set(rel.map(j => j.id));
+    // Issue #928: implement and continue jobs carry the issue, not the PR, so attribute them through the PR's issue.
+    const issueNo = names.issueOfPr(n)?.number ?? m?.issue ?? null;
+    const early = Number.isSafeInteger(issueNo) ? jobs.filter(j => !relIds.has(j.id) && ['implement', 'continue'].includes(state.jobs?.[j.id]?.kind || j.kind) && (state.jobs?.[j.id]?.issue ?? j.issue) === issueNo) : [];
+    const costJobs = [...rel, ...early];
     const prJobs = jobRows.filter(j => relIds.has(j.fullId));
     const key = p ? `${n}:${p.headRefOid}` : null;
     return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed', stage: m ? stageOf({ merged: true, installed: installedPrs.has(n) || verifiedPrs.has(n), verified: verifiedPrs.has(n) }) : null, awaitingReview: reviewing.has(n),
@@ -909,6 +924,8 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       // Issue #717: second-opinion reviews (kept apart from verdicts, one per pr:head) and the implement time from the merge log, for foreman_rebase_stats.
       secondOpinionRounds: secondOpinionsOf(state, n).filter(o => !(o && (o.carry || o.carriedFrom))).length, secondOpinionCarried: secondOpinionsOf(state, n).filter(o => o && (o.carry || o.carriedFrom)).length, startedAt: Number.isFinite(m?.startedAt) ? m.startedAt : null,
+      openedAt: (() => { const t = Date.parse(p?.createdAt); if (Number.isFinite(t)) return t; const f = costJobs.filter(j => (state.jobs?.[j.id]?.kind || j.kind) === 'implement' && Number.isFinite(j.updatedAt)).map(j => j.updatedAt); return f.length ? Math.min(...f) : null; })(),
+      costUsd: costJobs.some(j => Number.isFinite(j.usage?.costUsdEstimate)) ? costJobs.reduce((s, j) => s + (Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : 0), 0) : null,
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
       head: p?.headRefOid ?? null, needsHomeowner: (p?.labels || []).includes('needs-homeowner'), mergedAt: m?.mergedAt ?? null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,
@@ -938,7 +955,9 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {
     health: healthOf({ attention, states, teamEnabled, needsYouCount: needsYou.length }), freshness: freshness(tickAt, now),
-    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
+    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null,
+    wakes: root ? (() => { try { return wakeView(root, now); } catch { return null; } })() : null,   // issue #985
+    version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
     panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor

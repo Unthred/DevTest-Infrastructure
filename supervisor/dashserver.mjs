@@ -21,14 +21,17 @@ import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
 import { installs, breakerHistory } from './installs.mjs';
+import { readIndex, searchIndex } from './issueindex.mjs';
 import { wasteByCause, configView, testRunsView, ticksView } from './mcpreads.mjs';
+import { alertsView } from './alertsview.mjs';
 import { DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import nodePath from 'node:path';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
-import { wakeStatus, requestWake, spawnDetachedPass, inboxWatcher } from './wake.mjs';
+import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, scanInboxNow } from './wake.mjs';
+import * as inboxStore from './inbox.mjs';
 import { fileURLToPath } from 'node:url';
 import { recordRefusedOrigin } from './hostvalue.mjs';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
@@ -44,6 +47,8 @@ const SHIPPED_CONFIG = fileURLToPath(new URL('./team.json', import.meta.url));
 export function defaultWake(root, reason, config) {
   try {
     if (!config?.enabled) return;
+    // Issue #985: an approval also starts the approved prompt at once in the fast lane, so it does not wait for a running pass to end.
+    if (reason === 'approve') { try { spawnDetachedLane({ root, self: cliPath }); } catch { /* the woken pass starts it */ } }
     requestWake({ root, reason, spawnPass: why => spawnDetachedPass({ root, reason: why, self: cliPath }) });
   } catch (error) { console.error(`dashboard: wake not requested: ${error?.name || 'Error'}`); }
 }
@@ -96,7 +101,7 @@ export async function currentView({ root, config, now = Date.now(), tz = default
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
-export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/refresh.mjs': ['refresh.mjs', 'text/javascript; charset=utf-8'], '/static/chartopts.mjs': ['chartopts.mjs', 'text/javascript; charset=utf-8'], '/static/grid.mjs': ['grid.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
+export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/refresh.mjs': ['refresh.mjs', 'text/javascript; charset=utf-8'], '/static/chartopts.mjs': ['chartopts.mjs', 'text/javascript; charset=utf-8'], '/static/grid.mjs': ['grid.mjs', 'text/javascript; charset=utf-8'], '/static/appbar.mjs': ['appbar.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
   '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/inbox-ui.mjs': ['inbox-ui.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
@@ -139,7 +144,7 @@ export const DASHBOARD_VIEW_TTL_MS = 3000;
 export function diagnosticsData({ root, config, now, recorderDir }) {
   if (typeof config === 'function') config = config();
   const cfg = validateTeamConfig(config);
-  return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir, wake: (() => { try { return wakeStatus(root, now); } catch { return null; } })() });
+  return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir, wake: (() => { try { return wakeView(root, now); } catch { return null; } })() });
 }
 const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, behindWrite: p.behindWrite, refreshing: p.refreshing, failed: p.failed });
 export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
@@ -338,6 +343,10 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       // Issue #635: the Diagnostics data, the failure cost by cause, and the effective configuration, for the Foreman MCP tools.
       if (path === '/api/diagnostics.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(diagnosticsData({ root, config: source(), now: now(), recorderDir })));
       if (path === '/api/waste.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(wasteByCause(readTeamState(root), { now: now(), days: new URLSearchParams(search).get('days') })));
+      // Issue #951: read-only search of the issue and pull request index, for the Foreman MCP tool foreman_issues.
+      if (path === '/api/issues.json') { const q = Object.fromEntries(new URLSearchParams(search)); return send(200, 'application/json; charset=utf-8', JSON.stringify(searchIndex(readIndex(root), q, { verdicts: readTeamState(root).verdicts || {}, limit: q.limit }))); }
+      // Issue #949: the alerts sent to the homeowner, newest first, grouped and counted per day, for the foreman_alerts MCP tool.
+      if (path === '/api/alerts.json') { const q = new URLSearchParams(search); try { return send(200, 'application/json; charset=utf-8', JSON.stringify(alertsView(root, { now: now(), since: q.get('since'), contains: q.get('contains'), delivered: q.get('delivered'), limit: q.get('limit') }))); } catch (e) { return send(400, 'application/json; charset=utf-8', JSON.stringify({ error: String(e.message).slice(0, 200) })); } }
       // Issue #636: test-slot use with refused and killed runs, and recent ticks.
       if (path === '/api/tests.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(testRunsView(root, { limit: source()?.limits?.test_slots ?? DEFAULT_TEST_SLOTS, now: now() })));
       if (path === '/api/ticks.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(ticksView(root, { limit: new URLSearchParams(search).get('limit'), now: now() })));
@@ -381,7 +390,11 @@ export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot })
   // Issue #406: a new proposal file in the inbox folder starts a pass (no new port; one directory listing every few seconds).
   const src = configSource(config);
   const inboxDir = (() => { try { return src().inbox?.dir || null; } catch { return null; } })();
-  const watcher = inboxDir ? inboxWatcher({ dir: inboxDir, onNew: () => { try { defaultWake(root, 'inbox', src()); } catch { /* the schedule is the fallback */ } } }) : { stop() {} };
+  const watcher = inboxDir ? inboxWatcher({ dir: inboxDir, onNew: () => {
+    // Issue #985: validate the new proposal here and now (waiting -> pending), even while a pass runs. A scan that cannot run falls back to the wake.
+    try { const c = src(), r = scanInboxNow({ root, inboxDir: c.inbox.dir, scan: inboxStore.scan, maxPending: c.inbox.max_pending }); if (r.scanned) return; } catch { /* fall back to a pass */ }
+    try { defaultWake(root, 'inbox', src()); } catch { /* the schedule is the fallback */ }
+  } }) : { stop() {} };
   server.once('close', () => watcher.stop());
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
 }

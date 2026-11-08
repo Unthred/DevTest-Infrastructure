@@ -1,6 +1,6 @@
 // Issue #415: a conflict rebase must not silently drop a change inside a commit (PR #222: `runDueProbes` kept, its call dropped).
 // Real git (bare remote + independent clones, D-011) for the comparison and the guarded push; fake GitHub for the dispatcher.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -8,7 +8,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
-import { checkRebase, prepareRebase, pushRebase } from '../supervisor/rebasecheck.mjs';
+import { checkRebase, prepareRebase, pushRebase, countsHold, refusal } from '../supervisor/rebasecheck.mjs';
 
 const G = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];
 const git = (cwd, ...a) => execFileSync('git', [...G, ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -156,7 +156,10 @@ function resolveList(r, text) {
   return oldHead;
 }
 const cliPath = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
-const runPush = (r, oldHead) => { try { return { code: 0, out: execFileSync(process.execPath, [cliPath, 'rebase-push', '--worktree', r.agent, '--branch', 'feat', '--base', 'main', '--old', oldHead], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, out: e.stdout }; } };
+const rlsrRoots = [];   // issue #1007: removed after the run
+after(() => { for (const d of rlsrRoots) fs.rmSync(d, { recursive: true, force: true }); });
+const rlsrRoot = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')); rlsrRoots.push(d); return d; };
+const runPush = (r, oldHead) => { try { return { code: 0, out: execFileSync(process.execPath, [cliPath, 'rebase-push', '--worktree', r.agent, '--branch', 'feat', '--base', 'main', '--old', oldHead], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: rlsrRoot() }, stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, out: e.stdout }; } };
 
 test('a union of both sides\' list items is not lost, and rebase-push pushes it', t => {
   const r = listRepo(t); const oldHead = resolveList(r, 'export const KEYS = [\n  "a", "refusedReviews", "reviewRefusals",\n];\nconst z = 1;\n');
@@ -228,6 +231,206 @@ test('a merged line that is new in the resolution and holds the PR\'s tokens in 
 
 test('rebase-prepare prints oldHead so the agent can pass it to rebase-push', t => {
   const r = listRepo(t);
-  const out = execFileSync(process.execPath, [cliPath, 'rebase-prepare', '--worktree', r.agent, '--branch', 'feat'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'rlsr-')) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const out = execFileSync(process.execPath, [cliPath, 'rebase-prepare', '--worktree', r.agent, '--branch', 'feat'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: rlsrRoot() }, stdio: ['ignore', 'pipe', 'pipe'] });
   assert.match(JSON.parse(out).oldHead, /^[0-9a-f]{40}$/);
+});
+
+// ---- issue #640: both sides edited one line; a commit main already covers; a real loss is still refused
+function lineRepo(t, { base, feat, main, extra = '' }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rl640-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const remote = path.join(dir, 'remote.git'); git(dir, 'init', '-q', '--bare', '-b', 'main', remote);
+  const seed = path.join(dir, 'seed'); git(dir, 'clone', '-q', remote, seed);
+  const f = x => `function go() {\n${x}\n}\n`;
+  write(seed, 'l.mjs', f(base)); commit(seed, 'base'); git(seed, 'branch', '-M', 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  git(seed, 'checkout', '-q', '-b', 'feat'); write(seed, 'l.mjs', f(feat)); commit(seed, 'pr change'); git(seed, 'push', '-q', 'origin', 'feat');
+  git(seed, 'checkout', '-q', 'main'); write(seed, 'l.mjs', f(main)); commit(seed, 'main change'); git(seed, 'push', '-q', 'origin', 'main');
+  const agent = path.join(dir, 'agent'); git(dir, 'clone', '-q', remote, agent);
+  return { dir, remote, agent, f };
+}
+function resolveLine(r, text) {
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  write(r.agent, 'l.mjs', r.f(text)); git(r.agent, 'add', '-A');
+  execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' });
+  return oldHead;
+}
+const T640 = { base: '  title("names six read-only tools");', feat: '  title("names six read-only tools (no inbox configured)");', main: '  title("names seven read-only tools");' };
+
+test('#640: both sides edited the same line and the result has main\'s change plus the PR\'s addition: not lost, pushed', t => {
+  const r = lineRepo(t, T640); const oldHead = resolveLine(r, '  title("names seven read-only tools (no inbox configured)");');
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.lostChanges, []); assert.deepEqual(c.missing, []);
+  const p = runPush(r, oldHead); assert.equal(p.code, 0); assert.equal(JSON.parse(p.out).pushed, true);
+});
+
+test('#640: both sides edited the same line and the result keeps main\'s line only: still refused with a message naming the line', t => {
+  const r = lineRepo(t, T640); const oldHead = resolveLine(r, T640.main);
+  assert.ok(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges.some(x => x.text.includes('(no inbox configured)')));
+  const p = runPush(r, oldHead); assert.equal(p.code, 3);
+  const out = JSON.parse(p.out); assert.equal(out.pushed, false);   // main's line alone also empties the commit, so git drops it: reported as missing
+  assert.match(out.message, /no inbox configured/); assert.match(out.message, /homeowner or a reviewer/); assert.match(out.message, /force-with-lease/);
+  assert.equal(git(r.dir, '--git-dir', r.remote, 'rev-parse', 'feat'), oldHead);
+});
+
+test('#640: both sides edited the same line and the result keeps the PR\'s line only: main\'s change is not required, the PR\'s is kept', t => {
+  const r = lineRepo(t, T640); const oldHead = resolveLine(r, T640.feat);
+  assert.deepEqual(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges, []);
+});
+
+test('#640: a merged line that carries main\'s change but not the PR\'s addition is refused', t => {
+  const r = lineRepo(t, T640); const oldHead = resolveLine(r, '  title("names seven read-only tools") && other();');
+  assert.ok(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges.some(x => x.text.includes('(no inbox configured)')));
+});
+
+// A commit main already covers: main makes the same change by hand (a different patch-id once reformatted), the resolution empties the PR commit.
+function coveredRepo(t, mainText) {
+  const r = lineRepo(t, { base: '  const z = 1;', feat: '  const z = 3;', main: mainText });
+  return r;
+}
+test('#640: a PR commit whose change main already contains is not missing', t => {
+  const r = coveredRepo(t, '  const z = 3;');
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* may skip the commit as already applied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* no rebase in progress */ }
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.missing, []); assert.deepEqual(c.lostChanges, []);
+});
+
+test('#640: a commit emptied by keeping a main fix that differs from the PR\'s is still missing, and refused', t => {
+  const r = coveredRepo(t, '  const z = 2;');
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none */ }
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.equal(c.missing.length, 1);
+  const p = runPush(r, oldHead); assert.equal(p.code, 3); const out = JSON.parse(p.out);
+  assert.equal(out.reason, 'missing'); assert.match(out.message, /pr change/);
+});
+
+test('#640: two call sites, main renames both and the PR adds an argument to both: a change dropped at one site is refused, both kept is accepted', t => {
+  const sites = (a, b) => `  const x = ${a};\n  const y = ${b};`;
+  const spec = { base: sites('f(a)', 'g(b)'), feat: sites('f(a, force)', 'g(b, force)'), main: sites('h(a)', 'k(b)') };
+  const r = lineRepo(t, spec); const oldHead = resolveLine(r, sites('h(a)', 'k(b, force)'));   // the x change is dropped
+  const lost = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).lostChanges;
+  assert.ok(lost.some(x => x.text.includes('h(a, force)') || x.text.includes('f(a, force)')), JSON.stringify(lost));
+  const ok = lineRepo(t, spec); const oh = resolveLine(ok, sites('h(a, force)', 'k(b, force)'));
+  assert.deepEqual(checkRebase({ repoPath: ok.agent, base: 'origin/main', oldHead: oh, newHead: head(ok) }).lostChanges, []);
+});
+
+test('#640: main made the same change next to another edit, the rebase conflicts and keeps main\'s side: the emptied commit is not missing', t => {
+  const r = lineRepo(t, { base: '  const z = 1;\n  const w = 1;', feat: '  const z = 3;\n  const w = 1;', main: '  const z = 3;\n  const w = 2;' });
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  let conflicted = false;
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { conflicted = true; }
+  assert.ok(conflicted, 'the fixture must conflict');
+  write(r.agent, 'l.mjs', r.f('  const z = 3;\n  const w = 2;')); git(r.agent, 'add', '-A');
+  try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none in progress */ }
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.missing, []); assert.deepEqual(c.lostChanges, []);
+});
+
+test('#640: the same adjacent-edit conflict where main\'s value differs from the PR\'s stays missing', t => {
+  const r = lineRepo(t, { base: '  const z = 1;\n  const w = 1;', feat: '  const z = 3;\n  const w = 1;', main: '  const z = 2;\n  const w = 2;' });
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { /* conflict */ }
+  write(r.agent, 'l.mjs', r.f('  const z = 2;\n  const w = 2;')); git(r.agent, 'add', '-A');
+  try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none */ }
+  assert.equal(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).missing.length, 1);
+});
+
+// ---- review of PR #683: count rule. A commit that adds a copy of a line the file already holds must not be dropped unnoticed.
+const DUP = '  assert.ok(x);';
+function dupConflictRebase(r, resolved) {
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  let conflicted = false;
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { conflicted = true; }
+  assert.ok(conflicted, 'the fixture must conflict');
+  write(r.agent, 'l.mjs', r.f(resolved)); git(r.agent, 'add', '-A');
+  try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none in progress */ }
+  return oldHead;
+}
+
+test('count rule: a dropped commit that added a duplicate of an existing line is missing, and rebase-push refuses it', t => {
+  const r = lineRepo(t, { base: `${DUP}\n  const w = 1;`, feat: `${DUP}\n${DUP}\n  const w = 1;`, main: `${DUP}\n  const w = 2;` });
+  const oldHead = dupConflictRebase(r, `${DUP}\n  const w = 2;`);   // the duplicate is lost
+  assert.equal(checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) }).missing.length, 1);
+  const p = runPush(r, oldHead); assert.equal(p.code, 3); assert.equal(JSON.parse(p.out).reason, 'missing');
+});
+
+test('count rule: a duplicate line that main itself gained makes the dropped commit not missing', t => {
+  const r = lineRepo(t, { base: `${DUP}\n  const w = 1;`, feat: `${DUP}\n${DUP}\n  const w = 1;`, main: `${DUP}\n${DUP}\n  const w = 2;` });
+  const oldHead = dupConflictRebase(r, `${DUP}\n${DUP}\n  const w = 2;`);
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.missing, []); assert.deepEqual(c.lostChanges, []);
+});
+
+test('count rule: counts that cannot be read mean not applied', () => {
+  const hunks = [{ file: 'l.mjs', removed: [], added: ['assert.ok(x);'] }];
+  const files = { 'p:l.mjs': 'assert.ok(x);\n', 'b:l.mjs': 'assert.ok(x);\nassert.ok(x);\n' };
+  const reader = unreadable => args => { const k = args[1]; if (k === unreadable || !(k in files)) throw new Error('unreadable'); return files[k]; };
+  assert.equal(countsHold(reader(null), 'p', 'b', hunks), false);      // `p^` is not a key: the parent cannot be read
+  const run = args => { if (args[1] === 'p^:l.mjs') return files['p:l.mjs']; if (args[1] === 'b:l.mjs') return files['b:l.mjs']; throw new Error('unreadable'); };
+  assert.equal(countsHold(run, 'p', 'b', hunks), true);                // readable, base holds 2 >= 1 + 1
+  assert.equal(countsHold((a) => { if (a[1] === 'b:l.mjs') throw new Error('unreadable'); return run(a); }, 'p', 'b', hunks), false);
+  assert.equal(countsHold(run, 'p', 'b', [{ file: null, removed: [], added: ['assert.ok(x);'] }]), false);
+});
+
+test('#1025: a refusal counts every problem, lists at most five and gives no ready-to-run push command', () => {
+  const lost = Array.from({ length: 7 }, (_, i) => ({ file: 'a.mjs', text: `line ${i}` }));
+  const m = refusal({ missing: [{ sha: 'abcdef1234', subject: 'first' }], lostChanges: lost }, 'feat', '0123456789abcdef');
+  assert.match(m, /8 problems/); assert.match(m, /and 3 more/); assert.match(m, /commit abcdef12 "first"/); assert.doesNotMatch(m, /line 5/);
+  assert.match(m, /homeowner or a reviewer/); assert.doesNotMatch(m, /git push/);
+  assert.match(refusal({ missing: [], lostChanges: [lost[0]] }, 'feat', '0123456789'), /1 problem:/);
+});
+
+// ---- issue #875: anchor the added lines to the position their hunk maps to. The same line added elsewhere on main must not hide a lost change.
+const A875 = (a, extraA, extraB) => `function A() {\n  let a = ${a};\n${extraA}  b();\n}\nfunction B() {\n${extraB}  y();\n}\n`;
+function anchorRepo(t, { feat, main, base: base875 }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rl875-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const remote = path.join(dir, 'remote.git'); git(dir, 'init', '-q', '-b', 'main', '--bare', remote);
+  const seed = path.join(dir, 'seed'); git(dir, 'clone', '-q', remote, seed);
+  write(seed, "a.mjs", base875 || A875(1, "", "")); commit(seed, "base"); git(seed, 'branch', '-M', 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  git(seed, 'checkout', '-q', '-b', 'feat'); write(seed, 'a.mjs', feat); commit(seed, 'pr change'); git(seed, 'push', '-q', 'origin', 'feat');
+  git(seed, 'checkout', '-q', 'main'); write(seed, 'a.mjs', main); commit(seed, 'main change'); git(seed, 'push', '-q', 'origin', 'main');
+  const agent = path.join(dir, 'agent'); git(dir, 'clone', '-q', remote, agent);
+  return { dir, remote, agent };
+}
+function anchorRebase(r, resolved) {
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  let conflicted = false;
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { conflicted = true; }
+  assert.ok(conflicted, 'the fixture must conflict');
+  write(r.agent, 'a.mjs', resolved); git(r.agent, 'add', '-A');
+  try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none in progress */ }
+  return oldHead;
+}
+const AUDIT = '  audit();\n';
+
+test('#875: main adds the same line in another function next to a conflicting edit: the dropped commit is missing, and rebase-push refuses it', t => {
+  const r = anchorRepo(t, { feat: A875(1, AUDIT, ''), main: A875(2, '', AUDIT) });
+  const oldHead = anchorRebase(r, A875(2, '', AUDIT));   // keeps main's side: the PR's audit() in A is lost
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.equal(c.missing.length, 1); assert.equal(c.missing[0].subject, 'pr change');
+  const p = runPush(r, oldHead); assert.equal(p.code, 3); assert.equal(JSON.parse(p.out).reason, 'missing');
+});
+
+test('#875: main adds the same line at the same place in the same function: the emptied commit is not missing', t => {
+  const r = anchorRepo(t, { feat: A875(1, AUDIT, ''), main: A875(2, AUDIT, '') });
+  const oldHead = anchorRebase(r, A875(2, AUDIT, ''));
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.missing, []); assert.deepEqual(c.lostChanges, []);
+});
+
+// Review of PR #1071: main's copy elsewhere shares a neighbour line's text (here `b();` below it), so text equality alone must not anchor the block.
+test('#875: main adds the same line elsewhere and that spot shares a neighbour line: the dropped commit is still missing', t => {
+  const SH = (a, extraA, extraB) => `function A() {\n  let a = ${a};\n${extraA}  b();\n}\nfunction B() {\n${extraB}  b();\n}\n`;
+  const r = anchorRepo(t, { feat: SH(1, AUDIT, ''), main: SH(2, '', AUDIT), base: SH(1, '', '') });
+  const oldHead = anchorRebase(r, SH(2, '', AUDIT));
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.equal(c.missing.length, 1);
+  const p = runPush(r, oldHead); assert.equal(p.code, 3); assert.equal(JSON.parse(p.out).reason, 'missing');
 });

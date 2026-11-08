@@ -164,13 +164,14 @@ export async function checkForChanges({ repository, prev, config, run, now = Dat
 // ---- the client wrapper ----------------------------------------------------------------------------------------------------------
 const READS = new Set(['listPulls', 'listIssues', 'listMergedPulls', 'listClosedPulls', 'listLabels', 'prComments', 'issueComments', 'getIssue', 'issueAuthorAssociation', 'getComment']);
 const WRITES = new Set(['comment', 'createIssue', 'updateIssueBody', 'pinIssue', 'addLabel', 'removeLabel', 'rerunRun', 'merge', 'board']);
+const RECENT = new Set(['listPulls', 'listIssues']), RECENT_MS = 20000;
 const keyOf = (name, args) => `${name}|${JSON.stringify(args)}`;
 
 // mode 'replay': serve READS from `cache.reads` while no write has happened; mode 'record': pass through and store the FIRST answer of
 // each read; mode 'memo': pass through (immutable lookups only come from the memo). The memo applies in every mode: a file list for a PR
 // at a given head, and a PR GitHub says is merged, cannot change.
 export function cachedGithub(gh, { mode, cache = null }) {
-  const reads = {}, memo = memoOf(cache), stats = { served: 0, passed: 0, memoHits: 0, writes: 0, failed: 0 };
+  const reads = {}, memo = memoOf(cache), stats = { served: 0, passed: 0, memoHits: 0, recentHits: 0, writes: 0, failed: 0 }, recent = new Map();
   let live = mode === 'replay', heads = {};
   const wrapped = { ...gh };
   const noteHeads = list => { heads = {}; if (Array.isArray(list)) for (const p of list) if (Number.isSafeInteger(p?.number) && SHA.test(p?.headRefOid)) heads[p.number] = p.headRefOid; };
@@ -181,8 +182,12 @@ export function cachedGithub(gh, { mode, cache = null }) {
     wrapped[name] = async (...args) => {
       const key = keyOf(name, args);
       if (live && key in cache.reads) { stats.served++; return clone(cache.reads[key]); }
+      // Issue #985: one pass asks for the open PR and issue lists a dozen times; within RECENT_MS and until the first write the answer is reused.
+      const hit = RECENT.has(name) ? recent.get(key) : null;
+      if (hit && Date.now() - hit.at < RECENT_MS) { stats.recentHits++; return clone(hit.v); }
       stats.passed++;
       let v; try { v = await gh[name](...args); } catch (error) { stats.failed++; throw error; }
+      if (RECENT.has(name) && v !== undefined) recent.set(key, { at: Date.now(), v: clone(v) });
       if (name === 'listPulls') noteHeads(v);
       if (mode === 'record' && !(key in reads)) { try { reads[key] = clone(v === undefined ? null : v); } catch { stats.failed++; } }
       return v;
@@ -206,9 +211,9 @@ export function cachedGithub(gh, { mode, cache = null }) {
   };
   for (const name of WRITES) {
     if (typeof gh[name] !== 'function') continue;
-    wrapped[name] = async (...args) => { stats.writes++; live = false; return gh[name](...args); };   // after a write, GitHub is no longer what the 304s proved
+    wrapped[name] = async (...args) => { stats.writes++; live = false; recent.clear(); return gh[name](...args); };   // after a write, GitHub is no longer what the 304s proved
   }
-  return { gh: wrapped, stats, reads, memo, openHeads: () => ({ ...heads }), endReplay: () => { live = false; } };   // chained passes must read GitHub live
+  return { gh: wrapped, stats, reads, memo, openHeads: () => ({ ...heads }), endReplay: () => { live = false; recent.clear(); } };   // chained passes must read GitHub live
 }
 
 // The cache to store after a full pass that read everything without error. Returns null when nothing may be stored.

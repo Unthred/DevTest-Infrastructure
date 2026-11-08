@@ -53,12 +53,21 @@ test('scrubConfig matches whole name segments: counts named like secrets are kep
   for (const k of ['passwd', 'client_secret', 'api-key', 'apiKey', 'access_tokens', 'secrets']) assert.equal(out[k], '[removed]', k);
 });
 
+test('scrubConfig removes a secret word glued to another word and a singular token next to a quantity word', () => {
+  const out = scrubConfig({ webhooksecret: 'a', githubtoken: 'b', authtoken: 'c', dbpassword: 'd', passphrase: 'e', token_by_agent: 'f', token_per_host: 'g', session_token_limit: 'h', myApiKey: 'i' });
+  for (const k of Object.keys(out)) assert.equal(out[k], '[removed]', k);
+  const kept = scrubConfig({ max_tokens: 'n', tokens_by_model: 'n', chain_passes: 'n', bypass: 'n', compass: 'n', tokenizer: 'n' });
+  for (const k of Object.keys(kept)) assert.equal(kept[k], 'n', k);
+});
+
 test('wasteByCause caps each day at its top causes plus a remainder; byCause stays complete', () => {
   const waste = Object.fromEntries(Array.from({ length: 12 }, (_, i) => w('j' + i, 1000 + i, i + 1, 'cause-' + i)).map(x => [x.job, x]));
   const r = wasteByCause({ breaker: { waste } }, { now: NOW });
   assert.equal(r.byCause.length, 12); assert.equal(r.byDay[0].causes.length, 6);
   const rest = r.byDay[0].causes[5]; assert.equal(rest.remainder, true); assert.equal(rest.jobs, 7); assert.equal(rest.costUsdEquivalent, 28);
-  assert.equal(r.byDay[0].causes[0].cause, 'cause-11');
+  assert.equal(r.byDay[0].causes[0].cause, 'cause-11'); assert.equal(rest.cause, '(7 other causes)');
+  const one = wasteByCause({ breaker: { waste: Object.fromEntries(Array.from({ length: 6 }, (_, i) => w('k' + i, 1000 + i, i + 1, 'c-' + i)).map(x => [x.job, x])) } }, { now: NOW });
+  assert.equal(one.byDay[0].causes[5].cause, '(1 other cause)');
 });
 
 test('configDiff reports changed, added and removed settings by path and nothing for equal ones', () => {

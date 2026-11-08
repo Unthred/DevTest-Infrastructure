@@ -4,7 +4,7 @@
 export const PRESSED = { approve: 'Approved ✓', reject: 'Rejected ✗' };
 export const OUTCOME_LABEL = { approve: 'Approved', reject: 'Rejected' };
 // Issue #925: what an approved item says until the tick takes it ({t} is the time); a rejected one is final at once.
-export const OUTCOME_TEMPLATE = { approve: 'Approved {t}, waiting for a free slot', reject: 'Rejected {t}' };
+export const OUTCOME_TEMPLATE = { approve: 'Approved {t}, queued for the inbox lane', reject: 'Rejected {t}' };
 // A refusal that says the item was already decided (a second tab, a stale page): the item is settled, so its buttons stay off.
 export const ALREADY_DECIDED = /^the item is already (approved|rejected|running|posting|done|failed|refused)\b/;
 

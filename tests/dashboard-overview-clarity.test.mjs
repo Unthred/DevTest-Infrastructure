@@ -298,3 +298,14 @@ test('css: the one-row bar sheds labels between 1100 and 1439px and phone card h
   assert.match(css, /@media\(min-width:1100px\) and \(max-width:1279px\)\{[\s\S]*?\.agent-badge \.ab-role\{display:none\}/);
   assert.match(css, /\.card>header \.ranges\{flex-wrap:wrap\}/);
 });
+
+// Issue #881: a GitHub rate limit on board moves is a notice with the time, not a red tick; it disappears once the pause has passed.
+test('board updates paused: a notice with the resume time while paused, nothing after, and the tick stays ok', async t => {
+  const until = NOW + 30 * MIN;
+  const v = await build(t, { state: { board: { pausedUntil: until, pending: { 23: 'in_progress', 5: 'done' } } } });
+  const item = v.attention.find(a => a.id === 'board-paused');
+  assert.match(item.text, /^Board updates paused until 2026-11-02 20:30 UTC \(GitHub rate limit\); 2 move\(s\)/);
+  assert.equal(item.severity, 'warning'); assert.equal(v.attention.some(a => a.id === 'tick-failed'), false);
+  const over = await build(t, { state: { board: { pausedUntil: NOW - MIN, pending: {} } } });
+  assert.equal(over.attention.some(a => a.id === 'board-paused'), false);
+});

@@ -63,9 +63,10 @@ test('the standard set is the issue\'s width ladder and arguments are validated'
 
 // ---- WebSocket handshakes are not seen by context.route(): the audit must refuse and record them like capture.mjs does
 test('responsive audit refuses an undeclared WebSocket, records it without its query string and exits blocked', async t => {
-  const { default: fsm } = await import('node:fs'), { default: osm } = await import('node:os'), { default: pathm } = await import('node:path'), { default: netm } = await import('node:net');
+  const { default: fsm } = await import('node:fs'), { default: pathm } = await import('node:path'), { default: netm } = await import('node:net');
   const { audit } = await import('../browser/responsive.mjs');
-  const dir = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'resp-ws-'));
+  const { shortMkdtemp } = await import('./_short-tmp.mjs');
+  const dir = shortMkdtemp('resp-ws-');
   const sockets = pathm.join(dir, 's'), out = pathm.join(dir, 'o'); fsm.mkdirSync(sockets); fsm.mkdirSync(out);
   const server = netm.createServer(c => c.end()).listen(pathm.join(sockets, 'fixture.sock'));
   await new Promise(r => server.once('listening', r));
@@ -87,9 +88,10 @@ export const chromium = { launch: async () => ({ newContext: async () => context
 
 // ---- review round on PR #29: page text must not reach artifacts; a blocked destination outranks a navigation failure
 async function auditWithFake(t, pageSource) {
-  const { default: fsm } = await import('node:fs'), { default: osm } = await import('node:os'), { default: pathm } = await import('node:path'), { default: netm } = await import('node:net');
+  const { default: fsm } = await import('node:fs'), { default: pathm } = await import('node:path'), { default: netm } = await import('node:net');
   const { audit } = await import('../browser/responsive.mjs');
-  const dir = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'resp-rv-'));
+  const { shortMkdtemp } = await import('./_short-tmp.mjs');
+  const dir = shortMkdtemp('resp-rv-');
   const sockets = pathm.join(dir, 's'), out = pathm.join(dir, 'o'); fsm.mkdirSync(sockets); fsm.mkdirSync(out);
   const server = netm.createServer(c => c.end()).listen(pathm.join(sockets, 'fixture.sock'));
   await new Promise(r => server.once('listening', r));

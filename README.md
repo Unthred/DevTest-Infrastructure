@@ -31,6 +31,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 | Document | Purpose |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Components, tracks, storage, security model |
+| [docs/coding-standards.md](docs/coding-standards.md) | Coding standards for maintainability and architecture; applies to every change (issue #1066) |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Binding decisions, status, rejected alternatives, open questions |
 | [docs/cli-contract.md](docs/cli-contract.md) | `dev-test` commands, exit codes, result schema, setup and policy (issue #8: `bin/dev-test`, `cli/`) |
 | [docs/blazor-demo.md](docs/blazor-demo.md) | Blazor end-to-end demonstration (`tools/blazor-demo.mjs`) and applying the runner to other projects (issue #11) |
@@ -47,7 +48,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 | [contracts/](contracts/) | Machine-readable CLI and provider contracts, with examples |
 
 ## Validation
-`node tools/validate-project.mjs` checks required files, the decision register, the handover, entry points, contracts, secrets, Docker-socket/privileged use and image pinning. `node --test "tests/**/*.test.mjs"` runs it against good and deliberately broken fixtures. CI runs both.
+`node tools/validate-project.mjs` checks required files, the decision register, the handover, entry points, contracts, secrets, Docker-socket/privileged use and image pinning. `node --test "tests/**/*.test.mjs"` runs it against good and deliberately broken fixtures. CI runs both, the tests under `node tools/test-guard.mjs -- ...`, which sets TMPDIR to a fresh folder and fails the run if a test leaves anything in it (issue #1007).
 
 Before each substantive report, record progress in the PR description and issue comments (feature branches never edit the handover, D-023; it is updated on main after merge). Record source, CI, deployed and verified states separately.
 

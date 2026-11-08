@@ -1,5 +1,6 @@
 // Dashboard v2 (issue #54): sorting, pagination, footers, filters, severity, idle-reason text, routes, layout, static files.
 // Pure logic is tested directly (it is the same module the browser runs); pages are tested through the real request handler.
+import { removeLater } from './_tmp-leaks.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -154,6 +155,7 @@ function registerRepo(t) {
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
 async function serve(t, { jobs = [], cache, state, snapshots, upgrades, repo, statfs = () => ({ bavail: 5e8, blocks: 1e9, bsize: 4096 }) } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash2-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  removeLater(root);
   fs.mkdirSync(path.join(root, 'jobs'), { recursive: true }); fs.mkdirSync(path.join(root, 'dashboard'), { recursive: true }); fs.mkdirSync(path.join(root, 'team'), { recursive: true });
   for (const j of jobs) fs.writeFileSync(path.join(root, 'jobs', `${j.id}.json`), JSON.stringify(j));
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify(cache));
@@ -161,7 +163,7 @@ async function serve(t, { jobs = [], cache, state, snapshots, upgrades, repo, st
   if (snapshots) fs.writeFileSync(path.join(root, 'dashboard', 'snapshots.jsonl'), snapshots.map(s => JSON.stringify(s)).join('\n') + '\n');
   if (upgrades) fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), upgrades.map(s => JSON.stringify(s)).join('\n') + '\n');
   const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
-  const port = server.address().port; server.on('request', handler({ root, config: repo ? { ...config, repo_path: repo } : config, host: '127.0.0.1', port, now: () => NOW, statfs }));
+  const port = server.address().port; server.on('request', handler({ wake: () => {}, root, config: repo ? { ...config, repo_path: repo } : config, host: '127.0.0.1', port, now: () => NOW, statfs }));
   return { get: p => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: p, headers: { host: `127.0.0.1:${port}` } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject)) };
 }
 const jb = (over = {}) => ({ id: 'a'.repeat(32), provider: 'claude', kind: 'implement', issue: 30, branch: 'claude/issue-30-x', status: 'running', createdAt: NOW - 600000, updatedAt: NOW - 1000, lastProgress: NOW - 1000, attempts: 2, usage: { inputTokens: 900, outputTokens: 100, costUsdEstimate: 0.5 }, ...over });
@@ -295,7 +297,7 @@ test('phone design: tables carry labels for card layout, tap-to-expand rows, bot
   assert.match((await s.get('/work')).body, /<tr tabindex="0">/);
   const css = (await s.get('/static/style.css')).body;
   assert.match(css, /@media\(max-width:639px\)[\s\S]*\.nav\{position:fixed;bottom:0/); assert.match(css, /min-height:44px;min-width:44px/); assert.match(css, /td::before\{content:attr\(data-label\)/);
-  assert.match(css, /\.wide-only,\.layoutbar\{display:none!important\}/, 'no layout editor on a phone');
+  assert.match(css, /\.wide-only,\.layoutbar,\.barbtn\{display:none!important\}/, 'no layout editor on a phone');
   for (const bp of ['@media(min-width:1100px)', '@media(max-width:1099px)', '@media(max-width:639px)', 'prefers-reduced-motion:reduce', 'prefers-color-scheme:dark', ':root[data-theme=dark]', ':focus-visible']) assert.ok(css.includes(bp), bp);
   assert.doesNotMatch(css, /@import|url\(|https?:\/\//);
 });
@@ -621,9 +623,10 @@ test('#583 the PR card names the job holding needs-homeowner and the command tha
   assert.doesNotMatch(plain.panels.needsYou.find(c => c.id === 'homeowner-pr-41').action, /supervisor resume/);
 });
 
-test('handler refuses the statfs test seam together with offload, and accepts each alone (issue #841)', async () => {
+test('handler refuses the statfs test seam together with offload, and accepts each alone (issue #841)', async (t) => {
   const { handler } = await import('../supervisor/dashserver.mjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-offload-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = { root, config: {}, host: '127.0.0.1', port: 0 };
   assert.throws(() => handler({ ...base, offload: true, statfs: () => ({}) }), /statfs.*offload/);
   assert.equal(typeof handler({ ...base, statfs: () => ({}) }), 'function');

@@ -6,9 +6,9 @@ const HOUR = 3600000;
 export const WINDOWS = { '24h': 24 * HOUR, '7d': 7 * 24 * HOUR };
 export const WASTE_KEEP_MS = 7 * 24 * HOUR;   // the breaker keeps its waste record this long (breaker.mjs KEEP_MS)
 export const MAX_ITEMS = 200;                 // items kept per card and window; the true count is always stated
-export const CARD_IDS = ['issues', 'processed', 'merge-rate', 'first-pass', 'rounds', 'tokens', 'waste', 'rejects'];
+export const CARD_IDS = ['issues', 'processed', 'merge-rate', 'throughput', 'first-pass', 'rounds', 'tokens', 'cost', 'waste', 'rejects'];
 export const CARD_TITLES = {
-  issues: 'Issues opened vs closed', processed: 'Issues processed', 'merge-rate': 'PRs merged per hour', 'first-pass': 'First-pass approval',
+  issues: 'Issues opened vs closed', processed: 'Issues processed', 'merge-rate': 'PRs merged per hour', throughput: 'Throughput per hour', cost: 'Cost per merged issue', 'first-pass': 'First-pass approval',
   rounds: 'Rounds per merged PR', tokens: 'Tokens per merged PR', waste: 'Wasted tokens', rejects: 'Rejects',
 };
 const NOTE = 'Counted from Foreman\'s own job and review records and the issue and pull request state it last fetched. Tokens are a usage equivalent, not a cash charge.';
@@ -42,6 +42,10 @@ function period({ issues, prs, jobs, waste }, from, to, spanMs) {
   const changes = prs.flatMap(p => realVerdicts(p).filter(v => v.verdict === 'CHANGES' && inside(v.at, from, to)).map(v => ({ p, v })));
   const blocked = jobs.filter(j => j.status === 'blocked' && inside(fin(j.updatedAt) ? j.updatedAt : j.createdAt, from, to));
   const hours = spanMs / HOUR;
+  const openedPrs = prs.filter(p => inside(ms(p.openedAt), from, to));
+  const implemented = jobs.filter(j => j.kind === 'implement' && j.status === 'completed' && inside(ms(j.updatedAt), from, to));
+  const costKnown = merged.filter(p => fin(p.costUsd));
+  const perH = n => round(n / hours, 3);
   const cards = {
     issues: { value: opened.length - closed.length, opened: opened.length, closed: closed.length, net: opened.length - closed.length, unit: 'net issues',
       items: cap([...opened.map(i => item('issue', i.number, i.title, i.c, 'opened')), ...closed.map(i => item('issue', i.number, i.title, i.x, 'closed'))]), count: opened.length + closed.length },
@@ -49,12 +53,16 @@ function period({ issues, prs, jobs, waste }, from, to, spanMs) {
       items: cap(closed.map(i => item('issue', i.number, i.title, i.x, 'closed'))), count: closed.length },
     'merge-rate': { value: round(merged.length / hours, 3), merged: merged.length, hours, unit: 'per hour',
       items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, 'merged', p.tokens))), count: merged.length },
+    throughput: { value: perH(openedPrs.length), opened: openedPrs.length, merged: merged.length, implemented: implemented.length, openedPerHour: perH(openedPrs.length), mergedPerHour: perH(merged.length), implementedPerHour: perH(implemented.length), hours, unit: 'per hour',
+      items: cap([...openedPrs.map(p => item('pr', p.number, p.title, ms(p.openedAt), 'opened')), ...merged.map(p => item('pr', p.number, p.title, p.mergedAt, 'merged')), ...implemented.map(j => item('job', String(j.id || '').slice(0, 8), 'implement job completed', ms(j.updatedAt), `issue ${j.issue ?? 'unknown'}`))]), count: openedPrs.length + merged.length + implemented.length },
     'first-pass': { value: cohort.length ? round(approved.length / cohort.length * 100, 1) : null, approved: approved.length, reviewed: cohort.length, unit: '%',
       items: cap(cohort.map(({ p, first }) => item('pr', p.number, p.title, first.at, `first review: ${first.verdict}`))), count: cohort.length },
     rounds: { value: merged.length ? round(sum(merged, roundsOf) / merged.length) : null, merged: merged.length, rounds: sum(merged, roundsOf), unit: 'rounds',
       items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, `${reviewsOf(p)} review, ${fin(p.fixRounds) ? p.fixRounds : 0} fix, ${fin(p.rebaseRounds) ? p.rebaseRounds : 0} rebase`, p.tokens))), count: merged.length },
     tokens: { value: known.length ? Math.round(sum(known, p => p.tokens) / known.length) : null, merged: merged.length, withKnownTokens: known.length, totalTokens: sum(known, p => p.tokens), unit: 'tokens',
       items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, fin(p.tokens) ? 'merged' : 'merged, tokens unknown', p.tokens))), count: merged.length },
+    cost: { value: costKnown.length ? round(sum(costKnown, p => p.costUsd) / costKnown.length) : null, merged: merged.length, withKnownCost: costKnown.length, totalCostUsd: round(sum(costKnown, p => p.costUsd)), unit: 'USD equivalent',
+      items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, fin(p.costUsd) ? `merged, $${round(p.costUsd)} (implement, review, fix and rebase jobs)` : 'merged, cost unknown', p.tokens))), count: merged.length },
     waste: { value: sum(wasted, w => w.tokens), jobs: wasted.length, costUsdEquivalent: round(sum(wasted, w => w.cost)), topCause: top ? { cause: top[0], tokens: top[1] } : null, unit: 'tokens',
       items: cap(wasted.map(w => item(w.pr ? 'pr' : w.issue ? 'issue' : 'job', w.pr ?? w.issue ?? String(w.job || '').slice(0, 8), w.cause, w.at, `${w.agent || 'unknown agent'}, job ${String(w.job || '').slice(0, 8)}`, w.tokens))), count: wasted.length },
     rejects: { value: changes.length + blocked.length, changes: changes.length, blocked: blocked.length, unit: 'rejects',

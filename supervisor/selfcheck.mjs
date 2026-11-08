@@ -14,7 +14,7 @@ const GRACE_MS = 10 * 60000;   // a label recorded or added moments ago may not 
 const CAP = 50;                // log entries kept
 const short = (s, n = 200) => String(s ?? '').slice(0, n);
 
-export function selfCheck({ state, prs = [], issues = [], active = [], aliveById = {}, stale = {}, maxReviewAttempts = 2, now = Date.now() }) {
+export function selfCheck({ pressure = null, state, prs = [], issues = [], active = [], aliveById = {}, stale = {}, maxReviewAttempts = 2, now = Date.now() }) {
   const fixes = [], items = [], covered = [];
   const labelsOf = new Map([...issues, ...prs].map(x => [x.number, x.labels || null]));
   // 1. A label Foreman recorded adding, whose label is gone.
@@ -46,6 +46,8 @@ export function selfCheck({ state, prs = [], issues = [], active = [], aliveById
     items.push({ id: `selfcheck-review-${j.pr}`, kind: 'review-no-verdict', ref: j.pr, text: `The review of PR #${j.pr} at ${String(j.head).slice(0, 7)} (job ${String(id).slice(0, 8)}) finished but no verdict was recorded${j.refusal ? ` (${redact(j.refusal, 60)})` : ''}, and its attempts are used.`,
       action: `Look at the job (ai-supervisor status ${String(id).slice(0, 8)}), then approve "new_review_attempt" for PR #${j.pr} on the dashboard inbox or have another reviewer review this head.` });
   }
+  // 5. Issue #1007: the root volume or swap is nearly full; new job starts are held by the tick until it recovers.
+  if (pressure) items.push({ id: 'selfcheck-host-pressure', kind: 'host-pressure', ref: null, text: `Host storage or swap is nearly full: ${pressure.text}`, action: 'Free space (remove stale folders in /tmp and <state root>/tmp, or restart the biggest consumer). Job starts resume on their own once the volume is under 80% and swap under 90%.' });
   // 4. An implemented mark with no pull request: already a Needs you item (stale-mark-N).
   for (const n of Object.keys(stale || {})) covered.push({ kind: 'implemented-no-pr', ref: Number(n), item: `stale-mark-${n}` });
   return { fixes, items, covered };

@@ -275,7 +275,9 @@ export function decidedCards(inboxDir, now = Date.now()) {
   const day = new Date(now); day.setHours(0, 0, 0, 0);
   return allStatuses(inboxDir).filter(s => s.decision && Number.isFinite(s.decidedAt) && s.decidedAt >= day.getTime() && s.decidedAt <= now + 60000)
     .sort((x, y) => y.decidedAt - x.decidedAt).map(s => ({ id: s.id, kind: s.kind || null, title: s.title || null, issue: Number.isSafeInteger(s.issue) && s.issue > 0 && s.issue < 900000000 ? s.issue : null, decision: s.decision, state: s.state || null, decidedAt: s.decidedAt,
-      undoUntil: ['approved', 'rejected'].includes(s.state) && now - s.decidedAt <= UNDO_MS ? s.decidedAt + UNDO_MS : null }));
+      undoUntil: ['approved', 'rejected'].includes(s.state) && now - s.decidedAt <= UNDO_MS ? s.decidedAt + UNDO_MS : null,
+      // issue #971: a prompt shows queued (approved), then running in the inbox lane, with the time it waited (so far, or until it started)
+      lane: s.kind === 'prompt' && s.decision === 'approve' ? 'inbox' : null, waitedMs: s.kind === 'prompt' && s.decision === 'approve' ? (Number.isFinite(s.waitedMs) ? s.waitedMs : s.state === 'approved' ? Math.max(0, now - s.decidedAt) : null) : null }));
 }
 export function approvedItems(inboxDir, kind) {
   return allStatuses(inboxDir).filter(s => s.state === 'approved' && s.kind === kind).sort((a, b) => (a.decidedAt || 0) - (b.decidedAt || 0));

@@ -596,13 +596,12 @@ test('D-020 parity: shipped manifests give the same effective access as the inte
 
 test('GitHub client: gh with argument arrays only, merge pins the head, board and label calls', async () => {
   const seen = [];
-  const gh = ghRunner((args, input) => { seen.push({ args, input }); return { status: 0, stdout: args[0] === 'project' && args[1] === 'item-list' ? JSON.stringify({ items: [{ id: 'ITEM', content: { number: 7 } }] }) : '[]', stderr: '' }; });
+  const gh = ghRunner((args, input) => { seen.push({ args, input }); return { status: 0, stdout: args[0] === 'api' && args[1] === 'graphql' ? JSON.stringify({ data: { repository: { issue: { projectItems: { nodes: [{ id: 'ITEM', project: { id: 'P' } }] } } } } }) : '[]', stderr: '' }; });
   const c = githubClient(config(), gh);
   await c.merge(5, H(1));
   assert.deepEqual(seen.at(-1).args, ['pr', 'merge', '5', '--repo', 'o/r', '--merge', '--match-head-commit', H(1)]);
   await c.comment(5, 'body; $(rm -rf /)'); assert.equal(seen.at(-1).input, 'body; $(rm -rf /)'); assert.ok(!seen.at(-1).args.some(a => a.includes('rm')));
   await c.board(7, 'done'); assert.deepEqual(seen.at(-1).args.slice(0, 3), ['project', 'item-edit', '--id']); assert.ok(seen.at(-1).args.includes('c'));
-  await c.board(99, 'done');   // unknown issue: no edit
   assert.equal(seen.filter(s => s.args[1] === 'item-edit').length, 1);
   assert.throws(() => ghRunner(() => ({ status: 1, stdout: '', stderr: 'boom' }))(['pr', 'list']), /gh pr list failed: boom/);
 });
@@ -1024,6 +1023,21 @@ test('lean launch: the Claude manifest drops MCP servers (manifest only, D-012);
   assert.ok(m('claude').launch.args.includes('--strict-mcp-config'));
   assert.deepEqual(m('codex').launch.args, []);
   assert.ok(!JSON.stringify(m('codex')).includes('mcp'));
+});
+
+test('host pressure (issue #1007): over 80% disk holds new starts, keeps merges and raises one Inbox item; recovery resumes starts', async t => {
+  const mk = hostPressure => world(t, { issues: [issue(23), issue(2)], pulls: [pr(10, 'codex/issue-2-x', H(1))], teamOpts: { hostPressure } });
+  const full = mk(() => ({ hold: true, reasons: ['the root volume is 91% full'], top: [{ path: '/tmp/devtest-validate-x', bytes: 9e9 }] }));
+  full.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude' };
+  const r = await full.team.tick();
+  assert.deepEqual(r.actions.map(a => a.type), ['merge']); assert.deepEqual(full.calls.created, []);
+  assert.match(r.held.reason, /host pressure: the root volume is 91% full/);
+  assert.match(full.team.selfCheckItems().find(i => i.id === 'selfcheck-host-pressure').text, /91% full/);
+  const ok = mk(() => ({ hold: false, reasons: [], top: [] }));
+  const stale = path.join(ok.team.root, 'tmp', 'job-dead'); fs.mkdirSync(stale, { recursive: true }); fs.writeFileSync(path.join(stale, 'f'), 'x'.repeat(3000)); fs.utimesSync(stale, new Date(-8 * 3600000), new Date(-8 * 3600000));   // the test clock reads 1000 ms
+  const r2 = await ok.team.tick();
+  assert.equal(r2.tempSwept.folders, 1); assert.ok(!fs.existsSync(stale));
+  assert.equal(r2.held, undefined); assert.ok(ok.calls.created.length > 0); assert.equal(ok.team.selfCheckItems().some(i => i.id === 'selfcheck-host-pressure'), false);
 });
 
 test('hold (issue #134): a pending upgrade starts no job, reports the hold, and still merges; without a hold dispatch is unchanged', async t => {
@@ -1689,4 +1703,56 @@ test('#864 no churn stop when findings repeat, after one new round only, or when
   assert.equal(passed.team.churned(38), null);
   await rep.team.notifyChurn({}); assert.equal(rep.calls.comments.filter(c => /different set/.test(c[1])).length, 0);
   assert.equal((await rep.team.plan()).filter(a => a.type === 'fix').length, 1);
+});
+
+test('issue #881: a board failure after a merge is a warning; the label and comment still happen and the tick is not failed', async t => {
+  const w = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(2)] });
+  w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'PASS', reviewer: 'claude', job: 'j' };
+  w.gh.board = async () => { throw new Error('gh project item-list failed: boom'); };
+  const act = { ...(await w.team.plan()).find(a => a.type === 'merge'), interim: true, reviewer: 'claude', job: 'j' };
+  const report = {};
+  await w.team.execute(act, report);   // does not throw
+  assert.deepEqual(w.calls.labels, [[10, 'post-merge-review']]);
+  assert.equal(w.calls.comments.length, 1);
+  assert.match(report.warnings[0].warning, /board update for #2 \(done\) failed: .*boom/);
+  assert.deepEqual(w.team.s.board.pending, { 2: 'done' });
+  assert.equal(report.skipped, undefined);   // nothing skipped, so tickOutcome stays ok
+});
+
+test('issue #881: a rate limit pauses board moves until the reset, then the missed moves are replayed', async t => {
+  const w = world(t, { issues: [issue(23)] });
+  let now = 1000, limited = true; const edits = [];
+  w.team.clock = { now: () => now };
+  w.gh.board = async (n, s) => { if (limited) { const e = new Error('gh project item-list failed: GraphQL: API rate limit exceeded'); e.rateLimitedUntil = 5000; throw e; } edits.push([n, s]); };
+  const report = {};
+  assert.equal(await w.team.moveBoard(23, 'in_progress', report), false);
+  assert.match(report.warnings[0].warning, /paused until \d\d:\d\d UTC/);
+  assert.equal(w.team.s.board.pausedUntil, 5000);
+  let calls = 0; const real = w.gh.board; w.gh.board = async (...a) => { calls++; return real(...a); };
+  await w.team.moveBoard(5, 'done', {});      // paused: no GitHub call at all
+  assert.equal(calls, 0); assert.deepEqual(w.team.s.board.pending, { 23: 'in_progress', 5: 'done' });
+  limited = false; now = 3000; await w.team.flushBoard({});   // before the reset: still nothing
+  assert.equal(calls, 0);
+  now = 5001; await w.team.flushBoard({});
+  assert.deepEqual(edits, [[5, 'done'], [23, 'in_progress']].sort((a, b) => a[0] - b[0]));
+  assert.deepEqual(w.team.s.board.pending, {}); assert.equal(w.team.s.board.pausedUntil, undefined);
+});
+
+test('issue #881: the client looks up the item of each issue directly (never lists the board) and caches ids; a rate limit reports the GraphQL reset', async () => {
+  const seen = []; let limit = false;
+  const gh = ghRunner((args) => { seen.push(args);
+    if (args[0] === 'api' && args[1] === 'rate_limit') return { status: 0, stdout: JSON.stringify({ limit: 5000, reset: 4000 }), stderr: '' };
+    if (limit) return { status: 1, stdout: '', stderr: 'GraphQL: API rate limit exceeded' };
+    if (args[1] === 'graphql') { const n = Number(args.find(a => /^n=/.test(a)).slice(2)); return { status: 0, stdout: JSON.stringify({ data: { repository: { issue: { projectItems: { nodes: n === 99 ? [] : [{ id: 'I' + n, project: { id: 'P' } }] } } } } }), stderr: '' }; }
+    return { status: 0, stdout: '', stderr: '' }; });
+  const c = githubClient(config(), gh);
+  await c.board(7, 'done'); await c.board(8, 'in_review'); await c.board(7, 'in_review');
+  assert.equal(seen.filter(a => a[1] === 'graphql').length, 2);   // one direct lookup per issue, never a whole-board listing
+  assert.equal(seen.filter(a => a[1] === 'item-list').length, 0);
+  assert.equal(seen.filter(a => a[1] === 'item-edit').length, 3);
+  await assert.rejects(c.board(99, 'done'), /not found on the project board/);   // a missing item is a failure, not a silent success
+  limit = true;
+  await assert.rejects(c.board(7, 'done'), e => e.rateLimitedUntil === 4000000);
+  // a rate limit on the direct lookup itself (an uncached issue) also reports the reset
+  await assert.rejects(c.board(55, 'done'), e => e.rateLimitedUntil === 4000000);
 });

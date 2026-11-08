@@ -78,6 +78,60 @@ export function compact(pos) {
   return out;
 }
 
+// Groups: a list of id lists. A group is a block: it moves as one and closes gaps as one. Untrusted input is cleaned so that every
+// id exists and is on the page, each card is in at most one group, and a group has at least two members.
+export function cleanGroups(groups, onPage) {
+  const seen = new Set(), out = [];
+  if (!Array.isArray(groups)) return out;
+  for (const g of groups) {
+    if (!Array.isArray(g)) continue;
+    const m = [...new Set(g)].filter(i => typeof i === 'string' && Object.hasOwn(onPage, i) && !seen.has(i));
+    if (m.length < 2) continue;
+    m.forEach(i => seen.add(i)); out.push(m);
+  }
+  return out;
+}
+export const groupOf = (groups, id) => groups.find(g => g.includes(id)) || null;
+// Group the given cards (at least two): any group they already belong to is absorbed so a card is never in two.
+export function addGroup(groups, ids) {
+  const set = new Set(ids);
+  for (const g of groups) if (g.some(i => set.has(i))) g.forEach(i => set.add(i));
+  if (set.size < 2) return groups;
+  return [...groups.filter(g => !g.some(i => set.has(i))).map(g => [...g]), [...set]];
+}
+// Ungroup: every group that holds any of the given cards is dissolved.
+export const removeGroups = (groups, ids) => groups.filter(g => !g.some(i => ids.includes(i)));
+// Take a card off the page: it leaves its group, and a group left with fewer than two members dissolves.
+export const withoutCard = (groups, id) => groups.map(g => g.filter(i => i !== id)).filter(g => g.length >= 2);
+
+// Move a block of cards together by dc columns and dr rows (clamped so the block stays inside the grid), then push other cards
+// out of its way. Pure; computed from the layout as it was when the drag began.
+export function placeGroup(pos, ids, dc, dr, cols) {
+  const members = ids.filter(i => pos[i]);
+  if (!members.length) return copy(pos);
+  const minX = Math.min(...members.map(i => pos[i].x)), maxX = Math.max(...members.map(i => pos[i].x + pos[i].w)), minY = Math.min(...members.map(i => pos[i].y));
+  const cx = clamp(Math.round(dc) || 0, -minX, cols - maxX), cy = Math.max(Math.round(dr) || 0, -minY), out = copy(pos);
+  for (const i of members) { out[i].x += cx; out[i].y += cy; }
+  return pushClear(out, new Set(members));
+}
+// Tidy that treats each group as one block (its members keep their places relative to each other).
+export function compactGroups(pos, groups = []) {
+  if (!groups.length) return compact(pos);
+  const out = copy(pos), done = new Set();
+  const units = Object.keys(out).sort(byReading(out)).map(id => groupOf(groups, id)?.filter(i => out[i]) || [id]);
+  for (const unit of units) {
+    if (done.has(unit[0])) continue;
+    unit.forEach(i => done.add(i));
+    const top = Math.min(...unit.map(i => out[i].y));
+    let shift = 0;
+    // Checked against every other card, placed or not: a member must never be lifted onto a card that has not had its turn yet.
+    const others = Object.keys(out).filter(p => !unit.includes(p));
+    for (let y = 0; y <= top; y++) { if (!unit.some(i => others.some(p => overlaps({ ...out[i], y: out[i].y - top + y }, out[p])))) { shift = top - y; break; } }
+    for (const i of unit) out[i].y -= shift;
+  }
+  return out;
+}
+
 // The first free spot (top to bottom, left to right) for a w x h card; used for cards that have no saved place.
 export function firstFit(pos, w, h, cols) {
   const r = cleanRect({ x: 0, y: 0, w, h }, cols), others = Object.values(pos);
@@ -106,7 +160,7 @@ export function edgeAt(box, px, py, m = 8) {
 }
 
 // ---- saved form
-// { v: 2, pos: { id: { x, y, w, h } }, hidden: [id], collapsed: [id] }. `collapsed` is owned by the collapse buttons.
+// { v: 2, pos: { id: { x, y, w, h } }, hidden: [id], groups: [[id, id]], collapsed: [id] }. `hidden` = cards not chosen in the card picker (not on the page). `collapsed` is owned by the collapse buttons.
 // Anything else (an old order/span/h layout, a broken value, another version) returns null: the caller falls back to the default
 // flow, or converts an old layout. Cards that no longer exist are dropped, bad rectangles are dropped (such a card is placed in the
 // first free spot), a pinned card is never hidden, and overlapping rectangles are settled.
@@ -116,13 +170,14 @@ export function sanitizeLayout(saved, ids, cols, pinnedIds = []) {
   for (const id of ids) { const r = Object.hasOwn(saved.pos, id) ? cleanRect(saved.pos[id], cols) : null; if (r) pos[id] = r; }
   const hidden = Array.isArray(saved.hidden) ? [...new Set(saved.hidden.filter(i => typeof i === 'string' && ids.includes(i) && canHide(i, pinnedIds.includes(i))))] : [];
   for (const id of hidden) delete pos[id];
-  return { pos: settleAll(pos), hidden };
+  const settled = settleAll(pos);
+  return { pos: settled, hidden, groups: cleanGroups(saved.groups, settled) };
 }
 // A free layout with the pinned cards taken out of `hidden`. Used wherever a layout is restored or repainted (a refresh in place may
 // pin a card that an undo snapshot still has hidden). Returns the same object when nothing changes.
 export const withoutPinned = (st, pinnedIds = []) => (st && st.hidden.some(i => pinnedIds.includes(i)) ? { ...st, hidden: st.hidden.filter(i => !pinnedIds.includes(i)) } : st);
 export const isOldLayout = saved => isObj(saved) && saved.v !== 2 && (Array.isArray(saved.order) || isObj(saved.span) || isObj(saved.h));
-export const toSaved = (st, collapsed = []) => ({ v: 2, pos: st.pos, hidden: st.hidden, collapsed });
+export const toSaved = (st, collapsed = []) => ({ v: 2, pos: st.pos, hidden: st.hidden, groups: st.groups || [], collapsed });
 
 // From the cards as currently drawn (any old order/span/h layout included) to cells. `boxes` are { id, left, top, width, height }
 // in px relative to the grid; colPitch is one column plus its gap. Both edges of a card snap with the same rule (a little upward, so a

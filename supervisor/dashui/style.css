@@ -139,7 +139,7 @@ dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px var(--sp4);marg
 @media(max-width:639px){
   main{padding:var(--sp3);padding-bottom:calc(var(--nav-h) + var(--sp5))}
   .cards{grid-template-columns:1fr}.card{grid-column:1/-1}
-  .wide-only,.layoutbar{display:none!important}
+  .wide-only,.layoutbar,.barbtn{display:none!important}
   .nav{position:fixed;bottom:0;left:0;right:0;z-index:30;justify-content:space-between;padding:0;border-top:1px solid var(--line);border-bottom:0;box-shadow:0 -2px 8px rgba(0,0,0,.1)}
   .nav a{flex:1 0 auto;flex-direction:column;justify-content:center;gap:2px;padding:0 var(--sp1);font-size:11px;min-width:44px;min-height:var(--nav-h);border-bottom:0;border-top:3px solid transparent}
   .nav a[aria-current=page]{border-top-color:var(--link)}
@@ -441,6 +441,9 @@ body.layout-editing{overscroll-behavior:contain}
 .headline .hl-v,.hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1;text-decoration:none;color:inherit}
 .headline .hl-v:hover{color:var(--link)}
 .headline .hl-trend svg{width:1em;height:1em;vertical-align:-.15em;margin-right:.25em}
+/* Issue #928: the headline and KPI numbers are centred in their tiles. */
+.headline .hl-row{align-items:center;text-align:center}
+.kpi{text-align:center}.kpi .kpi-sub{font-size:var(--fs-sm)}
 
 /* Inbox decisions (issue #856) */
 .inbox-outcome{display:inline-block;font-weight:600;padding:0 var(--sp2);border-radius:var(--r-sm);border:1px solid var(--line)}
@@ -484,3 +487,24 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 @media print{.refresh-box{display:none}}
 
 .inbox-id code{font-weight:600}.inbox-kind{color:var(--mut);font-size:.9em}
+/* ---- issue #927: layout controls on the right, card picker, card groups, app bar editing */
+.layoutbar{justify-content:flex-end}
+.layoutbar .lay-hint{flex:1 1 100%;text-align:right}
+.layoutbar details[open]>ul{right:0;max-height:60vh;overflow:auto}
+.cards.editing{user-select:none}
+.cards.editing>.card.lay-selected{outline:2px solid var(--link);outline-offset:1px}
+.cards.editing>.card.lay-grouped{box-shadow:0 0 0 3px color-mix(in srgb,var(--link) 35%,transparent)}
+.lay-box{position:absolute;z-index:30;pointer-events:none;border:1px solid var(--link);background:color-mix(in srgb,var(--link) 14%,transparent)}
+.statusbar>.theme,.statusbar>.stickybtn,.statusbar>.barbtn,.statusbar>.bar-picker{order:100}
+.barbtn{background:none;border:1px solid var(--line);color:var(--fg);border-radius:var(--r-sm);min-height:44px;padding:0 var(--sp3);cursor:pointer;font:inherit}
+.barbtn[aria-pressed=true]{background:var(--link);color:var(--surface);border-color:var(--link)}
+.statusbar>.bar-removed{display:none!important}
+.statusbar.bar-editing>[data-bar]:not(.brand){outline:1px dashed var(--mut);outline-offset:3px;display:flex;align-items:center;gap:var(--sp1)}
+.statusbar.bar-editing>[data-bar] a,.statusbar.bar-editing>[data-bar] .pill{pointer-events:none}
+.bar-ctl{display:inline-flex;gap:2px;margin-left:var(--sp1)}
+.bar-ctl button{min-width:28px;min-height:28px;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:var(--r-sm);cursor:pointer;font:inherit;padding:0 4px}
+.bar-ctl button:disabled{opacity:.4;cursor:default}
+.bar-picker{position:relative}
+.bar-picker summary{cursor:pointer;padding:4px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);min-height:36px;display:inline-flex;align-items:center}
+.bar-picker[open]>ul{position:absolute;right:0;z-index:50;margin:var(--sp1) 0 0;padding:var(--sp2);list-style:none;min-width:14rem;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-lg)}
+.bar-picker li{display:flex;align-items:center;justify-content:space-between;gap:var(--sp3);padding:var(--sp1) 0}

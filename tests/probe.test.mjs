@@ -78,7 +78,7 @@ test('a probe run stores allowance fields only: source probe, no message text, n
   assert.equal(latestAllowance([], { claude: record }).claude.source, 'probe');
 });
 test('the probe runs outside any repository: its working directory is an empty temporary directory', async () => {
-  const script = `const fs=require('fs'),os=require('os');if(process.cwd().startsWith(os.tmpdir())&&fs.readdirSync('.').length===0&&!fs.existsSync('.git'))console.log(${JSON.stringify(eventLine(0.2))});`;
+  const script = `const fs=require('fs');if([${JSON.stringify(os.tmpdir())},${JSON.stringify(fs.realpathSync(os.tmpdir()))}].some(d=>process.cwd().startsWith(d))&&fs.readdirSync('.').length===0&&!fs.existsSync('.git'))console.log(${JSON.stringify(eventLine(0.2))});`;
   assert.ok(await runProbeCommand({ spec: claudeSpec(script), adapter: claudeAdapter, config, now: NOW }));
   const cwdBefore = process.cwd(); assert.equal(process.cwd(), cwdBefore);
 });
@@ -224,10 +224,10 @@ test('refreshProvider through a real registry: a custom manifest probe command i
   const noProbe = { ...manifest, id: 'plain' }; delete noProbe.probe; fs.writeFileSync(path.join(dir, 'providers', 'plain.json'), JSON.stringify(noProbe));
   fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify({ schemaVersion: 1, providers: { claude: { adapter: 'claude', manifest: 'providers/claude.json' }, plain: { adapter: 'claude', manifest: 'providers/plain.json' } } }));
   const reg = path.join(dir, 'providers.json');
-  const r = await refreshProvider(reg, 'claude', { now: NOW });
+  const r = await refreshProvider(reg, 'claude', { now: NOW, lockDir: path.join(dir, 'locks') });
   assert.equal(r.record.windows.find(w => w.type === 'seven_day').utilization, 0.11);
-  assert.deepEqual(await refreshProvider(reg, 'plain', { now: NOW }), { record: null, error: 'unsupported' });
-  const [a, b] = await Promise.all([refreshProvider(reg, 'claude', { now: NOW }), refreshProvider(reg, 'claude', { now: NOW })]);
+  assert.deepEqual(await refreshProvider(reg, 'plain', { now: NOW, lockDir: path.join(dir, 'locks') }), { record: null, error: 'unsupported' });
+  const [a, b] = await Promise.all([refreshProvider(reg, 'claude', { now: NOW, lockDir: path.join(dir, 'locks') }), refreshProvider(reg, 'claude', { now: NOW, lockDir: path.join(dir, 'locks') })]);
   assert.deepEqual([a.error, b.error].sort(), ['busy', undefined].sort(), 'a second concurrent probe of one provider is refused');
 });
 async function serve(t, probe, nowFn = () => NOW) {

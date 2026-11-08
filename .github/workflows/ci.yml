@@ -26,7 +26,7 @@ jobs:
       - name: Validate project contract
         run: node tools/validate-project.mjs
       - name: Positive and negative validator tests
-        run: node --test "tests/**/*.test.mjs"
+        run: node tools/test-guard.mjs -- node --test "tests/**/*.test.mjs"
 
   ci-lint:
     # Issue #12: shell syntax, workflow safety and image-lock checks. No Docker, no network, no secrets.

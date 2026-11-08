@@ -1,5 +1,6 @@
 // Issue #626: the Resume button's write protection (D-029). A real dashboard handler over a temp state root; no model call, no network
 // beyond loopback. The halt is written into the state file the dashboard reads; a click may only leave a request for the next tick.
+import { removeLater } from './_tmp-leaks.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -21,9 +22,9 @@ async function serve(t, { halted = true, supervised = () => false, peerPid = () 
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at, status: 'ok', lastOkAt: at }, fetchedAt: at, pulls: [], issues: [] }));
   const halt = { cause: CAUSE, since: at, jobs: 3, tokens: 30, inputTokens: 15, outputTokens: 15, cost: 1, prs: [40], issues: [], types: ['review'], jobIds: ['a', 'b', 'c'], trippedBy: 'count' };
   fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ breaker: { waste: {}, halts: halted ? { [CAUSE]: halt } : {}, global: null, clearedAt: {} } }));
-  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const server = http.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => new Promise(r => { server.close(r); server.closeAllConnections(); })); removeLater(root); // the server may keep writing to root after the test ends (issue #1007)
   const port = server.address().port, clock = { now: Date.now() };
-  server.on('request', handler({ root, config: dashboard ? { ...config, dashboard } : config, host: '127.0.0.1', port, now: () => clock.now, supervised, peerPid }));
+  server.on('request', handler({ wake: () => {}, root, config: dashboard ? { ...config, dashboard } : config, host: '127.0.0.1', port, now: () => clock.now, supervised, peerPid }));
   const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => { const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => (b += d)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); }).on('error', reject); r.end(body); });
   // What a browser sends for a click on a form button on the dashboard itself.
   const click = (scope = CAUSE, { proof = writeToken(root), origin = `http://127.0.0.1:${port}`, person = true } = {}) => req('POST', '/breaker-resume', {

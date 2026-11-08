@@ -11,6 +11,7 @@ import os from 'node:os';
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { atomicJson } from './core.mjs';
+import { makeJobTmp, removeJobTmp, jobTmpRoot, hostPressure, pressureText, leakText } from './jobtmp.mjs';
 import { readRearm, rearmUpgradeState } from './robust.mjs';
 import { withTestSlot, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { checksState, agentOfBranch, DRAIN_DEFAULT_MINUTES, MIN_INSTALL_GAP_DEFAULT_MINUTES } from './team.mjs';
@@ -682,8 +683,8 @@ export class SelfUpgrade {
 }
 
 // ---- real dependencies (used by the CLI only)
-const defaultRun = (cmd, args, { cwd, timeoutMs = 120000, input } = {}) => {
-  const r = spawnSync(cmd, args, { cwd, input, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C' } });
+const defaultRun = (cmd, args, { cwd, timeoutMs = 120000, input, env } = {}) => {
+  const r = spawnSync(cmd, args, { cwd, input, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C', ...(env?.TMPDIR ? { TMPDIR: env.TMPDIR } : {}) } });
   return { status: r.status ?? (r.error ? 127 : 1), stdout: r.stdout || '', stderr: r.stderr || '' };
 };
 const tail = r => String(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' | ').slice(0, 200);
@@ -703,7 +704,13 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
   const remoteUrl = () => git('remote', 'get-url', 'origin');
   // The bootstrap installer is taken from the installed commit, not the target: it is the one file a range may not change.
   const bootstrap = (mode, sha, timeoutMs, scriptFrom = null) => {
-    const dir = scratch();
+    // Issue #1007: the run's scratch space is a folder on the cache drive (TMPDIR), removed afterwards; with no space the reason says so,
+    // and a passing test run that left files in that TMPDIR fails the check.
+    const tmp = makeJobTmp(root, `install-${short(sha)}-${process.pid}-${Date.now()}`);
+    const pressure = hostPressure({ dirs: [os.tmpdir(), jobTmpRoot(root)] });
+    if (pressure.hold && !tmp) return { ok: false, environmental: true, reason: `no space: ${pressureText(pressure)}`.slice(0, 400) };
+    const dir = tmp ? fs.mkdtempSync(path.join(tmp, 'self-upgrade-')) : scratch();
+    const runEnv = tmp ? { TMPDIR: tmp } : undefined;
     try {
       const from = installedSha(root);
       if (!from) return { ok: false, reason: 'no installed version to take the bootstrap installer from' };
@@ -711,8 +718,13 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
       // Issue #446: the hand route takes the installer from the target itself (the reviewed commit that changed it).
       if (scriptFrom) git('fetch', '--quiet', 'origin');
       fs.writeFileSync(script, git('show', `${scriptFrom || from}:tools/bootstrap-install.sh`), { mode: 0o700 });
-      const r = run('bash', [script, mode, remoteUrl(), sha], { timeoutMs });
-      if (r.status === 0) return { ok: true };
+      const r = run('bash', [script, mode, remoteUrl(), sha], { timeoutMs, ...(runEnv ? { env: runEnv } : {}) });
+      if (r.status === 0) {
+        // Only the pre-swap check judges leftovers: in install mode exit 0 means the new version is already swapped in, so the install stands.
+        const left = tmp && mode === 'check' ? fs.readdirSync(tmp).filter(n => path.join(tmp, n) !== dir) : [];
+        return left.length ? { ok: false, blocked: true, reason: leakText(left).replace('test run', 'install check') } : { ok: true };
+      }
+      if (/ENOSPC|No space left/i.test(`${r.stderr || ''}${r.stdout || ''}`)) return { ok: false, environmental: true, reason: `no space left on the device: ${pressureText(pressure)}`.slice(0, 400) };
       const failure = r.status === BOOTSTRAP_EXIT.checks ? parseTestFailure(r.stderr) : null;
       const reason = failure?.tests.length ? `tests failed: ${testsOf(failure)}`.slice(0, 400) : tail(r);
       if (r.status === BOOTSTRAP_EXIT.transient) return { ok: false, environmental: true, reason };
@@ -720,7 +732,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
       const blocked = r.status === BOOTSTRAP_EXIT.checks || r.status === BOOTSTRAP_EXIT.payload;
       return { ok: false, ...(blocked ? { blocked: true } : {}), ...(failure ? failure : {}), reason: r.status === BOOTSTRAP_EXIT.payload ? `refused: ${reason}` : reason };
     } catch (error) { return { ok: false, environmental: true, reason: String(error?.message || error).slice(0, 160) }; }
-    finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    finally { if (tmp) removeJobTmp(tmp); else fs.rmSync(dir, { recursive: true, force: true }); }
   };
   const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'self-upgrade-'));
   // A slot directory that cannot be made (unwritable state root) is an environmental failure, never a thrown error or a bypass of the limit.

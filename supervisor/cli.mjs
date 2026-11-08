@@ -14,6 +14,7 @@ import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, Wo
 import { runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
+import { guardTmp, leakText } from './jobtmp.mjs';
 import { withTestConcurrency, testEnv, sweepTestTemp, suiteKey, findPass, recordPass, DEFAULT_REUSE_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_SWEEP_AGE_HOURS } from './testenv.mjs';
 import { admit, checkClass, runLimited, cgroupWrapper } from './resources.mjs';
 import { acquireTestSlot, recordTestEvent, testSlotStatus, testSlotLine, DEFAULT_TEST_SLOTS, DEFAULT_MAX_RUNTIME_MS, runInGroup, formatRuntime } from './testslots.mjs';
@@ -25,11 +26,13 @@ import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
 import { advanceWatchlist, factsFromCache } from './watchlist.mjs';
-import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
+import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, addPassPhases, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
 import { idleReport, renderIdleReport, passStats, renderPassStats } from './idlecause.mjs';
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
 import { readIncidents } from './migrations.mjs';
 import { ghRunner } from './github.mjs';
+import { updateIndex } from './issueindex.mjs';
+import { isStatusIssue } from './statusissue.mjs';
 import { redact } from './redact.mjs';
 import { saveWork } from './savework.mjs';
 import { hasProbe, refreshProvider } from './probe.mjs';
@@ -39,7 +42,7 @@ import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
-import { requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
+import { dirLock, requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -292,19 +295,25 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
         mode = check.replay ? 'replay' : check.baseline ? 'record' : 'memo';
       } else mode = 'memo';
     }
+    const phasesBefore = { 'change check': check ? Date.now() - checkedAt : 0 };
     const wrapGh = raw => (mode === 'plain' ? raw : (wrapper ||= cachedGithub(raw, { mode, cache: prevCache })).gh);
     try {
+      const setupSince = Date.now();
       let team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
       // Issue #110: refresh the allowance of a held agent whose reading is stale (or whose reset time has just passed) before
       // planning, so a fresh reading can release the reviews-only latch in this very tick. A dry run or a hold never spends a run.
       if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
+      phasesBefore['team setup'] = Date.now() - setupSince;
       const report = await team.tick({ dryRun, hold, replay: mode === 'replay', beforeChain: () => wrapper?.endReplay() });
       if (!dryRun) {
-        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}), noop: report.noop === true, ghCalls: ghStats.calls, ghMs: ghStats.ms, ...(check ? { check: { result: check.replay ? 'unchanged' : 'full', reason: check.reason, probes: check.probes, served: wrapper?.stats.served ?? 0 } } : {}) });
+        record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}), noop: report.noop === true, durationMs: Date.now() - tickStartedAt, phases: report.phases ? { ...report.phases, ...phasesBefore, total: (report.phases.total || 0) + (phasesBefore['change check'] || 0) + (phasesBefore['team setup'] || 0) } : null, ghCalls: ghStats.calls, ghMs: ghStats.ms, ...(check ? { check: { result: check.replay ? 'unchanged' : 'full', reason: check.reason, probes: check.probes, served: wrapper?.stats.served ?? 0 } } : {}) });
+        // Issue #951: bounded incremental refresh of the searchable issue and PR index (one gh call per kind). Best effort; skipped on a pass GitHub proved unchanged once caught up.
+        updateIndex(root, { run: ghRunner(), repository: config.repository, idle: mode === 'replay', isStatusIssue });
         // The baseline is stored only after a full pass that read everything without error, and never after a replay (so the forced-full clock keeps running).
         if (mode === 'record' && tickOutcome(report).status === 'ok') { try { const next = buildCache({ repository: config.repository, baseline: check.baseline, wrapper, now: checkedAt }); if (next) saveCache(root, next); } catch { /* the next pass is a full one */ } }
         // Issue #358: publish live state to the pinned status issue; never throws, never fails the tick.
         // Issue #430: advance the watched changes (merge commit, install, alerts, clearing). Never throws, never fails the tick.
+        const reportsStart = Date.now();
         try {
           const cache = readCache(root) || {}, state = readTeamState(root), ver = readVersion(root), now = Date.now();
           await advanceWatchlist({ root, cache, state, now, installed: ver?.installed || null, running: runningSha(self), tickOk: tickOutcome(report).status === 'ok',
@@ -312,6 +321,7 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
             factsFor: factsFromCache({ cache, state, now, checksOf: (pull, at) => checksState(pull.statusCheckRollup, retriedIn(state.cancelWatch, pull, at)) }), title: n => `#${n}` });
         } catch (error) { console.error(`ai-supervisor: watchlist step failed: ${error?.name || 'Error'}`); }
         await publishStatusIssue({ root, gh: team.gh, status: () => currentStatusFor(root, config) });
+        addPassPhases(root, { reports: Date.now() - reportsStart });
       }
       return report;
     } catch (error) {
@@ -378,7 +388,7 @@ async function main() {
   const registry = path.resolve(a.registry || defaultRegistry);
   registryOption = a.registry ? registry : null;   // only an operator-given registry is passed on (issue #406)
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
     return;
   }
   // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
@@ -436,6 +446,21 @@ async function main() {
     }
     return;
   }
+  // Issue #882: where hand-run sessions leave reports for the overseer (read by foreman_reports). Exit 3 with a plain reason when it cannot be used.
+  if (command === 'reports-dir' || command === 'report-save') {
+    const { reportsDir, saveReport, readReportInput, checkReportName } = await import('./reportsave.mjs');   // loaded here only: it shares the reader's rules from ../foreman-mcp, which other copies of supervisor/ (tests) lack
+    try {
+      const cfg = (() => { try { return loadTeamConfig(teamConfigFile, root); } catch { return {}; } })();
+      if (command === 'report-save') checkReportName(a._[0]);
+      const dir = reportsDir({ configured: cfg.reports_dir });
+      if (command === 'reports-dir') { console.log(dir); return; }
+      console.log(saveReport(dir, a._[0], readReportInput(a._[1])));
+    } catch (error) {
+      if (!(error instanceof SupervisorError)) throw error;
+      console.error(`${command}: ${error.message}`); process.exitCode = 3;
+    }
+    return;
+  }
   // Issue #448: the cron script calls this when it cannot start a run, so a skipped tick always leaves a record with its reason.
   if (command === 'record-skip') {
     if (!a.reason) throw new SupervisorError('usage: record-skip --reason TEXT');
@@ -476,23 +501,27 @@ async function main() {
     const release = await acquireTestSlot(root, { limit, label: a.label || cmd.join(' ') });
     if (!release) { console.error('waited too long for a free test slot'); recordTestEvent(root, { kind: 'refused', label: a.label || cmd.join(' '), reason: 'waited too long for a free test slot' }); process.exitCode = 3; return; }
     const id = `${Date.now()}-${process.pid}`;
+    // Issue #1007: the suite runs with a fresh TMPDIR; anything left in it after a passing run turns the result into a failure.
+    const guard = guardTmp(testEnv(process.env, cfg.test_tmp_root));
+    const leakCheck = code => { const left = guard.finish(); if (code === 0 && left.length) { console.error(`test-slot: ${leakText(left)}`); recordTestEvent(root, { kind: 'leak', label: a.label || cmd.join(' '), reason: leakText(left).slice(0, 300) }); return 1; } return code; };
     if (grant.limits) {
       // A memory-limited job runs through the resource runner (own group, cgroup wrapper, memory watchdog).
-      const { code, kill } = await runLimited(cmd, { env: testEnv(process.env, cfg.test_tmp_root), limits: grant.limits, klass, id, wrapper: cgroupWrapper(grant, id, { available: fs.existsSync('/run/systemd/system') }) });
+      const { code, kill } = await runLimited(cmd, { env: guard.env, limits: grant.limits, klass, id, wrapper: cgroupWrapper(grant, id, { available: fs.existsSync('/run/systemd/system') }) });
       if (kill) {
         console.error(`test-slot: ${kill.note}`); recordTestEvent(root, { kind: 'killed', label: a.label || cmd.join(' '), reason: kill.note });
         try { fs.mkdirSync(path.join(root, 'team'), { recursive: true }); fs.appendFileSync(path.join(root, 'team', 'test-job-results.jsonl'), JSON.stringify({ at: new Date().toISOString(), label: a.label || null, ...kill }) + '\n'); } catch { /* the stderr line above is the record */ }
       }
-      release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
+      const final = leakCheck(code);
+      release(); if (final === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = final; return;
     }
     // Own process group, a maximum runtime, and the whole group is stopped (TERM, then KILL) on timeout, signal or exit.
     const maxMinutes = Number(a['max-minutes']);
     const maxRuntimeMs = Number.isFinite(maxMinutes) && maxMinutes > 0 ? maxMinutes * 60000 : DEFAULT_MAX_RUNTIME_MS;
-    const run = await runInGroup(cmd, { env: testEnv(process.env, cfg.test_tmp_root), maxRuntimeMs, graceMs: Number(process.env.AI_SUPERVISOR_TEST_GRACE_MS) || 5000 });
+    const run = await runInGroup(cmd, { env: guard.env, maxRuntimeMs, graceMs: Number(process.env.AI_SUPERVISOR_TEST_GRACE_MS) || 5000 });
     if (run.timedOut) console.error(`test-slot: stopped after the maximum runtime of ${formatRuntime(maxRuntimeMs)} (process group terminated)`);
     if (run.timedOut) recordTestEvent(root, { kind: 'timeout', label: a.label || cmd.join(' '), reason: `stopped after the maximum runtime of ${formatRuntime(maxRuntimeMs)}` });
     if (run.leftover) { console.error('test-slot: WARNING processes of the test run survived SIGKILL'); recordTestEvent(root, { kind: 'orphaned', label: a.label || cmd.join(' '), reason: 'processes of the test run survived SIGKILL' }); }
-    const code = run.code;
+    const code = leakCheck(run.code);
     release(); if (code === 0 && keyBefore) recordPass(passFile, keyBefore, { label: a.label }); process.exitCode = code; return;
   }
   if (command === 'dashboard') {
@@ -535,6 +564,14 @@ async function main() {
       const config = loadTeamConfig(teamConfigFile, root);
       const status = await currentStatus({ root, config, register: readRegister(config), gh: a['no-github'] ? null : githubClient(config) });
       console.log(a.json === true ? JSON.stringify(status, null, 2) : renderStatus(status).trimEnd()); return;
+    }
+    if (a._[0] === 'start-approved') {   // issue #985: the fast lane for an approved prompt; no tick lock, no team state write
+      const config = loadTeamConfig(teamConfigFile, root);
+      if (!config.enabled || handInstallHold(root) || installRunning(root)) { console.log(JSON.stringify({ started: false, why: 'the team loop is off or an install is running' })); return; }
+      const release = dirLock(root, 'inbox-lane.lock');
+      if (!release) { console.log(JSON.stringify({ started: false, why: 'the lane is already running' })); return; }
+      try { console.log(JSON.stringify(await (await teamFor(root, registry, config)).startApprovedNow({}))); } finally { release(); }
+      return;
     }
     if (a._[0] === 'accept-split') {   // issue #244: the "Accept split" path of the Needs you item
       const n = Number(a._[1]);
@@ -628,7 +665,10 @@ async function main() {
         else { try { result = reconcileOnce(root, registry, installRunning(root)); } finally { unlockRecover(); } }
         // The upgrade check comes first (issue #134). A failure here never fails the tick.
         let before;
+        const installsStart = Date.now();   // issue #985: the install steps (before and after the team step) are one phase of the pass
+        let installsMs = 0;
         try { before = await selfUpgradeBefore(root, registry); } catch (error) { before = { error: String(error.message).slice(0, 200), hold: null }; }
+        installsMs += Date.now() - installsStart;
         // The five-minute reconcile cron also runs the token-free team tick, when the team loop is enabled.
         try {
           result.team = await teamTick(root, registry, false, before.hold, pass);
@@ -636,7 +676,10 @@ async function main() {
           if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
         } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
         // After the tick lock is released, so the new version's dry-run health check can take it (the pass lock is not taken by that check). A failure here never fails the tick.
+        const afterStart = Date.now();
         try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
+        installsMs += Date.now() - afterStart;
+        if (result.team && !result.team.skipped && !result.team.error) addPassPhases(root, { installs: installsMs });
         // Issue #406: this process ran the old code and dispatched nothing after an install; ask for a pass on the new code now. The request is
         // seen when this pass releases the pass lock, so the follow-up runs the installed code and verifies the install.
         if (before.result === 'upgraded') wakeNextJob(root, 'install');
