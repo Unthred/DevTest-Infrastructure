@@ -197,6 +197,7 @@ test('pill targets: Needs you → that item, Stuck / Tick error / Data → the t
   const l = pillLinks({ health: { state: 'idle' }, version: { installed: H(1), main: H(1) } });
   assert.deepEqual([l.tick, l.data, l.team, l.version], ['/supervisor#c-h-tick', '/supervisor#c-h-tick', '/system#c-sys', '/supervisor#c-h-version']);
 });
+// Issue #874: an ECONNRESET flake was seen once here (PR #872 review) and not reproduced (19/19 alone, full suite green). No retry added on purpose; if it returns, fix serve() with a real retry or timeout rather than adding a note.
 test('every header pill is a link, and each link lands on an element that exists on the target page, highlighted with :target', async t => {
   const s = await serve(t, { link: H(5), tick: { at: NOW - 60000, status: 'error', error: 'boom: cannot read x', lastOkAt: NOW - 7200000 } });
   const home = (await s.get('/')).body, bar = home.slice(home.indexOf('class="statusbar"'), home.indexOf('<nav class="nav"'));
