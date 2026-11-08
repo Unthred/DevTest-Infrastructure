@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { addGroup, cleanGroups, compactGroups, groupOf, overlaps, placeGroup, removeGroups, sanitizeLayout, toSaved, withoutCard } from '../supervisor/dashui/grid.mjs';
 import { addBarItem, barToSaved, moveBarItem, removeBarItem, sanitizeBar } from '../supervisor/dashui/appbar.mjs';
 import { STATIC } from '../supervisor/dashserver.mjs';
+import { busyReason } from '../supervisor/dashui/refresh.mjs';
 
 const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
 const appJs = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
@@ -106,4 +107,24 @@ test('the app bar renders named items, an Edit bar button, and the module is ser
   assert.ok(src.includes('id="barEdit"'));
   assert.match(css, /\.statusbar>\.bar-removed\{display:none!important\}/);
   assert.ok(appJs.includes("from './appbar.mjs'")); void renderPage;
+});
+
+test('compactGroups never leaves cards overlapping (reviewer reproducers and a fuzz)', () => {
+  const a = compactGroups({ d: R(4, 0, 4, 8), a: R(0, 10, 4, 4), c: R(4, 10, 4, 4), b: R(4, 14, 4, 4) }, [['a', 'b']]);
+  assert.ok(noOverlap(a));
+  const b = compactGroups({ c0: R(13, 57, 8, 8), c1: R(15, 38, 6, 11), c2: R(4, 38, 7, 10), c3: R(17, 17, 7, 5), c4: R(11, 65, 8, 7), c5: R(6, 48, 9, 9), c6: R(10, 25, 7, 13) }, [['c0', 'c1'], ['c2', 'c3', 'c4']]);
+  assert.ok(noOverlap(b));
+  let seed = 7; const rnd = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  for (let run = 0; run < 1500; run++) {
+    const raw = {}; for (let i = 0; i < 7; i++) raw['k' + i] = R(rnd(18), rnd(70), 4 + rnd(6), 3 + rnd(10));
+    const ids = Object.keys(raw), pos = sanitizeLayout({ v: 2, pos: raw }, ids, 24).pos;
+    const groups = [[ids[0], ids[1]], [ids[2], ids[3], ids[4]]];
+    assert.ok(noOverlap(compactGroups(pos, groups)), 'run ' + run);
+  }
+});
+
+test('a stats swap repaints the app bar, and bar editing holds the refresh', () => {
+  assert.match(appJs, /afterStats:[^\n]*repaintBar\?\.\(\)/);
+  assert.match(appJs, /repaintBar = paint/);
+  assert.equal(busyReason({ barEditing: true }), 'app bar editing');
 });

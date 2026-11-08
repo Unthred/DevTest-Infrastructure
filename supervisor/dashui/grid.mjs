@@ -117,15 +117,17 @@ export function placeGroup(pos, ids, dc, dr, cols) {
 // Tidy that treats each group as one block (its members keep their places relative to each other).
 export function compactGroups(pos, groups = []) {
   if (!groups.length) return compact(pos);
-  const out = copy(pos), placed = [], done = new Set();
+  const out = copy(pos), done = new Set();
   const units = Object.keys(out).sort(byReading(out)).map(id => groupOf(groups, id)?.filter(i => out[i]) || [id]);
   for (const unit of units) {
     if (done.has(unit[0])) continue;
     unit.forEach(i => done.add(i));
     const top = Math.min(...unit.map(i => out[i].y));
     let shift = 0;
-    for (let y = 0; y <= top; y++) { if (!unit.some(i => placed.some(p => overlaps({ ...out[i], y: out[i].y - top + y }, out[p])))) { shift = top - y; break; } }
-    for (const i of unit) { out[i].y -= shift; placed.push(i); }
+    // Checked against every other card, placed or not: a member must never be lifted onto a card that has not had its turn yet.
+    const others = Object.keys(out).filter(p => !unit.includes(p));
+    for (let y = 0; y <= top; y++) { if (!unit.some(i => others.some(p => overlaps({ ...out[i], y: out[i].y - top + y }, out[p])))) { shift = top - y; break; } }
+    for (const i of unit) out[i].y -= shift;
   }
   return out;
 }

@@ -23,6 +23,7 @@ export function diffRegions(prev, next) {
 export const TYPING_HOLD_MS = 8000;
 export function busyReason(s, { manual = false } = {}) {
   if (s.layoutEditing) return 'layout editing';
+  if (s.barEditing) return 'app bar editing';
   if (s.dragging) return 'dragging';
   if (s.dialogOpen) return 'dialog open';
   if (s.expanded) return 'card expanded';
@@ -202,7 +203,7 @@ export function startRefresh(env) {
   const snapshot = () => {
     const a = doc.activeElement, sel = doc.getSelection?.() || doc.defaultView?.getSelection?.();
     return {
-      layoutEditing: doc.body.classList.contains('layout-editing'), dragging: pointerDown && !!doc.querySelector('.lay-active, .dock-zones, .sb-thumb.drag'),
+      layoutEditing: doc.body.classList.contains('layout-editing'), barEditing: !!doc.querySelector('.statusbar.bar-editing'), dragging: pointerDown && !!doc.querySelector('.lay-active, .dock-zones, .sb-thumb.drag'),
       dialogOpen: !!doc.querySelector('dialog[open], .copy-manual, [role=dialog]:not([hidden])'), expanded: !!doc.querySelector('.card.expanded'),
       menuOpen: !!doc.querySelector('[aria-haspopup][aria-expanded=true]'),
       fieldFocused: !!a && a.matches?.('input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea, select, [contenteditable]'), sinceKey: lastKey == null ? null : Date.now() - lastKey,

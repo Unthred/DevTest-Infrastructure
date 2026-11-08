@@ -261,12 +261,13 @@ history.scrollRestoration = 'manual';
 // keeping scroll, open items, typed text and focus, and waits while the viewer is interacting (refresh.mjs). Without script the <noscript>
 // meta still reloads the page. It is not a <meta refresh> when script runs: a declarative refresh keeps the address the page loaded with,
 // so it would undo an in-place table change (replaceState).
+let repaintBar = null;   // set by the app bar editor below; a stats swap brings back the server's items, so the bar is painted again
 const refresher = startRefresh({
   document, baseline: serverRegions, seconds: Number($('meta[name=refresh-seconds]')?.content) || 60,
   hooks: {
     beforeSwap: () => saveLists(),   // list search, sort, scroll and open rows are written first; the swapped-in list re-reads them
     afterSwap: card => { bindCopy(card); localizeTimes(card); bindTables(card); initLegends({ document: scoped(card), store, legendKey }); },
-    afterStats: () => { localizeTimes($('.statusbar') || document); tickClock(); }
+    afterStats: () => { localizeTimes($('.statusbar') || document); tickClock(); repaintBar?.(); }
   }
 });
 // initLegends reads and creates through `document`; a swapped-in card is initialised through a view of just that card.
@@ -820,6 +821,7 @@ document.documentElement.classList.remove('tzp');   // normally already removed 
     function act(next, focusId) { state = next; save(); paint(); if (focusId) $('.bar-ctl button:not(:disabled)', itemById(focusId))?.focus({ preventScroll: true }); }
     editBtn.addEventListener('click', () => { editing = !editing; paint(); });
     addEventListener('resize', paint);
+    repaintBar = paint;
     paint();
   }
 }
@@ -831,5 +833,3 @@ try {
     history.replaceState(history.state, '', u.pathname + u.search + u.hash);
   }
 } catch { /* the notice just stays in the address bar */ }
-
-
