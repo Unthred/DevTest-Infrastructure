@@ -68,7 +68,7 @@ export function classifyFailure({ job, entry = {}, events = [], host = null, ref
   const reason = job?.incompleteReason || {};
   const text = `${reason.detail || ''} ${reason.cause || ''} ${job?.stopReason || ''} ${job?.lastError || ''}`;
   const last = String(job?.lastEvent || '');
-  const kinds = new Set([...(events || []), last]);
+  const kinds = new Set([last]);   // only the event that ended the job: earlier events (retried network errors, one-off limits) did not end it
   const out = (cause, detail) => ({ cause, detail: clip(detail, 160) });
 
   if (DISK_TEXT.test(text)) return out('environment', `disk full: ${reason.detail || text}`);

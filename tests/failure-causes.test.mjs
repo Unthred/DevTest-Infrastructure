@@ -171,3 +171,22 @@ test('team status lists the failure causes of the week', async () => {
   assert.equal(s.failCauses.week[0].cause, 'environment');
   assert.match(renderStatus(s), /Why jobs failed[\s\S]*1 job, 1200 tokens, about \$0\.5 \(issue #7\)/);
 });
+
+test('a real prerequisite stop (waiting_on) records prerequisite open; an inactivity cancel records wedged; a manual stop records nothing', async t => {
+  const w = world(t);
+  add(w, 'wait', { kind: 'implement', issue: 5 }, { id: 'wait', kind: 'implement', status: 'waiting_on', waitingOn: [4], lastEvent: 'waiting_on', usage: { inputTokens: 10, outputTokens: 5, costUsdEstimate: 0.1 } });
+  add(w, 'idle', { kind: 'review', pr: 40, head: H(1) }, job({ id: 'idle', status: 'stopped', lastEvent: 'idle_timeout', incompleteReason: undefined }));
+  add(w, 'man1', { kind: 'review', pr: 40, head: H(1) }, job({ id: 'man1', status: 'failed', lastEvent: 'manual_stop', incompleteReason: undefined }));
+  add(w, 'man2', { kind: 'review', pr: 40, head: H(1) }, job({ id: 'man2', status: 'failed', lastEvent: 'manual_stop', incompleteReason: undefined }));
+  await w.team.ingest({ ingested: [], skipped: [] });
+  const r = w.team.s.failCauses.records;
+  assert.equal(r.wait.cause, 'prerequisite_open'); assert.match(r.wait.detail, /#4/);
+  assert.equal(r.idle.cause, 'wedged'); assert.equal(r.idle.issue, null, 'a PR job carries no phantom issue number');
+  assert.equal(r.man1, undefined); assert.equal(r.man2, undefined);
+});
+
+test('an earlier recovered event does not decide the cause of a later, unrelated failure', () => {
+  const j = job({ lastEvent: 'incomplete', incompleteReason: { cause: 'postcondition_not_met', detail: 'no new head was pushed' } });
+  for (const old of ['usage_limit', 'network_error', 'checkpoint_failed', 'postcondition_exception'])
+    assert.equal(F.classifyFailure({ job: j, events: [old, 'incomplete'], host: okHost }).cause, 'unclassified', old);
+});

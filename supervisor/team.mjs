@@ -2364,20 +2364,22 @@ export class Team {
     } catch (error) { this.breakerFailed(error, report); }
   }
   // Issue #1020: a failed or blocked job (or one that left waste) gets one cause from the fixed list, a one line detail and its tokens. No model call.
-  async recordFailureCause(id, j, job, w, report, verdictRecorded = false) {
+  async recordFailureCause(id, j, job, w, report, verdictRecorded = false, forced = null) {
     const reviewDelivered = typeOfKind(j.kind || job.kind || '') === 'review' && verdictRecorded;   // a recorded verdict is the review's result, whatever else ended
-    if (!(w || (['failed', 'blocked'].includes(job.status) && !reviewDelivered))) return;
+    if (job.lastEvent === 'manual_stop') return;   // a deliberate stop is not a failure
+    const idleStop = job.status === 'stopped' && job.lastEvent === 'idle_timeout';   // the liveness cancel: the wedged cause
+    if (!forced && !idleStop && !(w || (['failed', 'blocked'].includes(job.status) && !reviewDelivered))) return;
     const fc = failcause.normalizeFailCauses(this.s.failCauses ||= {}), now = this.clock.now();
     let host = null; try { host = this.hostReader(this.root); } catch { /* the readings stay absent */ }
     let events = []; try { events = this.eventKinds(this.root, id); } catch { /* none */ }
-    const issueNo = j.issue ?? job.issue ?? null;
+    const issueNo = j.pr != null ? (j.issue ?? null) : (j.issue ?? job.issue ?? null);   // for a pull request job, job.issue is the PR number
     let issueList = this.view?.issues || this.nameView?.issues; if (!issueList && issueNo != null) { try { issueList = await this.gh.listIssues(); } catch { issueList = []; } }   // reuses the tick's issue read; lists only when none is held
     const view = new Map((issueList || []).map(i => [i.number, i]));
     const issue = issueNo != null ? view.get(issueNo) : null;
     const openPrerequisites = issue ? (this.c.depends_on_overrides?.[issueNo] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => view.get(d)?.state === 'OPEN') : [];
     const stop = failcause.stopKey(job), at = Number.isFinite(job.updatedAt) ? job.updatedAt : now;
     const repeats = failcause.repeatsOf(fc, { pr: j.pr ?? null, issue: issueNo, stop, at, id });
-    const cls = failcause.classifyFailure({ job, entry: j, events, host, refusal: j.refusal || null, repeats, fixLimitReached: j.pr != null && this.fixCount(j.pr) >= this.c.limits.max_fix_attempts, openPrerequisites });
+    const cls = forced || failcause.classifyFailure({ job, entry: j, events, host, refusal: j.refusal || null, repeats, fixLimitReached: j.pr != null && this.fixCount(j.pr) >= this.c.limits.max_fix_attempts, openPrerequisites });
     if (failcause.recordFailure(fc, failcause.failureRecord({ id, entry: { ...j, issue: issueNo }, job, cls }), now)) (report.failCauses ||= []).push({ job: id.slice(0, 8), cause: cls.cause });
     this.draftPostmortems(report);
   }
@@ -2429,6 +2431,7 @@ export class Team {
         this.s.waitingOn[j.issue] = { items, job: id, at: this.clock.now() };
         delete this.s.implemented[j.issue]; delete j.endedNoPr; j.wasteChecked = true; j.ingested = true; this.save();
         (report.waiting ||= []).push({ job: id, issue: j.issue, items });
+        try { await this.recordFailureCause(id, j, job, null, report, false, { cause: 'prerequisite_open', detail: items.length ? `stopped because ${items.map(n => `#${n}`).join(', ')} ${items.length > 1 ? 'are' : 'is'} still open` : 'stopped on an open prerequisite' }); this.save(); } catch (error) { (report.skipped ||= []).push({ what: `failure cause ${id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
         return;
       }
       // Issue #995 part 3: count the failed attempt by cause (a homeowner stop is not a failure); a completed job clears the count.
