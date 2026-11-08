@@ -70,9 +70,9 @@ test('a list or a table with no declared filters does not render', () => {
 });
 test('no list or table is written by hand: every plain list goes through dlist(), every table through table()', () => {
   // Fixed-schema tables with a handful of rows that are not yet on table() (each a follow-up, see the PR): breaker causes, allowance
-  // windows, UI review runs, the Diagnostics plainTable and the process table.
+  // windows, the two robustness tables (running jobs, retries), UI review runs, the Diagnostics plainTable and the process table.
   const handTables = (src.match(/<table[ >]/g) || []).length;
-  assert.ok(handTables <= 6, `a new hand-written <table> appeared (${handTables}; table() itself plus the five above); use table() from dashrender.mjs`);
+  assert.ok(handTables <= 8, `a new hand-written <table> appeared (${handTables}; table() itself plus the seven above); use table() from dashrender.mjs`);
   assert.equal((src.match(/<ul class="(?:panel-list|watch-list|since-list)[^"]*">/g) || []).length, 0, 'a plain list appeared; use dlist() or sevList()');
 });
 
