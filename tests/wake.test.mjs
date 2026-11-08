@@ -20,7 +20,7 @@ import * as inbox from '../supervisor/inbox.mjs';
 import { createInbox } from '../foreman-mcp/inbox.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
+const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-')); t.after(() => fs.rmSync(d, { maxRetries: 8, retryDelay: 250, recursive: true, force: true })); return d; };
 const spawner = () => { const calls = []; return { calls, spawnPass: r => calls.push(r) }; };
 const sleepMs = ms => new Promise(r => setTimeout(r, ms));
 const waitFor = async (fn, ms = 40000) => { const end = Date.now() + ms; while (!fn() && Date.now() < end) await sleepMs(150); return fn(); };
