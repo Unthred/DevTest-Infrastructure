@@ -29,7 +29,10 @@ const realVerdicts = (p, archive) => {
   const live = (Array.isArray(p.verdicts) ? p.verdicts : []).filter(v => v && typeof v === 'object');
   const carried = new Set(live.filter(v => v.carry || v.carriedFrom).map(v => v.head));
   const byHead = new Map();
-  for (const a of archive?.get(p.number) || []) if (fin(a.at) && !a.detail && !carried.has(a.head) && !byHead.has(a.head)) byHead.set(a.head, a);
+  const arch = archive?.get(p.number) || [];
+  // Entries archived before the carry marker existed: a plain entry at a head a rebase produced is that rebase's carried verdict.
+  const rebased = new Set(arch.filter(a => a.kind === 'rebase').map(a => a.head));
+  for (const a of arch) if (a.kind === 'verdict' && fin(a.at) && !a.detail && !a.carried && !rebased.has(a.head) && !carried.has(a.head) && !byHead.has(a.head)) byHead.set(a.head, a);
   const out = live.filter(v => !v.carry && !v.carriedFrom && fin(v.at) && !byHead.has(v.head));
   return [...byHead.values(), ...out].sort((a, b) => a.at - b.at);
 };
@@ -90,7 +93,7 @@ function period({ issues, prs, jobs, waste, archive }, from, to, spanMs) {
 // issues: { number, title, state, createdAt, closedAt }; prs: dashboard view PR rows; jobs: supervisor job records; wasteRecords: breaker waste entries; verdictArchive: history timeline entries (kind 'verdict').
 export function headlineStats({ issues = [], prs = [], jobs = [], wasteRecords = [], verdictArchive = [], now = Date.now() } = {}) {
   const archive = new Map();
-  for (const a of Array.isArray(verdictArchive) ? verdictArchive : []) if (a && a.kind === 'verdict' && Number.isSafeInteger(a.pr)) archive.set(a.pr, [...(archive.get(a.pr) || []), a]);
+  for (const a of Array.isArray(verdictArchive) ? verdictArchive : []) if (a && (a.kind === 'verdict' || a.kind === 'rebase') && Number.isSafeInteger(a.pr)) archive.set(a.pr, [...(archive.get(a.pr) || []), a]);
   const inputs = { issues, prs, jobs, archive, waste: wasteRecords.filter(w => w && typeof w === 'object' && fin(w.at)) };
   const openNow = issues.filter(i => i.state === 'OPEN').length;
   const closedHeld = issues.filter(i => i.state !== 'OPEN').length;

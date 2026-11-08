@@ -749,7 +749,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     return {
       ...extra,
       // Issue #866: the headline progress numbers, from the same records the rest of the view uses.
-      headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), verdictArchive: (() => { try { return readTimeline(root).filter(e => e.kind === 'verdict'); } catch { return []; } })(), now }),
+      headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), verdictArchive: (() => { try { return readTimeline(root).filter(e => e.kind === 'verdict' || e.kind === 'rebase'); } catch { return []; } })(), now }),
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),
       estimates,

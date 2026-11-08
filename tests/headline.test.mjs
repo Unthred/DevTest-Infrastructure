@@ -237,3 +237,18 @@ test('processed shows opened-in-period as a second figure on the card', async ()
   const html = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(), pathname: '/' }).html;
   assert.match(html, /2 closed of 4 in play \(2 open at the start \+ 2 opened in the period\)/);
 });
+test('a carried verdict archived then deleted at a re-review is not counted as a CHANGES', () => {
+  const pr = { number: 22, title: 'x', status: 'open', verdicts: [v('PASS', ago(1), { head: 'c'.repeat(7) })] };
+  const archive = [
+    { id: 'verdict:22:a', kind: 'verdict', pr: 22, head: 'a'.repeat(7), at: ago(3), verdict: 'CHANGES' },
+    { id: 'verdict:carried:22:b', kind: 'verdict', carried: true, pr: 22, head: 'b'.repeat(7), at: ago(2), verdict: 'CHANGES' },
+    { id: 'verdict:22:b', kind: 'verdict', pr: 22, head: 'd'.repeat(7), at: ago(2), verdict: 'CHANGES' },
+    { id: 'rebase:j', kind: 'rebase', pr: 22, head: 'd'.repeat(7), at: ago(2) }];
+  const c = headlineStats({ prs: [pr], verdictArchive: archive, now: NOW }).windows['24h'].cards;
+  assert.equal(c.rejects.changes, 1, 'only the one real CHANGES (legacy unmarked entry at a rebase head and the marked one are excluded)');
+});
+test('verdictEntry marks a carried verdict and gives it its own id', async () => {
+  const { verdictEntry } = await import('../supervisor/history.mjs');
+  const carried = verdictEntry('5:abc1234', { at: 1, verdict: 'CHANGES', carriedFrom: 'f'.repeat(40) }), real = verdictEntry('5:abc1234', { at: 2, verdict: 'CHANGES' });
+  assert.deepEqual([carried.carried, carried.id, real.carried, real.id], [true, 'verdict:carried:5:abc1234', undefined, 'verdict:5:abc1234']);
+});

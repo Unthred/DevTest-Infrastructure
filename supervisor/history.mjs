@@ -124,7 +124,8 @@ export function collectEntries({ config, root, jobs, events, state, incidents = 
 export const VERDICT_STAGES = { secondOpinion: 'second opinion', exception: 'review exception' };
 export function verdictEntry(key, v, stage) {
   const [pr, head] = String(key).split(':');
-  return v && Number.isFinite(v.at) ? { id: stage ? `verdict:${stage}:${key}` : `verdict:${key}`, ...(stage ? { detail: VERDICT_STAGES[stage] } : {}), at: v.at, kind: 'verdict', pr: Number(pr), head, verdict: v.verdict, reviewer: v.reviewer, job: v.job } : null;
+  const carried = !stage && !!(v?.carriedFrom || v?.carry); // a D-025 carried verdict is archived under its own id and marked: it is never a review and never hides a real verdict at that head
+  return v && Number.isFinite(v.at) ? { id: stage ? `verdict:${stage}:${key}` : carried ? `verdict:carried:${key}` : `verdict:${key}`, ...(stage ? { detail: VERDICT_STAGES[stage] } : {}), ...(carried ? { carried: true } : {}), at: v.at, kind: 'verdict', pr: Number(pr), head, verdict: v.verdict, reviewer: v.reviewer, job: v.job } : null;
 }
 export const mergeEntry = m => ({ id: `merge:${m.pr}`, at: m.mergedAt, kind: 'merge', pr: m.pr, issue: m.issue ?? undefined, agent: m.agent ?? undefined, reviewer: m.reviewer ?? undefined });
 
