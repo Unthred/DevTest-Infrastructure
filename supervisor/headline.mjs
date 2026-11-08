@@ -26,6 +26,9 @@ const realVerdicts = p => (Array.isArray(p.verdicts) ? p.verdicts : []).filter(v
 const reviewsOf = p => (Array.isArray(p.verdicts) ? realVerdicts(p).length : (fin(p.reviewRounds) ? p.reviewRounds : 0)) + (fin(p.secondOpinionRounds) ? p.secondOpinionRounds : 0);
 const roundsOf = p => reviewsOf(p) + (fin(p.fixRounds) ? p.fixRounds : 0) + (fin(p.rebaseRounds) ? p.rebaseRounds : 0);
 
+// Issue #963: follow-up versus batch versus other, so the card shows whether the follow-up chains stopped.
+const kinds = list => ({ followUp: list.filter(i => i.issueKind === 'follow-up').length, batch: list.filter(i => i.issueKind === 'batch').length, other: list.filter(i => i.issueKind !== 'follow-up' && i.issueKind !== 'batch').length });
+
 // One card's figures for one period [from, to].
 function period({ issues, prs, jobs, waste }, from, to, spanMs) {
   const issueMs = issues.map(i => ({ ...i, c: ms(i.createdAt), x: ms(i.closedAt) }));
@@ -47,7 +50,7 @@ function period({ issues, prs, jobs, waste }, from, to, spanMs) {
   const costKnown = merged.filter(p => fin(p.costUsd));
   const perH = n => round(n / hours, 3);
   const cards = {
-    issues: { value: opened.length - closed.length, opened: opened.length, closed: closed.length, net: opened.length - closed.length, unit: 'net issues',
+    issues: { value: opened.length - closed.length, opened: opened.length, closed: closed.length, split: { opened: kinds(opened), closed: kinds(closed) }, net: opened.length - closed.length, unit: 'net issues',
       items: cap([...opened.map(i => item('issue', i.number, i.title, i.c, 'opened')), ...closed.map(i => item('issue', i.number, i.title, i.x, 'closed'))]), count: opened.length + closed.length },
     processed: { value: total ? round(closed.length / total * 100, 1) : null, processed: closed.length, total, openAtStart, opened: opened.length, unit: '%',
       items: cap(closed.map(i => item('issue', i.number, i.title, i.x, 'closed'))), count: closed.length },

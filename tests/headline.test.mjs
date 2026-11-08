@@ -204,3 +204,17 @@ test('buildView: PRs opened comes from the cached createdAt and cost includes th
   assert.equal(w.throughput.opened, 2);   // PR 9 from createdAt, merged PR 8 from its implement job
   assert.equal(w.cost.value, 6);
 });
+
+test('issues card splits opened and closed into follow-up, batch and other (issue #963)', () => {
+  const tagged = issues.map(i => (i.number === 2 ? { ...i, issueKind: 'follow-up' } : i.number === 3 ? { ...i, issueKind: 'batch' } : i));
+  const d = headlineStats({ issues: tagged, prs, jobs, wasteRecords, now: NOW }).windows['24h'].cards.issues;
+  assert.deepEqual(d.split.opened, { followUp: 1, batch: 1, other: 0 });
+  assert.deepEqual(d.split.closed, { followUp: 0, batch: 1, other: 1 });
+  assert.equal(d.split.opened.followUp + d.split.opened.batch + d.split.opened.other, d.opened);
+});
+
+test('compactIssues records the follow-up or batch kind before the body is dropped (issue #963)', async () => {
+  const { compactIssues } = await import('../supervisor/dashdata.mjs');
+  const [a, b, c] = compactIssues([{ number: 1, title: 'x', state: 'OPEN', body: 'devtest-followup-batch' }, { number: 2, title: 'Review follow-ups for PR #5', state: 'OPEN', body: '' }, { number: 3, title: 'Plain', state: 'OPEN', body: '' }]);
+  assert.deepEqual([a.issueKind, b.issueKind, c.issueKind], ['batch', 'follow-up', undefined]);
+});

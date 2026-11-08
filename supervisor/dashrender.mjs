@@ -506,7 +506,7 @@ function watchingCard(view) {
 const pctText = n => (Number.isFinite(n) ? `${dec1(n)}%` : 'no data');
 const signed = n => (n > 0 ? `+${num(n)}` : n < 0 ? `\u2212${num(-n)}` : '0');
 const HEADLINE = {
-  issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` }),
+  issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` + (c.split ? `; opened: ${c.split.opened.followUp} follow-up, ${c.split.opened.batch} batch, ${c.split.opened.other} other; closed: ${c.split.closed.followUp} follow-up, ${c.split.closed.batch} batch, ${c.split.closed.other} other` : '') }),
   processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play` }),
   throughput: c => ({ big: Number.isFinite(c.openedPerHour) ? `${dec1(c.openedPerHour)} PRs opened/h` : 'no data', sub: `${dec1(c.mergedPerHour)} merged/h, ${dec1(c.implementedPerHour)} issues implemented/h (${c.opened} opened, ${c.merged} merged, ${c.implemented} implemented)` }),
   cost: c => ({ big: Number.isFinite(c.value) ? `$${c.value.toFixed(2)}` : 'unknown', sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),

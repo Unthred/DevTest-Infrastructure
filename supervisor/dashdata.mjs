@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
 import { checksState, retriedIn, prerequisites, pullPrerequisites, proseDependencies } from './team.mjs';
+import { isBatchIssue, isFollowUpIssue } from './followups.mjs';
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
@@ -114,6 +115,8 @@ export const compactMerged = merged => (merged || []).filter(m => Number.isSafeI
 export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, 120), state: i.state,
   // Issue #866: when the issue was opened and closed (ISO text from GitHub), for the headline progress numbers.
   ...(typeof i.createdAt === 'string' && Number.isFinite(Date.parse(i.createdAt)) ? { createdAt: i.createdAt } : {}), ...(typeof i.closedAt === 'string' && Number.isFinite(Date.parse(i.closedAt)) ? { closedAt: i.closedAt } : {}),
+  // Issue #963: follow-up, batch or other, read before the body is dropped, so the issues card can split on it.
+  ...(isBatchIssue(i) ? { issueKind: 'batch' } : isFollowUpIssue(i) ? { issueKind: 'follow-up' } : {}),
   labels: (i.labels || []).includes('needs-homeowner')
     ? ['needs-homeowner', ...(i.labels || []).filter(l => l !== 'needs-homeowner').slice(0, 9).map(l => redact(l, 40))]
     : (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
