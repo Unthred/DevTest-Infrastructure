@@ -22,7 +22,7 @@ function makeInbox(t) { const dir = tmp(t, 'inbox884-'); fs.mkdirSync(path.join(
 const drop = (dir, item) => { const id = hex(16); fs.writeFileSync(path.join(dir, 'items', `${id}.json`), JSON.stringify(item)); return id; };
 const PROMPT = (title, why) => ({ kind: 'prompt', title, prompt: `Do the thing called ${title}.`, ...(why ? { why } : {}) });
 const DRAFT = (title, body, why) => ({ kind: 'issue_draft', title, body, ...(why ? { why } : {}) });
-const ACTION = (title, target) => ({ kind: 'action', title, action: 'stop_job', target, reason: 'It is stuck.' });
+const ACTION = (title, target) => ({ kind: 'action', title, action: 'stop_job', target, reason: 'Nothing moved for a day.' });
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [10] } } };
 
@@ -85,6 +85,8 @@ test('the search text of a row is title, short id, full id, kind and why: each f
   assert.deepEqual(find('prompt job'), [ids[0]], 'kind: prompt job');
   assert.deepEqual(find('action'), [ids[2]], 'kind: action');
   assert.deepEqual(find('dead code'), [ids[1]], 'why');
+  assert.deepEqual(find('moved for a day'), [ids[2]], 'why of an action is its reason');
+  assert.match(rowOf(page, ids[2]), /Why: Nothing moved for a day/, 'the action row shows a why line');
   assert.deepEqual(find('zebra'), [], 'the body is not searched');
   assert.deepEqual(find('nothing like this'), []);
   assert.deepEqual(find('RETIRE   the'), [ids[1]], 'case and spacing do not matter');
