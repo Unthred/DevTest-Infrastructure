@@ -268,7 +268,7 @@ export const TRIPPED_BY_LABEL = {
   cost: 'cost limit',
   'any-kind-cost': 'cost of waste of any kind',
 };
-export const trippedByLabel = (v) => (Object.hasOwn(TRIPPED_BY_LABEL, v) ? TRIPPED_BY_LABEL[v] : String(v));
+export const trippedByLabel = (v) => (v == null ? '' : Object.hasOwn(TRIPPED_BY_LABEL, v) ? TRIPPED_BY_LABEL[v] : String(v));
 export const COST_LABEL = 'usage equivalent (the CLI\'s own estimate; plan usage is not a cash charge)';
 export function haltView(s, running = []) {
   normalize(s);
