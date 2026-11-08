@@ -218,3 +218,19 @@ test('compactIssues records the follow-up or batch kind before the body is dropp
   const [a, b, c] = compactIssues([{ number: 1, title: 'x', state: 'OPEN', body: 'devtest-followup-batch' }, { number: 2, title: 'Review follow-ups for PR #5', state: 'OPEN', body: '' }, { number: 3, title: 'Plain', state: 'OPEN', body: '' }]);
   assert.deepEqual([a.issueKind, b.issueKind, c.issueKind], ['batch', 'follow-up', undefined]);
 });
+
+// Issue #963: the split must survive the real buildView path (compactIssues -> dashExtras -> headlineStats), not injected rows.
+test('buildView: issues card split counts follow-up, batch and other from compactIssues (issue #963)', async () => {
+  const { buildView } = await import('../supervisor/dashboard.mjs');
+  const { validateTeamConfig } = await import('../supervisor/team.mjs');
+  const cfg = validateTeamConfig({ schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
+    limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+    agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [7] } }, board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } });
+  const at = new Date(NOW - H).toISOString();
+  const raw = [{ number: 1, title: 'Review follow-ups: area', body: '<!-- devtest-followup-batch -->', state: 'OPEN', createdAt: at, labels: [] },
+    { number: 2, title: 'x', body: '<!-- devtest-review-followup -->', state: 'OPEN', createdAt: at, labels: [] },
+    { number: 3, title: 'plain', body: 'b', state: 'OPEN', createdAt: at, labels: [] }];
+  const cache = { tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, pulls: [], issues: compactIssues(raw), merged: [] };
+  const view = await buildView({ config: cfg, root: '/nonexistent', jobs: [], events: [], state: { jobs: {} }, cache, snapshots: [], now: NOW });
+  assert.deepEqual(view.headline.windows['24h'].cards.issues.split.opened, { followUp: 1, batch: 1, other: 1 });
+});

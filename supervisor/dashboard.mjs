@@ -938,7 +938,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const issues = (cache.issues || []).slice().sort((a, b) => a.number - b.number).map(i => {
     const deps = i.prerequisites || [];
     return { number: i.number, name: redact(names.issue(i.number).text, 300), title: i.title, state: i.state, agent: agentNames.find(n => config.agents[n].issues.includes(i.number)) || null, needsHomeowner: (i.labels || []).includes('needs-homeowner'),
-      dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || excludedBy.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [],
+      dependsOn: deps, blockedBy: deps.filter(d => byNo.get(d)?.state !== 'CLOSED'), reason: queueReason.get(i.number) || excludedBy.get(i.number) || null, url: `https://github.com/${repo}/issues/${i.number}`, labels: i.labels || [], issueKind: i.issueKind,
       createdAt: Number.isFinite(Date.parse(i.createdAt)) ? Date.parse(i.createdAt) : null, closedAt: Number.isFinite(Date.parse(i.closedAt)) ? Date.parse(i.closedAt) : null };
   });
   const issueTimelines = issueTimelinesOf({ jobs, state, names, jobRows, cache });
