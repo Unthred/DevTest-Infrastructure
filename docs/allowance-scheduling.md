@@ -56,6 +56,7 @@ Fix-round re-reviews are diff-scoped (#45). When the reviewer is low (not `norma
 | `recent_hours` | `24` | readings used for the recent rate (the estimate) |
 | `recent_min_window_hours`, `recent_min_samples` | — | retired (issues #627, #680): accepted and ignored |
 | `exhausted_at` | `0.995` | a window at or above this is used up (`waiting`) |
+| `out_of_allowance.weekly_at` (in `team.json`, not `budget`) | `0.995` | weekly use at or above which a reviewer is held from reviewing; shipped equal to `exhausted_at` so a `reviews_only` agent (from 85 %) can still review until its allowance is used up (issue #1070; it was 0.95, which held a `reviews_only` Codex at 97 % from its last reviews) |
 | `probe` | `true` | allow allowance probes (below) |
 | `probe_age_hours` | `2` | a held agent whose newest reading is older than this is probed |
 | `probe_interval_minutes` | `60` | at most one probe attempt per agent in this time, successful or not |

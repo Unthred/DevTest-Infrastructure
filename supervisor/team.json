@@ -5,7 +5,7 @@
   "repo_path": "/mnt/user/projects/DevTest-Infrastructure",
   "worktree_base": "/mnt/user/projects",
   "access": { "mode": "full", "decision": "D-020" },
-  "out_of_allowance": { "weekly_at": 0.95 },
+  "out_of_allowance": { "weekly_at": 0.995 },
   "limits": { "roles": { "implementer": 1, "reviewer": 1 }, "max_review_attempts": 2, "max_fix_attempts": 2, "max_open_prs": 8, "chain_seconds": 0, "chain_passes": 3,"unblock": { "per_pr": 4, "per_day": 12, "cooldown_ms": 600000 } },
   "models": {
     "allowance_threshold": 0.8,
@@ -18,7 +18,8 @@
         "review_candidates": [{ "model": "opus", "effort": "medium" }],
         "rebase": { "model": "sonnet", "effort": "low" },
         "ci-fix": { "model": "sonnet", "effort": "medium" },
-        "low": { "model": "sonnet", "effort": "low" }
+        "low": { "model": "sonnet", "effort": "low" },
+        "split": { "model": "sonnet", "effort": "low" }
       },
       "codex": {
         "implement": { "effort": "high" },
@@ -27,26 +28,15 @@
         "review": { "effort": "low" },
         "rebase": { "effort": "low" },
         "ci-fix": { "effort": "medium" },
-        "low": { "effort": "low" }
+        "low": { "effort": "low" },
+        "split": { "effort": "low" }
       }
     }
   },
   "budget": { "enabled": true, "high_water": 0.85, "high_water_min_hours": 24, "recent_hours": 24, "exhausted_at": 0.995, "can_take_over": ["claude", "codex"] },
   "agents": {
-    "claude": { "provider": "claude", "branch_prefix": "claude/", "issues": [5, 6, 7, 10, 13, 14] },
-    "codex": { "provider": "codex", "branch_prefix": "codex/", "issues": [3, 4, 8, 9, 11, 12] }
-  },
-  "review_exception": {
-    "agent": "claude",
-    "full_review": { "model": "opus", "effort": "medium" },
-    "commit_review": { "model": "sonnet", "effort": "medium" },
-    "prs": [
-      { "pr": 137, "expires_at": "2026-11-09T00:00:00Z" },
-      { "pr": 216, "expires_at": "2026-11-09T00:00:00Z" },
-      { "pr": 217, "expires_at": "2026-11-09T00:00:00Z" },
-      { "pr": 222, "expires_at": "2026-11-09T00:00:00Z" },
-      { "pr": 234, "expires_at": "2026-11-09T00:00:00Z" }
-    ]
+    "claude": { "provider": "claude", "branch_prefix": "claude/", "issues": [] },
+    "codex": { "provider": "codex", "branch_prefix": "codex/", "issues": [] }
   },
   "depends_on_overrides": {},
   "board": {

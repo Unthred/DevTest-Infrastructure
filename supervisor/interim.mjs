@@ -8,7 +8,7 @@ const WEEK = 7 * 86400000;
 // allowance: the provider's latest recorded allowance (dashdata latestAllowance), or null.
 // jobs: supervisor job records. hadLimit(id): whether that job recorded a usage_limit event.
 // Returns { out: boolean, reason?: string, until?: epoch ms | null }.
-export function outOfAllowance({ provider, jobs = [], allowance = null, weeklyAt = 0.95, now = Date.now(), hadLimit = () => false }) {
+export function outOfAllowance({ provider, jobs = [], allowance = null, weeklyAt = 0.995, now = Date.now(), hadLimit = () => false }) {
   // Set when the provider's own record shows that every window it reported used up has since reset.
   let resetSince = null;
   if (allowance && Array.isArray(allowance.windows)) {

@@ -74,7 +74,7 @@ Cron runs the reconcile script with almost no `PATH`, so `gh`, `codex` and `clau
 
 ## Installs do not wait for running jobs (issue #845, replaces the drain of issue #136)
 
-Merged work is installed at the next tick that can install it: main is ahead, the range is eligible (D-011/D-021), and the validator and tests pass in a clean copy. Running jobs do not delay it and no slot is held back for it. The tick that installs starts no new job itself (it is the old version), asks for an immediate extra pass, and that pass runs the new code, which verifies the install and starts the next jobs.
+Merged work is installed at the next tick that can install it: main is ahead, the range is eligible (D-024), and the validator and tests pass in a clean copy. Running jobs do not delay it and no slot is held back for it. The tick that installs starts no new job itself (it is the old version), asks for an immediate extra pass, and that pass runs the new code, which verifies the install and starts the next jobs.
 
 **What a running job depends on, and why it can finish across an install.**
 - *The worker process* is started from the resolved path `versions/<sha>/supervisor/cli.mjs`. Every version is its own directory and an install only adds one and repoints `current` and the wrapper; nothing in an old directory is replaced or removed, so a running worker (and the files it loads later: `providers.json`, `access.json`, its adapters) keeps reading its own version. A worker resumed after a pause is started from whichever version resumes it.

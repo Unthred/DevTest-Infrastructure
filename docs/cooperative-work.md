@@ -9,7 +9,7 @@ How Claude, Codex and any registered provider (D-012) work in parallel without o
 - Git fixtures in tests use independent clones or `git init`, never a linked worktree.
 
 ## Dependencies
-Do not start an issue whose prerequisites are not at least *CI/review passed* (`docs/acceptance-gates.md`). The issue's **Prerequisites** line is authoritative; the project board is coordination only.
+Do not start an issue whose prerequisites are not closed (the rule the planner applies). The issue's **Prerequisites** line is authoritative; the project board is coordination only.
 
 ## Files only one branch may change at a time
 Migrations (`supervisor/migrations*`), secret handling (`broker/`, `docs/secrets.md`, key and `.env` files), the image lock (`docker/images.lock.json`), the decision register and the handover. If another open PR already changes one of these files, wait for it to merge, then rebase. The handover is edited on main only (D-023).
