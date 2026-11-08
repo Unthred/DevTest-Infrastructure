@@ -1,4 +1,5 @@
 import { tmpDir } from './helpers/tmp.mjs';
+import { removeLater } from './_tmp-leaks.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -54,6 +55,7 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
 function cronWorld(t, { nodeBody } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron35-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  removeLater(root);   // an overlapping cron run can still write its log after the test ended (issue #1007)
   const bin = path.join(root, 'fakebin'), plugin = path.join(root, 'plugin');
   fs.mkdirSync(bin); fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
   const exe = (name, body) => writeExe(path.join(bin, name), `#!/bin/sh\n${body}\n`);
