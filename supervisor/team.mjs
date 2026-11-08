@@ -2159,7 +2159,7 @@ export class Team {
   // writes the team state (a running pass holds its own copy and would overwrite it): the job record goes into the inbox item's status and
   // the next pass adopts it (processInbox). The planner's rule for the inbox lane: a free inbox slot (not the implementer slots, limits.overall or the open-PR pause), the
   // provider cap, the agent's allowance and usage limit, and the writer-model rules in modelFor. `admit` is the host-load check hook (#972):
-  // it returns { ok, why }; none is installed yet.
+  // it returns { ok, why } and runs after the stored host latch (hostRefusal) has been checked.
   async startApprovedNow(report = {}, { admit = null } = {}) {
     const dir = this.inboxDir(); if (!dir) return { started: false, why: 'no inbox configured' };
     const next = this.inboxNext(); if (!next) return { started: false, why: 'no approved prompt is waiting' };
@@ -2179,6 +2179,8 @@ export class Team {
       const live = await this.jobs.get(ad.id); if (live && !TERMINAL.has(live.status)) { inbox++; const k = `${live.provider}:inbox`; usedBy[k] = (usedBy[k] || 0) + 1; }
     }
     if (inbox >= roleCount(L, 'inbox')) return { started: false, why: 'no free inbox slot' };
+    const hostWhy = this.hostRefusal('inbox');   // issue #972: the stored host latch holds an approved prompt like any other start
+    if (hostWhy) return { started: false, why: hostWhy };
     const gate = admit ? admit() : { ok: true };
     if (!gate.ok) return { started: false, why: gate.why || 'the host is busy' };
     this.modes = this.budgets();
@@ -2771,6 +2773,7 @@ export class Team {
     const nkey = `${id}:${job.status}`;
     if (this.s.splits[j.issue]) { this.s.notified[nkey] ||= this.clock.now(); this.save(); return; }
     if (this.s.breaker.global) return;   // issue #549: the higher breaker limit stops every new job; the split draft is retried after a resume
+    if (this.hostRefusal('split')) return;   // issue #972: a split draft is a start; retried once the host recovers
     const a = this.c.agents[j.agent];
     const inUse = (job.usage?.inputTokens || 0) + (job.usage?.outputTokens || 0);
     const wasted = { tokens: inUse, cost: Number.isFinite(job.usage?.costUsdEstimate) ? job.usage.costUsdEstimate : null, attempts: job.attempts || 1 };
@@ -3278,6 +3281,7 @@ export class Team {
           this.save(); return;
         }   // notifyOne handles it as before
         if (this.limitedOf(j.agent)?.out) return;   // out of allowance: wait for the reset rather than burn the one resume
+        if (this.hostRefusal(j.kind)) return;   // issue #972: a resume is a start; wait for the host, keeping the one resume
         if (breaker.blocks(this.s.breaker, this.c.breaker, { type: j.kind, issue: j.issue ?? null })) return;   // issue #549: a halted job type does not restart either
         if (await this.providerRoleFull(job.provider ?? this.c.agents[j.agent]?.provider, roleOfType(j.kind))) return;   // issue #402: the provider's own role count is full; wait, keeping the one resume
         if (this.clock.now() - (job.updatedAt || 0) < this.unblockLimits().cooldown_ms) return;

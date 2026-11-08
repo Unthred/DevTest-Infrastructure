@@ -305,3 +305,17 @@ test('reports: through the launcher with the permission model, the configured fo
   assert.equal(r.code, 0); const replies = r.out.split('\n').filter(Boolean).map(l => JSON.parse(l));
   assert.deepEqual(JSON.parse(replies[1].result.content[0].text).reports.map(x => x.name), ['speedup.md']); assert.match(replies[2].result.content[0].text, /report body/);
 });
+
+// Issue #972: the permission model must let foreman_host read the cgroup tree, or the container breakdown silently comes back null.
+test('foreman_host through the launcher: the cgroup tree is readable under the permission model', async t => {
+  assert.match(fs.readFileSync(path.join(mcpDir, 'launcher.sh'), 'utf8'), /--allow-fs-read=\/sys\/fs\/cgroup\b/);
+  const dir = tmp(t, 'fmcp-host-'), copy = path.join(dir, 'srv'); fs.cpSync(mcpDir, copy, { recursive: true });
+  const logs = path.join(dir, 'logs'); fs.mkdirSync(logs);
+  const cfg = path.join(dir, 'config.json'); fs.writeFileSync(cfg, JSON.stringify({ viewUrl: null, logFile: path.join(logs, 'calls.log') }));
+  fs.writeFileSync(path.join(copy, 'launcher.env'), `NODE_BIN=${process.execPath}\nCONFIG_FILE=${cfg}\nLOG_DIR=${logs}\n`);
+  const input = [{ id: 1, method: 'initialize', params: { protocolVersion: SUPPORTED[0] } }, { id: 2, method: 'tools/call', params: { name: 'foreman_host', arguments: {} } }].map(o => JSON.stringify({ jsonrpc: '2.0', ...o })).join('\n') + '\n';
+  const r = await new Promise(resolve => { const c = spawn('sh', [path.join(copy, 'launcher.sh')], { env: { PATH: process.env.PATH }, stdio: ['pipe', 'pipe', 'pipe'] }); let out = ''; const timer = setTimeout(() => c.kill('SIGKILL'), 30000); c.stdout.on('data', d => { out += d; }); c.on('close', code => { clearTimeout(timer); resolve({ code, out }); }); c.stdin.end(input); });
+  const host = JSON.parse(r.out.split('\n').filter(Boolean).map(l => JSON.parse(l))[1].result.content[0].text);
+  assert.ok(host.cores >= 1);
+  if (fs.existsSync('/sys/fs/cgroup/docker')) assert.notEqual(host.containers, null, 'container memory is readable under --permission');
+});

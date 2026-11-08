@@ -18,7 +18,7 @@ export const DEFAULT_HOST_GATE = {
 const SETS = ['hold', 'resume', 'hard_hold', 'hard_resume'];
 const KEYS = ['swap_percent', 'memory_available_mb', 'load_per_core'];
 // Job types per level; anything else (a merge is not a job start) is never held.
-export const LEVEL_OF_TYPE = { implement: 'start', continue: 'start', review: 'hard', fix: 'hard', cifix: 'hard', rebase: 'hard', inbox: 'hard' };
+export const LEVEL_OF_TYPE = { implement: 'start', continue: 'start', review: 'hard', fix: 'hard', cifix: 'hard', rebase: 'hard', inbox: 'hard', split: 'hard' };
 
 export function normalizeHostGate(input) {
   if (input === undefined) return structuredClone(DEFAULT_HOST_GATE);

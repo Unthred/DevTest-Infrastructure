@@ -243,3 +243,15 @@ test('negative: the fast lane keeps the circuit breaker halt that the pass enfor
   assert.equal(out.started, false); assert.match(out.why, /circuit breaker/);
   assert.equal(w.created.length, 0); assert.equal(statusOf(w.inbox, w.id).state, 'approved');
 });
+
+test('issue #972: the fast lane starts no approved prompt while the hard host level is held, and starts it once the host recovers', async t => {
+  const { stepGate, normalizeHostGate } = await import('../supervisor/hostgate.mjs');
+  const gate = swapPercent => stepGate(undefined, { cores: 20, swapPercent, memoryAvailableMb: 20000, loadPerCore: 0.5 }, normalizeHostGate(undefined), 1000);
+  const w = laneWorld(t);
+  const team = w.mk(); team.s.hostGate = gate(99);
+  const out = await team.startApprovedNow({});
+  assert.equal(out.started, false); assert.match(out.why, /held: swap 99% ≥ 95%/);
+  assert.equal(w.created.length, 0); assert.equal(statusOf(w.inbox, w.id).state, 'approved');
+  const ok = w.mk(); ok.s.hostGate = gate(10);
+  assert.equal((await ok.startApprovedNow({})).started, true);
+});
