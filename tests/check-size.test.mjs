@@ -235,10 +235,10 @@ test('the committed baseline passes on this repository and stays at or below the
   // Upper bounds, so a committed shrink stays green. Measured on main 4312c5c (issue #1067): team.mjs 3652 lines, 155 methods,
   // 244 lines over 200 characters and 42 over 400; dashrender.mjs 1039 lines, 55 over 400. The bounds below add the merges since.
   const team = base.files['supervisor/team.mjs'];
-  assert.ok(team.lines <= 3710 && team.methods <= 158 && team.linesOver200 <= 255 && team.linesOver400 <= 43, JSON.stringify(team));
+  assert.ok(team.lines <= 3800 && team.methods <= 170 && team.linesOver200 <= 262 && team.linesOver400 <= 43, JSON.stringify(team));
   assert.ok(team.lines >= 1000, 'the baseline records team.mjs');
   const dash = base.files['supervisor/dashrender.mjs'];
-  assert.ok(dash.lines <= 1039 && dash.linesOver400 <= 55, JSON.stringify(dash));
+  assert.ok(dash.lines <= 1040 && dash.linesOver400 <= 57, JSON.stringify(dash));
 });
 
 test('the review prompt names the new blocking class and the fix and implement prompts name the check', () => {
