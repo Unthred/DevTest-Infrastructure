@@ -194,7 +194,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
     { name: 'foreman_headline', description: 'The headline progress numbers shown at the top of the dashboard, for the last 24 hours and the last 7 days, each with the previous period: issues opened vs closed (and open now), issues processed, pull requests merged per hour, first-pass review approval rate, rounds per merged pull request, tokens per merged pull request (usage equivalent, not a charge), wasted tokens with the top cause, and rejects (CHANGES verdicts and blocked jobs). Optional card (one of issues, processed, merge-rate, first-pass, rounds, tokens, waste, rejects) with window (24h or 7d) lists the items behind that number, newest first, with limit (default 25). Read-only.', inputSchema: { type: 'object', properties: { card: { type: 'string', enum: ['issues', 'processed', 'merge-rate', 'first-pass', 'rounds', 'tokens', 'waste', 'rejects'] }, window: { type: 'string', enum: ['24h', '7d'] }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
       run: args => withView(v => {
         if (!v.headline) return { available: false, note: 'This dashboard view carries no headline figures.' };
-        if (args.card === undefined) return summariseHeadline(v.headline);
+        if (args.card === undefined) return { ...summariseHeadline(v.headline), openPrsPerArea: v.areas ?? null };   // issue #1054
         const card = String(args.card), win = args.window === undefined ? '24h' : String(args.window), c = v.headline.windows[win]?.cards?.[card];
         if (!c) throw new Error('give card (issues, processed, merge-rate, first-pass, rounds, tokens, waste or rejects) and window 24h or 7d');
         const { items, ...figures } = c;

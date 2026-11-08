@@ -12,6 +12,7 @@ import { takeBreakerResumeRequests, discardBreakerResumeRequests } from './break
 import { takeHomeownerRequests, discardHomeownerRequest } from './homeownerqueue.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as robust from './robust.mjs';
+import { areaLimitOf, validateAreaLimit, areaOfPath, areaOfWork, fullAreas, holdText } from './areas.mjs';
 import * as breaker from './breaker.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
 import { validateResourceConfig } from './resources.mjs';
@@ -69,6 +70,7 @@ export function validateTeamConfig(input) {
   normalizeRoleLimits(c);
   if ('inbox_max_minutes' in L && !(Number.isFinite(L.inbox_max_minutes) && L.inbox_max_minutes >= 1 && L.inbox_max_minutes <= 720)) throw new SupervisorError('invalid team limit: inbox_max_minutes');   // issue #971
   if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
+  { const e = validateAreaLimit(L); if (e) throw new SupervisorError(e); }   // issue #1054
   validateUnblockLimits(L.unblock);
   validateSelfUpgrade(c.self_upgrade);
   try { validateChangeCheck(c.change_check); } catch (error) { throw new SupervisorError(error.message); }   // issue #755
@@ -947,12 +949,18 @@ export class Team {
   }
   // Second opinion (issue #152). Files per open PR are read once per plan; null = unreadable, which counts as touching (fail closed).
   async loadFiles(prs) {
-    this.files = new Map();
-    const so = this.c.second_opinion;
-    if (!so || !this.gh.listPullFiles) return;
-    for (const pr of prs) { try { this.files.set(pr.number, await this.gh.listPullFiles(pr.number)); } catch { this.files.set(pr.number, null); } }
+    // Issue #1054: the files also give each pull request its area and its real file set for the overlap rule, so they are read for every
+    // open PR, once per head (a new push re-reads them). null = unreadable.
+    this.files = new Map(); this.fileCache ||= new Map();
+    if (!this.gh.listPullFiles) return;
+    for (const pr of prs) {
+      const k = `${pr.number}:${pr.headRefOid}`;
+      if (!this.fileCache.has(k)) { try { this.fileCache.set(k, await this.gh.listPullFiles(pr.number)); } catch { this.fileCache.set(k, null); } }
+      this.files.set(pr.number, this.fileCache.get(k));
+    }
+    for (const k of [...this.fileCache.keys()]) if (!prs.some(pr => k === `${pr.number}:${pr.headRefOid}`)) this.fileCache.delete(k);
   }
-  touchesSecondOpinion(pr) { const f = this.files?.get(pr.number); return f === undefined ? false : f === null || touchesPaths(f, this.c.second_opinion.paths); }
+  touchesSecondOpinion(pr) { if (!this.c.second_opinion) return false; const f = this.files?.get(pr.number); return f === undefined ? false : f === null || touchesPaths(f, this.c.second_opinion.paths); }
   // The extra review that is owed for this open PR head, as { key } for the configured reviewer, or null. Allowance is not looked at
   // here: an owed review stays owed while its reviewer is out (D-024); secondOpinionDue() asks whether it can run now.
   secondOpinionOwed(agent, pr) {
@@ -1100,7 +1108,8 @@ export class Team {
     this.taken = new Set(); this.plannedUse = {}; this.gateStops = [];
     // Expected files of every running or planned implement job (issue #344): a new implement job whose expected files overlap one is refused.
     this.claimed = new Map();
-    for (const j of active) { const rec = this.s.jobs[j.id], n = rec && WRITER_KINDS.has(rec.kind) ? (rec.issue ?? issueOfBranch(rec.branch)) : null; if (n != null && issueByNo.get(n)) for (const f of this.predictFiles(issueByNo.get(n))) this.claimed.set(f, n); }
+    for (const j of active) { const rec = this.s.jobs[j.id], n = rec && WRITER_KINDS.has(rec.kind) ? (rec.issue ?? issueOfBranch(rec.branch)) : null; if (n != null && issueByNo.get(n)) this.claim(n, issueByNo.get(n), prs.find(p => p.headRefName === rec.branch) || null); }
+    this.areaMap = this.buildAreas(prs, issueByNo, active);   // issue #1054
     // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
@@ -1135,7 +1144,8 @@ export class Team {
         if (best.act.type === 'review') { this.taken.add(`review-pr:${best.act.pr}:${best.act.head}`); }
         if (best.act.issue) this.taken.add(`issue:${best.act.issue}`);
         const claimN = best.act.issue ?? (WRITER_KINDS.has(best.act.type) ? issueOfBranch(best.act.branch) : null);
-        if (claimN != null && issueByNo.get(claimN)) for (const f of this.predictFiles(issueByNo.get(claimN))) this.claimed.set(f, claimN);
+        if (claimN != null && issueByNo.get(claimN)) this.claim(claimN, issueByNo.get(claimN), prs.find(p => p.number === best.act.pr) || null);
+        if (best.act.type === 'implement' && best.act.issue != null) this.countPlannedImplement(best.act.issue, issueByNo);
       }
     }
     this.holdFullSlots(occupying, usedAtStart, totalAtStart, prs, issueByNo);
@@ -1164,17 +1174,84 @@ export class Team {
   }
   predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
   // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
-  overlapHold(agent, n, issue, type = 'implement') {
-    for (const f of this.predictFiles(issue)) {
-      const other = this.claimed?.get(f);
-      if (other !== undefined && other !== n) { this.hold(agent, type, `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
+  // Issue #1054: for an open PR its actual changed files count, for an issue not yet implemented the files its text names, and with none
+  // of those the issue's area (a claim on the whole top-level path).
+  overlapHold(agent, n, issue, type = 'implement', pr = null) {
+    for (const f of this.claimKeys(n, issue, pr)) {
+      const other = this.claimedBy(f);
+      if (other !== undefined && other !== n) { this.hold(agent, type, `issue #${n} waits: it is expected to edit ${f.replace(/^area:/, '')}${f.startsWith('area:') ? '/' : ''}, which the running or planned job for issue #${other} also edits`); return true; }
     }
     return false;
   }
+  // Issue #1054: open pull requests per area. Counted: every open PR of a configured agent (drafts too) by its area, plus a running
+  // implement job whose issue has no PR yet (it will have one). Area = the issue's area label, else the top-level path holding most of
+  // the PR's changed files, else of the files its issue names.
+  areaOfPr(pr, issueByNo) {
+    const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null, f = this.files?.get(pr.number);
+    return areaOfWork(issue?.labels, f?.length ? f : issue ? [...this.predictFiles(issue)] : []);
+  }
+  areaOfIssue(issue) { return areaOfWork(issue?.labels, [...this.predictFiles(issue)]); }
+  buildAreas(prs, issueByNo, active = []) {
+    const m = new Map(), add = (a, ref) => { if (a) (m.get(a) || m.set(a, []).get(a)).push(ref); }, withPr = new Set();
+    for (const pr of prs || []) {
+      if (!agentOfBranch(this.c, pr.headRefName)) continue;
+      const n = issueOfBranch(pr.headRefName); if (n != null) withPr.add(n);
+      add(this.areaOfPr(pr, issueByNo), `PR ${pr.number}`);
+    }
+    for (const j of active) {
+      const rec = this.s.jobs[j.id], n = rec?.kind === 'implement' ? (rec.issue ?? issueOfBranch(rec.branch)) : null;
+      if (n != null && !withPr.has(n) && issueByNo.get(n)) { withPr.add(n); add(this.areaOfIssue(issueByNo.get(n)), `issue #${n}`); }
+    }
+    return m;
+  }
+  countPlannedImplement(n, issueByNo) { const a = this.areaOfIssue(issueByNo.get(n)); if (a && this.areaMap) (this.areaMap.get(a) || this.areaMap.set(a, []).get(a)).push(`issue #${n}`); }
+  // For the dashboard and foreman_headline: the limit and the open PRs per area, fullest first.
+  areaView() {
+    const limit = areaLimitOf(this.c.limits);
+    return { limit, areas: [...(this.areaMap || [])].map(([area, refs]) => ({ area, open: refs.length, refs: refs.slice(0, 12), full: refs.length >= limit })).sort((a, b) => b.open - a.open || a.area.localeCompare(b.area)) };
+  }
+  // Issue #1054, prefer finishing over starting: true when an area is full and this agent has no ready issue in an area under the limit,
+  // so its implementer slot is better spent on review work than left idle. With a ready issue elsewhere that issue starts as usual.
+  areaCrowded(agent, prs, issueByNo, busy) {
+    const full = this.areaFull();
+    if (!full.size) return false;
+    let room = false;
+    for (const n of this.candidates(agent)) {
+      const i = this.implementable(n, prs, issueByNo, busy);
+      if (!i) continue;
+      if (full.has(this.areaOfIssue(i))) this.areaHold(agent, n, i);   // the reason is recorded even when review work takes the slot
+      else room = true;
+    }
+    return !room;
+  }
+  areaFull() { return this.areaMap ? fullAreas(this.areaMap, areaLimitOf(this.c.limits)) : new Map(); }
+  // True (with a reason for the queue and foreman_why_blocked) when the issue's area already has the limit of open PRs.
+  areaHold(agent, n, issue) {
+    const area = this.areaOfIssue(issue), refs = area ? this.areaFull().get(area) : null;
+    if (!refs) return false;
+    this.hold(agent, 'implement', `issue #${n} ${holdText(area, refs)}; finishing those comes first`);
+    return true;
+  }
+  // The claim keys of work on issue n: files (a pull request's real changed files when known), else the issue's area as "area:<name>".
+  claimKeys(n, issue, pr = null) {
+    const real = pr ? this.files?.get(pr.number) : null;
+    const files = real?.length ? real : [...this.predictFiles(issue)];
+    if (files.length) return files;
+    const area = areaOfWork(issue?.labels, []);
+    return area ? [`area:${area}`] : [];
+  }
+  // Who holds a claim that conflicts with key: the same file, the area of that file, or any file inside that area.
+  claimedBy(key) {
+    if (!this.claimed) return undefined;
+    if (this.claimed.has(key)) return this.claimed.get(key);
+    if (key.startsWith('area:')) { const a = key.slice(5); for (const [k, v] of this.claimed) if (!k.startsWith('area:') && areaOfPath(k) === a) return v; return undefined; }
+    return this.claimed.get(`area:${areaOfPath(key)}`);
+  }
+  claim(n, issue, pr = null) { for (const f of this.claimKeys(n, issue, pr)) this.claimed.set(f, n); }
   // The same refusal for a repair job (rebase, CI fix, fix, continue) on a PR: its issue's expected files must not overlap another writer's.
   repairOverlap(agent, type, pr, issueByNo) {
     const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
-    return !!issue && this.overlapHold(agent, n, issue, type);
+    return !!issue && this.overlapHold(agent, n, issue, type, pr);
   }
   // Issue #402: spare allowance of an agent, from the projection the budget already holds: the whole week (1) minus the projected weekly use
   // at the reset, unclamped. It only chooses between agents (issue #680); it never holds work back so that any difference in projection counts. An unknown reading (no usage data, a stale or reset window) scores 0: behind any reviewer that
@@ -1383,11 +1460,11 @@ export class Team {
   choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
     const L = this.c.limits;
     const paused = !!this.pauseInfo(prs, [...issueByNo.values()]);
+    const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key) || !!this.taken?.has(`${kind}:${key}`);
     // While new work is paused the implementer slot also takes reviews (review independence, D-024, is still checked below).
-    const impl = role !== 'reviewer' && role !== 'rebaser', rev = role === 'reviewer' || role === null || (role === 'implementer' && paused && !implementOnly);
+    const impl = role !== 'reviewer' && role !== 'rebaser', rev = role === 'reviewer' || role === null || (role === 'implementer' && (paused || this.areaCrowded(agent, prs, issueByNo, busy)) && !implementOnly);   // issue #1054: a crowded area also sends the implementer slot to finishing work
     const repair = impl && !implementOnly;
     const rebasing = (role === 'rebaser' || role === null) && !implementOnly;   // issue #460: only the rebaser slot (or an unscoped probe) plans a rebase
-    const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key) || !!this.taken?.has(`${kind}:${key}`);
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
     // chosen instead. The reason is kept for the dashboard and `team status`.
@@ -1509,7 +1586,7 @@ export class Team {
     if (guarding) { this.hold(agent, 'implement', guarding); return null; }
     for (const n of this.candidates(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
-      if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
+      if (!issue || this.taken?.has(`issue:${n}`) || this.areaHold(agent, n, issue) || this.overlapHold(agent, n, issue)) continue;
       if (this.limitedOf(agent).out) return null;   // an owner at its usage limit does not start its own implement job; another agent may take it over
       if (!allow('implement')) return null;
       return { type: 'implement', issue: n, title: issue.title, key: String(n) };
@@ -1525,7 +1602,7 @@ export class Team {
       if (other === agent || !ob) continue;
       for (const n of this.issuesOf(other)) {
         const issue = this.implementable(n, prs, issueByNo, busy);
-        if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
+        if (!issue || this.taken?.has(`issue:${n}`) || this.areaHold(agent, n, issue) || this.overlapHold(agent, n, issue)) continue;
         if (!allow('implement')) return null;
         return { type: 'implement', issue: n, title: issue.title, key: String(n), reassignedFrom: other, reassignReason: `reassigned for allowance: ${other} ${ob.why}` };
       }

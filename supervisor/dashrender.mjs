@@ -518,10 +518,17 @@ const HEADLINE = {
   rejects: c => ({ big: String(c.value), sub: `${c.changes} CHANGES, ${c.blocked} blocked` }),
 };
 const trendText = (c, name) => (c.direction === null ? (c.previousNote ? 'no previous period to compare' : `no previous ${name} figure`) : c.direction === 'flat' ? `unchanged from the previous ${name}` : `${c.direction} ${num(Math.abs(c.delta))} from the previous ${name}`);
+// Issue #1054: open pull requests per area against the limit (limits.max_open_prs_per_area, default 3, set in team.local.json).
+function areasCard(view) {
+  const a = view.areas;
+  if (!a) return '';
+  const rows = a.areas.length ? a.areas.map(x => `<div class="hl-row" data-area="${esc(x.area)}" data-full="${x.full}"><span class="hl-w">${esc(x.area)}</span><span class="hl-v">${x.open} of ${a.limit}</span><span class="sub">${x.full ? 'full, ' : ''}${esc(x.refs.join(', '))}</span></div>`).join('') : '<p class="sub">No open pull requests.</p>';
+  return card({ id: 'hl-areas', title: 'Open PRs per area', span: 3, cls: 'panel headline', type: 'panel', body: `${rows}<p class="sub">New work in a full area waits until one of its PRs merges or closes. Limit: ${a.limit} per area.</p>` });
+}
 function headlineCards(view) {
   const h = view.headline;
   if (!h) return '';
-  return CARD_IDS.map(id => {
+  return areasCard(view) + CARD_IDS.map(id => {
     const rows = Object.keys(WINDOWS).map(name => {
       const c = h.windows[name].cards[id], t = HEADLINE[id](c);
       return `<div class="hl-row" data-window="${esc(name)}"><span class="hl-w">${esc(name === '24h' ? 'Last 24 hours' : 'Last 7 days')}</span><a class="hl-v" href="${esc(`/headline/${id}?window=${name}`)}">${esc(t.big)}</a><span class="sub">${esc(t.sub)}</span><span class="sub hl-trend" data-dir="${esc(c.direction || '')}">${icon(c.direction === 'up' ? 'up' : c.direction === 'down' ? 'down' : 'sort')}${esc(trendText(c, name === '24h' ? '24 hours' : '7 days'))}</span></div>`;

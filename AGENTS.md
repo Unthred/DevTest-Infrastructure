@@ -30,4 +30,4 @@ node --test "tests/**/*.test.mjs"
 ```
 
 ## Map
-[`README.md`](README.md) · [`docs/cooperative-work.md`](docs/cooperative-work.md) · [`docs/architecture.md`](docs/architecture.md) · [`docs/agent-provider-contract.md`](docs/agent-provider-contract.md) · [`contracts/`](contracts/)
+[`README.md`](README.md) · [`docs/cooperative-work.md`](docs/cooperative-work.md) · [`docs/architecture.md`](docs/architecture.md) · [`docs/agent-provider-contract.md`](docs/agent-provider-contract.md) · [`docs/team-loop.md`](docs/team-loop.md) (Foreman behaviour, incl. open PRs per area and the overlap rule) · [`contracts/`](contracts/)

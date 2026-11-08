@@ -772,6 +772,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       watching: watchingView({ items: watchlist?.items || [], cache: c, state, prs: extra.prs, issues: extra.issues, jobs: extra.jobs, names, now }),
       generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
+      areas: team.areaView(),   // issue #1054
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
       budget,
       attention,
