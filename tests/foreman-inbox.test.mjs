@@ -434,6 +434,17 @@ test('team: the inbox time cap counts running time only: a usage-limit pause doe
   await at(3 * 3600000 + 9 * 60000); assert.deepEqual(stopped, [], '5 + 9 minutes of running is inside the cap');
   await at(3 * 3600000 + 12 * 60000); assert.deepEqual(stopped, [jobId], 'over 15 minutes of running time: stopped');
 });
+test('team: a job first seen paused on a usage limit does not count the pause as running time when it resumes', async t => {
+  const w = world(t, { limits: { ...LANE, inbox_max_minutes: 15 } }); approve(w, GOOD);
+  await w.team.runAction((await w.team.plan()).find(a => a.type === 'inbox'), rep());
+  const [jobId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox'); const stopped = []; let status = 'paused_limit';
+  w.jobs.stop = async x => { stopped.push(x); }; w.jobs.listActive = async () => [{ id: jobId, status, provider: 'claude' }];
+  const at = ms => { w.team.clock.now = () => rec.at + ms; return w.team.enforceInboxCap(rep()); };
+  await at(2 * 60000); await at(3 * 3600000);
+  status = 'running'; await at(3 * 3600000 + 60000); assert.deepEqual(stopped, [], 'resumed after a long first-seen pause: not stopped');
+  await at(3 * 3600000 + 14 * 60000); assert.deepEqual(stopped, [], '14 minutes of running is inside the cap');
+  await at(3 * 3600000 + 17 * 60000); assert.deepEqual(stopped, [jobId]);
+});
 test('team: a paused-on-limit inbox job holds no inbox slot, and resumes only into a free one regardless of the overall cap', () => {
   const L = { roles: { implementer: 1, reviewer: 1 }, overall: 2 }, job = { id: 'a', kind: 'inbox', provider: 'claude' };
   assert.equal(resumeDecision({ job, others: [{ id: 'b', kind: 'implement', provider: 'claude' }, { id: 'c', kind: 'review', provider: 'claude' }], limits: L }).go, true, 'overall cap full, inbox lane free');

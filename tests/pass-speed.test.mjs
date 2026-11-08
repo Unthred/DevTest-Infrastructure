@@ -149,6 +149,18 @@ test('negative: the fast lane waits only for the host check; busy implementer sl
   assert.equal(w3.created.length, 0);
 });
 
+test('negative: a second approved prompt waits while the first fast-lane job is live but not yet adopted (roles.inbox 1)', async t => {
+  const w = laneWorld(t); const live = [];
+  w.jobs.listActive = async () => live; w.jobs.get = async id => live.find(j => j.id === id) || null;
+  w.jobs.create = async spec => { w.created.push(spec); const j = { id: String(w.created.length).repeat(32), provider: 'claude', status: 'running' }; live.push(j); return j; };
+  assert.equal((await w.mk().startApprovedNow({})).started, true);
+  const id2 = 'd'.repeat(32);
+  fs.writeFileSync(path.join(w.inbox, 'items', `${id2}.json`), JSON.stringify({ kind: 'prompt', title: 'Another change', prompt: 'Edit another file as described.', why: 'test' }));
+  scan(w.inbox, 3000); assert.equal(decide(w.inbox, id2, 'approve', 4000).ok, true);
+  assert.deepEqual(await w.mk().startApprovedNow({}), { started: false, why: 'no free inbox slot' });
+  assert.equal(w.created.length, 1);
+});
+
 test('negative: a lane and a pass racing for the same approval start one job', async t => {
   const w = laneWorld(t);
   const [a, b] = await Promise.all([w.mk().startApprovedNow({}), (async () => { const x = w.mk(); return x.runAction({ type: 'inbox', agent: 'claude', key: w.id, inboxId: w.id, title: 't' }, { skipped: [] }); })()]);

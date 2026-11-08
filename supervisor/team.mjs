@@ -2083,7 +2083,7 @@ export class Team {
       const rec = this.s.jobs[j.id];
       if (!rec || rec.kind !== 'inbox' || rec.capStopped) continue;
       // Running time only: a usage-limit pause does not count, and a job that resumes counts again from the resume.
-      if (j.status === 'paused_limit') { if (rec.capSeen != null) { rec.capSeen = null; this.save(); } continue; }
+      if (j.status === 'paused_limit') { if (rec.capSeen != null || rec.capRan == null) { rec.capSeen = null; rec.capRan ??= 0; this.save(); } continue; }
       const since = rec.capSeen ?? (rec.capRan == null ? rec.at || now : now);
       rec.capRan = (rec.capRan || 0) + Math.max(0, now - since); rec.capSeen = now;
       if (rec.capRan <= cap || typeof this.jobs.stop !== 'function') { this.save(); continue; }
@@ -2129,7 +2129,8 @@ export class Team {
     // Issue #971: the planner's rule for the inbox lane: its own slot count, not the implementer slots, limits.overall or the open-PR pause.
     // A job the fast lane started during this pass is in no job record yet, only in its item's status, so it counts from there.
     const usedBy = {}; let inbox = 0; const seen = new Set(active.map(j => j.id));
-    for (const j of active) { const role = roleOfType(this.s.jobs[j.id]?.kind); if (role === 'inbox') inbox++; const k = `${j.provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    const adoptIds = new Set(inboxStore.allStatuses(dir).filter(st => st.state === 'running' && st.adopt?.id).map(st => st.adopt.id));
+    for (const j of active) { const role = this.s.jobs[j.id] ? roleOfType(this.s.jobs[j.id].kind) : adoptIds.has(j.id) ? 'inbox' : roleOfType(undefined); if (role === 'inbox') inbox++; const k = `${j.provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
     for (const st of inboxStore.allStatuses(dir)) {
       const ad = st.state === 'running' ? st.adopt : null; if (!ad?.id || seen.has(ad.id) || this.s.jobs[ad.id]) continue;
       const live = await this.jobs.get(ad.id); if (live && !TERMINAL.has(live.status)) { inbox++; const k = `${live.provider}:inbox`; usedBy[k] = (usedBy[k] || 0) + 1; }
