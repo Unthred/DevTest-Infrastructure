@@ -74,7 +74,10 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
   saveJob(root, job, clock);
   // A child that exits before reading its prompt closes the pipe; that is an exit status, not a supervisor crash.
   child.stdin.on('error', () => {});
-  child.stdin.end(prompt(job, job.attempts > 1, job.attempts > 1 && !session.resume ? sessionSeed(job) : null));
+  // Issue #1057: an adapter with `userMessage` takes the prompt as a stream-json user message and keeps stdin open, so the 80% reminder reaches the
+  // agent mid-run; stdin is closed on the final `result` line (or when the run is stopped).
+  const promptText = prompt(job, job.attempts > 1, job.attempts > 1 && !session.resume ? sessionSeed(job) : null);
+  if (typeof adapter.userMessage === 'function') child.stdin.write(adapter.userMessage(promptText)); else child.stdin.end(promptText);
   // Cap in UTF-16 code units (JS string length), not bytes: 64Ki units is 64 KiB for ASCII and more in UTF-8.
   const CAP = 65536;
   const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }; // no split multibyte characters
@@ -87,10 +90,11 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
     touch(job, clock);
     const sessionUsage = sessionFromLine(line); if (sessionUsage) recordUsage(job, sessionUsage);
     if (!turnStop) {   // issue #1057: count the turn, remind once at 80% of the kind's budget, stop at 100%
-      const verdict = recordTurn(job, turnFromLine(line, turnState), limit);
-      if (verdict === 'remind') event(root, job, `turn_reminder:${job.turns.count}/${limit}`, clock);
+      const verdict = recordTurn(job, turnFromLine(raw, turnState), limit);
+      if (verdict === 'remind') { event(root, job, `turn_reminder:${job.turns.count}/${limit}`, clock); if (typeof adapter.userMessage === 'function') { try { child.stdin.write(adapter.userMessage(`Turn budget: you have used ${job.turns.count} of ${limit} turns. Finish now: commit, push and report. Do not start new investigation.`)); } catch { /* stdin already closed */ } } }
       else if (verdict === 'stop') { turnStop = true; event(root, job, `turn_budget:${job.turns.count}/${limit}`, clock); saveJob(root, job, clock); signalChild('SIGINT'); }
     }
+    if (typeof adapter.userMessage === 'function' && /^\{"type":\s*"result"/.test(line)) child.stdin.end();
     const result = adapter.observe(line, clock.now());
     if (result.sessionId && result.sessionId !== job.sessionId && /^[a-zA-Z0-9_.:-]{1,128}$/.test(result.sessionId)) { job.sessionId = result.sessionId; saveJob(root, job, clock); }
     record(stream, line, result);

@@ -7,8 +7,9 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createJob, readJob, stateRoot } from '../supervisor/core.mjs';
 import { runProcess } from '../supervisor/process.mjs';
+import { modelUsage } from '../supervisor/dashboard.mjs';
 import * as claude from '../supervisor/adapters/claude.mjs';
-import { recordTurn, turnFromLine, turnLimit, turnsByKind, validateTurnBudget } from '../supervisor/turns.mjs';
+import { recordTurn, turnFromLine, turnLimit, turnsByKind, DEFAULT_TURN_BUDGET } from '../supervisor/turns.mjs';
 
 const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8' }).trim();
 const assistant = (id, input) => JSON.stringify({ type: 'assistant', message: { id, content: [{ type: 'text', text: 'x' }], usage: { input_tokens: 3, cache_creation_input_tokens: input, cache_read_input_tokens: 0, output_tokens: 1 } } });
@@ -19,7 +20,27 @@ test('turnFromLine counts a message id once and sums input tokens', () => {
   assert.equal(turnFromLine(assistant('m1', 100), st), null);   // same message on a second line
   assert.equal(turnFromLine('{"type":"user"}', st), null);
   assert.equal(turnFromLine('not json', st), null);
-  assert.equal(turnFromLine(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 7 } }), {}).input, 7);
+  // Codex emits one turn.completed for the whole run: it is not a turn. Each completed action item is.
+  assert.equal(turnFromLine(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 900000 } }), {}), null);
+  assert.deepEqual(turnFromLine(JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'ls' } }), {}), { turn: true, input: null });
+  assert.equal(turnFromLine(JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'x' } }), {}), null);
+  assert.equal(turnFromLine(JSON.stringify({ type: 'item.started', item: { type: 'command_execution' } }), {}), null);
+});
+
+test('a Codex stream of 60 tool calls counts 60 turns, is reminded and stopped, and has no first-turn input', () => {
+  const job = {}, st = {}, out = [];
+  const lines = Array.from({ length: 60 }, () => JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'ls' } })).concat(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 900000 } }));
+  for (const l of lines) { const v = recordTurn(job, turnFromLine(l, st), 40); if (v) out.push(v); if (v === 'stop') break; }
+  assert.deepEqual(out, ['remind', 'stop']); assert.equal(job.turns.count, 40); assert.equal(job.turns.firstTurnInput, null);
+});
+
+test('default budgets are the measured p90 per kind', () => {
+  assert.deepEqual(DEFAULT_TURN_BUDGET, { review: 29, fix: 22, cifix: 21, implement: 39, rebase: 50 });
+});
+
+test('modelUsage shows mean turns and first-turn input per job type', () => {
+  const g = modelUsage([{ kind: 'review', model: 'opus', turns: 10, firstTurnInput: 20000 }, { kind: 'review', model: 'opus', turns: 20, firstTurnInput: 24000 }, { kind: 'review', model: 'opus' }])[0];
+  assert.equal(g.jobs, 3); assert.equal(g.meanTurns, 15); assert.equal(g.meanFirstTurnInput, 22000);
 });
 
 test('recordTurn: first-turn size kept, reminder once at 80%, stop at 100%, no limit never acts', () => {
@@ -34,13 +55,11 @@ test('recordTurn: first-turn size kept, reminder once at 80%, stop at 100%, no l
   assert.equal(recordTurn(free, null, 5), null);
 });
 
-test('turnLimit: defaults per kind, override, 0 disables, unknown kind has none; validation rejects bad values', () => {
+test('turnLimit: defaults per kind, override, 0 disables, unknown kind has none', () => {
   assert.ok(turnLimit({}, 'review') > 0);
   assert.equal(turnLimit({ turn_budget: { review: 7 } }, 'review'), 7);
   assert.equal(turnLimit({ turn_budget: { review: 0 } }, 'review'), null);
   assert.equal(turnLimit({}, 'inbox'), null);
-  validateTurnBudget({ review: 5 });
-  for (const bad of [[], { review: -1 }, { review: 1.5 }, { 'Bad Key': 1 }, null]) assert.throws(() => validateTurnBudget(bad));
 });
 
 test('turnsByKind averages turns and first-turn input per kind and ignores jobs with no turns', () => {
@@ -49,7 +68,7 @@ test('turnsByKind averages turns and first-turn input per kind and ignores jobs 
   assert.equal(r.review.meanTurns, 15); assert.equal(r.review.meanFirstTurnInput, 22000); assert.equal(r.review.stopped, 1);
 });
 
-function sandbox(t, lines, kind, turnBudget) {
+function sandbox(t, lines, kind, turnBudget, extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'turn-budget-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const repo = path.join(dir, 'repo'), wt = path.join(dir, 'wt'); fs.mkdirSync(repo); git(repo, 'init', '-q', '-b', 'main');
   git(repo, 'config', 'user.email', 'a@b.invalid'); git(repo, 'config', 'user.name', 't'); fs.writeFileSync(path.join(repo, 'r'), 'x'); git(repo, 'add', 'r'); git(repo, 'commit', '-qm', 'i'); git(repo, 'worktree', 'add', '-qb', 'i1057', wt);
@@ -60,9 +79,24 @@ function sandbox(t, lines, kind, turnBudget) {
   const spec = { role: 'devtest', provider: 'codex', repository: repo, worktree: wt, issue: 1057, scope: 's', allowed_actions: ['read'], prompt: 'p', kind };
   const root = stateRoot(path.join(dir, 's'));
   const config = { turn_budget: turnBudget, manifest: { launch: { env_allowlist: ['PATH'] } } };
-  const run = async job => runProcess(root, job, config, { command: () => [process.execPath, script], observe: claude.observe, preflight: () => true }, { now: () => Date.now(), sleep: async () => {} });
+  const run = async job => runProcess(root, job, config, { command: () => [process.execPath, script], observe: claude.observe, preflight: () => true, ...extra }, { now: () => Date.now(), sleep: async () => {} });
   return { spec, registry, root, run };
 }
+test('the 80% reminder is written to the running agent over stdin, and stdin is closed on the result line', async t => {
+  const lines = Array.from({ length: 12 }, (_, i) => assistant(`m${i}`, 1000 + i));
+  const s = sandbox(t, lines, 'review', { review: 10 }, { userMessage: claude.userMessage });
+  const sink = path.join(path.dirname(s.registry), 'stdin.txt');
+  const script = path.join(path.dirname(s.registry), 'agent.mjs');
+  fs.writeFileSync(script, `import fs from 'node:fs'; process.stdin.on('data', d => fs.appendFileSync(${JSON.stringify(sink)}, d)); process.on('SIGINT', () => process.exit(130));
+let i = 0; const t = setInterval(() => { console.log(JSON.stringify({ type: 'assistant', message: { id: 'm' + i, content: [], usage: {} } })); if (++i >= 12) clearInterval(t); }, 40); setTimeout(() => {}, 20000);`);
+  const job = await createJob(s.root, s.spec, s.registry);
+  const result = await s.run(job);
+  assert.equal(result.event, 'turn_budget');
+  const got = fs.readFileSync(sink, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(got.length, 2); assert.ok(got.every(m => m.type === 'user'));
+  assert.match(got[1].message.content[0].text, /8 of 10 turns/);
+});
+
 const events = (root, id) => fs.readFileSync(path.join(root, 'events', `${id}.jsonl`), 'utf8').trim().split('\n').map(l => JSON.parse(l).kind);
 
 test('a run over its budget gets one reminder, then is stopped with cause turn_budget and the count recorded', async t => {

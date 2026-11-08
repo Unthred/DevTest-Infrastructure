@@ -114,7 +114,7 @@ test('modelUsage groups tokens per job type and model', () => {
   const rows = [{ kind: 'fix', model: 'sonnet', effort: 'medium', inTokens: 10, outTokens: 5, cost: 0.5 }, { kind: 'fix', model: 'sonnet', effort: 'medium', inTokens: 1, outTokens: 1, cost: null },
     { kind: 'implement', model: null, effort: null, inTokens: null, outTokens: null, cost: null }];
   const g = modelUsage(rows);
-  assert.deepEqual(g[0], { kind: 'fix', model: 'sonnet', effort: 'medium', jobs: 2, inTokens: 11, outTokens: 6, cost: 0.5 });
+  assert.deepEqual(g[0], { kind: 'fix', model: 'sonnet', effort: 'medium', jobs: 2, inTokens: 11, outTokens: 6, cost: 0.5, meanTurns: null, meanFirstTurnInput: null });
   assert.deepEqual([g[1].model, g[1].effort], ['CLI default', 'default']);
 });
 

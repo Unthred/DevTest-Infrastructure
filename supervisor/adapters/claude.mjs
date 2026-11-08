@@ -17,10 +17,12 @@ export function command(config, job, resume) {
   const context = base.contextForRole(job.role);
   const ruleFile = `/mnt/cache/cursor-workspace/ai-rules-live/adapters/generated/claude/${context}/CLAUDE.md`;
   const governance = fs.readFileSync(ruleFile, 'utf8');
-  const args = [...config.command, '--print', '--verbose', '--output-format', 'stream-json', ...base.accessArgs(config, job), ...base.modelArgs(config, job), '--append-system-prompt', `${governance}\nSelected role: ${job.role}. Follow its project and host safety instructions.`];
+  const args = [...config.command, '--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', ...base.accessArgs(config, job), ...base.modelArgs(config, job), '--append-system-prompt', `${governance}\nSelected role: ${job.role}. Follow its project and host safety instructions.`];
   if (resume && job.sessionId && config.manifest.capabilities.resume === 'supported') args.push('--resume', job.sessionId);
   return args;
 }
+// Issue #1057: stream-json input, so the supervisor can send the turn-budget reminder to the running agent. One user message per line.
+export const userMessage = text => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: String(text) }] } }) + '\n';
 export function observe(line) {
   let obj;
   try { obj = JSON.parse(line); } catch { obj = null; }

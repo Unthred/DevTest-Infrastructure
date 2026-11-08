@@ -1,24 +1,23 @@
 // Issue #1057: turns per job. Every turn re-reads the whole first-turn prompt and tool set, so the number of turns, not the files read,
 // drives a job's input tokens. This module counts turns from the provider stream, records the first turn's input size, and applies a
 // per-kind turn budget (a reminder at 80%, a stop at 100%). Pure functions: no model call, no network, no write.
-// A turn is one model response: a Claude assistant message id seen for the first time, or a Codex `turn.completed` line.
+// A turn is one model response: a Claude assistant message id seen for the first time. `codex exec --json` emits `turn.completed` once for the whole
+// run (measured: every one of 57 Codex transcripts has exactly one), so a Codex turn is counted per completed action item (a command, tool call,
+// file change, web search or the final message), each of which follows one model response. Codex first-turn input is not observable and stays null.
 const count = v => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
 
-// Defaults sit above the measured per-kind averages (review 16, fix 13, implement 19, rebase 25; 7 days, 8 Nov 2026) so a normal job is never cut.
-// Override per kind with `turn_budget` in team.local.json; 0 or a missing kind means no budget for that kind.
-export const DEFAULT_TURN_BUDGET = { review: 40, fix: 35, cifix: 35, implement: 60, rebase: 50 };
+// Budgets are the p90 of assistant messages per job over the 7 days to 8 Nov 2026, from the Claude transcripts (means: review 16.4, fix 13.3,
+// implement 19.4, rebase 24.2): review 29, fix 22, cifix 21, implement 39, rebase 50. A kind with no entry has no budget. Changing one is a code change.
+export const DEFAULT_TURN_BUDGET = { review: 29, fix: 22, cifix: 21, implement: 39, rebase: 50 };
 export const REMINDER_FRACTION = 0.8;
 
-export function validateTurnBudget(b) {
-  if (b === undefined) return;
-  if (!b || typeof b !== 'object' || Array.isArray(b)) throw new Error('invalid turn_budget');
-  for (const [k, v] of Object.entries(b)) if (!/^[a-z][a-z0-9_-]{0,31}$/.test(k) || !Number.isSafeInteger(v) || v < 0 || v > 1000) throw new Error(`invalid turn_budget: ${k}`);
-}
 export const turnLimit = (config, kind) => {
   const table = { ...DEFAULT_TURN_BUDGET, ...(config?.turn_budget || {}) };
   const n = table[kind];
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 };
+
+const CODEX_ACTIONS = new Set(['command_execution', 'mcp_tool_call', 'file_change', 'web_search', 'agent_message']);
 
 // Feed each stream line; returns { turn: true, firstInput } when the line starts a new turn, otherwise null.
 export function turnFromLine(line, state) {
@@ -32,7 +31,7 @@ export function turnFromLine(line, state) {
     const u = o.message.usage || {};
     return { turn: true, input: count(u.input_tokens) + count(u.cache_creation_input_tokens) + count(u.cache_read_input_tokens) };
   }
-  if (o.type === 'turn.completed') return { turn: true, input: count(o.usage?.input_tokens) };
+  if (o.type === 'item.completed' && CODEX_ACTIONS.has(o.item?.type)) return { turn: true, input: null };
   return null;
 }
 
@@ -41,7 +40,7 @@ export function recordTurn(job, hit, limit) {
   if (!hit) return null;
   const t = job.turns = job.turns && typeof job.turns === 'object' ? job.turns : { count: 0, firstTurnInput: null };
   t.count = count(t.count) + 1;
-  if (t.firstTurnInput === null || t.firstTurnInput === undefined) t.firstTurnInput = hit.input;   // the first turn of the first attempt; a resume does not overwrite it
+  if (!t.firstSeen) { t.firstSeen = true; t.firstTurnInput = Number.isFinite(hit.input) ? hit.input : null; }   // the first turn of the first attempt; a resume does not overwrite it
   if (!limit) return null;
   if (t.count >= limit) { t.stopped = true; return 'stop'; }
   if (!t.reminded && t.count >= Math.ceil(limit * REMINDER_FRACTION)) { t.reminded = true; return 'remind'; }
