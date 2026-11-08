@@ -25,6 +25,7 @@ import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
+import { recordJobErrors } from './agent-errors.mjs';
 import * as inboxStore from './inbox.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
@@ -2236,6 +2237,7 @@ export class Team {
   async ingestOne(id, j, report) {
     await this.ingestOneInner(id, j, report);
     if (j.ingested) await this.recordWaste(id, j, report);
+    if (j.ingested) await recordJobErrors({ root: this.root, jobs: this.jobs, id, entry: j, now: this.clock.now() });   // issue #1084
   }
   // Issue #549: a finished job that spent tokens and left no usable result is recorded once, with a stable cause. A failure here is
   // reported (state.breaker.error and the tick report), never swallowed: the existing halts stay in force and no new one is invented.

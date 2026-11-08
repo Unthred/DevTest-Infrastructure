@@ -14,6 +14,7 @@ import { makeNamer } from './naming.mjs';
 import { agentLine } from './agentline.mjs';
 import { testSlotStatus, DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import { readSkips, SKIP_WINDOW_MS } from './skips.mjs';
+import { agentErrorTotals } from './agent-errors.mjs';
 import { formatLocal, localStamps } from './dashui/logic.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;     // the reconcile cron runs `*/5 * * * *` (tools/install-reconcile-user-script.sh)
@@ -135,7 +136,8 @@ export async function buildStatus({ config, root, jobs, events, state, cache, sn
   let installed = null;
   try { const m = /^versions\/([0-9a-f]{40})$/.exec(fs.readlinkSync(path.join(root, 'current'))); installed = m ? m[1].slice(0, 7) : null; } catch { /* not a versioned install */ }
   const robustness = view.robustness;
-  return { robustness, testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
+  const agentErrors = agentErrorTotals(root, now);   // issue #1084
+  return { agentErrors, robustness, testRuns, needsYou: (view.panels?.needsYou || []).map(n => ({ id: n.id, text: redact(n.text, 300) })), install, installed, estimates, generatedAt: now, timeZone: tz, repository: view.repository, teamEnabled: view.teamEnabled, notes, agents, slots, next: { plan, waiting }, reviewOrder, problems, pulls, mergedToday, schedule, allowance };
 }
 
 export async function currentStatus({ root, config, gh = null, now = Date.now(), tz, register = '', registerUnreadable = !register }) {
@@ -171,6 +173,7 @@ export function renderStatus(s) {
     for (const r of s.robustness.retries) out.push(`  ${r.key}: ${r.count} attempt${r.count === 1 ? '' : 's'} with cause ${r.cause}${r.capped ? ' (stopped, in Needs you)' : ''}`);
     if (s.robustness.rearm) out.push(`  re-armed after ${s.robustness.rearm.scopes.join(', ')} cleared: ${s.robustness.rearm.items.join(', ')}`);
   }
+  if (s.agentErrors) out.push('', `In-job agent errors, last 24 hours: ${s.agentErrors.errors}, about ${s.agentErrors.tokensLost.toLocaleString('en-US')} tokens lost (${s.agentErrors.recovered} recovered)`);
   head('Problems');
   if (!s.problems.length) out.push('  none');
   for (const p of s.problems) out.push(`  - ${p.text}`);

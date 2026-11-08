@@ -20,6 +20,7 @@ import { createSampler, createJobReader } from './procsample.mjs';
 import { validateTeamConfig } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
+import { agentErrorGroups } from './agent-errors.mjs';
 import { installs, breakerHistory } from './installs.mjs';
 import { readIndex, searchIndex } from './issueindex.mjs';
 import { wasteByCause, configView, testRunsView, ticksView } from './mcpreads.mjs';
@@ -335,6 +336,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       }
       // Issue #623: two bounded, redacted, read-only records for the Foreman MCP tools (the account there cannot read the state root).
       if ((m = /^\/api\/jobs\/([a-f0-9]{32})\/outcome\.json$/.exec(path))) { const out = jobOutcome(root, m[1]); return out ? send(200, 'application/json; charset=utf-8', JSON.stringify(out)) : send(404, 'text/plain; charset=utf-8', 'not found'); }
+      if (path === '/api/agent-errors.json') { const q = new URLSearchParams(search), clean = v => (v && /^[\w.-]{1,40}$/.test(v) ? v : null); return send(200, 'application/json; charset=utf-8', JSON.stringify(agentErrorGroups(root, { now: now(), days: q.get('days'), kind: clean(q.get('kind')), agent: clean(q.get('agent')), limit: 100 }))); }   // issue #1084
       if (path === '/api/discarded.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(discarded(readTeamState(root), 200)));
       // Issue #625: install history (with the version each process runs) and the circuit breaker's trip history, for the Foreman MCP tools.
       if (path === '/api/installs.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(installs(root, { now: now() })));
