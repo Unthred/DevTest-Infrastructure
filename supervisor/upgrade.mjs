@@ -720,7 +720,8 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
       fs.writeFileSync(script, git('show', `${scriptFrom || from}:tools/bootstrap-install.sh`), { mode: 0o700 });
       const r = run('bash', [script, mode, remoteUrl(), sha], { timeoutMs, ...(runEnv ? { env: runEnv } : {}) });
       if (r.status === 0) {
-        const left = tmp ? fs.readdirSync(tmp).filter(n => path.join(tmp, n) !== dir) : [];
+        // Only the pre-swap check judges leftovers: in install mode exit 0 means the new version is already swapped in, so the install stands.
+        const left = tmp && mode === 'check' ? fs.readdirSync(tmp).filter(n => path.join(tmp, n) !== dir) : [];
         return left.length ? { ok: false, blocked: true, reason: leakText(left).replace('test run', 'install check') } : { ok: true };
       }
       if (/ENOSPC|No space left/i.test(`${r.stderr || ''}${r.stdout || ''}`)) return { ok: false, environmental: true, reason: `no space left on the device: ${pressureText(pressure)}`.slice(0, 400) };

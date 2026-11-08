@@ -415,6 +415,17 @@ test('issue #101: realDeps runs the bootstrap installer taken from the installed
   const none = realDeps({ root: path.join(r.dir, 'no-state'), config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {} });
   assert.equal((await none.preChecks(r.sha)).ok, false);
 });
+test('issue #1007: a file left in the install TMPDIR fails the pre-swap check but never an install that already swapped', async t => {
+  const r = remote(t);
+  const clone = path.join(r.dir, 'repo'); execFileSync('git', ['clone', '-q', r.origin, clone], { stdio: 'ignore' });
+  const root = path.join(r.dir, 'state'); fs.mkdirSync(path.join(root, 'versions'), { recursive: true }); fs.symlinkSync(`versions/${r.sha}`, path.join(root, 'current'));
+  const deps = realDeps({ root, config: { repo_path: clone, agents: {} }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, run: (cmd, args, o = {}) => {
+    const x = spawnSync(cmd, args, { cwd: o.cwd, encoding: 'utf8', env: { ...process.env, SWAP_MARK: r.mark } });
+    if (cmd === 'bash' && o.env?.TMPDIR) fs.writeFileSync(path.join(o.env.TMPDIR, 'stray'), 'x');
+    return { status: x.status ?? 1, stdout: x.stdout || '', stderr: x.stderr || '' }; } });
+  const pre = await deps.preChecks(r.sha); assert.equal(pre.ok, false); assert.equal(pre.blocked, true);
+  assert.deepEqual(await deps.upgrade(r.sha), { ok: true });
+});
 test('dry-run health check: only a real plan counts, not a lock skip, bad JSON or a non-zero exit', async t => {
   const mk = out => realDeps({ root: '/x', config: { repo_path: '/x' }, gh: {}, listActive: async () => [], verdictFor: () => null, sendAlert: async () => {}, wrapper: '/w', run: () => out });
   assert.equal((await mk({ status: 0, stdout: JSON.stringify({ actions: [], skipped: [] }), stderr: '' }).dryRunTick()).ok, true);
