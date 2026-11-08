@@ -98,6 +98,15 @@ Before considering work complete, verify:
 
 The reviewer must challenge architectural deterioration even when the implementation is functionally correct. New deterioration in the changed code is a blocking finding. Pre-existing debt the change did not worsen is not blocking; it is recorded for planned refactoring.
 
+## Enforcement
+
+`node tools/ci/check-size.mjs` measures every `.mjs`, `.js`, `.cjs`, `.cs` and `.razor` file outside test fixtures (function and class length, parameters and file length for JavaScript; file length and line length for every type) with a tokenising heuristic and no dependency; a file it cannot tokenise fails and is named. `tools/ci/size-baseline.json` lists every unit that was over a threshold, with its size. CI runs the check on every pull request and prints a table of unit, threshold, before and after.
+
+- A baselined unit that grows fails (for line length: the count of long lines, or their total excess, grows).
+- A unit that newly crosses a threshold fails when its file is already in the baseline as over the file threshold; in a healthy file it is a warning annotation, because thresholds are warnings and the reviewer judges.
+- A unit that shrinks passes; the check prints the smaller baseline, and committing it (`--update-baseline`) is part of the change, so the gain cannot be lost again.
+- Reviewers block on new architectural deterioration in the changed code (the ratchet is the mechanical part of that). Old debt the change did not worsen is a follow-up.
+
 ## Definition of done
 
 A change is complete only when it is functionally correct, appropriately tested, understandable and maintainable.

@@ -23,10 +23,25 @@ Resume from repository state, never from assumed chat memory.
 - **Secret-shaped test fixtures are assembled at runtime, never literal.** A fake token, key or Bearer value used by a test (for example a redaction fixture) is built from parts when the test runs, so secret scanners such as GitGuardian never flag the repository (issue #142).
 - **Do not start an issue whose prerequisites are not closed.** The issue's **Prerequisites** line is authoritative.
 
+## Coding standards (full text: docs/coding-standards.md)
+Write code another developer or agent can understand, debug, change and test. Maintainability beats the smallest diff.
+- Single responsibility per method, class, module and component. Keep presentation, business logic and infrastructure apart.
+- Decisions are pure functions of their inputs; code that touches the outside world carries them out.
+- Composition over inheritance. No speculative extensibility, one-off interfaces or generic helper dumps.
+- Warning thresholds: method 50 lines, class 400, file 500, Blazor component 250, 7 constructor dependencies, 6 parameters, line 160 characters. Do not split just to meet a number.
+- Ratchet: anything already over a threshold must not grow. Put new behaviour in a new focused unit; shrinking old code is separate, authorised work.
+- One statement per line. Long text (prompts, templates) lives in its own file, not inline.
+- Never append unrelated behaviour to a large class or module because it is convenient. Inspect the architecture first and choose the right place.
+- No unrelated refactoring or scope growth unless authorised. Structural moves are their own change with no behaviour change.
+- Comments say why, not what. Remove obsolete code and unused dependencies you introduced.
+- Before finishing: each changed unit has one clear responsibility, no new duplication, thresholds checked, tests cover the behaviour, build, tests and static analysis pass.
+- Reviewers block on new architectural deterioration in changed code, even when it works. Old debt the change did not worsen is a follow-up, not a blocker.
+
 ## Checks before you push
 ```
 node tools/validate-project.mjs
 node --test "tests/**/*.test.mjs"
+node tools/ci/check-size.mjs
 ```
 
 ## Map
