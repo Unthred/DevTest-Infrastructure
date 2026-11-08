@@ -541,3 +541,24 @@ test('paused review whose pull request head moved stops with no second run (issu
   const result = await drive(f.root, job, f.registry, clock, async () => { calls++; return { code: 1, event: 'usage_limit', resetAt: clock.now() + 900000, resetSource: 'provider_reported', verified: true }; }, 4, null, async () => ({ stale: true, reason: 'moved', release: () => { released++; } }));
   assert.equal(calls, 1); assert.equal(result.status, 'stopped'); assert.equal(result.lastEvent, 'head_moved'); assert.equal(released, 1);
 });
+
+test('an implement job that stopped on an open prerequisite ends waiting_on, whether it exits cleanly or reports a context limit (issue #1023)', async t => {
+  for (const run of [async () => ({ code: 0 }), async () => ({ code: 1, event: 'context_limit' })]) {
+    const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, postcondition: { kind: 'pr_opened', branch: 'claude/issue-9-x' } }, f.registry, clock);
+    let calls = 0;
+    const result = await drive(f.root, job, f.registry, clock, async (...a) => { calls++; return run(...a); }, 4, async j => { j.waitingOn = [979, 980]; return false; });
+    assert.equal(calls, 1, 'no retry');
+    assert.equal(result.status, 'waiting_on'); assert.equal(result.lastEvent, 'waiting_on');
+    assert.deepEqual(readJob(f.root, job.id).waitingOn, [979, 980]);
+    assert.notEqual(result.lastEvent, 'context_too_large'); assert.equal(result.incompleteReason, undefined);
+  }
+});
+
+test('without an open prerequisite the same stops stay incomplete and context_too_large (issue #1023)', async t => {
+  const f = fixture(t), clock = fakeClock(), job = await createJob(f.root, { ...f.spec, postcondition: { kind: 'pr_opened', branch: 'claude/issue-9-x' } }, f.registry, clock);
+  const big = await drive(f.root, job, f.registry, clock, async () => ({ code: 1, event: 'context_limit' }), 4, async () => false);
+  assert.equal(big.status, 'blocked'); assert.equal(big.lastEvent, 'context_too_large');
+  const g = fixture(t), job2 = await createJob(g.root, { ...g.spec, postcondition: { kind: 'pr_opened', branch: 'claude/issue-9-x' } }, g.registry, clock);
+  const inc = await drive(g.root, job2, g.registry, clock, async () => ({ code: 0 }), 4, async () => false);
+  assert.equal(inc.status, 'blocked'); assert.equal(inc.lastEvent, 'incomplete');
+});

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
-import { checksState, retriedIn, prerequisites, pullPrerequisites } from './team.mjs';
+import { checksState, retriedIn, prerequisites, pullPrerequisites, proseDependencies } from './team.mjs';
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
@@ -37,7 +37,7 @@ export function readJobs(root) {
   return out;
 }
 // The job statuses this version understands. A record with any other status was probably written by a newer version.
-export const KNOWN_STATUSES = ['queued', 'running', 'paused_limit', 'paused_manual', 'blocked', 'failed', 'completed', 'stopped'];
+export const KNOWN_STATUSES = ['queued', 'running', 'paused_limit', 'paused_manual', 'blocked', 'failed', 'completed', 'stopped', 'waiting_on'];
 // Issue #193: an unknown or unreadable record stops making an agent "Unknown" once it is this old, so one stale or legacy file in jobs/
 // cannot hold the header at "Unknown" for ever. A record with no timestamp at all never ages out (fail safe).
 export const UNKNOWN_RECORD_MAX_AGE_MS = 7 * 24 * 3600000;
@@ -116,7 +116,7 @@ export const compactIssues = issues => (issues || []).map(i => ({ number: i.numb
     ? ['needs-homeowner', ...(i.labels || []).filter(l => l !== 'needs-homeowner').slice(0, 9).map(l => redact(l, 40))]
     : (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
   // Parsed from the full title and body before the body is dropped, so the dashboard's exclusions match the tick's (issue #212).
-  prerequisites: prerequisites(i.body), pullPrerequisites: pullPrerequisites(i.title, i.body),
+  prerequisites: prerequisites(i.body), pullPrerequisites: pullPrerequisites(i.title, i.body), proseDependencies: proseDependencies(i.body),
   // Issue #414: the question the issue states for the homeowner and whether Foreman filed it, read before the body is dropped.
   ...(homeownerQuestion(i.body) ? { question: homeownerQuestion(i.body) } : {}), ...(/devtest-postmerge v1/.test(i.body || '') ? { foremanFiled: true } : {}) }));
 

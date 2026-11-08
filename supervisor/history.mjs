@@ -95,7 +95,7 @@ export function appendTimeline(root, entries) {
   return fresh.length;
 }
 
-const EVENT_KINDS = new Set(['created', 'started', 'completed', 'usage_limit', 'manual_pause', 'manual_stop', 'recovered', 'incomplete', 'retry_exhausted', 'transient_rate_limit', 'blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover', 'checkpoint_failed']);
+const EVENT_KINDS = new Set(['created', 'started', 'completed', 'usage_limit', 'manual_pause', 'manual_stop', 'recovered', 'incomplete', 'waiting_on', 'retry_exhausted', 'transient_rate_limit', 'blocked', 'crash', 'auth_error', 'approval_required', 'issue_closed', 'stale_handover', 'checkpoint_failed']);
 // Everything the live records hold now, as timeline entries. Run by every tick and by `history backfill`, so a record that later
 // expires from its source (a verdict, a capped merge log) is already kept.
 export function collectEntries({ config, root, jobs, events, state, incidents = [] }) {
@@ -177,7 +177,7 @@ export function storageReport(root, { now = Date.now(), timeline = readTimeline(
 }
 
 // ---- display: filtering, text and links. Pure; used by the dashboard and the tests.
-export const EVENT_TEXT = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', manual_stop: 'stopped by hand', checkpoint_failed: 'stopped: progress checkpoint failed', recovered: 'job recovered', incomplete: 'ended without its post-condition', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', blocked: 'blocked', crash: 'worker crashed', auth_error: 'authentication error', approval_required: 'approval required', issue_closed: 'issue closed', stale_handover: 'stale handover' };
+export const EVENT_TEXT = { created: 'job queued', started: 'job started', completed: 'job finished', usage_limit: 'paused on usage limit', manual_pause: 'paused by hand', manual_stop: 'stopped by hand', checkpoint_failed: 'stopped: progress checkpoint failed', recovered: 'job recovered', incomplete: 'ended without its post-condition', waiting_on: 'waiting on an open prerequisite', retry_exhausted: 'blocked: retries exhausted', transient_rate_limit: 'paused on transient rate limit', blocked: 'blocked', crash: 'worker crashed', auth_error: 'authentication error', approval_required: 'approval required', issue_closed: 'issue closed', stale_handover: 'stale handover' };
 export function entryText(e) {
   const ref = e.pr ? `PR #${e.pr}` : e.issue ? `issue #${e.issue}` : '';
   const who = e.agent ? `${e.agent}: ` : '';
