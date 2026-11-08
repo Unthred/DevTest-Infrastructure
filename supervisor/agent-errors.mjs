@@ -71,7 +71,11 @@ function placeholder(w) {
   return tail && tail[1].length >= 2 ? `${tail[1]}<n>` : w;
 }
 // The command a shell method runs, ignoring a leading `cd <dir> &&`.
-const headOf = method => (/^[^:]*:\s*(?:cd \S+ (?:&&|;) )*(\S+)/.exec(method) || [])[1] || '';
+// The command and its subcommand or first option (`git push`, `node --test`), so `git status` is not the answer to `git push`.
+const headOf = method => {
+  const m = /^[^:]*:\s*(?:cd \S+?\s*(?:&&|;)\s*)*(\S+)(?: (\S+))?/.exec(method) || [];
+  return m[1] ? (m[2] && !/^</.test(m[2]) ? `${m[1]} ${m[2]}` : m[1]) : '';
+};
 const SHELL_TOOLS = new Set(['Bash', 'shell']);
 
 const excerptOf = (text, secrets) => {
@@ -92,7 +96,7 @@ export function extractErrors(entries, { secrets = [] } = {}) {
   for (const e of entries) {
     if (e.kind === 'usage' && e.tokens) tokenPrefix += (e.tokens.in || 0) + (e.tokens.out || 0);
     else if (e.kind === 'tool_call') {
-      const c = { tool: String(e.tool || 'tool'), method: normalizeMethod(e.tool, e.text || e.detail || ''), seq: e.seq, at: e.at };
+      const c = { tool: String(e.tool || 'tool'), method: normalizeMethod(e.tool, e.tool === 'shell' ? (e.detail || e.text || '') : (e.text || e.detail || '')), seq: e.seq, at: e.at };
       if (e.callId) byId.set(e.callId, c); else loose.push(c);
     } else if (e.kind === 'tool_result') {
       const c = e.callId ? byId.get(e.callId) : loose.pop();
@@ -119,7 +123,7 @@ export function extractErrors(entries, { secrets = [] } = {}) {
     total++;
     if (errors.length < MAX_ERRORS_PER_JOB) errors.push({
       at: c.resultAt ?? c.at ?? null, tool: c.tool.slice(0, 40), method: c.method, type, excerpt: excerptOf(c.text, secrets), repeat,
-      recovered: !!next, recoveredBy: next && !same ? next.method : null, recoveredWithSameMethod: same,
+      recovered: !!next && !same, recoveredBy: next && !same ? next.method : null, recoveredWithSameMethod: same,
       tokensLost: end && lost > 0 ? lost : null,
     });
   });

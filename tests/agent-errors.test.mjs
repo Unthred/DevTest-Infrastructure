@@ -34,7 +34,7 @@ const STEPS = [
   { usage: 300 },
   { cmd: 'gh pr view 1013 --json state', fail: true, out: 'Exit code 1\nHTTP 401: Bad credentials' },
   { usage: 200 },
-  { cmd: 'gh api repos/o/r/pulls/1013', out: '{}' },
+  { cmd: 'gh pr view 1013 --json state,title', out: '{}' },
   { cmd: 'git status', out: 'clean' },
 ];
 
@@ -47,7 +47,7 @@ test('extraction: a failed step then the different method that worked, with type
   assert.equal(first.recovered, false, 'an unrelated later success (git status) is not a recovery'); assert.equal(first.recoveredBy, null);
   assert.match(first.excerpt, /No such file/);
   assert.ok(errors.every(e => ERROR_TYPES.includes(e.type)));
-  assert.equal(errors[1].type, 'auth'); assert.equal(errors[1].recovered, true); assert.equal(errors[1].recoveredBy, 'Bash: gh api <path>');
+  assert.equal(errors[1].type, 'auth'); assert.equal(errors[1].recovered, true); assert.equal(errors[1].recoveredBy, 'Bash: gh pr view <n> --json state,title');
   assert.equal(errors[1].recoveredWithSameMethod, false); assert.equal(errors[1].tokensLost, 500); assert.equal(errors[2].tokensLost, 200);
 });
 
@@ -55,7 +55,7 @@ test('a retry of the same method that then works is a retry, not a different met
   const e = extractErrors([
     { kind: 'tool_call', callId: 'a', tool: 'Bash', text: 'npm run build' }, { kind: 'tool_result', callId: 'a', error: true, text: 'Exit code 1\nboom' },
     { kind: 'tool_call', callId: 'b', tool: 'Bash', text: 'npm run build' }, { kind: 'tool_result', callId: 'b', text: 'ok' }]);
-  assert.equal(e[0].recovered, true); assert.equal(e[0].recoveredWithSameMethod, true); assert.equal(e[0].recoveredBy, null);
+  assert.equal(e[0].recovered, false); assert.equal(e[0].recoveredWithSameMethod, true); assert.equal(e[0].recoveredBy, null);
 });
 
 test('grouping: the same failing command on different ids gives one normalised method and the repeat is flagged', t => {
@@ -191,4 +191,33 @@ test('a resumed job is recorded again from the whole transcript; a missing trans
 test('team status line shows the count, the tokens lost and the errors with no token figure', () => {
   const out = renderStatus({ agentErrors: { errors: 4, tokensLost: 1200, tokensUnknown: 2, recovered: 1 }, problems: [], pulls: [], mergedToday: [], next: { plan: [], waiting: [] }, agents: [], slots: [], notes: [], schedule: {}, reviewOrder: [], estimates: { items: [], waits: [] }, robustness: null, needsYou: [], generatedAt: Date.now(), timeZone: 'UTC' });
   assert.match(out, /In-job agent errors, last 24 hours: 4, about 1,200 tokens lost \(2 with no token figure\) \(1 recovered\)/);
+});
+
+test('Codex long (truncated in text) commands use the full command: unrelated wrapped commands are not a recovery or one group', t => {
+  const root = tmp(t), pad = ' --flag'.repeat(40);
+  feed(root, ID, codex, [
+    ...shell('i1', `/bin/bash -lc "cd \\"/mnt/x\\" && npm run build${pad}"`, 1, 'boom'),
+    ...shell('i2', `/bin/bash -lc "cd \\"/mnt/x\\" && git log --oneline${pad}"`, 0, 'ok'),
+    ...shell('i3', `/bin/bash -lc "rm -rf nope${pad} && git push"`, 1, 'fatal')]);
+  const e = extractErrors(readTranscript(root, ID).entries);
+  assert.equal(e.length, 2);
+  assert.match(e[0].method, /npm run build/); assert.equal(e[0].recovered, false);
+  assert.notEqual(e[0].method, e[1].method);
+});
+
+test('recovery needs the same command: cd with a semicolon is skipped, git status does not answer git push, a retry is not a recovery', t => {
+  const root = tmp(t);
+  const use = (id, command) => ({ type: 'assistant', message: { id: 'm' + id, content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } });
+  const res = (id, text, err) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: text, is_error: err }] } });
+  feed(root, ID, claude, [
+    use('a', 'cd "/mnt/x"; node --test foo.test.mjs'), res('a', 'Exit code 1\nfail', true),
+    use('b', 'cd "/mnt/x"; cat README.md'), res('b', 'ok', false),
+    use('c', 'git push'), res('c', 'Exit code 1\nfatal', true),
+    use('d', 'git status'), res('d', 'clean', false),
+    use('e', 'npm run build'), res('e', 'Exit code 1\nboom', true),
+    use('f', 'npm run build'), res('f', 'ok', false)]);
+  const e = extractErrors(readTranscript(root, ID).entries);
+  assert.equal(e.length, 3);
+  assert.equal(e[0].recovered, false); assert.equal(e[1].recovered, false);
+  assert.equal(e[2].recovered, false); assert.equal(e[2].recoveredWithSameMethod, true); assert.equal(e[2].recoveredBy, null);
 });
