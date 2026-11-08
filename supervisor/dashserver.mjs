@@ -280,12 +280,12 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   // Clear latch (issue #692): removes team/self-upgrade.latch so automatic upgrades can resume, replacing the shell command. Same write protection
   // as the other posts (D-029): host, origin, the secret proof and a short cooldown. It records an audit line and changes no job or repository.
   const clearLatch = async (req, res, send) => {
-    if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');
-    if (req.headers.origin !== `http://${allowedHost}`) return send(403, 'text/plain; charset=utf-8', 'cross-origin request refused');
+    if (req.headers.host !== allowedHost) return refuseHost(req, send);
+    if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
-    for await (const c of req) { size += c.length; if (size > 1024) return send(413, 'text/plain; charset=utf-8', 'too large'); chunks.push(c); }
+    for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-    if (!proofValid(root, form.get('proof'))) return send(403, 'text/plain; charset=utf-8', 'missing or wrong access proof');
+    if (!proofValid(root, form.get('proof'))) return badProof(send);
     const t = now(), slot = reserveCooldown(root, 'clear-latch', t, CLEAR_LATCH_COOLDOWN_MS);
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=clear-latch-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
     const file = path.join(root, 'team', 'self-upgrade.latch');

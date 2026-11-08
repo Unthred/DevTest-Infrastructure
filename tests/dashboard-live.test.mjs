@@ -288,3 +288,14 @@ test('POST /clear-latch: wrong proof, foreign origin or wrong host change nothin
   s.clock.now += 6000;
   assert.equal((await post('proof=' + writeToken(s.root))).status, 409, 'nothing left to clear');
 });
+
+test('POST /clear-latch accepts a configured allowed origin like the other writes and refuses an unlisted one', async t => {
+  const PUBLIC = 'https://agents.example.test';
+  const s = await serve(t, { link: H(5), latch: { at: NOW - 1000, from: H(5), to: H(6), reason: 'x' }, dashboard: { allowed_origins: [PUBLIC] } });
+  const { writeToken } = await import('../supervisor/dashwrite.mjs');
+  const latchFile = path.join(s.root, 'team', 'self-upgrade.latch');
+  const bad = await s.post('/clear-latch', 'proof=' + writeToken(s.root), { origin: 'https://evil.example' });
+  assert.equal(bad.status, 403); assert.ok(fs.existsSync(latchFile));
+  const ok = await s.post('/clear-latch', 'proof=' + writeToken(s.root), { origin: PUBLIC });
+  assert.equal(ok.status, 303); assert.ok(!fs.existsSync(latchFile));
+});

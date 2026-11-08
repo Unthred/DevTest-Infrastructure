@@ -1070,3 +1070,8 @@ test('issue #692: a real fault anywhere in the tick, or a lasting outage, still 
   assert.equal(await o.up.verifyPending({ running: TO, ok: false, reason: GH_ERR, reasons: [GH_ERR] }), 'rolled-back');
   assert.ok(o.up.latch());
 });
+
+test('issue #692: git stderr connection text from a real fetch message classifies as transient', () => {
+  assert.ok(isGithubConnectionError("git fetch failed: fatal: unable to access 'https://github.com/o/r.git/': Failed to connect to github.com port 443 after 10 ms: Couldn't connect to server"));
+  assert.ok(!isGithubConnectionError('git fetch failed'));
+});

@@ -144,7 +144,7 @@ function realJobs(root, registry) {
   };
 }
 function realGit(repoPath) {
-  const git = (...args) => { const r = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', timeout: 60000 }); if (r.status !== 0) throw new SupervisorError(`git ${args[0]} failed`); return r.stdout.trim(); };
+  const git = (...args) => { const r = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', timeout: 60000 }); if (r.status !== 0) { const detail = String(r.stderr || '').split('\n').map(l => l.trim()).find(l => l) || ''; throw new SupervisorError(`git ${args[0]} failed${detail ? `: ${detail.replace(/\/\/[^/@\s]*@/g, '//').slice(0, 300)}` : ''}`); } return r.stdout.trim(); };
   return {
     // range-diff equality (issue #79); refs are fetched first so both heads and the base are present
     rangeEqual: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return rangeEqual({ repoPath, base, oldHead, newHead }); },
