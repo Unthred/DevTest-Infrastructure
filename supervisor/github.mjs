@@ -88,17 +88,20 @@ export function githubClient(config, gh = ghRunner()) {
     removeLabel: async (n, label) => { gh(['issue', 'edit', String(n), '--repo', repo, '--remove-label', label]); },
     rerunRun: async runId => { if (!/^\d+$/.test(String(runId))) throw new SupervisorError('invalid run id'); gh(['run', 'rerun', String(runId), '--repo', repo], undefined, { retry: false }); },
     merge: async (n, head) => { gh(['pr', 'merge', String(n), '--repo', repo, '--merge', '--match-head-commit', head]); },
-    // Issue #881: issue -> project item id is cached, and the board is listed only on a miss. A rate-limit failure carries the reset time
+    // Issue #881: issue -> project item id is cached, and a miss looks up that one issue's item directly. A rate-limit failure carries the reset time
     // (`error.rateLimitedUntil`, ms) so the caller can pause board updates until then; any other failure is a plain error.
     board: async (issue, status) => {
       const b = config.board; if (!b || !b.options?.[status]) return;
       try {
         let id = boardItems.get(issue);
         if (!id) {
-          const items = json(['project', 'item-list', String(b.number), '--owner', b.owner, '--format', 'json', '--limit', '200']);
-          for (const i of items?.items || []) if (Number.isSafeInteger(i.content?.number) && i.id) boardItems.set(i.content.number, i.id);
-          id = boardItems.get(issue);
-          if (!id) return;
+          // A direct lookup of this one issue's project item: no whole-board listing, so no 200-item cap on a large board.
+          const [owner, name] = repo.split('/');
+          const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){projectItems(first:50){nodes{id project{id}}}}}}';
+          const found = json(['api', 'graphql', '-f', `query=${q}`, '-F', `o=${owner}`, '-F', `r=${name}`, '-F', `n=${issue}`]);
+          id = (found?.data?.repository?.issue?.projectItems?.nodes || []).find(n => n?.project?.id === b.project_id)?.id;
+          if (!id) throw new SupervisorError(`issue #${issue} was not found on the project board`);   // a warning and a retry, never a silent success
+          boardItems.set(issue, id);
         }
         try { gh(['project', 'item-edit', '--id', id, '--project-id', b.project_id, '--field-id', b.status_field_id, '--single-select-option-id', b.options[status]]); }
         catch (error) { if (!isRateLimit(error.message)) boardItems.delete(issue); throw error; }   // a stale id is looked up again next time

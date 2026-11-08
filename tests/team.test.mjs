@@ -596,13 +596,12 @@ test('D-020 parity: shipped manifests give the same effective access as the inte
 
 test('GitHub client: gh with argument arrays only, merge pins the head, board and label calls', async () => {
   const seen = [];
-  const gh = ghRunner((args, input) => { seen.push({ args, input }); return { status: 0, stdout: args[0] === 'project' && args[1] === 'item-list' ? JSON.stringify({ items: [{ id: 'ITEM', content: { number: 7 } }] }) : '[]', stderr: '' }; });
+  const gh = ghRunner((args, input) => { seen.push({ args, input }); return { status: 0, stdout: args[0] === 'api' && args[1] === 'graphql' ? JSON.stringify({ data: { repository: { issue: { projectItems: { nodes: [{ id: 'ITEM', project: { id: 'P' } }] } } } } }) : '[]', stderr: '' }; });
   const c = githubClient(config(), gh);
   await c.merge(5, H(1));
   assert.deepEqual(seen.at(-1).args, ['pr', 'merge', '5', '--repo', 'o/r', '--merge', '--match-head-commit', H(1)]);
   await c.comment(5, 'body; $(rm -rf /)'); assert.equal(seen.at(-1).input, 'body; $(rm -rf /)'); assert.ok(!seen.at(-1).args.some(a => a.includes('rm')));
   await c.board(7, 'done'); assert.deepEqual(seen.at(-1).args.slice(0, 3), ['project', 'item-edit', '--id']); assert.ok(seen.at(-1).args.includes('c'));
-  await c.board(99, 'done');   // unknown issue: no edit
   assert.equal(seen.filter(s => s.args[1] === 'item-edit').length, 1);
   assert.throws(() => ghRunner(() => ({ status: 1, stdout: '', stderr: 'boom' }))(['pr', 'list']), /gh pr list failed: boom/);
 });
@@ -1742,13 +1741,16 @@ test('issue #881: a rate limit pauses board moves until the reset, then the miss
 test('issue #881: the client lists the board once and caches item ids; a rate limit reports the GraphQL reset', async () => {
   const seen = []; let limit = false;
   const gh = ghRunner((args) => { seen.push(args);
-    if (args[0] === 'api') return { status: 0, stdout: JSON.stringify({ limit: 5000, reset: 4000 }), stderr: '' };
+    if (args[0] === 'api' && args[1] === 'rate_limit') return { status: 0, stdout: JSON.stringify({ limit: 5000, reset: 4000 }), stderr: '' };
     if (limit) return { status: 1, stdout: '', stderr: 'GraphQL: API rate limit exceeded' };
-    return { status: 0, stdout: args[1] === 'item-list' ? JSON.stringify({ items: [{ id: 'I7', content: { number: 7 } }, { id: 'I8', content: { number: 8 } }] }) : '', stderr: '' }; });
+    if (args[1] === 'graphql') { const n = Number(args.find(a => /^n=/.test(a)).slice(2)); return { status: 0, stdout: JSON.stringify({ data: { repository: { issue: { projectItems: { nodes: n === 99 ? [] : [{ id: 'I' + n, project: { id: 'P' } }] } } } } }), stderr: '' }; }
+    return { status: 0, stdout: '', stderr: '' }; });
   const c = githubClient(config(), gh);
   await c.board(7, 'done'); await c.board(8, 'in_review'); await c.board(7, 'in_review');
-  assert.equal(seen.filter(a => a[1] === 'item-list').length, 1);
+  assert.equal(seen.filter(a => a[1] === 'graphql').length, 2);   // one direct lookup per issue, never a whole-board listing
+  assert.equal(seen.filter(a => a[1] === 'item-list').length, 0);
   assert.equal(seen.filter(a => a[1] === 'item-edit').length, 3);
+  await assert.rejects(c.board(99, 'done'), /not found on the project board/);   // a missing item is a failure, not a silent success
   limit = true;
   await assert.rejects(c.board(7, 'done'), e => e.rateLimitedUntil === 4000000);
 });
