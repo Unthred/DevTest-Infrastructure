@@ -98,3 +98,17 @@ test('a waiting_on implement job is recorded without a failure, notice or implem
   w.team.gh.listPulls = async () => []; w.team.gh.listMergedPulls = async () => [{ number: 20, title: 'x', mergedAt: '2026-11-07T00:00:00Z' }];
   assert.deepEqual(implemented(await w.team.plan()), [9], 'queued again on the first tick after the merge');
 });
+
+test('a depends_on_overrides entry replaces the Prerequisites line on the stop path too (issue #1023 review)', async t => {
+  const w = world(t, { issues: [issue(9, 'Prerequisites: #20'), issue(20), issue(30)], pulls: [] });
+  w.team.c.depends_on_overrides = { 9: [] };
+  const ticket = 'e'.repeat(32), inbox = path.join(w.team.dir, 'inbox', ticket); fs.mkdirSync(inbox, { recursive: true });
+  fs.writeFileSync(path.join(inbox, 'waiting-on.json'), JSON.stringify({ waiting_on: [20] }));
+  const job = { issue: 9, postcondition: { kind: 'pr_opened', branch: 'claude/issue-9-x', ticket } };
+  assert.equal(await w.team.postconditions()(job), false);
+  assert.equal(job.waitingOn, undefined, 'the overridden Prerequisites item is not a prerequisite');
+  w.team.c.depends_on_overrides = { 9: [30] };
+  const j2 = { issue: 9, postcondition: { kind: 'pr_opened', branch: 'claude/issue-9-x', ticket } };
+  await w.team.postconditions()(j2);
+  assert.deepEqual(j2.waitingOn, [30], 'an override naming an open item still holds');
+});

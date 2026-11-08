@@ -3464,7 +3464,13 @@ export class Team {
     } catch { /* nothing was reported */ }
     try {
       const issue = Number.isSafeInteger(job.issue) ? await this.gh.getIssue?.(job.issue) : null;
-      if (issue) { const pd = proseDependencies(issue.body); const pre = prerequisites(issue.body); for (const d of [...pd.prs, ...pd.numbers, ...pre]) if (d !== job.issue) want.add(d); }
+      if (issue) {
+        const pd = proseDependencies(issue.body);
+        const ov = this.c.depends_on_overrides?.[job.issue];
+        const pre = ov ?? issue.prerequisites ?? prerequisites(issue.body);   // the planner's own set: an override replaces the Prerequisites line
+        for (const d of [...pd.prs, ...pd.numbers, ...pre]) if (d !== job.issue) want.add(d);
+        if (ov) { const allowed = new Set([...pd.prs, ...pd.numbers, ...ov]); for (const d of [...want]) if (!allowed.has(d)) want.delete(d); }   // an override also bars items only the replaced Prerequisites line or the agent named
+      }
     } catch { /* the body is optional evidence */ }
     const out = [];
     for (const d of [...want].slice(0, 20)) {
