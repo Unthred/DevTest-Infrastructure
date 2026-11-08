@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as inbox from '../supervisor/inbox.mjs';
-import { Team, validateTeamConfig, loadTeamConfig } from '../supervisor/team.mjs';
+import { Team, validateTeamConfig, loadTeamConfig, roleCount, overallCap, resumeDecision, orderSensitive } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
@@ -346,12 +346,109 @@ test('team: an approved prompt cannot write as Opus; the job is not started and 
   const ok = world(t, { models: { agents: { claude: { implement: S, fix: S, 'ci-fix': S, rebase: S, continue: S, review: R, review_candidates: [R] } } } }); approve(ok, GOOD);
   await ok.team.runAction((await ok.team.plan()).find(a => a.type === 'inbox'), rep()); assert.equal(ok.calls.created[0].model, 'sonnet');
 });
-test('team: an approved prompt obeys the standing limits: no slot while the implementer slot is taken, none under a global circuit-breaker halt', async t => {
-  const w = world(t); approve(w, GOOD);
-  w.jobs.listActive = async () => [{ id: 'b'.repeat(32), status: 'running', provider: 'claude' }]; w.team.s.jobs['b'.repeat(32)] = { kind: 'implement', agent: 'claude', key: '1', issue: 1, ingested: false };
-  assert.ok(!(await w.team.plan()).some(a => a.type === 'inbox'), 'slot full');
+// Issue #971: the inbox lane. Its slot count is limits.roles.inbox (default 1), outside limits.overall and the implementer slots.
+const BUSY = (w, kinds) => { const act = []; kinds.forEach((kind, i) => { const id = String(i + 1).repeat(32).slice(0, 32); act.push({ id, status: 'running', provider: 'claude' }); w.team.s.jobs[id] = { kind, agent: 'claude', key: String(i + 1), issue: i + 1, ingested: false, at: 1000 }; }); w.jobs.listActive = async () => act; };
+const LANE = { roles: { implementer: 2, reviewer: 1 }, overall: 4, max_review_attempts: 2, max_fix_attempts: 2 };
+test('team: with every implementer slot busy and the overall cap reached, an approved prompt still starts in the inbox lane with its wait recorded', async t => {
+  const w = world(t, { limits: { ...LANE, overall: 2 } }); const id = approve(w, GOOD);
+  BUSY(w, ['implement', 'implement']);
+  const plan = await w.team.plan(); const act = plan.find(a => a.type === 'inbox');
+  assert.ok(act, 'planned although both implementer slots and the overall cap are full'); assert.equal(plan[0].type, 'inbox', 'the inbox action runs first');
+  await w.team.runAction(act, rep());
+  assert.equal(w.calls.created.length, 1); assert.equal(w.calls.created[0].kind, 'inbox');
+  const st = inbox.statusOf(w.dir, id);
+  assert.equal(st.state, 'running'); assert.equal(st.lane, 'inbox'); assert.equal(st.waitedMs, 5000 - st.decidedAt); assert.equal(st.startedAt, 5000);
+  const card = inbox.decidedCards(w.dir, 5000).find(c => c.id === id); assert.equal(card.lane, 'inbox');
+});
+test('team: the inbox lane has its own count: a running prompt fills it, limits.roles.inbox raises it, and implementer work does not fill it', async t => {
+  const w = world(t, { limits: LANE }); approve(w, GOOD); approve(w, { ...GOOD, title: 'Second prompt' });
+  BUSY(w, ['inbox']);
+  assert.ok(!(await w.team.plan()).some(a => a.type === 'inbox'), 'inbox lane full: the second prompt waits');
+  const two = world(t, { limits: { ...LANE, roles: { ...LANE.roles, inbox: 2 } } }); approve(two, GOOD); approve(two, { ...GOOD, title: 'Second prompt' });
+  BUSY(two, ['inbox']);
+  assert.equal((await two.team.plan()).filter(a => a.type === 'inbox').length, 1, 'a second lane slot admits one more');
+  const free = world(t, { limits: LANE }); approve(free, GOOD); BUSY(free, ['implement', 'review']);
+  assert.equal((await free.team.plan()).filter(a => a.type === 'inbox').length, 1, 'implement and review jobs do not occupy the inbox lane');
+  assert.equal((await free.team.plan()).filter(a => a.type === 'inbox').length, 1, 'planning is repeatable and starts nothing');
+});
+test('team: an approved prompt still obeys the circuit-breaker halt', async t => {
   const h = world(t); approve(h, GOOD); h.team.s.breaker.global = { text: 'halted', at: 1 };
   const kept = h.team.applyBreaker(await h.team.plan(), rep(), true); assert.ok(!kept.some(a => a.type === 'inbox'), 'halted');
+});
+test('team: limits.roles.inbox and limits.inbox_max_minutes are validated', t => {
+  const ok = (limits, extra = {}) => validateTeamConfig({ ...teamCfg('/x'), limits: { ...LANE, ...limits }, ...extra });
+  assert.equal(ok({ inbox_max_minutes: 15 }).limits.inbox_max_minutes, 15);
+  assert.equal(roleCount(ok({}).limits, 'inbox'), 1, 'default one slot');
+  assert.equal(roleCount(ok({ roles: { ...LANE.roles, inbox: 3 } }).limits, 'inbox'), 3);
+  for (const bad of [0, -1, 721, 'x', NaN]) assert.throws(() => ok({ inbox_max_minutes: bad }), /inbox_max_minutes/, String(bad));
+  for (const bad of [0, 1.5, '1']) assert.throws(() => ok({ roles: { ...LANE.roles, inbox: bad } }), /roles/, String(bad));
+  assert.equal(overallCap({ roles: { ...LANE.roles, inbox: 5 } }), 4, 'inbox slots are not part of the overall sum');
+});
+test('team: the order guard holds new implement work while an order-changing prompt is approved or running, and only then', async t => {
+  const agents = { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [5] } };
+  const mk = item => { const w = world(t, { agents }); w.gh.listIssues = async () => [{ number: 5, title: 'five', state: 'OPEN', body: '', labels: [] }]; if (item) approve(w, item); return w; };
+  const implementing = async w => (await w.team.plan()).some(a => a.type === 'implement');
+  assert.equal(await implementing(mk(null)), true, 'baseline: the issue is implemented');
+  for (const text of ['Move issue 940 ahead of 935', 'Put #940 first in the implement list', 'Do issue 12 before issue 7.', 'Swap 940 and 935 so 940 goes next', 'Swap 940 and 935', 'Make 940 the next issue', 'Change the implement list to 12, 13, 9', 'Skip 935 for now', 'Bring 940 forward', 'Prefer issue 940 over 935', 'Add 940 to the list for claude']) {
+    const w = mk({ ...GOOD, title: 'Change picks', prompt: text }); const pl = await w.team.plan();
+    assert.ok(pl.some(a => a.type === 'inbox') && !pl.some(a => a.type === 'implement'), `holds implement work: ${text}`);
+  }
+  const plain = mk({ ...GOOD, title: 'Tidy the docs', prompt: 'Fix a typo in the README.' });
+  assert.equal(await implementing(plain), false, 'fail safe: no approved prompt is known to be harmless, so every one holds until it has run');
+  assert.equal(orderSensitive({ title: 'x', prompt: 'y' }), true);
+  const order = mk({ ...GOOD, title: 'Reorder the issue queue', prompt: 'Put issue 9 before issue 5 in team.json.' });
+  const plan = await order.team.plan();
+  assert.ok(plan.some(a => a.type === 'inbox'), 'the reorder prompt is planned'); assert.ok(!plan.some(a => a.type === 'implement'), 'new implement work waits behind it');
+  // once the prompt runs, the guard still holds until the job ends, then releases
+  await order.team.runAction(plan.find(a => a.type === 'inbox'), rep());
+  const [jobId, rec] = Object.entries(order.team.s.jobs).find(([, r]) => r.kind === 'inbox'); assert.equal(rec.orderSensitive, true);
+  assert.equal(await implementing(order), false, 'running: still held');
+  rec.ingested = true; assert.equal(await implementing(order), true, 'ended: released, the new order applies to the next pick');
+  // a stuck record cannot hold implement work for ever
+  rec.ingested = false; order.team.c.limits.inbox_max_minutes = 15; order.team.clock.now = () => 5000 + 31 * 60000;
+  assert.equal(await implementing(order), true, 'a job record older than twice the time cap no longer holds');
+});
+test('team: the inbox time cap stops a prompt job that ran too long, once, and marks the item failed with the reason', async t => {
+  const w = world(t, { limits: { ...LANE, inbox_max_minutes: 15 } }); const id = approve(w, GOOD);
+  await w.team.runAction((await w.team.plan()).find(a => a.type === 'inbox'), rep());
+  const [jobId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox'); const stopped = [];
+  w.jobs.stop = async x => { stopped.push(x); }; w.jobs.listActive = async () => [{ id: jobId, status: 'running', provider: 'claude' }];
+  let r = rep(); await w.team.enforceInboxCap(r); assert.deepEqual(stopped, [], 'inside the cap nothing is stopped');
+  w.team.clock.now = () => rec.at + 15 * 60000; await w.team.enforceInboxCap(rep()); assert.deepEqual(stopped, [], 'exactly at the cap is still inside it');
+  w.team.clock.now = () => rec.at + 15 * 60000 + 1; r = rep(); await w.team.enforceInboxCap(r); assert.deepEqual(stopped, [jobId]); assert.match(JSON.stringify(r.actions), /after 15 minutes/);
+  await w.team.enforceInboxCap(rep()); assert.equal(stopped.length, 1, 'stopped once');
+  w.team.ingestInbox(jobId, rec, { status: 'stopped' });
+  assert.equal(inbox.statusOf(w.dir, id).state, 'failed'); assert.match(inbox.statusOf(w.dir, id).result, /15-minute inbox time cap/);
+  // an implement job past 15 minutes is never touched by the inbox cap
+  const x = world(t); x.jobs.stop = async y => stopped.push(y); x.jobs.listActive = async () => [{ id: 'c'.repeat(32), status: 'running', provider: 'claude' }]; x.team.s.jobs['c'.repeat(32)] = { kind: 'implement', agent: 'claude', key: '1', issue: 1, ingested: false, at: 0 };
+  x.team.clock.now = () => 3 * 3600000; await x.team.enforceInboxCap(rep()); assert.equal(stopped.length, 1);
+});
+test('team: the inbox time cap counts running time only: a usage-limit pause does not count, and a resumed job starts again from the resume', async t => {
+  const w = world(t, { limits: { ...LANE, inbox_max_minutes: 15 } }); approve(w, GOOD);
+  await w.team.runAction((await w.team.plan()).find(a => a.type === 'inbox'), rep());
+  const [jobId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox'); const stopped = []; let status = 'running';
+  w.jobs.stop = async x => { stopped.push(x); }; w.jobs.listActive = async () => [{ id: jobId, status, provider: 'claude' }];
+  const at = ms => { w.team.clock.now = () => rec.at + ms; return w.team.enforceInboxCap(rep()); };
+  await at(5 * 60000); status = 'paused_limit'; await at(6 * 60000); await at(3 * 3600000);
+  status = 'running'; await at(3 * 3600000 + 60000); assert.deepEqual(stopped, [], 'just resumed after a long pause: not stopped');
+  await at(3 * 3600000 + 9 * 60000); assert.deepEqual(stopped, [], '5 + 9 minutes of running is inside the cap');
+  await at(3 * 3600000 + 12 * 60000); assert.deepEqual(stopped, [jobId], 'over 15 minutes of running time: stopped');
+});
+test('team: a job first seen paused on a usage limit does not count the pause as running time when it resumes', async t => {
+  const w = world(t, { limits: { ...LANE, inbox_max_minutes: 15 } }); approve(w, GOOD);
+  await w.team.runAction((await w.team.plan()).find(a => a.type === 'inbox'), rep());
+  const [jobId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox'); const stopped = []; let status = 'paused_limit';
+  w.jobs.stop = async x => { stopped.push(x); }; w.jobs.listActive = async () => [{ id: jobId, status, provider: 'claude' }];
+  const at = ms => { w.team.clock.now = () => rec.at + ms; return w.team.enforceInboxCap(rep()); };
+  await at(2 * 60000); await at(3 * 3600000);
+  status = 'running'; await at(3 * 3600000 + 60000); assert.deepEqual(stopped, [], 'resumed after a long first-seen pause: not stopped');
+  await at(3 * 3600000 + 14 * 60000); assert.deepEqual(stopped, [], '14 minutes of running is inside the cap');
+  await at(3 * 3600000 + 17 * 60000); assert.deepEqual(stopped, [jobId]);
+});
+test('team: a paused-on-limit inbox job holds no inbox slot, and resumes only into a free one regardless of the overall cap', () => {
+  const L = { roles: { implementer: 1, reviewer: 1 }, overall: 2 }, job = { id: 'a', kind: 'inbox', provider: 'claude' };
+  assert.equal(resumeDecision({ job, others: [{ id: 'b', kind: 'implement', provider: 'claude' }, { id: 'c', kind: 'review', provider: 'claude' }], limits: L }).go, true, 'overall cap full, inbox lane free');
+  assert.equal(resumeDecision({ job, others: [{ id: 'b', kind: 'inbox', provider: 'claude' }], limits: L }).go, false, 'inbox lane full');
 });
 test('team: an item changed on disk after approval is not run', async t => {
   const w = world(t); const id = approve(w, GOOD);

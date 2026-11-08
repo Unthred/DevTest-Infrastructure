@@ -65,6 +65,7 @@ export function validateTeamConfig(input) {
   if ('stall_hours' in L && !(typeof L.stall_hours === 'number' && L.stall_hours > 0 && L.stall_hours <= 720)) throw new SupervisorError('invalid team limit: stall_hours');
   try { robust.validateRobustLimits(L); } catch (error) { throw new SupervisorError(error.message); }   // issue #995
   normalizeRoleLimits(c);
+  if ('inbox_max_minutes' in L && !(Number.isFinite(L.inbox_max_minutes) && L.inbox_max_minutes >= 1 && L.inbox_max_minutes <= 720)) throw new SupervisorError('invalid team limit: inbox_max_minutes');   // issue #971
   if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
   validateUnblockLimits(L.unblock);
   validateSelfUpgrade(c.self_upgrade);
@@ -130,11 +131,21 @@ function validateUnblockLimits(u) {
 // release: it maps to both role slots and leaves a deprecation warning (c.deprecations) that the tick reports. roles wins when both are set.
 const TYPE_ORDER = ['merge', 'rebase', 'cifix', 'fix', 'review', 'continue', 'inbox', 'implement'];   // the per-agent priority of choose()
 // Issue #460: a rebase has its own role slot (limits.roles.rebaser, default 1), so it never holds the implementer slot from new work.
-export const ROLES = ['implementer', 'reviewer', 'rebaser'];
+// Issue #971: the inbox lane (limits.roles.inbox, default 1) is a slot of its own for approved overseer prompts. It is not counted
+// against limits.overall, so a short supervised prompt is never held behind long implement or review jobs.
+export const ROLES = ['implementer', 'reviewer', 'rebaser', 'inbox'];
+export const OVERALL_ROLES = ROLES.filter(r => r !== 'inbox');
+export const DEFAULT_INBOX_MAX_MINUTES = 15;
+export const inboxMaxMs = L => (Number.isFinite(L?.inbox_max_minutes) && L.inbox_max_minutes > 0 ? L.inbox_max_minutes : DEFAULT_INBOX_MAX_MINUTES) * 60000;
+// Prompts that change the queue order or a config file must apply before the planner hands out new implement work (the order guard).
+// Issue #971 (review of #980): keywords cannot tell which prompt changes order or config ('Swap 940 and 935', 'Skip 935', 'Bring 940
+// forward' match nothing), so the guard fails safe: every approved or running prompt holds new implement picks until it has ended.
+// Prompts are short and bounded by limits.inbox_max_minutes, and reviews, fixes and rebases continue meanwhile.
+export const orderSensitive = () => true;
 export const DEFAULT_REBASERS = 1;
 // The count of a role: the configured one, else 1. limits.roles.rebaser is optional; an absent value is left absent so a config is not rewritten.
-export const roleCount = (L, r) => (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : r === 'rebaser' ? DEFAULT_REBASERS : 1);
-export const roleOfType = type => (type === 'review' ? 'reviewer' : type === 'rebase' ? 'rebaser' : 'implementer');   // implement, continue, fix, cifix -> implementer; review -> reviewer; rebase -> rebaser
+export const roleCount = (L, r) => (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : r === 'rebaser' ? DEFAULT_REBASERS : 1);   // rebaser and inbox default to 1
+export const roleOfType = type => (type === 'review' ? 'reviewer' : type === 'rebase' ? 'rebaser' : type === 'inbox' ? 'inbox' : 'implementer');   // implement, continue, fix, cifix -> implementer; review -> reviewer; rebase -> rebaser
 // The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
 // role count is the only change needed. One implementer and one reviewer give 2, as before.
 // Issue #344: the one replaceable function that predicts which files an implement job will edit. No model call: it reads the paths the
@@ -149,12 +160,12 @@ export const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''
 // Issue #344: what holds the running count below the sum of the chosen role counts, for the dashboard: an explicit overall limit, or
 // the open-PR cap pausing new implement work. Empty when nothing does.
 export function capNotes(L, pauseText = null) {
-  const sum = ROLES.reduce((n, r) => n + roleCount(L, r), 0), out = [];
+  const sum = OVERALL_ROLES.reduce((n, r) => n + roleCount(L, r), 0), out = [];
   if (Number.isSafeInteger(L?.overall) && L.overall >= 1 && L.overall < sum) out.push(`limits.overall is ${L.overall}, below the ${sum} slots the role counts allow, so at most ${L.overall} jobs run at once`);
   if (pauseText) out.push(`${pauseText}; no new implement job starts while the open-PR cap (limits.max_open_prs) is reached`);
   return out;
 }
-export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : ROLES.reduce((n, r) => n + roleCount(L, r), 0));
+export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : OVERALL_ROLES.reduce((n, r) => n + roleCount(L, r), 0));
 function normalizeRoleLimits(c) {
   const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1;   // no upper bound: the count per role is the homeowner's choice (#344)
   // Idempotent on its own output, also after a structuredClone (issue #379): the per_agent text already on a validated config is kept, so
@@ -169,7 +180,7 @@ function normalizeRoleLimits(c) {
   }
   const R = L.roles;
   // issue #460: rebaser is optional (default 1); implementer and reviewer stay required
-  if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]) || (k === 'rebaser' && R[k] === undefined))) throw new SupervisorError('invalid team limit: roles');
+  if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]) || ((k === 'rebaser' || k === 'inbox') && R[k] === undefined))) throw new SupervisorError('invalid team limit: roles');
   // Issue #402: optional limits.provider_roles { <provider>: { implementer?, reviewer? } }. A provider's count caps its own jobs in that
   // role, so one provider's reviews cannot fill the slot meant for the other. A role it omits is limited only by limits.roles.
   const P = L.provider_roles;
@@ -1126,7 +1137,7 @@ export class Team {
     const usedBy = {};
     for (const j of occupying) { const k = `${j.provider}:${roleOfType(this.s.jobs[j.id]?.kind)}`; usedBy[k] = (usedBy[k] || 0) + 1; }
     this.usedBy0 = { ...usedBy };
-    let total = occupying.length;
+    let total = occupying.filter(j => roleOfType(this.s.jobs[j.id]?.kind) !== 'inbox').length;   // issue #971: the inbox lane is outside limits.overall
     const L = this.c.limits;
     const usedAtStart = { ...used }, totalAtStart = total;   // slots filled by jobs already running, before this tick plans any
     this.taken = new Set(); this.plannedUse = {};
@@ -1150,7 +1161,7 @@ export class Team {
     // to the reviewer with the most spare allowance (issue #402), after any review only that agent can do, then second opinions, and an implement job to the issue's owner before
     // an agent taking it over (#104).
     for (const role of [...ROLES].reverse()) {   // reviews first: under the overall cap they unblock merging
-      while (used[role] < roleCount(L, role) && total < overallCap(L)) {
+      while (used[role] < roleCount(L, role) && (role === 'inbox' || total < overallCap(L))) {
         const cands = [];
         for (const [agent, a] of this.agents()) {
           if (this.providerSlotFull(a.provider, role, usedBy)) continue;
@@ -1160,7 +1171,7 @@ export class Team {
         if (!cands.length) break;
         const best = cands.sort((x, y) => x.rank - y.rank)[0];   // stable: ties keep the team.json agent order
         const why = best.act.type === 'review' ? this.reviewWhy(best.agent, best.act, prs) : null;
-        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}) }); used[role]++; total++;
+        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}) }); used[role]++; if (role !== 'inbox') total++;
         { const k = `${this.c.agents[best.agent].provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
@@ -1174,7 +1185,7 @@ export class Team {
     this.holdFullSlots(occupying, usedAtStart, totalAtStart, prs, issueByNo);
     // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
     const order = n => this.agents().findIndex(([x]) => x === n);
-    return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -1 : order(x.agent)) - (y.type === 'merge' ? -1 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
+    return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -3 : x.type === 'inbox' ? -2 : order(x.agent)) - (y.type === 'merge' ? -3 : y.type === 'inbox' ? -2 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
   }
   // Issue #380: eligible work that found its slot taken says so, naming the jobs that fill the slots (otherwise the plan and the held
   // list are both empty). Runs after dispatch, so work already planned this tick is not offered again by choose().
@@ -1182,7 +1193,7 @@ export class Team {
     const L = this.c.limits, names = this.names();
     const nameOf = j => { const r = this.s.jobs[j.id] || {}; const ref = r.pr != null ? names.pr(r.pr).text : r.issue != null ? names.issue(r.issue).text : j.id.slice(0, 8); return `${r.agent || j.provider} ${r.kind || 'job'} on ${ref}`.slice(0, 120); };
     for (const role of ROLES) {
-      const byRole = used[role] >= roleCount(L, role), byTotal = total >= overallCap(L);
+      const byRole = used[role] >= roleCount(L, role), byTotal = role !== 'inbox' && total >= overallCap(L);
       if (!byRole && !byTotal) continue;
       const holders = (byRole ? occupying.filter(j => roleOfType(this.s.jobs[j.id]?.kind) === role) : occupying).map(nameOf);
       const text = `${role} slot full${byRole ? '' : ' (overall cap reached)'}: ${holders.slice(0, 5).join('; ') || 'running jobs'}`;
@@ -1391,6 +1402,17 @@ export class Team {
     // chosen instead. The reason is kept for the dashboard and `team status`.
     const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent], planned: this.plannedUse[agent] } : B0, owed = B ? this.pendingReviews(agent, prs) : 0;
     const allow = type => { const r = admits(B, type, owed); if (!r.ok) this.hold(agent, type, r.why); return r.ok; };
+    // Issue #971: an approved overseer prompt has its own lane. It is planned only for the inbox role (or an unscoped probe), never from the
+    // implementer slot, and it does not wait for the open-PR cap. Allowance, usage-limit, model and breaker rules still apply.
+    if (role === 'inbox' || role === null) {
+      const approved = this.inboxNext();
+      if (approved) {
+        const m = this.modelFor({ agent, key: 'wb:implement' }, 'implement', {}, true);
+        if (m.writeRefusal?.startsWith('no permitted writer')) this.hold(agent, 'inbox', m.writeRefusal);
+        else if (!this.limitedOf(agent).out && allow('implement')) return { type: 'inbox', key: approved.id, inboxId: approved.id, title: approved.item.title };
+      }
+      if (role === 'inbox') return null;
+    }
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
     for (const pr of rebasing ? prs : []) {
@@ -1510,14 +1532,10 @@ export class Team {
     if (paused) { this.hold(agent, 'implement', this.pauseText(prs)); return null; }
     const implModel = this.modelFor({ agent, key: 'wb:implement' }, 'implement', {}, true);   // issue #368: an Opus implementer is held, not started
     if (implModel.writeRefusal?.startsWith('no permitted writer')) { this.hold(agent, 'implement', implModel.writeRefusal); return null; }
-    // Issue #124: an overseer prompt the homeowner approved goes first. It takes an implementer slot like any implement job and obeys the
-    // same allowance, usage-limit, model and breaker rules; the writer-model rules (no Opus) apply in modelFor.
-    const approved = this.inboxNext();
-    if (approved) {
-      if (this.limitedOf(agent).out) return null;
-      if (!allow('implement')) return null;
-      return { type: 'inbox', key: approved.id, inboxId: approved.id, title: approved.item.title };
-    }
+    // Issue #971: the order guard. While a prompt that changes queue order or config is approved or running in the inbox lane, no new
+    // implement job is handed out, so the change applies before the next pick.
+    const guarding = this.orderGuard();
+    if (guarding) { this.hold(agent, 'implement', guarding); return null; }
     for (const n of this.candidates(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
       if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
@@ -1714,7 +1732,7 @@ export class Team {
     const guard = async (what, fn) => { const since = Date.now(); try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } finally { lap(what.replace(/ \d.*$/, '').replace(/ \(.*$/, ''), since); } };
     if (!dryRun) {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
-      await guard('inbox', () => this.processInbox(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
+      await guard('inbox', () => this.processInbox(report)); await guard('inbox time cap', () => this.enforceInboxCap(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       await guard('board catch-up', () => this.flushBoard(report));
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
@@ -2043,6 +2061,37 @@ export class Team {
     }
     return null;
   }
+  // Issue #971: the reason new implement work waits, or null. An approved prompt not yet started, or a running inbox job, whose text
+  // changes queue order or config holds new implement picks until it ends; a job record older than twice the time cap no longer holds.
+  orderGuard() {
+    const dir = this.inboxDir(); if (!dir) return null;
+    const now = this.clock.now(), stale = 2 * inboxMaxMs(this.c.limits);
+    for (const j of Object.values(this.s.jobs)) if (j.kind === 'inbox' && !j.ingested && j.orderSensitive && now - (j.at || 0) < stale) return 'waiting for a running inbox prompt that changes queue order or config; new implement work starts after it ends';
+    // A job the fast lane started during this pass is held only in its item's status (adopt) until the next pass adopts it.
+    for (const st of inboxStore.allStatuses(dir)) if (st.state === 'running' && st.adopt?.rec?.kind === 'inbox' && !st.adopt.rec.ingested && !this.s.jobs[st.adopt.id] && now - (st.adopt.rec.at || 0) < stale) return 'waiting for a running inbox prompt that changes queue order or config; new implement work starts after it ends';
+    for (const st of inboxStore.approvedItems(dir, 'prompt')) {
+      if (Object.values(this.s.jobs).some(j => j.inboxId === st.id)) continue;
+      const l = inboxStore.loadItem(dir, st.id);
+      if (l.ok) return 'waiting for an approved inbox prompt that changes queue order or config; new implement work starts after it has run';
+    }
+    return null;
+  }
+  // Issue #971: stop a running inbox job that passed limits.inbox_max_minutes. The job's end is then ingested as a failed item.
+  async enforceInboxCap(report) {
+    const cap = inboxMaxMs(this.c.limits), now = this.clock.now();
+    for (const j of await this.jobs.listActive()) {
+      const rec = this.s.jobs[j.id];
+      if (!rec || rec.kind !== 'inbox' || rec.capStopped) continue;
+      // Running time only: a usage-limit pause does not count, and a job that resumes counts again from the resume.
+      if (j.status === 'paused_limit') { if (rec.capSeen != null || rec.capRan == null) { rec.capSeen = null; rec.capRan ??= 0; this.save(); } continue; }
+      const since = rec.capSeen ?? (rec.capRan == null ? rec.at || now : now);
+      rec.capRan = (rec.capRan || 0) + Math.max(0, now - since); rec.capSeen = now;
+      if (rec.capRan <= cap || typeof this.jobs.stop !== 'function') { this.save(); continue; }
+      rec.capStopped = true; this.save();
+      await this.jobs.stop(j.id);
+      (report.actions ||= []).push({ type: 'inbox-cap', result: `stopped inbox job ${j.id.slice(0, 8)} after ${Math.round(cap / 60000)} minutes (limits.inbox_max_minutes)` });
+    }
+  }
   // Each tick: pick up new items (validate, cap, refuse), fail approved items that changed on disk, and post approved issue drafts once.
   async processInbox(report) {
     const dir = this.inboxDir(); if (!dir) return;
@@ -2065,7 +2114,7 @@ export class Team {
   }
   // Issue #985: the fast lane. Starts the oldest approved prompt now, from a small separate process, even while a full pass runs. It never
   // writes the team state (a running pass holds its own copy and would overwrite it): the job record goes into the inbox item's status and
-  // the next pass adopts it (processInbox). The same limits as the planner: a free implementer slot, a place under limits.overall, the
+  // the next pass adopts it (processInbox). The planner's rule for the inbox lane: a free inbox slot (not the implementer slots, limits.overall or the open-PR pause), the
   // provider cap, the agent's allowance and usage limit, and the writer-model rules in modelFor. `admit` is the host-load check hook (#972):
   // it returns { ok, why }; none is installed yet.
   async startApprovedNow(report = {}, { admit = null } = {}) {
@@ -2073,23 +2122,26 @@ export class Team {
     const next = this.inboxNext(); if (!next) return { started: false, why: 'no approved prompt is waiting' };
     // The gates tickPass applies before any launch: D-020 for full access, and the open-PR pause that holds every new implement job.
     if (this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision)) return { started: false, why: `${this.c.access.decision} is not homeowner-approved in the decision register` };
-    let pause = null;
-    try { const prs = await this.gh.listPulls(), issues = await this.gh.listIssues(); pause = this.pauseText(prs, issues); } catch { return { started: false, why: 'GitHub could not be read to check the open-PR cap' }; }
-    if (pause) return { started: false, why: pause };
     // The circuit breaker (#549, #124): an approved prompt is held like any new implement job. Read-only here; the lane never writes state.
     const halt = breaker.blocks(this.s.breaker, this.c.breaker, { type: 'inbox', issue: null });
     if (halt) return { started: false, why: `circuit breaker: ${halt.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + halt.cause} halted new jobs until the homeowner resumes` };
     const L = this.c.limits, active = (await this.jobs.listActive()).filter(j => j.status !== 'paused_limit');
-    const usedBy = {}; let impl = 0;
-    for (const j of active) { const role = roleOfType(this.s.jobs[j.id]?.kind); if (role === 'implementer') impl++; const k = `${j.provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
-    if (impl >= roleCount(L, 'implementer')) return { started: false, why: 'no free implementer slot' };
-    if (active.length >= overallCap(L)) return { started: false, why: `the overall cap (${overallCap(L)}) is reached` };
+    // Issue #971: the planner's rule for the inbox lane: its own slot count, not the implementer slots, limits.overall or the open-PR pause.
+    // A job the fast lane started during this pass is in no job record yet, only in its item's status, so it counts from there.
+    const usedBy = {}; let inbox = 0; const seen = new Set(active.map(j => j.id));
+    const adoptIds = new Set(inboxStore.allStatuses(dir).filter(st => st.state === 'running' && st.adopt?.id).map(st => st.adopt.id));
+    for (const j of active) { const role = this.s.jobs[j.id] ? roleOfType(this.s.jobs[j.id].kind) : adoptIds.has(j.id) ? 'inbox' : roleOfType(undefined); if (role === 'inbox') inbox++; const k = `${j.provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    for (const st of inboxStore.allStatuses(dir)) {
+      const ad = st.state === 'running' ? st.adopt : null; if (!ad?.id || seen.has(ad.id) || this.s.jobs[ad.id]) continue;
+      const live = await this.jobs.get(ad.id); if (live && !TERMINAL.has(live.status)) { inbox++; const k = `${live.provider}:inbox`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    }
+    if (inbox >= roleCount(L, 'inbox')) return { started: false, why: 'no free inbox slot' };
     const gate = admit ? admit() : { ok: true };
     if (!gate.ok) return { started: false, why: gate.why || 'the host is busy' };
     this.modes = this.budgets();
     let agent = null;
     for (const [name, a] of this.agents()) {
-      if (this.limitedOf(name).out || this.providerSlotFull(a.provider, 'implementer', usedBy)) continue;
+      if (this.limitedOf(name).out || this.providerSlotFull(a.provider, 'inbox', usedBy)) continue;
       const B = this.modes?.[name]; if (B && !admits(B, 'implement', 0).ok) continue;
       agent = name; break;
     }
@@ -2221,7 +2273,7 @@ export class Team {
     let summary = '';
     if (job.status === 'completed') { try { summary = fs.readFileSync(path.join(this.dir, 'inbox', String(j.ticket || 'none'), 'inbox-result.txt'), 'utf8'); } catch { /* checked by the post-condition */ } }
     // Issue #995 part 4: a prompt that did not achieve its task ends failed, with the agent's own summary shown in the Inbox.
-    const outcome = job.status === 'completed' ? robust.inboxOutcome(summary) : { ok: false, why: `the job ended ${job.status}` };
+    const outcome = job.status === 'completed' ? robust.inboxOutcome(summary) : { ok: false, why: j.capStopped ? `stopped after the ${Math.round(inboxMaxMs(this.c.limits) / 60000)}-minute inbox time cap (limits.inbox_max_minutes)` : `the job ended ${job.status}` };
     const result = outcome.ok ? summary.trim() : `${outcome.why}${summary.trim() ? `. Agent summary: ${summary.trim()}` : '; it left no summary'}`;
     inboxStore.finish(dir, j.inboxId, { state: outcome.ok ? 'done' : 'failed', job: id.slice(0, 8), ...(outcome.ok ? {} : { reason: outcome.why }), result }, this.clock.now());
   }
@@ -3515,9 +3567,9 @@ export class Team {
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-inbox-${short}`), branch, base: 'origin/main' });
       spec = { ...common, kind: 'inbox', worktree: wt, issue: inboxStore.placeholderIssue(act.inboxId), scope: `Overseer prompt ${short}: ${redact(l.item.title, 100)}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
         prompt: inboxPrompt({ title: l.item.title, prompt: l.item.prompt, branch, resultFile }), postcondition: { kind: 'inbox_result', ticket } };
-      meta = { inboxId: act.inboxId, branch, worktree: wt };
-      preclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'approved', { state: 'running' }, this.clock.now());   // issue #856: taken just before the effect; an earlier Undo wins
-      unclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'running', { state: 'approved' }, this.clock.now());
+      meta = { inboxId: act.inboxId, branch, worktree: wt, ...(orderSensitive(l.item) ? { orderSensitive: true } : {}) };
+      preclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'approved', { state: 'running', lane: 'inbox', startedAt: this.clock.now(), waitedMs: Math.max(0, this.clock.now() - (l.status.decidedAt || this.clock.now())) }, this.clock.now());   // issue #856: taken just before the effect; an earlier Undo wins
+      unclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'running', { state: 'approved', lane: null, startedAt: null, waitedMs: null }, this.clock.now());
       bump = () => inboxStore.finish(this.inboxDir(), act.inboxId, { state: 'running', job: Object.keys(this.s.jobs).find(k => this.s.jobs[k].inboxId === act.inboxId)?.slice(0, 8) }, this.clock.now());
     } else {
       const branch = `${a.branch_prefix}issue-${act.issue}-${slug(act.title)}`;
@@ -3652,7 +3704,7 @@ export function resumeDecision({ job, others, limits, nameOf = o => o.id }) {
     const mine = inRole.filter(o => o.provider === job.provider);
     if (mine.length >= cap) return { go: false, reason: `waiting for the ${job.provider} ${role} slot (limits.provider_roles ${cap}): ${mine.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
   }
-  if (others.length >= overallCap(limits)) return { go: false, reason: `waiting for the overall cap (${overallCap(limits)}): ${others.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
+  if (role !== 'inbox' && others.filter(o => roleOfType(o.kind) !== 'inbox').length >= overallCap(limits)) return { go: false, reason: `waiting for the overall cap (${overallCap(limits)}): ${others.slice(0, 5).map(nameOf).join('; ')}`.slice(0, 300) };
   return { go: true };
 }
 export function takeResumeLock(root) {

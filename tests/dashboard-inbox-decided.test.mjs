@@ -93,7 +93,7 @@ test('route: a JSON decision answers with the state and undo time; the card leav
   const page = (await s.get('/')).body;
   assert.ok(!page.includes(`data-inbox="${a}"`), 'the decided card is gone from the pending list');
   assert.match(page, /<summary>Decided today \(<span class="inbox-decided-n">1<\/span>\)<\/summary>/);
-  assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-tag">.*?</span></span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, waiting for a free slot" data-tonly>Approved \\d\\d:\\d\\d UTC, waiting for a free slot</span>`));
+  assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-tag">.*?</span></span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, queued for the inbox lane \\(waited 0m\\)" data-tonly>Approved \\d\\d:\\d\\d UTC, queued for the inbox lane \\(waited 0m\\)</span>`));
   assert.match(page, /name="decision" value="undo"/);
   assert.match(page, /Needs you \(1\)/, 'the count dropped');
 });
@@ -173,7 +173,7 @@ test('script: a refusal saying the item is already decided keeps the buttons off
   assert.equal(r.ok, false);
   assert.deepEqual(log, [['error', null], ['lock', 'Approved ✓'], ['settled', 'Already decided: it is already approved. Nothing was changed.']]);
   assert.ok(!log.some(x => x[0] === 'unlock' || x[0] === 'decided'));
-  assert.ok(OUTCOME_TEMPLATE.approve.endsWith('waiting for a free slot') && OUTCOME_TEMPLATE.reject === 'Rejected {t}');
+  assert.ok(OUTCOME_TEMPLATE.approve.endsWith('queued for the inbox lane') && OUTCOME_TEMPLATE.reject === 'Rejected {t}');
 });
 test('route: a second click on an approved item is refused and changes nothing; once the tick took it the row reads plain Approved', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)); inbox.scan(dir, 1000); const s = await serve(t, dir);
@@ -181,7 +181,7 @@ test('route: a second click on an approved item is refused and changes nothing; 
   s.clock.now += 5000; const again = await s.post(a, 'reject'); assert.equal(again.status, 409); assert.match(JSON.parse(again.body).reason, /^the item is already approved/);
   assert.equal(inbox.statusOf(dir, a).decision, 'approve');
   inbox.finish(dir, a, { state: 'running' });
-  const page = (await s.get('/')).body; assert.match(page, new RegExp(`data-decided="${a}">[^]*?>Approved \\d\\d:\\d\\d UTC</span>`));
+  const page = (await s.get('/')).body; assert.match(page, new RegExp(`data-decided="${a}">[^]*?>Approved \\d\\d:\\d\\d UTC, running in the inbox lane</span>`));
   assert.ok(!page.includes('waiting for a free slot'));
 });
 test('script: postDecision turns a server refusal, a non-JSON page and a network failure into a reason, never a success', async () => {
@@ -234,4 +234,13 @@ test('#977: search finds an item by short id, full id, title and body, and ignor
   assert.deepEqual(ids("don't stall"), [0], 'straight apostrophe finds a curly one'); assert.deepEqual(ids('Don’t stall'), [0]);
   assert.deepEqual(ids('stall - fix'), [0], 'a hyphen finds an em dash'); assert.deepEqual(ids('stall – fix'), [0]); assert.deepEqual(ids('retries'), [1]);
   assert.deepEqual(ids('nomatch'), []);
+});
+
+test('#971: the queue view lists an approved prompt in the inbox lane, on the work page and the agent page', async t => {
+  const dir = makeInbox(t), a = drop(dir, GOOD(7)); inbox.scan(dir, Date.now() - 5000);
+  const s = await serve(t, dir); assert.equal((await s.post(a, 'approve')).status, 200);
+  const q = Object.values((await view(s)).queues).flat().filter(e => e.type === 'inbox');
+  assert.equal(q.length, 1); assert.equal(q[0].title, 'Tidy docs 7'); assert.match(q[0].reason, /inbox lane/);
+  assert.match((await s.get('/work')).body, /Inbox lane<\/[a-z]+> Tidy docs 7/);
+  assert.match((await s.get('/agents/claude')).body, /Inbox lane: Tidy docs 7/);
 });
