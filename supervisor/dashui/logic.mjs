@@ -12,7 +12,7 @@ export const SEVERITIES = {
 export function severityOf(id) {
   const s = String(id || '');
   if (/^(homeowner|fixlimit|reviewlimit|reviewrefused|prclosed|tick-failed|job|rebase-lost|migration|split|decision|noreviewer|stalled|stall)(-|$)/.test(s)) return 'action';
-  if (/^(ci|tick-stale|no-tick|idle|pause|drift|lease|register|history)(-|$)/.test(s)) return 'warning';
+  if (/^(ci|board-paused|tick-stale|no-tick|idle|pause|drift|lease|register|history)(-|$)/.test(s)) return 'warning';
   return 'info';
 }
 export const worst = levels => levels.reduce((w, l) => ((SEVERITIES[l]?.rank ?? 0) > (SEVERITIES[w]?.rank ?? 0) ? l : w), 'ok');

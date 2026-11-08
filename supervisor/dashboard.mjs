@@ -26,7 +26,11 @@ import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { wakeView } from './wake.mjs';
 import { sinceView } from './since.mjs';
+<<<<<<< HEAD
 import { markDuplicates as markInboxDuplicates, pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards } from './inbox.mjs';
+=======
+import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
+>>>>>>> origin/main
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -187,6 +191,13 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else { const ahead = plan.find(x => x.agent === agent); reason = ahead ? `ready; waits behind ${ahead.type} ${['implement', 'continue'].includes(ahead.type) ? names.issue(ahead.issue).text : names.pr(ahead.pr).text}` : 'ready; waits for a free slot'; }
     queues[agent].push({ type: 'issue', ref: n, title: issue.title, reason, next: planned.has(`${agent}:implement:${n}`) });
   }
+  // Issue #971: an approved prompt waits in the inbox lane, shown in the queue of the agent the planner picked (the first agent when none).
+  const inboxDir = c.inbox?.dir, inboxPlan = plan.find(a => a.type === 'inbox');
+  if (inboxDir) for (const st of approvedInboxItems(inboxDir, 'prompt')) {
+    if (Object.values(S.jobs).some(j => j.inboxId === st.id)) continue;
+    const owner = inboxPlan && queues[inboxPlan.agent] ? inboxPlan.agent : Object.keys(queues)[0]; if (!owner) continue;
+    queues[owner].push({ type: 'inbox', ref: 0, title: st.title || 'approved prompt', reason: `approved prompt in the inbox lane${inboxPlan?.inboxId === st.id ? ' (starts this tick)' : ' (waits for the inbox slot)'}; waited ${Math.max(0, Math.round((now - (st.decidedAt || now)) / 1000))} s`, next: inboxPlan?.inboxId === st.id });
+  }
   // Issue #405: reviews are listed in the order the planner takes them (closest to merge, then age), with the reason.
   for (const [reviewer, q] of Object.entries(queues)) {
     const order = new Map(team.reviewQueue(reviewer, prs).map(r => [r.pr.number, r]));
@@ -319,6 +330,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   if (!t) add('no-tick', 'No tick has ever been recorded: the dispatcher has not run since the dashboard was installed.');
   else {
     if (t.status === 'error') add('tick-failed', `Last tick failed at ${tmark(t.at)}: ${t.error || 'no detail recorded'}`);
+    // Issue #881: a GitHub rate limit pauses project board moves; it is a notice, not a failed tick.
+    if (Number.isFinite(state.board?.pausedUntil) && state.board.pausedUntil > now) add('board-paused', `Board updates paused until ${tmark(state.board.pausedUntil)} (GitHub rate limit); ${Object.keys(state.board.pending || {}).length} move(s) will be applied afterwards.`);
     if (teamEnabled !== false && t.status !== 'disabled' && now - t.at > STALE_TICK_MS) add('tick-stale', `No tick for ${Math.round((now - t.at) / 60000)} minutes (last ${tmark(t.at)}); the reconcile cron may have stopped.`);
   }
   const maxFix = limits.max_fix_attempts, maxReview = limits.max_review_attempts;
@@ -626,8 +639,8 @@ const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.
 export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: the real tick would refuse to launch jobs.';
 // Role slots (issue #148): who holds the implementer and reviewer slot right now, with the model and the work. A job the dispatcher has
 // no record of (started by hand) counts against the implementer slot, as the planner counts it.
-const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer', rebaser: 'Rebaser' };
-const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI' };
+const SLOT_LABEL = { implementer: 'Implementer', reviewer: 'Reviewer', rebaser: 'Rebaser', inbox: 'Inbox lane' };
+const SLOT_WHAT = { implement: 'implementing', continue: 'continuing', review: 'reviewing', fix: 'fixing', rebase: 'rebasing', cifix: 'fixing CI', inbox: 'running an approved prompt' };
 export function roleSlots(config, jobs, state, names = makeNamer({ repo: config.repository, stateJobs: state.jobs, titles: state.titles })) {
   return ROLES.map(role => {
     const held = jobs.filter(j => ((ACTIVE.includes(j.status) && j.status !== 'paused_limit') || isUnknownJob(j)) && roleOfType(state.jobs?.[j.id]?.kind) === role).map(j => {

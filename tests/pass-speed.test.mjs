@@ -118,7 +118,7 @@ function laneWorld(t, { active = [], limits = {}, pulls = [], register = REGISTE
   const jobs = { listActive: async () => active, get: async () => null, create: async spec => { created.push(spec); return { id: 'f'.repeat(32) }; } };
   const mk = () => new Team({ config: cfg, root, gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register, clock: { now: () => 5000 }, sleep: async () => {}, limitedOf: () => ({ out: false }),
     providerModels: { claude: { aliases: ['opus', 'sonnet', 'haiku'], pattern: '^claude-', efforts: ['low', 'medium', 'high'] } } });
-  return { inbox, root, id, created, mk };
+  return { inbox, root, id, created, mk, jobs };
 }
 
 test('an approved prompt starts in the fast lane while a pass holds its locks, without touching the team state', async t => {
@@ -137,16 +137,28 @@ test('an approved prompt starts in the fast lane while a pass holds its locks, w
   assert.equal(w.created.length, 1);
 });
 
-test('negative: the fast lane starts nothing with the implementer slot or the overall cap full, or the host check refusing', async t => {
+test('negative: the fast lane waits only for the host check; busy implementer slots and a full overall cap do not hold it (issue #971)', async t => {
   const busy = [{ id: 'a'.repeat(32), provider: 'claude', status: 'running' }];
   const w = laneWorld(t, { active: busy });
-  assert.deepEqual(await w.mk().startApprovedNow({}), { started: false, why: 'no free implementer slot' });
-  assert.equal(statusOf(w.inbox, w.id).state, 'approved');
+  assert.equal((await w.mk().startApprovedNow({})).started, true, 'implementer slot full: the inbox lane starts anyway');
+  assert.equal(statusOf(w.inbox, w.id).state, 'running');
   const w2 = laneWorld(t, { active: busy, limits: { roles: { implementer: 3, reviewer: 1 }, overall: 1 } });
-  assert.match((await w2.mk().startApprovedNow({})).why, /overall cap/);
+  assert.equal((await w2.mk().startApprovedNow({})).started, true, 'overall cap full: the inbox lane is outside it');
   const w3 = laneWorld(t);
   assert.deepEqual(await w3.mk().startApprovedNow({}, { admit: () => ({ ok: false, why: 'host load is high' }) }), { started: false, why: 'host load is high' });
   assert.equal(w3.created.length, 0);
+});
+
+test('negative: a second approved prompt waits while the first fast-lane job is live but not yet adopted (roles.inbox 1)', async t => {
+  const w = laneWorld(t); const live = [];
+  w.jobs.listActive = async () => live; w.jobs.get = async id => live.find(j => j.id === id) || null;
+  w.jobs.create = async spec => { w.created.push(spec); const j = { id: String(w.created.length).repeat(32), provider: 'claude', status: 'running' }; live.push(j); return j; };
+  assert.equal((await w.mk().startApprovedNow({})).started, true);
+  const id2 = 'd'.repeat(32);
+  fs.writeFileSync(path.join(w.inbox, 'items', `${id2}.json`), JSON.stringify({ kind: 'prompt', title: 'Another change', prompt: 'Edit another file as described.', why: 'test' }));
+  scan(w.inbox, 3000); assert.equal(decide(w.inbox, id2, 'approve', 4000).ok, true);
+  assert.deepEqual(await w.mk().startApprovedNow({}), { started: false, why: 'no free inbox slot' });
+  assert.equal(w.created.length, 1);
 });
 
 test('negative: a lane and a pass racing for the same approval start one job', async t => {
@@ -179,7 +191,7 @@ test('the lane command runs the installed code with the state root', () => {
   assert.equal(seen.args[0], '/self/cli.mjs'); assert.equal(seen.detached, true);
 });
 
-test('negative: the fast lane keeps the D-020 gate and the open-PR pause that the pass enforces', async t => {
+test('negative: the fast lane keeps the D-020 gate that the pass enforces, and ignores the open-PR pause like the inbox lane', async t => {
   const w = laneWorld(t, { register: REGISTER.replace(/homeowner-approved/g, 'agent-proposal') });
   const out = await w.mk().startApprovedNow({});
   assert.equal(out.started, false); assert.match(out.why, /D-020 is not homeowner-approved/);
@@ -187,8 +199,28 @@ test('negative: the fast lane keeps the D-020 gate and the open-PR pause that th
   const pr = n => ({ number: n, headRefName: `claude/issue-${n}-x`, title: 't', state: 'OPEN', labels: [], isDraft: false });
   const w2 = laneWorld(t, { limits: { max_open_prs: 2 }, pulls: [pr(1), pr(2)] });
   const out2 = await w2.mk().startApprovedNow({});
-  assert.equal(out2.started, false); assert.match(out2.why, /Paused new work: 2 open PRs/);
-  assert.equal(w2.created.length, 0);
+  assert.equal(out2.started, true, 'the open-PR cap pauses implement work, not the inbox lane'); assert.equal(w2.created.length, 1);
+});
+
+test('the fast lane honours limits.roles.inbox: a prompt started during a pass fills the slot, a second waits, a raised count lets it start (issue #971)', async t => {
+  const w = laneWorld(t);
+  const run = { id: 'f'.repeat(32), provider: 'claude', status: 'running' };
+  w.jobs.get = async id => (id === run.id ? run : null);
+  assert.equal((await w.mk().startApprovedNow({})).started, true);   // job f..: held only in the item's status until a pass adopts it
+  const id2 = 'd'.repeat(32);
+  fs.writeFileSync(path.join(w.inbox, 'items', `${id2}.json`), JSON.stringify({ kind: 'prompt', title: 'Second', prompt: 'Another small edit.', why: 'test' }));
+  scan(w.inbox, 3000); assert.equal(decide(w.inbox, id2, 'approve', 4000).ok, true);
+  const second = await w.mk().startApprovedNow({});
+  assert.deepEqual(second, { started: false, why: 'no free inbox slot' }); assert.equal(w.created.length, 1);
+  assert.equal(statusOf(w.inbox, id2).state, 'approved');
+});
+
+test('the order guard holds implement picks for a prompt the fast lane started during a pass, before any pass adopted it (issue #971)', async t => {
+  const w = laneWorld(t);
+  assert.equal((await w.mk().startApprovedNow({})).started, true);
+  assert.match(w.mk().orderGuard() || '', /running inbox prompt/, 'the unadopted fast-path job holds');
+  const pass = w.mk(); await pass.processInbox({ ingested: [], notified: [], actions: [], skipped: [] });
+  assert.match(pass.orderGuard() || '', /running inbox prompt/, 'after adoption it still holds');
 });
 
 test('a pass reads the open PR and issue lists once; a write, or the end of the window, reads GitHub again', async () => {
