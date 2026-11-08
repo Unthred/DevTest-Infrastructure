@@ -181,12 +181,12 @@ test('the Diagnostics tab is in the navigation, routes, and renders every sectio
   const serve = recorderDir => get(t, root, recorderDir);
   const ok = await serve(rdir);
   assert.equal(ok.status, 200);
-  for (const id of ['diag-about', 'diag-ticks', 'diag-turnaround', 'diag-verdicts', 'diag-idle', 'diag-recorder']) assert.match(ok.body, new RegExp(`data-card="${id}"`), id);
-  assert.match(ok.body, /<a href="\/diagnostics" aria-current="page">/); assert.match(ok.body, /data-diag-recorder="ok"/); assert.match(ok.body, /1 samples from 1 log file/);
+  for (const id of ['diag-about', 'diag-ticks', 'diag-turnaround', 'diag-verdicts', 'diag-idle']) assert.match(ok.body, new RegExp(`data-card="${id}"`), id);
+  assert.match(ok.body, /<a href="\/diagnostics" aria-current="page">/); assert.doesNotMatch(ok.body, /data-card="diag-recorder"|data-diag-recorder/, 'the recorder card moved to the Health page');
   assert.match(ok.body, /<td class="num" data-label="Missed ticks">1<\/td>/, 'the 08:05 to 08:30 gap is a missed tick');
   assert.doesNotMatch(ok.body, /undefined|NaN|\/mnt\/|rdir/);
   const gone = await serve(path.join(rdir, 'missing'));
-  assert.equal(gone.status, 200); assert.match(gone.body, /data-diag-recorder="missing"/); assert.match(gone.body, /Recorder logs not found/); assert.match(gone.body, /data-card="diag-ticks"/, 'the other sections still show');
+  assert.equal(gone.status, 200); assert.match(gone.body, /data-card="diag-ticks"/, 'the other sections still show');
   assert.doesNotMatch(gone.body, new RegExp(rdir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'no path is shown');
 });
 

@@ -77,7 +77,8 @@ export function validateTeamConfig(input) {
   try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
   validateDashboard(c.dashboard);
   try { c.display = validateDisplay(c.display); } catch (error) { throw new SupervisorError(error.message); }   // issue #1097
-  try { validateHealthConfig(c.health); } catch (error) { throw new SupervisorError(error.message); }   // issue #1092
+  if (c.health?.volumes !== undefined) { try { validateHealthConfig(c.health); } catch (error) { throw new SupervisorError(error.message); } }   // issue #1092
+  validateHealth(c.health);   // issue #1093
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
   if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir' || k === 'max_pending') && (c.inbox.max_pending === undefined || (Number.isSafeInteger(c.inbox.max_pending) && c.inbox.max_pending >= 1 && c.inbox.max_pending <= 200)))) throw new SupervisorError('invalid inbox: { dir: absolute path, max_pending?: 1-200 }');   // issue #124
@@ -114,6 +115,15 @@ function validateDashboard(d) {
   if (!d || typeof d !== 'object' || Array.isArray(d) || Object.keys(d).some(k => k !== 'allowed_origins')) throw new SupervisorError('invalid team config: dashboard');
   const a = d.allowed_origins;
   if (!Array.isArray(a) || a.length > 10 || !a.every(o => typeof o === 'string' && ORIGIN_PATTERN.test(o) && !/^http:\/\/[^/]*:80$|^https:\/\/[^/]*:443$/.test(o))) throw new SupervisorError('invalid team config: dashboard.allowed_origins must be a list of exact origins such as https://host (no path, no default port, no IPv6 literal)');
+}
+// Issue #1093: disk warning levels for the Health page, in percent. The alert level must be above the warn level.
+export const HEALTH_DEFAULTS = { disk_warn_percent: 85, disk_alert_percent: 95 };
+function validateHealth(h) {
+  if (h === undefined) return;
+  const pct = n => typeof n === 'number' && n > 0 && n <= 100;
+  if (!h || typeof h !== 'object' || Array.isArray(h) || Object.keys(h).some(k => k !== 'volumes' && !(k in HEALTH_DEFAULTS))) throw new SupervisorError('invalid team config: health');
+  const w = h.disk_warn_percent ?? HEALTH_DEFAULTS.disk_warn_percent, a = h.disk_alert_percent ?? HEALTH_DEFAULTS.disk_alert_percent;
+  if (!pct(w) || !pct(a) || w >= a) throw new SupervisorError('invalid team config: health disk levels must be percentages with warn below alert');
 }
 function validateSelfUpgrade(u) {
   if (u === undefined) return;

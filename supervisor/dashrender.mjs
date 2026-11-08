@@ -13,6 +13,7 @@ import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, 
 
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
+import { healthPage } from './healthpage.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
@@ -39,7 +40,7 @@ const colourOf = (name, i = 0) => AGENT_COLOUR[name] || EXTRA_COLOURS[i % EXTRA_
 // ---- routes
 export const NAV = [
   ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
-  ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['diagnostics', '/diagnostics', 'Diagnostics', 'clock'], ['system', '/system', 'System', 'gear']
+  ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['diagnostics', '/diagnostics', 'Diagnostics', 'clock'], ['health', '/health', 'Health', 'pulse'], ['system', '/system', 'System', 'gear']
 ];
 export function matchRoute(pathname) {
   const p = pathname.replace(/\/+$/, '') || '/';
@@ -948,11 +949,7 @@ function diagnosticsPage(view, query, path, route) {
   // Issue #406: passes by what started them, and the wake cap. A dropped request is said plainly; the schedule is the fallback.
   const ps = d.passes, wk = d.wake;
   const wakeCard = ps ? card({ id: 'diag-passes', title: 'Passes by trigger', span: 12, movable: false, body: `${wk?.capHit ? `<p class="sub" data-diag-wake-cap role="alert"><strong>Wake cap reached:</strong> ${esc(wk.droppedLastHour)} request${wk.droppedLastHour === 1 ? '' : 's'} dropped in the last hour (${esc(wk.acceptedLastHour)} of ${esc(wk.cap)} used). Work waits for the five-minute schedule until the hour rolls over.</p>` : wk ? `<p class="sub" data-diag-wake>Event wakes in the last hour: ${esc(wk.acceptedLastHour)} of ${esc(wk.cap)} allowed. The five-minute schedule always runs as well.</p>` : ''}${d.lastPass ? `<p class="sub" data-diag-last-pass>Last pass (${esc(d.lastPass.trigger)}): ${esc(d.lastPass.seconds)} s${d.lastPass.phases.length ? `; ${d.lastPass.phases.map(([k, s]) => `${esc(k)} ${esc(s)} s`).join(', ')}` : ''}.</p>` : ''}${wk?.pending ? `<p class="sub" data-diag-wake-pending>Waiting for the running pass: ${esc(wk.pending.reasons.join(', '))}${wk.pending.ageSeconds == null ? '' : ` (waiting ${esc(wk.pending.ageSeconds)} s)`}.</p>` : ''}<p class="sub">${esc(ps.total)} passes in the last ${esc(d.retentionDays)} days, ${esc(ps.didNothing)} did nothing. ${ps.unlabelled ? `${esc(ps.unlabelled)} were recorded before triggers were kept and are counted as scheduled. ` : ''}A pass that did nothing planned no action. ${ps.noop ? `${esc(ps.noop)} of them ended early because GitHub was unchanged (median ${ps.seconds?.medianNoop == null ? 'n/a' : esc(Math.round(ps.seconds.medianNoop)) + ' s'} against ${ps.seconds?.medianDidNothingFull == null ? 'n/a' : esc(Math.round(ps.seconds.medianDidNothingFull)) + ' s'} for a full pass that did nothing).` : 'None ended early as unchanged yet.'}</p>${plainTable(['Trigger', 'Passes', 'Started something', 'Did nothing', 'Ended early (unchanged)'], Object.entries(ps.byTrigger).map(([k, v]) => [k, v.passes, v.startedSomething, v.didNothing, v.noop || 0]), 'Passes by trigger')}` }) : '';
-  const r = d.recorder, problem = r.status === 'missing' || r.status === 'unreadable' || r.status === 'empty';
-  const kb = n => `${Math.round(n / 1048576 * 10) / 10} GiB`;
-  const rec = card({ id: 'diag-recorder', title: 'Load, swap and disk wait from the memory flight recorder', span: 12, movable: false, body: `<p class="sub" data-diag-recorder="${esc(r.status)}">${problem ? '' : `${esc(r.samples)} samples from ${esc(r.files)} log file${r.files === 1 ? '' : 's'}. `}${r.note ? esc(r.note) : ''}</p>${problem ? empty(r.status === 'empty' ? 'No recorder samples in this window' : r.status === 'missing' ? 'Recorder logs not found' : 'Recorder logs not readable', 'The rest of this page does not depend on them.', 'warn')
-    : `<div class="diag-sparks">${diagSpark(r.hourly, 'loadMax', 'Load average (1 min), hourly peak', '')}${diagSpark(r.hourly, 'swapMaxPercent', 'Swap in use, hourly peak', ' %')}${diagSpark(r.hourly, 'iowaitAvg', 'CPU waiting on disk, hourly average', ' %')}</div>${plainTable(['Day', 'Samples', 'Load avg', 'Load peak', 'Swap peak', 'Disk wait avg', 'Disk wait peak', 'Blocked tasks peak'], r.days.map(x => (x.samples ? [x.day, x.samples, x.loadAvg, x.loadMax, `${x.swapMaxPercent}% (${kb(x.swapMaxKb)})`, `${x.iowaitAvg ?? '–'}%`, `${x.iowaitMax ?? '–'}%`, x.blockedMax] : [x.day, 0, '–', '–', '–', '–', '–', '–'])), 'Recorder figures per day')}<p class="sub">Disk I/O is the share of CPU time spent waiting on disk and the number of blocked tasks, both from the one-minute host samples.</p>`}` });
-  return { title: 'Diagnostics', body: grid('diagnostics', intro + ticks + wakeCard + turn + lag + idle + rec) };
+  return { title: 'Diagnostics', body: grid('diagnostics', intro + ticks + wakeCard + turn + lag + idle) };
 }
 
 // ---- Live processes per agent and job (issue #568). Rendered from a procsample reading; /api/processes returns the same fragment
@@ -1017,7 +1014,7 @@ function processesPage(view, query, pathname, route) {
   return { title: agent ? `Processes: ${agent}` : 'Processes', crumbs: agent ? [['/system', 'System'], ['/system/processes', 'Processes'], [null, agent]] : [['/system', 'System'], [null, 'Processes']], bodyClass: 'procs',
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
-const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, health: (view, query, path, route) => healthPage(route, { esc, card, grid, empty, legend, plainTable, diagSpark, utc }), evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 export const PAGE_NAMES = Object.keys(PAGES);
 

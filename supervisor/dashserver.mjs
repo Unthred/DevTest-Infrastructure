@@ -17,8 +17,8 @@ import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
 import { matchRoute, nextTickHtml, renderRoute, processesFragment } from './dashrender.mjs';
 import { createSampler, createJobReader } from './procsample.mjs';
-import { validateTeamConfig } from './team.mjs';
 import { configureDisplay } from './money.mjs';
+import { validateTeamConfig, HEALTH_DEFAULTS } from './team.mjs';
 import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
 import { installs, breakerHistory } from './installs.mjs';
@@ -30,7 +30,7 @@ import nodePath from 'node:path';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
-import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
+import { buildDiagnostics, readDiskSamples, readRecorder, DAY_MS, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, scanInboxNow } from './wake.mjs';
 import * as inboxStore from './inbox.mjs';
 import { fileURLToPath } from 'node:url';
@@ -149,6 +149,13 @@ export function diagnosticsData({ root, config, now, recorderDir }) {
   return buildDiagnostics({ jobs: readJobs(root), snapshots: readSnapshots(root), verdicts: readTeamState(root)?.verdicts || {}, agents: Object.fromEntries(Object.entries(cfg.agents).map(([n, x]) => [n, x.provider])), now, recorderDir, wake: (() => { try { return wakeView(root, now); } catch { return null; } })() });
 }
 const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, behindWrite: p.behindWrite, refreshing: p.refreshing, failed: p.failed });
+// Issue #1093: the Health page's data. Disk samples and the recorder are bounded reads of local files; no model or GitHub call.
+export function healthData({ root, config, now, recorderDir }) {
+  if (typeof config === 'function') config = config();
+  const h = { ...HEALTH_DEFAULTS, ...validateTeamConfig(config).health };
+  return { now, warn: h.disk_warn_percent, alert: h.disk_alert_percent, disk: readDiskSamples(nodePath.join(root, 'dashboard', 'disk-samples.jsonl'), now),
+    recorder: recorderDir ? readRecorder(recorderDir, now - 7 * DAY_MS, now) : { status: 'missing', note: 'No recorder log folder is configured.', files: 0, samples: 0, hourly: [], days: [] } };
+}
 export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
   // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
   // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
@@ -373,8 +380,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         const agent = /^[A-Za-z0-9_-]{1,40}$/.test(q0.get('agent') || '') ? q0.get('agent') : null;
         return send(200, 'text/html; charset=utf-8', processesFragment({ ...view, generatedAt: now() }, procs.get(), agent));
       }
-      const diag = route.page === 'diagnostics', watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
-      const routed = diag ? { ...route, data: diagnosticsData({ root, config: source(), now: now(), recorderDir }) } : route.page === 'processes' ? { ...route, sample: procs.get() } : watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
+      const diag = route.page === 'diagnostics', health = route.page === 'health', watch = route.page === 'watch', evidence = route.page === 'evidence' || route.page === 'evidence-run';
+      const routed = health ? { ...route, data: healthData({ root, config: source(), now: now(), recorderDir }) } : diag ? { ...route, data: diagnosticsData({ root, config: source(), now: now(), recorderDir }) } : route.page === 'processes' ? { ...route, sample: procs.get() } : watch ? { ...route, transcript: readTranscript(root, route.id), job: jobRecord(root, route.id), runningNow: now() }
         : evidence ? { ...route, data: route.page === 'evidence' ? listRuns(evidenceRoot) : readRun(evidenceRoot, route.id) } : route;
       const out = renderRoute(route.page === 'processes' ? { ...view, generatedAt: now() } : view, routed, { query: new URLSearchParams(search), pathname: path, ...(watch ? { refreshSeconds: 0 } : {}) });
       // The evidence pages show same-origin screenshots, so only they may load images from 'self'; every other page keeps data: only.
