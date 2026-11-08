@@ -32,6 +32,7 @@ test('each cause in the fixed list is chosen from the job evidence', () => {
   c({ job: job({ kind: 'fix', status: 'failed' }), entry: { kind: 'fix', pr: 4 }, fixLimitReached: true }, 'review_disagreement');
   c({ job: job({ kind: 'implement', incompleteReason: { cause: 'postcondition_not_met', detail: 'stopped: prerequisite #991 is not done yet' } }) }, 'prerequisite_open');
   c({ job: job({ kind: 'implement', lastEvent: 'context_too_large' }), openPrerequisites: [991] }, 'prerequisite_open');
+  c({ job: job({ kind: 'fix', lastEvent: 'idle_timeout' }), openPrerequisites: [991] }, 'wedged');
   c({ job: job({ status: 'completed' }), refusal: 'invalid-ticket' }, 'identity_evidence');
   c({ job: job({ incompleteReason: { cause: 'postcondition_not_met', detail: 'no writer record for the head' } }) }, 'identity_evidence');
   c({ job: job({ incompleteReason: { cause: 'postcondition_not_met', detail: 'validator fault: boom' } }) }, 'foreman_bug');

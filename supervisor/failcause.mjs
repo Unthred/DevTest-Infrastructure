@@ -76,7 +76,8 @@ export function classifyFailure({ job, entry = {}, events = [], host = null, ref
   if (NET_TEXT.test(text) || kinds.has('network_error')) return out('environment', `network: ${reason.detail || last}`);
 
   if (['usage_limit', 'transient_rate_limit', 'rate_limit'].some(k => kinds.has(k)) || (num(job?.usageLimitHits) > 0 && last === 'retry_exhausted')) return out('provider_limit', `the provider's allowance stopped it (${last || 'usage_limit'})`);
-  if (openPrerequisites.length) return out('prerequisite_open', `stopped because ${openPrerequisites.map(n => `#${n}`).join(', ')} ${openPrerequisites.length > 1 ? 'are' : 'is'} still open`);
+  const wedgeKind = ['idle_timeout', 'stalled', 'wedged', 'liveness_timeout'].some(k => kinds.has(k));
+  if (openPrerequisites.length && !wedgeKind) return out('prerequisite_open', `stopped because ${openPrerequisites.map(n => `#${n}`).join(', ')} ${openPrerequisites.length > 1 ? 'are' : 'is'} still open`);
   if (PREREQ_TEXT.test(text)) return out('prerequisite_open', `stopped on an open prerequisite: ${reason.detail || text}`);
   if (kinds.has('approval_required') || HOMEOWNER_TEXT.test(text)) return out('homeowner_decision', `needs the homeowner: ${reason.detail || last}`);
   if (kinds.has('auth_error') || ['no-verdict-file', 'unreadable-verdict-file', 'invalid-ticket', 'wrong-pr', 'wrong-head'].includes(refusal) || (reason.cause === 'postcondition_not_met' && IDENTITY_TEXT.test(reason.detail || ''))) {
