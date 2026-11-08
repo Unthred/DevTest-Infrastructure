@@ -421,6 +421,7 @@ test('#550: a blocked review refused by the validator does not use up the head\'
   // bound: max_review_attempts (2) refunds, then attempts count again
   await startAndRefuse(w, { verdict: 'PASS', extra: 1 }, detail);
   assert.equal(w.team.s.reviewAttempts[k], 0);
+  w.team.s.sameCause = {};   // issue #1086: the planner now withholds a review after two same-cause failures; this test is about the attempt count, not the cap
   const c = await startAndRefuse(w, { verdict: 'PASS', extra: 1 }, detail);
   assert.equal(c.report.refusedReviews[0].refunded, false);
   assert.equal(w.team.s.reviewAttempts[k], 1, 'beyond the bound the attempt stays used so the loop ends in Needs you');

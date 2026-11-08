@@ -13,6 +13,7 @@ export const KINDS = ['prompt', 'issue_draft', 'action'];
 // number, or the 8-character job id the dashboard shows); the item carries no command, path or free-form argument.
 export const ACTIONS = {
   new_review_attempt: { target: 'pr', noun: 'pull request', will: "Give one more review attempt at the same head of this pull request (use it when attempts were spent by Foreman's own faults). Nothing is merged or approved; the new review decides." },
+  clear_retry_cap: { target: 'pr', noun: 'pull request', will: 'Clear the retry cap Foreman put on this pull request (a rebase, fix or review that failed twice for the same cause), so it is planned again. Refused when no cap is in place. Nothing is merged or approved.' },
   reopen: { target: 'issue', noun: 'issue', will: 'Clear the "implemented" mark of this issue so Foreman can start it again. Refused while a pull request, a live job or saved work for it exists.' },
   close_job: { target: 'job', noun: 'job', will: 'Close this stopped job of a pull request that a newer head has overtaken. Unpushed work is saved to a branch on the remote first; the job is closed only once nothing local is unsaved.' },
   stop_job: { target: 'job', noun: 'job', will: 'Stop this running or paused job.' },
