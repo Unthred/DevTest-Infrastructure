@@ -3017,7 +3017,7 @@ export class Team {
         this.s.notified[nkey] = this.clock.now(); this.save();
         try {
           await this.flag(pr.number, { key: 'fixlimit', kind: 'fixlimit', head: pr.headRefOid, tk: 'pull' });
-          await this.postNotice(pr.number, `churn pr=${pr.number} head=${pr.headRefOid}`, `**Needs the homeowner.** The last ${rounds.length - 1} fix rounds on this PR each drew a new, different set of blocking findings, so more rounds are unlikely to converge. The dispatcher starts no further fix jobs for it. The blocking findings side by side:\n\n${churnText(rounds)}\n\nRequired: decide which: ${FIX_LIMIT_OPTIONS}.`);
+          await this.postNotice(pr.number, `churn pr=${pr.number} head=${pr.headRefOid}`, `**Needs the homeowner.** The last ${rounds.length - 1} fix rounds on this PR each drew a new, different set of blocking findings, so more rounds are unlikely to converge. The dispatcher starts no further fix jobs for it. The blocking findings side by side:\n\n${churnText(rounds)}\n\nRequired: decide which: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
         } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
         (report.notified ||= []).push({ pr: pr.number, churn: true });
       });
@@ -3061,7 +3061,7 @@ export class Team {
       // alert is retried on the next tick; a failing channel never undoes the notice.
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
         try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${FIX_LIMIT_OPTIONS}.`);
+          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
           this.s.notified[akey] = this.clock.now(); this.save();
         } catch { (report.skipped ||= []).push({ what: `alert fix-limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
       }

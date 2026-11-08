@@ -323,9 +323,13 @@ test('#1048 a held PR with red CI starts no CI-fix round, is not awaiting a fina
   const acts = await w.team.plan();
   assert.equal(acts.find(a => a.agent === 'claude' && a.type === 'cifix'), undefined);
   assert.equal(acts.find(a => a.agent === 'codex'), undefined);
+  const alerts = []; w.team.alert = async m => { alerts.push(m); };
   await w.team.notifyFixLimit({});
   const n = w.calls.comments.filter(c => /fix rounds/.test(c[1]));
   assert.equal(n.length, 1);
   assert.match(n[0][1], /named list of the findings to fix, restart it smaller, or close it/);
   assert.doesNotMatch(n[0][1], /wait for another agent/);
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /named list of the findings to fix/);
+  assert.doesNotMatch(alerts[0], /wait for another agent/);
 });
