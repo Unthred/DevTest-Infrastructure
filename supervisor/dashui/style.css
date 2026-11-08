@@ -508,3 +508,6 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .bar-picker summary{cursor:pointer;padding:4px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);min-height:36px;display:inline-flex;align-items:center}
 .bar-picker[open]>ul{position:absolute;right:0;z-index:50;margin:var(--sp1) 0 0;padding:var(--sp2);list-style:none;min-width:14rem;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-lg)}
 .bar-picker li{display:flex;align-items:center;justify-content:space-between;gap:var(--sp3);padding:var(--sp1) 0}
+.card.health-warn{border-top:4px solid var(--warning);background:var(--warning-bg)}
+.card.health-alert{border-top:4px solid var(--action);background:var(--action-bg)}
+.card.health-unreadable{border-top:4px solid var(--warning);background:var(--warning-bg)}

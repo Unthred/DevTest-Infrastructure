@@ -84,3 +84,10 @@ test('health config validation rejects bad levels', () => {
   assert.doesNotThrow(() => validateTeamConfig({ ...CONFIG, health: { disk_warn_percent: 80 } }));
   for (const health of [{ disk_warn_percent: 95, disk_alert_percent: 90 }, { disk_warn_percent: 0 }, { disk_alert_percent: 101 }, { other: 1 }, []]) assert.throws(() => validateTeamConfig({ ...CONFIG, health }), /health/);
 });
+
+test('style.css gives the warn and alert cards amber and red styling', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.card\.health-warn\{[^}]*var\(--warning/);
+  assert.match(css, /\.card\.health-alert\{[^}]*var\(--action/);
+});
