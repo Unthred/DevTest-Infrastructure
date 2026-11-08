@@ -144,9 +144,9 @@ const DEFINITION = [
 
 // { file -> [added line text] } of `from..to` (no context, no renames, so a rename shows as delete plus add and fails safe).
 // onHunk(file, removed[], added[]) (issue #640) reports each hunk's trimmed removed and added lines, so a caller can pair them.
-function addedLines(run, from, to, onHunk = null) {
+function addedLines(run, from, to, onHunk = null, only = null) {
   const out = new Map();
-  const diff = run(['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, to]).split('\n');
+  const diff = run(['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, to, ...(only ? ['--', only] : [])]).split('\n');
   if (diff.length > MAX_DIFF_LINES) throw new SupervisorError('rebase check: diff too large to compare');
   let file = null; let header = false; let removed = []; let added = [];
   const flush = () => { if (onHunk && file && removed.length && added.length) onHunk(file, removed, added); removed = []; added = []; };
@@ -255,7 +255,7 @@ function lostChanges(run, base, oldHead, newHead) {
       if (t.length >= 4 && newFile.some(l => l.includes(t))) continue;   // a resolution that merged the line into a longer one keeps the change
       if (unionSurvives(t, newFile, oldFile, mainFile)) continue;   // issue #580: a list merged from both sides keeps every token
       const key = `${file}\0${t}`;
-      if (bases.has(key)) { if (!mainRepl) { const r = new Map(); addedLines(run, oldMb, base, (f, rem, add) => { if (f !== file) return; rem.forEach((x, i) => r.set(x, [...(r.get(x) ?? []), ...(rem.length === add.length ? [add[i]] : add)])); }); mainRepl = r; }
+      if (bases.has(key)) { if (!mainRepl) { const r = new Map(); addedLines(run, oldMb, base, (f, rem, add) => { if (f !== file) return; rem.forEach((x, i) => r.set(x, [...(r.get(x) ?? []), ...(rem.length === add.length ? [add[i]] : add)])); }, file); mainRepl = r; }
         if (sameLineMerged(t, bases.get(key), newFile, oldFile, mainFile, mainRepl, taken)) continue; }   // issue #640
       lost.push({ file, kind: 'line', text: t.slice(0, 200) });
     }
@@ -301,12 +301,14 @@ export function prepareRebase({ worktree, branch }) {
 }
 
 // Issue #640: a refusal names what it saw and who can accept it, so a person can push deliberately if the resolution is right.
-function refusal(check, branch, oldHead) {
-  const parts = [];
-  if (check.missing.length) parts.push(`commit ${check.missing[0].sha.slice(0, 8)} "${check.missing[0].subject}" is not in the result`);
-  if (check.lostChanges.length) parts.push(`${check.lostChanges[0].file}: "${check.lostChanges[0].text}" is not in the result`);
-  const what = parts.join('; ');
-  return `Refused: ${what}. If the resolution is deliberate, only the homeowner or a reviewer may accept it, by pushing with git push --force-with-lease=refs/heads/${branch}:${oldHead} origin HEAD:refs/heads/${branch}.`;
+export function refusal(check, branch, oldHead) {
+  const LIMIT = 5;
+  const items = [
+    ...check.missing.map(m => `commit ${m.sha.slice(0, 8)} "${m.subject}" is not in the result`),
+    ...check.lostChanges.map(l => `${l.file}: "${l.text}" is not in the result`),
+  ];
+  const more = items.length > LIMIT ? ` (and ${items.length - LIMIT} more)` : '';
+  return `Refused: ${items.length} problem${items.length === 1 ? '' : 's'}: ${items.slice(0, LIMIT).join('; ')}${more}. Report this to the homeowner; do not push another way. If the resolution is deliberate, only the homeowner or a reviewer may accept it, by a deliberate push with force-with-lease against the fetched head ${oldHead.slice(0, 8)} of ${branch}.`;
 }
 
 // Last step: verify, then push with a lease on the fetched head. Returns { pushed, ... } and never throws for the two

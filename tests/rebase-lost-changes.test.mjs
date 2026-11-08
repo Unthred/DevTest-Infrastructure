@@ -8,7 +8,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
-import { checkRebase, prepareRebase, pushRebase, countsHold } from '../supervisor/rebasecheck.mjs';
+import { checkRebase, prepareRebase, pushRebase, countsHold, refusal } from '../supervisor/rebasecheck.mjs';
 
 const G = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];
 const git = (cwd, ...a) => execFileSync('git', [...G, ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -373,4 +373,12 @@ test('count rule: counts that cannot be read mean not applied', () => {
   assert.equal(countsHold(run, 'p', 'b', hunks), true);                // readable, base holds 2 >= 1 + 1
   assert.equal(countsHold((a) => { if (a[1] === 'b:l.mjs') throw new Error('unreadable'); return run(a); }, 'p', 'b', hunks), false);
   assert.equal(countsHold(run, 'p', 'b', [{ file: null, removed: [], added: ['assert.ok(x);'] }]), false);
+});
+
+test('#1025: a refusal counts every problem, lists at most five and gives no ready-to-run push command', () => {
+  const lost = Array.from({ length: 7 }, (_, i) => ({ file: 'a.mjs', text: `line ${i}` }));
+  const m = refusal({ missing: [{ sha: 'abcdef1234', subject: 'first' }], lostChanges: lost }, 'feat', '0123456789abcdef');
+  assert.match(m, /8 problems/); assert.match(m, /and 3 more/); assert.match(m, /commit abcdef12 "first"/); assert.doesNotMatch(m, /line 5/);
+  assert.match(m, /homeowner or a reviewer/); assert.doesNotMatch(m, /git push/);
+  assert.match(refusal({ missing: [], lostChanges: [lost[0]] }, 'feat', '0123456789'), /1 problem:/);
 });
