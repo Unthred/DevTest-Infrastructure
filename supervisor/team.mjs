@@ -774,7 +774,7 @@ export class Team {
   writersOf(pr) {
     // Issue #258: a rebase that resolved no conflict is not authorship (homeowner decision 2 Nov 2026); resolving one is. A rebase whose
     // record does not say (older jobs, an unreadable comparison) counts as a writer.
-    const cleanRebase = j => j.kind === 'rebase' && j.rebase?.resolvedConflicts === false;
+    const cleanRebase = j => j.kind === 'rebase' && (j.mechanical === true || j.rebase?.resolvedConflicts === false);   // issue #1050: a mechanical rebase is never a model writer
     const out = Object.values(this.s.jobs).filter(j => WRITER_KINDS.has(j.kind) && !cleanRebase(j) && this.c.agents[j.agent] && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)))
       .map(j => ({ provider: this.c.agents[j.agent].provider, model: j.model ?? null }));
     const author = agentOfBranch(this.c, pr.headRefName);
@@ -1856,10 +1856,38 @@ export class Team {
     try { pull = await this.gh.getPull(act.pr); } catch { pull = null; }
     if (pull && pull.headRefOid !== act.head) return false;   // the head moved: let the normal checks decide
     const d = robust.rebaseNeeded({ probe, pull });
+    if (d.needed && d.mechanical && !this.s.mechanicalFailed?.[act.key]) return this.mechanicalRebase(act, report, d.why);   // issue #1050: git rebases it, no agent
     if (d.needed) return false;
     (this.s.rebaseSkipped ||= {})[act.key] = { at: this.clock.now(), why: d.why };
     (report.skipped ||= []).push({ what: `rebase ${act.pr} (${act.agent})`, reason: `no agent started: ${d.why}` });
     this.save();
+    return true;
+  }
+  // Issue #1050: a branch that is only behind its base and merges cleanly is rebased by git in a scratch worktree, checked (validator and test
+  // suite in a test slot) and pushed with --force-with-lease, with no agent. Recorded as a rebase job with agent and model none and tokens 0;
+  // it is never a model writer (writersOf) and, being a clean rebase, a PASS carries across it under D-025 (carryVerdict). Returns true when
+  // the rebase was done (the caller starts nothing); false when it could not be done, so the agent rebase job runs as before.
+  async mechanicalRebase(act, report, why) {
+    if (typeof this.git.mechanicalRebase !== 'function') return false;
+    let r = null;
+    try { r = await this.git.mechanicalRebase({ branch: act.branch, base: act.base, head: act.head }); } catch (error) { r = { ok: false, stage: 'error', detail: String(error?.message || error) }; }
+    if (!r?.ok || !SHA.test(String(r.newHead))) {
+      (this.s.mechanicalFailed ||= {})[act.key] = { at: this.clock.now(), stage: String(r?.stage || 'unknown').slice(0, 24), detail: redact(String(r?.detail || ''), 200) };
+      (report.skipped ||= []).push({ what: `mechanical rebase ${act.pr}`, reason: `failed at ${r?.stage || 'unknown'}; an agent rebase job runs instead` });
+      this.save();
+      return false;
+    }
+    const id = `mech-${crypto.randomBytes(4).toString('hex')}`;
+    const j = this.s.jobs[id] = { kind: 'rebase', agent: 'none', model: 'none', tokens: 0, mechanical: true, key: act.key, pr: act.pr, head: act.head, base: act.base, branch: act.branch, ingested: true, at: this.clock.now() };
+    Object.assign(j, this.titlesFor(j));
+    j.mechanicalNewHead = r.newHead;
+    this.save();
+    (report.mechanicalRebases ||= []).push({ pr: act.pr, job: id, from: act.head, to: r.newHead });
+    if (!(await this.recordRebase(id, j, report))) {
+      if (j.rebase) j.rebase.resolvedConflicts = false;   // by construction: git rebased without stopping
+      j.carry = { state: 'pending', newHead: r.newHead, at: this.clock.now() }; this.save();
+      await this.carryVerdict(id, j, report);
+    }
     return true;
   }
   retryCapItems() { return robust.cappedItems(this.s, robust.sameCauseCap(this.c.limits)); }
@@ -2430,7 +2458,7 @@ export class Team {
   // PR is labelled for the homeowner (the dashboard shows it under Needs you) and no verdict carries across. Returns true when
   // commits were lost. An unreadable comparison records the error and claims nothing.
   async recordRebase(id, j, report) {
-    const pr = await this.gh.getPull(j.pr);
+    const pr = j.mechanicalNewHead ? { headRefOid: j.mechanicalNewHead } : await this.gh.getPull(j.pr);   // issue #1050: our own push, before GitHub shows it
     if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === j.head) return false;
     let check;
     try { check = await this.git?.checkRebase?.({ base: `origin/${j.base || 'main'}`, oldHead: j.head, newHead: pr.headRefOid }); } catch { check = null; }
@@ -2482,6 +2510,8 @@ export class Team {
     if (!this.carryApproved()) return;
     const pr = await this.gh.getPull(j.pr);
     const done = () => { if (j.carry?.state === 'pending') { j.carry = { state: 'refused', reason: 'superseded', at: this.clock.now() }; this.save(); } };
+    // Issue #1050: GitHub may still show the old head just after a mechanical push; wait (bounded) instead of refusing.
+    if (pr && j.mechanical && pr.headRefOid === j.head && j.carry?.state === 'pending' && this.clock.now() - (j.carry.at || 0) < 10 * 60000) return;
     if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === j.head) return done();
     const key = verdictKey(j.pr, pr.headRefOid);
     if (this.s.verdicts[key]) return done();

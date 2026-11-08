@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import os from 'node:os';
 import fs from 'node:fs';
 import { requestBreakerResume } from './breakerresume.mjs';
 import { queueHomeownerRequest } from './homeownerqueue.mjs';
@@ -153,6 +154,32 @@ function realGit(repoPath) {
     // issue #302: true only when git can prove the worktree has no uncommitted work (tracked or untracked); anything else is false/null
     // issue #995: a read-only dry-run merge (no worktree, no ref changes); conflicts is true when git reports a conflict
     mergeProbe: async ({ branch, base }) => { git('fetch', '--quiet', 'origin'); const r = spawnSync('git', ['-C', repoPath, 'merge-tree', '--write-tree', '--quiet', `origin/${base}`, `origin/${branch}`], { encoding: 'utf8', timeout: 120000 }); if (r.status === 0) return { conflicts: false }; if (r.status === 1) return { conflicts: true }; return null; },
+    // issue #1050: rebase a clean, only-behind branch with git alone (no agent): scratch worktree on a detached head, validator and test suite in a
+    // test slot, then push with --force-with-lease against the head it started from. Nothing is pushed unless every step passed.
+    mechanicalRebase: async ({ branch, base, head }) => {
+      if (!/^[A-Za-z0-9._\/-]+$/.test(branch) || !/^[A-Za-z0-9._\/-]+$/.test(base) || !/^[0-9a-f]{40}$/.test(head)) return { ok: false, stage: 'input', detail: 'unexpected branch, base or head' };
+      git('fetch', '--quiet', 'origin');
+      const remote = spawnSync('git', ['-C', repoPath, 'rev-parse', '--verify', `refs/remotes/origin/${branch}`], { encoding: 'utf8', timeout: 60000 }).stdout.trim();
+      if (remote !== head) return { ok: false, stage: 'head-moved', detail: 'the branch is no longer at the planned head' };
+      const scratch = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'mech-rebase-')), wt = path.join(scratch, 'wt');
+      const run = (cmd, args, timeout = 120000) => spawnSync(cmd, args, { cwd: wt, encoding: 'utf8', timeout, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+      try {
+        git('worktree', 'add', '--detach', wt, head);
+        const rb = run('git', ['rebase', `origin/${base}`]);
+        if (rb.status !== 0) { run('git', ['rebase', '--abort']); return { ok: false, stage: 'rebase', detail: 'git rebase stopped' }; }
+        const newHead = run('git', ['rev-parse', 'HEAD']).stdout.trim();
+        if (newHead === head) return { ok: false, stage: 'rebase', detail: 'the rebase changed nothing' };
+        const cli = fileURLToPath(import.meta.url), slot = args => run(process.execPath, [cli, 'test-slot', 'run', '--label', `mechanical rebase ${branch}`, '--', ...args], 3600000);
+        if (run('node', ['tools/validate-project.mjs']).status !== 0) return { ok: false, stage: 'checks', detail: 'validate-project failed on the rebased head' };
+        if (slot(['node', '--test', '--test-reporter=dot', 'tests/**/*.test.mjs']).status !== 0) return { ok: false, stage: 'checks', detail: 'the test suite failed on the rebased head' };
+        const push = run('git', ['push', `--force-with-lease=refs/heads/${branch}:${head}`, 'origin', `HEAD:refs/heads/${branch}`]);
+        if (push.status !== 0) return { ok: false, stage: 'push', detail: 'the push was refused (the branch moved?)' };
+        return { ok: true, newHead };
+      } finally {
+        spawnSync('git', ['-C', repoPath, 'worktree', 'remove', '--force', wt], { timeout: 60000 });
+        fs.rmSync(scratch, { recursive: true, force: true });
+      }
+    },
     isClean: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 ? r.stdout.trim() === '' : null; },
     // issue #610: the branch the worktree has checked out (null when detached or unknown)
     currentBranch: async wt => { if (!fs.existsSync(wt)) return null; const r = spawnSync('git', ['-C', wt, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8', timeout: 60000 }); return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null; },

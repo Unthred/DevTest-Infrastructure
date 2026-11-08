@@ -71,7 +71,8 @@ export function rebaseNeeded({ probe, pull }) {
   if (probe.conflicts) return { needed: true, why: 'the dry-run merge conflicts' };
   if (!pull) return { needed: true, why: 'the pull request could not be read' };
   if (pull.mergeable !== 'MERGEABLE') return { needed: true, why: `GitHub reports the pull request ${String(pull.mergeable || 'unknown').toLowerCase()}` };
-  if (pull.mergeStateStatus === 'BEHIND') return { needed: true, why: 'the branch is behind its base' };
+  // Issue #1050: only behind, and the dry-run merge is clean: git does the rebase itself (mechanical), no agent.
+  if (pull.mergeStateStatus === 'BEHIND') return { needed: true, mechanical: true, why: 'the branch is only behind its base and the dry-run merge is clean' };
   return { needed: false, why: 'the dry-run merge is clean and GitHub reports the pull request mergeable and up to date' };
 }
 
