@@ -316,6 +316,15 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Expiring a halt by time (a halt would end without evidence); letting a job already running at the trip clear it; letting the dashboard edit Foreman's state file directly (two writers); an agent-callable resume.
 - Superseded-by: none
 
+## D-035 — A CHANGES verdict carries across a clean rebase until a fix lands
+- Status: agent-proposal
+- Date: 2026-11-08
+- Source: issue #1048; builds on D-025 and does not change it or D-024
+- Decision: When a pull request's latest verdict is CHANGES and the only thing since that verdict's head is a rebase that resolved no conflict and left the patch unchanged (the same mechanical evidence as D-025: no lost commit or change, exact patch text and hunk placement), the CHANGES verdict and its findings carry to the new head, with a public comment and a carry record. The pull request stays in the fix lane and no review is queued. CI state is not a condition (a carry only keeps a block; red CI is handled by the CI-fix path). A review is queued again only after a fix or CI-fix job pushes a commit that is not a rebase. A carried CHANGES does not count as a further CHANGES round for escalation or churn. At the fix limit, a pull request holding a carried CHANGES gets its one Needs you item at once (no final round first) and is held from rebase, further fix rounds and review until the homeowner decides (finish with a named list of findings, restart smaller, or close); a requested re-review (issue #418) sets the verdict aside and lifts the hold. The pull request card shows the old head, the new head and the findings carried.
+- Rationale: 8 Nov 2026, PR 979: two rebases bought two full reviews (1.6M and 2.5M tokens) of a patch whose blocking findings no fix had addressed.
+- Rejected: Carrying across a resolved conflict; carrying a CHANGES past a non-rebase commit; waiting for green CI before carrying a block.
+- Superseded-by: none
+
 ## Open questions (need homeowner or a later issue)
 - OQ-1: Exact secret delivery into a container (issue #7). Proposed answer: D-022, awaiting review and homeowner approval.
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.

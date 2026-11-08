@@ -400,7 +400,7 @@ export function checkDetails(runs, names) {
 export function carryValid(entry, pr) {
   if (!entry?.carriedFrom) return true;
   const c = entry.carry, e = c?.evidence;
-  return !!c && c.newHead === pr.headRefOid && c.oldHead === entry.carriedFrom && SHA.test(c.oldHead) && e?.resolvedConflicts === false && e.patchUnchanged === true && e.ci === 'green';
+  return !!c && c.newHead === pr.headRefOid && c.oldHead === entry.carriedFrom && SHA.test(c.oldHead) && e?.resolvedConflicts === false && e.patchUnchanged === true && (e.ci === 'green' || entry.verdict === 'CHANGES');   // issue #1048: a carried CHANGES needs no green CI (it only keeps a block)
 }
 // Issue #296: the carry record of a verdict as plain data for the dashboard and team status: old head, new head and the evidence.
 export function carryRecordOf(entry, pr) {
@@ -1396,6 +1396,7 @@ export class Team {
       // says is BEHIND its base, which a branch rule requiring an up-to-date branch would refuse). Main moving is not a reason.
       const behind = pr.mergeable !== 'CONFLICTING' && pr.mergeStateStatus === 'BEHIND' && this.s.verdicts[key]?.verdict === 'PASS' && this.ciState(pr) === 'green';
       if (pr.mergeable !== 'CONFLICTING' && !behind) continue;
+      if (this.carriedHold(pr)) continue;   // issue #1048
       if (busy('rebase', key) || (this.s.rebaseAttempts[key] || 0) >= L.max_fix_attempts) continue;
       // Issue #266: with a merge backlog, rebase only the PR that is next in rebase order (issue #326: the order of the author's issues queue, then PR number), and let a
       // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
@@ -1426,7 +1427,7 @@ export class Team {
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || this.churned(pr.number)) continue;   // issue #864: churn stops the fix loop
       const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
-      if ((escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // issue #318: a listed PR never escalates; it stops with one Needs you item
+      if ((escalated && (this.exceptionFor(pr.number) || !this.canEscalate(pr.number, pr) || this.carriedHold(pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // issue #318: a listed PR never escalates; it stops with one Needs you item
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
     }
@@ -1634,7 +1635,7 @@ export class Team {
       const k = verdictKey(p.number, p.headRefOid);
       const behind = p.mergeable !== 'CONFLICTING' && p.mergeStateStatus === 'BEHIND' && this.s.verdicts[k]?.verdict === 'PASS' && this.ciState(p) === 'green';
       if (p.mergeable !== 'CONFLICTING' && !behind) return false;
-      if (busy('rebase', k) || (this.s.rebaseAttempts[k] || 0) >= L.max_fix_attempts) return false;
+      if (busy('rebase', k) || (this.s.rebaseAttempts[k] || 0) >= L.max_fix_attempts || this.carriedHold(p)) return false;
       if (this.rebaseNotNext(p, prs)) return false;   // issue #633: deferred until next to review or merge, so it never holds the others back
       if (this.limitedOf(author).out) return false;
       if (this.writeBlock(p, 'rebase')) return false;   // choose() skips such a PR, so it must not hold the others back
@@ -2477,27 +2478,37 @@ export class Team {
   // then recorded with the evidence on the verdict itself, so the merge gate and the dashboard can show and re-verify it.
   async carryVerdict(id, j, report) {
     const prior = this.s.verdicts[verdictKey(j.pr, j.head)];
-    if (prior?.verdict !== 'PASS') return;
+    if (prior?.verdict !== 'PASS' && prior?.verdict !== 'CHANGES') return;
+    const changes = prior.verdict === 'CHANGES';   // issue #1048: a CHANGES verdict carries on the same mechanical evidence, without waiting for CI and without a second opinion
     // Issue #303: without an approved D-025 nothing carries (and nothing is recorded as refused: approving it later lets a pending carry proceed).
-    if (!this.carryApproved()) return;
+    // A carried CHANGES only keeps a block in place, so it does not wait for that approval.
+    if (!changes && !this.carryApproved()) return;
     const pr = await this.gh.getPull(j.pr);
     const done = () => { if (j.carry?.state === 'pending') { j.carry = { state: 'refused', reason: 'superseded', at: this.clock.now() }; this.save(); } };
     if (!pr || !SHA.test(pr.headRefOid) || pr.headRefOid === j.head) return done();
     const key = verdictKey(j.pr, pr.headRefOid);
     if (this.s.verdicts[key]) return done();
     const refuse = reason => { j.carry = { state: 'refused', reason, at: this.clock.now() }; this.save(); (report.carried ||= []).push({ pr: j.pr, head: pr.headRefOid, carried: false, reason }); };
-    const prev = this.s.secondOpinions[verdictKey(j.pr, j.head)];
+    const prev = changes ? null : this.s.secondOpinions[verdictKey(j.pr, j.head)];
     if (j.carry?.state === 'pending' && j.carry.newHead !== pr.headRefOid) return refuse('the head moved again before CI finished');
     if (j.rebase?.newHead !== pr.headRefOid) return refuse('no recorded comparison for this head');
     if (j.rebase.lost?.length || j.rebase.lostChanges?.length) return refuse('the rebase lost changes');
     if (j.rebase.resolvedConflicts !== false) return refuse(j.rebase.resolvedConflicts === true ? 'the rebase resolved a conflict' : 'could not tell whether the rebase resolved a conflict');
     const ci = this.ciState(pr);
-    if (ci === 'pending') { if (j.carry?.state !== 'pending') { j.carry = { state: 'pending', newHead: pr.headRefOid, at: this.clock.now() }; this.save(); } return; }
-    if (ci !== 'green') return refuse(`CI on the new head is ${ci}`);
+    if (!changes && ci === 'pending') { if (j.carry?.state !== 'pending') { j.carry = { state: 'pending', newHead: pr.headRefOid, at: this.clock.now() }; this.save(); } return; }
+    if (!changes && ci !== 'green') return refuse(`CI on the new head is ${ci}`);
     let equal = false;
     try { equal = (await this.git?.rangeEqual?.({ base: `origin/${j.base || 'main'}`, oldHead: j.head, newHead: pr.headRefOid })) === true; } catch { equal = false; }
     if (!equal) return refuse('the patch changed or could not be compared');
-    const carry = { oldHead: j.head, newHead: pr.headRefOid, job: id, base: j.base || 'main', evidence: { resolvedConflicts: false, patchUnchanged: true, ci: 'green' }, at: this.clock.now() };
+    const carry = { oldHead: j.head, newHead: pr.headRefOid, job: id, base: j.base || 'main', evidence: { resolvedConflicts: false, patchUnchanged: true, ci: changes ? ci : 'green' }, at: this.clock.now() };
+    if (changes) {
+      const n = (prior.findings || []).filter(f => f.kind === 'blocking').length;
+      await this.postNotice(j.pr, `carry pr=${j.pr} head=${pr.headRefOid}`, `**Verdict carried: CHANGES.** The rebase from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)} (${this.names().job({ id, kind: 'rebase', pr: j.pr }).text}) changed nothing but the base: no conflict was resolved and the patch is unchanged (exact text and placement comparison). The **CHANGES** verdict from \`${prior.reviewer}\` (job ${String(prior.job).slice(0, 8)}, ${n} blocking finding${n === 1 ? '' : 's'}) therefore stands for the new head, and no new review runs. A review is queued again only after a fix or CI-fix commit that is not a rebase.`);
+      this.s.verdicts[key] = { ...prior, carriedFrom: j.head, carry, at: this.clock.now() };
+      j.carry = { state: 'carried', newHead: pr.headRefOid, at: this.clock.now() };
+      this.save(); (report.carried ||= []).push({ pr: j.pr, head: pr.headRefOid, carried: true, verdict: 'CHANGES' });
+      return;
+    }
     await this.postNotice(j.pr, `carry pr=${j.pr} head=${pr.headRefOid}`, `**Verdict carried.** The rebase from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)} (${this.names().job({ id, kind: 'rebase', pr: j.pr }).text}) carries the **PASS** from \`${prior.reviewer}\` (job ${String(prior.job).slice(0, 8)})${prev ? ` and the second-opinion PASS from \`${prev.reviewer}\`` : ''} for the old head to the new head without a new review. Evidence: no conflict was resolved, the patch is unchanged (exact text and placement comparison), CI on the new head is green. Merge still re-verifies this record against the current head.`);
     this.s.verdicts[key] = { ...prior, carriedFrom: j.head, carry, at: this.clock.now() };
     if (prev?.verdict === 'PASS') this.s.secondOpinions[key] = { ...prev, carriedFrom: j.head, carry, at: this.clock.now() };
@@ -2514,6 +2525,12 @@ export class Team {
   carryOk(entry, pr) { return entry?.carriedFrom ? this.carryApproved() && carryValid(entry, pr) : carryValid(entry, pr); }
   // Issue #296: a carry attempt for this exact head is still waiting (pending CI, or not yet retried). No review is planned for that
   // head meanwhile; the next tick either records the carry or refuses it with a reason, and only then does a full review become due.
+  // Issue #1048: at the fix limit, a PR whose current head holds a CARRIED CHANGES verdict waits for the homeowner: no rebase, no further
+  // fix round and no review until a decision (a requested re-review sets the verdict aside, which lifts the hold).
+  carriedHold(pr) {
+    const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
+    return v?.verdict === 'CHANGES' && !!v.carriedFrom && carryValid(v, pr) && this.fixCount(pr.number) >= this.c.limits.max_fix_attempts;
+  }
   carryPending(pr) {
     return Object.values(this.s.jobs).some(j => j.kind === 'rebase' && j.pr === pr.number && j.carry?.state === 'pending' && j.carry.newHead === pr.headRefOid);
   }
@@ -3021,7 +3038,7 @@ export class Team {
       const nkey = `fixlimit:${pr.number}`, akey = `fixlimit-alert:${pr.number}`;
       if (!rejected) continue;
       if (this.churned(pr.number)) continue;   // issue #864: notifyChurn raises the one item
-      if (this.escalationPending(pr.number, pr)) continue;   // issue #163: one final round runs (or is still allowed) before the homeowner is asked
+      if (this.escalationPending(pr.number, pr) && !this.carriedHold(pr)) continue;   // issue #163 (issue #1048: a carried CHANGES runs no final round, so the homeowner is asked at once): one final round runs (or is still allowed) before the homeowner is asked
       // The final round was never run because the unblock budget is spent: that limit is its own Needs you item, and the
       // fix-limit notice says that no final round ran rather than claiming one did.
       const escalated = !!this.s.unblock.escalated[pr.number], room = escalated ? null : this.unblockRoom(pr.number), block = escalated || room ? null : this.writeBlock(pr);
@@ -3033,7 +3050,7 @@ export class Team {
           this.s.notified[nkey] = this.clock.now(); this.save();
           try {
             await this.flag(pr.number, { key: 'fixlimit', kind: 'fixlimit', head: pr.headRefOid, tk: 'pull' });
-            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads)${round} have not cleared ${this.rejectionCause(pr)} on this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it. Required: decide which: ${FIX_LIMIT_OPTIONS}.`);
+            await this.postNotice(pr.number, `fixlimit pr=${pr.number}`, `**Needs the homeowner.** ${this.fixCount(pr.number)} fix rounds by \`${author}\` (limit ${this.c.limits.max_fix_attempts} per PR, counted across heads)${round} have not cleared ${this.rejectionCause(pr)} on this PR at head \`${pr.headRefOid}\`. The dispatcher starts no further fix jobs for it.${this.carriedHold(pr) ? ' The CHANGES verdict was carried across a rebase from an earlier head (no fix commit has answered it), so the PR is held from rebase and review until you decide.' : ''} Required: decide which: ${FIX_LIMIT_OPTIONS}.`);
           } catch (error) { delete this.s.notified[nkey]; this.save(); throw error; }
           (report.notified ||= []).push({ pr: pr.number, fixLimit: true });
         });
@@ -3231,7 +3248,7 @@ export class Team {
     }
   }
   reviewHistory(pr) {
-    return Object.entries(this.s.verdicts).filter(([k]) => k.startsWith(`${pr}:`)).sort((a, b) => (a[1].at || 0) - (b[1].at || 0))
+    return Object.entries(this.s.verdicts).filter(([k, v]) => k.startsWith(`${pr}:`) && !(v.carriedFrom && v.verdict === 'CHANGES')).sort((a, b) => (a[1].at || 0) - (b[1].at || 0))
       .map(([k, v]) => ({ head: k.slice(String(pr).length + 1), verdict: v.verdict, reviewer: v.reviewer, findings: (v.findings || []).map(f => ({ kind: f.kind, text: f.text })) }));
   }
   // After the final round: findings the job proposes to split out are checked, and only the ones that are provably the reviewer's
