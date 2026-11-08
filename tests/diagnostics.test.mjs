@@ -183,7 +183,7 @@ test('the Diagnostics tab is in the navigation, routes, and renders every sectio
   assert.equal(ok.status, 200);
   for (const id of ['diag-about', 'diag-ticks', 'diag-turnaround', 'diag-verdicts', 'diag-idle', 'diag-recorder']) assert.match(ok.body, new RegExp(`data-card="${id}"`), id);
   assert.match(ok.body, /<a href="\/diagnostics" aria-current="page">/); assert.match(ok.body, /data-diag-recorder="ok"/); assert.match(ok.body, /1 samples from 1 log file/);
-  assert.match(ok.body, /<td class="num" data-label="Missed ticks">1<\/td>/, 'the 08:05 to 08:30 gap is a missed tick');
+  assert.match(ok.body, /<td data-label="Missed ticks" data-col="c4" class="num ">1<\/td>/, 'the 08:05 to 08:30 gap is a missed tick');
   assert.doesNotMatch(ok.body, /undefined|NaN|\/mnt\/|rdir/);
   const gone = await serve(path.join(rdir, 'missing'));
   assert.equal(gone.status, 200); assert.match(gone.body, /data-diag-recorder="missing"/); assert.match(gone.body, /Recorder logs not found/); assert.match(gone.body, /data-card="diag-ticks"/, 'the other sections still show');

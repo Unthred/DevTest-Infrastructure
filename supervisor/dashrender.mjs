@@ -122,6 +122,14 @@ const jobRef = (j, view) => (['implement', 'continue'].includes(j.kind) ? issueL
 
 // ---- empty / error states
 const empty = (title, hint, ic = 'info') => `<div class="empty">${icon(ic)}<b>${esc(title)}</b><span>${esc(hint)}</span></div>`;
+// A fixed-schema table (cells are text or ready HTML): every column is a text column and the first declared filter column gives the chips.
+// `rows` are arrays of cells in column order; `filter` is the index of the column the chips filter on. Built on table(), so it has search, sort,
+// chips, resize and show/hide like every other table (issue #939).
+export function gridTable({ id, path = '/', query = new URLSearchParams(), head, rows, noun = 'rows', filter = 0, numFrom = null, html = false, totals = {}, fixed = false, rowClass = null }) {
+  const cols = head.map((h, i) => ({ key: `c${i}`, label: h, num: numFrom !== null && i >= numFrom, ...(fixed ? { sortable: false } : {}), ...(html ? { html: r => r[`c${i}`] } : {}) }));
+  const objs = rows.map((r, n) => ({ _i: n, ...Object.fromEntries(r.map((c, i) => [`c${i}`, c ?? ''])) }));
+  return table({ id, path, query, cols, rows: objs, noun, filters: [{ key: `c${filter}`, label: head[filter], value: r => plain(r[`c${filter}`]) }], searchKeys: head.map((_, i) => `c${i}`), totals, rowClass: rowClass ? r => rowClass(r._i) : null });
+}
 // ---- lists (one shared component for every Overview list): a row is built by dli(), a list by dlist().
 // The server renders the default order and the footer, so a list is complete and scrolls inside its own card without script;
 // dashui/lists-ui.mjs adds the search box, the sort controls and keeps their state across the page's refresh.
@@ -158,7 +166,7 @@ const withQuery = (path, query, set) => {
 };
 // `filters` ([{ key, label, order?, value? }], logic.mjs) are REQUIRED: every table declares the filters that fit its data (issue #939).
 // Chip choices live in the URL as `<id>.f.<key>=a,b`; the columns carry data-col so dashui/tables-ui.mjs can resize and hide them.
-export function table({ id, path, query, cols, rows, filters, searchKeys = [], totals = {}, noun = 'rows', emptyState }) {
+export function table({ id, path, query, cols, rows, filters, searchKeys = [], totals = {}, noun = 'rows', emptyState, rowClass = null }) {
   if (!Array.isArray(filters) || !filters.length) throw new Error(`table "${id}" declares no filters`);
   const q = (k, d) => query.get(`${id}.${k}`) ?? d;
   const sel = Object.fromEntries(filters.map(f => [f.key, decodeFacet(q(`f.${f.key}`, ''))]).filter(([, v]) => v.length));
@@ -172,7 +180,7 @@ export function table({ id, path, query, cols, rows, filters, searchKeys = [], t
     return `<th scope="col" data-col="${esc(c.key)}"${c.num ? ' class="num"' : ''}${active ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}><a href="${href({ sort: c.key, dir: next, page: 1 })}" title="Sort by ${esc(c.label)}">${esc(c.label)}${icon(active ? (dir === 'asc' ? 'up' : 'down') : 'sort')}</a></th>`;
   }).join('');
   const expandable = cols.some(c => c.more);
-  const body = st.rows.map(r => `<tr${expandable ? ' tabindex="0"' : ''}>${cols.map(c => `<td data-label="${esc(c.label)}" data-col="${esc(c.key)}" class="${c.num ? 'num ' : ''}${c.more ? 'more' : ''}">${c.html ? c.html(r) : esc(r[c.key] ?? '–')}</td>`).join('')}</tr>`).join('');
+  const body = st.rows.map(r => `<tr${rowClass && rowClass(r) ? ` class="${esc(rowClass(r))}"` : ''}${expandable ? ' tabindex="0"' : ''}>${cols.map(c => `<td data-label="${esc(c.label)}" data-col="${esc(c.key)}" class="${c.num ? 'num ' : ''}${c.more ? 'more' : ''}">${c.html ? c.html(r) : esc(r[c.key] ?? '–')}</td>`).join('')}</tr>`).join('');
   const foot = Object.keys(totals).length ? `<tfoot><tr>${cols.map((c, i) => {
     const op = totals[c.key]; let v = '';
     if (op === 'sum') v = c.fmt ? c.fmt(st.footer[c.key]) : num(st.footer[c.key]); else if (op === 'avg') v = `avg ${c.fmt ? c.fmt(st.footer[c.key]) : dec1(st.footer[c.key])}`; else if (op === 'count') v = countText(st.footer[c.key], st.all, noun);
@@ -384,7 +392,7 @@ function nextPanel(view) {
   return `${globalWaitsHtml(view)}${plan.length ? '' : nextWhyHtml(view)}${plan.length ? dlist({ id: 'next', label: 'Next', noun: 'planned items', rows, filters: [{ key: 'agent', label: 'Agent' }, { key: 'type', label: 'Type' }], sorts: ['default', 'number', 'name'], defaultLabel: 'Run order' }) : empty('Nothing planned', 'The next tick has no work to start.', 'check')}`;
 }
 // Issue #549: the circuit breaker's status on the Overview, and the wasted usage by cause. Cost is the CLI's own estimate, not a cash charge.
-function breakerCard(view) {
+function breakerCard(view, query = new URLSearchParams(), path = '/') {
   const b = view.breaker;
   if (!b || (!b.halt && !b.byCause.length && !b.error)) return '';
   // Issue #626: a Resume button per halt (D-029 write protection; the form gets the access proof from withProof). Only a person's click works.
@@ -392,21 +400,20 @@ function breakerCard(view) {
   const buttons = b.halt ? (b.halt.entries || []).map(e => resumeBtn(e.cause === '@global' ? 'global' : e.cause, `Resume ${e.cause === '@global' ? 'all new jobs' : e.cause}`)).join('') + ((b.halt.entries || []).length > 1 ? resumeBtn('all', 'Resume everything') : '') : '';
   const halt = b.halt ? `<p class="sev-action"><strong>Work halted.</strong> ${escT(b.halt.text)} ${escT(b.halt.running_text)}</p><p class="sub">${escT(b.halt.action)}</p>${buttons}` : '<p class="sub">Circuit breaker: no halt.</p>';
   const err = b.error ? `<p class="sev-action">The breaker failed: ${escT(b.error)}</p>` : '';
-  const rows = b.byCause.slice(0, 12).map(r => `<tr><td>${escT(r.cause)}${r.halted ? ' (halted)' : ''}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>$${r.cost.toFixed(2)}</td><td>${escT(r.prs.map(n => '#' + n).join(', '))}</td></tr>`).join('');
-  const table = rows ? `<table><thead><tr><th>Cause</th><th>Wasted jobs</th><th>Tokens</th><th>Cost (usage equivalent)</th><th>PRs</th></tr></thead><tbody>${rows}</tbody></table><p class="sub">Cost is ${escT(b.costLabel)}.</p>` : '';
+    const table = b.byCause.length ? gridTable({ id: 'breaker', path, query, noun: 'causes', html: true, numFrom: 1, filter: 0, head: ['Cause', 'Wasted jobs', 'Tokens', 'Cost (usage equivalent)', 'PRs'], rows: b.byCause.slice(0, 12).map(r => [`${escT(r.cause)}${r.halted ? ' (halted)' : ''}`, String(r.jobs), num(r.tokens), `$${r.cost.toFixed(2)}`, escT(r.prs.map(n => '#' + n).join(', '))]) }) + `<p class="sub">Cost is ${escT(b.costLabel)}.</p>` : '';
   return card({ id: 'breaker', title: b.halt ? 'Work halted' : 'Wasted usage', span: 12, body: err + halt + table, cls: 'panel', type: b.halt ? 'action' : 'info' });
 }
 // Issue #995: liveness limit and last activity per running job, retry counts by cause, and what a recovery re-armed.
-function robustnessCard(view) {
+function robustnessCard(view, query = new URLSearchParams(), path = '/') {
   const r = view.robustness;
   if (!r || (!r.running.length && !r.retries.length && !r.rearm && !r.cancelled.length)) return '';
   const ago = ms => (ms == null ? 'unknown' : `${Math.round(ms / 60000)} min ago`);
-  const jobs = r.running.map(j => `<tr><td>${esc(j.id)}</td><td>${esc(j.kind || '')}</td><td>${esc(ago(j.idleMs))}</td></tr>`).join('');
-  const retries = r.retries.map(x => `<tr><td>${esc(x.key)}</td><td>${esc(x.cause)}</td><td>${x.count}${x.capped ? ' (stopped)' : ''}</td></tr>`).join('');
+  const jobs = r.running.length ? gridTable({ id: 'rb-jobs', path, query, noun: 'running jobs', head: ['Job', 'Kind', 'Last activity'], filter: 1, rows: r.running.map(j => [j.id, j.kind || '', ago(j.idleMs)]) }) : '';
+  const retries = r.retries.length ? gridTable({ id: 'rb-retries', path, query, noun: 'retries', head: ['Item', 'Same cause', 'Attempts'], filter: 1, rows: r.retries.map(x => [x.key, x.cause, `${x.count}${x.capped ? ' (stopped)' : ''}`]) }) : '';
   const body = `<p class="sub">A running job with no activity for ${r.limitMinutes} minutes is cancelled and requeued.</p>`
-    + (jobs ? `<table><thead><tr><th>Job</th><th>Kind</th><th>Last activity</th></tr></thead><tbody>${jobs}</tbody></table>` : '')
+    + jobs
     + (r.cancelled.length ? `<p class="sub">Cancelled for inactivity: ${r.cancelled.map(c => escT(`${c.job} (${c.reason})`)).join('; ')}</p>` : '')
-    + (retries ? `<table><thead><tr><th>Item</th><th>Same cause</th><th>Attempts</th></tr></thead><tbody>${retries}</tbody></table>` : '')
+    + retries
     + (r.rearm ? `<p class="sub">Re-armed after ${escT(r.rearm.scopes.join(', '))} cleared: ${escT(r.rearm.items.join(', '))}.</p>` : '');
   return card({ id: 'robustness', title: 'Job liveness and retries', span: 12, body, cls: 'panel', type: 'info' });
 }
@@ -426,8 +433,8 @@ const undoForm = c => (c.undoUntil ? `<form method="post" action="/inbox" class=
 function decidedBlock(view) {
   const list = view.panels.inboxDecided || [], pending = view.panels.needsYou.some(a => a.inbox);
   if (!list.length && !pending) return '';
-  const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state)} ${undoForm(c)}</li>`).join('');
-  return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary><ul class="inbox-decided-list">${rows}</ul></details>`;
+  const rows = list.map(c => dli({ id: `inbox-${c.id}`, key: `decided-${c.id}`, extra: `data-decided="${esc(c.id)}"`, name: c.title || 'Overseer proposal', facets: { outcome: (OUTCOME[c.decision] || OUTCOME.reject)[0] }, inner: `<span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state)} ${undoForm(c)}` }));
+  return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary>${dlist({ id: 'decided', label: 'Decided today', noun: 'decisions', rows, filters: [{ key: 'outcome', label: 'Outcome' }], listCls: 'inbox-decided-list', compact: true })}</details>`;
 }
 // Needs you filter kinds (issue #939): proposals waiting for Approve or Reject come first, then the rest by what they wait on.
 export const NEEDS_KINDS = ['Approvals', 'Blocked', 'Limits', 'CI', 'Other'];
@@ -595,8 +602,8 @@ function overview(view, query) {
   const verdicts = view.verdicts;
   const warnCount = view.panels.warnings.length + (view.agents.some(a => a.state === 'unknown') ? 1 : 0);
   const panels = [
-    breakerCard(view),
-    robustnessCard(view),
+    breakerCard(view, query, '/'),
+    robustnessCard(view, query, '/'),
     card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view, { list: 'now' }), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
@@ -695,8 +702,8 @@ function prDetail(view, query, path, route) {
   if (!p) return null;
   const facts = card({ id: 'facts', title: p.full || p.name, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(p.status)}</dd><dt>Author</dt><dd>${agentTag(p.agent, view)}</dd><dt>CI</dt><dd>${checksBadge(p.checks)}</dd><dt>Latest verdict</dt><dd>${verdictBadge(p.verdict)}</dd>${p.carry ? `<dt>Carried verdict</dt><dd>${esc(`${String(p.carry.oldHead).slice(0, 7)} → ${String(p.carry.newHead).slice(0, 7)}`)}${p.carry.valid ? '' : ' (record does not match this head)'}<br>${esc(`no conflict resolved: ${p.carry.evidence.resolvedConflicts === false ? 'yes' : 'not shown'}; patch unchanged: ${p.carry.evidence.patchUnchanged === true ? 'yes' : 'not shown'}; CI: ${p.carry.evidence.ci || 'unknown'}`)}</dd>` : ''}
 <dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd><dt>Watch</dt><dd>${watchBtn(view, 'pr', p.number, path)}</dd></dl>` });
-  const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${lt(r.at)}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
-  const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)}${v.model ? ` <span class="sub">(${esc(v.model)})</span>` : ''} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${lt(v.at)}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'No independent reviewer has reviewed this pull request.', 'review') });
+  const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? sevList('pr-tl', 'Timeline', 'events', p.timeline.map(r => ({ sev: 'info', inner: `<b>${lt(r.at)}</b><br>${esc(r.text)}` })), { listCls: 'tl', compact: false }) : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
+  const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map((v, vi) => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)}${v.model ? ` <span class="sub">(${esc(v.model)})</span>` : ''} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${lt(v.at)}</span></h3>${v.findings.length ? sevList(`vf-${vi}`, 'Findings', 'findings', v.findings.map(f => ({ sev: 'info', inner: esc(f) }))) : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'No independent reviewer has reviewed this pull request.', 'review') });
   const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], filters: JOB_FILTERS, cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
   return { title: p.name || `PR #${p.number}`, crumbs: [['/work', 'Work'], [null, p.name || `PR #${p.number}`]], body: grid('pr', facts + tl + vh + jobs, 'fit') };
 }
@@ -747,7 +754,7 @@ function activityPage(view, query, path) {
   const toggle = `<p class="sub"><a href="/activity/timeline">Full activity timeline since the first job</a> · View: ${grouped ? `<a href="${esc(withQuery(path, query, { group: null }))}">Timeline</a> · <b>Group by issue</b>` : `<b>Timeline</b> · <a href="${esc(withQuery(path, query, { group: 'issue' }))}">Group by issue</a>`}</p>`;
   if (grouped) {
     const tls = view.issueTimelines || [];
-    const body = tls.length ? tls.map(t => `<section class="issue-story"><h3>${named(`/work/issue/${t.number}`, { text: t.name, full: t.full }, `#${t.number}`)}</h3><ol class="tl">${t.events.map(e => `<li><b>${lt(e.at)}</b><br>${trunc(e.text)}${e.link ? ` <a href="${esc(e.link.url)}">job page</a>` : ''}</li>`).join('')}</ol></section>`).join('') : empty('No activity yet', 'Issue timelines appear after the first job.', 'pulse');
+    const body = tls.length ? tls.map(t => `<section class="issue-story"><h3>${named(`/work/issue/${t.number}`, { text: t.name, full: t.full }, `#${t.number}`)}</h3>${sevList(`story-${t.number}`, 'Timeline', 'events', t.events.map(e => ({ sev: 'info', inner: `<b>${lt(e.at)}</b><br>${trunc(e.text)}${e.link ? ` <a href="${esc(e.link.url)}">job page</a>` : ''}` })), { listCls: 'tl', compact: false })}</section>`).join('') : empty('No activity yet', 'Issue timelines appear after the first job.', 'pulse');
     return { title: 'Activity by issue', crumbs: [['/activity', 'Activity'], [null, 'By issue']], body: grid('activity', card({ id: 'act', title: `Issues (${tls.length})`, span: 12, movable: false, body: toggle + body })) };
   }
   const collapsed = collapseIdle(view.activity.map(r => ({ ...r })));
@@ -769,20 +776,20 @@ function activityPage(view, query, path) {
 // One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
 // marked and never shown as current; a limit pause says when it resets and on what basis.
 const SOURCE = { job: 'reported to a supervised job', probe: 'refreshed by a minimal probe run (no repository, no tools)', 'session-log': 'read from the local Codex session log (no model call)' };
-function allowanceBody(u, now, name = '') {
+function allowanceBody(u, now, name = '', query = new URLSearchParams(), path = '/usage') {
   const l = u.limit;
   const refresh = u.canProbe && name ? `<form method="post" action="/probe/${encodeURIComponent(name)}" class="probe-form"><button type="submit" class="tbtn" title="Run one minimal probe to read the current allowance (no repository, no tools)">Refresh allowance</button></form>` : '';
   const limit = l ? `<p class="limit">${badge('action', 'Paused on a usage limit')} ${l.limiting ? `${esc(l.limiting)}. ` : ''}${l.resetsAt ? `resets <b>${lt(l.resetsAt)}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
   if (!u.windows.length) return `${limit}<p>Allowance: <b>unknown</b></p>${refresh}${empty('No allowance reported', 'The provider has never reported a limit window to the supervisor.', 'info')}`;
   const used = w => (Number.isFinite(w.utilization) ? `<div class="bar${w.expired ? ' expired' : ''}" role="img" aria-label="${pct(w.utilization)} used${w.expired ? ', expired' : ''}"><b style="width:${Math.min(100, w.utilization * 100)}%"></b></div> ${pct(w.utilization)}${w.expired ? ' <span class="muted">(expired)</span>' : ''}` : 'unknown');
   const resets = w => (!w.resetsAt ? 'unknown' : w.expired ? `reset ${esc(dur(now - w.resetsAt))} ago; current use unknown` : esc(inFuture(w.resetsAt, now)));
-  const rows = u.windows.map(w => `<tr${w.expired ? ' class="expired"' : ''}><td>${esc(w.label)}</td><td>${used(w)}</td><td>${resets(w)}</td></tr>`).join('');
+  const rows = u.windows.map(w => [esc(w.label), used(w), resets(w)]);
   const note = u.allExpired ? `<p class="sub">${badge('warning', 'Expired')} Every window in this reading has reset since; current use is unknown until the provider reports again.</p>` : '';
-  return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${lt(u.observedAt)}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>${refresh}`;
+  return `${limit}${gridTable({ id: `allow-${name || 'x'}`, path, query, noun: 'windows', html: true, head: ['Window', 'Used', 'Resets'], rows, rowClass: n => (u.windows[n].expired ? 'expired' : '') })}${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${lt(u.observedAt)}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>${refresh}`;
 }
 function usagePage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
-  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now, name) })).join('');
+  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now, name, query, path) })).join('');
   const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }) });
   const toks = view.graphs.tokensPerPr.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.tokens, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
   const tokChart = card({ id: 'u-tok', title: 'Tokens per merged PR', span: 12, expandable: true, movable: true, body: barChart({ rows: toks, title: 'tokens per merged PR', emptyTitle: 'No merged PR has recorded tokens' }) });
@@ -843,7 +850,9 @@ function systemPage(view) {
 }
 
 // ---- Supervisor area (issue #72): health cards with drill-downs, tick history, upgrade history
-const list = (items, cls = '') => (items.length ? `<ul class="mini ${cls}">${items.join('')}</ul>` : '<span class="muted">none</span>');
+// Small key/value lists use the shared list too (ids are numbered per render so each keeps its own saved state).
+let MINI_N = 0;
+const list = (items, cls = '') => (items.length ? sevList(`mini-${cls || 'l'}-${++MINI_N}`, 'Details', 'entries', items.map(h => ({ sev: 'info', inner: h.replace(/^<li[^>]*>([\s\S]*)<\/li>$/, '$1') })), { listCls: `mini ${cls}` }) : '<span class="muted">none</span>');
 const tickRef = a => (a.type === 'implement' || a.type === 'continue' ? (a.issue ? issueLink(a.issue) : `#${Number(a.ref)}`) : a.pr ? prLink(a.pr) : `#${Number(a.ref)}`);
 function tickDetail(t) {
   return `<dl class="kv"><dt>Verdicts ingested</dt><dd>${list(t.ingested.map(i => `<li>${verdictBadge(i.verdict)} ${i.pr ? prLink(i.pr) : ''} ${i.job ? jobIdCell(i.job) : ''}</li>`))}</dd>
@@ -856,7 +865,7 @@ function tickDetail(t) {
 const tickStatusBadge = s => badge(({ ok: 'ok', partial: 'warning', skipped: 'info', empty: 'warning', error: 'action' })[s] || 'info', ({ ok: 'OK', partial: 'Partial', skipped: 'Skipped', empty: 'No result', error: 'Error' })[s] || s);
 function healthBody(c, view) {
   const now = view.generatedAt;
-  const notes = c.notes.length ? `<ul class="mini notes">${c.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '';
+  const notes = c.notes.length ? sevList(`hn-${c.id}`, 'Notes', 'notes', c.notes.map(n => ({ sev: 'info', inner: esc(n) })), { listCls: 'mini notes' }) : '';
   let dl = '';
   if (c.id === 'version') {
     const u = c.lastUpgrade;
@@ -944,8 +953,7 @@ const profileGroup = p => (PROFILE_ORDER.includes(p.split('-')[0]) ? p.split('-'
 const shot = (run, parts, caption) => `<figure class="ev-shot"><a href="${esc(evUrl([run, ...parts]))}"><img src="${esc(evUrl([run, ...parts]))}" alt="${esc(caption)}" loading="lazy"></a><figcaption>${esc(caption)}</figcaption></figure>`;
 function evidencePage(view, query, path, route) {
   const data = route.data || { available: false, runs: [] };
-  const rows = data.runs.map(r => `<tr><td><a href="/evidence/${esc(encodeURIComponent(r.name))}">${esc(r.name)}</a></td><td>${lt(r.mtime)}</td><td>${r.commit ? esc(String(r.commit).slice(0, 12)) : '<span class="muted">not recorded</span>'}</td><td>${r.source ? esc(r.source) : '<span class="muted">not recorded</span>'}</td><td class="num">${r.screenshots}</td><td class="num">${r.pairs}</td><td>${r.hasReport ? badge('ok', 'Report') : badge('info', 'No report')}</td></tr>`).join('');
-  const body = data.runs.length ? `<div class="tbl-wrap"><table><thead><tr><th scope="col">Review run</th><th scope="col">Last changed</th><th scope="col">Commit</th><th scope="col">Data source</th><th scope="col" class="num">Screenshots</th><th scope="col" class="num">Before/after pairs</th><th scope="col">Report</th></tr></thead><tbody>${rows}</tbody></table></div>`
+  const body = data.runs.length ? gridTable({ id: 'ev-runs', path, query, noun: 'review runs', html: true, filter: 6, numFrom: null, head: ['Review run', 'Last changed', 'Commit', 'Data source', 'Screenshots', 'Before/after pairs', 'Report'], rows: data.runs.map(r => [`<a href="/evidence/${esc(encodeURIComponent(r.name))}">${esc(r.name)}</a>`, lt(r.mtime), r.commit ? esc(String(r.commit).slice(0, 12)) : '<span class="muted">not recorded</span>', r.source ? esc(r.source) : '<span class="muted">not recorded</span>', String(r.screenshots), String(r.pairs), r.hasReport ? badge('ok', 'Report') : badge('info', 'No report')]) })
     : empty(data.available ? 'No review run yet' : 'No evidence folder yet', data.available ? 'A UI review writes its report, manifest and screenshots to a folder here.' : 'The ui-review evidence folder does not exist on this host yet; the first UI review creates it.', 'review');
   return { title: 'UI review evidence', crumbs: [['/system', 'System'], [null, 'UI review evidence']], bodyClass: 'ev', body: grid('evidence', card({ id: 'ev-runs', title: `Review runs (${data.runs.length})`, span: 12, movable: false, body: `${body}<p class="sub">Read-only. Screenshots are kept outside Git. Only png, json and md files in the review evidence folder are shown.</p>` })) };
 }
@@ -965,13 +973,15 @@ function evidenceRunPage(view, query, path, route) {
 }
 // ---- Diagnostics (issue #496): where the cycle loses time, over a stated retention window. Read-only; data comes from diagnostics.mjs through route.data.
 const mins = n => (Number.isFinite(n) ? `${n} min` : '–');
-const plainTable = (head, rows, label) => `<div class="tbl-wrap"><table aria-label="${esc(label)}"><thead><tr>${head.map((h, i) => `<th scope="col"${i ? ' class="num"' : ''}>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${i ? ' class="num"' : ''} data-label="${esc(head[i])}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+let DIAG = { path: '/diagnostics', query: new URLSearchParams() };
+const plainTable = (head, rows, label) => gridTable({ id: `diag-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, path: DIAG.path, query: DIAG.query, noun: 'rows', head, rows: rows.map(r => r.map(String)), numFrom: 1, filter: 0 });
 const diagSpark = (hourly, key, label, unit) => {
   const v = hourly.map(h => h[key]).filter(Number.isFinite);
   return `<div class="diag-spark" data-diag-series="${esc(key)}"><span class="muted">${esc(label)}</span> ${sparkline(v, 'var(--s3)')}<span class="sub">highest hour ${v.length ? esc(Math.max(...v)) : '–'}${esc(unit)}</span></div>`;
 };
 function diagnosticsPage(view, query, path, route) {
   const d = route.data;
+  DIAG = { path, query };
   if (!d) return { title: 'Diagnostics', body: `${grid('diagnostics', card({ id: 'diag-none', title: 'Diagnostics', span: 12, movable: false, body: empty('Diagnostics are not available here', 'This page was rendered without its data.', 'warn') }))}` };
   const intro = card({ id: 'diag-about', title: 'What this shows', span: 12, movable: false, body: `<p class="sub" data-diag-retention>Read-only history of the last ${esc(d.retentionDays)} days (UTC days), then dropped from this page; the supervisor's own records are kept longer. Every figure comes from files already on the host: no model call and no GitHub call. The recorder logs are read in bounded amounts (at most ${esc(MAX_FILE_BYTES / 1048576)} MiB per file and ${esc(MAX_TOTAL_BYTES / 1048576)} MiB per page view, only the new part of a file after the first read).</p>` });
   const t = d.ticks;
@@ -1007,8 +1017,11 @@ function procSpark(sample, agent, colour) {
   const h = sample.history?.[agent] || [];
   return h.length >= 2 ? `<span title="Process count, last ${h.length} readings since the dashboard started">${sparkline(h.map(p => p.processes), colour)}</span>` : '<span class="muted" title="Needs two readings">–</span>';
 }
-function procTable(cols, rows, extra = '') {
-  return `<div class="tbl-wrap"><table class="proc-table"><thead><tr>${cols.map(c => `<th scope="col"${c.num ? ' class="num"' : ''}>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr${r.cls ? ` class="${r.cls}"` : ''}>${cols.map(c => `<td data-label="${esc(c.label)}"${c.num ? ' class="num"' : ''}>${c.html(r)}</td>`).join('')}</tr>`).join('')}</tbody>${extra}</table></div>`;
+// Live fragment (polled by processes.js): the URL state of a swapped fragment is not known here, so the columns are not sortable; the chips and search still work in the browser.
+function procTable(cols, rows, id = 'procs') {
+  const cs = cols.map((c, i) => ({ key: `c${i}`, label: c.label, num: c.num, sortable: false, html: r => c.html(r.r) }));
+  const objs = rows.map(r => ({ r, c0: plain(cols[0].html(r)), ...Object.fromEntries(cols.map((c, i) => [`c${i}`, plain(c.html(r))])) }));
+  return table({ id, path: '/system/processes', query: new URLSearchParams(), cols: cs, rows: objs, noun: 'rows', filters: [{ key: 'cls', label: 'Row', value: r => (r.r.cls === 'proc-left' ? 'Leftover' : r.r.cls === 'proc-un' || r.r.cls === 'proc-total' ? 'Totals' : 'Running') }], searchKeys: cs.map(c => c.key), rowClass: r => r.r.cls || '' });
 }
 const jobSubject = j => (j.pr ? prLink(j.pr) : j.issue ? issueLink(j.issue) : '<span class="muted">–</span>');
 function procSummary(view, sample, now) {
@@ -1024,7 +1037,7 @@ function procSummary(view, sample, now) {
     { kind: 'row', key: 'tower', label: 'Tower total', ...r.total, leftoverProcesses: 0, colour: 'var(--s4)', cls: 'proc-total' }];
   const host = r.host?.swapTotalKb ? `<p class="proc-note muted">Host swap in use: ${mb(r.host.swapUsedKb)} of ${mb(r.host.swapTotalKb)}${r.host.memAvailableKb ? ` \u00b7 memory available: ${mb(r.host.memAvailableKb)} of ${mb(r.host.memTotalKb)}` : ''}</p>` : '';
   const un = r.unattributed.processes ? `<p class="proc-note muted">Unattributed (not tied to any job; never guessed): ${nameList(r.unattributed.top)}${r.ambiguous ? ` \u00b7 ${num(r.ambiguous)} claimed by more than one job` : ''}</p>` : '';
-  return `${banner}<div class="proc-body" data-state="${st}">${procTable(cols, rows)}${host}${un}</div>`;
+  return `${banner}<div class="proc-body" data-state="${st}">${procTable(cols, rows, 'procs')}${host}${un}</div>`;
 }
 function procAgent(view, sample, agent, now) {
   const { st, banner } = procStatus(sample, now), r = sample.reading;
@@ -1037,7 +1050,7 @@ function procAgent(view, sample, agent, now) {
     { label: 'Age', num: true, html: j => (Number.isFinite(j.ageMs) ? esc(dur(j.ageMs)) : '–') },
     { label: 'State', html: j => (j.leftover ? procLeft(j.processes) : badge('ok', 'Running')) }, { label: 'Largest by name', html: j => nameList(j.top) }];
   const head = `<p>${num(a.processes)} processes, ${mb(a.rssKb)} memory, ${mb(a.swapKb)} swap across ${num(a.jobs)} jobs${a.leftoverJobs ? ` (${procLeft(a.leftoverProcesses)} from ${num(a.leftoverJobs)} ended jobs)` : ''}. ${procSpark(sample, agent, colourOf(agent))}</p>`;
-  return `${banner}<div class="proc-body" data-state="${st}">${head}${procTable(cols, jobs.map(j => ({ ...j, cls: j.leftover ? 'proc-left' : '' })))}</div>`;
+  return `${banner}<div class="proc-body" data-state="${st}">${head}${procTable(cols, jobs.map(j => ({ ...j, cls: j.leftover ? 'proc-left' : '' })), 'procs-jobs')}</div>`;
 }
 export function processesFragment(view, sample, agent = null) {
   REFS = view.refs || { issue: {}, pr: {}, job: {} };
@@ -1059,7 +1072,7 @@ export const PAGE_NAMES = Object.keys(PAGES);
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
 // REFS is a module-level lookup that the link helpers read; it is set for one synchronous render and cleared after (issue #182).
 export function renderRoute(view, route, opts = {}) {
-  REFS = view.refs || { issue: {}, pr: {}, job: {} };
+  MINI_N = 0; REFS = view.refs || { issue: {}, pr: {}, job: {} };
   try { return renderRouteWith(view, route, opts); } finally { REFS = { issue: {}, pr: {}, job: {} }; }
 }
 function renderRouteWith(view, route, { query = new URLSearchParams(), pathname = '/', refreshSeconds = 60 } = {}) {

@@ -232,7 +232,7 @@ test('tick history: one row per tick, newest first, sortable, filterable, pagina
   const enoent = (await s.get(`/supervisor/ticks?ticks.q=ENOENT&ticks.open=${at}`)).body;
   assert.match(enoent, new RegExp(`aria-expanded="true">Hide</a><div class="tick-detail" id="tick-${at}">[\\s\\S]*Skipped[\\s\\S]*<b>continue 28 \\(codex\\)</b>: <span class="err">ENOENT: no such file`));
   assert.equal((enoent.match(/class="tick-detail"/g) || []).length, 1, 'only the opened row expands');
-  assert.match(enoent, /Actions<\/dt><dd><ul class="mini "><li>codex continue <a href="\/work\/issue\/3">#3[^<]*<\/a>/);
+  assert.match(enoent, /Actions<\/dt><dd>[\s\S]*?<li[^>]*>codex continue <a href="\/work\/issue\/3">#3[^<]*<\/a>/);
   assert.match((await s.get('/supervisor/ticks?ticks.page=2')).body, /26–37 of 37/);
 });
 test('upgrade history: records newest first with result, from/to commits (copyable), PRs and reason', async t => {

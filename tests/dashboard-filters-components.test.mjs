@@ -68,12 +68,13 @@ test('a list or a table with no declared filters does not render', () => {
   assert.throws(() => table({ id: 't', path: '/', query: new URLSearchParams(), cols: [{ key: 'a', label: 'A' }], rows: [{ a: 1 }] }), /declares no filters/);
   assert.ok(dlist({ id: 'x', label: 'x', rows: r, filters: [SEV_FILTER] }).includes('data-filters='));
 });
-test('no list or table is written by hand: every plain list goes through dlist(), every table through table()', () => {
-  // Fixed-schema tables with a handful of rows that are not yet on table() (each a follow-up, see the PR): breaker causes, allowance
-  // windows, the two robustness tables (running jobs, retries), UI review runs, the Diagnostics plainTable and the process table.
-  const handTables = (src.match(/<table[ >]/g) || []).length;
-  assert.ok(handTables <= 8, `a new hand-written <table> appeared (${handTables}; table() itself plus the seven above); use table() from dashrender.mjs`);
-  assert.equal((src.match(/<ul class="(?:panel-list|watch-list|since-list)[^"]*">/g) || []).length, 0, 'a plain list appeared; use dlist() or sevList()');
+test('no list or table is written by hand: the markup literals in dashrender.mjs are an exact inventory', () => {
+  // Every <table> goes through table() (one literal, or the same code via gridTable()) and every list through dlist() (one <ul>).
+  // The other list literals are structural parts of a row or the page chrome and are named here; any other new literal fails.
+  const lits = [...src.matchAll(/<(?:table|ul|ol)(?=[ >])[^>]{0,30}/g)].map(m => m[0].replace(/\$\{.*$/, '$'));
+  const expected = ['<ol', '<ol class="wsteps" aria-label="Steps from im', '<table data-table="$', '<ul', '<ul', '<ul class="$', '<ul class="whist"'].sort();
+  const got = lits.map(l => (l.startsWith('<ol class="wsteps') ? '<ol class="wsteps" aria-label="Steps from im' : l)).sort();
+  assert.deepEqual(got, expected, 'a hand-written <table>, <ul> or <ol> appeared; use table(), gridTable(), dlist() or sevList() from dashrender.mjs');
 });
 
 // ---- rendered: every page, every list and table
@@ -87,6 +88,12 @@ test('every rendered list declares filters and every rendered table has its tabl
       for (const m of main.matchAll(/<div class="dlist[^"]*" data-dlist="([^"]+)"[^>]*data-filters="([^"]*)"/g)) { lists++; assert.notEqual(m[2].replace(/&quot;/g, '"'), '[]', `${page}/${m[1]}`); }
       assert.equal((main.match(/<div class="dlist/g) || []).length, (main.match(/data-filters="/g) || []).length, `${page}: a list without data-filters`);
       assert.doesNotMatch(main, /<ul class="(?:panel-list|watch-list|since-list)(?![^"]*dl-scroll)/, `${page}: a plain list`);
+      // Every table is the shared component, and every top-level list is a dlist; the only other lists are parts of a row.
+      assert.equal((main.match(/<table[ >]/g) || []).length, (main.match(/<table data-table="/g) || []).length, `${page}: a table outside table()`);
+      for (const m of main.matchAll(/<(ul|ol)(?: class="([^"]*)")?[^>]*>/g)) {
+        const cls = m[2] || '', before = main.slice(Math.max(0, m.index - 160), m.index);
+        assert.ok(/dl-scroll|^whist$|^wsteps$/.test(cls) || (cls === '' && /(?:<details class="causes"><summary>[^<]*<\/summary>|<div class="stat agent-lines"[^>]*>)$/.test(before)), `${page}: a list outside dlist(): ${m[0]}`);
+      }
       tables += (main.match(/data-tregion=/g) || []).length;
     }
   }

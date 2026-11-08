@@ -103,7 +103,7 @@ test('Claude: a 5-hour 100% reading past its reset is expired: not current on th
   assert.equal(five.expired, true); assert.equal(v.usage.claude.windows.find(w => w.label === 'weekly').expired, false);
   assert.equal(v.usage.claude.limit.resetsAt, null);                       // the only full window has reset: no future reset claimed
   const card = section(usageHtml(v), 'claude');
-  assert.match(card, /<tr class="expired"><td>5-hour<\/td>/); assert.match(card, /reset 1h 17m ago; current use unknown/);
+  assert.match(card, /<tr class="expired"><td data-label="Window" data-col="c0" class="">5-hour<\/td>/); assert.match(card, /reset 1h 17m ago; current use unknown/);
   assert.doesNotMatch(card, /Every window in this reading has reset/);       // weekly is still current
   const f = pauseDisagreement(claudePaused, claudePaused.allowance, NOW);
   assert.equal(f.kind, 'expired'); assert.match(f.text, /full 5-hour window reset 1h 17m ago, so the limit may be over/);
