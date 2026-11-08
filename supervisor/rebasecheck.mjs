@@ -85,7 +85,11 @@ function changedLinesOnBase(run, sha, base) {
       else if (line.startsWith('@@')) header = false;
       if (header) continue;
     }
-    if (line.startsWith('@@')) { cur = { file, removed: [], added: [] }; hunks.push(cur); continue; }
+    if (line.startsWith('@@')) {
+      const m = /^@@ -(\d+)(?:,(\d+))? /.exec(line);
+      cur = { file, removed: [], added: [], oldStart: m ? Number(m[1]) : null, oldCount: m ? (m[2] === undefined ? 1 : Number(m[2])) : null };
+      hunks.push(cur); continue;
+    }
     if (!cur) continue;
     if (line.startsWith('-')) cur.removed.push(line.slice(1).trim());
     else if (line.startsWith('+')) cur.added.push(line.slice(1).trim());
@@ -98,13 +102,37 @@ function changedLinesOnBase(run, sha, base) {
     if (!lines.length) return false;
     if (!h.added.some(meaningful) && !h.removed.some(meaningful)) return false;
     if (h.added.some(meaningful)) {
+      // Issue #875: the block must also sit where the hunk maps to, not merely appear somewhere (the same line added elsewhere).
+      const want = hunkAnchors(readParentLines(run, sha, h.file), h);
+      if (!want) return false;
       let found = false;
-      for (let i = 0; i + h.added.length <= lines.length && !found; i++) found = h.added.every((t, k) => lines[i + k] === t);
+      for (let i = 0; i + h.added.length <= lines.length && !found; i++) {
+        if (!h.added.every((t, k) => lines[i + k] === t)) continue;
+        const prev = nearestMeaningful(lines, i - 1, -1), next = nearestMeaningful(lines, i + h.added.length, 1);
+        found = prev === want.prev || next === want.next;   // main may have edited one neighbour, so either unchanged one anchors the block
+      }
       if (!found) return false;
     }
     for (const t of h.removed.filter(meaningful)) if (!h.added.includes(t) && lines.includes(t)) return false;
   }
   return true;
+}
+
+// Issue #875: the nearest line with a letter or digit, going from index `from` by `step` (-1 up, 1 down); null at the file edge.
+function nearestMeaningful(lines, from, step) {
+  for (let i = from; i >= 0 && i < lines.length; i += step) if (meaningful(lines[i])) return lines[i];
+  return null;
+}
+function readParentLines(run, sha, file) {
+  try { return readLines(run, `${sha}^`, file); } catch { return null; }
+}
+// The unchanged lines either side of a -U0 hunk in the commit's parent: { prev, next }, or null when they cannot be known
+// (unparsed header, unreadable parent, or nothing meaningful on either side: too weak to anchor, so the guard refuses).
+function hunkAnchors(parent, h) {
+  if (!parent || h.oldStart === null || h.oldCount === null) return null;
+  const first = h.oldCount === 0 ? h.oldStart : h.oldStart - 1;   // 0-based index of the first removed line, or where a pure add goes
+  const prev = nearestMeaningful(parent, first - 1, -1), next = nearestMeaningful(parent, first + h.oldCount, 1);
+  return prev === null && next === null ? null : { prev, next };
 }
 
 // Count rule (review of PR #683): a line the commit adds may already exist in the file, so "it appears in the base" does not show the
