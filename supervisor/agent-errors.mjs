@@ -65,13 +65,17 @@ const unwrapShell = s => {
 };
 // The command a shell call runs, without a leading `cd <dir> &&` / `;` / newline, and its subcommand or first option
 // (`git push`, `node --test`). Taken from the raw command, before placeholders erase the separators.
-export const headOfCommand = raw => {
+const withoutLeadingCd = raw => {
   let s = unwrapShell(String(raw ?? '').trim());
   for (let n = 0; n < 5; n++) {
     const m = /^cd\s+(?:"(?:[^"\\]|\\.)*"|'[^']*'|\S+?)\s*(?:&&|;|\n)\s*/.exec(s);
     if (!m) break;
     s = s.slice(m[0].length);
   }
+  return s;
+};
+export const headOfCommand = raw => {
+  const s = withoutLeadingCd(raw);
   const w = s.split(/\s+/).filter(Boolean);
   if (!w.length) return '';
   const first = w[0].replace(/^.*\//, '');
@@ -104,6 +108,15 @@ function placeholder(w) {
   return tail && tail[1].length >= 2 ? `${tail[1]}<n>` : w;
 }
 const SHELL_TOOLS = new Set(['Bash', 'shell']);
+const TARGET_RE = /[a-z][a-z0-9+.-]*:\/\/[^\s"'\\,}]+|[\w.~@-]*\/[\w./@~-]+|\b[\w@-]+(?:\.[\w@-]+)*\.[A-Za-z][A-Za-z0-9]{0,4}\b/g;
+// The files and URLs a call works on, so a different tool or command that works on the same target counts as the replacement.
+const targetsOf = e => {
+  const found = new Set();
+  const body = SHELL_TOOLS.has(String(e.tool)) ? withoutLeadingCd(rawCommand(e)) : `${e.text || ''} ${e.detail || ''}`;
+  for (const m of body.matchAll(TARGET_RE)) if (m[0].length >= 3 && !/^\.+\/?$/.test(m[0])) found.add(m[0]);
+  return found;
+};
+const sharesTarget = (a, b) => [...a].some(t => b.has(t));
 // The command as written: Codex keeps it whole in detail; Claude's text is one line (newlines folded) so its Bash input is read from the
 // stored JSON detail, where a newline after a leading cd is still a newline.
 const rawCommand = e => {
@@ -120,8 +133,8 @@ const excerptOf = (text, secrets) => {
 
 // Entries are in sequence order. A result belongs to the call with its id; an older transcript without ids pairs it with the most
 // recent call still waiting. Codex file_change, web_search and MCP calls have no result entry, so they are never failures here.
-// A failure is "recovered" when, within a few results, the same tool (and for a shell, the same command) succeeds with a different
-// method; the same method succeeding is a retry (recoveredWithSameMethod) and names no replacement.
+// A failure is "recovered" when, within a few results, the same tool (for a shell, the same command) succeeds with a different
+// method, or a different tool or command works on the same file or URL, or replaces a command that was not found; the same method succeeding is a retry (recoveredWithSameMethod) and names no replacement.
 // Tokens lost are the tokens reported between the failure and the recovery; null when the provider reported none in that span
 // (Codex reports usage only at the end of a turn), so unknown is never counted as zero.
 export function extractErrors(entries, { secrets = [] } = {}) {
@@ -130,7 +143,7 @@ export function extractErrors(entries, { secrets = [] } = {}) {
   for (const e of entries) {
     if (e.kind === 'usage' && e.tokens) tokenPrefix += (e.tokens.in || 0) + (e.tokens.out || 0);
     else if (e.kind === 'tool_call') {
-      const c = { tool: String(e.tool || 'tool'), head: SHELL_TOOLS.has(String(e.tool)) ? headOfCommand(rawCommand(e)) : '', method: normalizeMethod(e.tool, rawCommand(e)), seq: e.seq, at: e.at };
+      const c = { tool: String(e.tool || 'tool'), head: SHELL_TOOLS.has(String(e.tool)) ? headOfCommand(rawCommand(e)) : '', method: normalizeMethod(e.tool, rawCommand(e)), targets: targetsOf(e), seq: e.seq, at: e.at };
       if (e.callId) byId.set(e.callId, c); else loose.push(c);
     } else if (e.kind === 'tool_result') {
       const c = e.callId ? byId.get(e.callId) : loose.pop();
@@ -148,9 +161,12 @@ export function extractErrors(entries, { secrets = [] } = {}) {
     let next = null;
     for (let k = i + 1; k < done.length && k <= i + LOOKAHEAD_CALLS; k++) {
       const d = done[k];
-      if (d.failed || d.tool !== c.tool) continue;
-      if (SHELL_TOOLS.has(c.tool) && d.method !== c.method && d.head !== c.head) continue;
-      next = d; break;
+      if (d.failed) continue;
+      const sameStep = d.tool === c.tool && (!SHELL_TOOLS.has(c.tool) || d.method === c.method || d.head === c.head);
+      // A different command or tool replaces the failed one when the command did not exist (the first success after it) or when it works
+      // on the same file or URL.
+      const replaced = type === 'command_not_found' && SHELL_TOOLS.has(c.tool) && SHELL_TOOLS.has(d.tool) && done.slice(i + 1, k).every(x => x.failed);
+      if (sameStep || replaced || sharesTarget(c.targets, d.targets)) { next = d; break; }
     }
     const same = !!next && next.method === c.method, end = next || done[i + 1] || null;
     const lost = end ? end.tokensAt - c.tokensAt : 0;
@@ -230,7 +246,7 @@ export function agentErrorGroups(root, { now = Date.now(), days = 7, kind = null
     method: g.method, type: g.type, count: g.count, repeats: g.repeats, recovered: g.recovered, tokensLost: g.tokensLost, tokensUnknown: g.tokensUnknown, jobs: g.jobs.size, jobIds: [...g.jobs].slice(0, 5), agents: [...g.agents].sort(),
     recoveredBy: [...g.recoveredBy].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([method, n]) => ({ method, count: n })), exampleExcerpt: g.excerpt }));
   return { days: span, from: new Date(since).toISOString(), filters: { kind, agent }, errors: total, recovered, tokensLost: tokens, tokensUnknown: unknown, groupCount: rows.length, shown: Math.min(rows.length, limit), groups: rows.slice(0, limit),
-    note: 'Built from job transcripts after each job ends. Tokens lost are approximate: the tokens used between the failure and the call that worked (or the next call); tokensUnknown counts errors where the provider reported none in that span (Codex reports usage once per turn), which are not counted as zero. A recovery is a later success of the same tool (for a shell, the same command) with a different method. Method text is normalised: paths, ids and numbers are placeholders.' };
+    note: 'Built from job transcripts after each job ends. Tokens lost are approximate: the tokens used between the failure and the call that worked (or the next call); tokensUnknown counts errors where the provider reported none in that span (Codex reports usage once per turn), which are not counted as zero. A recovery is a later success with a different method: the same tool (for a shell, the same command), another tool or command on the same file or URL, or another command after one that was not found. Method text is normalised: paths, ids and numbers are placeholders.' };
 }
 
 // The two numbers team status shows: errors recorded in the last 24 hours and the tokens lost to them.

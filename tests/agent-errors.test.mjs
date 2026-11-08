@@ -247,3 +247,20 @@ test('a leading cd with ; or a newline is ignored when judging the same step', t
   assert.equal(e[0].recovered, true); assert.match(e[0].recoveredBy, /node --test/);
   assert.equal(e[1].recovered, false);
 });
+
+test('a different command or tool is recorded as the replacement: command not found, or the same file or URL', t => {
+  const root = tmp(t);
+  const use = (id, name, input) => ({ type: 'assistant', message: { id: 'm' + id, content: [{ type: 'tool_use', id, name, input }] } });
+  const res = (id, text, err) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: text, is_error: err }] } });
+  feed(root, ID, claude, [
+    use('a', 'Bash', { command: 'rg foo src' }), res('a', 'Exit code 127\nrg: command not found', true), use('b', 'Bash', { command: 'grep -r foo src' }), res('b', 'x', false),
+    use('c', 'Edit', { file_path: '/mnt/x/docs/a.md', old_string: 'q', new_string: 'r' }), res('c', 'String to replace not found', true), use('d', 'Write', { file_path: '/mnt/x/docs/a.md', content: 'z' }), res('d', 'ok', false),
+    use('e', 'WebFetch', { url: 'https://example.com/page' }), res('e', 'HTTP 403', true), use('f', 'Bash', { command: 'curl -s https://example.com/page' }), res('f', 'ok', false),
+    use('g', 'Bash', { command: 'node --test foo.test.mjs' }), res('g', 'Exit code 1\nfail', true), use('h', 'Read', { file_path: '/mnt/x/other.md' }), res('h', 'ok', false)]);
+  const e = extractErrors(readTranscript(root, ID).entries);
+  assert.equal(e.length, 4);
+  assert.equal(e[0].type, 'command_not_found'); assert.equal(e[0].recovered, true); assert.match(e[0].recoveredBy, /grep -r/);
+  assert.equal(e[1].recovered, true); assert.match(e[1].recoveredBy, /^Write:/);
+  assert.equal(e[2].recovered, true); assert.match(e[2].recoveredBy, /curl/);
+  assert.equal(e[3].recovered, false); assert.equal(e[3].recoveredBy, null);
+});
