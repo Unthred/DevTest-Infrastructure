@@ -1129,7 +1129,7 @@ export class Team {
     let total = occupying.length;
     const L = this.c.limits;
     const usedAtStart = { ...used }, totalAtStart = total;   // slots filled by jobs already running, before this tick plans any
-    this.taken = new Set(); this.plannedUse = {};
+    this.taken = new Set(); this.plannedUse = {}; this.gateStops = [];
     // Expected files of every running or planned implement job (issue #344): a new implement job whose expected files overlap one is refused.
     this.claimed = new Map();
     for (const j of active) { const rec = this.s.jobs[j.id], n = rec && WRITER_KINDS.has(rec.kind) ? (rec.issue ?? issueOfBranch(rec.branch)) : null; if (n != null && issueByNo.get(n)) for (const f of this.predictFiles(issueByNo.get(n))) this.claimed.set(f, n); }
@@ -1154,7 +1154,7 @@ export class Team {
         const cands = [];
         for (const [agent, a] of this.agents()) {
           if (this.providerSlotFull(a.provider, role, usedBy)) continue;
-          const act = this.choose(agent, a, prs, issueByNo, role);
+          const act = this.chooseOpen(agent, a, prs, issueByNo, role);
           if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) + 0.1 * actions.filter(x => x.agent === agent).length });   // tie-break: spread load to an agent without a slot this tick
         }
         if (!cands.length) break;
@@ -1378,6 +1378,41 @@ export class Team {
     return { prs: counted.map(p => p.number), cap: info.cap };
   }
 
+  // Issue #1086: a held action (retry cap, circuit breaker) is ineligible inside the planner, so the lane's next startable action runs instead of
+  // idling behind it. The held item is marked taken (every candidate loop already skips a taken item), recorded with its reason, and choose() runs again.
+  gateReason(act) {
+    const subject = act.pr ?? act.issue;
+    if (act.type !== 'merge' && subject != null) {
+      const cap = robust.sameCauseCap(this.c.limits);
+      if (robust.capped(this.s, { type: act.type, subject, head: act.head ?? null }, cap)) { const r = this.s.sameCause[`${act.type}:${subject}`]; return { kind: 'retry', cause: r?.cause, attempts: r?.count, why: `retry cap: ${cap} attempts with the same cause (${r?.cause}); needs the homeowner` }; }
+    }
+    try {
+      const h = breaker.blocks(this.s.breaker, this.c.breaker, act);
+      if (h) return { kind: 'breaker', cause: h.cause, why: `circuit breaker: ${h.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + h.cause} halted new ${act.type} jobs until the homeowner resumes` };
+    } catch { /* applyBreaker reports a failing breaker; the post-plan filter still applies */ }
+    return null;
+  }
+  chooseOpen(agent, a, prs, issueByNo, role = null) {
+    for (let i = 0; i < 200; i++) {
+      const act = this.choose(agent, a, prs, issueByNo, role);
+      if (!act) return null;
+      const g = this.gateReason({ agent, ...act });
+      if (!g) return act;
+      this.taken.add(`${act.type}:${act.key}`);
+      if (act.type === 'review') this.taken.add(`review-pr:${act.pr}:${act.head}`);
+      if (act.issue) this.taken.add(`issue:${act.issue}`);
+      const ref = act.pr ?? act.issue;
+      this.noteGate(agent, act, role, g);
+    }
+    return null;
+  }
+  // Record one skip (item, cause, attempts, lane) in the hold list and the tick report; the same skip is recorded once per tick.
+  noteGate(agent, act, role, g) {
+    const ref = act.pr ?? act.issue ?? null;
+    if (this.gateStops.some(x => x.type === act.type && x.ref === ref && x.agent === agent && x.kind === g.kind)) return;
+    this.hold(agent, act.type, `${act.type}${ref != null ? ` #${ref}` : ''} skipped (${role || 'lane'}): ${g.why}`, act.pr ?? null);
+    this.gateStops.push({ type: act.type, ref, agent, lane: role, kind: g.kind, cause: g.cause, attempts: g.attempts ?? null });
+  }
   choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
     const L = this.c.limits;
     const paused = !!this.pauseInfo(prs, [...issueByNo.values()]);
@@ -1404,6 +1439,7 @@ export class Team {
       if (busy('rebase', key) || (this.s.rebaseAttempts[key] || 0) >= L.max_fix_attempts) continue;
       // Issue #266: with a merge backlog, rebase only the PR that is next in rebase order (issue #326: the order of the author's issues queue, then PR number), and let a
       // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
+      { const g = this.gateReason({ agent, type: 'rebase', pr: pr.number, head: pr.headRefOid }); if (g) { this.noteGate(agent, { type: 'rebase', pr: pr.number }, role, g); continue; } }   // issue #1086: a held rebase is skipped and says why
       if (this.rebaseDeferred(pr, prs, issueByNo, busy)) continue;   // issue #326: a deferred PR is skipped; the list order must not decide which PR goes
       if (this.writeBlock(pr, 'rebase') || this.repairOverlap(agent, 'rebase', pr, issueByNo)) continue;
       if (!allow('rebase')) break;
@@ -1621,7 +1657,7 @@ export class Team {
       if (!(r < me || (r === me && o.number < pr.number))) return false;   // not ahead of this PR in the queue order
       if (this.parkedReason(o, null, prs)) return false;   // needs-homeowner or a PASS held on a decision cannot move, so it is not ahead
       const v = this.s.verdicts[verdictKey(o.number, o.headRefOid)];
-      if (!v) return this.otherReviewers('', o).length > 0;   // unreviewed: ahead only if some agent can review it now
+      if (!v) return !this.gateReason({ type: 'review', pr: o.number, head: o.headRefOid }) && this.otherReviewers('', o).length > 0;   // issue #1086: a held review is not ahead   // unreviewed: ahead only if some agent can review it now
       if (v.verdict !== 'PASS' || o.mergeStateStatus === 'BLOCKED') return false;   // a PASS GitHub reports blocked cannot merge next
       if (o.mergeStateStatus === 'BEHIND' && (this.s.rebaseAttempts[verdictKey(o.number, o.headRefOid)] || 0) >= L.max_fix_attempts) return false;   // BEHIND with no rebase left waits for the homeowner
       return !!this.mergeVerdict(o);
@@ -1640,6 +1676,7 @@ export class Team {
       const behind = p.mergeable !== 'CONFLICTING' && p.mergeStateStatus === 'BEHIND' && this.s.verdicts[k]?.verdict === 'PASS' && this.ciState(p) === 'green';
       if (p.mergeable !== 'CONFLICTING' && !behind) return false;
       if (busy('rebase', k) || (this.s.rebaseAttempts[k] || 0) >= L.max_fix_attempts || this.carriedHold(p)) return false;
+      if (this.gateReason({ type: 'rebase', pr: p.number, head: p.headRefOid, agent: author })) return false;   // issue #1086: a held rebase never holds the others back
       if (this.rebaseNotNext(p, prs)) return false;   // issue #633: deferred until next to review or merge, so it never holds the others back
       if (this.limitedOf(author).out) return false;
       if (this.writeBlock(p, 'rebase')) return false;   // choose() skips such a PR, so it must not hold the others back
@@ -1850,6 +1887,8 @@ export class Team {
   applyRetryCap(actions, report) {
     const { kept, stopped } = robust.filterCapped(this.s, actions, robust.sameCauseCap(this.c.limits));
     if (stopped.length) report.retryCapped = stopped.map(a => ({ type: a.type, ref: a.pr ?? a.issue, cause: this.s.sameCause[`${a.type}:${a.pr ?? a.issue}`]?.cause }));
+    const gated = (this.gateStops || []).filter(x => x.kind === 'retry');
+    if (gated.length) report.retryCapped = [...(report.retryCapped || []), ...gated.map(x => ({ type: x.type, ref: x.ref, cause: x.cause, attempts: x.attempts, agent: x.agent, lane: x.lane }))];
     for (const a of stopped) this.hold(a.agent, a.type, `retry cap: ${robust.sameCauseCap(this.c.limits)} attempts with the same cause (${this.s.sameCause[`${a.type}:${a.pr ?? a.issue}`]?.cause}); needs the homeowner`);
     return kept;
   }
@@ -1891,6 +1930,8 @@ export class Team {
       if (!dryRun) this.applyResumeRequests(report);
       if (!dryRun) { const trips = breaker.evaluate(this.s.breaker, limits, this.clock.now()); this.s.breaker.error = null; if (trips.length) { (report.breaker ||= {}).tripped = trips; this.save(); } }
     } catch (error) { this.breakerFailed(error, report); }
+    const gated = (this.gateStops || []).filter(x => x.kind === 'breaker');
+    if (gated.length) (report.breaker ||= {}).stopped = [...((report.breaker || {}).stopped || []), ...gated.map(x => ({ type: x.type, ref: x.ref, agent: x.agent, cause: x.cause, lane: x.lane }))];
     try {
       const { kept, stopped } = breaker.filterActions(this.s.breaker, limits, actions);
       if (stopped.length) { (report.breaker ||= {}).stopped = stopped.map(x => ({ type: x.action.type, ref: x.action.pr ?? x.action.issue ?? null, agent: x.action.agent ?? null, cause: x.cause })); }
@@ -2124,6 +2165,7 @@ export class Team {
     const n = Number(target);
     if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
+    if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
     const tk = rec.issue != null && !['review', 'fix', 'rebase', 'cifix'].includes(rec.kind) ? 'issue' : 'pull', tgt = rec.pr ?? rec.issue;
@@ -2146,6 +2188,19 @@ export class Team {
     }
     if (action === 'close_job') return this.closeJob(id, rec, job, reason, log);
     throw new SupervisorError('unknown action');
+  }
+  // Issue #1086: clear the retry cap of one pull request (a rebase, fix, CI fix or review held on the same cause twice) so the planner may try again.
+  // Only records at the cap are removed; refused when the pull request is not open or nothing is capped for it.
+  async clearRetryCap(n, reason) {
+    const pr = (await this.gh.listPulls()).find(p => p.number === n);
+    if (!pr) throw new SupervisorError(`PR #${n} is not open`);
+    const cap = robust.sameCauseCap(this.c.limits);
+    const keys = Object.entries(this.s.sameCause || {}).filter(([k, v]) => k.slice(k.indexOf(':') + 1) === String(n) && v.count >= cap).map(([k]) => k);
+    if (!keys.length) throw new SupervisorError(`PR #${n} has no retry cap in place; nothing to clear`);
+    for (const k of keys) delete this.s.sameCause[k];
+    this.save();
+    this.logUnblock({}, { target: n, tk: 'pull', what: 'cleared the retry cap', why: `homeowner approved on the dashboard: ${reason}`, result: keys.join(', ') });
+    return `PR #${n}: retry cap cleared for ${keys.map(k => k.slice(0, k.indexOf(':'))).join(', ')}`;
   }
   // One more review attempt at the same head, for attempts spent by Foreman's own faults. Only counters that reached the limit move, each by
   // one, so the total stays bounded; refused when the head already has a verdict, a live review, or any attempt left.
