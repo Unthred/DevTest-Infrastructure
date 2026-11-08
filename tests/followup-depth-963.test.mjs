@@ -65,3 +65,37 @@ test('foldBacklog dry run writes nothing; apply appends to the batch and closes 
 test('foldItems falls back to the plain title', () => {
   assert.deepEqual(foldItems({ number: 4, title: 'Review follow-ups for PR #3 Fix X', body: '' }), ['Fix X (was #4)']);
 });
+
+test('foldBacklog leaves in-flight follow-ups and in-flight batches alone, and starts a second batch before the body limit', async () => {
+  const writes = [];
+  const big = 'x'.repeat(59990);
+  const open = [
+    { number: 1, title: 'Review follow-ups for PR #10', body: '- one finding here' },
+    { number: 2, title: 'Review follow-ups for PR #10', body: '1. numbered finding' },
+    { number: 3, title: 'Review follow-ups for PR #10', body: 'prose' },
+    { number: 9, title: 'Review follow-ups: docs', body: `${batchMarker('docs')}\n${big}` },
+    { number: 8, title: 'Review follow-ups: docs', body: `${batchMarker('docs')}\nimplemented` },
+  ];
+  let created = 100;
+  const gh = {
+    listOpenIssues: async () => open,
+    listPulls: async () => [{ headRefName: 'claude/issue-3-x' }, { headRefName: 'claude/issue-8-x' }],
+    getPullState: async () => ({ state: 'MERGED', files: ['docs/a.md'] }),
+    findOpenIssueByMarker: async (m, skip = []) => open.find(i => i.number >= 8 && i.body.includes(m) && !skip.includes(i.number)) || null,
+    updateIssueBody: async (n, b) => writes.push(['body', n, b]),
+    closeIssue: async (n, c) => writes.push(['close', n, c]),
+    createIssue: async (t, b) => { writes.push(['create', t, b]); return ++created; },
+  };
+  const r = await foldBacklog(gh, { apply: true });
+  assert.deepEqual(r.folded.map(f => f.issue).sort(), [1, 2]);
+  assert.ok(r.keep.some(k => k.issue === 3 && /implementing/.test(k.why)));
+  assert.ok(!writes.some(w => w[0] === 'body' && w[1] === 8), 'an in-flight batch is never edited');
+  assert.ok(writes.some(w => w[0] === 'create' && /^Review follow-ups: docs/.test(w[1])), 'overflow opens a new batch');
+  assert.ok(writes.every(w => w[0] !== 'body' || w[2].length <= 60000));
+  assert.equal(r.before.followUps, 3); assert.equal(r.before.batches, 2);
+  assert.match(writes.find(w => w[0] === 'create')[2], /numbered finding|one finding/);
+});
+
+test('foldItems carries numbered findings', () => {
+  assert.deepEqual(foldItems({ number: 4, title: 't', body: '1. First\n2) Second' }), ['First (was #4)', 'Second (was #4)']);
+});

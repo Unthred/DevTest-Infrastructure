@@ -246,7 +246,7 @@ test('post-merge CHANGES of a retained second-opinion entry opens one linked iss
   w.team.c.second_opinion = SO; w.gh.pulls = [];
   await w.team.execute((await w.team.plan()).find(a => a.agent === 'codex'));
   await finish(w, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'lease never released' }] });
-  assert.equal(w.calls.issues.length, 1); assert.match(w.calls.issues[0][1], /Second-opinion review of merged PR #77/); assert.match(w.calls.issues[0][2], /lease never released/);
+  assert.equal(w.calls.issues.length, 1); assert.match(w.calls.issues[0][1], /^lease never released: fix defects/); assert.doesNotMatch(w.calls.issues[0][1], /PR #77/); assert.match(w.calls.issues[0][2], /<!-- follow-up-depth: 1 -->/); assert.match(w.calls.issues[0][2], /Why a standalone issue: .* real defect in merged code/); assert.match(w.calls.issues[0][2], /PR #77/); assert.match(w.calls.issues[0][2], /lease never released/);
   assert.deepEqual(w.calls.labels.at(-1), [200, 'needs-homeowner']);
   assert.equal(w.team.s.postMerge[77].done.issue, 200);
 });
@@ -355,11 +355,25 @@ test('legacy D-021 post-merge reviews are worded as post-merge review (D-021); a
   const spec = w.calls.created.at(-1);
   assert.match(spec.scope, /^Post-merge review \(D-021\) of PR #77/); assert.match(spec.prompt, /post-merge reviewer \(D-021\)/); assert.doesNotMatch(spec.prompt, /second-opinion/i);
   await finish(w, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'bad' }] });
-  assert.match(w.calls.issues[0][1], /^Post-merge review \(D-021\) of merged PR #77/); assert.doesNotMatch(w.calls.issues[0][2], /second-opinion/);
+  assert.match(w.calls.issues[0][1], /fix defects found after merge$/); assert.doesNotMatch(w.calls.issues[0][1], /PR #77/); assert.match(w.calls.issues[0][2], /follow-up-depth: 1/); assert.doesNotMatch(w.calls.issues[0][2], /second-opinion/);
   const c = w.calls.comments.at(-1)[1]; assert.match(c, /post-merge review \(D-021\) by/); assert.doesNotMatch(c, /second-opinion/);
   // a retained second-opinion entry is unchanged
   const s = world(t); s.gh.pulls = []; s.team.c.second_opinion = SO;
   s.team.s.postMerge[77] = { head: H(5), branch: 'claude/issue-72-x', author: 'claude', at: NOW, secondOpinion: true };
   const a2 = (await s.team.plan()).find(a => a.postMerge); assert.equal(a2.legacyPostMerge, undefined);
   await s.team.execute(a2); assert.match(s.calls.created.at(-1).scope, /^Second-opinion review of PR #77/);
+});
+
+// Issue #963: depth limit 1. A merged PR that closed a review follow-up opens no standalone issue; its findings go to the area batch.
+test('post-merge CHANGES on a PR that closed a follow-up issue goes to the batch issue, not a new standalone one (issue #963)', async t => {
+  const w = world(t, { out: {} });
+  const fu = { number: 72, title: 'Review follow-ups for PR #5 Dashboard: guard cards', body: '- a nit', state: 'OPEN' };
+  w.gh.issues = [fu]; w.gh.getIssue = async n => (n === 72 ? fu : null);
+  w.team.s.postMerge[77] = { head: H(5), branch: 'claude/issue-72-x', author: 'claude', at: NOW, secondOpinion: true };
+  w.team.c.second_opinion = SO; w.gh.pulls = [];
+  await w.team.execute((await w.team.plan()).find(a => a.agent === 'codex'));
+  await finish(w, { verdict: 'CHANGES', findings: [{ kind: 'blocking', text: 'lease never released' }] });
+  assert.equal(w.calls.issues.length, 1);
+  assert.match(w.calls.issues[0][1], /^Review follow-ups: /); assert.match(w.calls.issues[0][2], /devtest-followup-batch/); assert.doesNotMatch(w.calls.issues[0][2], /follow-up-depth: 1/);
+  assert.match(w.calls.comments.at(-1)[1], /added to batch issue #200/);
 });

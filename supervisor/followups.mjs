@@ -113,7 +113,7 @@ export function planFold(issues, parents) {
 
 // What a folded issue adds to its batch: its plain title plus its non-marker body lines, clipped.
 export function foldItems(issue) {
-  const lines = String(issue.body || '').split('\n').map(l => l.trim()).filter(l => /^[-*]\s+\S/.test(l)).map(l => l.replace(/^[-*]\s+/, ''));
+  const lines = String(issue.body || "").split("\n").map(l => l.trim()).filter(l => /^(?:[-*]|\d+[.)])\s+\S/.test(l)).map(l => l.replace(/^(?:[-*]|\d+[.)])\s+/, ""));
   const clip = t => (t.length > 400 ? `${t.slice(0, 399)}…` : t);
   return (lines.length ? lines : [plainTitle(issue.title)]).slice(0, 20).map(t => clip(`${t} (was #${issue.number})`));
 }

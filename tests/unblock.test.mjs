@@ -158,13 +158,13 @@ async function escalatedWorld(t, { body = 'Do the thing.\n- The dispatcher must 
   return { w, jobId, rec, write, finish };
 }
 
-test('split: out-of-scope findings become one queued follow-up issue; homeowner-required items are never split', async t => {
+test('split: out-of-scope findings go to the area batch issue, never a standalone one; homeowner-required items are never split', async t => {
   const { w, write, finish } = await escalatedWorld(t);
   write([{ finding: 'Rename the helper for clarity please', reason: 'cosmetic, not in the acceptance list' }, { finding: 'The dispatcher must never merge without approval', reason: 'try to split a required item' }, { finding: 'invented finding', reason: 'not from a review' }]);
   const r = await finish();
   assert.equal(w.calls.issues.length, 1); const [num, , body] = w.calls.issues[0];
   assert.match(body, /Rename the helper/); assert.doesNotMatch(body, /never merge without approval/); assert.doesNotMatch(body, /invented/);
-  assert.deepEqual(w.team.s.unblock.queued.claude, [num]); assert.deepEqual(w.team.issuesOf('claude').slice(-1), [num]);
+  assert.match(w.calls.issues[0][1], /^Review follow-ups: /); assert.match(body, /devtest-followup-batch/); assert.doesNotMatch(w.calls.issues[0][1], /Follow-up from PR/); assert.deepEqual(w.team.s.unblock.queued.claude || [], []);
   assert.match(w.calls.comments.map(c => c[1]).join('\n'), /2 proposed split\(s\) refused/);
   // the queued issue is implementable at the end of the list, and the re-review is told it is out of scope
   assert.ok(!w.calls.created.some(c => c.kind === 'implement' && c.issue === num), 'the follow-up waits while PR #38 is open (issue #212)');

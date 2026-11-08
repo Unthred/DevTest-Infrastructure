@@ -31,7 +31,7 @@ import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
-import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
+import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText, isFollowUpIssue, plainTitle } from './followups.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
@@ -2714,19 +2714,37 @@ export class Team {
     const pm = this.s.postMerge[j.pr];
     const blocking = v.findings.filter(f => f.kind === 'blocking');
     let issue = null;
+    let batched = false;
     if (v.verdict === 'CHANGES') {
-      const marker = `<!-- devtest-postmerge v1 job=${id} pr=${j.pr} head=${j.head} -->`;
-      issue = await this.gh.findIssueByMarker(marker);
-      if (!issue) issue = await this.gh.createIssue(`${j.legacyPostMerge ? 'Post-merge review (D-021)' : 'Second-opinion review'} of merged ${this.names().pr(j.pr).text} found blocking issues`,
-        `${marker}\nPR #${j.pr} was merged at \`${j.head}\`. The ${j.legacyPostMerge ? 'post-merge review (D-021)' : 'second-opinion review'} by \`${j.agent}\` (job \`${id}\`) found:\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n')}`);
-      await this.gh.addLabel(issue, 'needs-homeowner');
+      // Issue #963: depth limit 1. A merged PR that itself closed a follow-up or batch issue never opens another standalone issue; its
+      // findings go to the area batch. A standalone issue is for a real defect in merged code: plain title, one-line reason, depth marker.
+      if (await this.closesFollowUp(j)) {
+        issue = await this.batchFollowUps(id, j, v.findings.map(f => f.text), true); batched = true;
+      } else {
+        const marker = `<!-- devtest-postmerge v1 job=${id} pr=${j.pr} head=${j.head} -->`;
+        issue = await this.gh.findIssueByMarker(marker);
+        const what = plainTitle(String(this.names().pr(j.pr).text || '').replace(/^\s*PR\s*#\d+\s*/i, '')).replace(/^Review follow-ups$/, '') || String(blocking[0]?.text || 'merged code').replace(/\s+/g, ' ').slice(0, 70);
+        if (!issue) issue = await this.gh.createIssue(`${what}: fix defects found after merge`,
+          `${marker}\n<!-- follow-up-depth: 1 -->\nWhy a standalone issue: the ${j.legacyPostMerge ? 'post-merge review (D-021)' : 'second-opinion review'} found a real defect in merged code (PR #${j.pr}, merged at \`${j.head}\`).\n\nReviewer: \`${j.agent}\` (job \`${id}\`). Findings:\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n')}`);
+        await this.gh.addLabel(issue, 'needs-homeowner');
+      }
     }
     const marker = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} `;
-    if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, `${marker}verdict=${v.verdict} reviewer=${j.agent} post-merge -->\n**${v.verdict}** — ${j.legacyPostMerge ? 'post-merge review (D-021)' : 'second-opinion review'} by \`${j.agent}\` (${this.names().job({ id, kind: 'review', pr: j.pr }).text}) of merged head ${this.commitRef(j.head)}.${issue ? ` Blocking findings: issue #${issue}.` : ''}\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}`);
+    if (!(await this.gh.hasComment?.(j.pr, marker))) await this.gh.comment(j.pr, `${marker}verdict=${v.verdict} reviewer=${j.agent} post-merge -->\n**${v.verdict}** — ${j.legacyPostMerge ? 'post-merge review (D-021)' : 'second-opinion review'} by \`${j.agent}\` (${this.names().job({ id, kind: 'review', pr: j.pr }).text}) of merged head ${this.commitRef(j.head)}.${issue ? ` Blocking findings: ${batched ? 'added to batch issue' : 'issue'} #${issue}.` : ''}\n\n${v.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}`);
     if (v.verdict === 'PASS') await this.gh.removeLabel?.(j.pr, 'post-merge-review');
     if (pm) pm.done = { verdict: v.verdict, reviewer: j.agent, job: id, issue, blocking: blocking.length, at: this.clock.now() };
     j.ingested = true; this.save();
     report.ingested.push({ job: id, pr: j.pr, verdict: v.verdict, postMerge: true });
+  }
+  // Issue #963: does the PR (by its issue-N branch) close a review follow-up or batch issue? Then it is at depth 1 and opens no standalone issue.
+  async closesFollowUp(j) {
+    const m = /\/issue-(\d+)(\D|$)/.exec(j.branch || ''); if (!m) return false;
+    const n = Number(m[1]);
+    try {
+      let found = ((this.view || this.nameView)?.issues || []).find(i => i.number === n);
+      if (!found && this.gh.getIssue) found = await this.gh.getIssue(n);
+      return !!found && (isFollowUpIssue(found) || String(found.body || '').includes('follow-up-depth'));
+    } catch { return false; }
   }
   // The one place the dispatcher builds names for issues, PRs and jobs in alerts, notices and comments (issue #147).
   // Ingestion, notices and alerts run before plan() reads GitHub, so the titles they name are fetched first (best effort: a failure only means bare numbers).
@@ -3425,7 +3443,7 @@ export class Team {
       .map(([k, v]) => ({ head: k.slice(String(pr).length + 1), verdict: v.verdict, reviewer: v.reviewer, findings: (v.findings || []).map(f => ({ kind: f.kind, text: f.text })) }));
   }
   // After the final round: findings the job proposes to split out are checked, and only the ones that are provably the reviewer's
-  // own and not homeowner-required (issue body or the owner's comments) become one follow-up issue, queued at the end of the author's list.
+  // own and not homeowner-required (issue body or the owner's comments) are appended to the area batch issue (issue #963).
   async processSplit(id, j, report) {
     const file = path.join(this.dir, 'inbox', j.ticket || 'none', 'split.json');
     let proposal;
@@ -3454,17 +3472,13 @@ export class Team {
     }
     let issue = null;
     if (accepted.length) {
-      const marker = `<!-- devtest-split v1 pr=${j.pr} job=${id} -->`;
-      issue = await this.gh.findIssueByMarker(marker);
-      if (!issue) issue = await this.gh.createIssue(`Follow-up from PR #${j.pr}: findings outside the original scope`, `${marker}\nSplit out of PR #${j.pr} by Foreman during the final fix round (job \`${id}\`). These reviewer findings are outside the acceptance criteria of the original issue and the homeowner's comments; the PR is re-reviewed against the original scope.\n\n${accepted.map(x => `- ${x.finding}`).join('\n')}`);
-      const agent = j.agent;
-      const q = this.s.unblock.queued[agent] ||= [];
-      if (!q.includes(issue)) q.push(issue);
+      // Issue #963: split-out findings are non-blocking, so they go to the open area batch issue and never open a standalone issue.
+      issue = await this.batchFollowUps(id, j, accepted.map(x => x.finding), true);
       j.split = { issue, findings: accepted.map(x => x.finding) };
       this.save();
     }
-    await this.postNotice(j.pr, `split job=${id}`, `**Final round: scope split.** ${issue ? `${accepted.length} reviewer finding(s) outside the original scope moved to issue #${issue}, queued at the end of \`${j.agent}\`'s list. The PR is re-reviewed against the original scope.` : 'No finding was split out.'}${refused.length ? ` ${refused.length} proposed split(s) refused: ${refused.map(r => r.why).join('; ')}.` : ''}`);
-    this.logUnblock(report, { target: j.pr, tk: 'pull', what: `split ${accepted.length} finding(s) of PR #${j.pr} into ${issue ? `issue #${issue}` : 'no issue'}`, why: 'final fix round proposed findings outside the original scope', result: refused.length ? `${refused.length} refused (homeowner-required or unverifiable)` : 'queued' });
+    await this.postNotice(j.pr, `split job=${id}`, `**Final round: scope split.** ${issue ? `${accepted.length} reviewer finding(s) outside the original scope moved to the area batch issue #${issue}. The PR is re-reviewed against the original scope.` : 'No finding was split out.'}${refused.length ? ` ${refused.length} proposed split(s) refused: ${refused.map(r => r.why).join('; ')}.` : ''}`);
+    this.logUnblock(report, { target: j.pr, tk: 'pull', what: `split ${accepted.length} finding(s) of PR #${j.pr} into ${issue ? `issue #${issue}` : 'no issue'}`, why: 'final fix round proposed findings outside the original scope', result: refused.length ? `${refused.length} refused (homeowner-required or unverifiable)` : 'batched' });
   }
   // Issue #163 part 4: needs-homeowner labels Foreman added are removed when their cause clears, and the removal is recorded.
   async clearStale(report, guard = (_, fn) => fn()) {
