@@ -188,10 +188,38 @@ export function tickOutcome(report) {
   return { status: 'error', error: `${skipped.length} action(s) skipped: ${skipped.map(s => `${s.what}: ${s.reason}`).join('; ')}`.slice(0, 300) };
 }
 
+// Issue #985: phase name -> whole milliseconds. Hostile names and values are dropped; "total" and the fixed phases come first, so the cap of
+// 20 names can only ever cut the variable per-step names.
+const PHASE_NAME = /^[a-z][a-z0-9 -]{0,30}$/, FIXED_PHASES = ['total', 'team setup', 'change check', 'github reads', 'plan', 'job launches', 'reports', 'installs'];
+export function cleanPhases(phases) {
+  if (!phases || typeof phases !== 'object') return null;
+  const ok = Object.entries(phases).filter(([k, v]) => PHASE_NAME.test(k) && Number.isFinite(v) && v >= 0);
+  const rank = k => { const i = FIXED_PHASES.indexOf(k); return i < 0 ? FIXED_PHASES.length : i; };
+  return Object.fromEntries(ok.sort((a, b) => rank(a[0]) - rank(b[0])).slice(0, 20).map(([k, v]) => [k, Math.round(v)]));
+}
+// Issue #985: work done after the tick was recorded (the install steps and the reports) adds its time to the record it belongs to: the cache
+// tick and, when it is still the newest line, the snapshot. Best effort; a failure leaves the record as it was.
+export function addPassPhases(root, add) {
+  try {
+    const prev = readCache(root); if (!prev?.tick || !add || typeof add !== 'object') return;
+    const extra = cleanPhases(add) || {}, sum = Object.values(extra).reduce((n, v) => n + v, 0);
+    if (!Object.keys(extra).length) return;
+    const merge = o => JSON.parse(JSON.stringify({ ...o, durationMs: Number.isFinite(o.durationMs) ? o.durationMs + sum : undefined,
+      phases: cleanPhases({ ...Object.fromEntries(Object.entries(o.phases || {}).map(([k, v]) => [k, k === 'total' ? v + sum : v])), ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, (o.phases?.[k] || 0) + v])) }) }));
+    atomicJson(cacheFile(root), { ...prev, tick: merge(prev.tick) });
+    const file = historyFile(root), lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean), last = JSON.parse(lines[lines.length - 1]);
+    if (last.at !== prev.tick.at) return;
+    lines[lines.length - 1] = JSON.stringify(merge(last));
+    const temp = `${file}.tmp-${process.pid}`; fs.writeFileSync(temp, lines.join('\n') + '\n', { mode: 0o600 }); fs.renameSync(temp, file);
+  } catch { /* the record stays as it was */ }
+}
 // Written by the tick (never by the dashboard server). `error` is the failure of this tick, if any.
-export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0, startedAt = null, heldAgents = null, holds = {}, trigger = null, merged = null, noop = false, ghCalls = null, ghMs = null, check = null }) {
+export function recordTick(root, { now, status, error = null, team = null, jobs, actions = [], probes = {}, ingested = 0, startedAt = null, heldAgents = null, holds = {}, trigger = null, merged = null, noop = false, ghCalls = null, ghMs = null, check = null, durationMs = null, phases = null }) {
+  // Issue #985: how long the pass took and where (phase name -> milliseconds), kept with the tick so the dashboard and foreman_status can show it.
+  const phaseMs = cleanPhases(phases);
+  const passTiming = { ...(Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {}), ...(phaseMs && Object.keys(phaseMs).length ? { phases: phaseMs } : {}) };
   const prev = readCache(root) || {};
-  const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null) },
+  const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null), ...passTiming },
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
   if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.mergedNumbers = (team.merged || []).map(x => x.number).filter(Number.isSafeInteger); cache.fetchedAt = now;
     // file lists the tick read for the second-opinion hold (null = unreadable), so the page shows the same hold as the tick
@@ -211,7 +239,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     // without `trigger` is from before wakes existed and was a scheduled pass.
     ...(typeof trigger === 'string' ? { trigger, ...(Array.isArray(merged) && merged.length ? { merged: merged.filter(x => typeof x === 'string').slice(0, 5) } : {}) } : {}),
     // Issue #755: a pass that GitHub's conditional requests proved unchanged and that did nothing; the gh processes the pass started; what the change check said.
-    ...(noop === true ? { noop: true } : {}), ...(Number.isSafeInteger(ghCalls) ? { ghCalls } : {}), ...(Number.isFinite(ghMs) ? { ghMs: Math.round(ghMs) } : {}),
+    ...passTiming, ...(noop === true ? { noop: true } : {}), ...(Number.isSafeInteger(ghCalls) ? { ghCalls } : {}), ...(Number.isFinite(ghMs) ? { ghMs: Math.round(ghMs) } : {}),
     ...(check && typeof check.result === 'string' ? { check: { result: check.result.slice(0, 20), reason: redact(String(check.reason || ''), 160), probes: Number.isSafeInteger(check.probes) ? check.probes : 0, served: Number.isSafeInteger(check.served) ? check.served : 0 } } : {}),
     redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };
   // Issue #362: keep a compact, allowlisted timeline of everything the live records hold now, before any of it can expire.

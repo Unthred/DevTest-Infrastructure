@@ -160,11 +160,19 @@ export function readRecorder(dir, from, to, limits = {}) {
 }
 
 // Everything the page shows. `recorderDir` null skips the recorder (status "missing").
+// Issue #985: the newest pass that recorded its duration, with its phase breakdown (seconds).
+export function lastPassOf(snaps) {
+  for (let i = (snaps || []).length - 1; i >= 0; i--) {
+    const s = snaps[i];
+    if (Number.isFinite(s?.durationMs)) return { at: s.at, trigger: s.trigger || 'schedule', seconds: Math.round(s.durationMs / 100) / 10, phases: s.phases ? Object.entries(s.phases).filter(([k]) => k !== 'total').map(([k, ms]) => [k, Math.round(ms / 100) / 10]).sort((a, b) => b[1] - a[1]).slice(0, 8) : [] };
+  }
+  return null;
+}
 export function buildDiagnostics({ jobs = [], snapshots = [], verdicts = {}, agents = {}, now = Date.now(), recorderDir = DEFAULT_RECORDER_DIR, wake = null }) {
   const to = now, from = now - RETENTION_DAYS * DAY_MS;
   const snaps = snapshots.filter(s => Number.isFinite(s?.at) && s.at >= from - DAY_MS);
   return { generatedAt: now, from, to, retentionDays: RETENTION_DAYS, agents: Object.keys(agents),
     ticks: tickGaps(snaps, from, to), turnaround: jobTurnaround(jobs, agents, from, to), verdictLag: verdictLag(jobs, verdicts, from, to),
-    idle: idleHistory({ jobs, snapshots: snaps, agents, from, to }), passes: passStats(snaps, from, to), wake,
+    idle: idleHistory({ jobs, snapshots: snaps, agents, from, to }), passes: passStats(snaps, from, to), wake, lastPass: lastPassOf(snaps),
     recorder: recorderDir ? readRecorder(recorderDir, from, to) : { status: 'missing', note: 'No recorder log folder is configured.', files: 0, samples: 0, hourly: [], days: [] } };
 }

@@ -68,7 +68,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
   const defs = [
     { name: 'foreman_status', description: 'Foreman health: tick state, installed and main version, role slots, circuit breaker, per-agent allowance mode and idle reason, the planned next actions, running jobs and the count of Needs you items.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => ({
-        health: v.health, freshness: v.freshness, tick: { ...v.tick, at: iso(v.tick?.at), lastOkAt: iso(v.tick?.lastOkAt) }, nextTick: v.nextTick, version: v.version, teamEnabled: v.teamEnabled,
+        health: v.health, freshness: v.freshness, tick: { ...v.tick, at: iso(v.tick?.at), lastOkAt: iso(v.tick?.lastOkAt) }, nextTick: v.nextTick, lastPass: { durationSeconds: Number.isFinite(v.tick?.durationMs) ? Math.round(v.tick.durationMs / 100) / 10 : null, phasesSeconds: v.tick?.phases ? Object.fromEntries(Object.entries(v.tick.phases).map(([k, ms]) => [k, Math.round(ms / 100) / 10])) : null }, wakes: v.wakes ?? null, version: v.version, teamEnabled: v.teamEnabled,
         slots: (v.slots || []).map(s => s.text), capNotes: v.capNotes, breaker: v.breaker ? { halt: v.breaker.halt, error: v.breaker.error ?? null, byCause: (v.breaker.byCause || []).slice(0, 8) } : null,
         agents: (v.agents || []).map(a => ({ name: a.name, state: a.state, idle: a.idleReason?.text ?? null })),
         budget: Object.fromEntries(Object.entries(v.budget || {}).map(([k, b]) => [k, { mode: b.mode, reason: b.reason, used: b.used, projected: b.projected }])),

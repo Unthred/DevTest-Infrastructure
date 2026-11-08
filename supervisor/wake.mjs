@@ -167,6 +167,14 @@ export function spawnDetachedPass({ root, reason, self, registry = null, spawnFn
   const child = spawnFn(process.execPath, wakeArgs({ target: wakeTarget({ root, self }), reason, root, registry }), { detached: true, stdio: 'ignore', env: wakeEnv(root) });
   child.on?.('error', () => {}); child.unref?.();
 }
+// Issue #985: start an approved prompt now, in its own small process, whatever a running pass is doing. The process takes inbox-lane.lock (one
+// at a time; a second finds it held and ends: the holder reads the same approved items), runs `team start-approved` on the installed code and
+// ends. Failure to start it is no failure: the woken pass starts the prompt the normal way.
+export const laneArgs = ({ target, root, registry }) => [target, 'team', 'start-approved', '--state-root', root, ...(registry ? ['--registry', registry] : [])];
+export function spawnDetachedLane({ root, self, registry = null, spawnFn = spawn }) {
+  const child = spawnFn(process.execPath, laneArgs({ target: wakeTarget({ root, self }), root, registry }), { detached: true, stdio: 'ignore', env: wakeEnv(root) });
+  child.on?.('error', () => {}); child.unref?.();
+}
 // A new overseer proposal arrives as a file in <inbox>/items/ (the existing write route, foreman-mcp/inbox.mjs). The dashboard server, which
 // already reads the inbox, looks at the folder's file names every few seconds (one directory listing, no reads of file content) and calls
 // `onNew` when a name appears that it has not seen. Names present when the watcher starts are not new: the schedule picks those up.
@@ -182,4 +190,20 @@ export function inboxWatcher({ dir, onNew, intervalMs = 5000, list = d => fs.rea
   poll();
   const timer = setTimer(poll, intervalMs); timer.unref?.();
   return { poll, stop: () => clearTimer(timer) };
+}
+
+// Issue #985: what the dashboard and foreman_status show about wakes: the rolling-hour use against the cap, the requests waiting for the
+// running pass (reasons and how long they have waited) and how long the running pass has held the lock. Local files only.
+export function wakeView(root, now = Date.now(), cap = WAKE_MAX_PER_HOUR) {
+  const st = wakeStatus(root, now, cap), req = readWake(root).requested;
+  return { ...st, pending: req ? { reasons: req.reasons, since: req.at || null, ageSeconds: req.at ? Math.max(0, Math.round((now - req.at) / 1000)) : null } : null, passRunningSeconds: Math.round(passLockAge(root, now) / 1000) || null };
+}
+
+// Issue #985: a new proposal is validated (waiting -> pending) at once, by whoever sees it first, even while a pass runs: the scan only
+// writes inbox status files, never Foreman's team state. A small lock keeps two scanners (the dashboard's watcher and the pass) from
+// writing the same status; a scanner that finds it held does nothing, because the holder is already scanning the same folder.
+export function scanInboxNow({ root, inboxDir, scan, maxPending, now = Date.now() }) {
+  let release; try { release = dirLock(root, 'inbox-scan.lock', now); } catch { release = null; }
+  if (!release) return { scanned: false };
+  try { return { scanned: true, ...scan(inboxDir, now, { maxPending }) }; } finally { release(); }
 }
