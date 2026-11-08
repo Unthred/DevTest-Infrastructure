@@ -6,13 +6,14 @@ import http from 'node:http';
 import path from 'node:path';
 import { buildPlanForVerifiedPaths, verifyTargets, targetSocketPath, validateLock, RunnerError } from '../docker/runner.mjs';
 import { parseArguments, isAllowed, redactUrl, PROFILES, STANDARD_PROFILES, EXIT } from '../browser/capture.mjs';
+import { shortMkdtemp } from './_short-tmp.mjs';
 import { createStaticServer, listenOnSocket } from '../browser/static-server.mjs';
 
 const lock = JSON.parse(fs.readFileSync(new URL('../docker/images.lock.json', import.meta.url), 'utf8'));
 const limits = { cpus: 1, memoryMb: 1024, pids: 128, shmMb: 64, timeoutMs: 60000, diskMb: 64, cacheMb: 64 };
 const plan = (spec, storage = '/mnt/cache/appdata/x') => buildPlanForVerifiedPaths({ runId: 'a'.repeat(16), image: 'playwright', command: ['node', 'x'], ...spec },
   { lock, uid: 99, gid: 100, limits }, '/mnt/user/projects/p', storage);
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'devtest-browser-'));
+const tmp = () => shortMkdtemp('dtb-');
 
 test('the Playwright image is an official digest with its tag and date, and the npm package is integrity-pinned', () => {
   const entry = validateLock(lock).images.playwright;
