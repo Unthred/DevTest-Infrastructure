@@ -10,6 +10,7 @@ import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
 
+import { renderMarkdown } from './markdown.mjs';
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
@@ -37,7 +38,7 @@ const colourOf = (name, i = 0) => AGENT_COLOUR[name] || EXTRA_COLOURS[i % EXTRA_
 
 // ---- routes
 export const NAV = [
-  ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
+  ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'], ['inbox', '/inbox', 'Inbox', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
   ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['diagnostics', '/diagnostics', 'Diagnostics', 'clock'], ['system', '/system', 'System', 'gear']
 ];
 export function matchRoute(pathname) {
@@ -127,17 +128,17 @@ const empty = (title, hint, ic = 'info') => `<div class="empty">${icon(ic)}<b>${
 // dashui/lists-ui.mjs adds the search box, the sort controls and keeps their state across the page's refresh.
 // A row carries what the controls sort and search on: severity (data-sev), a number, a short name and the age in ms.
 const plain = h => String(h ?? '').replace(/<[^>]*>/g, ' ').replace(/&(amp|lt|gt|quot|#39);/g, (m, c) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[c]).replace(/\s+/g, ' ').trim();
-export function dli({ cls = '', id = '', extra = '', key = '', sev = null, num = null, name = '', age = null, inner = '' }) {
+export function dli({ cls = '', id = '', extra = '', key = '', sev = null, num = null, name = '', age = null, search = '', inner = '' }) {
   const attrs = [cls ? `class="${esc(cls)}"` : '', id ? `id="${esc(id)}"` : '', key ? `data-key="${esc(key)}"` : '', sev ? `data-sev="${esc(sev)}"` : '',
-    Number.isFinite(num) ? `data-num="${num}"` : '', name ? `data-name="${esc(String(name).slice(0, 120))}"` : '', Number.isFinite(age) ? `data-age="${Math.round(age)}"` : '', extra].filter(Boolean).join(' ');
+    Number.isFinite(num) ? `data-num="${num}"` : '', name ? `data-name="${esc(String(name).slice(0, 120))}"` : '', Number.isFinite(age) ? `data-age="${Math.round(age)}"` : '', search ? `data-search="${esc(String(search).slice(0, 1200))}"` : '', extra].filter(Boolean).join(' ');
   return { html: `<li ${attrs}>${inner}</li>`, sev, num: Number.isFinite(num) ? num : null, name, age: Number.isFinite(age) ? age : null };
 }
 // `sorts` are the sort keys that make sense for these rows (lists.mjs SORT_KEYS); `defaultSort` is what the list is rendered in.
 // `compact` is for small lists inside a card that has other content (a shorter fixed height).
-export function dlist({ id, label, noun = 'items', rows, sorts = ['default'], defaultSort = { key: 'default', dir: 'asc' }, defaultLabel = 'Original order', compact = false, listCls = 'panel-list' }) {
+export function dlist({ id, label, noun = 'items', rows, sorts = ['default'], defaultSort = { key: 'default', dir: 'asc' }, defaultLabel = 'Original order', compact = false, listCls = 'panel-list', minSearch }) {
   const ordered = sortListRows(rows.map((r, i) => ({ ...r, i })), defaultSort.key, defaultSort.dir);
   const words = k => (k === 'default' ? [defaultLabel, 'Reversed'] : DIRECTION_WORDS[k]);
-  const search = searchVisible(rows.length), sort = sortsVisible(sorts) && rows.length > 1;
+  const search = searchVisible(rows.length, minSearch), sort = sortsVisible(sorts) && rows.length > 1;
   const word = words(defaultSort.key)[defaultSort.dir === 'desc' ? 1 : 0];
   const bar = search || sort ? `<div class="dl-bar">${search ? `<div class="dl-search"><input type="search" class="dl-q" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Search ${esc(label)}" maxlength="200"><button type="button" class="tbtn dl-clear" aria-label="Clear search" title="Clear search" hidden>${icon('stop')}</button></div>` : ''}${sort ? `<label class="dl-sort"><span class="vh">Sort ${esc(label)} by</span><select class="dl-key">${sorts.map(k => `<option value="${k}"${k === defaultSort.key ? ' selected' : ''}>${esc(k === 'default' ? defaultLabel : SORT_LABELS[k])}</option>`).join('')}</select></label><button type="button" class="btn dl-dir" aria-label="Sort direction: ${esc(word)}. Press to reverse." title="Reverse the order" ${sorts.length ? '' : 'hidden'}>${icon(defaultSort.dir === 'desc' ? 'down' : 'up')}<span>${esc(word)}</span></button>` : ''}</div>` : '';
   return `<div class="dlist${compact ? ' compact' : ''}" data-dlist="${esc(id)}" data-sorts="${esc(sorts.join(','))}" data-default-key="${esc(defaultSort.key)}" data-default-dir="${defaultSort.dir === 'desc' ? 'desc' : 'asc'}" data-default-label="${esc(defaultLabel)}" data-noun="${esc(noun)}">${bar}<ul class="${esc(listCls)} dl-scroll" tabindex="0" aria-label="${esc(label)}">${ordered.map(r => r.html.replace('<li ', `<li data-i="${r.i}" `)).join('')}</ul><p class="dl-none sub" role="status" hidden></p><div class="dl-foot sub" data-dl-foot aria-live="polite">${esc(footerText(rows, rows, noun))}</div></div>`;
@@ -395,10 +396,9 @@ function robustnessCard(view) {
 // Issue #124: the Approve/Reject card of one inbox item. The item's own text is shown in full (escaped), so the click is informed.
 // Issue #977: every inbox item shows its short id (the first 8 characters, as the overseer quotes it) beside its kind, as a link to /inbox/<id>.
 // The full id sits in a hidden span so the list search matches either.
-const KIND_WORD = { prompt: 'prompt', issue_draft: 'issue draft', action: 'action' };
+const KIND_WORD = { prompt: 'prompt job', issue_draft: 'issue draft', action: 'action' };
 const inboxTag = (id, kind) => (/^[a-f0-9]{32}$/.test(String(id)) ? `<span class="inbox-tag"><a class="inbox-id" href="/inbox/${id}" title="Direct link to this item"><code>${id.slice(0, 8)}</code></a>${KIND_WORD[kind] ? ` <span class="inbox-kind">${KIND_WORD[kind]}</span>` : ''}<span class="inbox-fullid" hidden>${id}</span></span>` : '');
 const inboxForm = (id, decision, label, cls) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="decision" value="${decision}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
-const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div><div class="inbox-err" role="alert" hidden></div></div>`;
 // Issue #856: what was chosen and when ("Approved 06:20"), shown beside the title. dashui/app.js rewrites the time in the viewer's zone from data-lms.
 const OUTCOME = { approve: ['Approved', 'approved', '✓'], reject: ['Rejected', 'rejected', '✗'] };
 // Issue #925: an approval nothing has acted on yet says it is waiting for a free slot; once the tick has taken it, it reads plainly "Approved".
@@ -406,16 +406,42 @@ const outcomeSpan = (decision, ms, state) => { const [label, cls] = OUTCOME[deci
 const undoForm = c => (c.undoUntil ? `<form method="post" action="/inbox" class="inbox-form inbox-undo" data-undo-until="${Math.round(c.undoUntil)}"><input type="hidden" name="id" value="${esc(c.id)}"><input type="hidden" name="decision" value="undo"><button class="linkbtn" type="submit">Undo</button></form>` : '');
 // The collapsed "Decided today" list (newest first). It is also rendered, hidden and empty, while a proposal is pending, so the script can move a decided card into it.
 function decidedBlock(view) {
-  const list = view.panels.inboxDecided || [], pending = view.panels.needsYou.some(a => a.inbox);
+  const list = view.panels.inboxDecided || [], pending = (view.panels.inbox || []).length > 0;
   if (!list.length && !pending) return '';
   const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state)} ${undoForm(c)}</li>`).join('');
   return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary><ul class="inbox-decided-list">${rows}</ul></details>`;
 }
+// Issue #884: the Inbox. One compact row per pending overseer proposal: a tick box, the title, the kind, the short id, when it was submitted, the "why"
+// line, and Approve / Reject. The full text (Markdown for an issue draft) and the content hash open on click. The row's search text is exactly
+// title, short and full id, kind (both its words) and why, so a search matches on those and not on the body.
+const KIND_SEARCH = { prompt: 'prompt job prompt', issue_draft: 'issue draft issue_draft', action: 'action' };
+const inboxBody = c => (c.kind === 'issue_draft' ? `<div class="md">${renderMarkdown(c.text || '')}</div>` : `<pre class="inbox-text">${esc(c.text || '')}</pre>`);
+function inboxRow(c, now) {
+  const short = c.id.slice(0, 8), title = c.broken ? 'An inbox item that cannot be shown' : c.title, dup = c.duplicate;
+  const buttons = `${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}`;
+  const pick = c.strong ? '<span class="inbox-pick inbox-strong" title="This item needs its own confirmation and is not part of bulk actions">own confirmation</span>'
+    : `<label class="inbox-pick"><input type="checkbox" class="inbox-check" name="id" value="${esc(c.id)}" form="inbox-bulk" aria-label="Select ${esc(title)}"></label>`;
+  const search = [title, short, c.id, KIND_SEARCH[c.kind] || c.kind || '', c.why || '', dup ? 'possible duplicate' : '', c.broken || ''].join(' ');
+  const inner = `<div class="inbox-item inbox-row" data-inbox="${esc(c.id)}"><div class="inbox-head">${pick}<div class="t"><span class="inbox-title">${esc(title)}</span></div><span class="inbox-outcome" hidden></span></div>
+<div class="inbox-meta">${inboxTag(c.id, c.kind)}<span class="inbox-when">Submitted ${c.createdAt == null ? 'at an unknown time' : `${lt(c.createdAt)} (${esc(ago(c.createdAt, now))})`}</span>${dup ? ` <span class="badge inbox-dup">Possible duplicate: ${dup.copies} with this title${dup.newer ? ', this is the newer one' : ', a newer one exists'}</span>` : ''}</div>
+${c.why ? `<div class="sub inbox-why">Why: ${esc(c.why)}</div>` : ''}${c.broken ? `<div class="sub">It cannot be shown: ${esc(c.broken)}. Reject it; the overseer can propose it again.</div>` : ''}<div class="acts">${buttons}</div><div class="inbox-err" role="alert" hidden></div>
+${c.broken ? '' : `<details class="inbox-more"><summary>Show full text</summary><div class="sub">${esc(c.will || '')}</div>${inboxBody(c)}<div class="sub">Content hash ${esc(c.hash || '')}</div></details>`}</div>`;
+  return dli({ cls: 'sev-action inbox-li', id: `att-inbox-${c.id}`, key: `inbox-${c.id}`, sev: 'action', name: title, age: c.createdAt == null ? null : Math.max(0, now - c.createdAt), search, inner });
+}
+function inboxPanel(view) {
+  const list = view.panels.inbox || [], now = view.generatedAt;
+  if (!list.length) return empty('The inbox is empty', 'No overseer proposal is waiting.', 'check') + decidedBlock(view);
+  const rows = list.map(c => inboxRow(c, now));
+  const bulk = `<form method="post" action="/inbox" id="inbox-bulk" class="inbox-bulk"><input type="hidden" name="bulk" value="1"><label class="inbox-all"><input type="checkbox" class="inbox-checkall"> Select all shown</label><button class="btn inbox-approve" type="submit" name="decision" value="approve">Approve selected</button><button class="btn inbox-reject" type="submit" name="decision" value="reject">Reject selected</button><span class="inbox-bulk-msg sub" role="status" aria-live="polite">Items that need their own confirmation are never part of these buttons.</span></form>`;
+  return `${bulk}${dlist({ id: 'inbox', label: 'Inbox', noun: 'proposals', rows, sorts: ['default', 'age', 'name'], defaultLabel: 'Oldest first', minSearch: 2 })}${decidedBlock(view)}`;
+}
+const inboxCard = view => card({ id: 'inbox', title: `Inbox${(view.panels.inbox || []).length ? ` (${view.panels.inbox.length})` : ''}`, span: 12, body: inboxPanel(view), href: '/inbox', cls: 'panel inbox-card', type: 'panel' });
+function inboxPage(view) { return { title: 'Inbox', crumbs: [[null, 'Inbox']], body: grid('inbox', inboxCard(view).replace(/ href="\/inbox"/, '')) }; }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
+  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
   return (items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
-    : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check')) + decidedBlock(view);
+    : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check'));
 }
 // Issue #414: parked or staged work, quieter than Needs you: what it waits for and who or what ends the wait.
 function laterPanel(view) {
@@ -568,6 +594,7 @@ function overview(view, query) {
   const panels = [
     breakerCard(view),
     robustnessCard(view),
+    (view.panels.inbox || []).length || (view.panels.inboxDecided || []).length ? inboxCard(view) : '',
     card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view, { list: 'now' }), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
@@ -1015,7 +1042,7 @@ function processesPage(view, query, pathname, route) {
   return { title: agent ? `Processes: ${agent}` : 'Processes', crumbs: agent ? [['/system', 'System'], ['/system/processes', 'Processes'], [null, agent]] : [['/system', 'System'], [null, 'Processes']], bodyClass: 'procs',
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
-const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+const PAGES = { inbox: inboxPage, headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 export const PAGE_NAMES = Object.keys(PAGES);
 

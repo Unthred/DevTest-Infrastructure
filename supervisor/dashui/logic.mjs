@@ -166,7 +166,7 @@ export function dockFromPoint(x, y, w, h) {
 }
 
 // ---- back navigation (issue #58)
-export const TOP_PAGES = { agents: 'Agents', work: 'Work', activity: 'Activity', usage: 'Usage & cost', reviews: 'Reviews', system: 'System' };
+export const TOP_PAGES = { agents: 'Agents', work: 'Work', inbox: 'Inbox', activity: 'Activity', usage: 'Usage & cost', reviews: 'Reviews', system: 'System' };
 // The trail for a page: Overview > Work > PR #41. [href, label]; the last item has no link. Overview itself has no trail.
 export function trail(page, extra = []) {
   if (page === 'overview') return [];

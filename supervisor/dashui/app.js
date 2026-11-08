@@ -7,7 +7,7 @@ import { initChartOptions } from './chartopts.mjs';
 import { BAR_KEY, FIXED, addBarItem, barToSaved, moveBarItem, removeBarItem, sanitizeBar } from './appbar.mjs';
 import { COLS, MIN_W, ROW_PITCH, addGroup, canHide, compactGroups, dragRect, groupOf, placeGroup, removeGroups, withoutCard, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { saveLists, watchLists } from './lists-ui.mjs';
-import { postDecision, runDecision, lowerCount, OUTCOME_TEMPLATE } from './inbox-ui.mjs';
+import { postDecision, runDecision, lowerCount, OUTCOME_TEMPLATE, bulkLabel, pickedIds, bulkSummary } from './inbox-ui.mjs';
 import { readRegions, startRefresh } from './refresh.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -61,9 +61,42 @@ document.addEventListener('submit', async e => {
       }
       list.prepend(li); box.hidden = false; $('.inbox-decided-n', box).textContent = String($$('li', list).length);
       row.remove();
-      const h = $('#h-needs'); if (h) h.textContent = lowerCount(h.textContent);
+      for (const h of $$('#h-inbox')) h.textContent = lowerCount(h.textContent);
     } } });
 });
+// Issue #884: bulk Approve / Reject of the ticked rows. Only rows the search shows count; the server decides each item on its own and answers with a
+// result per item, so a refused one keeps its row and says why. Without this script the form still posts (every ticked box, then a redirect).
+const boxState = () => $$('input.inbox-check').map(b => ({ value: b.value, checked: b.checked, disabled: b.disabled, visible: !b.closest('li')?.hidden }));
+const syncBulk = () => {
+  const n = pickedIds(boxState()).length;
+  for (const f of $$('form.inbox-bulk')) for (const b of $$('button[name=decision]', f)) { const t = bulkLabel(b.value === 'approve' ? 'Approve' : 'Reject', n); if (b.textContent !== t) b.textContent = t; if (b.disabled !== (n === 0)) b.disabled = n === 0; }
+};
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.matches?.('input.inbox-checkall')) for (const b of $$('input.inbox-check')) b.checked = t.checked && !b.closest('li')?.hidden;
+  if (t.matches?.('input.inbox-check, input.inbox-checkall')) syncBulk();
+});
+document.addEventListener('input', e => { if (e.target.matches?.('.dl-q')) setTimeout(() => { for (const b of $$('input.inbox-check')) if (b.closest('li')?.hidden) b.checked = false; syncBulk(); }, 0); });
+syncBulk();
+if (typeof MutationObserver === 'function') new MutationObserver(syncBulk).observe(document.body, { childList: true, subtree: true });   // a refresh in place brings the rows back unticked
+document.addEventListener('submit', async e => {
+  const form = e.target.closest?.('form.inbox-bulk'); if (!form) return;
+  e.preventDefault();
+  const decision = e.submitter?.value, ids = pickedIds(boxState()), msg = $('.inbox-bulk-msg', form);
+  if (!['approve', 'reject'].includes(decision) || !ids.length) { msg.textContent = 'Tick at least one row first.'; return; }
+  for (const b of $$('button[name=decision]', form)) b.disabled = true;
+  msg.textContent = 'Working…';
+  const j = await postDecision(fetch.bind(window), form.action, [['proof', form.elements.proof.value], ['bulk', '1'], ['decision', decision], ...ids.map(id => ['id', id])]);
+  if (!j.ok || !Array.isArray(j.results)) { msg.textContent = `Not recorded: ${j.reason || 'the dashboard refused it'}`; syncBulk(); return; }
+  for (const r of j.results) {
+    const li = $(`input.inbox-check[value="${r.id}"]`)?.closest('li'); if (!li) continue;
+    if (r.ok) li.remove(); else { const err = $('.inbox-err', li); if (err) { err.textContent = `Not recorded: ${r.reason}`; err.hidden = false; } }
+  }
+  msg.textContent = bulkSummary(decision, j.results);
+  for (const h of $$('#h-inbox')) h.textContent = lowerCount(h.textContent, j.results.filter(r => r.ok).length);
+  syncBulk();
+});
+
 // An Undo link disappears when its window ends, so it is never offered after the server would refuse it.
 setInterval(() => { for (const f of $$('form.inbox-undo')) if (Date.now() > Number(f.dataset.undoUntil)) f.remove(); }, 1000);
 

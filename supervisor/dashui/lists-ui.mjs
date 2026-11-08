@@ -32,7 +32,7 @@ export function initList(el, store = sessionStorage) {
   const sorts = el.dataset.sorts.split(','), noun = el.dataset.noun || 'items', defaultLabel = el.dataset.defaultLabel || 'Original order';
   const defaultSort = { key: el.dataset.defaultKey, dir: el.dataset.defaultDir };
   const lis = [...ul.children].filter(n => n.tagName === 'LI');
-  const rows = lis.map((li, n) => ({ i: num(li.dataset.i) ?? n, li, sev: li.dataset.sev || null, num: num(li.dataset.num), name: li.dataset.name || null, age: num(li.dataset.age), text: li.textContent.replace(/\s+/g, ' ') }));
+  const rows = lis.map((li, n) => ({ i: num(li.dataset.i) ?? n, li, sev: li.dataset.sev || null, num: num(li.dataset.num), name: li.dataset.name || null, age: num(li.dataset.age), text: (li.dataset.search ?? li.textContent).replace(/\s+/g, ' ') }));
   const st = sanitizeListState(readStore(store, id), { sorts, defaultSort, searchable: !!input });
   const words = k => (k === 'default' ? [defaultLabel, 'Reversed'] : DIRECTION_WORDS[k]);
   let saveTimer = 0;

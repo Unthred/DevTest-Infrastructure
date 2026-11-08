@@ -33,7 +33,7 @@ import { buildDiagnostics, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, scanInboxNow } from './wake.mjs';
 import * as inboxStore from './inbox.mjs';
 import { fileURLToPath } from 'node:url';
-import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
+import { decide as decideInbox, decideMany as decideManyInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
@@ -230,9 +230,11 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
     const chunks = []; let size = 0;
-    for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
+    for await (const c of req) { size += c.length; if (size > 8192) return tooLarge(send); chunks.push(c); }   // issue #884: a bulk post carries up to 200 ids
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
     if (!proofValid(root, form.get('proof'))) return badProof(send);
+    if (form.get('bulk') === '1') return inboxBulk(form, send, json);
+    if (size > 1024) return tooLarge(send);
     const id = form.get('id') || '', decision = form.get('decision') || '';
     if (!INBOX_ID.test(id) || !['approve', 'reject', 'undo'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
     const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
@@ -243,6 +245,21 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (decision !== 'undo') { try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ } }   // the decision starts a pass now
     if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
+  };
+  // Issue #884: Approve or Reject several pending items in one post (the same protection as one: host, origin, proof and the same one-second
+  // cooldown, taken once for the whole post). Each item is decided on its own; strong-confirm items are refused by name and never bulk-decided.
+  const inboxBulk = (form, send, json) => {
+    const decision = form.get('decision') || '', ids = form.getAll('id');
+    if (!['approve', 'reject'].includes(decision) || !ids.length || ids.some(i => !INBOX_ID.test(i))) return send(400, 'text/plain; charset=utf-8', ids.length ? 'bad request' : 'nothing is selected');
+    const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    const r = decideManyInbox(source().inbox.dir, ids, decision, t);
+    if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason || `none of the selected items could be decided: ${r.results[0]?.reason || 'unknown'}`); }
+    store.invalidate();
+    try { wake(root, 'approve', source()); } catch { /* issue #406: the decisions are recorded; the schedule is the fallback */ }
+    const results = r.results.map(x => (x.ok ? { id: x.id, ok: true, state: x.state, decidedAt: x.decidedAt, undoUntil: x.undoUntil } : { id: x.id, ok: false, reason: x.reason }));
+    if (json) return send(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, results }));
+    return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/inbox' });
   };
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
@@ -322,7 +339,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         const hits = inboxStatuses(dir).filter(s => s.id.startsWith(m[1]));
         if (hits.length !== 1) return refuseWith(send, hits.length ? 409 : 404, hits.length ? 'Ambiguous inbox id' : 'No such inbox item', hits.length ? 'More than one inbox item starts with that id; use the full id.' : 'No inbox item has that id. It may have been cleared after fourteen days.');
         const s = hits[0];
-        if (s.state === 'pending') return send(302, 'text/plain; charset=utf-8', 'found', { location: `/#att-inbox-${s.id}` });
+        if (s.state === 'pending') return send(302, 'text/plain; charset=utf-8', 'found', { location: `/inbox#att-inbox-${s.id}` });
         const issue = Number.isSafeInteger(s.issue) && s.issue > 0 && s.issue < 900000000 ? s.issue : null;
         return page(send, 200, `Inbox item ${esc(s.id.slice(0, 8))}`, `<p><code>${esc(s.id)}</code></p><ul><li>Kind: ${esc(s.kind || 'unknown')}</li><li>State: ${esc(s.state || 'unknown')}</li>${s.title ? `<li>Title: ${esc(String(s.title).slice(0, 200))}</li>` : ''}${issue ? `<li>GitHub issue: <a href="/work/issue/${issue}">#${issue}</a></li>` : ''}${s.reason ? `<li>Reason: ${esc(String(s.reason).slice(0, 300))}</li>` : ''}</ul>`);
       }

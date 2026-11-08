@@ -180,3 +180,13 @@ Inside a swapped card the script keeps inner scroll, open `<details>`, typed fie
 An update waits, and is applied straight after, while: the layout editor is open or a card or the navigation is being dragged, a dialog or menu or an expanded chart is open, a text field has focus and was typed in during the last 8 s, or text is selected. The **Refresh** button beside the theme button asks for an update now; it ignores only the typing and selection holds. The small "Updated hh:mm:ss" next to it shows the last successful update, or "Update failed hh:mm:ss" (the page keeps its last content and tries again next interval). The `<noscript>` meta refresh stays for browsers without script. The real-browser check is `node tests/refresh-browser.mjs <dir>` (Tower, pinned Chromium, desktop and phone; `browser/refresh-scenario.mjs`; run `node browser/prepare-cache.mjs` once first); the pure rules (diff, busy rule, class sync) are in `tests/dashboard-refresh.test.mjs`.
 
 Rows are keyed by item id (`data-key`): in a swapped list, a row whose server content is the same as in the previous fetch stays the very element the viewer has (open details, focus, inner scroll); only a new or changed row comes from the fresh page, and a vanished row goes. After a change the page's own script makes (an Inbox decision or its Undo) the next refresh compares with the page as it is now, not with the previous fetch, so the server record wins.
+
+## Inbox (issue #884)
+
+Overseer proposals (D-031, D-033) have their own **Inbox** card on the Overview (while any is waiting or was decided today) and page at `/inbox`. Needs you carries one line, "N overseer proposals waiting", linking to it.
+
+- One compact row per proposal: kind (issue draft, prompt job, action), title, the first 8 characters of its id (the id the overseer quotes), submitted time, the "why" line, and Approve / Reject. The full text opens on click (Markdown for an issue draft, plain text otherwise) with the content hash under it.
+- Search matches title, short id, full id, kind, why and the duplicate flag. It does not search the body.
+- Proposals with the same title (case, spacing and quote or dash style ignored) are flagged as possible duplicates; the newest of the group says so.
+- Bulk: tick rows (or "Select all shown", which ticks only rows the search shows) then Approve selected or Reject selected. One post, one cooldown slot, each item decided on its own, with a result per item. Strong-confirm items (merge, approve, verdict) have no tick box and are refused by the server in bulk; no accepted kind is one yet.
+- Browser check (Tower, pinned Chromium): `node tests/inbox-browser.mjs <dir>` after `node browser/prepare-cache.mjs`.

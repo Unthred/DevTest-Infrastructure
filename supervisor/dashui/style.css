@@ -508,3 +508,20 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .bar-picker summary{cursor:pointer;padding:4px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);min-height:36px;display:inline-flex;align-items:center}
 .bar-picker[open]>ul{position:absolute;right:0;z-index:50;margin:var(--sp1) 0 0;padding:var(--sp2);list-style:none;min-width:14rem;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-lg)}
 .bar-picker li{display:flex;align-items:center;justify-content:space-between;gap:var(--sp3);padding:var(--sp1) 0}
+/* ---- Inbox (issue #884): one compact row per proposal; the bulk bar; the expanding full text */
+.inbox-bulk{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2);margin:0 0 var(--sp2)}
+.inbox-bulk .inbox-all{display:inline-flex;align-items:center;gap:var(--sp1);min-height:36px}
+.inbox-bulk .btn[disabled]{opacity:.5;cursor:not-allowed}.inbox-bulk-msg{flex:1 1 14rem}
+.inbox-row{display:flex;flex-direction:column;gap:var(--sp1)}
+.inbox-head{display:flex;align-items:flex-start;gap:var(--sp2)}.inbox-head .t{flex:1 1 auto;min-width:0}
+.inbox-head .inbox-title{font-weight:600;overflow-wrap:anywhere}
+.inbox-pick{flex:none;display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:36px}
+.inbox-pick input{width:18px;height:18px}.inbox-strong{font-size:.8em;color:var(--mut);min-width:0;text-align:center}
+.inbox-meta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2);color:var(--mut)}
+.inbox-dup{border:1px solid var(--warning);color:var(--warning);white-space:normal;max-width:100%}
+.inbox-row .acts{display:flex;flex-wrap:wrap;gap:var(--sp2)}
+.inbox-more summary{cursor:pointer;min-height:36px;display:flex;align-items:center}
+.inbox-more .md,.inbox-more .inbox-text{max-height:24rem;overflow:auto;overflow-wrap:anywhere}.inbox-more .md pre,.inbox-more .md code{overflow-wrap:anywhere;white-space:pre-wrap}
+.inbox-more .md h3,.inbox-more .md h4,.inbox-more .md h5,.inbox-more .md h6,.inbox-more .md h7,.inbox-more .md h8{margin:var(--sp2) 0 var(--sp1);font-size:1em}
+@media(max-width:640px){.inbox-bulk .btn{flex:1 1 auto;justify-content:center}.inbox-pick{min-width:44px;min-height:44px}.inbox-more summary{min-height:44px}.inbox-row .acts{flex-wrap:nowrap}.inbox-row .acts .inbox-form{flex:1 1 0}}
+.inbox-pick input{width:24px;height:24px}.inbox-id{display:inline-flex;align-items:center;min-width:24px;min-height:24px}.inbox-bulk .inbox-all input{width:24px;height:24px}

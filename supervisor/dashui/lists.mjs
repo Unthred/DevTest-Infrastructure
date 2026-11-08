@@ -59,5 +59,5 @@ export function footerText(rows, shownRows, noun = 'items', filtered = false) {
   return [head, ...parts].join(' · ');
 }
 export const noMatchText = q => `Nothing matches “${String(q).trim().slice(0, 60)}”.`;
-export const searchVisible = total => total >= LIST_MIN_SEARCH;
+export const searchVisible = (total, min = LIST_MIN_SEARCH) => total >= min;
 export const sortsVisible = sorts => sorts.length > 1;

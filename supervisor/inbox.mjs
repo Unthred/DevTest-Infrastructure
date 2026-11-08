@@ -185,12 +185,46 @@ export function loadItem(inboxDir, id) {
 export function pendingCards(inboxDir) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
     const l = loadItem(inboxDir, s.id);
-    if (!l.ok) return { id: s.id, kind: s.kind, broken: l.reason };
+    if (!l.ok) return { id: s.id, kind: s.kind, broken: l.reason, createdAt: Number.isFinite(s.createdAt) ? s.createdAt : null, strong: isStrongConfirm(readJson(path.join(dirs(inboxDir).items, `${s.id}.json`))) };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
-    return { id: s.id, kind: it.kind, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
+    return { id: s.id, kind: it.kind, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), createdAt: Number.isFinite(s.createdAt) ? s.createdAt : null, strong: isStrongConfirm(it),
       will: it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
       text: clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
   });
+}
+
+// Issue #884: strong-confirm items (a merge, an approval or a review verdict) are decided one at a time, on their own row, and never in a bulk
+// action. No accepted kind or action is one today (validateItem refuses these names), so this is the guard the bulk route applies the day the
+// inbox-requests work adds one. It looks at the raw item, so a name the validator would refuse still counts as strong.
+export const STRONG_CONFIRM = new Set(['merge', 'approve', 'verdict', 'merge_pr', 'approve_pr', 'review_verdict', 'write_verdict']);
+export const isStrongConfirm = raw => !!raw && typeof raw === 'object' && (STRONG_CONFIRM.has(raw.kind) || (typeof raw.action === 'string' && STRONG_CONFIRM.has(raw.action)));
+// Issue #884: the same title (case, spacing and quote or dash style ignored) is a possible duplicate. The newest of a group is marked `newer`.
+// Returns new card objects; a broken card (no title) is never grouped.
+const titleKey = t => String(t ?? '').toLowerCase().replace(/[‘’‚‛′´`]/g, "'").replace(/[“”„‟″]/g, '"').replace(/[‐-―−]/g, '-').replace(/\s+/g, ' ').trim();
+export function markDuplicates(cards) {
+  const groups = new Map();
+  for (const c of cards) { const k = c.broken ? '' : titleKey(c.title); if (!k) continue; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
+  const dup = new Map(), at = c => c.createdAt ?? -Infinity;
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    const newest = g.reduce((a, b) => (at(b) > at(a) || (at(b) === at(a) && b.id > a.id) ? b : a));
+    for (const c of g) dup.set(c.id, { copies: g.length, newer: c === newest });
+  }
+  return cards.map(c => (dup.has(c.id) ? { ...c, duplicate: dup.get(c.id) } : c));
+}
+// Issue #884: decide several pending items at once. Each goes through decide() on its own, so every check (state, hash) applies per item and one
+// refusal never blocks the others. A strong-confirm item is refused here whatever the decision. At most 200 ids.
+export function decideMany(inboxDir, ids, decision, now = Date.now()) {
+  if (!['approve', 'reject'].includes(decision)) return { ok: false, reason: 'unknown decision', results: [] };
+  const list = [...new Set((ids || []).map(String))];
+  if (!list.length) return { ok: false, reason: 'nothing selected', results: [] };
+  if (list.length > 200) return { ok: false, reason: 'too many items selected at once', results: [] };
+  const results = list.map(id => {
+    if (!ID_RE.test(id)) return { id, ok: false, reason: 'unknown item' };
+    if (isStrongConfirm(readJson(path.join(dirs(inboxDir).items, `${id}.json`)))) return { id, ok: false, reason: 'this item needs its own confirmation and is never decided in bulk' };
+    return { id, ...decide(inboxDir, id, decision, now) };
+  });
+  return { ok: results.some(r => r.ok), results };
 }
 
 // Issue #943: items Foreman refused after pickup (a full queue, a failed check) have no GitHub notice either. They are grouped by reason into one

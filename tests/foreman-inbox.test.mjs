@@ -257,7 +257,7 @@ test('dashboard: a pending item is one Approve/Reject card that shows its exact 
   assert.equal((page.match(/data-inbox=/g) || []).length, 1);
   assert.match(page, /<form method="post" action="\/inbox"[^>]*><input type="hidden" name="proof"/);
   assert.ok(!page.includes(TOKEN));
-  const view = JSON.parse((await s.get('/api/view.json')).body); assert.ok(view.panels.needsYou.some(a => a.id === `inbox-${id}`));
+  const view = JSON.parse((await s.get('/api/view.json')).body); assert.ok(view.panels.inbox.some(c => c.id === id)); assert.ok(view.panels.needsYou.some(a => a.id === 'inbox-waiting' && a.text === '1 overseer proposal waiting'));
 });
 test('dashboard: no proof, wrong proof, a foreign origin, a bad id or decision approve nothing; the right proof records the decision', async t => {
   const dir = makeInbox(t), id = drop(dir, GOOD); inbox.scan(dir, 1000);

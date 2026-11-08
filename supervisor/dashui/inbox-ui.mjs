@@ -31,5 +31,16 @@ export async function runDecision({ decision, post, ui }) {
   return result;
 }
 
+// Issue #884: the bulk bar. Pure helpers so the tests run the code the page runs.
+export const bulkLabel = (verb, n) => (n > 0 ? `${verb} selected (${n})` : `${verb} selected`);
+// Rows hidden by the search must not be acted on: only ticked, enabled, visible boxes count.
+export const pickedIds = boxes => boxes.filter(b => b.checked && !b.disabled && b.visible !== false).map(b => b.value);
+// What the bar says after a bulk answer: counts first, then the first reason a refused row gave.
+export function bulkSummary(decision, results) {
+  const okN = results.filter(r => r.ok).length, bad = results.filter(r => !r.ok);
+  const head = okN ? `${OUTCOME_LABEL[decision]} ${okN}.` : 'Nothing was changed.';
+  return bad.length ? `${head} ${bad.length} refused: ${bad[0].reason}${bad.length > 1 ? ' (see each row)' : ''}` : head;
+}
+
 // The Needs you heading count after a card leaves: "Needs you (3)" -> "Needs you (2)"; no count when none are left.
 export const lowerCount = (heading, by = 1) => String(heading).replace(/\((\d+)\)/, (m, n) => (Number(n) - by > 0 ? `(${Number(n) - by})` : '')).trim();
