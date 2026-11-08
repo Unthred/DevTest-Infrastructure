@@ -301,6 +301,14 @@ test('trippedBy labels: every value the breaker records has display text, unknow
   for (const k of ['toString', '__proto__', 'constructor', 'hasOwnProperty']) assert.equal(B.trippedByLabel(k), k);
 });
 
+test('trippedBy label is empty, never the word undefined, for a halt persisted before trippedBy existed', () => {
+  assert.equal(B.trippedByLabel(undefined), '');
+  assert.equal(B.trippedByLabel(null), '');
+  const v = B.haltView({ halts: { x: { cause: 'x', since: 1, jobs: 1, tokens: 0, cost: 0, prs: [], types: [] } } });
+  assert.equal(v.trippedByLabel, '');
+  assert.ok(v.entries.every(e => e.trippedByLabel === ''));
+});
+
 test('haltView exposes a display label next to the raw trippedBy, for the view and every entry', () => {
   const s = stateWith(blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 2.6 } }), blocked({ usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: 2.5 } }));
   B.evaluate(s, L, NOW);
