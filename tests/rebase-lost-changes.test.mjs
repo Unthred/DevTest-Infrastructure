@@ -385,3 +385,52 @@ test('#1025: a refusal counts every problem, lists at most five and gives no rea
   assert.match(m, /homeowner or a reviewer/); assert.doesNotMatch(m, /git push/);
   assert.match(refusal({ missing: [], lostChanges: [lost[0]] }, 'feat', '0123456789'), /1 problem:/);
 });
+
+// ---- issue #875: anchor the added lines to the position their hunk maps to. The same line added elsewhere on main must not hide a lost change.
+const A875 = (a, extraA, extraB) => `function A() {\n  let a = ${a};\n${extraA}  b();\n}\nfunction B() {\n${extraB}  y();\n}\n`;
+function anchorRepo(t, { feat, main, base: base875 }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rl875-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const remote = path.join(dir, 'remote.git'); git(dir, 'init', '-q', '-b', 'main', '--bare', remote);
+  const seed = path.join(dir, 'seed'); git(dir, 'clone', '-q', remote, seed);
+  write(seed, "a.mjs", base875 || A875(1, "", "")); commit(seed, "base"); git(seed, 'branch', '-M', 'main'); git(seed, 'push', '-q', 'origin', 'main');
+  git(seed, 'checkout', '-q', '-b', 'feat'); write(seed, 'a.mjs', feat); commit(seed, 'pr change'); git(seed, 'push', '-q', 'origin', 'feat');
+  git(seed, 'checkout', '-q', 'main'); write(seed, 'a.mjs', main); commit(seed, 'main change'); git(seed, 'push', '-q', 'origin', 'main');
+  const agent = path.join(dir, 'agent'); git(dir, 'clone', '-q', remote, agent);
+  return { dir, remote, agent };
+}
+function anchorRebase(r, resolved) {
+  const { oldHead } = prepareRebase({ worktree: r.agent, branch: 'feat' });
+  let conflicted = false;
+  try { git(r.agent, 'rebase', 'origin/main'); } catch { conflicted = true; }
+  assert.ok(conflicted, 'the fixture must conflict');
+  write(r.agent, 'a.mjs', resolved); git(r.agent, 'add', '-A');
+  try { execFileSync('git', [...G, 'rebase', '--continue'], { cwd: r.agent, env: { ...process.env, GIT_EDITOR: 'true' }, stdio: 'ignore' }); } catch { /* emptied */ }
+  try { execFileSync('git', [...G, 'rebase', '--skip'], { cwd: r.agent, stdio: 'ignore' }); } catch { /* none in progress */ }
+  return oldHead;
+}
+const AUDIT = '  audit();\n';
+
+test('#875: main adds the same line in another function next to a conflicting edit: the dropped commit is missing, and rebase-push refuses it', t => {
+  const r = anchorRepo(t, { feat: A875(1, AUDIT, ''), main: A875(2, '', AUDIT) });
+  const oldHead = anchorRebase(r, A875(2, '', AUDIT));   // keeps main's side: the PR's audit() in A is lost
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.equal(c.missing.length, 1); assert.equal(c.missing[0].subject, 'pr change');
+  const p = runPush(r, oldHead); assert.equal(p.code, 3); assert.equal(JSON.parse(p.out).reason, 'missing');
+});
+
+test('#875: main adds the same line at the same place in the same function: the emptied commit is not missing', t => {
+  const r = anchorRepo(t, { feat: A875(1, AUDIT, ''), main: A875(2, AUDIT, '') });
+  const oldHead = anchorRebase(r, A875(2, AUDIT, ''));
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.deepEqual(c.missing, []); assert.deepEqual(c.lostChanges, []);
+});
+
+// Review of PR #1071: main's copy elsewhere shares a neighbour line's text (here `b();` below it), so text equality alone must not anchor the block.
+test('#875: main adds the same line elsewhere and that spot shares a neighbour line: the dropped commit is still missing', t => {
+  const SH = (a, extraA, extraB) => `function A() {\n  let a = ${a};\n${extraA}  b();\n}\nfunction B() {\n${extraB}  b();\n}\n`;
+  const r = anchorRepo(t, { feat: SH(1, AUDIT, ''), main: SH(2, '', AUDIT), base: SH(1, '', '') });
+  const oldHead = anchorRebase(r, SH(2, '', AUDIT));
+  const c = checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
+  assert.equal(c.missing.length, 1);
+  const p = runPush(r, oldHead); assert.equal(p.code, 3); assert.equal(JSON.parse(p.out).reason, 'missing');
+});
