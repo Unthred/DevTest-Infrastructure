@@ -244,7 +244,7 @@ function world(t, { prs = [], issues = [] } = {}) {
   fs.writeFileSync(path.join(repo, 'R'), 'x\n'); git(repo, 'add', 'R'); git(repo, 'commit', '-qm', 'init'); git(repo, 'remote', 'add', 'origin', origin); git(repo, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin');
   const code = path.join(dir, 'code'); fs.cpSync(path.join(here, '..', 'supervisor'), path.join(code, 'supervisor'), { recursive: true });
   const teamFile = path.join(code, 'supervisor', 'team.json'), team = JSON.parse(fs.readFileSync(teamFile, 'utf8'));
-  team.enabled = true; team.repo_path = repo; team.worktree_base = dir; team.agents.claude.issues = [901]; team.agents.codex.issues = []; delete team.review_exception; team.limits.chain_seconds = 0;
+  team.enabled = true; team.repo_path = repo; team.worktree_base = dir; team.agents.claude.issues = [901]; team.agents.codex.issues = []; team.limits.chain_seconds = 0;
   fs.writeFileSync(teamFile, JSON.stringify(team));
   const root = path.join(dir, 'state'), bin = path.join(dir, 'bin'), gh = path.join(dir, 'gh');
   fs.mkdirSync(path.join(root, 'team'), { recursive: true, mode: 0o700 }); fs.chmodSync(root, 0o700); fs.mkdirSync(bin); fs.mkdirSync(gh);

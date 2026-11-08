@@ -631,7 +631,7 @@ test('issue #30 local override: allowed knobs apply, everything else is refused,
   fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true, limits: { overall: 3 }, agents: { claude: { issues: [5] } } }));
   const c = loadTeamConfig(shippedFile, root);
   assert.equal(c.enabled, true); assert.equal(c.limits.overall, 3); assert.equal(c.limits.roles.implementer, 1); assert.deepEqual(c.agents.claude.issues, [5]);
-  assert.deepEqual(c.agents.codex.issues, [3, 4, 8, 9, 11, 12]);
+  assert.deepEqual(c.agents.codex.issues, []);
   // simulated upgrade: a different code directory holding another shipped version, same state root
   const v2 = fs.mkdtempSync(path.join(os.tmpdir(), 'team-v2-')); t.after(() => fs.rmSync(v2, { recursive: true, force: true }));
   const shipped2 = JSON.parse(fs.readFileSync(shippedFile, 'utf8')); shipped2.agents.codex.issues = [3]; fs.writeFileSync(path.join(v2, 'team.json'), JSON.stringify(shipped2));
@@ -640,7 +640,7 @@ test('issue #30 local override: allowed knobs apply, everything else is refused,
   const shipped = JSON.parse(fs.readFileSync(shippedFile, 'utf8'));
   for (const bad of [{ repo_path: '/x' }, { access: { mode: 'standard' } }, { enabled: 'yes' }, { agents: { ghost: { issues: [1] } } }, { agents: { claude: { provider: 'codex' } } }, []])
     assert.throws(() => applyLocalOverride(shipped, bad), /team\.local\.json/);
-  assert.throws(() => applyLocalOverride(shipped, { agents: { claude: { issues: [3] } } }) && validateTeamConfig(applyLocalOverride(shipped, { agents: { claude: { issues: [3] } } })), /two owners/);
+  assert.throws(() => applyLocalOverride(shipped, { agents: { claude: { issues: [3] }, codex: { issues: [3] } } }) && validateTeamConfig(applyLocalOverride(shipped, { agents: { claude: { issues: [3] }, codex: { issues: [3] } } })), /two owners/);
   fs.writeFileSync(path.join(root, 'team.local.json'), '{broken');
   assert.throws(() => loadTeamConfig(shippedFile, root), /unreadable/);
 });

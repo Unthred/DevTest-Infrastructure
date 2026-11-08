@@ -21,7 +21,7 @@ Resume from repository state, never from assumed chat memory.
 - **Decisions: proposals only (issue #303).** Add register entries as `Status: agent-proposal`. Never mark an entry `homeowner-approved`, or change a status to or from it, yourself. CI (`tools/ci/validate-decision-status.mjs`) fails the PR unless the repository owner recorded `homeowner-approval: D-0NN` in a PR comment that the entry's Source links. Foreman raises a Needs you item for each proposal in an open PR. Code gates exist for D-020, D-021, D-024 (`decisionApproved`) and D-025 (verdict carry); other entries are policy enforced by validators, CI or review.
 - **No AI attribution, anywhere (homeowner rule, top priority).** No "Generated with/by …" footer, no session link, no AI co-author trailer or bot e-mail in a commit message, pull request body, issue, comment or file, and no replacement credit line. Remove such text if a tool adds it; do not rewrite merged history. CI enforces it on commit messages and the PR body ([`tools/ci/validate-commit-attribution.sh`](tools/ci/validate-commit-attribution.sh)).
 - **Secret-shaped test fixtures are assembled at runtime, never literal.** A fake token, key or Bearer value used by a test (for example a redaction fixture) is built from parts when the test runs, so secret scanners such as GitGuardian never flag the repository (issue #142).
-- **Do not start an issue whose prerequisites are not done.** Issue #15 (supervisor) is P0 and independent.
+- **Do not start an issue whose prerequisites are not closed.** The issue's **Prerequisites** line is authoritative.
 
 ## Checks before you push
 ```

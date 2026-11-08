@@ -69,13 +69,6 @@ test('the writing guard cannot be skipped by an act flag', t => {
   assert.ok(team.modelFor(act({ noWriteGuard: true }), 'fix', {}).writeRefusal);
 });
 
-test('exception path: an exception fix on an Opus commit-review model is refused; a Sonnet one runs', t => {
-  const mk = model => { const team = world(t); team.exceptionFor = () => ({ agent: 'claude', commit_review: { model, effort: 'medium' }, full_review: S }); return team; };
-  assert.match(mk('opus').modelFor(act(), 'fix', {}).writeRefusal, /Opus is never given/);
-  const ok = mk('sonnet').modelFor(act(), 'fix', {});
-  assert.equal(ok.model, 'sonnet'); assert.equal(ok.writeRefusal, undefined);
-});
-
 test('reviews may still use Opus (control)', t => {
   const team = world(t, { review: O, review_candidates: [O] });
   const f = team.modelFor(act(), 'review', {});
@@ -116,12 +109,6 @@ test('bad config: a writing entry with no usable model is pinned to a non-Opus m
   assert.equal(world(t, { fix: { model: 'nonsense', effort: 'high' } }).modelFor(act(), 'fix', {}).model, 'sonnet');
 });
 
-test('exception path: an unpinned or rejected-name Opus commit-review model is refused for a fix', t => {
-  const team = world(t);
-  team.exceptionFor = () => ({ agent: 'claude', commit_review: { model: 'Opus', effort: 'medium' }, full_review: S });
-  assert.match(team.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer/);
-});
-
 test('an unpinned writer is never pinned to a review model of its agent (D-026)', t => {
   const fable = { model: 'fable', effort: 'medium' };
   const team = world(t, { fix: { effort: 'high' }, review: fable, review_candidates: [fable] });
@@ -132,7 +119,4 @@ test('an unpinned writer is never pinned to a review model of its agent (D-026)'
   const only = world(t, { fix: { effort: 'high' }, review: fable, review_candidates: [fable] });
   only.providerModels.claude = { ...manifests.claude, aliases: ['fable', 'opus'] };
   assert.match(only.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer.*review model/);
-  // the exception path pins with the same check
-  only.exceptionFor = () => ({ agent: 'claude', commit_review: { effort: 'medium' }, full_review: S });
-  assert.match(only.modelFor(act(), 'fix', {}).writeRefusal, /no permitted writer/);
 });

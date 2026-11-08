@@ -102,7 +102,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Status: homeowner-approved
 - Date: 2026-10-29
 - Source: homeowner brief 2026-10-29; README (Parallel agents); issue #1, #9
-- Decision: Each agent works on its own branch in its own worktree. Never touch another agent's worktree or overwrite a shared handover. Every PR is reviewed by the opposite agent before merge. Narrowed by D-021: an interim same-provider review while every other agent is out of allowance.
+- Decision: Each agent works on its own branch in its own worktree. Never touch another agent's worktree or overwrite a shared handover. Every PR is reviewed by the opposite agent before merge. Narrowed by D-021: an interim same-provider review while every other agent is out of allowance. Note (issue #1070): the "opposite agent" wording is replaced by D-024 (a fresh session on a different model; a different provider is not required).
 - Rationale: Prevents silent overwrites and self-acceptance.
 - Rejected: Shared worktrees; self-merge; Git fixtures run inside a linked worktree (their `.git` is a pointer, so fixture commits would land on the real branch; fixtures use independent clones or `git init`).
 - Superseded-by: none
@@ -195,7 +195,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: When every agent other than a pull request's author is out of allowance, the team loop may have the author's own provider review that pull request as an *interim reviewer*. The interim review is a separate supervised review job: a fresh session, the reviewer's own review worktree, and the agent's `interim-review` model entry (a cheaper review model or effort where the provider offers one, never the strong implement entry). Its PASS is merge-eligible without the homeowner, under the same gates as any PASS (exact head, green checks, mergeable). Every such merge is labelled `post-merge-review`, and when the regular opposite agent has allowance again the dispatcher runs its review of the merged head; a blocking finding there opens a linked issue for the homeowner. "Out of allowance" means evidence only: a provider-reported exhausted window or status, reported weekly use at or above the configured threshold, or the provider's most recent supervised job paused or blocked on a usage limit. Provider-agnostic (D-012): it applies to whichever agent is out. The interim reviewer never merges; the dispatcher does. No paid overage or credits are used to avoid it.
 - Rationale: With one agent out of allowance for days nothing could merge (31 Oct: Codex at its weekly limit; PRs #41, #60 and #77 waiting). A fresh session on a different model is a weaker but real independent check, and the opposite agent still reviews afterwards.
 - Rejected: Self-review in the authoring session or on the authoring model; waiting for the homeowner to review every PR while an agent is out; skipping review.
-- Superseded-by: none
+- Superseded-by: D-024 (its interim review and post-merge-review queue no longer exist; issue #1070)
 
 ## D-022 — Secret delivery: host broker, tmpfs file bind mounts
 - Status: agent-proposal
@@ -241,7 +241,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: No writing job (implement, continue, fix, ci-fix, rebase) is automatically moved to a stronger model; the escalation entry is retired. A model that an agent is configured to review with (its `review` entry and `review_candidates`) is not assigned writing jobs automatically; this is decided from role config, not from model names. A job whose model would also leave a PR with no available independent reviewer is not started. When the implementer's model cannot finish a fix, Foreman tries a fresh session on that model with the review findings, then splitting out-of-scope findings, then stops with one Needs you item. That item does not offer paid escalation.
 - Rationale: 2 Nov: Opus escalation fixes made every Claude model a writer, and five PRs (#137, #216, #217, #222, #234) could not be reviewed while Codex was out of allowance.
 - Rejected: Withholding the escalation only when it would strand the PR; offering paid escalation as an option; changing D-024.
-- Superseded-by: none
+- Superseded-by: D-037 (in part: the rule that a configured review model is never assigned writing jobs, and the no escalation rule for the one case of a low risk PR that draws CHANGES twice)
 
 ## D-027 — One-off review exception for named pull requests
 - Status: agent-proposal
@@ -251,6 +251,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rationale: 2 Nov: five long-open PRs need a stronger first look than a single D-024 review gives, and a normal review of an Opus-written PR is refused by D-024.
 - Accepted risk: for these PRs the Opus review of its own earlier commits is covered only by the narrower Sonnet commit review; a PR on a branch whose author is not the configured agent is repaired on that author's default models.
 - Rejected: A per-PR switch that skips review; a path-based `second_opinion` (it cannot name PRs or relax D-024); Opus writing fixes.
+- Withdrawn: issue #1070. Never approved, and every entry expires 9 Nov 2026; `review_exception` with its code path, tests and docs is removed. The entry stays as history, binds nothing, and needs no superseding entry.
 - Superseded-by: none
 
 ## D-028 — Docker smokes run on Tower only; hosted CI is static; no dependency bots
@@ -296,7 +297,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: The projection of weekly use (rate, projected use at the reset, run-out time) is an estimate shown on the dashboard and used only to choose between agents. It never sets `reviews_only` or any other mode, never latches, and never moves a scheduling estimate. Actual use still holds work: the paid-overage stop, `exhausted_at` on a weekly or short window, a provider-reported limit, and the high-water reserve (reviews and fixes only at 85 % used with more than `high_water_min_hours` left) are unchanged, as is the per-job cost check against the weekly limit.
 - Rationale: Spreading work over the week left the server idle while allowance remained, and a forecast built from a few hours after a reset held Claude off implementation at 9 % to 11 % used.
 - Rejected: A better forecast (issue #627: a minimum of evidence, a self-releasing latch), a forecast margin setting, and switching allowance-aware scheduling off, which would also disable the overage check.
-- Superseded-by: none
+- Superseded-by: D-036 (in part: the statement that a projection never moves scheduling; it may now reorder work by D-036 rule D2 and still never sets a mode or holds work by itself)
 
 ## D-033 — Inbox actions: named job operations approved on the dashboard
 - Status: agent-proposal
@@ -330,3 +331,21 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - OQ-2: Enforcing a browser egress allowlist on Tower without firewall changes (issues #5, #10; any firewall change is a hard approval gate). Partly answered in issue #5: with `--network=none`, a declared target that is a host-side Unix socket is enforced by the runner ([browser-runner.md](browser-runner.md)). Still open and blocked: a target that is a real TCP service.
 - OQ-3: Whether Docker-dependent tests run in GitHub-hosted CI or only on Tower's runner (issue #12). Proposed answer: D-028, awaiting homeowner approval.
 - OQ-4: Evidence retention period (issue #12/#13).
+
+## D-036 — Scheduler model: finish before starting, one ranking, admission by review capacity
+- Status: agent-proposal
+- Date: 2026-11-08
+- Source: homeowner decisions in chat 8 Nov 2026, recorded on issue #1064; reconciled by issue #1070
+- Decision: (1) Finish before starting. (2) One ranking, with the tiers agreed on 8 Nov, is used by every lane (review, fix, rebase, implement). (3) New work is admitted by review capacity. (4) Few open PRs per hot file. (5) Every stuck PR gets a decision (a Needs you item), and a PR that no reviewer can review now leaves the ranking. (D1) Implementers may idle while review is full. (D2) When projected weekly use exceeds 100 %, cheaper-to-finish work ranks first. (D3) The parked PR limit pauses tiers 3 to 6. Supersedes the part of D-032 that says a projection never moves scheduling: the projection may reorder work by D2; it still never sets a mode or holds work by itself.
+- Rationale: Tokens, not slots, are the limit: about 3.9M tokens per merged PR, and rework about 47 %.
+- Rejected: Starting new work whenever a slot is free; separate orderings per lane.
+- Superseded-by: none
+
+## D-037 — Model choice by risk
+- Status: agent-proposal
+- Date: 2026-11-08
+- Source: homeowner decisions in chat 8 Nov 2026; reconciled by issue #1070
+- Decision: Low risk work is implemented on Haiku and reviewed on Sonnet. Review independence is judged per PR: a model may review a PR it wrote no commit on (D-024 otherwise unchanged). A low risk PR that draws CHANGES twice moves to the standard class (Sonnet fix, Opus review) for the rest of its life. Opus still never writes. Supersedes, in part, D-026: the rule that a configured review model is never assigned writing jobs, and the no escalation rule for this one case.
+- Rationale: Cheaper models for low risk work save tokens; independence only needs a different model per PR.
+- Rejected: Escalating any other writing job; letting Opus write.
+- Superseded-by: none

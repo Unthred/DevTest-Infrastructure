@@ -232,7 +232,7 @@ function plannerWorld(t, { tweak = () => {}, issue = 950, open = true } = {}) {
   fs.writeFileSync(path.join(repo, 'R'), 'x\n'); git(repo, 'add', 'R'); git(repo, 'commit', '-qm', 'init'); git(repo, 'remote', 'add', 'origin', origin); git(repo, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin');
   const code = path.join(dir, 'code'); fs.cpSync(path.join(here, '..', 'supervisor'), path.join(code, 'supervisor'), { recursive: true });
   const teamFile = path.join(code, 'supervisor', 'team.json'), team = JSON.parse(fs.readFileSync(teamFile, 'utf8'));
-  team.enabled = true; team.repo_path = repo; team.worktree_base = dir; team.agents.claude.issues = [issue]; team.agents.codex.issues = []; delete team.review_exception;
+  team.enabled = true; team.repo_path = repo; team.worktree_base = dir; team.agents.claude.issues = [issue]; team.agents.codex.issues = [];
   team.limits.chain_seconds = 0;   // a chained tick would keep the first pass alive while its job runs; these tests count passes
   tweak(team); fs.writeFileSync(teamFile, JSON.stringify(team));
   const root = path.join(dir, 'state'), bin = path.join(dir, 'bin'), ghlog = path.join(dir, 'gh-calls'), slow = path.join(dir, 'slow');

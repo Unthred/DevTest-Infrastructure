@@ -56,7 +56,7 @@ test('out of allowance: provider windows, weekly threshold and the latest job ar
   assert.equal(outOfAllowance({ ...base, allowance: { status: 'rejected', windows: [win('five_hour', 1, NOW + 60000, 'rejected')] } }).out, true);
   // the used-up window has already reset: not out, even though the recorded status still says rejected
   assert.equal(outOfAllowance({ ...base, allowance: { status: 'rejected', windows: [win('five_hour', 1, NOW - 1, 'rejected'), win('seven_day', 0.76, NOW + 1e8)] } }).out, false);
-  assert.match(outOfAllowance({ ...base, allowance: { status: 'allowed', windows: [win('seven_day', 0.97, NOW + 1e8)] } }).reason, /weekly use 97% >= 95%/);
+  assert.match(outOfAllowance({ ...base, allowance: { status: 'allowed', windows: [win('seven_day', 0.97, NOW + 1e8)] }, weeklyAt: 0.95 }).reason, /weekly use 97% >= 95%/);
   assert.equal(outOfAllowance({ ...base, allowance: { status: 'allowed', windows: [win('seven_day', 0.9, NOW + 1e8)] } }).out, false);
   // a bare status with no windows counts; an unknown status never does
   assert.equal(outOfAllowance({ ...base, allowance: { status: 'limit_reached', windows: [], observedAt: NOW - 1000 } }).out, true);
@@ -256,7 +256,7 @@ test('config: interim_review is retired but tolerated with a warning; out_of_all
   assert.match(old.deprecations[0], /interim_review is retired/); assert.equal(weeklyAtOf(old), 0.9);
   const now = validateTeamConfig(config({ interim_review: undefined, out_of_allowance: { weekly_at: 0.8 } }));
   assert.deepEqual(now.deprecations, []); assert.equal(weeklyAtOf(now), 0.8);
-  assert.equal(weeklyAtOf(validateTeamConfig(config({ interim_review: undefined, out_of_allowance: undefined }))), 0.95);
+  assert.equal(weeklyAtOf(validateTeamConfig(config({ interim_review: undefined, out_of_allowance: undefined }))), 0.995);
   for (const bad of [{ weekly_at: 2 }, { weekly_at: 0.5, x: 1 }, []]) assert.throws(() => validateTeamConfig(config({ interim_review: undefined, out_of_allowance: bad })), /out_of_allowance/);
   assert.deepEqual(applyLocalOverride(config({ interim_review: undefined }), { out_of_allowance: { weekly_at: 0.7 } }).out_of_allowance, { weekly_at: 0.7 });
   assert.throws(() => applyLocalOverride(config(), { out_of_allowance: { enabled: true } }), /only weekly_at/);

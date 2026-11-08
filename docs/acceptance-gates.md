@@ -22,7 +22,7 @@ A merged PR or green CI alone is state 1–2, not 4.
 | G7 Handover | The four states, SHA and blockers are in the PR description and issue comment. The handover file is not edited on the feature branch (D-023); it is updated on main after merge. | PR description; main handover commit |
 | G8 Live (only if the issue deploys) | Deployed to Tower with a rollback, then observed working. | observation record |
 
-Dependencies come first: do not start an issue whose prerequisites are not at least state 2.
+Dependencies come first: do not start an issue whose prerequisites are not closed.
 
 ## Per-issue required evidence
 | Issue | Must show |
