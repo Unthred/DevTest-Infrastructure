@@ -40,10 +40,43 @@ export function classifyError(text, { exit = null } = {}) {
 }
 const exitOf = text => { const m = /^\s*(?:exit(?: code)?[: ]+)(\d+)/i.exec(String(text ?? '')); return m ? Number(m[1]) : null; };
 
-// Codex stores a shell call as `/bin/bash -lc "<command>"`: the real command is inside, so look at that.
+// Codex stores a shell call as `/bin/bash -lc <word>` where the word may join double- and single-quoted segments
+// ("cd \"/x\" && a"'b'). Parse the one shell word that follows -lc and return its text; anything else is left as it was.
 const unwrapShell = s => {
-  const m = /^(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+(["'])([\s\S]*)\1$/.exec(s);
-  return m ? (m[1] === '"' ? m[2].replace(/\\(["\\$`])/g, '$1') : m[2]) : s;
+  const m = /^(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+([\s\S]+)$/.exec(s);
+  if (!m) return s;
+  const w = m[1]; let out = '', i = 0;
+  while (i < w.length) {
+    const ch = w[i];
+    if (ch === '"') {
+      i++;
+      while (i < w.length && w[i] !== '"') { if (w[i] === '\\' && /["\\$`]/.test(w[i + 1] || '')) i++; out += w[i++]; }
+      if (i >= w.length) return s;   // unterminated: not a wrapper we understand
+      i++;
+    } else if (ch === "'") {
+      const j = w.indexOf("'", i + 1);
+      if (j < 0) return s;
+      out += w.slice(i + 1, j); i = j + 1;
+    } else if (/\s/.test(ch)) return s;   // a second word: not a single wrapped command
+    else if (ch === '\\' && i + 1 < w.length) { out += w[i + 1]; i += 2; }
+    else out += w[i++];
+  }
+  return out;
+};
+// The command a shell call runs, without a leading `cd <dir> &&` / `;` / newline, and its subcommand or first option
+// (`git push`, `node --test`). Taken from the raw command, before placeholders erase the separators.
+export const headOfCommand = raw => {
+  let s = unwrapShell(String(raw ?? '').trim());
+  for (let n = 0; n < 5; n++) {
+    const m = /^cd\s+(?:"(?:[^"\\]|\\.)*"|'[^']*'|\S+?)\s*(?:&&|;|\n)\s*/.exec(s);
+    if (!m) break;
+    s = s.slice(m[0].length);
+  }
+  const w = s.split(/\s+/).filter(Boolean);
+  if (!w.length) return '';
+  const first = w[0].replace(/^.*\//, '');
+  const second = w[1] && /^[A-Za-z-][\w-]*$/.test(w[1]) ? ' ' + w[1] : '';
+  return first + second;
 };
 // The same failing method on different paths, ids and numbers must group together: replace what varies with placeholders.
 // Quoted text first (it may hold spaces), then URLs, then each word: a path, a long hex or alphanumeric id, a number.
@@ -70,13 +103,14 @@ function placeholder(w) {
   const tail = /^(.*[^\d])(\d+)$/.exec(w);   // issue-1084, pr42: keep the word, drop the number
   return tail && tail[1].length >= 2 ? `${tail[1]}<n>` : w;
 }
-// The command a shell method runs, ignoring a leading `cd <dir> &&`.
-// The command and its subcommand or first option (`git push`, `node --test`), so `git status` is not the answer to `git push`.
-const headOf = method => {
-  const m = /^[^:]*:\s*(?:cd \S+?\s*(?:&&|;)\s*)*(\S+)(?: (\S+))?/.exec(method) || [];
-  return m[1] ? (m[2] && !/^</.test(m[2]) ? `${m[1]} ${m[2]}` : m[1]) : '';
-};
 const SHELL_TOOLS = new Set(['Bash', 'shell']);
+// The command as written: Codex keeps it whole in detail; Claude's text is one line (newlines folded) so its Bash input is read from the
+// stored JSON detail, where a newline after a leading cd is still a newline.
+const rawCommand = e => {
+  if (e.tool === 'shell') return e.detail || e.text || '';
+  if (e.tool === 'Bash' && e.detail) { try { const c = JSON.parse(e.detail)?.command; if (typeof c === 'string' && c) return c; } catch { /* clipped detail: use the one-line text */ } }
+  return e.text || e.detail || '';
+};
 
 const excerptOf = (text, secrets) => {
   const lines = String(text ?? '').split('\n').map(l => l.trim()).filter(Boolean);
@@ -96,7 +130,7 @@ export function extractErrors(entries, { secrets = [] } = {}) {
   for (const e of entries) {
     if (e.kind === 'usage' && e.tokens) tokenPrefix += (e.tokens.in || 0) + (e.tokens.out || 0);
     else if (e.kind === 'tool_call') {
-      const c = { tool: String(e.tool || 'tool'), method: normalizeMethod(e.tool, e.tool === 'shell' ? (e.detail || e.text || '') : (e.text || e.detail || '')), seq: e.seq, at: e.at };
+      const c = { tool: String(e.tool || 'tool'), head: SHELL_TOOLS.has(String(e.tool)) ? headOfCommand(rawCommand(e)) : '', method: normalizeMethod(e.tool, rawCommand(e)), seq: e.seq, at: e.at };
       if (e.callId) byId.set(e.callId, c); else loose.push(c);
     } else if (e.kind === 'tool_result') {
       const c = e.callId ? byId.get(e.callId) : loose.pop();
@@ -115,7 +149,7 @@ export function extractErrors(entries, { secrets = [] } = {}) {
     for (let k = i + 1; k < done.length && k <= i + LOOKAHEAD_CALLS; k++) {
       const d = done[k];
       if (d.failed || d.tool !== c.tool) continue;
-      if (SHELL_TOOLS.has(c.tool) && d.method !== c.method && headOf(d.method) !== headOf(c.method)) continue;
+      if (SHELL_TOOLS.has(c.tool) && d.method !== c.method && d.head !== c.head) continue;
       next = d; break;
     }
     const same = !!next && next.method === c.method, end = next || done[i + 1] || null;

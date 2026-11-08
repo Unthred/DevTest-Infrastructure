@@ -221,3 +221,29 @@ test('recovery needs the same command: cd with a semicolon is skipped, git statu
   assert.equal(e[0].recovered, false); assert.equal(e[1].recovered, false);
   assert.equal(e[2].recovered, false); assert.equal(e[2].recoveredWithSameMethod, true); assert.equal(e[2].recoveredBy, null);
 });
+
+test('mixed-quote Codex wrappers are unwrapped and unrelated commands are not each other\'s recovery', t => {
+  const root = tmp(t);
+  const build = `/bin/bash -lc "cd \\"/mnt/x\\" && npm run build 2>&1 | grep 'err'"'; true'`;
+  const log = `/bin/bash -lc "cd \\"/mnt/x\\" && git log -1 --format='%H'"'; true'`;
+  feed(root, ID, codex, [...shell('i1', build, 1, 'boom'), ...shell('i2', log, 0, 'abc')]);
+  const e = extractErrors(readTranscript(root, ID).entries);
+  assert.equal(e.length, 1);
+  assert.match(e[0].method, /npm run build/);
+  assert.equal(e[0].recovered, false); assert.equal(e[0].recoveredWithSameMethod, false);
+  assert.notEqual(normalizeMethod('shell', build), normalizeMethod('shell', log));
+});
+
+test('a leading cd with ; or a newline is ignored when judging the same step', t => {
+  const root = tmp(t);
+  const use = (id, command) => ({ type: 'assistant', message: { id: 'm' + id, content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }], usage: { input_tokens: 10, output_tokens: 5 } } });
+  const res = (id, text, err) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: text, is_error: err }] } });
+  feed(root, ID, claude, [
+    use('a', 'cd /mnt/x; node --test foo.test.mjs'), res('a', 'Exit code 1\nfail', true), use('b', 'cd /mnt/x; cat README.md'), res('b', 'ok', false),
+    use('c', 'cd /mnt/x\nfind . -name x'), res('c', 'Exit code 1\nfail', true), use('d', 'cd /mnt/x\ngh pr view 1'), res('d', 'ok', false),
+    use('e', 'cd /mnt/x; node --test --test-reporter=dot bar.test.mjs'), res('e', 'ok', false)]);
+  const e = extractErrors(readTranscript(root, ID).entries);
+  assert.equal(e.length, 2);
+  assert.equal(e[0].recovered, true); assert.match(e[0].recoveredBy, /node --test/);
+  assert.equal(e[1].recovered, false);
+});
