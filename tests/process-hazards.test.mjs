@@ -137,6 +137,9 @@ test('runnerGone without /proc (issue #695): with no recorded start time it fall
   // The existence probe is injected so the result does not depend on an exited child's PID staying unused.
   assert.equal(runnerGone(4242, null, noProc, () => false), true, 'a dead PID is gone');
   assert.equal(runnerGone(4242, null, noProc, () => true), false, 'a PID that still exists is not gone');
+  // The real probe's dead-PID branch (kill throws ESRCH): a PID above the kernel's maximum can never exist.
+  const beyondMax = Number(fs.readFileSync('/proc/sys/kernel/pid_max', 'utf8')) + 1;
+  assert.equal(runnerGone(beyondMax, null, noProc), true, 'real probe: a PID above pid_max is gone');
   assert.equal(runnerGone(process.pid, '123', noProc), true, 'a recorded start time but unreadable stat: gone');
 });
 

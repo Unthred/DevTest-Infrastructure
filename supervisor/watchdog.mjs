@@ -12,7 +12,7 @@ import { processInfo } from './core.mjs';
 // start time (no readable /proc: not Linux, or hidepid) fall back to process.kill(pid, 0), as the older watchdog did (issue #695).
 function pidExists(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
 // Limitation: in this fallback kill(pid, 0) cannot tell a zombie runner or a reused PID from a live one. That matches the older watchdog and
-// does not apply on Foreman's Linux host, where the start time is always recorded.
+// does not apply on Foreman's Linux host, where /proc is readable so the start time is normally recorded (it is empty only if /proc is unreadable).
 export function runnerGone(pid, start, readInfo = processInfo, exists = pidExists) {
   const info = readInfo(pid);
   if (!info && start == null) return !exists(pid);
