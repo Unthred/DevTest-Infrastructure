@@ -2024,6 +2024,9 @@ export class Team {
     let pause = null;
     try { const prs = await this.gh.listPulls(), issues = await this.gh.listIssues(); pause = this.pauseText(prs, issues); } catch { return { started: false, why: 'GitHub could not be read to check the open-PR cap' }; }
     if (pause) return { started: false, why: pause };
+    // The circuit breaker (#549, #124): an approved prompt is held like any new implement job. Read-only here; the lane never writes state.
+    const halt = breaker.blocks(this.s.breaker, this.c.breaker, { type: 'inbox', issue: null });
+    if (halt) return { started: false, why: `circuit breaker: ${halt.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + halt.cause} halted new jobs until the homeowner resumes` };
     const L = this.c.limits, active = (await this.jobs.listActive()).filter(j => j.status !== 'paused_limit');
     const usedBy = {}; let impl = 0;
     for (const j of active) { const role = roleOfType(this.s.jobs[j.id]?.kind); if (role === 'implementer') impl++; const k = `${j.provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }

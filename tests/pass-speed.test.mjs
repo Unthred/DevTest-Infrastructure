@@ -202,3 +202,12 @@ test('a pass reads the open PR and issue lists once; a write, or the end of the 
   assert.deepEqual(await w.gh.listPulls(), [{ number: 2 }]);   // a write forces a fresh read
   w.endReplay(); await w.gh.listPulls(); assert.equal(pulls, 3);
 });
+
+test('negative: the fast lane keeps the circuit breaker halt that the pass enforces', async t => {
+  const w = laneWorld(t);
+  const team = w.mk();
+  team.s.breaker.global = { since: 1, trippedBy: 'cost', cost: 99, causes: ['x'] };
+  const out = await team.startApprovedNow({});
+  assert.equal(out.started, false); assert.match(out.why, /circuit breaker/);
+  assert.equal(w.created.length, 0); assert.equal(statusOf(w.inbox, w.id).state, 'approved');
+});
