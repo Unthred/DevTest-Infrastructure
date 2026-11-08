@@ -7,8 +7,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
+import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action'];
+// Issue #855: kinds only Foreman raises itself (raiseHostValue). The overseer cannot submit one: scan() validates files without `internal`.
+export const INTERNAL_KINDS = ['host_value'];
 // Issue #629: named actions for cases that needed a terminal. Each is a fixed name with one target of a fixed shape (a pull request or issue
 // number, or the 8-character job id the dashboard shows); the item carries no command, path or free-form argument.
 export const ACTIONS = {
@@ -23,7 +26,7 @@ const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
-const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'] };
+const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
 // status record keeps the history. A rejected item keeps its file until the undo window has passed, because Undo returns it to pending.
@@ -63,29 +66,33 @@ const flat = t => String(t).replace(/\r/g, '').replace(/\t/g, ' ').trim();
 export const displayChanges = text => redactLong(flat(text), flat(text).length + 16, ' [cut]') !== flat(text);
 
 // Returns { ok:true, item } with only the known fields, or { ok:false, reason } (a short sentence safe to show; it never quotes the text).
-export function validateItem(raw) {
+export function validateItem(raw, { internal = false } = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: 'the item is not a JSON object' };
-  if (!KINDS.includes(raw.kind)) return { ok: false, reason: `unknown kind (accepted: ${KINDS.join(', ')})` };
+  if (!KINDS.includes(raw.kind) && !(internal && INTERNAL_KINDS.includes(raw.kind))) return { ok: false, reason: `unknown kind (accepted: ${KINDS.join(', ')})` };
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
-  const bodyKey = raw.kind === 'prompt' ? 'prompt' : raw.kind === 'action' ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12 };
+  const bodyKey = raw.kind === 'prompt' ? 'prompt' : raw.kind === 'action' ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
     if (v === undefined && k === 'why') continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
     if (v.length > max[k]) return { ok: false, reason: `${k} is longer than ${max[k]} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, reason: `${k} contains control characters` };
+    if (raw.kind === 'host_value' && k === 'value') continue;   // checked against its key's exact shape below; the card must show it as it is
     if (secretShaped(v)) return { ok: false, reason: `${k} contains secret-shaped text` };
     if (attributionShaped(v)) return { ok: false, reason: `${k} contains AI attribution text, which this project does not allow` };
     // The card shows redacted text, so anything the display redactor would change (e-mail addresses, digests, short key=value values)
     // is refused: the card must show exactly what the job receives.
-    if (displayChanges(v)) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
+    if (displayChanges(v) && !(raw.kind === 'host_value' && k === 'key')) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
   }
   if (/[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
   if (raw.kind === 'action') {
     const spec = Object.hasOwn(ACTIONS, raw.action) ? ACTIONS[raw.action] : null;
     if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(ACTIONS).join(', ')})` };
     if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
+  }
+  if (raw.kind === 'host_value') {
+    if (!validateHostValue(raw.key, raw.value)) return { ok: false, reason: `key must be one of ${Object.keys(HOST_KEYS).join(', ')} with a value of the right shape` };
   }
   return { ok: true, item: Object.fromEntries(allowed.filter(k => raw[k] !== undefined).map(k => [k, raw[k]])) };
 }
@@ -178,7 +185,7 @@ export function loadItem(inboxDir, id) {
   if (!st.isFile() || st.size > LIMITS.itemBytes) return { ok: false, reason: 'the item file is not usable' };
   const raw = readJson(file);
   if (!raw || hashOf(raw) !== s.hash) return { ok: false, reason: 'the item file changed after it was picked up' };
-  const v = validateItem(raw);
+  const v = validateItem(raw, { internal: INTERNAL_KINDS.includes(s.kind) });
   return v.ok ? { ok: true, item: v.item, status: s } : { ok: false, reason: v.reason };
 }
 
@@ -189,8 +196,8 @@ export function pendingCards(inboxDir) {
     if (!l.ok) return { id: s.id, kind: s.kind, broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
     return { id: s.id, kind: it.kind, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
-      will: it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
-      text: clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
+      will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
+      text: it.kind === 'host_value' ? `${it.key} += ${it.value}` : clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
   });
 }
 
@@ -286,4 +293,20 @@ export function finish(inboxDir, id, patch, now = Date.now()) {
 }
 // A job needs an issue number for its lease; an inbox job has none, so it gets a unique number far above any real issue (never looked up).
 export const placeholderIssue = id => 900000000 + parseInt(String(id).slice(0, 6), 16);
+// Issue #855: Foreman raises ONE pending item for a host-specific value it observed. The id is derived from the key and value, so a repeat
+// (the next tick, a second refused request from the same origin) finds the status already there and raises nothing, whatever its state.
+export function raiseHostValue(inboxDir, { key, value, why }, now = Date.now()) {
+  const item = { kind: 'host_value', title: `Add ${value} to ${key} in team.local.json`.slice(0, LIMITS.title), key, value, ...(why ? { why } : {}) };
+  const v = validateItem(item, { internal: true });
+  if (!v.ok) return { raised: false, reason: v.reason };
+  const id = crypto.createHash('sha256').update(`host_value\0${key}\0${value}`).digest('hex').slice(0, 32);
+  if (statusOf(inboxDir, id)) return { raised: false, id, reason: 'already raised' };
+  const d = dirs(inboxDir);
+  fs.mkdirSync(d.items, { recursive: true, mode: 0o755 }); fs.mkdirSync(d.status, { recursive: true, mode: 0o755 });
+  const file = path.join(d.items, `${id}.json`);
+  try { fs.writeFileSync(file, JSON.stringify(v.item, null, 1) + '\n', { mode: 0o644, flag: 'wx' }); } catch { return { raised: false, id, reason: 'item file exists' }; }
+  setStatus(inboxDir, id, { state: 'pending', kind: 'host_value', hash: hashOf(v.item), createdAt: now }, now);
+  audit(inboxDir, { id, event: 'proposed', kind: 'host_value', hash: hashOf(v.item) }, now);
+  return { raised: true, id };
+}
 export const marker = id => `<!-- devtest-inbox v1 ${id} -->`;

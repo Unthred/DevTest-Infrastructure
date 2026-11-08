@@ -18,7 +18,8 @@ import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
 import { consolidateNeedsYou } from './needsyou.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
-import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
+import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex, readUpgrades } from './suphealth.mjs';
+import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { hasProbe } from './probe.mjs';
 import { defaultRegistry, processStart } from './core.mjs';
@@ -385,6 +386,13 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   // Issue #303: one item per decision proposal awaiting the homeowner's sign-off, naming the entry and the pull request that adds it.
   for (const p of proposals) add(`decision-proposal-${p.id}-${p.pr}`, `Decision ${p.id} (${redact(p.title, 120)}) is an agent proposal awaiting your sign-off, added by ${names.pr(p.pr).text}`, { kind: 'pull', n: p.pr },
     { tried: 'Agents may only propose decisions; the entry does not bind until you approve it. CI fails any agent PR that marks an entry homeowner-approved without a recorded approval from you.', action: `To approve, comment "homeowner-approval: ${p.id}" on the pull request and set the entry to "Status: homeowner-approved" with its Source linking that comment, or reject the PR.`, links: [{ text: names.pr(p.pr).text, url: web('pull', p.pr) }] });
+  // Issue #855: a step that truly cannot be automated is listed by the PR under "Homeowner steps"; it shows here, not in a job report.
+  for (const [n, h] of Object.entries(state.homeownerSteps || {})) {
+    const pr = Number(n), open = (cache?.pulls || []).some(p => p.number === pr && p.headRefOid === h?.head);
+    if (!open || !Array.isArray(h.steps) || !h.steps.length) continue;
+    add(`homeowner-steps-${pr}`, `${names.pr(pr).text} lists steps only you can do: ${h.steps.slice(0, 3).join('; ')}`, { kind: 'pull', n: pr },
+      { tried: 'The pull request says under "Homeowner steps" that these cannot be automated (they need your credentials or a physical action). Foreman does not defer anything else to you.', action: 'Do the steps after the install, or reject the pull request if one of them could be automated.', links: [{ text: names.pr(pr).text, url: web('pull', pr) }] });
+  }
   // Issue #258: one item per PR that no configured agent can review, with the real reason of each agent.
   for (const u of unreviewed) {
     const what = names.pr(u.pr).text, uniq = x => [...new Set(x)];
@@ -897,6 +905,9 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const reviewing = new Set(Object.values(queues).flat().filter(q => q.type === 'review').map(q => q.ref));   // issue #76: PRs waiting for a review
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
+  // Issue #855: merged, installed or verified. Installed: the PR is in a completed install (upgrade record verified). Verified: its live checks passed.
+  const installedPrs = new Set((() => { try { return readUpgrades(root).filter(r => r.result === 'verified' && Array.isArray(r.prs)).flatMap(r => r.prs); } catch { return []; } })());
+  const verifiedPrs = new Set(Object.values((() => { try { return readVerification(root); } catch { return {}; } })()).filter(r => r && r.state === 'verified').map(r => r.pr));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
   const prs = [...prNumbers].sort((a, b) => b - a).map(n => {
     const p = (cache.pulls || []).find(x => x.number === n), vs = verdictRows.filter(v => v.pr === n), m = merged.get(n);
@@ -908,7 +919,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     const costJobs = [...rel, ...early];
     const prJobs = jobRows.filter(j => relIds.has(j.fullId));
     const key = p ? `${n}:${p.headRefOid}` : null;
-    return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed', awaitingReview: reviewing.has(n),
+    return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed', stage: m ? stageOf({ merged: true, installed: installedPrs.has(n) || verifiedPrs.has(n), verified: verifiedPrs.has(n) }) : null, awaitingReview: reviewing.has(n),
       checks: p ? checksState(p.statusCheckRollup, retriedIn(state.cancelWatch, p, now)) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length, carry: p && key ? carryRecordOf(state.verdicts?.[key], p) : null,
       fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
       // Issue #717: second-opinion reviews (kept apart from verdicts, one per pr:head) and the implement time from the merge log, for foreman_rebase_stats.
