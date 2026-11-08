@@ -33,7 +33,7 @@ function viewServer(t, view) {
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => { t.after(() => server.close()); resolve({ url: `http://127.0.0.1:${server.address().port}/api/view.json`, hits }); }));
 }
 const smallView = () => ({
-  health: { state: 'ok', label: 'ok', count: 1, severity: 'ok' }, freshness: { ageMs: 5, level: 'ok', label: 'fresh' }, tick: { at: 1000, status: 'ok', lastOkAt: 1000 }, nextTick: { state: 'scheduled' },
+  display: { gbpPerUsd: 1 }, health: { state: 'ok', label: 'ok', count: 1, severity: 'ok' }, freshness: { ageMs: 5, level: 'ok', label: 'fresh' }, tick: { at: 1000, status: 'ok', lastOkAt: 1000 }, nextTick: { state: 'scheduled' },
   version: { installed: 'aaaaaaa', main: 'aaaaaaa', behind: 0 }, teamEnabled: true, slots: [{ text: 'Reviewer: idle' }], capNotes: [], breaker: { halt: null, byCause: [] },
   agents: [{ name: 'claude', state: 'idle', idleReason: { text: 'nothing to do' } }], budget: { claude: { mode: 'normal', reason: 'ok', used: 0.1, projected: 0.2 } }, plan: [{ type: 'review', agent: 'claude', pr: 7, why: 'only claude can review' }],
   jobs: [{ id: 'abc', fullId: 'a'.repeat(32), kind: 'review', ref: 7, agent: 'claude', model: 'opus', status: 'completed', attempts: 1, startedAt: 1000, elapsedMs: 5000, tokens: 100, inTokens: 90, outTokens: 10, cost: 0.5, desc: 'Reviewer approved PR #7', hasTranscript: true }],
@@ -118,7 +118,7 @@ test('tools: each tool answers from the view, with the planner\'s queue, reasons
   const ro = await j('foreman_review_order'); assert.deepEqual(ro.reviewers.claude.map(x => x.pr), [7]); assert.equal(ro.notQueued[0].pr, 8); assert.match(ro.notQueued[0].why[0], /CI failing/);
   const wb = await j('foreman_why_blocked', { kind: 'pr', number: 8 }); assert.equal(wb.found, true); assert.match(wb.queue[0].reason, /CI failing/); assert.equal(wb.needsYou[0].text, '#8 needs you');
   const wi = await j('foreman_why_blocked', { kind: 'issue', number: 9 }); assert.match(wi.excluded[0].reason, /blocked by #1/); assert.equal(wi.waits[0].waits, 'a prerequisite');
-  const jobs = await j('foreman_jobs', { ref: 7 }); assert.equal(jobs.jobs[0].costUsdEquivalent, 0.5); assert.match(jobs.note, /not a cash charge/); assert.equal(jobs.jobs[0].transcriptAvailable, true); assert.ok(!('transcript' in jobs.jobs[0]));
+  const jobs = await j('foreman_jobs', { ref: 7 }); assert.equal(jobs.jobs[0].costGbpEquivalent, 0.5); assert.match(jobs.note, /not a cash charge/); assert.equal(jobs.jobs[0].transcriptAvailable, true); assert.ok(!('transcript' in jobs.jobs[0]));
   assert.equal((await j('foreman_plan')).plannedActions[0].type, 'review'); assert.equal((await j('foreman_plan')).breakerHalt.halted, false);
   const halted = createProtocol({ tools: toolsFor(() => ({ ...smallView(), breaker: { halt: { scope: 'every new job', cause: '@global' } } })) });
   const hp = JSON.parse((await call(halted, 'foreman_plan')).result.content[0].text); assert.equal(hp.breakerHalt.halted, true); assert.match(hp.breakerHalt.caution, /would drop/);

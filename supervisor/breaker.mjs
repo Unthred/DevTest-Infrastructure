@@ -2,6 +2,7 @@
 // breaker state kept in the Foreman state file (so a restart keeps a halt). Nothing here kills a job or loosens a review gate.
 // A halt ends in two ways only (issue #626): a later job of the halted type succeeds (succeeded()), or the homeowner resumes it (resume(),
 // from the terminal or the dashboard's Resume button).
+import { formatCost } from './money.mjs';
 import fs from 'node:fs';
 import { typeOfKind } from './models.mjs';
 
@@ -275,7 +276,7 @@ export function haltView(s, running = []) {
   const entries = [...(s.global ? [{ ...s.global, cause: '@global' }] : []), ...Object.values(s.halts)].sort((a, b) => a.since - b.since);
   if (!entries.length) return null;
   const top = entries[0], scope = top.cause === '@global' ? 'every new job (merges and the install path continue)' : `new ${top.types.join('/')} jobs`;
-  const fmt = n => `$${n.toFixed(2)}`;
+  const fmt = n => formatCost(n);   // issue #1097
   return {
     halted: true, count: entries.length, cause: top.cause, since: top.since, scope, jobs: top.jobs, tokens: top.tokens, cost: top.cost, costLabel: COST_LABEL, prs: top.prs, trippedBy: top.trippedBy, trippedByLabel: trippedByLabel(top.trippedBy),
     running: running.map(r => ({ ...r })),

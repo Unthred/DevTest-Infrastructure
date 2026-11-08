@@ -1,3 +1,4 @@
+import { formatCost } from './money.mjs';
 // Issue #866: the headline progress numbers at the top of the dashboard ("are we getting through the work?").
 // Pure: it reads Foreman's own records (the dashboard view's issues, pull requests and jobs, and the circuit breaker's waste record) and
 // returns, for each of the last 24 hours and the last 7 days, eight figures, the same figure for the period before (for the trend) and the
@@ -62,7 +63,7 @@ function period({ issues, prs, jobs, waste }, from, to, spanMs) {
     tokens: { value: known.length ? Math.round(sum(known, p => p.tokens) / known.length) : null, merged: merged.length, withKnownTokens: known.length, totalTokens: sum(known, p => p.tokens), unit: 'tokens',
       items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, fin(p.tokens) ? 'merged' : 'merged, tokens unknown', p.tokens))), count: merged.length },
     cost: { value: costKnown.length ? round(sum(costKnown, p => p.costUsd) / costKnown.length) : null, merged: merged.length, withKnownCost: costKnown.length, totalCostUsd: round(sum(costKnown, p => p.costUsd)), unit: 'USD equivalent',
-      items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, fin(p.costUsd) ? `merged, $${round(p.costUsd)} (implement, review, fix and rebase jobs)` : 'merged, cost unknown', p.tokens))), count: merged.length },
+      items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, fin(p.costUsd) ? `merged, ${formatCost(p.costUsd)} (implement, review, fix and rebase jobs)` : 'merged, cost unknown', p.tokens))), count: merged.length },
     waste: { value: sum(wasted, w => w.tokens), jobs: wasted.length, costUsdEquivalent: round(sum(wasted, w => w.cost)), topCause: top ? { cause: top[0], tokens: top[1] } : null, unit: 'tokens',
       items: cap(wasted.map(w => item(w.pr ? 'pr' : w.issue ? 'issue' : 'job', w.pr ?? w.issue ?? String(w.job || '').slice(0, 8), w.cause, w.at, `${w.agent || 'unknown agent'}, job ${String(w.job || '').slice(0, 8)}`, w.tokens))), count: wasted.length },
     rejects: { value: changes.length + blocked.length, changes: changes.length, blocked: blocked.length, unit: 'rejects',

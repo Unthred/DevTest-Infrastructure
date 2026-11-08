@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import { matchRoute, nextTickHtml, renderRoute, processesFragment } from './dashrender.mjs';
 import { createSampler, createJobReader } from './procsample.mjs';
 import { validateTeamConfig } from './team.mjs';
+import { configureDisplay } from './money.mjs';
 import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
 import { installs, breakerHistory } from './installs.mjs';
@@ -83,7 +84,7 @@ export function configSource(config) {
   if (typeof config !== 'function') return () => config;
   let good = null;
   // `invalid` names why the file was refused while the last good one is served (issue #191), so the page can say so.
-  const read = () => { try { good = config(); read.invalid = null; } catch (error) { if (!good) throw error; read.invalid = String(error?.message || error); } return good; };
+  const read = () => { try { good = config(); if (good?.display) configureDisplay(good.display); read.invalid = null; } catch (error) { if (!good) throw error; read.invalid = String(error?.message || error); } return good; };
   read.invalid = null;
   return read;
 }
@@ -94,6 +95,7 @@ export function configSource(config) {
 export async function currentView({ root, config, now = Date.now(), tz = defaultZone(), configError = null, timeline = false, allTime = false, statfs = undefined }) {
   if (typeof config === 'function') config = config();
   const jobs = readJobs(root);
+  configureDisplay(validateTeamConfig(config).display);   // issue #1097
   const register = registerCached(config);
   const hot = readSnapshots(root), tl = readTimeline(root);
   const history = { timeline: timeline ? tl : [], gaps: timeline ? computeGaps(tl, allSnapshots(root, hot), now) : [], storage: storageReport(root, { now, timeline: tl, ...(statfs ? { statfs } : {}) }), ...(allTime ? { chartSnapshots: allSnapshots(root, hot) } : {}) };
