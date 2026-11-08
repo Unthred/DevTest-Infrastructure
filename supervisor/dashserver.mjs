@@ -340,7 +340,9 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       // Issue #625: install history (with the version each process runs) and the circuit breaker's trip history, for the Foreman MCP tools.
       if (path === '/api/installs.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(installs(root, { now: now() })));
       // Issue #947: the alert history with level filters (?level=action,problem), as JSON and as a plain page.
-      if (path === '/api/alerts.json' || path === '/alerts') {
+      // Both routes share /api/alerts.json: a request that uses the #949 filters (since, contains, delivered, limit) is answered by the foreman_alerts view below; any other request by the level view.
+      const q949 = path === '/api/alerts.json' && ['since', 'contains', 'delivered', 'limit'].some(k => new URLSearchParams(search).has(k));
+      if ((path === '/api/alerts.json' && !q949) || path === '/alerts') {
         const asked = (new URLSearchParams(search).get('level') || '').split(',').filter(l => ALERT_LEVELS.includes(l)), levels = asked.length ? asked : ALERT_LEVELS;
         const rows = readAlerts(root, { levels, limit: 200 }).map(r => ({ at: r.at, level: r.level, text: redact(String(r.text || ''), 600), count: r.count ?? 1, pushed: Boolean(r.pushed), delivered: r.delivered ?? null, link: r.link ? redact(String(r.link), 300) : null, digest: Boolean(r.digest) }));
         if (path === '/api/alerts.json') return send(200, 'application/json; charset=utf-8', JSON.stringify({ levels, alerts: rows }));
