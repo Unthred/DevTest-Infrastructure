@@ -92,3 +92,10 @@ test('the review prompt requires running verdict-check', () => {
   assert.match(p, /ai-supervisor verdict-check \/i\/verdict\.json --pr 7 --head a1b2c3d4e5/);
   assert.match(p, /--checklist/);
 });
+
+test('the CLI needs no state root: it works where the default one cannot be created (CI)', () => {
+  const blocker = write('x');   // a regular file, so a state root beneath it can never be created
+  const env = { ...process.env, AI_SUPERVISOR_STATE_ROOT: path.join(blocker, 'state') };
+  const r = spawnSync(process.execPath, ['supervisor/cli.mjs', 'verdict-check', write(good()), '--pr', '7', '--head', HEAD], { encoding: 'utf8', env });
+  assert.equal(r.status, 0, r.stderr);
+});
