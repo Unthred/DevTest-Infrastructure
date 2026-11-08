@@ -16,7 +16,8 @@ export function normaliseAlert(text) {
     .replace(/\b[a-z0-9._-]+(?:\/[a-z0-9._-]+)+/g, '<path>')
     .replace(/\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/g, '<sha>')
     .replace(/#?\d+(?:[.,:]\d+)*%?/g, '<n>')
-    .replace(/\s+/g, ' ').trim();
+    .replace(/\s+/g, ' ').trim()
+    .replace(/(\bpr <n> ).+?( is still )/, '$1<title>$2');
 }
 
 export function readAlerts(root) {
@@ -48,17 +49,19 @@ export function alertsView(root, { now = Date.now(), since = null, contains = nu
     const key = normaliseAlert(redact(r.text, 2000)).slice(0, 300), g = groups.get(key) || { pattern: key, count: 0, delivered: 0, notDelivered: 0, firstAt: r.at, lastAt: r.at, example: redact(r.text, 300) };
     g.count++; r.delivered ? g.delivered++ : g.notDelivered++; g.firstAt = Math.min(g.firstAt, r.at); g.lastAt = Math.max(g.lastAt, r.at); groups.set(key, g);
   }
-  // Totals per UTC day for the last 7 days, today first, with the same text and delivered filters (since does not narrow them).
-  const days = new Map();
+  // Totals per UTC day for the last 7 UTC calendar days (today and the 6 before), today first, with the same text and delivered filters (since does not narrow them).
+  const days = new Map(), dayStart = Math.floor(now / DAY_MS) * DAY_MS - 6 * DAY_MS;   // today and the 6 UTC days before it
   for (const r of rows) {
-    if (r.at < now - 7 * DAY_MS || (want !== null && r.delivered !== want) || (needle && !redact(r.text, 2000).toLowerCase().includes(needle))) continue;
+    if (r.at < dayStart || (want !== null && r.delivered !== want) || (needle && !redact(r.text, 2000).toLowerCase().includes(needle))) continue;
     const d = iso(r.at).slice(0, 10), e = days.get(d) || { day: d, total: 0, delivered: 0, notDelivered: 0 };
     e.total++; r.delivered ? e.delivered++ : e.notDelivered++; days.set(d, e);
   }
+  const allGroups = [...groups.values()].sort((a, b) => b.count - a.count || b.lastAt - a.lastAt);
   return {
     from: iso(from), to: iso(now), matching: picked.length, shown: Math.min(lim, picked.length),
     alerts: picked.slice(0, lim).map(clean),
-    groups: [...groups.values()].sort((a, b) => b.count - a.count || b.lastAt - a.lastAt).slice(0, 50).map(g => ({ pattern: g.pattern, count: g.count, delivered: g.delivered, notDelivered: g.notDelivered, firstAt: iso(g.firstAt), lastAt: iso(g.lastAt), example: g.example })),
+    groupCount: allGroups.length, ...(allGroups.length > 50 ? { groupsTruncated: true } : {}),
+    groups: allGroups.slice(0, 50).map(g => ({ pattern: g.pattern, count: g.count, delivered: g.delivered, notDelivered: g.notDelivered, firstAt: iso(g.firstAt), lastAt: iso(g.lastAt), example: g.example })),
     perDay: [...days.values()].sort((a, b) => b.day.localeCompare(a.day)),
     ...(partial ? { note: 'The log is large; only its most recent part was read, so the oldest alerts may be missing.' } : {}),
   };

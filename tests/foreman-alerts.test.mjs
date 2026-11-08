@@ -32,6 +32,21 @@ test('normaliseAlert strips numbers, SHAs, paths, URLs and quoted names', () => 
   assert.equal(normaliseAlert(undefined), '');
 });
 
+test('normaliseAlert: unquoted PR titles in the still-rejected alert are one pattern', () => {
+  assert.equal(normaliseAlert('needs the homeowner: PR #5 Fix the widget is still rejected after 3 fix rounds'), normaliseAlert('needs the homeowner: PR #9 Add other thing is still rejected after 4 fix rounds'));
+});
+
+test('alertsView: perDay covers 7 UTC calendar days; groups report truncation', t => {
+  const root = tmp(t), n = Date.parse('2026-11-08T12:00:00Z');
+  const r = [{ at: Date.parse('2026-11-01T23:00:00Z'), text: 'old day', delivered: true }, { at: Date.parse('2026-11-02T00:30:00Z'), text: 'first day', delivered: true }];
+  for (let i = 0; i < 55; i++) r.push({ at: n - 1000 * i, text: 'distinct' + 'abcdefghijklmnopqrstuvwxyz'[i % 26] + 'q'.repeat(Math.floor(i / 26)) + ' word', delivered: true });
+  write(root, r);
+  const v = alertsView(root, { now: n, since: '2026-11-08T00:00:00Z' });
+  assert.ok(v.perDay.length <= 7); assert.equal(v.perDay.at(-1).day, '2026-11-02'); assert.ok(!v.perDay.some(d => d.day === '2026-11-01'));
+  assert.equal(v.groups.length, 50); assert.ok(v.groupCount > 50); assert.equal(v.groupsTruncated, true);
+  assert.equal(alertsView(root, { now: n, since: '2026-11-08T11:59:00Z', contains: 'distincta' }).groupsTruncated, undefined);
+});
+
 test('alertsView: last day newest first, groups, per-day totals, redaction', t => {
   const root = tmp(t); write(root, rows());
   const v = alertsView(root, { now: NOW });
