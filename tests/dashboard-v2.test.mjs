@@ -286,7 +286,7 @@ test('usage and reviews tables: sortable, with footers (total tokens, job count,
   const s = await serve(t, { jobs, cache: cache(), state: { verdicts: { [`41:${H(1)}`]: { verdict: 'CHANGES', reviewer: 'codex', at: NOW - 2000, findings: ['a', 'b'] }, [`41:${H(2)}`]: { verdict: 'PASS', reviewer: 'codex', at: NOW - 1000, findings: [] } } } });
   const u = (await s.get('/usage?jobs.sort=inTokens&jobs.dir=desc')).body;
   assert.match(u, /aria-sort="descending"/); assert.ok(u.indexOf('>900</td>') < u.indexOf('>50</td>'));
-  assert.match(u, /<tfoot>[\s\S]*2 jobs[\s\S]*950[\s\S]*150[\s\S]*\$0\.75/);
+  assert.match(u, /<tfoot>[\s\S]*2 jobs[\s\S]*950[\s\S]*150[\s\S]*£0\.56/);
   const r = (await s.get('/reviews')).body;
   assert.match(r, /<tfoot>[\s\S]*2 verdicts[\s\S]*avg 1/); const w = (await s.get('/work')).body;
   assert.match(w, /<tfoot>[\s\S]*1 pull requests[\s\S]*avg 2/); assert.match(w, /4 issues/);
@@ -525,7 +525,7 @@ test('#244 a proposed split is one Needs you card with the Accept split path and
   const ids = v.panels.needsYou.map(x => x.id).filter(id => id !== 'unqueued' && id !== 'homeowner-3');   // fixture noise: no agent queues, issue 3 already labelled
   assert.deepEqual(ids, ['split-30']);
   const card = v.panels.needsYou.find(x => x.id === 'split-30');
-  assert.equal(card.id, 'split-30'); assert.match(card.action, /Accept split.*team accept-split 30/); assert.match(card.tried, /3,700,000 tokens.*\$2\.00/);
+  assert.equal(card.id, 'split-30'); assert.match(card.action, /Accept split.*team accept-split 30/); assert.match(card.tried, /3,700,000 tokens.*£1\.50/);
   // Drafting is not yet a decision; an accepted split is no longer one either.
   for (const status of ['drafting', 'accepted']) {
     state.splits[30].status = status;
@@ -542,7 +542,7 @@ test('#244 failed attempts: tokens and cost are summed on the dashboard and show
   assert.equal(v.failedSpend.jobs, 1); assert.equal(v.failedSpend.tokens, 3700000); assert.equal(v.failedSpend.cost, 2);
   assert.equal(v.failedSpend.rows.length, 1);
   const page = (await s.get('/usage')).body;
-  assert.match(page, /Failed attempts: 1 job, 3,700,000 tokens, \$2\.00/);
+  assert.match(page, /Failed attempts: 1 job, 3,700,000 tokens, £1\.50/);
   const none = JSON.parse((await (await serve(t, { jobs: [ok], cache: cache() })).get('/api/view.json')).body);
   assert.deepEqual([none.failedSpend.jobs, none.failedSpend.tokens, none.failedSpend.cost], [0, null, null]);
 });

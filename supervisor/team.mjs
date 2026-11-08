@@ -14,6 +14,7 @@ import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as robust from './robust.mjs';
 import * as breaker from './breaker.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
+import { configureDisplay, formatCost, validateDisplay } from './money.mjs';
 import { validateResourceConfig } from './resources.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, isOpusModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
@@ -74,6 +75,7 @@ export function validateTeamConfig(input) {
   try { validateChangeCheck(c.change_check); } catch (error) { throw new SupervisorError(error.message); }   // issue #755
   try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
   validateDashboard(c.dashboard);
+  try { c.display = validateDisplay(c.display); } catch (error) { throw new SupervisorError(error.message); }   // issue #1097
   // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
   // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
   if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir' || k === 'max_pending') && (c.inbox.max_pending === undefined || (Number.isSafeInteger(c.inbox.max_pending) && c.inbox.max_pending >= 1 && c.inbox.max_pending <= 200)))) throw new SupervisorError('invalid inbox: { dir: absolute path, max_pending?: 1-200 }');   // issue #124
@@ -234,7 +236,7 @@ export const LOCAL_OVERRIDE = 'team.local.json';
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard'].includes(k));
+  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard', 'display'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
   const out = structuredClone(shipped);
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
@@ -244,6 +246,7 @@ export function applyLocalOverride(shipped, local) {
   if ('change_check' in local) { try { validateChangeCheck(local.change_check); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } out.change_check = { ...(out.change_check || {}), ...local.change_check }; }   // issue #755
   if ('inbox' in local) out.inbox = local.inbox;   // issue #642: validated like the shipped key by validateTeamConfig, which loadTeamConfig runs on the merged result
   if ('breaker' in local) { try { out.breaker = validateBreakerConfig({ ...(out.breaker || {}), ...local.breaker }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }
+  if ('display' in local) { try { out.display = validateDisplay({ ...(out.display || {}), ...local.display }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }   // issue #1097
   if ('dashboard' in local) { validateDashboard(local.dashboard); out.dashboard = { ...local.dashboard }; }
   if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
   if ('alerts' in local) {
@@ -284,7 +287,9 @@ export function loadTeamConfig(shippedFile, root) {
   let local = null;
   try { local = JSON.parse(fs.readFileSync(path.join(root, LOCAL_OVERRIDE), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new SupervisorError(`unreadable ${LOCAL_OVERRIDE}`); }
-  return validateTeamConfig(applyLocalOverride(shipped, local));
+  const cfg = validateTeamConfig(applyLocalOverride(shipped, local));
+  configureDisplay(cfg.display);   // issue #1097: the cost display rate of this process
+  return cfg;
 }
 
 // The access decision must be homeowner-approved in the register, or the dispatcher refuses to launch anything.
@@ -2789,7 +2794,7 @@ export class Team {
     if (draft.error) { sp.status = 'failed'; sp.error = draft.error; this.save(); report.ingested.push({ job: id, issue: j.issue, error: draft.error }); return; }
     sp.status = 'proposed'; sp.children = draft.children; this.save();
     const list = draft.children.map((c, i) => `${i + 1}. **${c.title}** — ${c.scope}`).join('\n');
-    const spent = sp.wasted.tokens ? ` The failed attempt spent about ${sp.wasted.tokens.toLocaleString('en-US')} tokens${sp.wasted.cost != null ? ` (about $${sp.wasted.cost.toFixed(2)})` : ''}.` : '';
+    const spent = sp.wasted.tokens ? ` The failed attempt spent about ${sp.wasted.tokens.toLocaleString('en-US')} tokens${sp.wasted.cost != null ? ` (about ${formatCost(sp.wasted.cost)})` : ''}.` : '';
     await this.postNotice(j.issue, `split-proposal job=${id}`, `**Needs the homeowner: proposed split.** ${this.names().job({ id: sp.implementJob, kind: 'implement', issue: { number: j.issue } }).text} ran out of context before opening a pull request, so Foreman did not restart it with the same scope.${spent} Proposed children:\n\n${list}\n\nRequired: accept with \`ai-agent --supervisor team accept-split ${j.issue}\` (Foreman then files these as issues and queues them), or reshape the issue by hand and remove the needs-homeowner label.`);
     await this.flag(j.issue, { key: `split:${j.issue}`, kind: 'split', issue: j.issue, tk: 'issue' });
     report.ingested.push({ job: id, issue: j.issue, split: draft.children.length });

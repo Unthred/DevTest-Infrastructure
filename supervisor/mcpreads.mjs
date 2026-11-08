@@ -1,6 +1,7 @@
 // Issue #635: two more bounded, redacted, read-only records for the Foreman MCP tools (D-030), served by the dashboard's GET handler because the
 // MCP account cannot read the state root: the failure cost by cause over time (foreman_waste) and the effective configuration with its
 // difference from the shipped default (foreman_config). They only read and make no model call.
+import { gbpAmount } from './money.mjs';
 import fs from 'node:fs';
 import { redact, KEY } from './redact.mjs';
 import { readCache, readSnapshots } from './dashdata.mjs';
@@ -26,16 +27,16 @@ export function wasteByCause(state, { now = Date.now(), days = 7 } = {}) {
     add(byDay.get(day), cause, w);
   }
   const PER_DAY = 5;   // per day: the top causes by cost, then one remainder row, so a 30-day answer stays useful inside the output bound
-  const sorted = m => [...m].map(([cause, e]) => ({ cause, jobs: e.jobs, tokens: e.tokens, costUsdEquivalent: round2(e.cost) })).sort((a, b) => b.costUsdEquivalent - a.costUsdEquivalent || b.tokens - a.tokens || a.cause.localeCompare(b.cause));
+  const sorted = m => [...m].map(([cause, e]) => ({ cause, jobs: e.jobs, tokens: e.tokens, costGbpEquivalent: gbpAmount(e.cost) ?? 0 })).sort((a, b) => b.costGbpEquivalent - a.costGbpEquivalent || b.tokens - a.tokens || a.cause.localeCompare(b.cause));
   const out = m => sorted(m);
   const dayOut = m => {
     const all = sorted(m); if (all.length <= PER_DAY) return all;
     const rest = all.slice(PER_DAY);
-    return [...all.slice(0, PER_DAY), { cause: `(${rest.length} other ${rest.length === 1 ? 'cause' : 'causes'})`, jobs: rest.reduce((n, c) => n + c.jobs, 0), tokens: rest.reduce((n, c) => n + c.tokens, 0), costUsdEquivalent: round2(rest.reduce((n, c) => n + c.costUsdEquivalent, 0)), remainder: true }];
+    return [...all.slice(0, PER_DAY), { cause: `(${rest.length} other ${rest.length === 1 ? 'cause' : 'causes'})`, jobs: rest.reduce((n, c) => n + c.jobs, 0), tokens: rest.reduce((n, c) => n + c.tokens, 0), costGbpEquivalent: round2(rest.reduce((n, c) => n + c.costGbpEquivalent, 0)), remainder: true }];
   };
   const sum = k => rows.reduce((n, w) => n + (Number.isFinite(w[k]) ? w[k] : 0), 0);
   return {
-    from: iso(from), to: iso(now), days: span, jobs: rows.length, totalTokens: sum('tokens'), totalCostUsdEquivalent: round2(sum('cost')),
+    from: iso(from), to: iso(now), days: span, jobs: rows.length, totalTokens: sum('tokens'), totalCostGbpEquivalent: gbpAmount(sum('cost')) ?? 0,
     note: 'Waste is a finished job that spent tokens and left no usable result. Cost is the provider CLI usage estimate, not a charge. The record covers the last 7 days and at most 1000 entries, so a longer span shows no more. Each day lists its top 5 causes by cost and one remainder row; byCause is complete.',
     byCause: out(causes), byDay: [...byDay].sort((a, b) => b[0].localeCompare(a[0])).map(([day, m]) => ({ day, causes: dayOut(m) })),
   };

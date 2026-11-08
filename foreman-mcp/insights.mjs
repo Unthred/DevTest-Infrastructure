@@ -27,6 +27,9 @@ const refText = r => `${r.kind === 'issue' ? 'issue' : 'pr'} #${r.n}`;
 const needsYouItems = view => (Array.isArray(view.panels?.needsYou) ? view.panels.needsYou : (view.attention || []).filter(a => a.severity === 'action'));
 
 // The Needs you items grouped by cause. Each group states how many items, what they refer to and the action asked, so a cluster of one cause is one decision.
+// Issue #1097: the MCP server imports nothing from the supervisor tree, so this repeats money.mjs gbpAmount with the rate the dashboard
+// view carries (view.display.gbpPerUsd, from display.gbp_per_usd). Stored job records keep USD; only the answer converts.
+export const gbpOf = (usd, v) => (Number.isFinite(usd) && Number.isFinite(v?.display?.gbpPerUsd) ? Math.round(usd * v.display.gbpPerUsd * 100) / 100 : null);
 export function needsYouGroups(view) {
   const items = needsYouItems(view), groups = new Map();
   for (const a of items) {
@@ -113,7 +116,7 @@ export function itemTimeline(view, kind, number, { limit = 60 } = {}) {
   const prNumbers = new Set(prs.map(p => p.number));
   const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
   const entries = [], seen = new Set();
-  const jobEntry = j => { const at = Number.isFinite(j.startedAt) ? j.startedAt : j.createdAt; return { atMs: at, type: 'job', what: j.kind, id: j.fullId ?? null, ref: j.ref, agent: j.agent ?? null, status: j.status, durationSeconds: Number.isFinite(j.elapsedMs) ? Math.round(j.elapsedMs / 1000) : null, tokens: j.tokens ?? null, costUsdEquivalent: j.cost ?? null, summary: j.desc ?? null }; };
+  const jobEntry = j => { const at = Number.isFinite(j.startedAt) ? j.startedAt : j.createdAt; return { atMs: at, type: 'job', what: j.kind, id: j.fullId ?? null, ref: j.ref, agent: j.agent ?? null, status: j.status, durationSeconds: Number.isFinite(j.elapsedMs) ? Math.round(j.elapsedMs / 1000) : null, tokens: j.tokens ?? null, costGbpEquivalent: gbpOf(j.cost, v), summary: j.desc ?? null }; };
   for (const j of v.jobs || []) {
     if (!refs.has(j.ref)) continue;
     if (j.fullId) seen.add(`job:${j.fullId}`);

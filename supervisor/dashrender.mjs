@@ -1,6 +1,7 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
+import { formatCost } from './money.mjs';
 import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { PINNED } from './dashui/grid.mjs';
 import { CARD_IDS, CARD_TITLES, WINDOWS } from './headline.mjs';
@@ -374,7 +375,7 @@ function breakerCard(view) {
   const buttons = b.halt ? (b.halt.entries || []).map(e => resumeBtn(e.cause === '@global' ? 'global' : e.cause, `Resume ${e.cause === '@global' ? 'all new jobs' : e.cause}`)).join('') + ((b.halt.entries || []).length > 1 ? resumeBtn('all', 'Resume everything') : '') : '';
   const halt = b.halt ? `<p class="sev-action"><strong>Work halted.</strong> ${escT(b.halt.text)} ${escT(b.halt.running_text)}</p><p class="sub">${escT(b.halt.action)}</p>${buttons}` : '<p class="sub">Circuit breaker: no halt.</p>';
   const err = b.error ? `<p class="sev-action">The breaker failed: ${escT(b.error)}</p>` : '';
-  const rows = b.byCause.slice(0, 12).map(r => `<tr><td>${escT(r.cause)}${r.halted ? ' (halted)' : ''}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>$${r.cost.toFixed(2)}</td><td>${escT(r.prs.map(n => '#' + n).join(', '))}</td></tr>`).join('');
+  const rows = b.byCause.slice(0, 12).map(r => `<tr><td>${escT(r.cause)}${r.halted ? ' (halted)' : ''}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>${esc(formatCost(r.cost))}</td><td>${escT(r.prs.map(n => '#' + n).join(', '))}</td></tr>`).join('');
   const table = rows ? `<table><thead><tr><th>Cause</th><th>Wasted jobs</th><th>Tokens</th><th>Cost (usage equivalent)</th><th>PRs</th></tr></thead><tbody>${rows}</tbody></table><p class="sub">Cost is ${escT(b.costLabel)}.</p>` : '';
   return card({ id: 'breaker', title: b.halt ? 'Work halted' : 'Wasted usage', span: 12, body: err + halt + table, cls: 'panel', type: b.halt ? 'action' : 'info' });
 }
@@ -509,7 +510,7 @@ const HEADLINE = {
   issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` }),
   processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play` }),
   throughput: c => ({ big: Number.isFinite(c.openedPerHour) ? `${dec1(c.openedPerHour)} PRs opened/h` : 'no data', sub: `${dec1(c.mergedPerHour)} merged/h, ${dec1(c.implementedPerHour)} issues implemented/h (${c.opened} opened, ${c.merged} merged, ${c.implemented} implemented)` }),
-  cost: c => ({ big: Number.isFinite(c.value) ? `$${c.value.toFixed(2)}` : 'unknown', sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),
+  cost: c => ({ big: formatCost(c.value, { unknown: 'unknown' }), sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),
   'merge-rate': c => ({ big: Number.isFinite(c.value) ? `${dec1(Math.round(c.value * 100) / 100)}/h` : 'no data', sub: `${c.merged} merged` }),
   'first-pass': c => ({ big: pctText(c.value), sub: c.reviewed ? `${c.approved} of ${c.reviewed} approved on the first review` : 'no first reviews' }),
   rounds: c => ({ big: Number.isFinite(c.value) ? dec1(c.value) : 'no data', sub: `${c.merged} merged (review, fix and rebase rounds)` }),
@@ -765,20 +766,20 @@ function usagePage(view, query, path) {
   const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }) });
   const toks = view.graphs.tokensPerPr.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.tokens, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
   const tokChart = card({ id: 'u-tok', title: 'Tokens per merged PR', span: 12, expandable: true, movable: true, body: barChart({ rows: toks, title: 'tokens per merged PR', emptyTitle: 'No merged PR has recorded tokens' }) });
-  const usd = n => (Number.isFinite(n) ? `$${(Math.round(n * 100) / 100).toFixed(2)}` : '–');
+  const usd = n => formatCost(n);   // issue #1097: pounds, one formatter (money.mjs)
   const ucols = [jobCols(view)[0], jobCols(view)[1], jobCols(view)[2], jobCols(view)[3], jobCols(view)[4],
     { key: 'inTokens', label: 'Input tokens', num: true, html: r => esc(num(r.inTokens)) }, { key: 'outTokens', label: 'Output tokens', num: true, html: r => esc(num(r.outTokens)) },
-    { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd, more: true }];
+    { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: r => esc(usd(r.cost)), fmt: usd, more: true }];
   const table_ = card({ id: 'u-jobs', title: 'Tokens per job', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: view.jobs, searchKeys: ['id', 'agent', 'kind', 'status'], totals: { id: 'count', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: ucols,
     emptyState: empty('No jobs recorded', 'Token counts appear after a job finishes.', 'chart') }) + '<p class="sub">*Token counts and the CLI cost estimate are what the CLI reported, not billing. Subscription use is not billed per token.</p>' });
   const mcols = [{ key: 'kind', label: 'Job type' }, { key: 'model', label: 'Model' }, { key: 'effort', label: 'Effort' }, { key: 'jobs', label: 'Jobs', num: true },
     { key: 'inTokens', label: 'Input tokens', num: true, html: r => esc(num(r.inTokens)) }, { key: 'outTokens', label: 'Output tokens', num: true, html: r => esc(num(r.outTokens)) },
-    { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd }];
+    { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: r => esc(usd(r.cost)), fmt: usd }];
   const byModel = card({ id: 'u-models', title: 'Tokens per job type and model', span: 12, movable: false, body: table({ id: 'models', path, query, noun: 'groups', rows: view.modelUsage || [], searchKeys: ['kind', 'model', 'effort'], totals: { jobs: 'sum', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: mcols,
     emptyState: empty('No model usage recorded', 'Token counts appear per job type and model after jobs finish.', 'chart') }) });
   const fs_ = view.failedSpend || { jobs: 0, rows: [] };
   const fcols = [{ key: 'name', label: 'Job' }, { key: 'status', label: 'Status' }, { key: 'attempts', label: 'Attempts', num: true },
-    { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
+    { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
   const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
     emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
   return { title: 'Usage & cost', body: `${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };

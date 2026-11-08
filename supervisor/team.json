@@ -33,6 +33,7 @@
       }
     }
   },
+  "display": { "gbp_per_usd": 0.75 },
   "budget": { "enabled": true, "high_water": 0.85, "high_water_min_hours": 24, "recent_hours": 24, "exhausted_at": 0.995, "can_take_over": ["claude", "codex"] },
   "agents": {
     "claude": { "provider": "claude", "branch_prefix": "claude/", "issues": [] },
