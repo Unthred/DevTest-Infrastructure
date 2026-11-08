@@ -109,3 +109,13 @@ A dashboard write (Watch, Mark as read, Refresh allowance, Approve or Reject on 
 
 ### Merged, installed and verified (issue #855)
 The team tick runs three things for this rule. `raiseHostValues` offers one inbox item (`host_value`, raised only by Foreman) for the first Origin the dashboard refused that is not in `dashboard.allowed_origins`; the dashboard records refused origins in `<state root>/team/refused-origins.json` (well-formed origins only, newest ten). `runHostValue` applies an approved item with a backup, a validation of the merged configuration and a parse check. `verifyInstalled` reads the completed installs in `team/upgrades.jsonl`, takes the issues each pull request closes, and runs their `## Live checks` against `self_upgrade.public_dashboard_url`; results are kept in `<state root>/team/verification.json` (`verified` or `failed` with the follow-up issue number). Without that URL nothing is run and the issue stays at installed. Stages and rules for authors: [team-loop.md](team-loop.md#done-is-installed-and-verified-not-merged-issue-855).
+
+## Host disk samples (issue #1092)
+
+Each tick (not a dry run) appends one line to `<root>/dashboard/disk-samples.jsonl` and drops lines older than 7 days. The line records used and total bytes for every volume in `health.volumes` in `team.json` (default `["/", "/tmp", "/mnt/cache", "/mnt/user"]`, absolute paths only) and the number of entries directly inside `/tmp`. It uses `statfs` and `readdir` only (`supervisor/hostdisk.mjs`); no shell command, no folder-size scan.
+
+```
+{"at": <epoch ms>, "volumes": [{"path": "/", "usedBytes": <n>, "totalBytes": <n>, "status": "ok"}], "tmpEntries": <n>}
+```
+
+A volume that cannot be read is `{"path": "...", "status": "unreadable"}` with no byte fields; the others still record. If `/tmp` cannot be listed, `tmpEntries` is `null`. A sampling failure is listed in the tick report as skipped step `disk samples` and never fails the tick. The Health page (#1027) reads this format.
