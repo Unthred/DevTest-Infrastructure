@@ -91,7 +91,7 @@ export function allowanceGates(budget = {}, now) {
 export function globalWaits({ upgrade = null, now, tz }) {
   const waits = [];
   // Issue #302: while the rollback latch is set no upgrade is tried at all, so no "next try" is promised.
-  if (upgrade?.latch) { waits.push({ kind: 'upgrade-latched', at: null, text: 'upgrades paused: a rolled-back upgrade set the latch; clear it with "ai-supervisor self-upgrade clear-latch" once the cause is understood' }); return waits; }
+  if (upgrade?.latch) { waits.push({ kind: 'upgrade-latched', at: null, text: 'upgrades paused: a rolled-back upgrade set the latch; press Clear latch on the dashboard once the cause is understood' }); return waits; }
   const last = upgrade?.lastUpgradeAt;
   if (Number.isFinite(last) && last + MIN_UPGRADE_INTERVAL_MS > now) {
     const at = last + MIN_UPGRADE_INTERVAL_MS;

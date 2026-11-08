@@ -268,7 +268,7 @@ test('issue #302: a rollback latch raises a Needs you item with the clear comman
   const need = v.panels.needsYou.find(a => a.id === 'upgrade-latched');
   assert.equal(need.clearLatch, true, 'a Clear latch button (issue #692), no shell command'); assert.equal(need.command, null);
   assert.ok(!v.estimates.waits.some(w => /next try/.test(w.text)), 'no next try is promised while latched');
-  assert.ok(v.estimates.waits.some(w => w.kind === 'upgrade-latched' && /clear-latch/.test(w.text)));
+  assert.ok(v.estimates.waits.some(w => w.kind === 'upgrade-latched' && /Clear latch/.test(w.text)));
 });
 
 // ---- issue #193

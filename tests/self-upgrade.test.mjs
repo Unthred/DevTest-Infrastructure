@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { MIN_INSTALL_GAP_MS, SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, NEXT_INSTALL_WHY, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS, PRECHECK_RETRY_MS } from '../supervisor/upgrade.mjs';
+import { MIN_INSTALL_GAP_MS, SelfUpgrade, parseTestFailure, realDeps, runningSha, installedSha, BOOTSTRAP_PATHS, envBackoffMs, ENV_RETRY_MAX_MS, QUIET_MAX_WAIT_MS, NEXT_INSTALL_WHY, holdOf, MIN_UPGRADE_INTERVAL_MS, VERIFY_MAX_WAIT_MS, ENV_RETRY_MS, PRECHECK_RETRY_MS, isGithubConnectionError, LIVE_RETRY_MAX_MS } from '../supervisor/upgrade.mjs';
 import { DRAIN_DEFAULT_MINUTES, applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
@@ -606,7 +606,7 @@ import { liveTickOutcome } from '../supervisor/upgrade.mjs';
 test('issue #302: a verifying tick with only a live job\'s lease wait verifies; real faults still fail it', async t => {
   assert.deepEqual(liveTickOutcome({ actions: [], skipped: [], waiting: [{ what: 'review 5 (claude)', reason: 'waiting for job abababab (running)' }] }), { ok: true, reason: null });
   assert.equal(liveTickOutcome({ skipped: [{ what: 'x', reason: 'r', expected: true }] }).ok, true);
-  assert.deepEqual(liveTickOutcome({ skipped: [{ what: 'x', reason: 'gh failed' }] }), { ok: false, reason: 'gh failed' });
+  assert.deepEqual(liveTickOutcome({ skipped: [{ what: 'x', reason: 'gh failed' }] }), { ok: false, reason: 'gh failed', reasons: ['gh failed'] });
   assert.deepEqual(liveTickOutcome({ error: 'boom' }), { ok: false, reason: 'boom' });
   const w = world(t);
   await w.up.step();
@@ -1027,7 +1027,7 @@ test('a GitHub connection error at the live tick backs off, keeps the install pe
   w.state.now += envBackoffMs(1);
   assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR }), 'awaiting-verification');
   assert.equal(w.up.s.pending.liveRetry.attempts, 2); assert.equal(w.up.s.pending.liveRetry.retryAt, w.state.now + envBackoffMs(2));
-  for (let i = 0; i < 12; i++) { w.state.now += ENV_RETRY_MAX_MS; await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR }); }
+  for (let i = 0; i < 4; i++) { w.state.now += ENV_RETRY_MAX_MS; await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR }); }
   assert.equal(w.up.s.pending.liveRetry.retryAt - w.state.now, ENV_RETRY_MAX_MS, 'bounded');
   assert.equal(w.up.latch(), null);
   // the first passing tick verifies at once, even inside a window
@@ -1046,4 +1046,26 @@ test('a real failure of the new code still rolls back and latches, also after a 
     const v = world(t); await v.up.step();
     assert.equal(await v.up.verifyPending({ running: TO, ok: false, reason }), 'rolled-back', String(reason));
   }
+});
+
+test('issue #692: gh and git connection wording is recognised, unanchored network text is not', () => {
+  for (const r of ['gh pr list failed: Post "https://api.github.com/graphql": dial tcp 140.82.1.1:443: connect: connection refused',
+    'gh pr list failed: Post "https://api.github.com/graphql": dial tcp 1.2.3.4:443: i/o timeout',
+    'gh api failed: read tcp 1.2.3.4:5->6.7.8.9:443: i/o timeout', 'gh api failed: dial tcp 1.2.3.4:443: connect: no route to host',
+    'gh api failed: Get "https://api.github.com/x": EOF', 'gh api failed: unexpected EOF',
+    'gh api failed: Get "https://api.github.com/x": context deadline exceeded (Client.Timeout exceeded while awaiting headers)',
+    'git fetch failed: Failed to connect to github.com port 443: Connection refused', GH_ERR]) assert.ok(isGithubConnectionError(r), r);
+  for (const r of ['connect ECONNREFUSED 127.0.0.1:80', 'spawnSync docker ETIMEDOUT', 'ECONNRESET', 'tcp connect error', 'EAI_AGAIN', 'network is unreachable', undefined]) assert.ok(!isGithubConnectionError(r), String(r));
+});
+test('issue #692: a real fault anywhere in the tick, or a lasting outage, still rolls back and latches', async t => {
+  const w = world(t); await w.up.step();
+  assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR, reasons: [GH_ERR, "TypeError: Cannot read properties of undefined (reading 'x')"] }), 'rolled-back');
+  assert.ok(w.up.latch());
+  const v = world(t); await v.up.step();
+  assert.equal(await v.up.verifyPending({ running: TO, ok: false, reason: 'connect ECONNREFUSED 127.0.0.1:80' }), 'rolled-back');
+  const o = world(t); await o.up.step();
+  assert.equal(await o.up.verifyPending({ running: TO, ok: false, reason: GH_ERR, reasons: [GH_ERR] }), 'awaiting-verification');
+  o.state.now += LIVE_RETRY_MAX_MS;
+  assert.equal(await o.up.verifyPending({ running: TO, ok: false, reason: GH_ERR, reasons: [GH_ERR] }), 'rolled-back');
+  assert.ok(o.up.latch());
 });

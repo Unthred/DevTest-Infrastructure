@@ -375,7 +375,7 @@ async function selfUpgradeVerify(root, registry, before, tick) {
   const live = !tick?.skipped || Array.isArray(tick.skipped);
   const outcome = liveTickOutcome(tick);
   if (live) {
-    const verdict = await upgrade.verifyPending({ running: runningSha(self), ok: outcome.ok, reason: outcome.reason });
+    const verdict = await upgrade.verifyPending({ running: runningSha(self), ok: outcome.ok, reason: outcome.reason, reasons: outcome.reasons });
     if (verdict === 'rolled-back' || verdict === 'rollback-failed' || verdict === 'verified') return verdict;
   }
   return before.result;
