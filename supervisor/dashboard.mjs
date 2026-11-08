@@ -142,7 +142,12 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     const checks = team.ciState(pr);
     if (!author) continue;
     let reason;
-    if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
+    const hostHold = type => (team.hostRefusal?.(type) && !planned.has(`${author}:${type}:${pr.number}`)) ? team.hostRefusal(type) : null;   // issue #972: the host gate holds this start
+    if (pr.isDraft && hostHold('continue')) reason = `draft; ${hostHold('continue')}`;
+    else if (pr.mergeable === 'CONFLICTING' && hostHold('rebase')) reason = `conflicts with its base; rebase ${hostHold('rebase')}`;
+    else if (checks === 'red' && !pr.isDraft && hostHold('cifix')) reason = `CI failing; fix ${hostHold('cifix')}`;
+    else if (v?.verdict === 'CHANGES' && !pr.isDraft && checks !== 'red' && hostHold('fix')) reason = `CHANGES from ${v.reviewer} on ${sha7(pr.headRefOid)}; fix ${hostHold('fix')}`;
+    else if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
     else if (team.carryPending(pr)) reason = 'the rebase carry is waiting for CI; no review starts for this head until it is recorded or refused';
     else if (checks === 'pending') reason = waitingOnText(pr.statusCheckRollup, now);
     else if (checks === 'red') reason = 'CI failing';

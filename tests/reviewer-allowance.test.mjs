@@ -206,3 +206,32 @@ test('one resume after a transient stop waits while the job\'s provider is at it
   const none = await run({ limits: { roles: { implementer: 1, reviewer: 3 }, overall: 6 }, active: [{ id: 'r1', provider: 'claude', status: 'running' }], states: { r1: { kind: 'review', agent: 'claude', pr: 20 } } });
   assert.deepEqual(none.resumed, ['j1']);                   // no provider_roles: as before
 });
+
+// Issue #972: the host gate also holds a transient resume and a split draft (both are job starts).
+import { stepGate, normalizeHostGate } from '../supervisor/hostgate.mjs';
+const heldGate = (swapPercent) => stepGate(undefined, { cores: 20, swapPercent, memoryAvailableMb: 20000, loadPerCore: 0.5 }, normalizeHostGate(undefined), 1000);
+
+test('host gate: a transient resume waits while the hard level is held and is not used up; it resumes once the host recovers', async t => {
+  const blocked = { id: 'j1', status: 'blocked', lastEvent: 'crash', provider: 'claude', kind: 'review', updatedAt: 0 };
+  const resumed = [];
+  const { team } = await plan(t, { pulls: [pr(10, 'claude/issue-1-x', H(1))], records: { j1: blocked }, resumed });
+  team.s.jobs.j1 = { kind: 'review', agent: 'claude', pr: 10, ingested: true, at: 1_800_000_000_000 - 1000 };
+  const report = { actions: [], notified: [], ingested: [], skipped: [], waiting: [], unblocked: [] };
+  team.s.hostGate = heldGate(99);
+  await team.resumeTransient(report);
+  assert.deepEqual(resumed, []); assert.equal(team.s.unblock.resumed.j1, undefined);
+  team.s.hostGate = heldGate(10);
+  await team.resumeTransient(report);
+  assert.deepEqual(resumed, ['j1']);
+});
+
+test('host gate: a split draft is not created while the hard level is held', async t => {
+  const { team } = await plan(t, { pulls: [] });
+  let created = 0;
+  team.jobs.create = async () => { created++; return { id: 'f'.repeat(32) }; };
+  team.git = { ensureWorktree: async o => o.path };
+  team.s.hostGate = heldGate(99);
+  await team.draftSplit('j9', { agent: 'claude', issue: 5 }, { status: 'blocked' }, { skipped: [] });
+  assert.equal(created, 0); assert.equal(team.s.splits[5], undefined);
+  assert.match(team.hostRefusal('split'), /swap 99%/);
+});

@@ -60,3 +60,17 @@ test('meaningfulRange: limit is a share of the time from now to the midpoint', (
   assert.equal(meaningfulRange(est('08:58', '16:10'), NOW), false);
   assert.equal(meaningfulRange({ finish: { p50: NOW + 1000, p90: NOW + 1000 } }, NOW), true);
 });
+
+// Issue #972: a PR whose fix, CI fix, rebase or continue is held for host load says so in the queue reason.
+test('queue reason names the host hold for fix, CI fix, rebase and continue', async () => {
+  const { stepGate, normalizeHostGate } = await import('../supervisor/hostgate.mjs');
+  const hostGate = stepGate(undefined, { cores: 20, swapPercent: 99, memoryAvailableMb: 20000, loadPerCore: 0.5 }, normalizeHostGate(undefined), NOW - 5000);
+  const H = 'a'.repeat(40);
+  const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], red = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
+  const pr = over => ({ number: 40, title: 't', headRefName: 'claude/issue-30-x', headRefOid: H, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', statusCheckRollup: green, labels: [], ...over });
+  const reasonOf = async (p, state = {}) => (await buildView({ config: config(), root: '/nonexistent-root', jobs: [], events: [], state: { jobs: {}, hostGate, ...state }, cache: { tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, pulls: [p], issues: [{ number: 30, title: 'Thirty', state: 'OPEN', labels: [] }] }, snapshots: [], now: NOW })).queues.claude.find(q => q.type === 'pr').reason;
+  assert.match(await reasonOf(pr({}), { verdicts: { [`40:${H}`]: { verdict: 'CHANGES', reviewer: 'codex' } } }), /fix held: swap 99% ≥ 95%/);
+  assert.match(await reasonOf(pr({ statusCheckRollup: red })), /CI failing; fix held: swap 99%/);
+  assert.match(await reasonOf(pr({ mergeable: 'CONFLICTING' })), /rebase held: swap 99%/);
+  assert.match(await reasonOf(pr({ isDraft: true })), /draft; held: swap 99%/);
+});
