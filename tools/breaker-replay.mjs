@@ -3,6 +3,7 @@
 // the state root and prints when the breaker would have tripped and the usage it would have saved. No GitHub, no model, nothing written.
 // usage: node tools/breaker-replay.mjs --from 2026-11-03T07:50:00Z --to 2026-11-04T13:50:00Z [--root DIR] [--json]
 import { formatCost } from '../supervisor/money.mjs';
+import { loadTeamConfig } from '../supervisor/team.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { replay, COST_LABEL, trippedByLabel } from '../supervisor/breaker.mjs';
@@ -12,6 +13,8 @@ const argv = process.argv.slice(2), args = {};
 for (let i = 0; i < argv.length; i++) if (argv[i].startsWith('--')) { const next = argv[i + 1]; args[argv[i].slice(2)] = next === undefined || next.startsWith('--') ? true : next; }
 const root = args.root || process.env.AI_SUPERVISOR_STATE_ROOT || '/mnt/cache/ai-supervisor';
 const from = args.from ? Date.parse(args.from) : 0, to = args.to ? Date.parse(args.to) : Infinity;
+// Issue #1097: show costs at the configured display.gbp_per_usd (loadTeamConfig sets the process rate), not the module default.
+try { loadTeamConfig(new URL('../supervisor/team.json', import.meta.url).pathname, root); } catch { /* no readable configuration: the documented default rate */ }
 let state = {}; try { state = JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')); } catch { /* no team state: job records only */ }
 const verdictJobs = new Set([state.verdicts, state.secondOpinions, state.exceptionReviews].flatMap(m => Object.values(m || {})).map(v => v?.job).filter(Boolean));
 const out = replay({ jobs: readJobs(root), entries: state.jobs || {}, verdictJobs, from, to });

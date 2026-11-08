@@ -1,5 +1,6 @@
 // Issue #624 (D-030): two pure, read-only readings of the dashboard view for the Foreman MCP tools. No I/O, no model, no lock.
 // Everything is derived from the same /api/view.json the other tools read, so it cannot disagree with the Needs you panel.
+import { gbpAmount } from './gbp.mjs';
 const CAP = 40;                       // items kept per list; the true count is always stated
 const DAY = 24 * 3600000;
 const short = (s, n = 300) => String(s ?? '').slice(0, n);
@@ -27,9 +28,9 @@ const refText = r => `${r.kind === 'issue' ? 'issue' : 'pr'} #${r.n}`;
 const needsYouItems = view => (Array.isArray(view.panels?.needsYou) ? view.panels.needsYou : (view.attention || []).filter(a => a.severity === 'action'));
 
 // The Needs you items grouped by cause. Each group states how many items, what they refer to and the action asked, so a cluster of one cause is one decision.
-// Issue #1097: the MCP server imports nothing from the supervisor tree, so this repeats money.mjs gbpAmount with the rate the dashboard
-// view carries (view.display.gbpPerUsd, from display.gbp_per_usd). Stored job records keep USD; only the answer converts.
-export const gbpOf = (usd, v) => (Number.isFinite(usd) && Number.isFinite(v?.display?.gbpPerUsd) ? Math.round(usd * v.display.gbpPerUsd * 100) / 100 : null);
+// Issue #1097: the one conversion is foreman-mcp/gbp.mjs gbpAmount (also used by supervisor/money.mjs); this only supplies the rate the
+// dashboard view carries (view.display.gbpPerUsd, from display.gbp_per_usd). Stored job records keep USD; only the answer converts.
+export const gbpOf = (usd, v) => (Number.isFinite(v?.display?.gbpPerUsd) ? gbpAmount(usd, v.display.gbpPerUsd) : null);
 export function needsYouGroups(view) {
   const items = needsYouItems(view), groups = new Map();
   for (const a of items) {

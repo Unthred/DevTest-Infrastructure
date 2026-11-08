@@ -1,6 +1,7 @@
 // Issue #1097: the one place a job cost is converted and formatted. The agent CLIs report cost in US dollars (a usage
 // equivalent, not a charge) and the stored job records keep that figure unchanged; only display converts it, with one
 // configured rate (`display.gbp_per_usd` in team.json or team.local.json). No live exchange-rate lookup.
+import { gbpAmount as convert } from '../foreman-mcp/gbp.mjs';
 export const DEFAULT_GBP_PER_USD = 0.75;
 export const DISPLAY_DEFAULTS = Object.freeze({ gbp_per_usd: DEFAULT_GBP_PER_USD });
 
@@ -16,10 +17,8 @@ let current = DEFAULT_GBP_PER_USD;   // set by the dashboard server from the con
 export function configureDisplay(display) { current = validateDisplay(display).gbp_per_usd; return current; }
 export const displayRate = () => current;
 
-const ok = n => typeof n === 'number' && Number.isFinite(n);
-
-// A US dollar amount as pounds rounded to pence, or null when the cost is unknown.
-export function gbpAmount(usd, rate = current) { return ok(usd) ? Math.round(usd * rate * 100) / 100 : null; }
+// The conversion itself is foreman-mcp/gbp.mjs (shared with the MCP server, which cannot import the supervisor tree).
+export const gbpAmount = (usd, rate = current) => convert(usd, rate);
 
 // A US dollar amount shown as pounds: "£1.52". Unknown (null, undefined, NaN) shows `unknown`, default an en dash; zero shows £0.00.
 export function formatCost(usd, { rate = current, unknown = '–' } = {}) {

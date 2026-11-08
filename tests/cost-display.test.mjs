@@ -6,6 +6,9 @@ import { validateTeamConfig, applyLocalOverride } from '../supervisor/team.mjs';
 import { gbpOf } from '../foreman-mcp/insights.mjs';
 import { discarded } from '../supervisor/joboutcome.mjs';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const shipped = () => JSON.parse(fs.readFileSync(new URL('../supervisor/team.json', import.meta.url), 'utf8'));
 
@@ -56,4 +59,17 @@ test('the waste record is converted for display and the stored value is untouche
   assert.equal(out.items[0].costGbpEquivalent, 2);
   assert.equal(state.breaker.waste.a.cost, 4);   // A3: the stored USD stays
   assert.equal(displayRate(), 0.5);
+});
+
+test('the breaker replay report honours the configured rate (host override) and the default', t => {
+  const run = override => {
+    const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'replay-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, 'jobs'));
+    fs.writeFileSync(path.join(root, 'jobs', 'a.json'), JSON.stringify({ id: 'a', kind: 'implement', status: 'failed', updatedAt: 1000, createdAt: 900, usage: { inputTokens: 10, outputTokens: 5, costUsdEstimate: 4 } }));
+    if (override) fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify(override));
+    return execFileSync(process.execPath, [new URL('../tools/breaker-replay.mjs', import.meta.url).pathname, '--root', root], { encoding: 'utf8' });
+  };
+  assert.match(run(null), /£3\.00/);                              // default 0.75
+  assert.match(run({ display: { gbp_per_usd: 0.5 } }), /£2\.00/);  // host override
 });
