@@ -131,6 +131,26 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       run: async () => { if (!getPath) throw new Error('diagnostics are not available on this server'); const out = await getPath('/api/diagnostics.json'); const { hourly, ...recorder } = out.recorder || {}; return { ...out, recorder: { ...recorder, hourlySamplesOmitted: Array.isArray(hourly) ? hourly.length : 0 }, from: iso(out.from), to: iso(out.to), generatedAt: iso(out.generatedAt) }; } },
     { name: 'foreman_waste', description: 'Tokens and cost (usage equivalent, not a charge) wasted on jobs that left no usable result, grouped by failure cause, in total and per day (UTC). Optional days (1 to 30, default 7; the record holds the last 7 days). Read-only.', inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 30 } }, additionalProperties: false },
       run: async args => { if (!getPath) throw new Error('waste figures are not available on this server'); return getPath(`/api/waste.json?days=${num(args.days, 1, 30, 7)}`); } },
+    { name: 'foreman_alerts', description: 'The alerts Foreman sent to the homeowner, read-only. Returns recent alerts newest first (time, redacted text, delivered or not), a grouped view (alerts with the same text once numbers, SHAs, paths and quoted names are removed: count, delivered and not delivered, first and last time), and totals per UTC day for the last 7 UTC calendar days (today and the 6 before); groups are capped at 50 (groupCount gives the total). Optional filters: since (ISO date or time; default the last 24 hours), contains (text), delivered (true or false), limit (1 to 200, default 50).', inputSchema: { type: 'object', properties: { since: { type: 'string', maxLength: 40 }, contains: { type: 'string', maxLength: 200 }, delivered: { type: 'boolean' }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
+      run: async args => {
+        if (!getPath) throw new Error('alerts are not available on this server');
+        const q = new URLSearchParams(), limit = num(args.limit, 1, 200, 50);
+        if (args.since !== undefined) q.set('since', String(args.since).slice(0, 40));
+        if (args.contains !== undefined) q.set('contains', String(args.contains).slice(0, 200));
+        if (args.delivered !== undefined) q.set('delivered', String(args.delivered));
+        q.set('limit', String(limit));
+        const out = dropNullFields(await getPath('/api/alerts.json?' + q), 'alerts');
+        // The alerts get their room first: halve the groups until the requested alerts (up to 20) fit with them.
+        if (Array.isArray(out?.groups)) {
+          const need = Math.min(limit, Array.isArray(out.alerts) ? out.alerts.length : 0, 20);
+          const total = out.groupCount ?? out.groups.length;
+          const room = g => fitItems({ ...out, groups: g }, 'alerts', need).shown >= need;
+          let g = out.groups;
+          while (g.length > 0 && !room(g)) g = g.slice(0, Math.floor(g.length / 2));
+          if (g.length < out.groups.length) { out.groups = g; out.groupsTruncated = true; out.groupCount = total; }
+        }
+        return fitItems(out, 'alerts', limit);
+      } },
     { name: 'foreman_config', description: 'The configuration Foreman uses now (shipped team.json plus the team.local.json override) with secrets removed, and a list of every setting that differs from the shipped default. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { if (!getPath) throw new Error('the configuration is not available on this server'); return getPath('/api/config.json'); } },
     { name: 'foreman_budget', description: 'Per agent allowance and scheduling: the mode and why it holds (or what holds it), when it ends, the weekly window (used, reset time, hours left), the rate behind the estimate and where the rate came from, the estimate at reset (for information only, it never sets a mode), typical job costs, and the thresholds in force (when the dashboard serves its configuration). Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
