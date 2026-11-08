@@ -99,6 +99,8 @@ export function readSnapshots(root) {
 // the issue and PR references parsed from a body are kept instead).
 export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, title: redact(p.title, 120), headRefName: redact(p.headRefName, 100), headRefOid: p.headRefOid, baseRefName: redact(p.baseRefName, 60), isDraft: p.isDraft === true, mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus,
   url: typeof p.url === 'string' ? p.url.slice(0, 200) : null,
+  // Issue #928: when the PR was opened (ISO text), for the throughput numbers.
+  ...(typeof p.createdAt === 'string' && Number.isFinite(Date.parse(p.createdAt)) ? { createdAt: p.createdAt } : {}),
   // Issue #430: only the numbers of the issues a PR closes, so a watched issue is followed to a PR whose branch has no issue-<n>.
   closingIssuesReferences: (p.closingIssuesReferences || []).map(r => ({ number: r?.number })).filter(r => Number.isSafeInteger(r.number) && r.number > 0).slice(0, 10),
   labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l?.name)).includes('needs-homeowner') ? ['needs-homeowner'] : [],

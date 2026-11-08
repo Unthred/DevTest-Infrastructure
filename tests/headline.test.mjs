@@ -183,3 +183,24 @@ test('the Overview centres the tiles, explains Data age, splits the queue and sh
   const css = readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.kpi\{text-align:center\}/); assert.match(css, /\.headline \.hl-row\{align-items:center;text-align:center\}/);
 });
+
+// Issue #928: through the real buildView path (compactPulls, state.jobs without a pr on implement jobs), not injected rows.
+test('buildView: PRs opened comes from the cached createdAt and cost includes the implement job', async () => {
+  const { buildView } = await import('../supervisor/dashboard.mjs');
+  const { compactPulls } = await import('../supervisor/dashdata.mjs');
+  const { validateTeamConfig } = await import('../supervisor/team.mjs');
+  const cfg = validateTeamConfig({ schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
+    limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+    agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [7] } }, board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } });
+  const job = (id, kind, issue, cost) => ({ id: id.repeat(32), provider: 'claude', kind, issue, status: 'completed', createdAt: NOW - 3 * H, updatedAt: NOW - 2 * H, usage: { inputTokens: 1, outputTokens: 1, costUsdEstimate: cost } });
+  const jobs = [job('a', 'implement', 7, 5), job('b', 'review', 8, 1)];
+  const state = { jobs: { ['a'.repeat(32)]: { kind: 'implement', issue: 7, branch: 'claude/issue-7-x' }, ['b'.repeat(32)]: { kind: 'review', pr: 8 } },
+    mergeLog: [{ pr: 8, issue: 7, agent: 'claude', mergedAt: NOW - H, startedAt: NOW - 3 * H }] };
+  const pulls = compactPulls([{ number: 9, title: 't', headRefName: 'claude/issue-10-y', headRefOid: 'c'.repeat(40), baseRefName: 'main', createdAt: new Date(NOW - 2 * H).toISOString() }]);
+  assert.ok(pulls[0].createdAt);
+  const cache = { tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, pulls, issues: [], merged: [{ number: 8, mergedAt: new Date(NOW - H).toISOString(), headRefName: 'claude/issue-7-x', closingIssuesReferences: [{ number: 7 }] }] };
+  const view = await buildView({ config: cfg, root: '/nonexistent', jobs, events: [], state, cache, snapshots: [], now: NOW });
+  const w = view.headline.windows['24h'].cards;
+  assert.equal(w.throughput.opened, 2);   // PR 9 from createdAt, merged PR 8 from its implement job
+  assert.equal(w.cost.value, 6);
+});
