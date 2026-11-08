@@ -241,7 +241,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: No writing job (implement, continue, fix, ci-fix, rebase) is automatically moved to a stronger model; the escalation entry is retired. A model that an agent is configured to review with (its `review` entry and `review_candidates`) is not assigned writing jobs automatically; this is decided from role config, not from model names. A job whose model would also leave a PR with no available independent reviewer is not started. When the implementer's model cannot finish a fix, Foreman tries a fresh session on that model with the review findings, then splitting out-of-scope findings, then stops with one Needs you item. That item does not offer paid escalation.
 - Rationale: 2 Nov: Opus escalation fixes made every Claude model a writer, and five PRs (#137, #216, #217, #222, #234) could not be reviewed while Codex was out of allowance.
 - Rejected: Withholding the escalation only when it would strand the PR; offering paid escalation as an option; changing D-024.
-- Superseded-by: D-036 (in part: the rule that a configured review model is never assigned writing jobs, and the no escalation rule for the one case of a low risk PR that draws CHANGES twice)
+- Superseded-by: D-037 (in part: the rule that a configured review model is never assigned writing jobs, and the no escalation rule for the one case of a low risk PR that draws CHANGES twice)
 
 ## D-027 — One-off review exception for named pull requests
 - Status: agent-proposal
@@ -297,7 +297,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: The projection of weekly use (rate, projected use at the reset, run-out time) is an estimate shown on the dashboard and used only to choose between agents. It never sets `reviews_only` or any other mode, never latches, and never moves a scheduling estimate. Actual use still holds work: the paid-overage stop, `exhausted_at` on a weekly or short window, a provider-reported limit, and the high-water reserve (reviews and fixes only at 85 % used with more than `high_water_min_hours` left) are unchanged, as is the per-job cost check against the weekly limit.
 - Rationale: Spreading work over the week left the server idle while allowance remained, and a forecast built from a few hours after a reset held Claude off implementation at 9 % to 11 % used.
 - Rejected: A better forecast (issue #627: a minimum of evidence, a self-releasing latch), a forecast margin setting, and switching allowance-aware scheduling off, which would also disable the overage check.
-- Superseded-by: D-035 (in part: the statement that a projection never moves scheduling; it may now reorder work by D-035 rule D2 and still never sets a mode or holds work by itself)
+- Superseded-by: D-036 (in part: the statement that a projection never moves scheduling; it may now reorder work by D-036 rule D2 and still never sets a mode or holds work by itself)
 
 ## D-033 — Inbox actions: named job operations approved on the dashboard
 - Status: agent-proposal
@@ -332,7 +332,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - OQ-3: Whether Docker-dependent tests run in GitHub-hosted CI or only on Tower's runner (issue #12). Proposed answer: D-028, awaiting homeowner approval.
 - OQ-4: Evidence retention period (issue #12/#13).
 
-## D-035 — Scheduler model: finish before starting, one ranking, admission by review capacity
+## D-036 — Scheduler model: finish before starting, one ranking, admission by review capacity
 - Status: agent-proposal
 - Date: 2026-11-08
 - Source: homeowner decisions in chat 8 Nov 2026, recorded on issue #1064; reconciled by issue #1070
@@ -341,7 +341,7 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rejected: Starting new work whenever a slot is free; separate orderings per lane.
 - Superseded-by: none
 
-## D-036 — Model choice by risk
+## D-037 — Model choice by risk
 - Status: agent-proposal
 - Date: 2026-11-08
 - Source: homeowner decisions in chat 8 Nov 2026; reconciled by issue #1070
