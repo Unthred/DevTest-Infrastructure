@@ -30,6 +30,30 @@ export function primaryArea(files) {
 }
 export const areaOfWork = (labels, files) => areaFromLabels(labels) ?? primaryArea(files);
 
+// Every code area the files touch, sorted. tests/ and root files are secondary: they count only when nothing else is touched, so a PR
+// with one supervisor file and two tests files is a supervisor PR (it counts in each code area it changes).
+const SECONDARY = new Set(['tests', ROOT_AREA]);
+export function codeAreas(files) {
+  const all = [...new Set((files || []).map(areaOfPath))], code = all.filter(a => !SECONDARY.has(a));
+  return (code.length ? code : all).sort();
+}
+export const areasOfWork = (labels, files) => { const l = areaFromLabels(labels); return l ? [l] : codeAreas(files); };
+// A bare file name (team.mjs, AGENTS.md) does not say which directory it lives in, so it chooses no area.
+export const pathedFiles = files => [...(files || [])].filter(f => String(f).includes('/'));
+export const baseName = k => String(k).slice(String(k).lastIndexOf('/') + 1);
+
+// Issue #1054, the week report: rebase jobs per merged pull request since the 8 Nov 2026 baseline (37 blocked rebase jobs for about 30
+// stuck pull requests, about 1.2 per pull request). Null until the report is due, 7 days after the baseline date.
+export const REBASE_BASELINE = { at: Date.parse('2026-11-08T00:00:00Z'), rebaseJobs: 37, pullRequests: 30, perPullRequest: 1.2 };
+export function rebaseReport(state, now, baseline = REBASE_BASELINE) {
+  if (!(now >= baseline.at + 7 * 86400000)) return null;
+  const merged = (state?.mergeLog || []).filter(m => Number.isFinite(m.mergedAt) && m.mergedAt >= baseline.at);
+  const rebases = Object.values(state?.jobs || {}).filter(j => j.kind === 'rebase' && Number.isFinite(j.at) && j.at >= baseline.at).length;
+  const per = merged.length ? Math.round((rebases / merged.length) * 10) / 10 : null;
+  return { rebases, merged: merged.length, perPullRequest: per, baseline: baseline.perPullRequest,
+    text: `Issue #1054 week report: ${rebases} rebase job${rebases === 1 ? '' : 's'} for ${merged.length} merged pull request${merged.length === 1 ? '' : 's'} since 8 Nov 2026 (${per === null ? 'no merges yet' : `${per} per merged PR`}); the 8 Nov baseline was ${baseline.rebaseJobs} blocked rebase jobs for about ${baseline.pullRequests} stuck PRs (about ${baseline.perPullRequest} per PR).` };
+}
+
 // areas: Map area -> [refs]. Returns the areas at or above the limit.
 export const fullAreas = (areas, limit) => new Map([...areas].filter(([, prs]) => prs.length >= limit));
 // refs: readable names such as "PR 1038" (a started job without a pull request yet is "issue #1054").

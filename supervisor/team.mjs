@@ -12,7 +12,7 @@ import { takeBreakerResumeRequests, discardBreakerResumeRequests } from './break
 import { takeHomeownerRequests, discardHomeownerRequest } from './homeownerqueue.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as robust from './robust.mjs';
-import { areaLimitOf, validateAreaLimit, areaOfPath, areaOfWork, fullAreas, holdText } from './areas.mjs';
+import { areaLimitOf, validateAreaLimit, areaOfPath, areasOfWork, pathedFiles, baseName, fullAreas, holdText } from './areas.mjs';
 import * as breaker from './breaker.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
 import { validateResourceConfig } from './resources.mjs';
@@ -1172,7 +1172,8 @@ export class Team {
       if (act) this.hold(agent, act.type, `${a.provider} ${role} slot full (limits.provider_roles ${this.c.limits.provider_roles[a.provider][role]})`);
     }
   }
-  predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
+  // The dashboard cache drops issue bodies, so compactIssues carries the files read from the body (issue.expectedFiles).
+  predictFiles(issue) { return !this.expectFiles && Array.isArray(issue?.expectedFiles) ? new Set(issue.expectedFiles) : (this.expectFiles || expectedFiles)(issue); }
   // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
   // Issue #1054: for an open PR its actual changed files count, for an issue not yet implemented the files its text names, and with none
   // of those the issue's area (a claim on the whole top-level path).
@@ -1186,25 +1187,25 @@ export class Team {
   // Issue #1054: open pull requests per area. Counted: every open PR of a configured agent (drafts too) by its area, plus a running
   // implement job whose issue has no PR yet (it will have one). Area = the issue's area label, else the top-level path holding most of
   // the PR's changed files, else of the files its issue names.
-  areaOfPr(pr, issueByNo) {
+  areasOfPr(pr, issueByNo) {
     const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null, f = this.files?.get(pr.number);
-    return areaOfWork(issue?.labels, f?.length ? f : issue ? [...this.predictFiles(issue)] : []);
+    return areasOfWork(issue?.labels, f?.length ? f : issue ? pathedFiles(this.predictFiles(issue)) : []);
   }
-  areaOfIssue(issue) { return areaOfWork(issue?.labels, [...this.predictFiles(issue)]); }
+  areasOfIssue(issue) { return issue ? areasOfWork(issue.labels, pathedFiles(this.predictFiles(issue))) : []; }
   buildAreas(prs, issueByNo, active = []) {
-    const m = new Map(), add = (a, ref) => { if (a) (m.get(a) || m.set(a, []).get(a)).push(ref); }, withPr = new Set();
+    const m = new Map(), add = (as, ref) => { for (const a of as) (m.get(a) || m.set(a, []).get(a)).push(ref); }, withPr = new Set();
     for (const pr of prs || []) {
       if (!agentOfBranch(this.c, pr.headRefName)) continue;
       const n = issueOfBranch(pr.headRefName); if (n != null) withPr.add(n);
-      add(this.areaOfPr(pr, issueByNo), `PR ${pr.number}`);
+      add(this.areasOfPr(pr, issueByNo), `PR ${pr.number}`);
     }
     for (const j of active) {
       const rec = this.s.jobs[j.id], n = rec?.kind === 'implement' ? (rec.issue ?? issueOfBranch(rec.branch)) : null;
-      if (n != null && !withPr.has(n) && issueByNo.get(n)) { withPr.add(n); add(this.areaOfIssue(issueByNo.get(n)), `issue #${n}`); }
+      if (n != null && !withPr.has(n) && issueByNo.get(n)) { withPr.add(n); add(this.areasOfIssue(issueByNo.get(n)), `issue #${n}`); }
     }
     return m;
   }
-  countPlannedImplement(n, issueByNo) { const a = this.areaOfIssue(issueByNo.get(n)); if (a && this.areaMap) (this.areaMap.get(a) || this.areaMap.set(a, []).get(a)).push(`issue #${n}`); }
+  countPlannedImplement(n, issueByNo) { if (!this.areaMap) return; for (const a of this.areasOfIssue(issueByNo.get(n))) (this.areaMap.get(a) || this.areaMap.set(a, []).get(a)).push(`issue #${n}`); }
   // For the dashboard and foreman_headline: the limit and the open PRs per area, fullest first.
   areaView() {
     const limit = areaLimitOf(this.c.limits);
@@ -1219,7 +1220,7 @@ export class Team {
     for (const n of this.candidates(agent)) {
       const i = this.implementable(n, prs, issueByNo, busy);
       if (!i) continue;
-      if (full.has(this.areaOfIssue(i))) this.areaHold(agent, n, i);   // the reason is recorded even when review work takes the slot
+      if (this.areasOfIssue(i).some(a => full.has(a))) this.areaHold(agent, n, i);   // the reason is recorded even when review work takes the slot
       else room = true;
     }
     return !room;
@@ -1227,7 +1228,7 @@ export class Team {
   areaFull() { return this.areaMap ? fullAreas(this.areaMap, areaLimitOf(this.c.limits)) : new Map(); }
   // True (with a reason for the queue and foreman_why_blocked) when the issue's area already has the limit of open PRs.
   areaHold(agent, n, issue) {
-    const area = this.areaOfIssue(issue), refs = area ? this.areaFull().get(area) : null;
+    const full = this.areaFull(), area = this.areasOfIssue(issue).find(a => full.has(a)), refs = area ? full.get(area) : null;
     if (!refs) return false;
     this.hold(agent, 'implement', `issue #${n} ${holdText(area, refs)}; finishing those comes first`);
     return true;
@@ -1237,13 +1238,15 @@ export class Team {
     const real = pr ? this.files?.get(pr.number) : null;
     const files = real?.length ? real : [...this.predictFiles(issue)];
     if (files.length) return files;
-    const area = areaOfWork(issue?.labels, []);
+    const area = areasOfWork(issue?.labels, [])[0];
     return area ? [`area:${area}`] : [];
   }
   // Who holds a claim that conflicts with key: the same file, the area of that file, or any file inside that area.
   claimedBy(key) {
     if (!this.claimed) return undefined;
     if (this.claimed.has(key)) return this.claimed.get(key);
+    // A bare file name (team.mjs) matches a claimed path with that name, and a path matches a claimed bare name.
+    if (!key.startsWith('area:')) for (const [k, v] of this.claimed) if (!k.startsWith('area:') && (!k.includes('/') || !key.includes('/')) && baseName(k) === baseName(key)) return v;
     if (key.startsWith('area:')) { const a = key.slice(5); for (const [k, v] of this.claimed) if (!k.startsWith('area:') && areaOfPath(k) === a) return v; return undefined; }
     return this.claimed.get(`area:${areaOfPath(key)}`);
   }

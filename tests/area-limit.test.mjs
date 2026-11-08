@@ -158,3 +158,51 @@ test('foreman_headline carries open PRs per area; absent view data gives null', 
   const without = JSON.parse((await mk({ headline }).call('foreman_headline', {})).text);
   assert.equal(without.openPrsPerArea, null);
 });
+
+// ---- fix round for the review of PR 1077 ----
+import { compactIssues } from '../supervisor/dashdata.mjs';
+import { codeAreas, rebaseReport } from '../supervisor/areas.mjs';
+
+test('the dashboard plans from compacted issues (no body) and still shows the hold', async t => {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'areac-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); fs.chmodSync(dir, 0o700);
+  const raw = [...[201, 202, 203].map(n => issue(n, `Change supervisor/f${n}.mjs`)), issue(5, 'Change supervisor/team.mjs')];
+  const cached = compactIssues(raw);
+  assert.equal(cached.every(i => i.body === undefined), true);
+  const v = await buildView({ config: config(), root: dir, jobs: [], events: [], state: {}, register: REGISTER,
+    cache: { tick: { at: 1, status: 'ok', error: null, lastOkAt: 1 }, pulls: three(), issues: cached }, snapshots: [], now: 1_800_000_000_000 });
+  assert.equal(JSON.stringify(v.plan).includes('"issue":5'), false, JSON.stringify(v.plan));
+  assert.match(JSON.stringify(v), /issue #5 held: 3 open PRs in supervisor/);
+});
+
+test('bare file names choose no area and are matched by name for overlap', async t => {
+  const issues = [issue(5, 'Refactor supervisor/team.mjs (team.mjs) and record it in AGENTS.md')];
+  const team = world(t, { pulls: three(), issues, files: sup });
+  assert.deepEqual(team.areasOfIssue(issues[0]), ['supervisor']);
+  assert.deepEqual(implementing(await team.plan()), []);
+  assert.deepEqual(world(t, { issues: [issue(6, 'edit team.mjs only')] }).areasOfIssue(issue(6, 'edit team.mjs only')), []);
+  // a running implement for an issue naming only team.mjs blocks a rebase of a PR that really changes supervisor/team.mjs
+  const pulls = [pr(1001, 'claude/issue-201-x', { mergeable: 'CONFLICTING' })];
+  const t1 = world(t, { pulls, issues: [issue(5, 'edit team.mjs only'), issue(201, 'no paths')], files: { 1001: ['supervisor/team.mjs'] }, active: [{ id: 'r5', provider: 'claude', status: 'running' }] });
+  t1.s.jobs.r5 = { kind: 'implement', issue: 5, agent: 'claude', key: '5', branch: 'claude/issue-5-a' };
+  assert.equal((await t1.plan()).some(a => a.type === 'rebase'), false);
+  assert.match(t1.held.claude.rebase, /waits/);
+});
+
+test('a PR counts in every code area it changes; tests/ and root files do not outvote the code', async t => {
+  assert.deepEqual(codeAreas(['supervisor/a.mjs', 'tests/a.test.mjs', 'tests/b.test.mjs']), ['supervisor']);
+  assert.deepEqual(codeAreas(['supervisor/a.mjs', 'docs/x.md']), ['docs', 'supervisor']);
+  assert.deepEqual(codeAreas(['tests/a.test.mjs']), ['tests']);
+  const files = { 1001: ['supervisor/a.mjs', 'tests/1.test.mjs', 'tests/2.test.mjs'], 1002: ['supervisor/b.mjs', 'tests/1.test.mjs', 'tests/2.test.mjs'], 1003: ['supervisor/c.mjs', 'tests/1.test.mjs', 'tests/2.test.mjs'] };
+  const team = world(t, { pulls: three(), issues: [issue(5, 'Change supervisor/team.mjs')], files });
+  assert.deepEqual(implementing(await team.plan()), []);
+  assert.match(team.held.claude.implement, /held: 3 open PRs in supervisor/);
+});
+
+test('the week report: absent before day 7, then rebase jobs per merged PR against the baseline', () => {
+  const day = 86400000, t0 = Date.parse('2026-11-08T00:00:00Z');
+  const state = { mergeLog: [{ pr: 1, mergedAt: t0 + day }, { pr: 2, mergedAt: t0 + 2 * day }], jobs: { a: { kind: 'rebase', at: t0 + day }, b: { kind: 'rebase', at: t0 + day }, c: { kind: 'review', at: t0 + day }, d: { kind: 'rebase', at: t0 - day } } };
+  assert.equal(rebaseReport(state, t0 + 6 * day), null);
+  const r = rebaseReport(state, t0 + 7 * day);
+  assert.equal(r.rebases, 2); assert.equal(r.merged, 2); assert.equal(r.perPullRequest, 1);
+  assert.match(r.text, /baseline was 37 blocked rebase jobs/);
+});

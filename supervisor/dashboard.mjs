@@ -1,6 +1,7 @@
 // View model of the team dashboard (issue #32). Pure functions over data the tick already stored: supervisor job records,
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import fs from 'node:fs';
+import { rebaseReport } from './areas.mjs';
 import { headlineStats } from './headline.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
 import { typeOfKind } from './models.mjs';
@@ -739,6 +740,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     for (const it of team.retryCapItems?.() || []) attention.push({ id: it.id, text: redact(`${it.type} on #${it.subject} stopped after ${it.attempts} attempts with the same cause (${it.cause}); Foreman starts no more until the head changes or you decide.`, 400), ref: { kind: ['implement', 'continue'].includes(it.type) ? 'issue' : 'pull', n: Number(it.subject) }, since: it.since, severity: 'action', action: 'Fix the cause, then approve the clear_retry_cap action for this pull request in the inbox (or reopen the item by hand)' });
     // Issue #547: a finished review whose verdict was refused at ingestion (writer unknown, or the reviewer's model wrote the head).
     for (const r of team.refusedVerdicts(c.pulls || [])) attention.push({ id: `noreviewer-refused-${r.pr}`, text: redact(`The review of PR #${r.pr} at ${String(r.head).slice(0, 7)} (job ${String(r.job).slice(0, 8)}, ${r.agent} on ${r.model || 'its default model'}) finished but its verdict was not recorded: ${r.text}. Verdict file: ${r.file}${r.kept ? keptText(r.kept) : ''}`, 1400), ref: { kind: 'pull', n: r.pr }, severity: 'action', action: r.reason === 'writer unknown' ? `Have a reviewer on another provider review PR #${r.pr} at this head, or push a new head through a Foreman job and have that new head reviewed; this refused verdict is not recorded.` : `Have a different model review PR #${r.pr} at this head (the refused verdict in the file above is not recorded and is not trusted).` });
+    // Issue #1054: once the week is up, rebase jobs per merged PR against the 8 Nov baseline.
+    { const rr = rebaseReport(state, now); if (rr) attention.push({ id: 'rebase-week-report', text: redact(rr.text, 500), ref: null, severity: 'info', action: 'Compare with the baseline and record the result on issue #1054.' }); }
     // Issue #326: queued or conflicting work, but nothing planned or started for idle_minutes; clears when a job starts.
     { const idle = team.idleItem(now); if (idle) attention.push({ id: 'foreman-idle', text: redact(`Foreman has work waiting but has started nothing for ${idle.minutes} minutes: ${idle.work.join('; ')}. Reason: ${idle.reason}`, 600), ref: null, severity: 'action', action: 'Resolve what is holding the work (allowance, review independence, a conflict Foreman cannot rebase) or start it by hand.' }); }
     // Issue #193: say which job records make an agent Unknown, so nobody has to hunt through jobs/.
