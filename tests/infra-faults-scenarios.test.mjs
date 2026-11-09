@@ -134,3 +134,20 @@ test('install: caps set by infrastructure faults are cleared once, one log line 
   const r2 = await w.team.tick();
   assert.ok(!r2.infraCapsCleared, 'once only'); assert.ok(w.team.s.sameCause['review:12']);
 });
+
+test('PR #1104 style (issue #1109): attempts already spent by sign-in failures are released on install and the review is planned', async t => {
+  const w = world(t, { agents: AGENTS, pulls: [pr(10, 'claude/issue-23-x', H(1))] });
+  const key = `10:${H(1)}:codex`;
+  w.team.s.reviewAttempts[key] = 2;
+  for (const id of ['01', '02']) {
+    w.team.s.jobs[id] = { kind: 'review', key, pr: 10, head: H(1), agent: 'codex', ingested: true, wasteChecked: true };
+    w.jobs.states[id] = { id, status: 'blocked', lastEvent: 'auth_error', usage: {}, updatedAt: w.clock.t - 1000 };
+  }
+  await w.team.tick();
+  assert.equal(reviewers(w).length, 1, 'a review is planned with no homeowner action');
+  assert.equal(w.team.s.reviewAttempts[key], 1, 'two released, one launch counted');
+  assert.ok(w.team.s.infraAttemptsReleased);
+  // Never increases for a fault: a second tick adds no attempt.
+  await w.team.tick();
+  assert.equal(w.team.s.reviewAttempts[key], 1);
+});

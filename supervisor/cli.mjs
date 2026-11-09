@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, resolveJobId, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
 import { attachProbe } from './faultflow.mjs';
+import { stopJob, workerSignal } from './stopjob.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
 import { guardTmp, leakText } from './jobtmp.mjs';
@@ -137,8 +138,7 @@ function realJobs(root, registry) {
     stop: async (id, reason = 'manual_stop') => {
       const job = readJob(root, id);
       if (terminal.has(job.status)) throw new SupervisorError('terminal job cannot be stopped');
-      if (job.workerPid && processStart(job.workerPid) === job.workerStart) process.kill(job.workerPid, 'SIGTERM');
-      transition(root, job, 'stopped', /^[a-z_]{1,32}$/.test(reason) ? reason : 'manual_stop');
+      stopJob(root, job, { reason, by: 'overseer', signal: workerSignal(job, { processStart, childAlive }, 'SIGTERM') });
     },
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
@@ -709,11 +709,9 @@ async function main() {
   const job = readJob(root, id);
   if (command === 'pause' || command === 'stop') {
     if (['completed', 'failed', 'blocked', 'stopped'].includes(job.status)) throw new SupervisorError('terminal job cannot be paused or stopped');
-    if (job.workerPid && processStart(job.workerPid) === job.workerStart) {
-      if (childAlive(job)) process.kill(job.workerPid, command === 'pause' ? 'SIGUSR1' : 'SIGTERM');
-      else process.kill(job.workerPid, 'SIGTERM');
-    }
-    transition(root, job, command === 'pause' ? 'paused_manual' : 'stopped', command === 'pause' ? 'manual_pause' : 'manual_stop');
+    const signal = workerSignal(job, { processStart, childAlive }, command === 'pause' ? 'SIGUSR1' : 'SIGTERM');
+    if (command === 'stop') stopJob(root, job, { by: 'homeowner', signal });   // issue #1109: record first, then signal
+    else { signal(); transition(root, job, 'paused_manual', 'manual_pause'); }
     print(job); return;
   }
   if (command === 'auto-resume') {

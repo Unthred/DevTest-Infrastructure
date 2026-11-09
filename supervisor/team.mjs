@@ -2349,7 +2349,7 @@ export class Team {
       if (j.ingested) continue;
       await guard(`ingest ${id}`, () => this.ingestOne(id, j, report));
     }
-    await guard('infrastructure faults', () => this.faults.step(report, robust.sameCauseCap(this.c.limits)));   // issue #1107
+    await guard('infrastructure faults', () => this.faults.step(report, robust.sameCauseCap(this.c.limits), id => this.jobs.get(id)));   // issue #1107
   }
   // Each effect is recorded and saved BEFORE it is posted, so a later failure in the same tick can never make the next tick
   // post it again (verdict and needs-homeowner comments were repeated every five minutes while the tick kept aborting).
