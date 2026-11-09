@@ -27,6 +27,7 @@ import { redact, redactLong } from './redact.mjs';
 import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
+import { capacityFor, spareScoreOf, takeoverSources, figure } from './capacity.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
@@ -989,8 +990,10 @@ export class Team {
     if (!this.usage) return null;
     const now = this.clock.now(), settings = budgetSettings(this.c), out = {};
     for (const [name, a] of this.agents()) {
-      const allowance = this.usage.allowance?.[a.provider] || null;
-      out[name] = assessAgent({ allowance, jobs: (this.usage.jobs || []).filter(j => j.provider === a.provider), history: weeklyHistory(this.usage.snapshots, name, allowance), settings, now, latched: this.s.budget[name] || null });
+      const allowance = this.usage.allowance?.[a.provider] || null, jobs = (this.usage.jobs || []).filter(j => j.provider === a.provider);
+      const capacity = capacityFor({ name, allowance, jobs, settings, now, prs: this.view?.prs, owns: pr => agentOfBranch(this.c, pr.headRefName) });
+      out[name] = assessAgent({ allowance, jobs, history: weeklyHistory(this.usage.snapshots, name, allowance), settings, now, latched: this.s.budget[name] || null, capacity });
+      out[name].capacity = capacity;
     }
     return out;
   }
@@ -1177,13 +1180,10 @@ export class Team {
     const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
     return !!issue && this.overlapHold(agent, n, issue, type);
   }
-  // Issue #402: spare allowance of an agent, from the projection the budget already holds: the whole week (1) minus the projected weekly use
-  // at the reset, unclamped. It only chooses between agents (issue #680); it never holds work back so that any difference in projection counts. An unknown reading (no usage data, a stale or reset window) scores 0: behind any reviewer that
-  // is known to have spare, ahead of one projected to run out.
+  // Issues #402, #1116: spare allowance, only to choose between agents (never holds work back): remaining capacity relative to need when every
+  // agent's capacity is known, else the week minus the projected use; an unknown reading scores 0 (capacity.mjs).
   spareScore(agent) {
-    const m = this.modes?.[agent];
-    if (!m?.known || !Number.isFinite(m.projected)) return 0;
-    return 1 - m.projected;
+    return spareScoreOf(this, agent);
   }
   // True when `provider` already runs its limits.provider_roles count in `role` (no such limit: never).
   providerSlotFull(provider, role, usedBy) {
@@ -1213,7 +1213,7 @@ export class Team {
   reviewWhy(agent, act, prs) {
     if (act.secondOpinion || act.postMerge) return null;
     const pr = prs.find(p => p.number === act.pr); if (!pr) return null;
-    const fig = n => { const m = this.modes?.[n]; return m?.known && Number.isFinite(m.projected) ? `${n} estimate ${Math.round(m.projected * 100)}% at its reset` : `${n} reading unknown`; };
+    const fig = n => figure(n, this.modes?.[n]);
     const others = this.otherReviewers(agent, pr);
     if (!others.length) {
       const rest = this.agents().map(([n]) => n).filter(n => n !== agent).map(n => `${n}: ${this.reviewRefusal(n, pr, `${verdictKey(pr.number, pr.headRefOid)}:${n}`) ? 'it wrote this head' : this.limitedOf(n).out ? 'out of allowance' : 'cannot review now'}`);
@@ -1521,7 +1521,7 @@ export class Team {
     // a started job stay with their author. The issue keeps its owner; the work is done on this agent's branch, so the owner (or
     // another agent) reviews it and D-011 holds. Ownership returns once the owner has allowance again and no work has started.
     if (!B || B.mode !== 'normal' || !B.known || !mayTakeOver(this.c, agent) || this.limitedOf(agent).out) return null;   // an agent at a usage limit takes nothing over either
-    for (const [other, o] of this.agents()) {
+    for (const [other] of takeoverSources(this, agent)) {
       const ob = this.ownerOut(other);
       if (other === agent || !ob) continue;
       for (const n of this.issuesOf(other)) {

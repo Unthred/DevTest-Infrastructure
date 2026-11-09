@@ -6,6 +6,7 @@ import { createInbox } from './inbox.mjs';
 import { mismatches, needsYouGroups, rebaseStats, itemTimeline, gbpOf } from './insights.mjs';
 import { hostActivity } from './source.mjs';
 import { dependencyView, dependencySkips } from './dependencyview.mjs';
+import { budgetBrief } from './budgetfigures.mjs';
 
 const PLAN_NOTE = 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.';
 
@@ -80,7 +81,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         slots: (v.slots || []).map(s => s.text), capNotes: v.capNotes, breaker: v.breaker ? { halt: v.breaker.halt, error: v.breaker.error ?? null, byCause: (v.breaker.byCause || []).slice(0, 8).map(({ cost, ...r }) => ({ ...r, costGbpEquivalent: gbpOf(cost, v) })), topFailureCauses: (v.breaker.failCauses?.week || []).slice(0, 5) } : null,
         infraFaults: v.robustness?.infraFaults ?? null,   // issue #1107: shown apart from the work failure causes
         agents: (v.agents || []).map(a => ({ name: a.name, state: a.state, idle: a.idleReason?.text ?? null })),
-        budget: Object.fromEntries(Object.entries(v.budget || {}).map(([k, b]) => [k, { mode: b.mode, reason: b.reason, used: b.used, projected: b.projected }])),
+        budget: budgetBrief(v.budget),
         planned: (v.plan || []).map(a => ({ type: a.type, agent: a.agent ?? null, pr: a.pr ?? null, issue: a.issue ?? null, why: a.why ?? null })),
         running: (v.jobs || []).filter(j => ['running', 'queued', 'paused_limit', 'paused_manual'].includes(j.status)).map(j => ({ id: j.fullId, kind: j.kind, ref: j.ref, agent: j.agent, status: j.status, startedAt: iso(j.startedAt) })),
         needsYouCount: v.health?.count ?? v.panels?.needsYou?.length ?? (v.attention || []).filter(a => a.severity === 'action').length })) },
@@ -167,7 +168,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
     { name: 'foreman_budget', description: 'Per agent allowance and scheduling: the mode and why it holds (or what holds it), when it ends, the weekly window (used, reset time, hours left), the rate behind the estimate and where the rate came from, the estimate at reset (for information only, it never sets a mode), typical job costs, and the thresholds in force (when the dashboard serves its configuration). Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { const cfg = getPath ? await getPath('/api/config.json').catch(() => null) : null; return withView(v => ({
         agents: Object.fromEntries(Object.entries(v.budget || {}).map(([name, b]) => [name, {
-          mode: b.mode, label: b.label ?? null, why: b.reason ?? null, endsAt: iso(b.until), known: b.known,
+          mode: b.mode, label: b.label ?? null, why: b.reason ?? null, endsAt: iso(b.until), known: b.known, capacity: b.capacity ?? null,
           weekly: { used: b.used, resetsAt: iso(b.resetsAt), hoursLeft: Number.isFinite(b.hoursLeft) ? Math.round(b.hoursLeft * 10) / 10 : null },
           rate: { perHour: b.ratePerHour, source: b.rateSource, estimateAtReset: b.projected, runsOutAt: iso(b.runsOutAt), note: 'The estimate is for information only; it does not set a mode (issue #680).' },
           shortWindow: b.shortWindow ? { used: b.shortWindow.used, resetsAt: iso(b.shortWindow.resetsAt) } : null, overage: !!b.overage, creditsAvailable: !!b.creditsAvailable, typicalJobCost: b.jobCost ?? {}, heldJobTypes: b.held ?? {},
