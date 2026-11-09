@@ -53,8 +53,19 @@ async function findPullByNumber(team, issue) {
 
 // Closed results do not change, so they are kept in the state file and the next pass (a new Team) does not ask GitHub again.
 // Only the fields the decision reads are kept. depFetched: closed issues, depPulls: merged pull requests, depClosed: pull requests closed unmerged.
-const keepIssue = i => ({ number: i.number, state: i.state, stateReason: i.stateReason ?? null, closedByPullRequestsReferences: i.closedByPullRequestsReferences || [] });
-const keepPull = p => ({ number: p.number, state: p.state, headRefName: p.headRefName ?? '', mergeCommit: p.mergeCommit ?? null, closingIssuesReferences: p.closingIssuesReferences || [] });
+const keepIssue = i => ({
+  number: i.number,
+  state: i.state,
+  stateReason: i.stateReason ?? null,
+  closedByPullRequestsReferences: i.closedByPullRequestsReferences || [],
+});
+const keepPull = p => ({
+  number: p.number,
+  state: p.state,
+  headRefName: p.headRefName ?? '',
+  mergeCommit: p.mergeCommit ?? null,
+  closingIssuesReferences: p.closingIssuesReferences || [],
+});
 function loadRemembered(team) {
   if (team.depFetched) return team.s.depCache;
   const kept = team.s.depCache ||= { issues: {}, pulls: {}, closed: [] };
@@ -233,8 +244,13 @@ export function dependencyAttention(cache) {
     }
     for (const d of e.dependsOn || []) {
       if (d.unlinked) {
-        out.push({ id: `dependency-unlinked-${n}-${d.number}`, text: `#${n} waits on #${d.number}, which was closed as completed with no linked pull request`, ref,
-          action: `Foreman cannot tell whether #${d.number} is installed. Remove it from the Depends on line of #${n}, or name the pull request that delivered it.` });
+        out.push({
+          id: `dependency-unlinked-${n}-${d.number}`,
+          text: `#${n} waits on #${d.number}, which was closed as completed with no linked pull request`,
+          ref,
+          action: `Foreman cannot tell whether #${d.number} is installed. `
+            + `Remove it from the Depends on line of #${n}, or name the pull request that delivered it.`,
+        });
       }
       if (d.state !== 'closed_not_planned') continue;
       out.push({ id: `dependency-notplanned-${n}-${d.number}`, text: `#${n} waits on #${d.number}, which was closed as not planned or superseded`, ref,
