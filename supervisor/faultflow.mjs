@@ -80,7 +80,8 @@ export class FaultFlow {
       if (!COUNTERS[j.kind] || j.attemptRefunded) continue;
       let job = null;
       try { job = await getJob(id); } catch { job = null; }
-      if (!job || !['stopped', 'blocked', 'failed', 'waiting_on', 'completed'].includes(job.status)) continue;
+      // A missing or unreadable record is classified as infrastructure by faults.classifyEnd(null), so it is released too.
+      if (job && !['stopped', 'blocked', 'failed', 'waiting_on', 'completed'].includes(job.status)) continue;
       const cls = faults.classifyEnd(job);
       if (cls.kind === 'work' || !this.refund(j)) continue;
       j.attemptRefunded = cls.cause;

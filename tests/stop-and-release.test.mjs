@@ -67,11 +67,11 @@ test('release: mixed counter keeps the work attempt; stops are released; a secon
   assert.deepEqual([again, s.reviewAttempts], [[], { 'k1:codex': 1, 'k2:codex': 0 }]);
 });
 
-test('release: unknown end with no tokens is infrastructure; unreadable record and running job are left alone', async () => {
+test('release: unknown end with no tokens is infrastructure; unreadable record is infrastructure too; a running job is left alone', async () => {
   const s = mkState(), f = flow(s);
   const odd = { j1: { status: 'blocked', lastEvent: 'brand_new', usage: {} }, j2: null, j3: { status: 'running' } };
   await f.releaseInfraAttempts(async id => odd[id], () => {});
-  assert.deepEqual(s.reviewAttempts, { 'k1:codex': 1, 'k2:codex': 1 });
+  assert.deepEqual(s.reviewAttempts, { 'k1:codex': 0, 'k2:codex': 1 });
 });
 
 test('stop uses no attempt: onEnd refunds the launch attempt, never parks, never goes below zero', () => {
