@@ -2435,7 +2435,7 @@ export class Team {
   }
   async ingestOneInner(id, j, report) {
       const job = await this.jobs.get(id);
-      if (!job || !TERMINAL.has(job.status)) return;
+      if (!job || !TERMINAL.has(job.status)) return; const ended = this.faults.onEnd(id, j, job, report);   // #1107: one classifier
       // Issue #1023: an implement job that stopped on an open prerequisite is waiting. It is neither a failure (no count, no breaker waste, no
       // notice, no needs-homeowner) nor implemented: the issue is queued again by the planner once the items have merged or closed.
       if (job.status === 'waiting_on' && j.kind === 'implement' && Number.isSafeInteger(j.issue)) {
@@ -2448,7 +2448,7 @@ export class Team {
       }
       // Issue #995 part 3: count the failed attempt by cause (a homeowner stop is not a failure); a completed job clears the count.
       if (job.status === 'completed') { const subject = j.pr ?? j.issue; if (subject != null) robust.noteSuccessFor(this.s, { type: j.kind, subject }); }
-      else if (this.faults.onEnd(id, j, job, report).kind === 'work') this.countFailure(j, causeOfEnd(job));   // issue #1107
+      else if (ended.kind === 'work') this.countFailure(j, causeOfEnd(job));   // issue #1107
       // Issue #995 (owner comment 1): a stopped implement job (by hand or for inactivity) is backed up, cleaned up and made requeueable.
       if (job.status === 'stopped' && ['manual_stop', 'idle_timeout'].includes(job.lastEvent) && j.kind === 'implement' && Number.isSafeInteger(j.issue)) {
         if (!(await this.cleanupStoppedImplement(id, j, job, report))) return;

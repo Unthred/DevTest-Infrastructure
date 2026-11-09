@@ -33,6 +33,7 @@ export function classifyEnd(job) {
   if (!readable) return infra('other_infra', 'the job record is missing or unreadable');
   if (job.status === 'completed') return work('completed');
   if (job.lastEvent === 'manual_stop') return { kind: 'none', cause: 'manual_stop' };
+  if (job.status === 'waiting_on') return { kind: 'none', cause: 'waiting_on' };   // stopped on an open prerequisite: neither a try nor a fault
   const reason = job.incompleteReason && typeof job.incompleteReason === 'object' ? job.incompleteReason : {};
   const stop = String(reason.cause || job.lastEvent || job.status);
   const text = `${reason.detail || ''} ${job.error || ''}`;

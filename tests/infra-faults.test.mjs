@@ -45,6 +45,7 @@ test('classifier: a zero token end with no output is infrastructure by default',
 
 test('classifier: a deliberate stop is neither; malformed or missing records are infrastructure', () => {
   assert.equal(faults.classifyEnd(ended({ lastEvent: 'manual_stop' })).kind, 'none');
+  assert.deepEqual(faults.classifyEnd({ status: 'waiting_on', usage: {} }), { kind: 'none', cause: 'waiting_on' });
   for (const bad of [null, undefined, 'x', 7, [], {}, { status: 5 }]) assert.deepEqual([faults.classifyEnd(bad).kind, faults.classifyEnd(bad).cause], ['infra', 'other_infra']);
   assert.doesNotThrow(() => faults.classifyEnd({ status: 'failed', incompleteReason: 'text', usage: 'x' }));
 });
