@@ -16,7 +16,9 @@ for directory in /mnt/cache/ai-supervisor /mnt/cache/ai-supervisor/versions; do
   [ ! -L "$directory" ] || { printf 'unsafe supervisor directory symlink\n' >&2; exit 2; }
 done
 install_root="/mnt/cache/ai-supervisor/versions/$commit"
-[ ! -e "$install_root" ] || { printf 'version already installed\n' >&2; exit 2; }
+# Issue #1120: only the installed version or one in use is refused; a leftover from a rolled back attempt is rebuilt.
+source "$source_root/tools/version-dir.sh"
+prepare_version_dir /mnt/cache/ai-supervisor "$commit" || exit 2
 mkdir -p "$install_root"
 chmod 700 /mnt/cache/ai-supervisor /mnt/cache/ai-supervisor/versions "$install_root"
 [ "$(stat -c '%u:%a' /mnt/cache/ai-supervisor)" = 0:700 ] || { printf 'unsafe supervisor state root\n' >&2; exit 2; }

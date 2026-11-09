@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Sourced by tools/upgrade-supervisor.sh (issue #1120). Decides what the swap does with versions/<commit> when it already exists.
+# tools/rollback-supervisor.sh carries its own copy of dir_in_use because the dispatcher runs it as a single file.
+
+# True when a running process (other than this one) has the directory as its working directory or on its command line.
+dir_in_use() {
+  local dir=$1 p cwd
+  for p in /proc/[0-9]*; do
+    [ "${p#/proc/}" != "$$" ] || continue
+    cwd=$(readlink "$p/cwd" 2>/dev/null) || cwd=
+    case "$cwd" in "$dir"|"$dir"/*) return 0 ;; esac
+    if tr '\0' ' ' <"$p/cmdline" 2>/dev/null | grep -qF -- "$dir/"; then return 0; fi
+  done
+  return 1
+}
+
+# prepare_version_dir STATE COMMIT: leave STATE/versions/COMMIT absent and record that this attempt will create it.
+# Refuses (return 1, reason on stderr) only for the installed version or a directory a running process uses; any other leftover
+# from an earlier attempt is removed so it is rebuilt from the reviewed commit.
+prepare_version_dir() {
+  local state=$1 commit=$2 dir="$1/versions/$2" installed
+  if [ -e "$dir" ] || [ -L "$dir" ]; then
+    installed=$(readlink "$state/current" 2>/dev/null || true)
+    if [ "$installed" = "versions/$commit" ]; then printf 'version already installed (it is the installed version)\n' >&2; return 1; fi
+    if [ -L "$dir" ] || [ ! -d "$dir" ]; then printf 'version path is not a plain directory\n' >&2; return 1; fi
+    if dir_in_use "$dir"; then printf 'version directory left by an earlier attempt is in use by a running process\n' >&2; return 1; fi
+    rm -rf -- "$dir"
+    printf 'leftover version directory from an earlier attempt removed; rebuilding\n'
+  fi
+  : >"$state/.created-$commit"
+}

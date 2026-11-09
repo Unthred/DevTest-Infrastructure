@@ -16,6 +16,24 @@ if [ "${1:-}" = "--supervisor" ]; then
   cp -p "$backup" "$bin/.ai-supervisor-rollback-$new"
   mv "$bin/.ai-supervisor-rollback-$new" "$bin/ai-supervisor"
   printf 'supervisor restored to %s from %s\n' "$previous" "$backup"
+  # Issue #1120: remove the version directory this attempt created (marked by upgrade-supervisor.sh), so the same commit can be retried.
+  # Never the installed version, a directory a running process uses, or one that existed before the attempt (no marker).
+  dir_in_use() {
+    local dir=$1 p cwd
+    for p in /proc/[0-9]*; do
+      [ "${p#/proc/}" != "$$" ] || continue
+      cwd=$(readlink "$p/cwd" 2>/dev/null) || cwd=
+      case "$cwd" in "$dir"|"$dir"/*) return 0 ;; esac
+      if tr '\0' ' ' <"$p/cmdline" 2>/dev/null | grep -qF -- "$dir/"; then return 0; fi
+    done
+    return 1
+  }
+  created="$state/versions/$new"; marker="$state/.created-$new"
+  if [ ! -e "$marker" ]; then printf 'cleanup: version directory kept (it existed before the attempt)\n'
+  elif [ "$new" = "$previous" ] || [ "$(readlink "$state/current")" = "versions/$new" ]; then printf 'cleanup: version directory kept (it is the installed version)\n'
+  elif [ -L "$created" ] || [ ! -d "$created" ]; then printf 'cleanup: version directory kept (not a plain directory)\n'
+  elif dir_in_use "$created"; then printf 'cleanup: version directory kept (in use by a running process)\n'
+  else rm -rf -- "$created" && rm -f "$marker" && printf 'cleanup: removed version directory %s\n' "$new"; fi
   # Issue #946: put the MCP server copy of the restored version back (best effort; versions installed before this had none).
   if [ -f "$state/versions/$previous/tools/install-foreman-mcp.sh" ] && [ -d "$state/versions/$previous/foreman-mcp" ]; then
     AI_SUPERVISOR_STATE_DIR="$state" bash "$state/versions/$previous/tools/install-foreman-mcp.sh" "$state/versions/$previous" "$previous" || printf 'foreman-mcp restore failed\n' >&2
