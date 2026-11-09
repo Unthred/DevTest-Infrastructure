@@ -1,6 +1,7 @@
 // HTML for the team dashboard v2 (issue #54): one server-rendered page per URL, charts as inline SVG, tables sorted, filtered and
 // paginated on the server from the URL (so every state is bookmarkable and works without script). One small same-origin script
 // (dashui/app.js) adds the countdown, theme, legend toggles, chart expand and card layout. Every dynamic value goes through esc().
+import { formatCost } from './money.mjs';
 import { ACTIVITY_FILTERS, DEFAULT_PAGE_SIZE, DEFAULT_RANGE, PAGE_SIZES, RANGES, SEVERITIES, activityFilters, collapseIdle, countText, filterActivity, formatLocal, inRange, pillLinks, localStamps, tmark, tableState, trail, versionStatus } from './dashui/logic.mjs';
 import { PINNED } from './dashui/grid.mjs';
 import { CARD_IDS, CARD_TITLES, WINDOWS } from './headline.mjs';
@@ -12,6 +13,7 @@ import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, 
 
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
+import { healthPage } from './healthpage.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
@@ -38,7 +40,7 @@ const colourOf = (name, i = 0) => AGENT_COLOUR[name] || EXTRA_COLOURS[i % EXTRA_
 // ---- routes
 export const NAV = [
   ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
-  ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['diagnostics', '/diagnostics', 'Diagnostics', 'clock'], ['system', '/system', 'System', 'gear']
+  ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['diagnostics', '/diagnostics', 'Diagnostics', 'clock'], ['health', '/health', 'Health', 'pulse'], ['system', '/system', 'System', 'gear']
 ];
 export function matchRoute(pathname) {
   const p = pathname.replace(/\/+$/, '') || '/';
@@ -374,7 +376,7 @@ function breakerCard(view) {
   const buttons = b.halt ? (b.halt.entries || []).map(e => resumeBtn(e.cause === '@global' ? 'global' : e.cause, `Resume ${e.cause === '@global' ? 'all new jobs' : e.cause}`)).join('') + ((b.halt.entries || []).length > 1 ? resumeBtn('all', 'Resume everything') : '') : '';
   const halt = b.halt ? `<p class="sev-action"><strong>Work halted.</strong> ${escT(b.halt.text)} ${escT(b.halt.running_text)}</p><p class="sub">${escT(b.halt.action)}</p>${buttons}` : '<p class="sub">Circuit breaker: no halt.</p>';
   const err = b.error ? `<p class="sev-action">The breaker failed: ${escT(b.error)}</p>` : '';
-  const rows = b.byCause.slice(0, 12).map(r => `<tr><td>${escT(r.cause)}${r.halted ? ' (halted)' : ''}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>$${r.cost.toFixed(2)}</td><td>${escT(r.prs.map(n => '#' + n).join(', '))}</td></tr>`).join('');
+  const rows = b.byCause.slice(0, 12).map(r => `<tr><td>${escT(r.cause)}${r.halted ? ' (halted)' : ''}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>${esc(formatCost(r.cost))}</td><td>${escT(r.prs.map(n => '#' + n).join(', '))}</td></tr>`).join('');
   const table = rows ? `<table><thead><tr><th>Cause</th><th>Wasted jobs</th><th>Tokens</th><th>Cost (usage equivalent)</th><th>PRs</th></tr></thead><tbody>${rows}</tbody></table><p class="sub">Cost is ${escT(b.costLabel)}.</p>` : '';
   return card({ id: 'breaker', title: b.halt ? 'Work halted' : 'Wasted usage', span: 12, body: err + halt + table, cls: 'panel', type: b.halt ? 'action' : 'info' });
 }
@@ -509,7 +511,7 @@ const HEADLINE = {
   issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` }),
   processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play` }),
   throughput: c => ({ big: Number.isFinite(c.openedPerHour) ? `${dec1(c.openedPerHour)} PRs opened/h` : 'no data', sub: `${dec1(c.mergedPerHour)} merged/h, ${dec1(c.implementedPerHour)} issues implemented/h (${c.opened} opened, ${c.merged} merged, ${c.implemented} implemented)` }),
-  cost: c => ({ big: Number.isFinite(c.value) ? `$${c.value.toFixed(2)}` : 'unknown', sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),
+  cost: c => ({ big: formatCost(c.value, { unknown: 'unknown' }), sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),
   'merge-rate': c => ({ big: Number.isFinite(c.value) ? `${dec1(Math.round(c.value * 100) / 100)}/h` : 'no data', sub: `${c.merged} merged` }),
   'first-pass': c => ({ big: pctText(c.value), sub: c.reviewed ? `${c.approved} of ${c.reviewed} approved on the first review` : 'no first reviews' }),
   rounds: c => ({ big: Number.isFinite(c.value) ? dec1(c.value) : 'no data', sub: `${c.merged} merged (review, fix and rebase rounds)` }),
@@ -765,20 +767,20 @@ function usagePage(view, query, path) {
   const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }) });
   const toks = view.graphs.tokensPerPr.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.tokens, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
   const tokChart = card({ id: 'u-tok', title: 'Tokens per merged PR', span: 12, expandable: true, movable: true, body: barChart({ rows: toks, title: 'tokens per merged PR', emptyTitle: 'No merged PR has recorded tokens' }) });
-  const usd = n => (Number.isFinite(n) ? `$${(Math.round(n * 100) / 100).toFixed(2)}` : '–');
+  const usd = n => formatCost(n);   // issue #1097: pounds, one formatter (money.mjs)
   const ucols = [jobCols(view)[0], jobCols(view)[1], jobCols(view)[2], jobCols(view)[3], jobCols(view)[4],
     { key: 'inTokens', label: 'Input tokens', num: true, html: r => esc(num(r.inTokens)) }, { key: 'outTokens', label: 'Output tokens', num: true, html: r => esc(num(r.outTokens)) },
-    { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd, more: true }];
+    { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: r => esc(usd(r.cost)), fmt: usd, more: true }];
   const table_ = card({ id: 'u-jobs', title: 'Tokens per job', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: view.jobs, searchKeys: ['id', 'agent', 'kind', 'status'], totals: { id: 'count', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: ucols,
     emptyState: empty('No jobs recorded', 'Token counts appear after a job finishes.', 'chart') }) + '<p class="sub">*Token counts and the CLI cost estimate are what the CLI reported, not billing. Subscription use is not billed per token.</p>' });
   const mcols = [{ key: 'kind', label: 'Job type' }, { key: 'model', label: 'Model' }, { key: 'effort', label: 'Effort' }, { key: 'jobs', label: 'Jobs', num: true },
     { key: 'inTokens', label: 'Input tokens', num: true, html: r => esc(num(r.inTokens)) }, { key: 'outTokens', label: 'Output tokens', num: true, html: r => esc(num(r.outTokens)) },
-    { key: 'cost', label: 'CLI cost estimate*', num: true, html: r => esc(usd(r.cost)), fmt: usd }];
+    { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: r => esc(usd(r.cost)), fmt: usd }];
   const byModel = card({ id: 'u-models', title: 'Tokens per job type and model', span: 12, movable: false, body: table({ id: 'models', path, query, noun: 'groups', rows: view.modelUsage || [], searchKeys: ['kind', 'model', 'effort'], totals: { jobs: 'sum', inTokens: 'sum', outTokens: 'sum', cost: 'sum' }, cols: mcols,
     emptyState: empty('No model usage recorded', 'Token counts appear per job type and model after jobs finish.', 'chart') }) });
   const fs_ = view.failedSpend || { jobs: 0, rows: [] };
   const fcols = [{ key: 'name', label: 'Job' }, { key: 'status', label: 'Status' }, { key: 'attempts', label: 'Attempts', num: true },
-    { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
+    { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
   const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
     emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
   return { title: 'Usage & cost', body: `${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
@@ -947,11 +949,7 @@ function diagnosticsPage(view, query, path, route) {
   // Issue #406: passes by what started them, and the wake cap. A dropped request is said plainly; the schedule is the fallback.
   const ps = d.passes, wk = d.wake;
   const wakeCard = ps ? card({ id: 'diag-passes', title: 'Passes by trigger', span: 12, movable: false, body: `${wk?.capHit ? `<p class="sub" data-diag-wake-cap role="alert"><strong>Wake cap reached:</strong> ${esc(wk.droppedLastHour)} request${wk.droppedLastHour === 1 ? '' : 's'} dropped in the last hour (${esc(wk.acceptedLastHour)} of ${esc(wk.cap)} used). Work waits for the five-minute schedule until the hour rolls over.</p>` : wk ? `<p class="sub" data-diag-wake>Event wakes in the last hour: ${esc(wk.acceptedLastHour)} of ${esc(wk.cap)} allowed. The five-minute schedule always runs as well.</p>` : ''}${d.lastPass ? `<p class="sub" data-diag-last-pass>Last pass (${esc(d.lastPass.trigger)}): ${esc(d.lastPass.seconds)} s${d.lastPass.phases.length ? `; ${d.lastPass.phases.map(([k, s]) => `${esc(k)} ${esc(s)} s`).join(', ')}` : ''}.</p>` : ''}${wk?.pending ? `<p class="sub" data-diag-wake-pending>Waiting for the running pass: ${esc(wk.pending.reasons.join(', '))}${wk.pending.ageSeconds == null ? '' : ` (waiting ${esc(wk.pending.ageSeconds)} s)`}.</p>` : ''}<p class="sub">${esc(ps.total)} passes in the last ${esc(d.retentionDays)} days, ${esc(ps.didNothing)} did nothing. ${ps.unlabelled ? `${esc(ps.unlabelled)} were recorded before triggers were kept and are counted as scheduled. ` : ''}A pass that did nothing planned no action. ${ps.noop ? `${esc(ps.noop)} of them ended early because GitHub was unchanged (median ${ps.seconds?.medianNoop == null ? 'n/a' : esc(Math.round(ps.seconds.medianNoop)) + ' s'} against ${ps.seconds?.medianDidNothingFull == null ? 'n/a' : esc(Math.round(ps.seconds.medianDidNothingFull)) + ' s'} for a full pass that did nothing).` : 'None ended early as unchanged yet.'}</p>${plainTable(['Trigger', 'Passes', 'Started something', 'Did nothing', 'Ended early (unchanged)'], Object.entries(ps.byTrigger).map(([k, v]) => [k, v.passes, v.startedSomething, v.didNothing, v.noop || 0]), 'Passes by trigger')}` }) : '';
-  const r = d.recorder, problem = r.status === 'missing' || r.status === 'unreadable' || r.status === 'empty';
-  const kb = n => `${Math.round(n / 1048576 * 10) / 10} GiB`;
-  const rec = card({ id: 'diag-recorder', title: 'Load, swap and disk wait from the memory flight recorder', span: 12, movable: false, body: `<p class="sub" data-diag-recorder="${esc(r.status)}">${problem ? '' : `${esc(r.samples)} samples from ${esc(r.files)} log file${r.files === 1 ? '' : 's'}. `}${r.note ? esc(r.note) : ''}</p>${problem ? empty(r.status === 'empty' ? 'No recorder samples in this window' : r.status === 'missing' ? 'Recorder logs not found' : 'Recorder logs not readable', 'The rest of this page does not depend on them.', 'warn')
-    : `<div class="diag-sparks">${diagSpark(r.hourly, 'loadMax', 'Load average (1 min), hourly peak', '')}${diagSpark(r.hourly, 'swapMaxPercent', 'Swap in use, hourly peak', ' %')}${diagSpark(r.hourly, 'iowaitAvg', 'CPU waiting on disk, hourly average', ' %')}</div>${plainTable(['Day', 'Samples', 'Load avg', 'Load peak', 'Swap peak', 'Disk wait avg', 'Disk wait peak', 'Blocked tasks peak'], r.days.map(x => (x.samples ? [x.day, x.samples, x.loadAvg, x.loadMax, `${x.swapMaxPercent}% (${kb(x.swapMaxKb)})`, `${x.iowaitAvg ?? '–'}%`, `${x.iowaitMax ?? '–'}%`, x.blockedMax] : [x.day, 0, '–', '–', '–', '–', '–', '–'])), 'Recorder figures per day')}<p class="sub">Disk I/O is the share of CPU time spent waiting on disk and the number of blocked tasks, both from the one-minute host samples.</p>`}` });
-  return { title: 'Diagnostics', body: grid('diagnostics', intro + ticks + wakeCard + turn + lag + idle + rec) };
+  return { title: 'Diagnostics', body: grid('diagnostics', intro + ticks + wakeCard + turn + lag + idle) };
 }
 
 // ---- Live processes per agent and job (issue #568). Rendered from a procsample reading; /api/processes returns the same fragment
@@ -1016,7 +1014,7 @@ function processesPage(view, query, pathname, route) {
   return { title: agent ? `Processes: ${agent}` : 'Processes', crumbs: agent ? [['/system', 'System'], ['/system/processes', 'Processes'], [null, agent]] : [['/system', 'System'], [null, 'Processes']], bodyClass: 'procs',
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
-const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, health: (view, query, path, route) => healthPage(route, { esc, card, grid, empty, legend, plainTable, diagSpark, utc }), evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
 
 export const PAGE_NAMES = Object.keys(PAGES);
 

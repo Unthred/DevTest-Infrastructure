@@ -87,7 +87,7 @@ test('the breaker records each trip with cause, jobs, cost and when it cleared; 
   assert.equal(breaker.evaluate(s, limits, T + 10).length, 1);
   let h = breakerHistory({ breaker: s });
   assert.equal(h.count, 1); assert.equal(h.halted, true); assert.equal(h.trips[0].stillHalted, true); assert.equal(h.trips[0].clearedAt, null);
-  assert.equal(h.trips[0].scope, 'review:refused:x'); assert.equal(h.trips[0].jobs, 3); assert.equal(h.trips[0].costUsdEquivalent, 1.5); assert.deepEqual(h.trips[0].prs, [9]);
+  assert.equal(h.trips[0].scope, 'review:refused:x'); assert.equal(h.trips[0].jobs, 3); assert.equal(h.trips[0].costGbpEquivalent, 1.13); assert.deepEqual(h.trips[0].prs, [9]);
   breaker.evaluate(s, limits, T + 20); assert.equal(s.history.length, 1, 'a held halt updates its entry, no duplicate');
   breaker.resume(s, 'all', T + 100);
   h = breakerHistory({ breaker: s }); assert.equal(h.halted, false); assert.equal(h.trips[0].clearedAt, new Date(T + 100).toISOString()); assert.equal(h.trips[0].stillHalted, false);

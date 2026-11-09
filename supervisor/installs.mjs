@@ -2,6 +2,7 @@
 // The MCP account cannot read the state root, so the dashboard serves these from its existing GET handler (two narrow routes,
 // /api/installs.json and /api/breaker.json). They only read: the upgrade records, the self-upgrade state, the `current` link,
 // /proc command lines (never the environment, never printed) and the breaker state. No model call, no lock, no write.
+import { gbpAmount } from './money.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readUpgrades, readSelfUpgrade, readInstalled, scrub } from './suphealth.mjs';
@@ -71,11 +72,11 @@ export function breakerHistory(state, limit = 50) {
     if (!t || typeof t !== 'object') continue;
     seen.add(`${t.scope}@${t.since}`);
     rows.push({ scope: redact(String(t.scope || ''), 120), trippedBy: redact(String(t.trippedBy || ''), 24), trippedAt: iso(t.since), clearedAt: iso(t.clearedAt), stillHalted: !Number.isFinite(t.clearedAt),
-      jobs: t.jobs ?? 0, tokens: t.tokens ?? 0, costUsdEquivalent: Number.isFinite(t.cost) ? Math.round(t.cost * 100) / 100 : 0, prs: (t.prs || []).slice(0, 20), issues: (t.issues || []).slice(0, 20), types: (t.types || []).slice(0, 8).map(x => redact(String(x), 24)), jobIds: (t.jobIds || []).slice(0, 10).map(x => String(x).slice(0, 32)) });
+      jobs: t.jobs ?? 0, tokens: t.tokens ?? 0, costGbpEquivalent: gbpAmount(t.cost) ?? 0, prs: (t.prs || []).slice(0, 20), issues: (t.issues || []).slice(0, 20), types: (t.types || []).slice(0, 8).map(x => redact(String(x), 24)), jobIds: (t.jobIds || []).slice(0, 10).map(x => String(x).slice(0, 32)) });
   }
   const live = [...(b.global ? [{ ...b.global, cause: '@global' }] : []), ...Object.values(b.halts || {})];
   for (const h of live) if (h && !seen.has(`${h.cause}@${h.since}`)) rows.push({ scope: redact(String(h.cause || ''), 120), trippedBy: redact(String(h.trippedBy || ''), 24), trippedAt: iso(h.since), clearedAt: null, stillHalted: true,
-    jobs: h.jobs ?? 0, tokens: h.tokens ?? 0, costUsdEquivalent: Number.isFinite(h.cost) ? Math.round(h.cost * 100) / 100 : 0, prs: (h.prs || []).slice(0, 20), issues: (h.issues || []).slice(0, 20), types: (h.types || []).slice(0, 8).map(x => redact(String(x), 24)), jobIds: (h.jobIds || []).slice(0, 10).map(x => String(x).slice(0, 32)) });
+    jobs: h.jobs ?? 0, tokens: h.tokens ?? 0, costGbpEquivalent: gbpAmount(h.cost) ?? 0, prs: (h.prs || []).slice(0, 20), issues: (h.issues || []).slice(0, 20), types: (h.types || []).slice(0, 8).map(x => redact(String(x), 24)), jobIds: (h.jobIds || []).slice(0, 10).map(x => String(x).slice(0, 32)) });
   rows.sort((a, c) => (Date.parse(c.trippedAt) || 0) - (Date.parse(a.trippedAt) || 0));
   return { count: rows.length, shown: Math.min(rows.length, limit), halted: rows.some(r => r.stillHalted), note: 'Cost is the provider CLI usage estimate, not a charge. Figures are those at the last update before the halt was cleared.', trips: rows.slice(0, limit) };
 }

@@ -43,7 +43,7 @@ test('the outcome says what was asked, what happened, how it ended and what it c
   assert.match(o.asked, /rebase PR 538/);
   assert.equal(o.postcondition.kind, 'rebased'); assert.equal(o.postcondition.met, false); assert.equal(o.postcondition.notMetBecause.cause, 'postcondition_not_met'); assert.match(o.postcondition.notMetBecause.detail, /still conflicts/);
   assert.equal(o.pushed.headMovedLocally, true); assert.equal(o.pushed.uncommittedFiles, 2); assert.equal(o.pushed.pushCommandsInLog, 1);
-  assert.deepEqual(o.cost, { tokens: 1000, usdEquivalent: 1.25 });
+  assert.deepEqual(o.cost, { tokens: 1000, gbpEquivalent: 0.94 });
   assert.deepEqual(o.events.map(e => e.kind), ['created', 'started', 'incomplete'], 'checkpoints are left out');
   assert.equal(o.logTail.length, LOG_TAIL_ENTRIES); assert.equal(o.did.toolCalls.Bash, 40);
   assert.ok(!JSON.stringify(o).includes('SHOULD NOT APPEAR'));
@@ -67,7 +67,7 @@ test('an unknown job, a short id and a damaged record give nothing; a missing tr
 test('discarded lists waste newest first with causes and cost, respects the limit and survives empty state', () => {
   const state = { breaker: { waste: { a: { job: 'a', at: 1, type: 'review', cause: 'review:no-verdict:x', tokens: 10, cost: 0.1 }, b: { job: 'b', at: 2, type: 'review', cause: 'review:refused:independence', tokens: 20, cost: 0.2 }, c: { job: 'c', at: 3, type: 'fix', cause: 'fix:failed:y', tokens: 30, cost: 0.3 } } } };
   const d = discarded(state, 2);
-  assert.deepEqual(d.items.map(i => i.job), ['c', 'b']); assert.equal(d.count, 3); assert.equal(d.shown, 2); assert.equal(d.totalTokens, 60); assert.equal(d.totalCostUsdEquivalent, 0.6);
+  assert.deepEqual(d.items.map(i => i.job), ['c', 'b']); assert.equal(d.count, 3); assert.equal(d.shown, 2); assert.equal(d.totalTokens, 60); assert.equal(d.totalCostGbpEquivalent, 0.45);
   assert.deepEqual(discarded({}).items, []); assert.deepEqual(discarded(null).items, []);
 });
 
@@ -109,7 +109,7 @@ test('the dashboard routes are GET-only, strict about the id, and end to end thr
 });
 
 test('foreman_discarded with a limit above 50 keeps shown equal to the list and states any cut', async () => {
-  const mk = n => ({ count: n, items: Array.from({ length: n }, (_, i) => ({ job: `j${i}`.padEnd(32, 'a'), at: new Date(1e12 + i).toISOString(), type: 'review', cause: 'review:no-verdict:' + 'x'.repeat(90), agent: 'codex', model: 'gpt-5-codex-long-model-name', pr: 600 + i, issue: 100 + i, tokens: 123456, costUsdEquivalent: 1.23 })) });
+  const mk = n => ({ count: n, items: Array.from({ length: n }, (_, i) => ({ job: `j${i}`.padEnd(32, 'a'), at: new Date(1e12 + i).toISOString(), type: 'review', cause: 'review:no-verdict:' + 'x'.repeat(90), agent: 'codex', model: 'gpt-5-codex-long-model-name', pr: 600 + i, issue: 100 + i, tokens: 123456, costGbpEquivalent: 1.23 })) });
   const run = async (n, args) => { const tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0, stale: false }) }, readHost: () => ({}), getPath: async () => mk(n) }); const r = await tools.call('foreman_discarded', args); return { r, d: JSON.parse(r.text) }; };
   // Few enough records: all 200 requested are returned, with no cut.
   const small = await run(30, { limit: 200 }); assert.equal(small.d.items.length, 30); assert.equal(small.d.shown, 30); assert.equal(small.d.truncated, undefined);

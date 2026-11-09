@@ -2,6 +2,7 @@
 // The MCP account cannot read the state root, so the dashboard serves this from its existing GET handler (one narrow route,
 // /api/jobs/<id>/outcome.json). It only reads: the job record, the event names, the end of the transcript and the dispatcher's
 // entry for the job. It calls no model, takes no lock and writes nothing.
+import { gbpAmount } from './money.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { redact } from './redact.mjs';
@@ -46,7 +47,7 @@ export function jobOutcome(root, id) {
     // Evidence about pushed work, stated as evidence: the record has no remote check. A local commit that was never pushed shows as headMovedLocally with no push command.
     pushed: { headAtStart: startHead ? String(startHead).slice(0, 12) : null, lastCheckpointHead: nowHead ? String(nowHead).slice(0, 12) : null, headMovedLocally: startHead && nowHead ? startHead !== nowHead : null, uncommittedFiles: Array.isArray(cp?.status) ? cp.status.length : null, pushCommandsInLog: pushCommands,
       note: 'Evidence only: Foreman does not check the remote here. Compare with the pull request head (foreman_why_blocked).' },
-    cost: { tokens: job.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : null, usdEquivalent: Number.isFinite(job.usage?.costUsdEstimate) ? job.usage.costUsdEstimate : null },
+    cost: { tokens: job.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : null, gbpEquivalent: gbpAmount(job.usage?.costUsdEstimate) },
     events: readEventNames(root, id).map(e => ({ at: iso(e.at), kind: e.kind })),
     logTail: entries.slice(-LOG_TAIL_ENTRIES).map(e => ({ seq: e.seq, kind: e.kind, text: redact(`${e.tool ? e.tool + ': ' : ''}${e.text || e.detail || ''}`, LOG_ENTRY_CHARS) })),
   };
@@ -60,8 +61,8 @@ export function discarded(state, limit = 50) {
   const all = Object.values(state?.breaker?.waste || {});
   const sum = k => all.reduce((n, w) => n + (Number.isFinite(w[k]) ? w[k] : 0), 0);
   return {
-    count: all.length, shown: rows.length, totalTokens: sum('tokens'), totalCostUsdEquivalent: Math.round(sum('cost') * 100) / 100,
+    count: all.length, shown: rows.length, totalTokens: sum('tokens'), totalCostGbpEquivalent: gbpAmount(sum('cost')),
     note: 'Waste on file for the last 7 days (at most 1000 records). Cost is a usage equivalent, not a charge.',
-    items: rows.map(w => ({ job: String(w.job || '').slice(0, 32), at: iso(w.at), type: redact(w.type || '', 24), cause: redact(w.cause || '', 120), agent: w.agent ?? null, model: redact(w.model || '', 60) || null, pr: w.pr ?? null, issue: w.issue ?? null, tokens: w.tokens ?? 0, costUsdEquivalent: Number.isFinite(w.cost) ? w.cost : 0 })),
+    items: rows.map(w => ({ job: String(w.job || '').slice(0, 32), at: iso(w.at), type: redact(w.type || '', 24), cause: redact(w.cause || '', 120), agent: w.agent ?? null, model: redact(w.model || '', 60) || null, pr: w.pr ?? null, issue: w.issue ?? null, tokens: w.tokens ?? 0, costGbpEquivalent: gbpAmount(w.cost) ?? 0 })),
   };
 }

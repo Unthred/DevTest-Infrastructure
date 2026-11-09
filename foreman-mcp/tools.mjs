@@ -3,7 +3,7 @@
 // directory and nothing else (issue #124); it cannot approve, run or change anything. No tool takes a lock, reads a transcript or calls a model.
 import { redact, redactDeep } from './redact.mjs';
 import { createInbox } from './inbox.mjs';
-import { mismatches, needsYouGroups, rebaseStats, itemTimeline } from './insights.mjs';
+import { mismatches, needsYouGroups, rebaseStats, itemTimeline, gbpOf } from './insights.mjs';
 import { hostActivity } from './source.mjs';
 
 export const MAX_TEXT = 24000;      // characters of one tool result
@@ -46,7 +46,13 @@ export function dropNullFields(out, key) {
 }
 
 // The headline figures without the item lists (the MCP server imports nothing from the supervisor tree).
-const summariseHeadline = h => ({ ...h, windows: Object.fromEntries(Object.entries(h.windows || {}).map(([w, v]) => [w, { ...v, cards: Object.fromEntries(Object.entries(v.cards || {}).map(([id, c]) => { const { items, ...rest } = c; return [id, rest]; })) }])) });
+const summariseHeadline = (h, v) => ({ ...h, windows: Object.fromEntries(Object.entries(h.windows || {}).map(([w, v]) => [w, { ...v, cards: Object.fromEntries(Object.entries(v.cards || {}).map(([id, c]) => { const { items, ...rest } = gbpCard(id, c, v); return [id, rest]; })) }])) });
+// Issue #1097: the cost and waste cards carry USD for the dashboard renderer; the answer converts them to pounds.
+const gbpCard = (id, c, v) => {
+  if (id === 'cost') { const { totalCostUsd, value, unit, ...r } = c; return { ...r, value: gbpOf(value, v), totalCostGbp: gbpOf(totalCostUsd, v), unit: 'GBP equivalent' }; }
+  if (id === 'waste') { const { costUsdEquivalent, ...r } = c; return { ...r, costGbpEquivalent: gbpOf(costUsdEquivalent, v) }; }
+  return c;
+};
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : dflt; };
 
@@ -69,7 +75,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
     { name: 'foreman_status', description: 'Foreman health: tick state, installed and main version, role slots, circuit breaker, per-agent allowance mode and idle reason, the planned next actions, running jobs and the count of Needs you items.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => ({
         health: v.health, freshness: v.freshness, tick: { ...v.tick, at: iso(v.tick?.at), lastOkAt: iso(v.tick?.lastOkAt) }, nextTick: v.nextTick, lastPass: { durationSeconds: Number.isFinite(v.tick?.durationMs) ? Math.round(v.tick.durationMs / 100) / 10 : null, phasesSeconds: v.tick?.phases ? Object.fromEntries(Object.entries(v.tick.phases).map(([k, ms]) => [k, Math.round(ms / 100) / 10])) : null }, wakes: v.wakes ?? null, version: v.version, teamEnabled: v.teamEnabled,
-        slots: (v.slots || []).map(s => s.text), capNotes: v.capNotes, breaker: v.breaker ? { halt: v.breaker.halt, error: v.breaker.error ?? null, byCause: (v.breaker.byCause || []).slice(0, 8) } : null,
+        slots: (v.slots || []).map(s => s.text), capNotes: v.capNotes, breaker: v.breaker ? { halt: v.breaker.halt, error: v.breaker.error ?? null, byCause: (v.breaker.byCause || []).slice(0, 8).map(({ cost, ...r }) => ({ ...r, costGbpEquivalent: gbpOf(cost, v) })) } : null,
         agents: (v.agents || []).map(a => ({ name: a.name, state: a.state, idle: a.idleReason?.text ?? null })),
         budget: Object.fromEntries(Object.entries(v.budget || {}).map(([k, b]) => [k, { mode: b.mode, reason: b.reason, used: b.used, projected: b.projected }])),
         planned: (v.plan || []).map(a => ({ type: a.type, agent: a.agent ?? null, pr: a.pr ?? null, issue: a.issue ?? null, why: a.why ?? null })),
@@ -103,8 +109,8 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         const limit = num(args.limit, 1, 100, 20);
         let rows = (v.jobs || []).filter(j => (!args.status || j.status === String(args.status)) && (!args.ref || j.ref === Number(args.ref)) && (!args.id || String(j.fullId || '').startsWith(String(args.id))));
         const total = rows.length, cost = rows.reduce((a, j) => a + (Number.isFinite(j.cost) ? j.cost : 0), 0), tokens = rows.reduce((a, j) => a + (Number.isFinite(j.tokens) ? j.tokens : 0), 0);
-        rows = rows.slice(0, limit).map(j => ({ id: j.fullId, kind: j.kind, ref: j.ref, agent: j.agent, model: j.model, effort: j.effort, status: j.status, attempts: j.attempts, startedAt: iso(j.startedAt), elapsedSeconds: Number.isFinite(j.elapsedMs) ? Math.round(j.elapsedMs / 1000) : null, tokens: j.tokens, inTokens: j.inTokens, outTokens: j.outTokens, costUsdEquivalent: j.cost, transcriptAvailable: !!j.hasTranscript, summary: j.desc }));
-        return { matching: total, shown: rows.length, totalTokens: tokens, totalCostUsdEquivalent: Math.round(cost * 100) / 100, note: 'Cost is the provider CLI\'s own usage estimate, not a cash charge. Transcripts are not available through this server.', jobs: rows };
+        rows = rows.slice(0, limit).map(j => ({ id: j.fullId, kind: j.kind, ref: j.ref, agent: j.agent, model: j.model, effort: j.effort, status: j.status, attempts: j.attempts, startedAt: iso(j.startedAt), elapsedSeconds: Number.isFinite(j.elapsedMs) ? Math.round(j.elapsedMs / 1000) : null, tokens: j.tokens, inTokens: j.inTokens, outTokens: j.outTokens, costGbpEquivalent: gbpOf(j.cost, v), transcriptAvailable: !!j.hasTranscript, summary: j.desc }));
+        return { matching: total, shown: rows.length, totalTokens: tokens, totalCostGbpEquivalent: gbpOf(cost, v), note: 'Cost is the provider CLI\'s own usage estimate, not a cash charge. Transcripts are not available through this server.', jobs: rows };
       }) },
     { name: 'foreman_plan', description: 'What the planner would do, as the dashboard recomputes it per request from the last tick\'s cached GitHub data (not a live dry run, and before the circuit breaker is applied): planned actions, why work waits, the open-PR cap and the next tick time. breakerHalt says when the breaker has halted jobs, in which case plannedActions may list actions a real tick would drop.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => ({ plannedActions: v.plan || [], breakerHalt: breakerHaltOf(v.breaker), nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [], note: 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.' })) },
@@ -194,10 +200,10 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
     { name: 'foreman_headline', description: 'The headline progress numbers shown at the top of the dashboard, for the last 24 hours and the last 7 days, each with the previous period: issues opened vs closed (and open now), issues processed, pull requests merged per hour, first-pass review approval rate, rounds per merged pull request, tokens per merged pull request (usage equivalent, not a charge), wasted tokens with the top cause, and rejects (CHANGES verdicts and blocked jobs). Optional card (one of issues, processed, merge-rate, first-pass, rounds, tokens, waste, rejects) with window (24h or 7d) lists the items behind that number, newest first, with limit (default 25). Read-only.', inputSchema: { type: 'object', properties: { card: { type: 'string', enum: ['issues', 'processed', 'merge-rate', 'first-pass', 'rounds', 'tokens', 'waste', 'rejects'] }, window: { type: 'string', enum: ['24h', '7d'] }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
       run: args => withView(v => {
         if (!v.headline) return { available: false, note: 'This dashboard view carries no headline figures.' };
-        if (args.card === undefined) return summariseHeadline(v.headline);
+        if (args.card === undefined) return summariseHeadline(v.headline, v);
         const card = String(args.card), win = args.window === undefined ? '24h' : String(args.window), c = v.headline.windows[win]?.cards?.[card];
         if (!c) throw new Error('give card (issues, processed, merge-rate, first-pass, rounds, tokens, waste or rejects) and window 24h or 7d');
-        const { items, ...figures } = c;
+        const { items, ...figures } = gbpCard(card, c, v);
         return fitItems({ window: win, ...figures, note: v.headline.note, items: items.slice(0, num(args.limit, 1, 200, 25)) }, 'items', num(args.limit, 1, 200, 25));
       }) },
     { name: 'foreman_rebase_stats', description: 'Rebases per merged pull request, reviews per merged pull request, and the time from first recorded activity to merge (mean and median), for all merged pull requests the view holds and, with splitAt (ISO date), before and after that time, so a change to the rebase policy can be measured. Read-only.', inputSchema: { type: 'object', properties: { splitAt: { type: 'string', maxLength: 40 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },

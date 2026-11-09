@@ -1,5 +1,6 @@
 // View model of the team dashboard (issue #32). Pure functions over data the tick already stored: supervisor job records,
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
+import { DEFAULT_GBP_PER_USD, formatCost } from './money.mjs';
 import fs from 'node:fs';
 import { headlineStats } from './headline.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
@@ -336,7 +337,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   const splitting = new Set(Object.entries(state.splits || {}).filter(([, sp]) => ['drafting', 'proposed'].includes(sp.status)).map(([n]) => Number(n)));
   const splitJobs = new Set(Object.values(state.splits || {}).map(sp => sp.implementJob));
   for (const [n, sp] of Object.entries(state.splits || {})) if (sp.status === 'proposed' && (cache?.issues || []).some(i => i.number === Number(n) && i.state === 'OPEN')) {
-    const spent = sp.wasted?.tokens ? `${sp.wasted.tokens.toLocaleString('en-GB')} tokens${Number.isFinite(sp.wasted.cost) ? ` (about $${sp.wasted.cost.toFixed(2)})` : ''} spent on the failed attempt` : 'the failed attempt used an unknown number of tokens';
+    const spent = sp.wasted?.tokens ? `${sp.wasted.tokens.toLocaleString('en-GB')} tokens${Number.isFinite(sp.wasted.cost) ? ` (about ${formatCost(sp.wasted.cost)})` : ''} spent on the failed attempt` : 'the failed attempt used an unknown number of tokens';
     add(`split-${n}`, `${names.issue(Number(n)).text} was too large for one session; a split into ${sp.children?.length || 0} issues is proposed`, { kind: 'issue', n: Number(n) },
       { tried: `The implement job ran out of context (${spent}). Foreman did not restart it with the same scope; a cheap session drafted the split and posted it on the issue.`, action: `Accept split: run ai-agent --supervisor team accept-split ${n} to file the children and queue them, or reshape the issue by hand (removing the needs-homeowner label then makes the issue eligible for Foreman to start).`, links: [{ text: names.issue(Number(n)).text, url: web('issue', n) }] });
   }
@@ -954,6 +955,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   });
   const supervisor = { severity: sup.severity, logFound: sup.logFound, cards: sup.cards.map(c => ({ ...c, overseer: cardOverseer(c, ctx) })), ticks: sup.ticks, upgrades: sup.upgrades };
   return {
+    display: { gbpPerUsd: config.display?.gbp_per_usd ?? DEFAULT_GBP_PER_USD },   // issue #1097: the rate the cost figures were shown with, for the MCP tools
     health: healthOf({ attention, states, teamEnabled, needsYouCount: needsYou.length }), freshness: freshness(tickAt, now),
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null,
     wakes: root ? (() => { try { return wakeView(root, now); } catch { return null; } })() : null,   // issue #985

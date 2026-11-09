@@ -25,8 +25,8 @@ const w = (job, ago, cost, cause, tokens = 100) => ({ job, at: NOW - ago, type: 
 test('wasteByCause groups cost and tokens by cause, per UTC day, newest first, and honours days', () => {
   const waste = Object.fromEntries([w('a', 1000, 1.256, 'review:no-verdict'), w('b', 2000, 0.5, 'review:no-verdict'), w('c', 3000, 2, 'ci-fix:failed'), w('d', 2 * DAY, 0.4, 'review:no-verdict'), w('e', 6.5 * DAY, 9, 'old')].map(x => [x.job, x]));
   const r = wasteByCause({ breaker: { waste } }, { now: NOW, days: 3 });
-  assert.equal(r.jobs, 4); assert.equal(r.totalTokens, 400); assert.equal(r.totalCostUsdEquivalent, 4.16);
-  assert.deepEqual(r.byCause.map(c => [c.cause, c.jobs, c.costUsdEquivalent]), [['review:no-verdict', 3, 2.16], ['ci-fix:failed', 1, 2]], 'sorted by cost, the old record is outside the span');
+  assert.equal(r.jobs, 4); assert.equal(r.totalTokens, 400); assert.equal(r.totalCostGbpEquivalent, 3.12);
+  assert.deepEqual(r.byCause.map(c => [c.cause, c.jobs, c.costGbpEquivalent]), [['review:no-verdict', 3, 1.62], ['ci-fix:failed', 1, 1.5]], 'sorted by cost, the old record is outside the span');
   assert.deepEqual(r.byDay.map(d => d.day), ['2026-11-06', '2026-11-04']);
   assert.equal(r.byDay[0].causes.find(c => c.cause === 'review:no-verdict').jobs, 2);
   assert.equal(wasteByCause({ breaker: { waste } }, { now: NOW, days: 30 }).jobs, 5);
@@ -64,7 +64,7 @@ test('wasteByCause caps each day at its top causes plus a remainder; byCause sta
   const waste = Object.fromEntries(Array.from({ length: 12 }, (_, i) => w('j' + i, 1000 + i, i + 1, 'cause-' + i)).map(x => [x.job, x]));
   const r = wasteByCause({ breaker: { waste } }, { now: NOW });
   assert.equal(r.byCause.length, 12); assert.equal(r.byDay[0].causes.length, 6);
-  const rest = r.byDay[0].causes[5]; assert.equal(rest.remainder, true); assert.equal(rest.jobs, 7); assert.equal(rest.costUsdEquivalent, 28);
+  const rest = r.byDay[0].causes[5]; assert.equal(rest.remainder, true); assert.equal(rest.jobs, 7); assert.equal(rest.costGbpEquivalent, 21);
   assert.equal(r.byDay[0].causes[0].cause, 'cause-11'); assert.equal(rest.cause, '(7 other causes)');
   const one = wasteByCause({ breaker: { waste: Object.fromEntries(Array.from({ length: 6 }, (_, i) => w('k' + i, 1000 + i, i + 1, 'c-' + i)).map(x => [x.job, x])) } }, { now: NOW });
   assert.equal(one.byDay[0].causes[5].cause, '(1 other cause)');
@@ -114,7 +114,7 @@ test('end to end: GET-only routes, the four tools, limits, redaction, and an unc
   const mine = tools.list().filter(x => names.includes(x.name)); assert.equal(mine.length, 4); assert.ok(mine.every(x => x.annotations.readOnlyHint === true && x.annotations.destructiveHint === false));
   const out = {}; for (const n of names) { out[n] = await tools.call(n, n === 'foreman_waste' ? { days: 2 } : {}); assert.equal(out[n].isError, false, `${n}: ${out[n].text.slice(0, 200)}`); }
   const dg = JSON.parse(out.foreman_diagnostics.text); assert.equal(dg.retentionDays, 7); assert.ok('ticks' in dg && 'idle' in dg); assert.equal(dg.recorder.hourly, undefined); assert.equal(dg.recorder.hourlySamplesOmitted, 0);
-  const wv = JSON.parse(out.foreman_waste.text); assert.equal(wv.days, 2); assert.equal(wv.jobs, 2); assert.equal(wv.totalCostUsdEquivalent, 2);
+  const wv = JSON.parse(out.foreman_waste.text); assert.equal(wv.days, 2); assert.equal(wv.jobs, 2); assert.equal(wv.totalCostGbpEquivalent, 1.5);
   const cv = JSON.parse(out.foreman_config.text); assert.equal(cv.localOverridePresent, true); assert.deepEqual(cv.effective.alerts.command, ['/usr/bin/notify', '[1 argument(s) removed]']);
   const bv = JSON.parse(out.foreman_budget.text); assert.equal(bv.agents.claude.mode, 'reviews_only'); assert.match(bv.agents.claude.why, /weekly 90%/); assert.equal(bv.agents.claude.endsAt, new Date(NOW + DAY).toISOString());
   assert.equal(bv.agents.claude.rate.perHour, 0.01); assert.equal(bv.agents.claude.rate.source, 'recent'); assert.equal(bv.agents.claude.weekly.hoursLeft, 24); assert.equal(bv.thresholds.highWater, 0.85, 'thresholds come from the effective configuration');
