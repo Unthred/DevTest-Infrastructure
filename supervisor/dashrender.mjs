@@ -370,7 +370,8 @@ function nextPanel(view) {
 // Issue #549: the circuit breaker's status on the Overview, and the wasted usage by cause. Cost is the CLI's own estimate, not a cash charge.
 function breakerCard(view) {
   const b = view.breaker;
-  if (!b || (!b.halt && !b.byCause.length && !b.error)) return '';
+  const fcWeek = (b?.failCauses?.week || []).filter(r => r.jobs > 0);
+  if (!b || (!b.halt && !b.byCause.length && !b.error && !fcWeek.length)) return '';
   // Issue #626: a Resume button per halt (D-029 write protection; the form gets the access proof from withProof). Only a person's click works.
   const resumeBtn = (scope, label) => `<form method="post" action="/breaker-resume" class="breaker-resume"><input type="hidden" name="scope" value="${esc(scope)}"><button type="submit" class="tbtn">${esc(label)}</button></form>`;
   const buttons = b.halt ? (b.halt.entries || []).map(e => resumeBtn(e.cause === '@global' ? 'global' : e.cause, `Resume ${e.cause === '@global' ? 'all new jobs' : e.cause}`)).join('') + ((b.halt.entries || []).length > 1 ? resumeBtn('all', 'Resume everything') : '') : '';
@@ -378,7 +379,12 @@ function breakerCard(view) {
   const err = b.error ? `<p class="sev-action">The breaker failed: ${escT(b.error)}</p>` : '';
   const rows = b.byCause.slice(0, 12).map(r => `<tr><td>${escT(r.cause)}${r.halted ? ' (halted)' : ''}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>${esc(formatCost(r.cost))}</td><td>${escT(r.prs.map(n => '#' + n).join(', '))}</td></tr>`).join('');
   const table = rows ? `<table><thead><tr><th>Cause</th><th>Wasted jobs</th><th>Tokens</th><th>Cost (usage equivalent)</th><th>PRs</th></tr></thead><tbody>${rows}</tbody></table><p class="sub">Cost is ${escT(b.costLabel)}.</p>` : '';
-  return card({ id: 'breaker', title: b.halt ? 'Work halted' : 'Wasted usage', span: 12, body: err + halt + table, cls: 'panel', type: b.halt ? 'action' : 'info' });
+  // Issue #1020: the honest cause of every failed job, ordered by waste, with the items involved.
+  const fcRow = r => `<tr><td>${escT(r.label)}</td><td>${r.jobs}</td><td>${num(r.tokens)}</td><td>$${r.cost.toFixed(2)}</td><td>${escT([...r.prs.map(n => 'PR #' + n), ...r.issues.map(n => '#' + n)].slice(0, 12).join(', '))}</td></tr>`;
+  const fcDay = (b?.failCauses?.day || []).filter(r => r.jobs > 0);
+  const fcTable = (title, rows) => rows.length ? `<h4>${escT(title)}</h4><table><thead><tr><th>Failure cause</th><th>Failed jobs</th><th>Tokens</th><th>Cost (usage equivalent)</th><th>Items</th></tr></thead><tbody>${rows.slice(0, 9).map(fcRow).join('')}</tbody></table>` : '';
+  const causes = fcTable('Failure causes, last 24 hours', fcDay) + fcTable('Failure causes, last 7 days', fcWeek);
+  return card({ id: 'breaker', title: b.halt ? 'Work halted' : 'Wasted usage', span: 12, body: err + halt + table + causes, cls: 'panel', type: b.halt ? 'action' : 'info' });
 }
 // Issue #995: liveness limit and last activity per running job, retry counts by cause, and what a recovery re-armed.
 function robustnessCard(view) {

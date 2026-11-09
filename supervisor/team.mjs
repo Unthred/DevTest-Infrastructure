@@ -13,6 +13,7 @@ import { takeHomeownerRequests, discardHomeownerRequest } from './homeownerqueue
 import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as robust from './robust.mjs';
 import * as breaker from './breaker.mjs';
+import * as failcause from './failcause.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
 import { configureDisplay, formatCost, validateDisplay } from './money.mjs';
 import { validateResourceConfig } from './resources.mjs';
@@ -690,7 +691,8 @@ export function readSplitDraft(root, ticket) {
 
 const STALE_MARK_MS = 10 * 60000;   // issue #521
 export class Team {
-  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, sessionWriterOf = findSessionWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined, hostPressure: pressureReader = null }) {
+  constructor({ config, root, gh, jobs, git, alert = null, clock = { now: () => Date.now() }, sleep = ms => new Promise(r => setTimeout(r, ms)), register = '', checkPostconditionOnly = false, providerModels = {}, headWriterOf = findHeadWriter, sessionWriterOf = findSessionWriter, worktreeWriterOf = findWorktreeWriter, allowanceOf = () => null, limitedOf = () => ({ out: false }), usage = null, timeZone = undefined, hostPressure: pressureReader = null, hostReader = failcause.readHost, eventKinds = failcause.readEventKinds }) {
+    this.hostReader = hostReader; this.eventKinds = eventKinds;
     // usage (issue #56): { allowance: {provider: record}, jobs: [job records], snapshots: [dashboard snapshots] }; null disables budgeting.
     this.providerModels = providerModels; this.headWriterOf = headWriterOf; this.sessionWriterOf = sessionWriterOf; this.worktreeWriterOf = worktreeWriterOf; this.allowanceOf = allowanceOf; this.limitedOf = limitedOf; this.usage = usage; this.timeZone = timeZone; this.modes = null; this.held = {}; this.heldPr = {}; this.picked = new Set();
     this.c = validateTeamConfig(config); this.root = root; this.pressureReader = pressureReader; this.gh = gh; this.jobs = jobs; this.git = git; this.clock = clock; this.sleep = sleep; this.register = register; this.alert = alert;
@@ -702,6 +704,7 @@ export class Team {
     this.s.mergeLog ||= [];
     for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews', 'reviewFaults', 'waitingOn', 'board', 'homeownerSteps']) this.s[k] ||= {};
     this.s.sameCause ||= {}; this.s.liveness ||= { running: {}, cancelled: [] };   // issue #995
+    failcause.normalizeFailCauses(this.s.failCauses ||= {});   // issue #1020: the cause of every failed job
     breaker.normalize(this.s.breaker ||= {});   // issue #549: the halt state lives in the state file, so a restart keeps it
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
@@ -1954,7 +1957,7 @@ export class Team {
   }
   async breakerStatus() {
     const running = (await this.jobs.listActive()).filter(j => j.status === 'running').map(j => ({ id: String(j.id).slice(0, 8), type: typeOfKind(j.kind || 'job'), ref: this.s.jobs[j.id]?.pr ?? this.s.jobs[j.id]?.issue ?? j.issue ?? null }));
-    return { view: breaker.haltView(this.s.breaker, running), byCause: breaker.byCause(this.s.breaker), error: this.s.breaker.error };
+    return { view: breaker.haltView(this.s.breaker, running), byCause: breaker.byCause(this.s.breaker), failCauses: failcause.summarize(this.s.failCauses, { now: this.clock.now() }), error: this.s.breaker.error };
   }
   // Issue #326: Foreman has queued or conflicting work but plans and starts nothing. Records when that began (this.s.idle) and what is
   // waiting; any planned action or running job clears it. The dashboard shows a Needs you item once it lasts idle_minutes (default 30).
@@ -2369,8 +2372,46 @@ export class Team {
       // Issue #626: a completed job that was not waste is a success; it ends the halt of its type if it began after the halt.
       if (!w && job.status === 'completed' && !j.refusal) { breaker.noteSuccess(b, { job: id, type: typeOfKind(j.kind || job.kind || ''), pr: j.pr ?? null, issue: j.issue ?? null, created: job.createdAt, at: job.updatedAt }, this.clock.now()); const cleared = breaker.succeeded(b, { type: typeOfKind(j.kind || job.kind || ''), createdAt: job.createdAt }, this.clock.now()); if (cleared.length) (report.breaker ||= {}).cleared = cleared; }
       if (w && breaker.record(b, w, this.clock.now())) (report.wasted ||= []).push({ job: id.slice(0, 8), cause: w.cause, cost: w.cost });
+      try { await this.recordFailureCause(id, j, job, w, report, recorded); } catch (error) { (report.skipped ||= []).push({ what: `failure cause ${id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
       this.save();
     } catch (error) { this.breakerFailed(error, report); }
+  }
+  // Issue #1020: a failed or blocked job (or one that left waste) gets one cause from the fixed list, a one line detail and its tokens. No model call.
+  async recordFailureCause(id, j, job, w, report, verdictRecorded = false, forced = null) {
+    const reviewDelivered = typeOfKind(j.kind || job.kind || '') === 'review' && verdictRecorded;   // a recorded verdict is the review's result, whatever else ended
+    if (job.lastEvent === 'manual_stop') return;   // a deliberate stop is not a failure
+    const idleStop = job.status === 'stopped' && job.lastEvent === 'idle_timeout';   // the liveness cancel: the wedged cause
+    if (!forced && !idleStop && !(w || (['failed', 'blocked'].includes(job.status) && !reviewDelivered))) return;
+    const fc = failcause.normalizeFailCauses(this.s.failCauses ||= {}), now = this.clock.now();
+    let host = null; try { host = this.hostReader(this.root); } catch { /* the readings stay absent */ }
+    let events = []; try { events = this.eventKinds(this.root, id); } catch { /* none */ }
+    const issueNo = j.pr != null ? (j.issue ?? null) : (j.issue ?? job.issue ?? null);   // for a pull request job, job.issue is the PR number
+    let issueList = this.view?.issues || this.nameView?.issues; if (!issueList && issueNo != null) { try { issueList = await this.gh.listIssues(); } catch { issueList = []; } }   // reuses the tick's issue read; lists only when none is held
+    const view = new Map((issueList || []).map(i => [i.number, i]));
+    const issue = issueNo != null ? view.get(issueNo) : null;
+    const openPrerequisites = issue ? (this.c.depends_on_overrides?.[issueNo] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => view.get(d)?.state === 'OPEN') : [];
+    const stop = failcause.stopKey(job), at = Number.isFinite(job.updatedAt) ? job.updatedAt : now;
+    const repeats = failcause.repeatsOf(fc, { pr: j.pr ?? null, issue: issueNo, stop, at, id });
+    const cls = forced || failcause.classifyFailure({ job, entry: j, events, host, refusal: j.refusal || null, repeats, fixLimitReached: j.pr != null && this.fixCount(j.pr) >= this.c.limits.max_fix_attempts, openPrerequisites });
+    if (failcause.recordFailure(fc, failcause.failureRecord({ id, entry: { ...j, issue: issueNo }, job, cls }), now)) (report.failCauses ||= []).push({ job: id.slice(0, 8), cause: cls.cause });
+    this.draftPostmortems(report);
+  }
+  // Issue #1020: three or more jobs of one cause inside an hour draft a post-mortem issue into the Inbox (the homeowner approves it there).
+  draftPostmortems(report) {
+    const dir = this.inboxDir(); if (!dir) return;
+    const fc = this.s.failCauses, now = this.clock.now();
+    for (const due of failcause.postmortemsDue(fc, { now })) {
+      const item = failcause.postmortemItem(due), v = inboxStore.validateItem(item);
+      if (!v.ok) { (report.skipped ||= []).push({ what: `post-mortem ${due.cause}`, reason: v.reason }); continue; }
+      const id = crypto.createHash('sha256').update(`postmortem:${due.cause}:${due.records[0].job}`).digest('hex').slice(0, 32);
+      try {
+        const file = path.join(inboxStore.dirs(dir).items, `${id}.json`);
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o755 });
+        if (!fs.existsSync(file) && !inboxStore.statusOf(dir, id)) fs.writeFileSync(file, JSON.stringify(v.item, null, 1) + '\n', { mode: 0o644, flag: 'wx' });
+        failcause.markDrafted(fc, due.records, now);
+        (report.postmortems ||= []).push({ cause: due.cause, jobs: due.records.length });
+      } catch (error) { (report.skipped ||= []).push({ what: `post-mortem ${due.cause}`, reason: String(error?.message || error).slice(0, 200) }); }
+    }
   }
   // Issue #865: successes finished before this version kept none, so after an install the breaker would still count the waste they
   // superseded. Read each such job once (only those that could supersede waste still on file) and record it.
@@ -2403,6 +2444,7 @@ export class Team {
         this.s.waitingOn[j.issue] = { items, job: id, at: this.clock.now() };
         delete this.s.implemented[j.issue]; delete j.endedNoPr; j.wasteChecked = true; j.ingested = true; this.save();
         (report.waiting ||= []).push({ job: id, issue: j.issue, items });
+        try { await this.recordFailureCause(id, j, job, null, report, false, { cause: 'prerequisite_open', detail: items.length ? `stopped because ${items.map(n => `#${n}`).join(', ')} ${items.length > 1 ? 'are' : 'is'} still open` : 'stopped on an open prerequisite' }); this.save(); } catch (error) { (report.skipped ||= []).push({ what: `failure cause ${id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
         return;
       }
       // Issue #995 part 3: count the failed attempt by cause (a homeowner stop is not a failure); a completed job clears the count.

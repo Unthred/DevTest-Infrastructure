@@ -3,6 +3,7 @@
 import { DEFAULT_GBP_PER_USD, formatCost } from './money.mjs';
 import fs from 'node:fs';
 import { headlineStats } from './headline.mjs';
+import { summarize as failCausesOf } from './failcause.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
 import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
@@ -777,7 +778,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       budget,
       attention,
       robustness: robustnessView(state, team, jobs, now),
-      breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL },
+      breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL, failCauses: failCausesOf(state.failCauses, { now }) },
       usage: usageView(config, jobs, states, allowance, now),
       graphs: graphs({ config, jobs, state, snapshots: history?.chartSnapshots || snapshots, now, windowMs: history?.chartSnapshots ? Infinity : 30 * DAY }),
       idleCauses: idleReport({ jobs, snapshots, agents: Object.fromEntries(Object.entries(config.agents).map(([n, x]) => [n, x.provider])), from: now - 24 * 3600000, to: now }),

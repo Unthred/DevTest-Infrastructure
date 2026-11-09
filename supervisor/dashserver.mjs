@@ -25,6 +25,7 @@ import { installs, breakerHistory } from './installs.mjs';
 import { readIndex, searchIndex } from './issueindex.mjs';
 import { wasteByCause, configView, testRunsView, ticksView } from './mcpreads.mjs';
 import { alertsView } from './alertsview.mjs';
+import { summarize as failCausesOf } from './failcause.mjs';
 import { DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import nodePath from 'node:path';
 import { defaultRegistry } from './core.mjs';
@@ -351,6 +352,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       if (path === '/api/breaker.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(breakerHistory(readTeamState(root), 100)));
       // Issue #635: the Diagnostics data, the failure cost by cause, and the effective configuration, for the Foreman MCP tools.
       if (path === '/api/diagnostics.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(diagnosticsData({ root, config: source(), now: now(), recorderDir })));
+      if (path === '/api/failure-causes.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(failCausesOf(readTeamState(root).failCauses, { now: now(), days: new URLSearchParams(search).get('days') })));
       if (path === '/api/waste.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(wasteByCause(readTeamState(root), { now: now(), days: new URLSearchParams(search).get('days') })));
       // Issue #951: read-only search of the issue and pull request index, for the Foreman MCP tool foreman_issues.
       if (path === '/api/issues.json') { const q = Object.fromEntries(new URLSearchParams(search)); return send(200, 'application/json; charset=utf-8', JSON.stringify(searchIndex(readIndex(root), q, { verdicts: readTeamState(root).verdicts || {}, limit: q.limit }))); }
