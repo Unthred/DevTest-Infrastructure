@@ -21,21 +21,19 @@ export async function approveEach({ forms, post, wait, onEach = () => {} }) {
 export const summary = r => `Approved ${r.approved}${r.skipped ? `, ${r.skipped} already decided` : ''}${r.failed ? `. Stopped: ${r.failed}` : ''}`;
 
 // post(url, params) is the page's postDecision, passed in by inbox-ui.mjs so this file has no import cycle.
+// A single Approve or Reject refreshes the page in place from app.js (the decided handler); Approve all refreshes once, after the last item.
 export function bindApproveAll(postDecision) {
-  const panel = () => document.querySelector('[data-approvals]');
   const rows = () => [...document.querySelectorAll('[data-approvals] .approval-row')];
   const refreshNow = () => document.querySelector('.refresh-now')?.click();
+  const wait = ms => new Promise(res => setTimeout(res, ms));
+  const post = f => postDecision(fetch.bind(window), f.action, new FormData(f));
   document.addEventListener('click', async e => {
-    const btn = e.target.closest?.('[data-approve-all]'); if (!btn) return;
+    const btn = e.target.closest?.('[data-approve-all]');
+    if (!btn) return;
     const forms = rows().filter(li => li.dataset.tier === 'click').map(li => li.querySelector('form:has([value=approve])')).filter(Boolean);
     btn.disabled = true;
-    const r = await approveEach({ forms, wait: ms => new Promise(res => setTimeout(res, ms)), post: f => postDecision(fetch.bind(window), f.action, new FormData(f)) });
+    const r = await approveEach({ forms, wait, post });
     btn.textContent = summary(r);
     refreshNow();
   });
-  // A row whose outcome the Inbox handler has shown leaves the list a moment later and the badge follows; a refresh then confirms from the server.
-  if (typeof MutationObserver === 'undefined') return;   // a test double of the page has none
-  new MutationObserver(() => {
-    for (const li of rows()) if (li.querySelector('.inbox-outcome:not([hidden])')) setTimeout(() => { li.remove(); const b = panel()?.querySelector('[data-approvals-count]'); if (b) b.textContent = String(rows().length); refreshNow(); }, 1500);
-  }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
 }

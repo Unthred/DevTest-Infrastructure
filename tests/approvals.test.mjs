@@ -9,13 +9,14 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import * as inbox from '../supervisor/inbox.mjs';
-import { toApprovalRows, pendingApprovals, approveAllIds, tierOf } from '../supervisor/approvals.mjs';
+import { toApprovalRows, pendingApprovals as listOf, approveAllIds, tierOf, withApprovals } from '../supervisor/approvals.mjs';
 import { approvalsDropdown } from '../supervisor/approvals-ui.mjs';
 import { approveEach, summary } from '../supervisor/dashui/approve-all.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
 
 const tmp = (t, p) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
+const pendingApprovals = (dir, needsYou = []) => listOf({ inboxDir: dir, needsYou });
 const hex = n => crypto.randomBytes(n).toString('hex');
 const makeInbox = t => { const dir = tmp(t, 'appr1101-'); fs.mkdirSync(path.join(dir, 'items')); fs.mkdirSync(path.join(dir, 'status')); return dir; };
 const drop = (dir, item) => { const id = hex(16); fs.writeFileSync(path.join(dir, 'items', `${id}.json`), JSON.stringify(item)); return id; };
@@ -108,4 +109,37 @@ test('shared path: the dropdown forms post exactly what the Inbox card forms pos
   const approve = forms.filter(f => f.includes('value="approve"'));
   assert.ok(approve.length >= 2, 'one in Needs you, one in the dropdown');
   assert.equal(new Set(approve).size, 1, 'identical action and fields');
+});
+
+const DECISION = { id: 'fixlimit-77', text: 'PR #77 is still rejected after 2 fix rounds (limit 2)', tried: 'Two rounds ran.', action: 'Choose one: raise the limit, or close it.', links: [{ text: 'PR #77', url: 'https://github.com/o/r/pull/77' }], since: 500 };
+const OTHER = { id: 'drift', text: 'The checkout drifted', action: 'Fix it.', since: 100 };
+test('list: decisions waiting on the homeowner are listed with their options; other Needs you items are not', t => {
+  const dir = makeInbox(t); const a = drop(dir, PROMPT); inbox.scan(dir, 1000);
+  const rows = pendingApprovals(dir, [OTHER, DECISION, { id: 'decision-proposal-D-040-12', text: 'Decision D-040 awaits sign-off', since: 2000 }]);
+  assert.deepEqual(rows.map(r => r.id), ['fixlimit-77', a, 'decision-proposal-D-040-12'], 'oldest first, decisions and proposals together');
+  const [d] = rows;
+  assert.equal(d.tier, 'decision'); assert.equal(d.kindLabel, 'Decision'); assert.match(d.options, /^Choose one: raise the limit/); assert.equal(d.link, 'https://github.com/o/r/pull/77');
+  assert.deepEqual(approveAllIds(rows), [a], 'a decision is never in Approve all');
+  const html = approvalsDropdown({ rows, esc, ago: () => '3 min ago' });
+  assert.match(html, /data-approvals-count>3</); assert.match(html, /Options: Choose one/); assert.match(html, /Decide it here/);
+  const decisionRow = html.split('<li ').find(x => x.includes('data-tier="decision"'));
+  assert.ok(!/<form|value="approve"/.test(decisionRow), 'no Approve or Reject form on a decision row');
+});
+test('list: an action never shows its target job id, in the title or the why', t => {
+  const dir = makeInbox(t); drop(dir, ACTION); inbox.scan(dir, 1000);
+  const [r] = pendingApprovals(dir);
+  assert.ok(r.why.length > 10); assert.ok(!/[0-9a-f]{8}/.test(r.why) && !r.why.includes('Target'), r.why);
+  const html = approvalsDropdown({ rows: [r], esc, ago: () => '1 min ago' });
+  assert.ok(!/[0-9a-f]{8}/.test(html.replace(/data-inbox="[^"]*"|name="id" value="[^"]*"/g, '')), 'no hex id in what is read');
+});
+test('view: withApprovals puts the one list on the view the dropdown reads', t => {
+  const dir = makeInbox(t); drop(dir, PROMPT); inbox.scan(dir, 1000);
+  const view = withApprovals({ panels: { needsYou: [DECISION] } }, { inbox: { dir } });
+  assert.deepEqual(view.panels.approvals.map(r => r.kind), ['decision', 'prompt']);
+  assert.deepEqual(withApprovals({ panels: { needsYou: [OTHER] } }, {}).panels.approvals, []);
+});
+test('page: a decision made on the page refreshes the list in place (the decided handler calls the refresher)', () => {
+  const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
+  const submit = app.slice(app.indexOf("addEventListener('submit'"), app.indexOf('An Undo link disappears'));
+  assert.match(submit, /await runDecision\([\s\S]*\}\) => ?\)?/.source ? /\}\)\.then\(\(\) => refresher\?\.refresh\(true, \{ live: true \}\)\)/ : null, 'every single decision re-reads the page');
 });

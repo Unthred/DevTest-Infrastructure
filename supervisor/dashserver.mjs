@@ -12,6 +12,7 @@ import { applyAction, readWatchlist } from './watchlist.mjs';
 import { createViewStore, VIEW_STALE_MS } from './viewstore.mjs';
 import { createWorkerBuild } from './viewworker.mjs';
 import { buildView } from './dashboard.mjs';
+import { withApprovals } from './approvals.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
@@ -100,7 +101,12 @@ export async function currentView({ root, config, now = Date.now(), tz = default
   const register = registerCached(config);
   const hot = readSnapshots(root), tl = readTimeline(root);
   const history = { timeline: timeline ? tl : [], gaps: timeline ? computeGaps(tl, allSnapshots(root, hot), now) : [], storage: storageReport(root, { now, timeline: tl, ...(statfs ? { statfs } : {}) }), ...(allTime ? { chartSnapshots: allSnapshots(root, hot) } : {}) };
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register });
+  const checked = validateTeamConfig(config);   // the validated configuration carries the inbox folder the approvals list reads
+  const view = await buildView({
+    config: checked, root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root),
+    snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register,
+  });
+  return withApprovals(view, checked);
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
