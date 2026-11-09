@@ -1,23 +1,15 @@
 // The "Waiting for approval" dropdown on the Now tab (issue #1101): HTML only, from the rows supervisor/approvals.mjs returns. The forms are the
 // Inbox's own (post to /inbox with the page's access proof), so the existing submit handler and the existing approve and reject path decide.
 import { approveAllIds } from './approvals.mjs';
+import { decisionForm } from './decision-ui.mjs';
 
 const FORM_TAIL = '</button></form>';
 const form = (esc, id, decision, label) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}">`
   + `<input type="hidden" name="decision" value="${decision}"><button class="btn inbox-${decision}" type="submit">${label}${FORM_TAIL}`;
 
-const actionForm = (esc, control) => {
-  const action = `<input type="hidden" name="action" value="${esc(control.action)}">`;
-  const target = `<input type="hidden" name="target" value="${esc(control.target)}">`;
-  const reason = '<label>Why <input name="reason" maxlength="300" required></label>';
-  const button = `<button class="btn" type="submit">${esc(control.label)}</button>`;
-  return `<form method="post" action="/decision" class="decision-form">${action}${target}${reason}${button}</form>`;
-};
-
-const STRONG_NOTE = '<span class="sub">Needs the typed pull request number; decide it on its pull request.</span>';
 const buttons = (esc, r) => {
-  if (r.tier === 'decision') return r.error ? `<span class="sub" role="alert">${esc(r.error)}</span>` : r.controls.map(c => actionForm(esc, c)).join('');
-  if (r.tier === 'strong') return STRONG_NOTE;
+  if (r.tier === 'decision') return r.error ? `<span class="sub" role="alert">${esc(r.error)}</span>` : r.controls.map(c => decisionForm(esc, c)).join('');
+  if (r.tier === 'strong') return '<span class="sub">A strong confirmation is required on this card.</span>';
   return (r.canApprove ? form(esc, r.id, 'approve', 'Approve') : '') + form(esc, r.id, 'reject', 'Reject');
 };
 const whyBlock = (esc, r) => {

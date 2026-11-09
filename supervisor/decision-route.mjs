@@ -1,5 +1,6 @@
 import { recordDecisionAction } from './decision-request.mjs';
 import { proofValid, reserveCooldown, releaseCooldown, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
+import { ACTIONS } from '../foreman-mcp/actions.mjs';
 
 export async function handleDecision({
   req, send, root, source, allowedHost, originAllowed, refuseWith, refuseHost,
@@ -17,7 +18,11 @@ export async function handleDecision({
   const slot = reserveCooldown(root, 'decision', t, INBOX_COOLDOWN_MS);
   if (!slot.ok) return send(429, 'text/plain; charset=utf-8', 'too soon');
   try {
-    const r = recordDecisionAction({ dir: source().inbox.dir, action: form.get('action'), target: form.get('target'), reason: form.get('reason'), now: t });
+    const action = form.get('action');
+    const target = form.get('target');
+    const strong = Object.hasOwn(ACTIONS, action) && ACTIONS[action].tier === 'strong';
+    if (strong && form.get('confirm') !== target) throw new Error(`type PR #${target} to confirm this homeowner override`);
+    const r = recordDecisionAction({ dir: source().inbox.dir, action, target, reason: form.get('reason'), override: strong, now: t });
     invalidate();
     try { wake(root, 'approve', source()); } catch { /* schedule remains the fallback */ }
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: `/?notice=decision-${r.id.slice(0, 8)}` });

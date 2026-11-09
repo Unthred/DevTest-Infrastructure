@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { ACTIONS, validAction } from '../foreman-mcp/actions.mjs';
 import { dirs, scan, decide, finish, statusOf } from './inbox.mjs';
 
-export function recordDecisionAction({ dir, action, target, reason, now = Date.now() }) {
+export function recordDecisionAction({ dir, action, target, reason, override = false, now = Date.now() }) {
   if (!validAction(action, target)) throw new Error('unknown action or target');
   const why = String(reason || '').trim();
   if (!why || why.length > 300) throw new Error('reason must be 1 to 300 characters');
@@ -18,6 +18,6 @@ export function recordDecisionAction({ dir, action, target, reason, now = Date.n
   scan(dir, now);
   const approved = decide(dir, id, 'approve', now);
   if (!approved.ok) throw new Error(approved.reason);
-  finish(dir, id, { decidedBy: 'homeowner', decisionReason: why }, now);
+  finish(dir, id, { decidedBy: 'homeowner', decisionReason: why, ...(override ? { homeownerOverride: true } : {}) }, now);
   return { id, action, target: String(target), decidedAt: now, state: statusOf(dir, id)?.state };
 }

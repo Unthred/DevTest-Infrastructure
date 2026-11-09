@@ -29,3 +29,14 @@ test('decision route records only table actions and leaves invalid requests with
   assert.equal(invalid.code, 409);
   assert.equal(allStatuses(dir).length, 1);
 });
+
+test('strong actions require the typed pull request number and retain the homeowner override', async t => {
+  const root = temp(), dir = path.join(root, 'inbox');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const proof = writeToken(root);
+  const wrong = await invoke({ root, dir, body: new URLSearchParams({ proof, action: 'merge', target: '12', confirm: '13', reason: 'ready to merge' }).toString() });
+  assert.equal(wrong.code, 409);
+  const accepted = await invoke({ root, dir, at: 2001, body: new URLSearchParams({ proof, action: 'merge', target: '12', confirm: '12', reason: 'ready to merge' }).toString() });
+  assert.equal(accepted.code, 303);
+  assert.equal(allStatuses(dir)[0].homeownerOverride, true);
+});

@@ -19,7 +19,7 @@ export { ACTIONS };
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
 export const CONTROLS = { park: { target: 'pr' }, stop_job: { target: 'job' } };
-const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
+const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, number: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
@@ -241,7 +241,18 @@ export function decide(inboxDir, id, decision, now = Date.now()) {
     if (!l.ok) { setStatus(inboxDir, id, { state: 'refused', reason: l.reason }, now); audit(inboxDir, { id, event: 'refused', kind: s.kind, hash: s.hash, reason: l.reason }, now); return { ok: false, reason: l.reason }; }
   }
   const state = decision === 'approve' ? 'approved' : 'rejected';
-  setStatus(inboxDir, id, { state, decision, decidedAt: now, title: titleOf(inboxDir, id), ...(decision === 'reject' ? { result: 'rejected by the homeowner; nothing was done' } : {}) }, now);
+  const loaded = decision === 'approve' ? loadItem(inboxDir, id) : null;
+  const decisionReason = loaded?.ok && loaded.item.kind === 'action' ? loaded.item.reason : null;
+  const outcome = decision === 'approve'
+    ? { decidedBy: 'homeowner', ...(decisionReason ? { decisionReason } : {}) }
+    : { result: 'rejected by the homeowner; nothing was done' };
+  setStatus(inboxDir, id, {
+    state,
+    decision,
+    decidedAt: now,
+    title: titleOf(inboxDir, id),
+    ...outcome,
+  }, now);
   audit(inboxDir, { id, event: state, kind: s.kind, hash: s.hash }, now);
   return { ok: true, state, decidedAt: now, undoUntil: now + UNDO_MS };
 }
@@ -255,7 +266,7 @@ export function undo(inboxDir, id, now = Date.now()) {
     if (!s) return { ok: false, reason: 'unknown item' };
     if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
     if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
-    const { decision, decidedAt, title, result, ...rest } = s;
+    const { decision, decidedAt, title, result, decidedBy, decisionReason, homeownerOverride, ...rest } = s;
     writeAtomic(file, { ...rest, state: 'pending', id, updatedAt: now });
     audit(inboxDir, { id, event: 'undone', kind: s.kind, hash: s.hash }, now);
     return { ok: true, state: 'pending' };

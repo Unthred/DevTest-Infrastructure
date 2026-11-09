@@ -6,13 +6,7 @@ import { controlsForDecision } from '../foreman-mcp/actions.mjs';
 
 // Words for the homeowner. The raw kind names are internal.
 export const KIND_LABEL = { prompt: 'Prompt', issue_draft: 'Issue draft', action: 'Action', host_value: 'Configuration value' };
-// Strong tier: approvals that carry a typed pull request number confirmation. None is an inbox kind today; the set is the guard, so an item of
-// one of these kinds can never reach Approve all if the list later includes it.
-export const STRONG_KINDS = new Set(['merge', 'approve', 'verdict']);
-export const tierOf = kind => (STRONG_KINDS.has(kind) ? 'strong' : 'click');
-// Needs you items that are a choice between options (fix limit, split, retry cap, decision register entries). They get no Approve button here:
-// the choice is made on the pull request or issue, so the row shows the options and links to it.
-export const DECISION_ID = /^(decision-proposal-|decision-|fixlimit-|split-|retrycap-|reviewlimit-|reviewrefused-|job-[a-f0-9]{8,}$|stale-mark-)/;
+export const tierOf = kind => (['merge', 'approve', 'verdict'].includes(kind) ? 'strong' : 'click');
 
 // Job ids and hashes are internal; none is shown to the homeowner.
 const plain = text => String(text ?? '').replace(/\b[0-9a-f]{8,}\b/g, '').replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim();
@@ -35,10 +29,7 @@ export function toApprovalRows(cards) {
 
 // Pure: Needs you items -> decision rows, with the options the homeowner chooses between.
 export function toDecisionRows(items) {
-  return items.filter(a => {
-    const mapped = controlsForDecision(a);
-    return mapped.type || [a.id, ...(a.causes || []).map(c => c.id)].some(id => DECISION_ID.test(id || ''));
-  }).map(a => {
+  return items.map(a => {
     const mapped = controlsForDecision(a);
     return {
       id: a.id,
@@ -72,7 +63,7 @@ export function withApprovals(view, config) {
   if (!view?.panels) return view;   // a degraded view has no panels to list from
   for (const item of view.panels.needsYou || []) {
     const mapped = controlsForDecision(item);
-    if (mapped.type || DECISION_ID.test(item.id || '')) item.decisionControls = mapped;
+    item.decisionControls = mapped;
   }
   view.panels.approvals = pendingApprovals({ inboxDir: config?.inbox?.dir ?? null, needsYou: view.panels.needsYou || [] });
   return view;

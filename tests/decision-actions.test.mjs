@@ -10,7 +10,7 @@ const tempRoot = () => fs.mkdtempSync(path.join(process.env.TMPDIR, 'decision-ac
 
 test('each declared decision type has a valid action and unknown types are visible errors', () => {
   assert.equal(assertDecisionTable(), true);
-  for (const names of Object.values(DECISION_ACTIONS)) assert.ok(names.length && names.every(name => ACTIONS[name]));
+  for (const row of DECISION_ACTIONS) assert.ok(row.actions.length && row.actions.every(name => ACTIONS[name]));
   const mapped = controlsForDecision({ id: 'retrycap-review-12', ref: { n: 12 } });
   assert.deepEqual(mapped.controls.map(c => c.action), ['clear_retry_cap', 'new_review_attempt']);
   assert.equal(mapped.error, null);
@@ -23,7 +23,7 @@ test('each declared decision type has a valid action and unknown types are visib
     ['close_job', 'aaaaaaaa'],
   ]);
   assert.deepEqual(controlsForDecision({ id: 'stale-mark-12', ref: { kind: 'issue', n: 12 } }).controls.map(c => c.action), ['reopen']);
-  const unknown = controlsForDecision({ id: 'decision-new-type', ref: { n: 12 } });
+  const unknown = controlsForDecision({ id: 'unmapped-new-type', ref: { n: 12 } });
   assert.match(unknown.error, /no action mapping/);
 });
 

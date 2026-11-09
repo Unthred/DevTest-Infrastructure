@@ -113,16 +113,16 @@ test('shared path: the dropdown forms post exactly what the Inbox card forms pos
 
 const DECISION = { id: 'fixlimit-77', text: 'PR #77 is still rejected after 2 fix rounds (limit 2)', tried: 'Two rounds ran.', action: 'Choose one: raise the limit, or close it.', links: [{ text: 'PR #77', url: 'https://github.com/o/r/pull/77' }], since: 500 };
 const OTHER = { id: 'drift', text: 'The checkout drifted', action: 'Fix it.', since: 100 };
-test('list: decisions waiting on the homeowner are listed with their options; other Needs you items are not', t => {
+test('list: decisions waiting on the homeowner are listed with their options; unmapped ones are visible errors', t => {
   const dir = makeInbox(t); const a = drop(dir, PROMPT); inbox.scan(dir, 1000);
   const rows = pendingApprovals(dir, [OTHER, DECISION, { id: 'decision-proposal-D-040-12', text: 'Decision D-040 awaits sign-off', since: 2000 }]);
-  assert.deepEqual(rows.map(r => r.id), ['fixlimit-77', a, 'decision-proposal-D-040-12'], 'oldest first, decisions and proposals together');
-  const [d] = rows;
+  assert.deepEqual(rows.map(r => r.id), ['drift', 'fixlimit-77', a, 'decision-proposal-D-040-12'], 'oldest first, decisions and proposals together');
+  const d = rows[1];
   assert.equal(d.tier, 'decision'); assert.equal(d.kindLabel, 'Decision'); assert.match(d.options, /^Choose one: raise the limit/); assert.equal(d.link, 'https://github.com/o/r/pull/77');
   assert.deepEqual(approveAllIds(rows), [a], 'a decision is never in Approve all');
   const html = approvalsDropdown({ rows, esc, ago: () => '3 min ago' });
-  assert.match(html, /data-approvals-count>3</); assert.match(html, /Options: Choose one/); assert.match(html, /action="\/decision"/);
-  const decisionRow = html.split('<li ').find(x => x.includes('data-tier="decision"'));
+  assert.match(html, /data-approvals-count>4</); assert.match(html, /Options: Choose one/); assert.match(html, /action="\/decision"/);
+  const decisionRow = html.split('<li ').find(x => x.includes('data-inbox="fixlimit-77"'));
   assert.match(decisionRow, /extra_fix_round/); assert.ok(!/name="decision" value="approve"/.test(decisionRow), 'no generic approval form on a decision row');
 });
 test('list: every mapped decision appears in Waiting for approval with its card control', t => {
@@ -171,7 +171,7 @@ test('view: withApprovals puts the one list on the view the dropdown reads', t =
   const dir = makeInbox(t); drop(dir, PROMPT); inbox.scan(dir, 1000);
   const view = withApprovals({ panels: { needsYou: [DECISION] } }, { inbox: { dir } });
   assert.deepEqual(view.panels.approvals.map(r => r.kind), ['decision', 'prompt']);
-  assert.deepEqual(withApprovals({ panels: { needsYou: [OTHER] } }, {}).panels.approvals, []);
+  assert.match(withApprovals({ panels: { needsYou: [OTHER] } }, {}).panels.approvals[0].error, /no action mapping/);
 });
 test('page: a decision made on the page refreshes the list in place (the decided handler calls the refresher)', () => {
   const app = fs.readFileSync(new URL('../supervisor/dashui/app.js', import.meta.url), 'utf8');
