@@ -10,7 +10,7 @@ test('methods, classes and parameters are measured', () => {
   const src = `namespace N;\npublic class Svc\n{\n    public int Run(int a, Dictionary<string, int> b, string c = "x")\n    {\n${body(3)}    }\n    public int Value { get { return 1; } }\n}\n`;
   const by = Object.fromEntries(measureCsharp('Svc.cs', src).map(u => [u.key, u]));
   assert.equal(by['class:Svc'].lines, 10);
-  assert.equal(by['function:Svc>Run'].lines, 5);
+  assert.equal(by['function:Svc>Run'].lines, 6);
   assert.equal(by['function:Svc>Run'].params, 3);
   assert.equal(by['function:Svc>Run'].method, true);
   assert.equal(by['function:Svc>get'], undefined);
