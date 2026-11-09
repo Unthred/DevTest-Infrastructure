@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
+import { dependencyPlain } from './teamdeps.mjs';
 import { checksState, retriedIn, prerequisites, pullPrerequisites, proseDependencies } from './team.mjs';
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { hasReading } from './allowance.mjs';
@@ -227,6 +228,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     // file lists the tick read for the second-opinion hold (null = unreadable), so the page shows the same hold as the tick
     cache.pullFiles = team.files instanceof Map ? Object.fromEntries([...team.files].map(([n, f]) => [n, Array.isArray(f) ? f.slice(0, 300).map(x => redact(String(x), 200)) : null])) : (prev.pullFiles || {}); }
   else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.merged = prev.merged || []; cache.mergedNumbers = prev.mergedNumbers || []; cache.pullFiles = prev.pullFiles || {}; cache.fetchedAt = prev.fetchedAt ?? null; }
+  cache.dependencies = (team?.view ? dependencyPlain(team.dependencies) : null) ?? prev.dependencies ?? null;   // issue #1103
   atomicJson(cacheFile(root), cache);
   if (!team || (status !== 'ok' && status !== 'error')) return cache;
   const states = agentStates(team.c, jobs, now);

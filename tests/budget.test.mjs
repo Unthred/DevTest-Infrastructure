@@ -401,13 +401,13 @@ test('#104 in-flight, started and draft issues are never taken', async t => {
   const flight = world(t, { ...base, issues: [issue(2), issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(3, 'CLOSED')] });
   flight.team.s.jobs.j = { kind: 'implement', key: '2', agent: 'codex', issue: 2, ingested: false };
   assert.ok(!(await flight.team.plan()).some(a => a.agent === 'claude'), 'an in-flight job blocks it');
-  const prereq = world(t, { ...base, issues: [issue(2, 'OPEN', 'Prerequisites: #3'), issue(3), issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
+  const prereq = world(t, { ...base, issues: [issue(2, 'OPEN', 'Depends on: #3'), issue(3), issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   const p = await prereq.team.plan();
   assert.deepEqual(p.filter(a => a.agent === 'claude').map(a => a.issue), [3], 'the prerequisite (also codex-owned) is taken, not its dependant');
 });
 
 test('#104 a prerequisite owned by another, out owner is taken so the taker can then do its own dependant', async t => {
-  const w = world(t, { issues: [issue(23, 'OPEN', 'Prerequisites: #3'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3)], allowance: { codex: codexAl(0.92), claude: claudeAl(0.4) } });
+  const w = world(t, { issues: [issue(23, 'OPEN', 'Depends on: #3'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3)], allowance: { codex: codexAl(0.92), claude: claudeAl(0.4) } });
   const p = await w.team.plan();
   assert.deepEqual(p.filter(a => a.agent === 'claude').map(a => [a.type, a.issue, a.reassignedFrom]), [['implement', 3, 'codex']], 'claude takes codex prerequisite #3, not its own blocked #23');
 });

@@ -35,6 +35,8 @@ import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './nam
 
 const sha7 = s => String(s || '').slice(0, 7);
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
+// Issue #1103: only what a stopped job reported as open still holds an issue besides its Depends on line.
+const reportedWaits = (S, n, byNo, prs) => waitingOnRefs({ body: '' }, byNo, prs, S.waitingOn?.[n]?.items || []);
 export const EXHAUSTED = 0.995;       // a window at or above this fraction used counts as exhausted
 export const windowLabel = (w, provider) => {
   if (w.type === 'five_hour') return '5-hour';
@@ -121,7 +123,8 @@ function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now =
   // reassignments `team tick --dry-run` would.
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs, probes: cache.probes, snapshots, events, now });
   const team = new Team({ config, root, gh, jobs: jobsApi, git: null, register, allowanceOf, limitedOf, usage, clock: { now: () => now }, timeZone: tz });
-  team.s = { ...team.s, ...state };      // the state the caller read, so the plan and the page agree
+  team.s = { ...team.s, ...state }; team.dependencies = Team.dependencyTools.fromPlain(cache.dependencies); // the state the caller read
+  team.depFromCache = !!team.dependencies;   // issue #1103: without tick data plan() works it out from the issues it was given
   for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable', 'unblock', 'refusedReviews']) team.s[k] ||= {};
   for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'escalated', 'queued']) team.s.unblock[k] ||= {};
   team.s.unblock.log ||= [];
@@ -166,18 +169,15 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
   for (const [agent, a] of Object.entries(c.agents)) for (const n of a.issues) {
     const issue = byNo.get(n);
     if (!issue || issue.state !== 'OPEN' || team.delivered?.has(n)) continue;
-    const deps = c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
-    const open = deps.filter(d => byNo.get(d)?.state !== 'CLOSED');
     const prOf = prs.find(p => agentOfBranch(c, p.headRefName) && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName));
     const hasPr = !!prOf && agentOfBranch(c, prOf.headRefName) === agent;
     const taker = plan.find(x => x.type === 'implement' && x.issue === n && x.reassignedFrom === agent);
     const moved = Object.values(S.jobs || {}).find(j => j.kind === 'implement' && j.issue === n && j.reassignedFrom === agent);
     const mode = team.modes?.[agent];
     const running = activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n);
-    let reason, waits;
-    if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
-    else if (open.length) reason = `blocked by ${open.map(d => names.issue(d).text).join(', ')}`;
-    else if ((waits = waitingOnRefs(issue, byNo, prs, S.waitingOn?.[n]?.items || [])).length) reason = `waiting on ${waits.map(d => names.issue(d).text).join(', ')}`;   // issue #1023
+    let reason, waits, dep = Team.dependencyTools.exclusion(team, n)?.text;   // issue #1103
+    if (dep) reason = dep; else if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
+    else if ((waits = reportedWaits(S, n, byNo, prs)).length) reason = `waiting on ${waits.map(d => names.issue(d).text).join(', ')}`;   // issue #1023
     else if (running) reason = 'being implemented now';
     else if (hasPr) reason = 'PR open';
     else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; ${names.pr(prOf.number).text} open` : ''}`;
@@ -249,8 +249,7 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
     if (issue.labels.includes('needs-homeowner')) { part(0, `waiting for homeowner: ${names.issue(n).text} needs the homeowner`, 'issue', n); continue; }
     if (mine.some(p => new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName))) continue;
     openIssues++;
-    const open = (c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => byNo.get(d)?.state !== 'CLOSED');
-    if (open.length) open.forEach(d => blockers.add(d));
+    (Team.dependencyTools.exclusion(team, n)?.refs || []).forEach(d => blockers.add(d));   // issue #1103: the Depends on line
   }
   if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => names.issue(d).text).join(', ')}` }); for (const d of blockers) links.push({ text: names.issue(d).text, url: url('issues', d) }); }
   else if (openIssues && !(m && m.mode !== 'normal')) parts.push({ rank: 3, text: 'has an open issue but nothing started it yet (limits or a lease may be holding it)' });
@@ -407,8 +406,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     else add(`noreviewer-${u.pr}`, `${what} at ${sha7(u.head)} has no reviewer that is independent and available: ${u.reasons.join('; ')}`, { kind: 'pull', n: u.pr },
       { tried, action: `${unblock}, or review the PR by hand.`, links: [{ text: what, url: web('pull', u.pr) }] });
   }
-  // Issue #212: every open issue is eligible by default, so none is orphaned. Deliberate exclusions (labels, prerequisites, a PR still to
-  // merge) are listed on the Work page, not here; only a follow-up whose PR was closed without merging needs the homeowner.
+  // Issue #212: exclusions are listed on the Work page; only a follow-up whose PR closed unmerged needs the homeowner. #1103: so does a bad Depends on line.
+  for (const x of Team.dependencyTools.attention(cache)) add(x.id, x.text, x.ref, { action: x.action });
   for (const e of excluded) if (e.kind === 'pr-closed') add(`prclosed-${e.number}`, `${names.issue(e.number).text}: ${e.reason}`, { kind: 'issue', n: e.number },
     { tried: 'Foreman held this follow-up until its pull request merged; the PR was closed without merging, so it will not become eligible by itself.', action: 'Close the issue, remove the reference to the PR, or reopen the PR.', links: [{ text: names.issue(e.number).text, url: web('issue', e.number) }] });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
@@ -958,7 +957,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     display: { gbpPerUsd: config.display?.gbp_per_usd ?? DEFAULT_GBP_PER_USD },   // issue #1097: the rate the cost figures were shown with, for the MCP tools
     health: healthOf({ attention, states, teamEnabled, needsYouCount: needsYou.length }), freshness: freshness(tickAt, now),
-    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null,
+    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, dependencies: cache.dependencies ?? null,
     wakes: root ? (() => { try { return wakeView(root, now); } catch { return null; } })() : null,   // issue #985
     version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
     panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },

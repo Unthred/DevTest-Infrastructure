@@ -26,11 +26,18 @@ export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding
   };
 }
 
+// issue #1103: stateReason says whether an issue closed as completed or not planned; closedBy... names the pull requests that closed it
+const ISSUE_FIELDS = 'number,title,state,stateReason,body,labels,closedByPullRequestsReferences';
+// state and mergeCommit: issue #1103 reads old merged prerequisites by number
+const PULL_FIELDS = [
+  'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels',
+  'closingIssuesReferences,createdAt,state,mergeCommit'
+].join(',');
 export function githubClient(config, gh = ghRunner()) {
   const repo = config.repository;
   const boardItems = new Map();
   const json = args => JSON.parse(gh(args) || 'null');
-  const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels,closingIssuesReferences,createdAt';
+  const PR_FIELDS = PULL_FIELDS;
   const withLabels = prs => (Array.isArray(prs) ? prs.map(p => ({ ...p, labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l.name)) })) : prs);
   return {
     listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),
@@ -48,13 +55,13 @@ export function githubClient(config, gh = ghRunner()) {
     // Issue #414: every OPEN issue is fetched (up to 1000, its own call), plus the newest 200 of any state for recently closed
     // prerequisites, so a labelled open issue cannot fall out of a 200 cap when newer issues crowd it out.
     listIssues: async () => {
-      const list = state => json(['issue', 'list', '--repo', repo, '--state', state, '--limit', state === 'open' ? '1000' : '200', '--json', 'number,title,state,body,labels,createdAt,closedAt']) || [];
+      const list = state => json(['issue', 'list', '--repo', repo, '--state', state, '--limit', state === 'open' ? '1000' : '200', '--json', ISSUE_FIELDS + ',createdAt,closedAt']) || [];
       const byNo = new Map();
       for (const i of [...list('open'), ...list('all')]) byNo.set(i.number, i);
       return [...byNo.values()].filter(i => !isStatusIssue(i)).map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) }));
     },
     // One issue by number, for when it is not in the capped list.
-    getIssue: async n => { const i = json(['issue', 'view', String(n), '--repo', repo, '--json', 'number,title,state,body,labels']); return i ? { ...i, labels: (i.labels || []).map(l => l.name) } : null; },
+    getIssue: async n => { const i = json(['issue', 'view', String(n), '--repo', repo, '--json', ISSUE_FIELDS]); return i ? { ...i, labels: (i.labels || []).map(l => l.name) } : null; },
     // The association of the issue's author with the repository (OWNER = the homeowner); the issue body counts as homeowner text only when OWNER (issue #299).
     issueAuthorAssociation: async n => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); return json(['api', '--method', 'GET', `repos/${repo}/issues/${n}`])?.author_association ?? null; },
     // Comments with the author's association to the repository (OWNER = the homeowner), to tell homeowner-required text apart.

@@ -34,33 +34,15 @@ test('prose dependency lines are parsed; code, other phrasing and unspecific "af
   assert.deepEqual(proseDependencies(''), { prs: [], numbers: [] });
 });
 
-test('an issue with a prose dependency on an open PR is not started, shows waiting on it, and starts on the first tick after it merges', async t => {
-  const body = 'Do this once ready.\nDepends on #20.';
-  const open = world(t, { issues: [issue(30, body)], pulls: [pr(20, 'codex/issue-19-x')] });
-  assert.deepEqual(implemented(await open.team.plan()), [], 'not started while PR 20 is open');
-  const ex = open.team.exclusion(30, new Map(open.team.view.issues.map(i => [i.number, i])), open.team.view.prs);
-  assert.equal(ex.kind, 'waiting_on'); assert.equal(ex.text, 'waiting on #20'); assert.deepEqual(ex.refs, [20]);
-  const merged = world(t, { issues: [issue(30, body)], pulls: [], merged: [{ number: 20, title: 'x', mergedAt: '2026-11-07T00:00:00Z' }] });
-  assert.deepEqual(implemented(await merged.team.plan()), [30], 'starts on the first tick after the merge');
-});
-
-test('"after PR N" and an open issue named by "after #N merges" hold the issue; a closed one does not', async t => {
-  assert.deepEqual(implemented(await world(t, { issues: [issue(31, 'after PR 21'), ], pulls: [pr(21, 'codex/issue-2-x')] }).team.plan()), []);
-  assert.deepEqual(implemented(await world(t, { issues: [issue(32, 'after #22 merges'), issue(22)] }).team.plan()), [22], 'the open prerequisite issue is started, not 32');
-  assert.deepEqual(implemented(await world(t, { issues: [issue(32, 'after #22 merges'), issue(22, '', 'CLOSED')] }).team.plan()), [32]);
+test('prose dependencies no longer hold an issue; only the Depends on line does (issue #1103)', async t => {
+  const w = world(t, { issues: [issue(30, 'Depends on #20.\nafter PR 21'), issue(20, '', 'CLOSED')], pulls: [pr(21, 'codex/issue-2-x')] });
+  assert.deepEqual(implemented(await w.team.plan()), [30]);
 });
 
 test('waitingOnRefs ignores merged, closed and unknown items', () => {
   const byNo = new Map([[5, issue(5)], [6, issue(6, '', 'CLOSED')]]);
   assert.deepEqual(waitingOnRefs(issue(1, 'Depends on #5, #6, #7 and PR 8'), byNo, [pr(8, 'x/y')]), [5, 8]);
   assert.deepEqual(waitingOnRefs(issue(1, ''), byNo, [], [5, 6, 9]), [5]);
-});
-
-test('queue reasons show "waiting on #N"', async t => {
-  const w = world(t, { issues: [issue(30, 'Depends on #20')], pulls: [pr(20, 'codex/issue-19-x')] });
-  await w.team.plan();
-  const text = w.team.exclusion(30, new Map(w.team.view.issues.map(i => [i.number, i])), w.team.view.prs).text;
-  assert.match(text, /^waiting on #20$/);
 });
 
 test('the implement prompt tells a job to report an open prerequisite instead of failing', () => {

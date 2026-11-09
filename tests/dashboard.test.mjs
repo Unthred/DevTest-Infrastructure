@@ -150,7 +150,7 @@ test('draft PRs with red CI are not alarms; green PRs are quiet', async t => {
   assert.deepEqual(ids(v), []);
 });
 test('idle agent with work: flagged only when the same plan has stood, idle, for 9+ minutes (or the loop is off)', async t => {
-  const cache = { tick: okTick(), pulls: [], issues: [issue(30), issue(5, 'OPEN', 'Prerequisites: #77'), issue(77)] };
+  const cache = { tick: okTick(), pulls: [], issues: [issue(30), issue(5, 'OPEN', 'Depends on: #77'), issue(77)] };
   const snap = at => ({ at, status: 'ok', plan: [{ agent: 'claude', type: 'implement', ref: 30 }], agents: { claude: 'idle', codex: 'idle' } });
   let v = await view(t, { cache, snapshots: [snap(NOW - 600000), snap(NOW - 300000), snap(NOW - 10000)] });
   assert.deepEqual(v.plan.map(a => [a.agent, a.type, a.issue]), [['claude', 'implement', 30], ['codex', 'implement', 2]].filter(x => cache.issues.some(i => i.number === x[2])).map(x => x));
@@ -166,7 +166,7 @@ test('idle agent with work: flagged only when the same plan has stood, idle, for
 
 // ---- queue
 test('queue reasons: waiting on CI, blocked by #n, awaiting review of sha, draft, CHANGES, ready to merge', async t => {
-  const cache = { tick: okTick(), issues: [issue(30, 'OPEN', 'Prerequisites: #5'), issue(5), issue(2), issue(3, 'OPEN', '', ['needs-homeowner'])],
+  const cache = { tick: okTick(), issues: [issue(30, 'OPEN', 'Depends on: #5'), issue(5), issue(2), issue(3, 'OPEN', '', ['needs-homeowner'])],
     pulls: [pr(11, 'claude/issue-5-x', H(1), { statusCheckRollup: [{ status: 'IN_PROGRESS' }] }), pr(12, 'claude/issue-6-x', H(2), { isDraft: true }), pr(13, 'claude/issue-7-x', H(3)),
       pr(14, 'claude/issue-8-x', H(4)), pr(15, 'codex/issue-9-x', H(5)), pr(16, 'claude/issue-10-x', H(6), { mergeable: 'CONFLICTING' })] };
   const state = { verdicts: { [`14:${H(4)}`]: { verdict: 'CHANGES', reviewer: 'codex' }, [`15:${H(5)}`]: { verdict: 'PASS', reviewer: 'claude' }, [`16:${H(6)}`]: { verdict: 'PASS', reviewer: 'codex' } }, implemented: {}, jobs: {} };
@@ -178,7 +178,7 @@ test('queue reasons: waiting on CI, blocked by #n, awaiting review of sha, draft
   assert.match(q('claude', 14), /CHANGES from codex on 4444444; fix is next/);
   assert.match(q('codex', 15), /PASS from claude; merges on the next tick/);
   assert.match(q('claude', 16), /PASS from codex but not mergeable \(conflicting\)/);
-  assert.match(q('claude', 30), /^blocked by #5 issue 5$/);
+  assert.match(q('claude', 30), /^waiting for #5 still open$/);
   assert.equal(q('codex', 3), 'needs the homeowner');
   assert.match(q('codex', 2), /ready; waits behind review PR #13/);
   assert.match(v.queues.codex.find(i => i.type === 'review' && i.ref === 13).reason, /review PR #13 pr 13 \(for #7\) at 3333333 \(next\)/);
@@ -469,12 +469,13 @@ test('second-opinion rounds (#804): a carried second opinion is not a review and
   assert.deepEqual([none.prs.find(p => p.number === 60).secondOpinionRounds, none.prs.find(p => p.number === 60).secondOpinionCarried], [0, 0]);
 });
 
-test('queue reasons: a prose dependency on an open PR reads "waiting on" it, and a reported wait does too (issue #1023)', async t => {
+test('queue reasons: only a wait the stopped job reported reads "waiting on"; prose dependencies no longer hold (issues #1023, #1103)', async t => {
   const cache = { tick: okTick(), issues: [issue(30, 'OPEN', 'Depends on #11.'), issue(2, 'OPEN', 'Do after PR 11 merges'), issue(3)],
     pulls: [pr(11, 'claude/issue-5-x', H(1), { statusCheckRollup: [{ status: 'IN_PROGRESS' }] })] };
   const v = await view(t, { cache, state: { implemented: {}, jobs: {}, waitingOn: { 3: { items: [11], job: 'x', at: 1 } } } });
   const q = (agent, ref) => v.queues[agent].find(i => i.ref === ref)?.reason;
-  for (const n of [30, 2, 3]) assert.match(q('claude', n) ?? q('codex', n), /^waiting on PR #11 pr 11$|^waiting on #11/, `issue ${n}`);
+  assert.match(q('claude', 3) ?? q('codex', 3), /^waiting on PR #11 pr 11$|^waiting on #11/);
+  for (const n of [30, 2]) assert.doesNotMatch(q('claude', n) ?? q('codex', n), /waiting on/, `issue ${n}`);
   const merged = await view(t, { cache: { ...cache, pulls: [] }, state: { implemented: {}, jobs: {}, waitingOn: { 3: { items: [11], job: 'x', at: 1 } } } });
   for (const n of [30, 2, 3]) assert.doesNotMatch(merged.queues.claude.find(i => i.ref === n)?.reason ?? merged.queues.codex.find(i => i.ref === n)?.reason ?? '', /waiting on/);
 });
