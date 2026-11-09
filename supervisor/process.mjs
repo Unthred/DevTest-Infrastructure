@@ -8,11 +8,17 @@ import { TranscriptWriter, oneLine, pruneTranscripts } from './transcript.mjs';
 import { makeJobTmp, removeJobTmp, tmpEnv } from './jobtmp.mjs';
 import { checkpoint, processInfo, event, prompt, readJob, safeEnvironment, saveJob } from './core.mjs';
 
+// What a provider preflight's outcome means for `ai-supervisor preflight`; null when it passed.
+export function preflightFailure(ok) {
+  if (ok === 'not_found') return 'failed: provider binary not found on PATH';
+  if (ok === 'policy_refused') return 'failed: policy delivery was refused';
+  return ok === false ? 'failed: not logged in or launcher refused the product root' : null;
+}
 export async function runProcess(root, job, config, adapter, clock, options = {}) {
   if (typeof adapter.preflight === 'function') {
     const ok = adapter.preflight(job);
     // A missing provider binary is a PATH/install fault, not a login problem: never tell the homeowner to log in again.
-    if (ok === 'not_found') return { code: 1, event: 'preflight_failed' };
+    if (ok === 'not_found' || ok === 'policy_refused') return { code: 1, event: 'preflight_failed' };
     if (!ok) return { code: 1, event: 'auth_error' };
   }
   // Issue #74: a new job always starts a fresh session; a later attempt resumes only a recent, small session.

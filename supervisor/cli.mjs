@@ -11,7 +11,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, resolveJobId, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
-import { runProcess } from './process.mjs';
+import { preflightFailure, runProcess } from './process.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
 import { guardTmp, leakText } from './jobtmp.mjs';
@@ -236,7 +236,7 @@ async function gatePreflight(registry, config) {
     for (const id of [...new Set(Object.values(config.agents || {}).map(a => a.provider))]) {
       await run(`provider:${id}`, async () => {
         const ok = (await provider(registry, id)).adapter.preflight?.({ role: 'implementer', worktree: config.repo_path });
-        return ok === 'not_found' ? 'failed: provider binary not found on PATH' : ok === false ? 'failed: not logged in or launcher refused the product root' : true;
+        return preflightFailure(ok) ?? true;
       });
     }
   } finally { process.chdir(here); }

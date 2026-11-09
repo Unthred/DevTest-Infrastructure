@@ -2,21 +2,25 @@ import * as base from './base.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { claudeAllowance } from '../allowance.mjs';
+import { deliveredPolicy, policyPreflight } from '../policy.mjs';
 import { safeEnvironment } from '../core.mjs';
 import { oneLine, summarizeInput } from '../transcript.mjs';
 export const capabilities = { resumeSession: true, usageReset: true };
-export function preflight() {
+const POLICY_DELIVERY = 'append_system_prompt';
+export function preflight(job) {
   const result = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8', timeout: 10000, env: safeEnvironment() });
   if (result.error?.code === 'ENOENT') return 'not_found';
   try {
     const status = JSON.parse(result.stdout);
-    return result.status === 0 && status.loggedIn === true && status.authMethod === 'claude.ai' && !!status.subscriptionType;
+    if (!(result.status === 0 && status.loggedIn === true && status.authMethod === 'claude.ai' && !!status.subscriptionType)) return false;
   } catch { return false; }
+  return policyPreflight(job, 'claude', POLICY_DELIVERY);
 }
 export function command(config, job, resume) {
   const context = base.contextForRole(job.role);
   const ruleFile = `/mnt/cache/cursor-workspace/ai-rules-live/adapters/generated/claude/${context}/CLAUDE.md`;
-  const governance = fs.readFileSync(ruleFile, 'utf8');
+  const delivered = deliveredPolicy(job, 'claude', POLICY_DELIVERY);
+  const governance = delivered ? delivered.text : fs.readFileSync(ruleFile, 'utf8');
   const args = [...config.command, '--print', '--verbose', '--output-format', 'stream-json', ...base.accessArgs(config, job), ...base.modelArgs(config, job), '--append-system-prompt', `${governance}\nSelected role: ${job.role}. Follow its project and host safety instructions.`];
   if (resume && job.sessionId && config.manifest.capabilities.resume === 'supported') args.push('--resume', job.sessionId);
   return args;

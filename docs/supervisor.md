@@ -39,6 +39,12 @@ The `allowed_actions` values are a closed list: `read`, `edit`, `test`, `push_fe
 
 ## Validation and limits
 
+## Project and role policy delivery (issue #1105)
+
+The supervisor can deliver the same project and role policy as the interactive launcher, through the AI-Rules contract `tools/policy-delivery.mjs` (`supervisor/policy.mjs`). It is opt-in: with no `policy-delivery.json` in the state root (or the file named by `AI_SUPERVISOR_POLICY_SETTINGS`), each adapter keeps its context-level policy, so installing this version changes nothing. The file holds an absolute `policyRoot` and a non-empty `authorizedRoots` list.
+
+Once the file exists delivery fails closed: a stale, missing or unsupported policy stops the job as `preflight_failed`, never as a sign-in problem and never with weaker policy. The request is built only from the job's role, kind and worktree, so issue and PR text cannot select policy. A `review` job gets the `reviewer` role, `rebase` gets `rebaser`, `inbox` and the `overseer` role get `overseer`, and other jobs get `implementer`. Coding standards stay in the delivered policy and `docs/coding-standards.md`, not in supervisor prompts. Role separation, leases, merge gating, allowances and access arguments are unaffected.
+
 Run `node --test tests/supervisor.test.mjs` and `node tests/real-smoke.mjs WORKTREE`. The latter performs one read-only prompt per installed subscription CLI and summarizes results without exposing provider output. Fake-clock tests cover verified and unverified resets, long waits, transient rate limit, auth, context, approval, network, crash, duplicate job, stale-worker and handover cases. Manifest negatives cover unknown fields, missing capabilities and billing fallback.
 
 Provider usage-limit text and reset formats are based on narrow simulated fixtures; real subscription-limit output has not yet been observed. A provider response that changes format will block or fail safely rather than claim a valid reset. The daemon needs an approved host startup mechanism for reboot recovery. The process is not an independent acceptance authority and cannot grant permission for deployment, purchases or merges.

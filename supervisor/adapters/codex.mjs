@@ -1,19 +1,31 @@
 import * as base from './base.mjs';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { codexAllowanceFromRollout, codexRolloutFile } from '../allowance.mjs';
 import { oneLine } from '../transcript.mjs';
 import { parseStatusWindow, parseTryAgain } from '../clocktext.mjs';
+import { deliveredPolicy, policyPreflight } from '../policy.mjs';
+const POLICY_DELIVERY = 'developer_instructions';
+const profileFor = (job) => {
+  const delivered = deliveredPolicy(job, 'codex', POLICY_DELIVERY);
+  return delivered ? path.basename(delivered.artifact, '.config.toml') : `ai-rules-${base.contextForRole(job.role)}`;
+};
 export const capabilities = { resumeSession: true, usageReset: true };
 export function preflight(job) {
   const status = spawnSync('codex', ['login', 'status'], { encoding: 'utf8', timeout: 10000 });
   if (status.error?.code === 'ENOENT') return 'not_found';
   if (status.status !== 0 || !/logged in using chatgpt/i.test(`${status.stdout}\n${status.stderr}`)) return false;
   // The governed launcher validates its installed profile and the selected product root.
-  const governed = spawnSync('/usr/local/bin/ai-rules-codex', ['--session-name', base.contextForRole(job.role), job.worktree], { encoding: 'utf8', timeout: 15000 });
+  const policy = policyPreflight(job, 'codex', POLICY_DELIVERY);
+  if (policy !== true) return policy;
+  const profile = profileFor(job);
+  const env = profile.startsWith('ai-rules-project-') ? { ...process.env, AI_RULES_POLICY_PROFILE: profile } : process.env;
+  const session = ['--session-name', base.contextForRole(job.role), job.worktree];
+  const governed = spawnSync('/usr/local/bin/ai-rules-codex', session, { encoding: 'utf8', timeout: 15000, env });
   return governed.status === 0;
 }
 export function command(config, job, resume) {
-  const args = [...config.command, 'exec', '--json', '--profile', `ai-rules-${base.contextForRole(job.role)}`, '--cd', job.worktree, ...base.accessArgs(config, job), ...base.modelArgs(config, job)];
+  const args = [...config.command, 'exec', '--json', '--profile', profileFor(job), '--cd', job.worktree, ...base.accessArgs(config, job), ...base.modelArgs(config, job)];
   if (resume && job.sessionId && config.manifest.capabilities.resume === 'supported') args.push('resume', job.sessionId, '-');
   else args.push('-');
   return args;
