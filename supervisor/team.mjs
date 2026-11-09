@@ -21,6 +21,7 @@ import { configureDisplay, formatCost, validateDisplay } from './money.mjs';
 import { validateResourceConfig } from './resources.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, isOpusModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
+import { usageLimitSkip } from './tickskips.mjs';
 import { entryApproved } from './decisions.mjs';
 import { STANDARDS_STEP, STANDARDS_BLOCKING } from './standards-prompt.mjs';
 import { redact, redactLong } from './redact.mjs';
@@ -1754,7 +1755,7 @@ export class Team {
       // Issue #344: several jobs start in one tick, so the allowance is checked again right before each start; a limit reached while
       // an earlier job was starting holds the rest until the next tick (merges are not jobs).
       const l = act.type !== 'merge' ? this.limitedOf(act.agent) : null;
-      if (l?.out) { (report.skipped ||= []).push({ what: `${act.type} ${act.pr ?? act.issue} (${act.agent})`, reason: `not started: ${act.agent} reached its usage limit (${String(l.reason || 'usage limit').slice(0, 120)}); it is retried when allowance returns` }); continue; }
+      if (l?.out) { (report.skipped ||= []).push(usageLimitSkip(act, l)); continue; }
       const startSince = Date.now();
       await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
       lap('job launches', startSince);
@@ -1857,7 +1858,7 @@ export class Team {
     const d = robust.rebaseNeeded({ probe, pull });
     if (d.needed) return false;
     (this.s.rebaseSkipped ||= {})[act.key] = { at: this.clock.now(), why: d.why };
-    (report.skipped ||= []).push({ what: `rebase ${act.pr} (${act.agent})`, reason: `no agent started: ${d.why}` });
+    (report.skipped ||= []).push({ what: `rebase ${act.pr} (${act.agent})`, deliberate: 'admission_refusal', reason: `no agent started: ${d.why}` });
     this.save();
     return true;
   }

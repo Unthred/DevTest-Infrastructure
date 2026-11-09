@@ -8,6 +8,7 @@ import { readLeases, redact } from './dashdata.mjs';
 import { redactAddresses, redactLong } from './redact.mjs';
 import { worst } from './dashui/logic.mjs';
 import { testSlotStatus, DEFAULT_TEST_SLOTS } from './testslots.mjs';
+import { classifySkips } from './tickskips.mjs';
 import { readSkips, SKIP_WINDOW_MS } from './skips.mjs';
 
 export const TICK_INTERVAL_MS = 5 * 60000;          // the reconcile cron runs every five minutes
@@ -75,19 +76,20 @@ function summariseTick(t) {
   const r = t.result || {}, team = r.team && typeof r.team === 'object' ? r.team : {};
   const list = v => (Array.isArray(v) ? v : []);
   const actions = list(team.actions).slice(0, 40).map(a => ({ agent: scrub(a.agent || '', 20), type: scrub(a.type || '', 20), ref: refOf(a), pr: Number.isSafeInteger(a.pr) ? a.pr : null, issue: Number.isSafeInteger(a.issue) ? a.issue : null }));
-  const skipped = list(team.skipped).slice(0, 40).map(s => ({ what: scrub(s?.what ?? s, 120), reason: scrub(s?.reason ?? '', 240) }));
+  const rawSkipped = list(team.skipped).slice(0, 40);
+  const skipped = rawSkipped.map(s => ({ what: scrub(s?.what ?? s, 120), reason: scrub(s?.reason ?? '', 240), deliberate: classifySkips([s]).errors.length === 0 }));
   const ingested = list(team.ingested).slice(0, 40).map(i => ({ job: /^[a-f0-9]{32}$/.test(i?.job || '') ? i.job : null, pr: Number.isSafeInteger(i?.pr) ? i.pr : null, verdict: scrub(i?.verdict || '', 20) }));
   const released = list(team.released).filter(id => /^[a-f0-9]{32}$/.test(id));
   const selfUpgrade = typeof r.selfUpgrade === 'string' ? scrub(r.selfUpgrade, 40) : r.selfUpgrade?.error ? 'error' : null;
   const errors = [...t.stray];
   if (team.error) errors.push(scrub(`team tick: ${team.error}`));
   if (r.selfUpgrade?.error) errors.push(scrub(`self-upgrade: ${r.selfUpgrade.error}`));
-  for (const s of skipped) errors.push(scrub(`skipped ${s.what}: ${s.reason}`));
+  for (const s of skipped.filter(x => !x.deliberate)) errors.push(scrub(`skipped ${s.what}: ${s.reason}`));
   if (t.rc && !errors.length) errors.push(`reconcile exited rc=${t.rc}`);
   const note = typeof team.skipped === 'string' ? scrub(team.skipped, 120) : null;      // "another tick is running", "team loop disabled"
   let status;
   if (team.error || t.stray.length || r.selfUpgrade?.error || (t.rc && t.rc !== 1)) status = 'error';
-  else if (skipped.length || t.rc) status = 'partial';
+  else if (errors.length || t.rc) status = 'partial';
   else if (note) status = 'skipped';
   else if (!t.result) status = 'empty';
   else status = 'ok';
