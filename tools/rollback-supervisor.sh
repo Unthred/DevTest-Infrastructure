@@ -11,6 +11,7 @@ if [ "${1:-}" = "--supervisor" ]; then
   [ -d "$state/versions/$previous" ] || { printf 'previous version missing\n' >&2; exit 2; }
   [ -L "$state/current" ] || { printf 'current supervisor path is not a symlink\n' >&2; exit 2; }
   bash -n "$backup"
+  was_current=$(readlink "$state/current" || true)
   ln -s "versions/$previous" "$state/.current-rollback-$previous"
   mv -Tf "$state/.current-rollback-$previous" "$state/current"
   cp -p "$backup" "$bin/.ai-supervisor-rollback-$new"
@@ -19,12 +20,15 @@ if [ "${1:-}" = "--supervisor" ]; then
   # Issue #1120: remove the version directory this attempt created (marked by upgrade-supervisor.sh), so the same commit can be retried.
   # Never the installed version, a directory a running process uses, or one that existed before the attempt (no marker).
   dir_in_use() {
-    local dir=$1 p cwd
+    local dir=$1 alias=${2:-} p cwd cmd
     for p in /proc/[0-9]*; do
       [ "${p#/proc/}" != "$$" ] || continue
       cwd=$(readlink "$p/cwd" 2>/dev/null) || cwd=
       case "$cwd" in "$dir"|"$dir"/*) return 0 ;; esac
-      if tr '\0' ' ' <"$p/cmdline" 2>/dev/null | grep -qF -- "$dir/"; then return 0; fi
+      if [ -n "$alias" ]; then case "$cwd" in "$alias"|"$alias"/*) return 0 ;; esac; fi
+      cmd=$(tr '\0' ' ' 2>/dev/null <"$p/cmdline") || cmd=
+      case "$cmd" in *"$dir/"*) return 0 ;; esac
+      if [ -n "$alias" ]; then case "$cmd" in *"$alias/"*) return 0 ;; esac; fi
     done
     return 1
   }
@@ -32,7 +36,7 @@ if [ "${1:-}" = "--supervisor" ]; then
   if [ ! -e "$marker" ]; then printf 'cleanup: version directory kept (it existed before the attempt)\n'
   elif [ "$new" = "$previous" ] || [ "$(readlink "$state/current")" = "versions/$new" ]; then printf 'cleanup: version directory kept (it is the installed version)\n'
   elif [ -L "$created" ] || [ ! -d "$created" ]; then printf 'cleanup: version directory kept (not a plain directory)\n'
-  elif dir_in_use "$created"; then printf 'cleanup: version directory kept (in use by a running process)\n'
+  elif dir_in_use "$created" "$([ "$was_current" = "versions/$new" ] && printf '%s' "$state/current")"; then printf 'cleanup: version directory kept (in use by a running process)\n'
   else rm -rf -- "$created" && rm -f "$marker" && printf 'cleanup: removed version directory %s\n' "$new"; fi
   # Issue #946: put the MCP server copy of the restored version back (best effort; versions installed before this had none).
   if [ -f "$state/versions/$previous/tools/install-foreman-mcp.sh" ] && [ -d "$state/versions/$previous/foreman-mcp" ]; then

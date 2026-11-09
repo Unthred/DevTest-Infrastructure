@@ -133,3 +133,39 @@ test('rollback note and install record say what was cleaned up, and a failed rol
   assert.equal(rollbackInstall(TO, 'n', bad).result, 'rollback_failed');
   assert.equal('cleanup' in rollbackInstall(TO, 'n', bad), false);
 });
+
+test('boundary through the real swap: a leftover that existed before the attempt is rebuilt but its rollback leaves it alone', t => {
+  const w = world(t);
+  fs.mkdirSync(w.versionDir(TO), { recursive: true });
+  assert.equal(w.prepare(TO).status, 0);
+  assert.equal(fs.existsSync(w.marker(TO)), false, 'a pre-existing directory is never marked as created by the attempt');
+  fs.mkdirSync(w.versionDir(TO), { recursive: true });
+  w.installNew();
+  const r = w.rollback(FROM, TO);
+  assert.match(r.stdout, /kept \(it existed before the attempt\)/);
+  assert.ok(fs.existsSync(w.versionDir(TO)));
+});
+
+test('invalid: a process started through the current symlink keeps the directory it was running from', async t => {
+  const w = world(t);
+  assert.equal(w.prepare(TO).status, 0);
+  fs.mkdirSync(w.versionDir(TO), { recursive: true });
+  w.installNew();
+  const holder = spawn('bash', ['-c', 'sleep 30; : "$0"', path.join(w.state, 'current', 'supervisor', 'cli.mjs')], { cwd: os.tmpdir(), stdio: 'ignore' });
+  t.after(() => holder.kill());
+  await new Promise(r => setTimeout(r, 150));
+  const r = w.rollback(FROM, TO);
+  assert.match(r.stdout, /kept \(in use by a running process\)/);
+  assert.ok(fs.existsSync(w.versionDir(TO)));
+  assert.equal(r.stderr, '', 'scanning /proc prints no errors for processes that exit');
+});
+
+test('lastInstall shows what the rollback cleaned up', async t => {
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'rbinst-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+  const { rollbackInstall } = await import('../supervisor/rollbackcleanup.mjs');
+  fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({ install: { ...rollbackInstall(TO, 'live tick failed', { ok: true, cleanup: 'removed version directory abc' }), at: Date.now() } }));
+  const { installs } = await import('../supervisor/installs.mjs');
+  assert.equal(installs(root, { running: null }).lastInstall.cleanup, 'removed version directory abc');
+});
