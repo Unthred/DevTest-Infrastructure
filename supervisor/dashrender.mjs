@@ -11,6 +11,7 @@ import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
 import { approvals, decisionHtml } from './approvals-ui.mjs';
+import { inboxPage } from './inbox-page.mjs';
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
 import { healthPage } from './healthpage.mjs';
@@ -37,10 +38,10 @@ const sha7 = s => esc(String(s || '').slice(0, 7));
 const AGENT_COLOUR = { claude: 'var(--claude)', codex: 'var(--codex)' };
 const EXTRA_COLOURS = ['var(--s3)', 'var(--s4)', 'var(--s5)', 'var(--s6)'];
 const colourOf = (name, i = 0) => AGENT_COLOUR[name] || EXTRA_COLOURS[i % EXTRA_COLOURS.length];
-
 // ---- routes
 export const NAV = [
-  ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
+  ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'],
+  ['inbox', '/inbox', 'Inbox', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
   ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['diagnostics', '/diagnostics', 'Diagnostics', 'clock'], ['health', '/health', 'Health', 'pulse'], ['system', '/system', 'System', 'gear']
 ];
 export function matchRoute(pathname) {
@@ -407,7 +408,6 @@ function robustnessCard(view) {
 const KIND_WORD = { prompt: 'prompt', issue_draft: 'issue draft', action: 'action', host_value: 'host value' };
 const inboxTag = (id, kind) => (/^[a-f0-9]{32}$/.test(String(id)) ? `<span class="inbox-tag"><a class="inbox-id" href="/inbox/${id}" title="Direct link to this item"><code>${id.slice(0, 8)}</code></a>${KIND_WORD[kind] ? ` <span class="inbox-kind">${KIND_WORD[kind]}</span>` : ''}<span class="inbox-fullid" hidden>${id}</span></span>` : '');
 const inboxForm = (id, decision, label, cls) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="decision" value="${decision}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
-const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div><div class="inbox-err" role="alert" hidden></div></div>`;
 // Issue #856: what was chosen and when ("Approved 06:20"), shown beside the title. dashui/app.js rewrites the time in the viewer's zone from data-lms.
 const OUTCOME = { approve: ['Approved', 'approved', '✓'], reject: ['Rejected', 'rejected', '✗'] };
 // Issue #925: an approval nothing has acted on yet says it is waiting for a free slot; once the tick has taken it, it reads plainly "Approved".
@@ -416,7 +416,7 @@ const outcomeSpan = (decision, ms, state, c = {}) => { const [label, cls] = OUTC
 const undoForm = c => (c.undoUntil ? `<form method="post" action="/inbox" class="inbox-form inbox-undo" data-undo-until="${Math.round(c.undoUntil)}"><input type="hidden" name="id" value="${esc(c.id)}"><input type="hidden" name="decision" value="undo"><button class="linkbtn" type="submit">Undo</button></form>` : '');
 // The collapsed "Decided today" list (newest first). It is also rendered, hidden and empty, while a proposal is pending, so the script can move a decided card into it.
 function decidedBlock(view) {
-  const list = view.panels.inboxDecided || [], pending = view.panels.needsYou.some(a => a.inbox);
+  const list = view.panels.inboxDecided || [], pending = (view.panels.inbox || []).length > 0;
   if (!list.length && !pending) return '';
   const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state, c)} ${undoForm(c)}</li>`).join('');
   return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary><ul class="inbox-decided-list">${rows}</ul></details>`;
@@ -1011,6 +1011,8 @@ function processesPage(view, query, pathname, route) {
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
 const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, health: (view, query, path, route) => healthPage(route, { esc, card, grid, empty, legend, plainTable, diagSpark, utc }), evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+PAGES.inbox = (view, query) => inboxPage(view, query, { card, decided: decidedBlock, esc, form: inboxForm, grid, tag: inboxTag });
+
 export const PAGE_NAMES = Object.keys(PAGES);
 
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.

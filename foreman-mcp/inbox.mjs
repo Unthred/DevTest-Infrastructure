@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
+import { matchesInboxSearch } from './inbox-search.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
@@ -14,6 +15,7 @@ const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen };
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
+const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
 export function checkProposal(args) {
@@ -92,6 +94,26 @@ export function createInbox({ dir, baseUrl = null }) {
         return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'waiting', note: 'Foreman has not picked this item up yet (it does so on its next tick).' };
       }
       return { id, shortId: id.slice(0, 8), link: linkFor(id), state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null, decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null, updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null, issue: s.issue ?? null, job: s.job ?? null };
+    },
+    list({ search = '', kind = '', state = '', limit = 50 } = {}) {
+      if (!dir) throw new Error('the inbox is not configured on this server');
+      if (typeof search !== 'string' || search.length > 200) throw new Error('search must be text of at most 200 characters');
+      if (kind && !['prompt', 'issue_draft', 'action', 'host_value'].includes(kind)) throw new Error('kind is not recognised');
+      if (state && !['pending', 'approved', 'rejected', 'running', 'posting', 'done', 'failed', 'refused'].includes(state)) throw new Error('state is not recognised');
+      const cap = Number.isInteger(limit) && limit >= 1 && limit <= 100 ? limit : 50;
+      const records = [];
+      let names = []; try { names = fs.readdirSync(status); } catch { throw new Error('the inbox directory is not available'); }
+      for (const name of names.sort()) {
+        if (!/^([a-f0-9]{32})\.json$/.test(name)) continue;
+        const s = readJson(path.join(status, name));
+        if (!s || !ID_RE.test(s.id || '')) continue;
+        let item = null;
+        const file = path.join(items, name);
+        try { if (fs.lstatSync(file).isFile()) item = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* final items have no item file */ }
+        const record = { id: s.id, shortId: s.id.slice(0, 8), title: item?.title ?? s.title ?? null, body: item?.body ?? null, prompt: item?.prompt ?? null, why: item?.why ?? null, reason: item?.reason ?? s.reason ?? null, target: item?.target ?? null, kind: item?.kind ?? s.kind ?? null, state: s.state ?? 'unknown', issue: s.issue ?? null, pr: s.pr ?? null, link: linkFor(s.id), createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : null, updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null };
+        if ((!kind || record.kind === kind) && (!state || record.state === state) && matchesInboxSearch(record, search)) records.push(record);
+      }
+      return { search, kind: kind || null, state: state || null, count: records.length, shown: Math.min(records.length, cap), items: records.slice(0, cap) };
     },
   };
 }
