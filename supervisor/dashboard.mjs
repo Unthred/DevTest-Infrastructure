@@ -30,7 +30,8 @@ import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { wakeView } from './wake.mjs';
 import { sinceView } from './since.mjs';
-import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
+import { decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
+import { inboxSearchView, inboxView } from './inbox-panel.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -705,12 +706,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const pauseText = team.pauseText(c.pulls || [], c.issues || []);
     const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), held: new Set((c.pulls || []).filter(p => team.carriedHold(p)).map(p => p.number)), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
-    // Issue #124: each pending inbox item is one Approve/Reject card. Nothing here runs anything; the card posts to the dashboard's own write route.
-    if (config.inbox?.dir) for (const card of inboxCards(config.inbox.dir)) attention.push({ id: `inbox-${card.id}`, inboxId: card.id, inboxKind: card.kind, text: card.broken ? `An inbox item cannot be shown: ${card.broken}` : `Overseer proposal (${card.kind === 'prompt' ? 'run as a job' : 'post as an issue'}): ${card.title}`, ref: null, severity: 'action', inbox: card, action: card.broken ? 'Reject it; the overseer can propose it again.' : card.will });
-    // Issue #641: a failed or stopped inbox item has no GitHub notice, so it is one Needs you line (for three days after it failed).
-    if (config.inbox?.dir) for (const f of failedInboxCards(config.inbox.dir, now)) attention.push({ id: `inboxfail-${f.id}`, inboxId: f.id, inboxKind: f.kind, text: `An overseer ${f.kind === 'prompt' ? 'job' : f.kind === 'action' ? 'action' : 'item'} failed${f.job ? ` (job ${f.job})` : ''}: ${f.why}`, ref: null, severity: 'action', action: f.job ? `Look at it with ai-supervisor status ${f.job}; the overseer can read the outcome and propose it again.` : 'The overseer can read the outcome and propose it again. It leaves this list three days after it failed.' });
-    // Issue #943: refusals after pickup, one grouped line per reason.
-    if (config.inbox?.dir) refusedInboxGroups(config.inbox.dir, now).forEach((g, i) => attention.push({ id: `inboxrefused-${i}`, text: `${g.count} overseer proposal${g.count === 1 ? ' was' : 's were'} refused: ${g.reason}`, ref: null, severity: 'action', action: 'The overseer can read the reason with foreman_proposal_status and propose again. It leaves this list three days after the latest refusal.' }));
+    const inbox = inboxView(config, attention, now);
+    const inboxSearch = inboxSearchView(config);
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: merged, not installed yet.${ver.nextInstall ? ` Next install: ${Number.isFinite(ver.nextInstall.at) ? 'not before ' + new Date(ver.nextInstall.at).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : ver.nextInstall.why}.` : ''}`, ref: null, severity: 'warning' });
     // Issue #265: one Needs you item while main needs a hand-deployed bootstrap installer change; it ends when the installed commit moves.
@@ -758,7 +755,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const breakerView = breakerHaltView(breakerState, breakerRunning);
     if (breakerState.error) attention.unshift({ id: 'breaker-error', text: redact(`The circuit breaker failed: ${breakerState.error.message}. Existing halts stay in force and no new halt is being evaluated.`, 300), ref: null, severity: 'action', action: 'Read the tick report and fix the cause; the breaker retries every tick.' });
     if (breakerView) attention.unshift({ id: 'breaker-halt', text: redact(`${breakerView.text} ${breakerView.running_text}`, 700), ref: breakerView.prs[0] ?? null, severity: 'action', action: breakerView.action });
-    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText });
+    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText, inbox, inboxSearch });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
     if (latch) upgrade = { ...(upgrade || {}), latch: true };
@@ -889,7 +886,7 @@ export function nextWhy({ states, issues, prs, names }) {
   return { busy, paused, blocked: blocked.length, waitingReview: waiting.length };
 }
 
-function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText = null }) {
+function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText = null, inbox = [], inboxSearch = [] }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
@@ -899,8 +896,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     id: shortJob(j.id), fullId: j.id, hasTranscript: transcriptExists(root, j.id), desc: describeFor(j, { names, state }), name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, head: state.jobs?.[j.id]?.head ?? j.head ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100), overseer: jobOverseer(j, { ticks: sup.ticks, state, cache, now }) });
-  const jobRows = sortedJobs.slice(0, 300).map(rowOf);
-  // Older jobs keep a page (not a table row) so a job link from old Activity, a verdict or a lease still resolves (issue #182).
+  const jobRows = sortedJobs.slice(0, 300).map(rowOf); // Issue #182.
   const olderJobs = sortedJobs.slice(300, 2300).map(rowOf);
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobById.get(v.job)), verdict: v.verdict || null, at: v.at ?? null,
@@ -961,7 +957,8 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null,
     wakes: root ? (() => { try { return wakeView(root, now); } catch { return null; } })() : null,   // issue #985
     version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou,
+      inbox, inboxSearch, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };

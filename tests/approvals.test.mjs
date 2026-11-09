@@ -104,11 +104,11 @@ test('page: the Now card carries the dropdown; the same POST /inbox path decides
 test('shared path: the dropdown forms post exactly what the Inbox card forms post', async t => {
   const dir = makeInbox(t); drop(dir, PROMPT); inbox.scan(dir, 1000);
   const s = await serve(t, dir);
-  const page = (await s.get('/')).body;
-  const forms = [...page.matchAll(/<form method="post" action="([^"]*)" class="inbox-form">(.*?)<\/form>/g)].map(m => `${m[1]}|${m[2].replace(/value="[0-9a-f]{32}"/, 'value="ID"').replace(/<input type="hidden" name="proof"[^>]*>/, '')}`);
-  const approve = forms.filter(f => f.includes('value="approve"'));
-  assert.ok(approve.length >= 2, 'one in Needs you, one in the dropdown');
-  assert.equal(new Set(approve).size, 1, 'identical action and fields');
+  const forms = page => [...page.matchAll(/<form method="post" action="([^"]*)" class="inbox-form">(.*?)<\/form>/g)].map(m => `${m[1]}|${m[2].replace(/value="[0-9a-f]{32}"/, 'value="ID"').replace(/<input type="hidden" name="proof"[^>]*>/, '')}`).filter(f => f.includes('value="approve"'));
+  const card = forms((await s.get('/inbox')).body), dropdown = forms((await s.get('/')).body);
+  assert.equal(card.length, 1, 'the Inbox page owns the proposal card');
+  assert.equal(dropdown.length, 1, 'the Waiting for approval dropdown keeps the same decision');
+  assert.equal(card[0], dropdown[0], 'identical action and fields');
 });
 
 const DECISION = { id: 'fixlimit-77', text: 'PR #77 is still rejected after 2 fix rounds (limit 2)', tried: 'Two rounds ran.', action: 'Choose one: raise the limit, or close it.', links: [{ text: 'PR #77', url: 'https://github.com/o/r/pull/77' }], since: 500 };

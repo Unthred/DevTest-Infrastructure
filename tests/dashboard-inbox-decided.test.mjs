@@ -82,20 +82,22 @@ test('decidedCards: today only, newest first, undo offered only inside the windo
 test('route: a JSON decision answers with the state and undo time; the card leaves Needs you at once and is under Decided today with its outcome', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)), b = drop(dir, GOOD(2)); inbox.scan(dir, 1000);
   const s = await serve(t, dir);
-  assert.equal((await view(s)).panels.needsYou.filter(x => x.inbox).length, 2);
-  const page0 = (await s.get('/')).body; assert.match(page0, /<details class="inbox-decided" hidden>/, 'an empty list is ready for the script to fill'); assert.match(page0, /<span class="inbox-outcome" hidden><\/span>/);
+  assert.equal((await view(s)).panels.inbox.length, 2);
+  const page0 = (await s.get('/inbox')).body;
+  assert.match(page0, /<details class="inbox-decided" hidden>/, 'an empty list is ready for the script to fill');
+  assert.match(page0, /<span class="inbox-outcome" hidden><\/span>/);
   assert.match(page0, /<div class="inbox-err" role="alert" hidden>/);
   const r = await s.post(a, 'approve'); assert.equal(r.status, 200); assert.match(r.headers['content-type'], /json/);
   const j = JSON.parse(r.body); assert.equal(j.ok, true); assert.equal(j.state, 'approved'); assert.equal(j.undoUntil - j.decidedAt, inbox.UNDO_MS);
   const v = await view(s);
-  assert.deepEqual(v.panels.needsYou.filter(x => x.inbox).map(x => x.id), [`inbox-${b}`], 'only the undecided card remains');
+  assert.deepEqual(v.panels.inbox.map(x => x.id), [b], 'only the undecided card remains');
   assert.equal(v.panels.inboxDecided.length, 1);
-  const page = (await s.get('/')).body;
+  const page = (await s.get('/inbox?state=pending')).body;
   assert.ok(!page.includes(`data-inbox="${a}"`), 'the decided card is gone from the pending list');
   assert.match(page, /<summary>Decided today \(<span class="inbox-decided-n">1<\/span>\)<\/summary>/);
   assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-tag">.*?</span></span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, queued for the inbox lane \\(waited 0m\\)" data-tonly>Approved \\d\\d:\\d\\d UTC, queued for the inbox lane \\(waited 0m\\)</span>`));
   assert.match(page, /name="decision" value="undo"/);
-  assert.match(page, /Needs you \(1\)/, 'the count dropped');
+  assert.match(page, /1 of 2 proposals/, 'the count dropped');
 });
 test('route: Reject is shown as Rejected, newest decision first; the plain form post still redirects', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)), b = drop(dir, GOOD(2)); inbox.scan(dir, 1000);
@@ -106,6 +108,24 @@ test('route: Reject is shown as Rejected, newest decision first; the plain form 
   const page = (await s.get('/')).body;
   assert.ok(page.indexOf(`data-decided="${b}"`) < page.indexOf(`data-decided="${a}"`), 'newest first');
   assert.match(page, /inbox-outcome rejected"[^>]*data-tpl="Rejected \{t\}"/);
+});
+test('Inbox search is shareable, combines filters and highlights matched title words', async t => {
+  const dir = makeInbox(t);
+  const found = drop(dir, {
+    kind: 'prompt',
+    title: 'Reserve digest for allowance',
+    prompt: 'Check PR #1104 before dispatch.',
+    why: 'Use the role fallback.',
+  });
+  drop(dir, { kind: 'issue_draft', title: 'Other note', body: 'No matching work.' });
+  inbox.scan(dir, 1000);
+  const server = await serve(t, dir);
+  const page = (await server.get('/inbox?search=Reserve+%231104&kind=prompt&state=pending')).body;
+  assert.match(page, new RegExp(`data-inbox="${found}"`));
+  assert.match(page, /<mark>Reserve<\/mark> digest/);
+  assert.match(page, /1 of 2 proposals/);
+  const empty = (await server.get('/inbox?search=%5B%5D%7B%7D&kind=action')).body;
+  assert.match(empty, /No Inbox items match/);
 });
 test('route: a refused decision keeps its status, changes nothing and gives a reason as JSON (item decided already, cross-origin, bad proof, cooldown)', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)), b = drop(dir, GOOD(2)); inbox.scan(dir, 1000);
@@ -132,7 +152,7 @@ test('route: Undo inside the window restores the pending card and records no dec
   await s.post(a, 'approve'); s.clock.now += 2000;
   const u = await s.post(a, 'undo'); assert.equal(u.status, 200); assert.equal(JSON.parse(u.body).state, 'pending');
   assert.equal(inbox.statusOf(dir, a).state, 'pending'); assert.deepEqual(inbox.approvedItems(dir, 'prompt'), []);
-  const v = await view(s); assert.equal(v.panels.needsYou.filter(x => x.inbox).length, 2); assert.equal(v.panels.inboxDecided.length, 0);
+  const v = await view(s); assert.equal(v.panels.inbox.length, 2); assert.equal(v.panels.inboxDecided.length, 0);
   s.clock.now += 2000; await s.post(b, 'reject'); s.clock.now += inbox.UNDO_MS + 1000;
   const late = await s.post(b, 'undo'); assert.equal(late.status, 409); assert.match(JSON.parse(late.body).reason, /window has passed/);
   assert.equal(inbox.statusOf(dir, b).state, 'rejected');
@@ -203,14 +223,18 @@ test('script: the Needs you count drops with the card and disappears at zero', (
 import { filterListRows } from '../supervisor/dashui/lists.mjs';
 test('#977: a pending item shows its short id and kind as a link, with the full id findable by search', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)); inbox.scan(dir, 1000);
-  const page = (await (await serve(t, dir)).get('/')).body;
+  const page = (await (await serve(t, dir)).get('/inbox')).body;
   assert.ok(page.includes(`<a class="inbox-id" href="/inbox/${a}" title="Direct link to this item"><code>${a.slice(0, 8)}</code></a> <span class="inbox-kind">prompt</span><span class="inbox-fullid" hidden>${a}</span>`));
   assert.ok(!page.includes(`<code>${a.slice(0, 9)}`), 'only eight characters are shown');
 });
 test('#977: /inbox/<id> redirects a waiting item to its card (full or short id); a decided one gets a state page; unknown, malformed and ambiguous ids are refused', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)), b = drop(dir, GOOD(2)); inbox.scan(dir, 1000);
   const s = await serve(t, dir);
-  for (const id of [a, a.slice(0, 8)]) { const r = await s.get(`/inbox/${id}`); assert.equal(r.status, 302); assert.equal(r.headers.location, `/#att-inbox-${a}`); }
+  for (const id of [a, a.slice(0, 8)]) {
+    const r = await s.get(`/inbox/${id}`);
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.location, `/inbox#att-inbox-${a}`);
+  }
   const n = (await s.post(b, 'reject')); assert.equal(n.status, 200);
   const r = await s.get(`/inbox/${b}`); assert.equal(r.status, 200); assert.match(r.body, /State: rejected/); assert.match(r.body, /Title: Tidy docs 2/);
   assert.equal((await s.get(`/inbox/${'0'.repeat(32)}`)).status, 404);
