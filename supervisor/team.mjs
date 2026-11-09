@@ -36,6 +36,7 @@ import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
+import { refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -466,27 +467,8 @@ export function pullPrerequisites(title, body) {
   if (line) for (const m of line[1].matchAll(/(?:PR|pull request)\s*#(\d+)/gi)) out.add(Number(m[1]));
   return [...out];
 }
-// Issue #1023: dependencies written in prose: "Depends on #N", "after PR N", "after #N merges" (a list may follow: "#4, PR 5 and #6").
-// Returns { prs, numbers }: `prs` were written as PR N, `numbers` as a bare #N that may name an issue or a pull request (resolved
-// when the queue is built). A bare "after #N" counts only when it says what it waits for ("merges", "closes", "lands").
-const DEP_ITEM = String.raw`(?:(?:PR|pull request)\s*#?\d+|#\d+)`;
-const DEP_LIST = String.raw`${DEP_ITEM}(?:\s*(?:,|and|&)\s*${DEP_ITEM})*`;
-export function proseDependencies(body) {
-  const text = String(body || '').replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ');
-  const prs = new Set(), numbers = new Set();
-  const take = (list, bare) => { for (const m of list.matchAll(/(?:(?:PR|pull request)\s*#?(\d+))|#(\d+)/gi)) { if (m[1]) prs.add(Number(m[1])); else if (bare) numbers.add(Number(m[2])); } };
-  for (const m of text.matchAll(new RegExp(String.raw`\bdepends?\s+on\s+(${DEP_LIST})`, 'gi'))) take(m[1], true);
-  for (const m of text.matchAll(new RegExp(String.raw`\bafter\s+(${DEP_LIST})(\s+(?:has\s+|have\s+|is\s+|are\s+|being\s+)?(?:merge[sd]?|land(?:s|ed)?|clos(?:es|ed)))?`, 'gi'))) take(m[1], !!m[2]);
-  for (const p of prs) numbers.delete(p);
-  return { prs: [...prs], numbers: [...numbers] };
-}
-// The open items an issue waits on: prose dependencies and the items an earlier implement job reported (`declared`). An item is open
-// while it is an open issue or an open pull request; a merged or closed one, or one nobody knows, no longer holds the issue.
-export function waitingOnRefs(issue, issueByNo, prs, declared = []) {
-  const pd = issue.proseDependencies ?? proseDependencies(issue.body);
-  const open = d => issueByNo.get(d)?.state === 'OPEN' || (prs || []).some(p => p.number === d);
-  return [...new Set([...pd.prs, ...pd.numbers, ...declared])].filter(open).sort((a, b) => a - b);
-}
+import { proseDependencies, waitingOnRefs } from './proseDependencies.mjs';
+export { proseDependencies, waitingOnRefs };
 // Labels that keep an open issue out of the queue (issue #212).
 export const EXCLUDING_LABELS = ['epic', 'tracking', 'parked', 'needs-homeowner'];
 // Stops that Foreman resumes once (issue #163): provider/network faults, a crash, an incomplete run, a used-up allowance window.
@@ -771,8 +753,8 @@ export class Team {
   // Issue #212: every open issue is eligible unless excluded. Returns null when eligible, else { kind, text, refs } where kind is
   // label | prerequisite | pr-wait | pr-closed. A PR in neither the open nor the merged list was closed unmerged.
   exclusion(n, issueByNo, prs = this.view?.prs || []) {
-    const issue = issueByNo.get(n);
-    if (!issue) return null;
+    const issue = issueByNo.get(n), dependency = dependencyExclusion(this, n);   // issue #1103
+    if (!issue) return null; if (dependency) return dependency;
     const label = EXCLUDING_LABELS.find(l => (issue.labels || []).includes(l));
     if (label) return { kind: 'label', label, text: label === 'needs-homeowner' ? 'needs the homeowner' : `labelled ${label}` };
     const open = (this.c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => issueByNo.get(d)?.state !== 'CLOSED');
@@ -1102,7 +1084,7 @@ export class Team {
       if ((this.s.scanOnlyAnnounced[pr.number] || this.s.scanOnlyRounds[pr.number]) && latestChecks(pr.statusCheckRollup).some(c => checkDone(c) && isSecretScanner({ name: c.name || c.context }) && CHECK_OK.includes(c.conclusion || c.state))) { delete this.s.scanOnlyAnnounced[pr.number]; delete this.s.scanOnlyRounds[pr.number]; }
     }
     this.modes = this.budgets(); this.held = {}; this.heldPr = {};
-    await this.loadFiles(prs);
+    await this.loadFiles(prs); await refreshDependencies(this, issues, prs);   // issue #1103
     this.recordHeadWriters(prs);
     this.recordReviewWaits(prs);
     const active = await this.jobs.listActive();
@@ -1129,7 +1111,7 @@ export class Team {
     // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
     for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
       const author = agentOfBranch(this.c, pr.headRefName);
-      if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
+      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || dependencyGate(this, { type: 'merge', pr: pr.number })) continue;
       const v = this.mergeVerdict(pr, author);
       if (v) {
         const interim = v.interim === true && v.reviewer === author;
@@ -1373,7 +1355,7 @@ export class Team {
   // Issue #1086: a held action (retry cap, circuit breaker) is ineligible inside the planner, so the lane's next startable action runs instead of
   // idling behind it. The held item is marked taken (every candidate loop already skips a taken item), recorded with its reason, and choose() runs again.
   gateReason(act) {
-    const subject = act.pr ?? act.issue;
+    const subject = act.pr ?? act.issue, held = dependencyGate(this, act); if (held) return held;   // issue #1103: every lane waits for installed prerequisites
     if (act.type !== 'merge' && subject != null) {
       const cap = robust.sameCauseCap(this.c.limits);
       if (robust.capped(this.s, { type: act.type, subject, head: act.head ?? null }, cap)) { const r = this.s.sameCause[`${act.type}:${subject}`]; return { kind: 'retry', cause: r?.cause, attempts: r?.count, why: `retry cap: ${cap} attempts with the same cause (${r?.cause}); needs the homeowner` }; }
@@ -1737,7 +1719,7 @@ export class Team {
     const guard = async (what, fn) => { const since = Date.now(); try { await fn(); } catch (error) { report.skipped.push({ what, reason: String(error?.message || error).slice(0, 200) }); } finally { lap(what.replace(/ \d.*$/, '').replace(/ \(.*$/, ''), since); } };
     if (!dryRun) {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
-      await guard('inbox', () => this.processInbox(report)); await guard('inbox time cap', () => this.enforceInboxCap(report)); await guard('host values', () => this.raiseHostValues(report)); await guard('live checks', () => this.verifyInstalled(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
+      await guard('inbox', () => this.processInbox(report)); await guard('time caps', () => enforceStops(this, report)); await guard('host values', () => this.raiseHostValues(report)); await guard('live checks', () => this.verifyInstalled(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
       await guard('board catch-up', () => this.flushBoard(report));
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
@@ -2448,7 +2430,7 @@ export class Team {
       }
       // Issue #995 part 3: count the failed attempt by cause (a homeowner stop is not a failure); a completed job clears the count.
       if (job.status === 'completed') { const subject = j.pr ?? j.issue; if (subject != null) robust.noteSuccessFor(this.s, { type: j.kind, subject }); }
-      else if (ended.kind === 'work') this.countFailure(j, causeOfEnd(job));   // issue #1107
+      else if (ended.kind === 'work' && !j.dependencyStop) this.countFailure(j, causeOfEnd(job));   // issue #1107, #1103
       // Issue #995 (owner comment 1): a stopped implement job (by hand or for inactivity) is backed up, cleaned up and made requeueable.
       if (job.status === 'stopped' && ['manual_stop', 'idle_timeout'].includes(job.lastEvent) && j.kind === 'implement' && Number.isSafeInteger(j.issue)) {
         if (!(await this.cleanupStoppedImplement(id, j, job, report))) return;
@@ -3779,6 +3761,7 @@ export class Team {
     };
   }
 }
+Team.dependencyTools = dependencyTools;   // issue #1103: the dashboard reads the cached dependency data through the Team it already imports
 
 // Issue #380: whether a job paused on a usage limit may resume now. `others` are the other running or queued jobs. It resumes only when its
 // role has a free slot and the overall cap leaves room; otherwise the reason names the jobs filling them.
