@@ -44,7 +44,7 @@ import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold } from './handinstall.mjs';
-import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome } from './upgrade.mjs';
+import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome, classifySkips } from './upgrade.mjs';
 import { dirLock, requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
 const self = fileURLToPath(import.meta.url);
@@ -673,8 +673,8 @@ async function main() {
         // The five-minute reconcile cron also runs the token-free team tick, when the team loop is enabled.
         try {
           result.team = await teamTick(root, registry, false, before.hold, pass);
-          // A skipped item (lease conflict, gh error) keeps the other items running but still makes the scheduled run fail visibly.
-          if (Array.isArray(result.team?.skipped) && result.team.skipped.length) process.exitCode = 1;
+          // A real-error skip keeps the other items running but still fails the run visibly; a deliberate skip is healthy (issue #1119).
+          if (classifySkips(result.team?.skipped).errors.length) process.exitCode = 1;
         } catch (error) { result.team = { error: String(error.message).slice(0, 200) }; process.exitCode = 1; }
         // After the tick lock is released, so the new version's dry-run health check can take it (the pass lock is not taken by that check). A failure here never fails the tick.
         const afterStart = Date.now();

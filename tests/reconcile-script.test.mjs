@@ -122,7 +122,7 @@ test('issue #35 reconcile exits nonzero when the team tick fails, so the generat
 
 test('issue #35 reconcile exits nonzero when the tick skips an item, so a failed dispatch is not logged as rc=0', t => {
   const src = fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8');
-  assert.match(src, /Array\.isArray\(result\.team\?\.skipped\) && result\.team\.skipped\.length\) process\.exitCode = 1/);
+  assert.match(src, /classifySkips\(result\.team\?\.skipped\)\.errors\.length\) process\.exitCode = 1/);
 });
 
 test('issue #35 an unreadable CLI or non-executable node leaves a failing log line instead of a silent exit', t => {

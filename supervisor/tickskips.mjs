@@ -32,15 +32,11 @@ export function skipOutcome(skipped) {
   return { status: 'error', error: `${errors.length} action(s) skipped: ${errors.map(line).join('; ')}`.slice(0, 300), ...listed };
 }
 
-// A rollback latch written before this change, whose only cause was deliberate usage-limit skips, is stale: clear it once.
-// Recognised by the exact recorded text, and only when every one of the counted skips is shown and is a usage-limit refusal.
-const LEGACY_LATCH = /^live tick failed: (\d+) action\(s\) skipped: (.*)$/;
-const LEGACY_USAGE_SKIP = /^[^;]+: not started: \S+ reached its usage limit/;
+// A rollback latch written before this change, whose only cause was a usage-limit refusal, is stale: clear it once.
+// The recorded reason is `live tick failed: ` plus the first fault's text (cut at 160 characters), so it carries no skip count.
+const LEGACY_LATCH = /^live tick failed: not started: \S+ reached its usage limit/;
 export function latchIsOnlyDeliberateSkips(latch) {
-  const match = LEGACY_LATCH.exec(String(latch?.reason || ''));
-  if (!match) return false;
-  const segments = match[2].split('; ');
-  return segments.length === Number(match[1]) && segments.every(s => LEGACY_USAGE_SKIP.test(s));
+  return LEGACY_LATCH.test(String(latch?.reason || ''));
 }
 
 // Issue #302: what a live tick says about the new version. Only a thrown error or a real-error skip fails it. A lease held by a
@@ -54,7 +50,9 @@ export function liveTickOutcome(tick) {
 // A job that did not start because its agent is out of allowance (D-019): retried when allowance returns, never a failure.
 export function usageLimitSkip(act, limit) {
   const why = String(limit?.reason || 'usage limit').slice(0, 120);
-  return { what: `${act.type} ${act.pr ?? act.issue} (${act.agent})`, deliberate: 'usage_limit',
+  const what = `${act.type} ${act.pr ?? act.issue} (${act.agent})`;
+  if (limit?.parked) return { what, deliberate: 'parked_agent', reason: `not started: ${act.agent} is ${why}; it is retried when the agent is back` };
+  return { what, deliberate: 'usage_limit',
     reason: `not started: ${act.agent} reached its usage limit (${why}); it is retried when allowance returns` };
 }
 

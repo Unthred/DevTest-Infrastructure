@@ -39,12 +39,12 @@ test('an unknown skip reason is an error and is named', () => {
 test('a skip with no kind stays an error', () => {
   assert.equal(tickOutcome({ skipped: [{ what: 'x', reason: 'gh failed' }] }).status, 'error');
 });
-test('only the exact old usage-limit latch is stale', () => {
-  const reason = n => `live tick failed: ${n} action(s) skipped: cifix 1117 (codex): not started: codex reached its usage limit`;
-  assert.equal(latchIsOnlyDeliberateSkips({ reason: reason(1) }), true);
-  assert.equal(latchIsOnlyDeliberateSkips({ reason: reason(2) }), false, 'a truncated list hides a skip');
-  assert.equal(latchIsOnlyDeliberateSkips({ reason: 'live tick failed: 1 action(s) skipped: implement 5 (claude): lease conflict' }), false);
-  assert.equal(latchIsOnlyDeliberateSkips({ reason: 'tests failed' }), false);
+test('only the real old usage-limit latch text is stale', () => {
+  const real = 'live tick failed: not started: codex reached its usage limit (codex job 0ef14bc5 is paused on a usage limit); it is retried when allowance returns';
+  assert.equal(latchIsOnlyDeliberateSkips({ reason: real }), true);
+  assert.equal(latchIsOnlyDeliberateSkips({ reason: real.slice(0, 80) }), true, 'a reason cut at 160 characters still matches');
+  assert.equal(latchIsOnlyDeliberateSkips({ reason: 'live tick failed: lease conflict' }), false);
+  assert.equal(latchIsOnlyDeliberateSkips({ reason: 'upgrade script failed: swap: version already installed' }), false);
   assert.equal(latchIsOnlyDeliberateSkips(null), false);
 });
 
@@ -54,7 +54,7 @@ test('a latch caused only by usage-limit skips is dropped once and recorded; any
     const up = { latch: () => (calls.includes('clear') ? null : { from: 'a', to: 'b', reason }), clearLatch: () => calls.push('clear'), record: r => calls.push(r.result) };
     return { up, calls };
   };
-  const stale = make('live tick failed: 1 action(s) skipped: cifix 1117 (codex): not started: codex reached its usage limit');
+  const stale = make('live tick failed: not started: codex reached its usage limit (x); it is retried');
   assert.equal(dropStaleLatch(stale.up), true);
   assert.deepEqual(stale.calls, ['clear', 'latch_cleared']);
   const kept = make('live tick failed: boom');
@@ -76,4 +76,18 @@ test('the recorded tick lists its deliberate skips and stays ok', t => {
   assert.equal(tick.status, 'ok');
   assert.equal(tick.error, null);
   assert.deepEqual(tick.skips.map(s => s.what), ['cifix 1117 (codex)']);
+});
+test('a parked agent is a parked_agent skip, and the health view and exit code treat skips as healthy', async () => {
+  const parked = usageLimitSkip({ type: 'cifix', pr: 1, agent: 'codex' }, { reason: 'parked: other infrastructure fault', parked: true });
+  assert.equal(parked.deliberate, 'parked_agent');
+  const { parseReconcileLog } = await import('../supervisor/suphealth.mjs');
+  const tick = skipped => parseReconcileLog(`2026-11-09T20:00:00Z rc=0 ${JSON.stringify({ resumed: 0, blocked: 0, team: { skipped } })}\n`)[0];
+  const healthy = tick([usage, parked]);
+  assert.equal(healthy.status, 'ok');
+  assert.deepEqual(healthy.errors, []);
+  assert.equal(healthy.skipped.length, 2);
+  const mixed = tick([usage, real]);
+  assert.equal(mixed.status, 'partial');
+  assert.equal(mixed.errors.length, 1);
+  assert.equal(tick([{ what: 'x', reason: 'y', deliberate: 'bogus' }]).errors.length, 1);
 });

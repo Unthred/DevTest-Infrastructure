@@ -6,7 +6,7 @@
 // check is `verifyPending`, called by the CLI with the outcome of the live tick that ran under the new version.
 import { mcpNeedsInstall } from './mcpinstall.mjs';
 import { dropStaleLatch } from './tickskips.mjs';
-export { liveTickOutcome } from './tickskips.mjs';   // issue #302, #1119: what a live tick says about the new version
+export { liveTickOutcome, classifySkips } from './tickskips.mjs';   // issue #302, #1119: what a live tick says about the new version
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
