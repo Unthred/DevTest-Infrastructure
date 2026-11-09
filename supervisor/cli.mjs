@@ -235,7 +235,7 @@ async function gatePreflight(registry, config) {
     if (checks.git === 'ok') process.chdir(config.repo_path);
     for (const id of [...new Set(Object.values(config.agents || {}).map(a => a.provider))]) {
       await run(`provider:${id}`, async () => {
-        const ok = (await provider(registry, id)).adapter.preflight?.({ role: 'implementer', worktree: config.repo_path });
+        const ok = (await provider(registry, id)).adapter.preflight?.({ role: 'devtest', worktree: config.repo_path });
         return preflightFailure(ok) ?? true;
       });
     }

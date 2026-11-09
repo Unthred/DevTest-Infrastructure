@@ -175,20 +175,37 @@ test('coding standards are not duplicated into supervisor prompts', () => {
   for (const text of texts) assert.doesNotMatch(text, /Ratchet rule|\| Class \| 400 lines|## Code size/);
 });
 
-// Run on Tower against a real deployed-shape tree with AI_RULES_TREE and AI_AGENT_SOURCE set: the supervisor and the launcher must deliver identical policy.
-test('supervisor and interactive launcher resolve the same policy from the same tree', { skip: process.env.AI_RULES_TREE ? false : 'AI_RULES_TREE is not set; this cross-repository check runs on Tower' }, t => {
-  const tree = process.env.AI_RULES_TREE;
+test('the team preflight checks the repository it names, so policy identity can pass', () => {
+  const cli = fs.readFileSync(new URL('../supervisor/cli.mjs', import.meta.url), 'utf8');
+  assert.match(cli, /preflight\?\.\(\{ role: 'devtest', worktree: config\.repo_path \}\)/);
+});
+
+// Run on Tower with AI_RULES_TREE at a clone of the AI-Rules launcher branch: the supervisor and the launcher must deliver identical policy.
+const needsTree = process.env.AI_RULES_TREE ? false : 'AI_RULES_TREE is not set; this cross-repository check runs on Tower';
+test('supervisor and interactive launcher resolve the same policy from the same tree', { skip: needsTree }, t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'policy-consistency-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const projects = path.join(root, 'projects');
   const worktree = path.join(projects, 'DevTest-Infrastructure');
+  const tree = path.join(root, 'tree');
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   fs.mkdirSync(worktree, { recursive: true });
+  git(worktree, 'init', '-q');
+  git(worktree, 'config', 'remote.origin.url', 'git@github.com:Unthred/DevTest-Infrastructure.git');
+  git(root, 'clone', '-q', process.env.AI_RULES_TREE, tree);
+  const declarations = path.join(tree, 'projects/policy-contexts.json');
+  const value = JSON.parse(fs.readFileSync(declarations, 'utf8'));
+  value.projects['DevTest-Infrastructure'].root = worktree;
+  fs.writeFileSync(declarations, JSON.stringify(value));
+  git(tree, 'add', '-A');
+  git(tree, '-c', 'user.name=fixture', '-c', 'user.email=fixture@localhost', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'bind fixture');
+  fs.writeFileSync(path.join(tree, '.ai-rules-deployment.json'), JSON.stringify({ commit: git(tree, 'rev-parse', 'HEAD'), schema: 1 }));
   const settingsFile = path.join(root, 'settings.json');
   fs.writeFileSync(settingsFile, JSON.stringify({ policyRoot: tree, authorizedRoots: [projects] }));
   const env = { ...process.env, AI_SUPERVISOR_POLICY_SETTINGS: settingsFile };
   for (const [provider, delivery] of [['claude', 'append_system_prompt'], ['codex', 'developer_instructions']]) {
     const supervised = deliveredPolicy({ role: 'devtest', kind: 'implement', worktree }, provider, delivery, env);
-    const launcher = execFileSync('bash', [process.env.AI_AGENT_SOURCE, '--policy-diagnose', 'devtest', provider], {
+    const launcher = execFileSync('bash', [path.join(tree, 'tools/ai-agent'), '--policy-diagnose', 'devtest', provider], {
       encoding: 'utf8', env: { ...process.env, AI_AGENT_RULES_ROOT: tree, AI_AGENT_PROJECT_ROOT: projects, AI_AGENT_CONTROL_ROOT: root }
     });
     const field = name => launcher.match(new RegExp(`^${name}\\t(.*)$`, 'm'))?.[1];
@@ -197,5 +214,21 @@ test('supervisor and interactive launcher resolve the same policy from the same 
     assert.equal(supervised.modules.join(','), field('modules'), provider);
     assert.equal(supervised.role, field('role'), provider);
     assert.equal(supervised.delivery, field('delivery'), provider);
+    assert.equal(field('workspace_relation'), 'project_root', provider);
   }
+});
+
+test('a supervised job in an unverified worktree is refused by the real contract', { skip: needsTree }, t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'policy-identity-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const worktree = path.join(root, 'unrelated');
+  const tree = path.join(root, 'tree');
+  fs.mkdirSync(worktree);
+  execFileSync('git', ['clone', '-q', process.env.AI_RULES_TREE, tree], { stdio: 'ignore' });
+  const commit = execFileSync('git', ['-C', tree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(tree, '.ai-rules-deployment.json'), JSON.stringify({ commit, schema: 1 }));
+  const settingsFile = path.join(root, 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ policyRoot: tree, authorizedRoots: [root] }));
+  const env = { ...process.env, AI_SUPERVISOR_POLICY_SETTINGS: settingsFile };
+  assert.throws(() => deliveredPolicy({ role: 'devtest', kind: 'implement', worktree }, 'claude', 'append_system_prompt', env), /not an approved location/);
 });
