@@ -28,7 +28,7 @@ function world(t, { jobStatus = 'running' } = {}) {
   const gh = { prs: [{ number: 5, headRefName: 'claude/issue-5-x', headRefOid: HEAD, isDraft: false, labels: [], mergeable: 'CONFLICTING' }, { number: 6, headRefName: 'claude/issue-6-x', headRefOid: HEAD, isDraft: false, labels: ['parked'] }],
     issues: [{ number: 23, state: 'OPEN', title: 'T', body: '', labels: [] }],
     listPulls: async () => gh.prs, listIssues: async () => gh.issues, getPull: async () => null, board: async () => {}, listMergedPulls: async () => [],
-    addLabel: async (n, l, o) => { assert.equal(o?.create, false, 'the parked label is never created or recoloured'); return gh.park(n, l); }, park: async (n, l) => { calls.labelled.push([n, l]); const x = [...gh.prs, ...gh.issues].find(i => i.number === n); x.labels = [...x.labels, l]; },
+    addLabelAsApp: async (n, l) => gh.park(n, l), park: async (n, l) => { calls.labelled.push([n, l]); const x = [...gh.prs, ...gh.issues].find(i => i.number === n); x.labels = [...x.labels, l]; },
     removeLabel: async (n, l) => { calls.unlabelled.push([n, l]); const x = [...gh.prs, ...gh.issues].find(i => i.number === n); x.labels = x.labels.filter(y => y !== l); } };
   const jobs = { states: { [JOB]: { id: JOB, status: jobStatus, provider: 'claude' } }, listActive: async () => [], get: async id => jobs.states[id] || null,
     stop: async id => { calls.stopped.push(id); jobs.states[id].status = 'stopped'; jobs.states[id].autoRestart = false; } };

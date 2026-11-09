@@ -34,7 +34,7 @@ import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, readDiskSamples, readRecorder, DAY_MS, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
-import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, scanInboxNow } from './wake.mjs';
+import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, inboxScanDone } from './wake.mjs';
 import * as inboxStore from './inbox.mjs';
 import { controlsOf } from './controlactions.mjs';
 import { fileURLToPath } from 'node:url';
@@ -411,7 +411,7 @@ export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot })
   const inboxDir = (() => { try { return src().inbox?.dir || null; } catch { return null; } })();
   const watcher = inboxDir ? inboxWatcher({ dir: inboxDir, onNew: () => {
     // Issue #985: validate the new proposal here and now (waiting -> pending), even while a pass runs. A scan that cannot run falls back to the wake.
-    try { const c = src(), r = scanInboxNow({ root, inboxDir: c.inbox.dir, scan: inboxStore.scan, maxPending: c.inbox.max_pending }); if (r.scanned) return; } catch { /* fall back to a pass */ }
+    try { if (inboxScanDone(root, src(), inboxStore.scan)) return; } catch { /* fall back to a pass */ }
     try { defaultWake(root, 'inbox', src()); } catch { /* the schedule is the fallback */ }
   } }) : { stop() {} };
   server.once('close', () => watcher.stop());

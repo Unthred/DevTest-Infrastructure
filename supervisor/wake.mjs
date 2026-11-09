@@ -207,3 +207,9 @@ export function scanInboxNow({ root, inboxDir, scan, maxPending, now = Date.now(
   if (!release) return { scanned: false };
   try { return { scanned: true, ...scan(inboxDir, now, { maxPending }) }; } finally { release(); }
 }
+
+// Issue #1115: true when the scan ran and nothing in it needs a pass. A control item has no click to wake one, so it asks for the pass itself.
+export function inboxScanDone(root, config, scan) {
+  const r = scanInboxNow({ root, inboxDir: config.inbox.dir, scan, maxPending: config.inbox.max_pending });
+  return r.scanned && !r.controls;
+}

@@ -144,7 +144,7 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
   sweepFinished(inboxDir, now);
   let names = [];
   try { names = fs.readdirSync(d.items); } catch { return { picked: 0 }; }
-  let picked = 0;
+  let picked = 0, controls = 0;
   let pending = allStatuses(inboxDir).filter(s => s.state === 'pending').length;
   for (const name of names.sort()) {
     const m = /^([a-f0-9]{32})\.json$/.exec(name);
@@ -159,7 +159,7 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
     if (!v.ok) { setStatus(inboxDir, id, { state: 'refused', reason: v.reason, kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, reason: v.reason }, now); picked++; continue; }
     if (v.item.kind === 'control') {   // issue #1115: no card and no pending slot; the tick runs it and records who, why and the result
       setStatus(inboxDir, id, { state: 'approved', kind: 'control', hash, createdAt: now, title: v.item.title, control: { action: v.item.action, target: v.item.target, reason: v.item.reason, by: 'overseer' } }, now);
-      audit(inboxDir, { id, event: 'control', kind: 'control', hash }, now); picked++; continue;
+      audit(inboxDir, { id, event: 'control', kind: 'control', hash }, now); picked++; controls++; continue;
     }
     if (pending >= maxPending) { setStatus(inboxDir, id, { state: 'refused', reason: `${maxPending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
     setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now }, now);
@@ -167,7 +167,7 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
     pending++; picked++;
   }
   prune(inboxDir, now);
-  return { picked };
+  return { picked, controls };
 }
 function sweepFinished(inboxDir, now) {
   for (const s of allStatuses(inboxDir)) {

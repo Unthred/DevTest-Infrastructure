@@ -1,6 +1,7 @@
 // Issue #1115: what an overseer `control` item (park, stop_job) and an approved `unpark` do. Each returns a plain outcome and never throws for a
 // normal refusal: { outcome: 'done' | 'refused', changed, text }. The caller records who, when, why and the result in the item's status.
 // Nothing here merges, approves or releases work except unpark, which only runs after the homeowner approved it on the dashboard.
+import { addLabelAsApp } from './appidentity.mjs';
 const PARKED = 'parked';
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 // The planner reads pull requests through this, so a parked one gets no rebase, fix, review or merge.
@@ -28,7 +29,7 @@ export async function park(n, deps) {
   const found = await findItem(deps.gh, n);
   if (!found) return refused(`no open issue or pull request #${n}`);
   if (found.labels.includes(PARKED)) return done(false, `${found.kind} #${n} is already parked; nothing changed`);
-  await deps.gh.addLabel(n, PARKED, { create: false });
+  try { await deps.labelAsApp(n, PARKED); } catch (error) { return refused(`${found.kind} #${n} was not parked: ${String(error?.message || error).slice(0, 200)}`); }   // the App identity, never the owner account
   const live = await liveJobsFor(n, deps);
   const note = live.length ? ` Its running job${live.length > 1 ? 's' : ''} (${live.join(', ')}) ${live.length > 1 ? 'were' : 'was'} not stopped; stop ${live.length > 1 ? 'them' : 'it'} separately with stop_job.` : '';
   return done(true, `${found.kind} #${n} is parked.${note}`);
@@ -69,7 +70,8 @@ export async function applyControl({ action, target }, deps) {
   return refused('unknown action');
 }
 
-export const depsOf = team => ({ gh: team.gh, jobs: team.jobs, records: team.s.jobs });
+// The parked label is written as the GitHub App; a test may supply its own writer on the GitHub client.
+export const depsOf = team => ({ gh: team.gh, jobs: team.jobs, records: team.s.jobs, labelAsApp: (n, label) => (team.gh.addLabelAsApp ?? ((x, l) => addLabelAsApp(team.c, x, l)))(n, label) });
 
 // Runs one picked-up control item. 'running' is recorded BEFORE the effect (at most once, as for a named action). The status keeps who, why and
 // the result (the item file is removed once final); a refusal ends 'refused' with its reason, a failure ends 'failed'.

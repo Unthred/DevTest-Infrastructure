@@ -38,6 +38,7 @@ import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
+import { validGithubApp } from './appidentity.mjs';
 import { runControl, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
@@ -82,7 +83,7 @@ export function validateTeamConfig(input) {
   if ('inbox_max_minutes' in L && !(Number.isFinite(L.inbox_max_minutes) && L.inbox_max_minutes >= 1 && L.inbox_max_minutes <= 720)) throw new SupervisorError('invalid team limit: inbox_max_minutes');   // issue #971
   if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
   validateUnblockLimits(L.unblock);
-  validateSelfUpgrade(c.self_upgrade);
+  validateOptionalSections(c);
   try { validateChangeCheck(c.change_check); } catch (error) { throw new SupervisorError(error.message); }   // issue #755
   try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
   validateDashboard(c.dashboard);
@@ -140,6 +141,11 @@ function validateHealth(h) {
   if (!h || typeof h !== 'object' || Array.isArray(h) || Object.keys(h).some(k => k !== 'volumes' && !(k in HEALTH_DEFAULTS))) throw new SupervisorError('invalid team config: health');
   const w = h.disk_warn_percent ?? HEALTH_DEFAULTS.disk_warn_percent, a = h.disk_alert_percent ?? HEALTH_DEFAULTS.disk_alert_percent;
   if (!pct(w) || !pct(a) || w >= a) throw new SupervisorError('invalid team config: health disk levels must be percentages with warn below alert');
+}
+// issue #1115: github_app is optional; when present it needs both ids and an absolute key file
+function validateOptionalSections(c) {
+  validateSelfUpgrade(c.self_upgrade);
+  if ('github_app' in c && !validGithubApp(c.github_app)) throw new SupervisorError('invalid team config: github_app needs app_id, installation_id and an absolute key_file');
 }
 function validateSelfUpgrade(u) {
   if (u === undefined) return;
@@ -1068,9 +1074,7 @@ export class Team {
   async plan() {
     const actions = [];
     this.picked = new Set();   // issues already given to an agent in this plan (one taker per issue)
-    const lists = await this.readLists();   // issue #1115: parked PRs stay out of the planner view
-    const { issues, merged } = lists;
-    const prs = unparkedPulls(lists.prs);
+    const { prs, issues, merged } = await this.readLists();   // issue #1115: a parked PR stays in the planner view
     this.view = { prs, issues };
     const issueByNo = new Map(issues.map(i => [i.number, i]));
     // Delivered work: an issue with a merged PR linked to it (closing reference or its issue-<n> branch) is never re-planned.
@@ -1129,7 +1133,7 @@ export class Team {
     this.claimed = new Map();
     for (const j of active) { const rec = this.s.jobs[j.id], n = rec && WRITER_KINDS.has(rec.kind) ? (rec.issue ?? issueOfBranch(rec.branch)) : null; if (n != null && issueByNo.get(n)) for (const f of this.predictFiles(issueByNo.get(n))) this.claimed.set(f, n); }
     // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
-    for (const pr of [...prs].sort((x, y) => x.number - y.number)) {
+    for (const pr of unparkedPulls(prs).sort((x, y) => x.number - y.number)) {   // issue #1115: a parked PR stays in the view; only its actions are held
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || dependencyGate(this, { type: 'merge', pr: pr.number })) continue;
       const v = this.mergeVerdict(pr, author);
@@ -1408,7 +1412,7 @@ export class Team {
     this.gateStops.push({ type: act.type, ref, agent, lane: role, kind: g.kind, cause: g.cause, attempts: g.attempts ?? null });
   }
   choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
-    const L = this.c.limits;
+    const L = this.c.limits, up = unparkedPulls(prs);   // issue #1115: parked PRs get no action but still count as open PRs below
     const paused = !!this.pauseInfo(prs, [...issueByNo.values()]);
     // While new work is paused the implementer slot also takes reviews (review independence, D-024, is still checked below).
     const impl = role !== 'reviewer' && role !== 'rebaser', rev = role === 'reviewer' || role === null || (role === 'implementer' && paused && !implementOnly);
@@ -1433,7 +1437,7 @@ export class Team {
     }
     // Priority per agent: rebase > CI fix > review fix > review > continue > implement > implement reassigned for allowance.
     // rebase: my open, non-draft PR conflicts with its base. GitHub runs no pull_request CI on a conflicting PR, so this comes first.
-    for (const pr of rebasing ? prs : []) {
+    for (const pr of rebasing ? up : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       // Issue #79: rebase only on a conflict, or right before merge (a PR that already has its PASS and green CI, and that GitHub
@@ -1451,7 +1455,7 @@ export class Team {
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };
     }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
-    for (const pr of repair ? prs : []) {
+    for (const pr of repair ? up : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const checks = failingChecks(pr.statusCheckRollup, this.retried(pr));
@@ -1467,7 +1471,7 @@ export class Team {
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks, key, ...(scanOnly ? { scanOnly: true } : {}), ...(escalated ? { escalated: true } : {}) };
     }
     // fix: my PR with a CHANGES verdict on its current head
-    for (const pr of repair ? prs : []) {
+    for (const pr of repair ? up : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || this.churned(pr.number)) continue;   // issue #864: churn stops the fix loop
@@ -1480,7 +1484,7 @@ export class Team {
     // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
     const wtBusy = false;   // issue #344: every review has its own worktree and lease, so no review waits for another
     // review: any agent's PR whose head was written by another model, green CI, mergeable, no verdict yet on this exact head
-    for (const pr of rev && !wtBusy ? this.reviewOrder(agent, this.reviewQueue(agent, prs, { planning: true }).map(q => q.pr)) : []) {   // issue #405: closest to merge first; issue #402: then PRs only this agent can review first
+    for (const pr of rev && !wtBusy ? this.reviewOrder(agent, this.reviewQueue(agent, up, { planning: true }).map(q => q.pr)) : []) {   // issue #405: closest to merge first; issue #402: then PRs only this agent can review first
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
@@ -1495,7 +1499,7 @@ export class Team {
     }
     // second opinion (optional second_opinion config): one extra review of a PR that touches the configured paths, by the configured
     // reviewer, on another provider than the one that wrote the head, once the primary review has passed and while it has allowance.
-    for (const pr of rev && !wtBusy ? prs : []) {
+    for (const pr of rev && !wtBusy ? up : []) {
       const so = this.secondOpinionDue(agent, pr);
       if (!so) continue;
       if (busy('review', so.key) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
@@ -1518,7 +1522,7 @@ export class Team {
     // continue: my own DRAFT PR for an owned, open, unblocked issue (a draft is never reviewed or merged, so without this it sits idle forever).
     // Bounded per PR by max_fix_attempts, like fix rounds; the count is across heads. A draft stays with its branch's author
     // (never reassigned): another agent continuing it would later review its own work.
-    for (const pr of repair ? prs : []) {
+    for (const pr of repair ? up : []) {
       const n = this.draftIssue(agent, a, pr, issueByNo);
       if (n == null || !SHA.test(pr.headRefOid) || busy('continue', String(pr.number)) || busy('implement', String(n)) || this.taken?.has(`issue:${n}`)) continue;
       if ((this.s.continueAttempts[pr.number] || 0) >= L.max_fix_attempts || this.writeBlock(pr, 'continue') || this.repairOverlap(agent, 'continue', pr, issueByNo)) continue;
