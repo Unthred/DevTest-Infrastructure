@@ -37,7 +37,7 @@ async function installationToken(app, { fetchFn, readKey, now }) {
 
 // Adds an existing label to an issue or pull request as the App. Never creates or recolours the label.
 export async function addLabelAsApp(config, n, label, { fetchFn = fetch, readKey = f => fs.readFileSync(f), now = Date.now() } = {}) {
-  if (!appConfigured(config)) throw new SupervisorError('Foreman has no GitHub App identity configured (github_app in team.json), so it will not label as the owner account');
+  if (!appConfigured(config)) throw new SupervisorError('Foreman has no GitHub App identity configured (github_app in team.local.json), so it will not label as the owner account');
   const token = await installationToken(config.github_app, { fetchFn, readKey, now });
   const res = await fetchFn(`${API}/repos/${config.repository}/issues/${Number(n)}/labels`, { method: 'POST', headers: { ...headers(token), 'content-type': 'application/json' }, body: JSON.stringify({ labels: [label] }) });
   if (!res.ok) throw new SupervisorError(`GitHub App label write failed (HTTP ${res.status})`);

@@ -267,12 +267,14 @@ export const touchesPaths = (files, globs) => files.some(f => globs.some(g => gl
 // copy is never edited. Only operational knobs may be overridden; repository, paths, providers, access and board come
 // from the reviewed file in Git.
 export const LOCAL_OVERRIDE = 'team.local.json';
+const HOST_ONLY_KEYS = ['github_app'];   // issue #1115: set per host, never in the public shipped file
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const bad = Object.keys(local).filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard', 'display'].includes(k));
+  const keys = Object.keys(local).filter(k => !HOST_ONLY_KEYS.includes(k));
+  const bad = keys.filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard', 'display'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
-  const out = structuredClone(shipped);
+  const out = structuredClone({ ...shipped, ...(local.github_app && { github_app: local.github_app }) });   // issue #1115
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
   if ('test_tmp_root' in local) { if (typeof local.test_tmp_root !== 'string' || !path.isAbsolute(local.test_tmp_root)) throw new SupervisorError('invalid team.local.json: test_tmp_root must be an absolute path'); out.test_tmp_root = local.test_tmp_root; }
   if ('reports_dir' in local) { if (typeof local.reports_dir !== 'string' || !path.isAbsolute(local.reports_dir)) throw new SupervisorError('invalid team.local.json: reports_dir must be an absolute path'); out.reports_dir = local.reports_dir; }   // issue #882
@@ -1449,7 +1451,7 @@ export class Team {
       // Issue #266: with a merge backlog, rebase only the PR that is next in rebase order (issue #326: the order of the author's issues queue, then PR number), and let a
       // queued implement job have the slot after a rebase, so serial merging cannot starve implementation. Review rules are unchanged.
       { const g = this.gateReason({ agent, type: 'rebase', pr: pr.number, head: pr.headRefOid }); if (g) { this.noteGate(agent, { type: 'rebase', pr: pr.number }, role, g); continue; } }   // issue #1086: a held rebase is skipped and says why
-      if (this.rebaseDeferred(pr, prs, issueByNo, busy)) continue;   // issue #326: a deferred PR is skipped; the list order must not decide which PR goes
+      if (this.rebaseDeferred(pr, up, issueByNo, busy)) continue;   // issue #326: a deferred PR is skipped; the list order must not decide which PR goes
       if (this.writeBlock(pr, 'rebase') || this.repairOverlap(agent, 'rebase', pr, issueByNo)) continue;
       if (!allow('rebase')) break;
       return { type: 'rebase', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, branch: pr.headRefName, key, ...(behind ? { behind: true } : {}) };

@@ -9,7 +9,7 @@ import { addLabelAsApp, appConfigured } from '../supervisor/appidentity.mjs';
 import { park } from '../supervisor/controlactions.mjs';
 import { scanInboxNow, inboxScanDone } from '../supervisor/wake.mjs';
 import * as inbox from '../supervisor/inbox.mjs';
-import { Team, validateTeamConfig } from '../supervisor/team.mjs';
+import { Team, validateTeamConfig, applyLocalOverride } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 
 const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -99,4 +99,25 @@ test('inboxScanDone: false (so a pass is requested) when the scan picked up a co
     fs.writeFileSync(path.join(dir, 'items', `${'d'.repeat(32)}.json`), JSON.stringify({ kind: 'prompt', title: 'p', prompt: 'do it' }));
     assert.equal(inboxScanDone(dir, config, inbox.scan), true);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('github_app can be set in the local override', () => {
+  const shipped = { repository: 'o/r', agents: {}, limits: {} };
+  assert.deepEqual(applyLocalOverride(shipped, { github_app: config.github_app }).github_app, config.github_app);
+});
+
+test('a parked conflicting pull request does not hold the rebase slot from another conflicting one', async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'parkrebase-'));
+  try {
+    const cfg = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
+      limits: { roles: { implementer: 1, reviewer: 1, rebaser: 1 }, overall: 3, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [5, 6] } } };
+    const pr = (number, issue, labels) => ({ number, headRefName: `claude/issue-${issue}-x`, headRefOid: String(number).padStart(2, '0').repeat(20), isDraft: false, mergeable: 'CONFLICTING', labels });
+    const gh = { prs: [pr(50, 5, ['parked']), pr(60, 6, [])], issues: [{ number: 5, state: 'OPEN', title: 'T', body: '', labels: [] }, { number: 6, state: 'OPEN', title: 'T', body: '', labels: [] }],
+      listPulls: async () => gh.prs, listIssues: async () => gh.issues, getPull: async () => null, board: async () => {}, listMergedPulls: async () => [] };
+    const team = new Team({ config: cfg, root: stateRoot(state), gh, jobs: { listActive: async () => [], get: async () => null }, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null },
+      register: '', clock: { now: () => 5000 }, providerModels: { claude: { aliases: ['opus'], pattern: '^claude-', efforts: ['low'] } } });
+    const actions = await team.plan();
+    assert.ok(actions.some(a => a.type === 'rebase' && a.pr === 60), 'the unparked PR is rebased');
+    assert.ok(!actions.some(a => a.pr === 50), 'the parked PR gets no action');
+  } finally { fs.rmSync(state, { recursive: true, force: true }); }
 });
