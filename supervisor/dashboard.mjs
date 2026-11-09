@@ -406,10 +406,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     else add(`noreviewer-${u.pr}`, `${what} at ${sha7(u.head)} has no reviewer that is independent and available: ${u.reasons.join('; ')}`, { kind: 'pull', n: u.pr },
       { tried, action: `${unblock}, or review the PR by hand.`, links: [{ text: what, url: web('pull', u.pr) }] });
   }
-  // Issue #212: exclusions are listed on the Work page; only a follow-up whose PR closed unmerged needs the homeowner. #1103: so does a bad Depends on line.
+  // Issue #212: exclusions are listed on the Work page; #1103: a bad Depends on line needs the homeowner.
   for (const x of Team.dependencyTools.attention(cache)) add(x.id, x.text, x.ref, { action: x.action });
-  for (const e of excluded) if (e.kind === 'pr-closed') add(`prclosed-${e.number}`, `${names.issue(e.number).text}: ${e.reason}`, { kind: 'issue', n: e.number },
-    { tried: 'Foreman held this follow-up until its pull request merged; the PR was closed without merging, so it will not become eligible by itself.', action: 'Close the issue, remove the reference to the PR, or reopen the PR.', links: [{ text: names.issue(e.number).text, url: web('issue', e.number) }] });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
     // Issue #297: an issue that is closed, labelled epic or has an accepted split has nothing left to decide.

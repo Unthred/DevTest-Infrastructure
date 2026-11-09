@@ -16,15 +16,19 @@ function environment(team) {
 }
 
 // The merged pull requests that settled prerequisite `d`: the PR itself, or the ones that close issue `d`.
-const mergedFor = (merged, d) => (merged || []).filter(m => m.number === d || (m.closingIssuesReferences || []).some(r => r?.number === d) || issueOfBranch(m.headRefName) === d)
+const closesIssue = (m, d) => (m.closingIssuesReferences || []).some(r => r?.number === d);
+const mergedFor = (merged, d) => (merged || [])
+  .filter(m => m.number === d || closesIssue(m, d) || issueOfBranch(m.headRefName) === d)
   .map(m => ({ state: 'MERGED', mergeSha: m.mergeCommit?.oid ?? m.mergeSha ?? null }));
 
 // Pull requests found by number are remembered: merged ones in team.depPulls, ones closed without a merge in team.depClosed.
 function noteSettledPull(team, pr, closes = null) {
   const state = String(pr?.state).toUpperCase();
   // The issue that named this pull request as its closer is recorded on it, so the match does not depend on the pull request's own list.
-  if (state === 'MERGED') team.depPulls.set(pr.number, closes == null ? pr : { ...pr, closingIssuesReferences: [...(pr.closingIssuesReferences || []), { number: closes }] });
-  else if (state === 'CLOSED') team.depClosed.add(pr.number);
+  if (state === 'MERGED') {
+    const refs = [...(pr.closingIssuesReferences || []), { number: closes }];
+    team.depPulls.set(pr.number, closes == null ? pr : { ...pr, closingIssuesReferences: refs });
+  } else if (state === 'CLOSED') team.depClosed.add(pr.number);
 }
 
 // A closed prerequisite: its closing pull requests are read by number, whether or not the issue was in the cached list.
@@ -99,7 +103,8 @@ export function dependencyEntry(team, number) { return team.dependencies?.byIssu
 export function dependencyExclusion(team, number) {
   const e = dependencyEntry(team, number);
   if (!e || e.met) return null;
-  return { kind: 'dependency', refs: e.dependsOn.filter(d => d.state !== 'installed').map(d => d.number), text: waitText(e) };
+  const refs = e.dependsOn.filter(d => d.state !== 'installed').map(d => d.number);
+  return { kind: 'dependency', refs, text: waitText(e) };
 }
 
 // The issue a lane job or action belongs to: its issue, or the issue named in its pull request's branch.
@@ -111,7 +116,8 @@ export function issueOfAction(team, act) {
 
 // Every lane honours the gate: implement, review, fix, rebase, merge and the rest wait while their issue has an unmet prerequisite.
 export function dependencyGate(team, act) {
-  const n = issueOfAction(team, act), e = n != null ? dependencyEntry(team, n) : null;
+  const n = issueOfAction(team, act);
+  const e = n != null ? dependencyEntry(team, n) : null;
   return e && !e.met ? { kind: 'dependency', why: waitText(e) } : null;
 }
 
@@ -127,15 +133,16 @@ export async function enforceDependencies(team, report) {
   }
   if (!team.dependencies) return;
   for (const j of active) {
-
     const rec = team.s.jobs[j.id];
     if (!rec || rec.dependencyStop || rec.kind === 'inbox' && !Number.isSafeInteger(rec.issue)) continue;
-    const n = issueOfAction(team, { issue: rec.issue, pr: rec.pr, branch: rec.branch }), e = n != null ? dependencyEntry(team, n) : null;
+    const n = issueOfAction(team, { issue: rec.issue, pr: rec.pr, branch: rec.branch });
+    const e = n != null ? dependencyEntry(team, n) : null;
     if (!e || e.met || !(e.malformed || e.cycle || e.dependsOn.some(d => DEFINITE.has(d.state)))) continue;
+    // Stop first: if the job ended in that instant the stop throws and nothing is marked or refunded, so the next pass looks again.
+    await team.jobs.stop(j.id);
     rec.dependencyStop = { at: team.clock.now(), reasons: e.reasons };
     refundAttempt(team, rec);
     team.save();
-    await team.jobs.stop(j.id);
     (report.actions ||= []).push({ type: 'dependency-stop', result: `stopped job ${j.id.slice(0, 8)} on #${n}: ${waitText(e)}; it waits and uses no attempt` });
   }
 }
@@ -153,8 +160,14 @@ export function chargedCounter(act) {
 }
 
 // A dependency stop uses no attempt: the attempt the lane charged when the job started is given back, once, as the stop is made.
+// A scan-only round is counted in scanOnlyRounds instead; the launch records on the job which kind of fix it was.
 function refundAttempt(team, rec) {
-  const charged = chargedCounter({ type: rec.kind, key: rec.key, pr: rec.pr, scanOnly: team.s.scanOnlyRounds?.[rec.pr] > 0 });
+  if (rec.scanOnly) {
+    const rounds = team.s.scanOnlyRounds;
+    if (rounds?.[rec.pr] > 0) rounds[rec.pr]--;
+    return;
+  }
+  const charged = chargedCounter({ type: rec.kind, key: rec.key, pr: rec.pr });
   const counts = charged ? team.s[charged[0]] : null;
   if (counts && charged[1] != null && counts[charged[1]] > 0) counts[charged[1]]--;
 }
@@ -180,9 +193,21 @@ export function dependencyAttention(cache) {
   const out = [], issues = cache?.dependencies?.issues || {}, seen = new Set();
   for (const [key, e] of Object.entries(issues)) {
     const n = Number(key), ref = { kind: 'issue', n };
-    if (e.malformed) out.push({ id: `dependency-malformed-${n}`, text: `#${n}: the Depends on line is malformed (${e.malformed})`, ref, action: 'Edit the issue so it has one line like "Depends on: #12, #15". Foreman does not guess, so the issue waits until then.' });
-    if (e.cycle && !seen.has(e.cycle.join(','))) { seen.add(e.cycle.join(',')); out.push({ id: `dependency-cycle-${e.cycle.join('-')}`, text: `Dependency loop: ${e.cycle.map(c => `#${c}`).join(' -> ')} -> #${e.cycle[0]}; none of them can start`, ref: { kind: 'issue', n: e.cycle[0] }, action: 'Remove one Depends on reference to break the loop.' }); }
-    for (const d of e.dependsOn || []) if (d.state === 'closed_not_planned') out.push({ id: `dependency-notplanned-${n}-${d.number}`, text: `#${n} waits on #${d.number}, which was closed as not planned or superseded`, ref, action: `Repoint the Depends on line of #${n} to the issue that replaced #${d.number}, or remove it.` });
+    if (e.malformed) {
+      out.push({ id: `dependency-malformed-${n}`, text: `#${n}: the Depends on line is malformed (${e.malformed})`, ref,
+        action: 'Edit the issue so it has one line like "Depends on: #12, #15". Foreman does not guess, so the issue waits until then.' });
+    }
+    if (e.cycle && !seen.has(e.cycle.join(','))) {
+      seen.add(e.cycle.join(','));
+      const loop = e.cycle.map(c => `#${c}`).join(' -> ');
+      out.push({ id: `dependency-cycle-${e.cycle.join('-')}`, text: `Dependency loop: ${loop} -> #${e.cycle[0]}; none of them can start`,
+        ref: { kind: 'issue', n: e.cycle[0] }, action: 'Remove one Depends on reference to break the loop.' });
+    }
+    for (const d of e.dependsOn || []) {
+      if (d.state !== 'closed_not_planned') continue;
+      out.push({ id: `dependency-notplanned-${n}-${d.number}`, text: `#${n} waits on #${d.number}, which was closed as not planned or superseded`, ref,
+        action: `Repoint the Depends on line of #${n} to the issue that replaced #${d.number}, or remove it.` });
+    }
   }
   return out;
 }

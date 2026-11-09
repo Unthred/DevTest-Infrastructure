@@ -115,6 +115,12 @@ export const MIN_INSTALL_GAP_DEFAULT_MINUTES = 0;
 // Issue #556: origins other than the listen address that may POST to the dashboard (a reverse proxy at a public address). Exact
 // lowercase scheme://host[:port] only (browsers send a lowercase Origin), no path, wildcard or credentials; anything not listed is still refused.
 export { ORIGIN_PATTERN };
+// What a rebase or CI-fix job record carries. scanOnly lets a dependency stop give back the scan-only round the launch counted.
+function fixJobMeta(act, rebase, ticket) {
+  if (rebase) return { pr: act.pr, head: act.head, base: act.base, branch: act.branch };
+  const escalated = act.escalated ? { escalated: true, ticket } : {};
+  return { pr: act.pr, head: act.head, branch: act.branch, ...escalated, ...(act.scanOnly ? { scanOnly: true } : {}) };
+}
 function validateDashboard(d) {
   if (d === undefined) return;
   if (!d || typeof d !== 'object' || Array.isArray(d) || Object.keys(d).some(k => k !== 'allowed_origins')) throw new SupervisorError('invalid team config: dashboard');
@@ -751,10 +757,12 @@ export class Team {
   // An agent's issue list, plus follow-up issues the dispatcher queued at its end (issue #163).
   issuesOf(agent) { return [...(this.c.agents[agent]?.issues || []), ...(this.s.unblock.queued[agent] || []).filter(n => !this.c.agents[agent].issues.includes(n))]; }
   // Issue #212: every open issue is eligible unless excluded. Returns null when eligible, else { kind, text, refs } where kind is
-  // label | prerequisite | pr-wait | pr-closed. A PR in neither the open nor the merged list was closed unmerged.
+  // label | dependency | waiting_on (what a stopped job reported as open).
   exclusion(n, issueByNo, prs = this.view?.prs || []) {
-    const issue = issueByNo.get(n), dependency = dependencyExclusion(this, n);   // issue #1103
-    if (!issue) return null; if (dependency) return dependency;
+    const issue = issueByNo.get(n);
+    const dependency = dependencyExclusion(this, n);   // issue #1103
+    if (!issue) return null;
+    if (dependency) return dependency;
     const label = EXCLUDING_LABELS.find(l => (issue.labels || []).includes(l));
     if (label) return { kind: 'label', label, text: label === 'needs-homeowner' ? 'needs the homeowner' : `labelled ${label}` };
     // Issue #1103: the Depends on line (dependencyExclusion above) is the only dependency source read from an issue; the V1 forms no longer hold it.
@@ -1349,7 +1357,9 @@ export class Team {
   // Issue #1086: a held action (retry cap, circuit breaker) is ineligible inside the planner, so the lane's next startable action runs instead of
   // idling behind it. The held item is marked taken (every candidate loop already skips a taken item), recorded with its reason, and choose() runs again.
   gateReason(act) {
-    const subject = act.pr ?? act.issue, held = dependencyGate(this, act); if (held) return held;   // issue #1103: every lane waits for installed prerequisites
+    const subject = act.pr ?? act.issue;
+    const held = dependencyGate(this, act);   // issue #1103: every lane waits for installed prerequisites
+    if (held) return held;
     if (act.type !== 'merge' && subject != null) {
       const cap = robust.sameCauseCap(this.c.limits);
       if (robust.capped(this.s, { type: act.type, subject, head: act.head ?? null }, cap)) { const r = this.s.sameCause[`${act.type}:${subject}`]; return { kind: 'retry', cause: r?.cause, attempts: r?.count, why: `retry cap: ${cap} attempts with the same cause (${r?.cause}); needs the homeowner` }; }
@@ -3613,7 +3623,7 @@ export class Team {
         allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: rebase ? rebasePrompt({ pr: act.pr, head: act.head, base: act.base, branch: act.branch, behind: !!act.behind }) : ciFixPrompt({ pr: act.pr, head: act.head, branch: act.branch, checks: act.checks, checkDetails: details, escalatedInbox, requirementsFile: rq?.file }),
         postcondition: { kind: rebase ? 'rebased' : 'new_head', pr: act.pr, baseHead: act.head } };
-      meta = { pr: act.pr, head: act.head, ...(rebase ? { base: act.base, branch: act.branch } : { branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) }) };
+      meta = fixJobMeta(act, rebase, ticket);
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
       bump = () => { if (act.scanOnly) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; if (act.announced) this.s.scanOnlyAnnounced[act.pr] = true; return; }   // issue #400: never counted; later heads are skipped only once the homeowner item exists
         this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; };
