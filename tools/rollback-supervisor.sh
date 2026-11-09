@@ -26,7 +26,7 @@ if [ "${1:-}" = "--supervisor" ]; then
       cwd=$(readlink "$p/cwd" 2>/dev/null) || cwd=
       case "$cwd" in "$dir"|"$dir"/*) return 0 ;; esac
       if [ -n "$alias" ]; then case "$cwd" in "$alias"|"$alias"/*) return 0 ;; esac; fi
-      cmd=$(tr '\0' ' ' 2>/dev/null <"$p/cmdline") || cmd=
+      cmd=$({ tr '\0' ' ' <"$p/cmdline"; } 2>/dev/null) || cmd=
       case "$cmd" in *"$dir/"*) return 0 ;; esac
       if [ -n "$alias" ]; then case "$cmd" in *"$alias/"*) return 0 ;; esac; fi
     done
