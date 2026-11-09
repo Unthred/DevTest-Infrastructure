@@ -178,6 +178,12 @@ The order only ranks; it never makes a PR eligible, and which agent reviews (iss
 
 On a 4-core runner the suite takes about 125 seconds whatever the limit (a few long files bound it) and 2 is about 5% slower, so CI shows no time cost for any value from 4 up. CI has no swap pressure, so it does not argue against 8, which stays the default because of the Tower figures (the old unlimited run gave 30 processes and 2.6 GB there); re-run the tool on Tower when the host is quiet to refine the value. The effect of skipping repeat suites is not measured: it removes whole suites (about 85 seconds each at 8), in proportion to how often the same tree is re-run.
 
+## Planner invariant suite (issue #1110)
+
+`tests/planner-invariants.test.mjs` builds real `Team.plan()` inputs from named fixtures and 128 bounded combinations generated with seed `1110`. It checks each produced plan for a merge after a current-head CHANGES verdict, an action halted by the circuit breaker, an action for a parked issue, and duplicate actions for one PR. The harness also proves that valid and boundary plans pass and that a hand-made violation of each checked rule is detected. On failure it reports the invariant, seed and full fixture state.
+
+Every new planner decision rule must add its invariant here, using the same state builder rather than a second planner implementation. The current planner cannot yet meet two proposed V2 rules, so they are intentionally absent rather than weakened: a conflicting PR with an unanswered CHANGES verdict can still be selected for rebase, and an active PR linked to a parked issue is not yet excluded. The V2 planner redesign will add both rules and their generated states.
+
 ## Idle time by cause (issue #487)
 Each tick snapshot records when the tick began (`startedAt`) and, for every agent idle when the tick ended, why: `upgrade` (the upgrade hold dropped work planned for that agent), `named-hold` (the planner named a hold for that agent, with its text), `work-planned`, or `no-eligible-work`. A hold belongs to the agent it names; other idle agents are not charged for it. Nothing here calls a model or GitHub: the report reads the local job records and snapshots.
 
