@@ -27,6 +27,8 @@ export function bindApproveAll(postDecision) {
   const refreshNow = () => document.querySelector('.refresh-now')?.click();
   const wait = ms => new Promise(res => setTimeout(res, ms));
   const post = f => postDecision(fetch.bind(window), f.action, new FormData(f));
+  // The server says when a proposal or decision arrives or is decided anywhere; the page then re-reads itself in place. EventSource reconnects by itself.
+  if (typeof EventSource !== 'undefined' && document.querySelector('[data-approvals-count]')) new EventSource('/api/approvals/events').addEventListener('changed', refreshNow);
   document.addEventListener('click', async e => {
     const btn = e.target.closest?.('[data-approve-all]');
     if (!btn) return;

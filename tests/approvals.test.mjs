@@ -143,3 +143,10 @@ test('page: a decision made on the page refreshes the list in place (the decided
   const submit = app.slice(app.indexOf("addEventListener('submit'"), app.indexOf('An Undo link disappears'));
   assert.match(submit, /await runDecision\([\s\S]*\}\) => ?\)?/.source ? /\}\)\.then\(\(\) => refresher\?\.refresh\(true, \{ live: true \}\)\)/ : null, 'every single decision re-reads the page');
 });
+
+test('page script: the open page listens to the approvals event stream', async t => {
+  const dir = makeInbox(t); drop(dir, PROMPT); inbox.scan(dir, Date.now() - 600000);
+  const s = await serve(t, dir);
+  const app = (await s.get('/static/approve-all.mjs')).body;
+  assert.match(app, /new EventSource\('\/api\/approvals\/events'\)/);
+});
