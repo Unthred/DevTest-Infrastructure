@@ -98,6 +98,15 @@ Before considering work complete, verify:
 
 The reviewer must challenge architectural deterioration even when the implementation is functionally correct. New deterioration in the changed code is a blocking finding. Pre-existing debt the change did not worsen is not blocking; it is recorded for planned refactoring.
 
+## Enforcement
+
+`node tools/ci/check-size.mjs` measures every `.mjs`, `.js`, `.cjs`, `.cs` and `.razor` file outside test fixtures (function and class length, parameters, file length and line length; for .razor only the @code and @functions blocks are C#) with a tokenising heuristic (tools/ci/size-csharp.mjs for C#) and no dependency; a file it cannot tokenise fails and is named. `tools/ci/size-baseline.json` lists every unit that was over a threshold, with its size. CI runs the check on every pull request and prints a table of unit, threshold, before and after.
+
+- A baselined unit that grows fails. Each line over 160 characters is its own unit, keyed by the start of its text, so a lengthened line fails whatever happens to other lines. A new long line in a healthy file is normally a warning, but lines are paired with removed or edited long lines of the same file by start text and then by length, so a new long line written in the same change that removes or rewrites another long line of that file can be read as growth of the old one and fail.
+- A unit that newly crosses a threshold fails when its file is already in the baseline as over the file threshold; in a healthy file it is a warning annotation, because thresholds are warnings and the reviewer judges.
+- A unit that shrinks passes; the check prints the smaller baseline, and committing it (`--update-baseline`) is part of the change, so the gain cannot be lost again.
+- Reviewers block on new architectural deterioration in the changed code (the ratchet is the mechanical part of that). Old debt the change did not worsen is a follow-up.
+
 ## Definition of done
 
 A change is complete only when it is functionally correct, appropriately tested, understandable and maintainable.
