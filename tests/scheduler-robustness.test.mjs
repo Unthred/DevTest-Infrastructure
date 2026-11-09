@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Team, validateTeamConfig } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import * as robust from '../supervisor/robust.mjs';
+import { applyRetryCap } from '../supervisor/retrycap.mjs';
 import { robustnessView } from '../supervisor/dashboard.mjs';
 
 const NOW0 = 1_800_000_000_000, MIN = 60000;
@@ -104,7 +105,7 @@ test('a capped item is dropped from the plan, held, and listed as a Needs you it
   const w = world(t);
   for (let i = 0; i < 2; i++) robust.noteFailure(w.team.s, { type: 'rebase', subject: 7, cause: 'postcondition_not_met', head: H(1) }, NOW0);
   const actions = [act, { ...act, pr: 8, key: `8:${H(1)}` }, { type: 'merge', pr: 7, head: H(1) }];
-  const report = {}, kept = w.team.applyRetryCap(actions, report);
+  const report = {}, kept = applyRetryCap(w.team, actions, report);
   assert.deepEqual(kept.map(a => `${a.type}:${a.pr}`), ['rebase:8', 'merge:7']);
   assert.equal(report.retryCapped[0].cause, 'postcondition_not_met');
   const items = w.team.retryCapItems(); assert.equal(items.length, 1); assert.equal(items[0].attempts, 2);

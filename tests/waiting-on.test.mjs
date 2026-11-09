@@ -112,3 +112,26 @@ test('a depends_on_overrides entry replaces the Prerequisites line on the stop p
   await w.team.postconditions()(j2);
   assert.deepEqual(j2.waitingOn, [30], 'an override naming an open item still holds');
 });
+
+test('issue #1107: a waiting_on end goes through the one classifier and is neither a fault nor an attempt', async t => {
+  const id = 'c'.repeat(32), job = { id, status: 'waiting_on', lastEvent: 'waiting_on', waitingOn: [20] };
+  const w = world(t, { issues: [issue(9)], pulls: [pr(20, 'codex/issue-19-x')], jobs: { [id]: job } });
+  w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '9', issue: 9, branch: 'claude/issue-9-x', ingested: false, at: 1000 };
+  const seen = [], onEnd = w.team.faults.onEnd.bind(w.team.faults);
+  w.team.faults.onEnd = (...a) => { const c = onEnd(...a); seen.push(c); return c; };
+  const report = { ingested: [], notified: [] };
+  await w.team.ingestOneInner(id, w.team.s.jobs[id], report);
+  assert.deepEqual(seen.map(c => [c.kind, c.cause]), [['none', 'waiting_on']]);
+  assert.equal(report.infraFaults, undefined, 'a prerequisite wait is not an infrastructure fault');
+  assert.deepEqual(w.team.s.waitingOn[9].items, [20]);
+});
+
+test('issue #1107: a completed end goes through the one classifier', async t => {
+  const id = 'd'.repeat(32), job = { id, status: 'completed', lastEvent: 'completed' };
+  const w = world(t, { issues: [issue(9)], pulls: [], jobs: { [id]: job } });
+  w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '9', issue: 9, branch: 'claude/issue-9-x', ingested: false, at: 1000 };
+  const seen = [], onEnd = w.team.faults.onEnd.bind(w.team.faults);
+  w.team.faults.onEnd = (...a) => { const c = onEnd(...a); seen.push(c); return c; };
+  await w.team.ingestOneInner(id, w.team.s.jobs[id], { ingested: [], notified: [] });
+  assert.deepEqual(seen.map(c => [c.kind, c.cause]), [['work', 'completed']]);
+});

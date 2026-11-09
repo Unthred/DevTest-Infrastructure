@@ -453,7 +453,7 @@ const endReview = async (w, fields, verdict) => {
   await startReview(w);
   const [id, rec] = Object.entries(w.team.s.jobs).at(-1);
   if (verdict) writeVerdict(w.team, rec.ticket, { pr: rec.pr, headSha: rec.head, findings: [], commandsRun: ['node --test'], ...verdict });
-  jobWith(w, id, fields); const report = { ingested: [] }; await w.team.ingest(report); return { id, rec, report };
+  jobWith(w, id, { usage: { inputTokens: 100 }, ...fields }); const report = { ingested: [] }; await w.team.ingest(report); return { id, rec, report };
 };
 const checkpointFailed = { status: 'failed', lastEvent: 'checkpoint_failed', incompleteReason: { cause: 'checkpoint_failed', detail: 'the run ended with checkpoint_failed (exit 1)', attempt: 3 } };
 test('#631: the review job carries a short repair task, and the retry of a refused verdict uses it instead of the whole review', async t => {

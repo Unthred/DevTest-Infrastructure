@@ -717,7 +717,7 @@ test('issue #35 notices and verdicts are posted once even when later work in the
   for (let i = 0; i < 3; i++) { const team = again(); await team.tick(); }     // three scheduled ticks over the same state
   assert.equal(w.calls.comments.filter(c => /devtest-verdict v1/.test(c[1])).length, 1);
   // blocked: one notice per job and state; a state change is a new notice, a failed post is retried
-  w.jobs.states[id].status = 'blocked'; w.jobs.states[id].lastEvent = 'preflight_failed';
+  w.jobs.states[id].status = 'blocked'; w.jobs.states[id].lastEvent = 'retry_exhausted'; w.jobs.states[id].usage = { inputTokens: 100 };
   for (let i = 0; i < 3; i++) await again().tick();
   assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 1);
   w.jobs.states[id].status = 'failed';
@@ -725,7 +725,7 @@ test('issue #35 notices and verdicts are posted once even when later work in the
   assert.equal(w.calls.comments.filter(c => /Needs the homeowner/.test(c[1])).length, 2);
   const w2 = world(t, { pulls: [pr(10, 'codex/issue-2-x', H(1))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   await w2.team.execute((await w2.team.plan())[0]);
-  const [id2] = Object.keys(w2.team.s.jobs); w2.jobs.states[id2].status = 'blocked';
+  const [id2] = Object.keys(w2.team.s.jobs); w2.jobs.states[id2].status = 'blocked'; w2.jobs.states[id2].usage = { inputTokens: 100 };
   let fail = true; const post = w2.gh.comment; w2.gh.comment = async (n, b) => { if (fail) throw new Error('gh down'); return post(n, b); };
   const r = await w2.team.tick(); assert.match(r.skipped[0].reason, /gh down/);
   fail = false; await w2.team.tick();

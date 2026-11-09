@@ -14,6 +14,8 @@ import { stallCheck, stallLimitMs } from './stall.mjs';
 import * as robust from './robust.mjs';
 import * as breaker from './breaker.mjs';
 import * as failcause from './failcause.mjs';
+import { FaultFlow, withParking, causeOfEnd } from './faultflow.mjs';
+import { applyRetryCap } from './retrycap.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
 import { configureDisplay, formatCost, validateDisplay } from './money.mjs';
 import { validateResourceConfig } from './resources.mjs';
@@ -704,6 +706,8 @@ export class Team {
     this.view = null;   // what the last plan() read from GitHub; the tick hands it to the dashboard cache
     this.s.mergeLog ||= [];
     for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'rebaseAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'unusable', 'posted', 'merged', 'implemented', 'released', 'escalations', 'postMerge', 'secondOpinions', 'exceptionReviews', 'exceptionEnded', 'exceptionFixes', 'budget', 'cancelWatch', 'unblock', 'titles', 'splits', 'progress', 'headWriters', 'headWriterMiss', 'reReviews', 'reviewSince', 'probes', 'scanOnlyRounds', 'scanOnlyAnnounced', 'closedUnmerged', 'refusedReviews', 'reviewFaults', 'waitingOn', 'board', 'homeownerSteps']) this.s[k] ||= {};
+    this.faults = new FaultFlow({ state: () => this.s, now: () => this.clock.now(), save: () => this.save() });   // issue #1107
+    this.limitedOf = withParking(this.limitedOf, this.faults);
     this.s.sameCause ||= {}; this.s.liveness ||= { running: {}, cancelled: [] };   // issue #995
     failcause.normalizeFailCauses(this.s.failCauses ||= {});   // issue #1020: the cause of every failed job
     breaker.normalize(this.s.breaker ||= {});   // issue #549: the halt state lives in the state file, so a restart keeps it
@@ -1744,7 +1748,7 @@ export class Team {
     if (!dryRun) await guard('breaker successes', () => this.backfillSuccesses());
     actions = this.applyBreaker(actions, report, dryRun);
     if (!dryRun) await this.rearmOnRecovery(report);
-    actions = this.applyRetryCap(actions, report);   // issue #995
+    actions = applyRetryCap(this, actions, report);   // issue #995
     if (!dryRun) await guard('job liveness', () => this.livenessSweep(report));
     if (!dryRun) await guard('temp sweep', () => this.sweepTemp(report));
     if (!dryRun && this.root) await guard('disk samples', async () => recordDiskSample({ root: this.root, now: this.clock.now(), volumes: this.c.health?.volumes ?? DEFAULT_VOLUMES }));
@@ -1865,14 +1869,6 @@ export class Team {
     const subject = rec.pr ?? rec.issue; if (subject == null || rec.capCounted) return;
     rec.capCounted = true;
     robust.noteFailure(this.s, { type: rec.kind, subject, cause, head: rec.head ?? null }, this.clock.now());
-  }
-  applyRetryCap(actions, report) {
-    const { kept, stopped } = robust.filterCapped(this.s, actions, robust.sameCauseCap(this.c.limits));
-    if (stopped.length) report.retryCapped = stopped.map(a => ({ type: a.type, ref: a.pr ?? a.issue, cause: this.s.sameCause[`${a.type}:${a.pr ?? a.issue}`]?.cause }));
-    const gated = (this.gateStops || []).filter(x => x.kind === 'retry');
-    if (gated.length) report.retryCapped = [...(report.retryCapped || []), ...gated.map(x => ({ type: x.type, ref: x.ref, cause: x.cause, attempts: x.attempts, agent: x.agent, lane: x.lane }))];
-    for (const a of stopped) this.hold(a.agent, a.type, `retry cap: ${robust.sameCauseCap(this.c.limits)} attempts with the same cause (${this.s.sameCause[`${a.type}:${a.pr ?? a.issue}`]?.cause}); needs the homeowner`);
-    return kept;
   }
   // Issue #995 part 2: a non-agent check before a rebase job: a git dry-run merge of the branch onto its base plus the same mergeable test the
   // job's post-condition applies. True (and nothing started, no attempt counted) only when both show the pull request needs no rebase.
@@ -2353,6 +2349,7 @@ export class Team {
       if (j.ingested) continue;
       await guard(`ingest ${id}`, () => this.ingestOne(id, j, report));
     }
+    await guard('infrastructure faults', () => this.faults.step(report, robust.sameCauseCap(this.c.limits)));   // issue #1107
   }
   // Each effect is recorded and saved BEFORE it is posted, so a later failure in the same tick can never make the next tick
   // post it again (verdict and needs-homeowner comments were repeated every five minutes while the tick kept aborting).
@@ -2365,6 +2362,7 @@ export class Team {
   async recordWaste(id, j, report) {
     try {
       if (j.wasteChecked) return;
+      if (j.infraFault) { j.wasteChecked = true; return; }   // issue #1107: a fault is neither waste nor a failure cause
       const job = await this.jobs.get(id);
       if (!job || !TERMINAL.has(job.status)) return;
       const b = this.s.breaker, recorded = [this.s.verdicts, this.s.secondOpinions, this.s.exceptionReviews].some(m => Object.values(m || {}).some(v => v?.job === id));
@@ -2437,7 +2435,7 @@ export class Team {
   }
   async ingestOneInner(id, j, report) {
       const job = await this.jobs.get(id);
-      if (!job || !TERMINAL.has(job.status)) return;
+      if (!job || !TERMINAL.has(job.status)) return; const ended = this.faults.onEnd(id, j, job, report);   // #1107: one classifier
       // Issue #1023: an implement job that stopped on an open prerequisite is waiting. It is neither a failure (no count, no breaker waste, no
       // notice, no needs-homeowner) nor implemented: the issue is queued again by the planner once the items have merged or closed.
       if (job.status === 'waiting_on' && j.kind === 'implement' && Number.isSafeInteger(j.issue)) {
@@ -2450,7 +2448,7 @@ export class Team {
       }
       // Issue #995 part 3: count the failed attempt by cause (a homeowner stop is not a failure); a completed job clears the count.
       if (job.status === 'completed') { const subject = j.pr ?? j.issue; if (subject != null) robust.noteSuccessFor(this.s, { type: j.kind, subject }); }
-      else if (job.lastEvent !== 'manual_stop') this.countFailure(j, String(job.incompleteReason?.cause || job.lastEvent || job.status));
+      else if (ended.kind === 'work') this.countFailure(j, causeOfEnd(job));   // issue #1107
       // Issue #995 (owner comment 1): a stopped implement job (by hand or for inactivity) is backed up, cleaned up and made requeueable.
       if (job.status === 'stopped' && ['manual_stop', 'idle_timeout'].includes(job.lastEvent) && j.kind === 'implement' && Number.isSafeInteger(j.issue)) {
         if (!(await this.cleanupStoppedImplement(id, j, job, report))) return;
@@ -2518,7 +2516,7 @@ export class Team {
       if (j.kind === 'implement' && job.status === 'completed') delete j.endedNoPr;
       else if (j.kind === 'implement') {
         // Issue #660: the same conditions as resumeTransient's candidate test (RESUME_WINDOW_MS included); a job it will never look at is surfaced now.
-        if (this.willResume(id, job, j)) delete j.endedNoPr; else j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
+        if (j.infraRequeued || this.willResume(id, job, j)) delete j.endedNoPr; else j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
       }
       j.ingested = true; this.save();
   }
@@ -3053,7 +3051,7 @@ export class Team {
   // Once per job and state: a changed state (blocked -> failed) is a new notice; an unchanged one is never repeated.
   async notifyOne(id, j, report) {
       const job = await this.jobs.get(id);
-      if (!job || !['blocked', 'failed'].includes(job.status)) return;
+      if (!job || (j.infraFault && j.infraFault !== 'usage_limit') || !['blocked', 'failed'].includes(job.status)) return;   // issue #1107: a fault is not the homeowner's to handle
       const nkey = `${id}:${job.status}`;
       if (this.s.notified[nkey]) return;
       if (j.kind === 'implement' && job.status === 'blocked' && job.lastEvent === 'context_too_large') { await this.draftSplit(id, j, job, report); return; }

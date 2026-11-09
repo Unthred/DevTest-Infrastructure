@@ -79,7 +79,7 @@ test('CI: a superseded cancelled run is green and is not re-run', async t => {
 
 const stoppedJob = (w, id, lastEvent, over = {}) => {
   w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '23', issue: 23, ingested: false, at: 1 };
-  w.jobs.states[id] = { id, status: 'blocked', lastEvent, updatedAt: w.clock.t - 5000, ...over };
+  w.jobs.states[id] = { id, status: 'blocked', lastEvent, updatedAt: w.clock.t - 5000, usage: { inputTokens: 100 }, ...over };   // tokens spent: the agent ran, so the stop is a work outcome
 };
 
 test('transient stop: resumed once after the cooldown, no notice; stopping again asks the homeowner', async t => {
@@ -91,15 +91,19 @@ test('transient stop: resumed once after the cooldown, no notice; stopping again
   r = await w.team.tick();
   assert.deepEqual(w.calls.resumed, ['j1']); assert.match(r.unblocked[0].why, /crash/); assert.deepEqual(w.calls.labels, []);
   // it stops again: resumed only once, now the homeowner is asked as before
-  w.jobs.states.j1 = { id: 'j1', status: 'blocked', lastEvent: 'crash', updatedAt: w.clock.t - 5000 };
+  w.jobs.states.j1 = { id: 'j1', status: 'blocked', lastEvent: 'crash', updatedAt: w.clock.t - 5000, usage: { inputTokens: 100 } };
   w.clock.t += 61_000; await w.team.tick();
   assert.deepEqual(w.calls.resumed, ['j1']); assert.deepEqual(w.calls.labels, [[23, 'needs-homeowner']]);
 });
 
 test('transient stop: a real decision (auth, closed issue) is never auto-resumed; an agent out of allowance waits', async t => {
   const w = world(t, { issues: [issue(23), issue(5, 'CLOSED')] });
-  stoppedJob(w, 'j1', 'auth_error'); await w.team.tick();
+  stoppedJob(w, 'j1', 'retry_exhausted'); await w.team.tick();
   assert.deepEqual(w.calls.resumed, []); assert.deepEqual(w.calls.labels, [[23, 'needs-homeowner']]);
+  // A sign-in fault (issue #1107) is never resumed either, and it does not ask the homeowner: the agent is parked instead.
+  const s = world(t, { issues: [issue(23), issue(5, 'CLOSED')] });
+  stoppedJob(s, 'j3', 'auth_error'); await s.team.tick();
+  assert.deepEqual(s.calls.resumed, []); assert.deepEqual(s.calls.labels, []); assert.equal(s.calls.comments.length, 0); assert.ok(s.team.s.infra.parked.claude);
   const o = world(t, { issues: [issue(23), issue(5, 'CLOSED')] }); o.team.limitedOf = () => ({ out: true, reason: 'weekly' });
   stoppedJob(o, 'j2', 'crash'); await o.team.tick();
   assert.deepEqual(o.calls.resumed, []); assert.deepEqual(o.calls.labels, []);
@@ -221,7 +225,7 @@ test('split: an issue missing from the capped list is fetched directly, and a va
 test('labels: a Foreman-added needs-homeowner label is removed when its cause clears, and the removal is recorded', async t => {
   // job cause
   const w = world(t, { issues: [issue(23), issue(5, 'CLOSED')], cfg: config({ cooldown_ms: 86_400_000 }) });
-  stoppedJob(w, 'j1', 'auth_error'); await w.team.tick();
+  stoppedJob(w, 'j1', 'retry_exhausted'); await w.team.tick();
   assert.deepEqual(w.calls.labels, [[23, 'needs-homeowner']]);
   await w.team.tick(); assert.deepEqual(w.calls.removed, [], 'still blocked: label stays');
   w.jobs.states.j1 = { id: 'j1', status: 'running' };   // the homeowner resumed it

@@ -86,7 +86,7 @@ test('endedNoPr: cleared by a completed ingest; not set for a transient stop tha
   w.team.jobs.get = async i => states[i] || null;
   w.team.jobs.resume = async () => {};
   const entry = () => w.team.s.jobs[id];
-  const ingest = async job => { states[id] = { id, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
+  const ingest = async job => { states[id] = { id, usage: { inputTokens: 100 }, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
   w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '23', issue: 23, ingested: false, at: NOW - 1000 };
   await ingest({ status: 'failed', lastEvent: 'checkpoint_failed' });
   assert.equal(entry().endedNoPr, undefined, 'transient stop, resume still pending: not surfaced yet');
@@ -105,7 +105,7 @@ test('endedNoPr: set at ingest for a job outside the resume window; set when res
   w.team.jobs.get = async i => states[i] || null;
   w.team.jobs.resume = async () => {};
   const entry = () => w.team.s.jobs[id];
-  const ingest = async job => { states[id] = { id, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
+  const ingest = async job => { states[id] = { id, usage: { inputTokens: 100 }, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
   w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '24', issue: 24, ingested: false, at: NOW - 8 * 86400000 };
   await ingest({ status: 'failed', lastEvent: 'checkpoint_failed' });
   assert.equal(entry().endedNoPr.event, 'checkpoint_failed', 'older than the window: never resumed, surfaced at once');
@@ -126,7 +126,7 @@ test('endedNoPr: set when a deferred job ages out of the window; set at ingest w
   w.team.jobs.get = async i => states[i] || null;
   w.team.jobs.resume = async () => {};
   const entry = () => w.team.s.jobs[id];
-  const ingest = async job => { states[id] = { id, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
+  const ingest = async job => { states[id] = { id, usage: { inputTokens: 100 }, ...job }; entry().ingested = false; await w.team.ingestOneInner(id, entry(), { ingested: [] }); };
   w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '23', issue: 23, ingested: false, at: NOW - 1000 };
   await ingest({ status: 'failed', lastEvent: 'checkpoint_failed', updatedAt: NOW });   // fresh stop: the resume cooldown holds it
   assert.equal(entry().endedNoPr, undefined, 'inside the window: awaits its resume');
