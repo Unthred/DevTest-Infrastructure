@@ -86,6 +86,9 @@ test('stop uses no attempt: onEnd refunds the launch attempt, never parks, never
 test('endNote: stop and fault wording', () => {
   assert.match(endNote({ status: 'stopped', stop: { by: 'homeowner', reason: 'manual_stop' } }, {}), /stopped by homeowner; no attempt used/);
   assert.match(endNote({ status: 'blocked' }, { infraFault: 'auth_error', attemptRefunded: 'auth_error' }), /attempt released/);
+  assert.match(endNote({ status: 'blocked' }, { attemptRefunded: 'auth_error' }), /infrastructure fault \(auth_error\).*attempt released/);
+  assert.equal(endNote({ status: 'blocked' }, { attemptRefunded: 'manual_stop' }), 'stopped; attempt released');
+  assert.doesNotMatch(endNote({ status: 'stopped', stop: { by: 'overseer', reason: 'idle_timeout' } }, {}), /no attempt used/);
   assert.equal(endNote({ status: 'completed' }, {}), null);
   assert.equal(endNote(null, undefined), null);
 });
