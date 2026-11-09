@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { skipOutcome } from './tickskips.mjs';
 import { atomicJson } from './core.mjs';
 import { redact } from './redact.mjs';
 import { dependencyPlain } from './teamdeps.mjs';
@@ -184,11 +185,16 @@ export function storeProbes(root, probes) {
   return true;
 }
 
-// A skipped action (lease conflict, gh error) is a partial failure: the dashboard must not show it as a successful tick.
+// A real skipped failure (lease conflict, gh error) is an error; a deliberate skip (issue #1119) is listed and the tick stays ok.
 export function tickOutcome(report) {
-  const skipped = Array.isArray(report?.skipped) ? report.skipped : [];
-  if (!skipped.length) return { status: 'ok' };
-  return { status: 'error', error: `${skipped.length} action(s) skipped: ${skipped.map(s => `${s.what}: ${s.reason}`).join('; ')}`.slice(0, 300) };
+  return skipOutcome(report?.skipped);
+}
+// Issue #1119: the deliberate skips of the tick just recorded, listed with their reasons next to its status. Best effort.
+export function addTickSkips(root, skips) {
+  const prev = readCache(root);
+  if (!prev?.tick || !Array.isArray(skips) || !skips.length) return;
+  const listed = skips.slice(0, 10).map(k => ({ what: redact(String(k.what), 100), reason: redact(String(k.reason), 200) }));
+  atomicJson(cacheFile(root), { ...prev, tick: { ...prev.tick, skips: listed } });
 }
 
 // Issue #985: phase name -> whole milliseconds. Hostile names and values are dropped; "total" and the fixed phases come first, so the cap of

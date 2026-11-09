@@ -5,6 +5,8 @@
 // upgrader guard, review/CI eligibility, quiet wait, pre-checks, upgrade, dry-run health check. The "next live tick" health
 // check is `verifyPending`, called by the CLI with the outcome of the live tick that ran under the new version.
 import { mcpNeedsInstall } from './mcpinstall.mjs';
+import { dropStaleLatch } from './tickskips.mjs';
+export { liveTickOutcome } from './tickskips.mjs';   // issue #302, #1119: what a live tick says about the new version
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -48,14 +50,6 @@ export const ENV_RETRY_MAX_MS = 4 * 60 * 60 * 1000;
 // Issue #581: a commit refused by a failed check gets one more attempt after this delay without waiting for main to move
 // (a check that fails only under load is not a defect of the commit). A second failure latches it until a newer main.
 export const PRECHECK_RETRY_MS = 30 * 60 * 1000;
-// Issue #302: what a live tick says about the new version. Only a thrown error or a skipped item that is a real fault fails it.
-// A lease held by a running job is an expected wait, reported under `waiting` and never `skipped`; an item flagged `expected`
-// is ignored too. Items needing the homeowner are reported under `blocked`: they are the condition, not a fault of the code.
-export function liveTickOutcome(tick) {
-  if (tick?.error) return { ok: false, reason: tick.error };
-  const faults = Array.isArray(tick?.skipped) ? tick.skipped.filter(item => !item?.expected) : [];
-  return faults.length ? { ok: false, reason: faults[0]?.reason } : { ok: true, reason: null };
-}
 // Issue #489: the explicit list of paths that do NOT need an install. The list is the only rule: every other path (bin/, supervisor/,
 // tools/ outside tools/ci/, a root file that is not *.md, and anything unknown) needs one.
 export const NO_INSTALL_PREFIXES = ['tests/', 'docs/', '.github/', 'tools/ci/'];
@@ -400,7 +394,7 @@ export class SelfUpgrade {
     return result;
   }
   async stepInner() {
-    if (this.latch()) return 'latched';
+    if (this.latch() && !dropStaleLatch(this)) return 'latched';   // issue #1119: a latch caused only by deliberate skips is cleared once
     if (this.s.pending) return 'awaiting-verification';
     const from = this.d.installed();
     if (!from) return 'not-versioned';
