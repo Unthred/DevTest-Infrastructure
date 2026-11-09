@@ -511,3 +511,8 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .card.health-warn{border-top:4px solid var(--warning);background:var(--warning-bg)}
 .card.health-alert{border-top:4px solid var(--action);background:var(--action-bg)}
 .card.health-unreadable{border-top:4px solid var(--warning);background:var(--warning-bg)}
+/* Waiting for approval dropdown on the Now card (issue #1101) */
+.approvals{margin-bottom:var(--sp3)}.approvals summary{cursor:pointer;min-height:36px;display:inline-flex;align-items:center;gap:var(--sp2)}
+.approvals-panel{margin-top:var(--sp2);max-height:60vh;overflow:auto}.approval-row{padding:var(--sp2) 0;border-top:1px solid var(--line)}
+.approval-row .acts{display:flex;flex-wrap:wrap;gap:var(--sp2)}
+@media (max-width:600px){.approvals-panel .btn{min-height:44px}.approvals{width:100%}}

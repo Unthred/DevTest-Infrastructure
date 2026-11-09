@@ -10,7 +10,7 @@ import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
-
+import { approvals } from './approvals-ui.mjs';
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
 import { healthPage } from './healthpage.mjs';
@@ -577,7 +577,7 @@ function overview(view, query) {
   const panels = [
     breakerCard(view),
     robustnessCard(view),
-    card({ id: 'now', title: 'Now', span: 3, body: nowPanel(view, { list: 'now' }), href: '/agents', cls: 'panel', type: 'panel' }),
+    card({ id: 'now', title: 'Now', span: 3, body: approvals(view, nowPanel(view, { list: 'now' }), esc, ago), href: '/agents', cls: 'panel', type: 'panel' }),
     card({ id: 'next', title: 'Next', span: 3, body: nextPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'needs', title: `Needs you${view.panels.needsYou.length ? ` (${view.panels.needsYou.length})` : ''}`, span: 3, body: needsPanel(view), href: '/work', cls: 'panel', type: 'panel' }),
     card({ id: 'later', title: `Later${(view.panels.later || []).length ? ` (${view.panels.later.length})` : ''}`, span: 3, body: laterPanel(view), href: '/work', cls: 'panel', type: 'panel' }),

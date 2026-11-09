@@ -254,7 +254,7 @@ test('dashboard: a pending item is one Approve/Reject card that shows its exact 
   inbox.scan(dir, 1000);
   const s = await serve(t, dir), page = (await s.get('/')).body;
   assert.match(page, new RegExp(`data-inbox="${id}"`)); assert.match(page, /Do &lt;b&gt;this&lt;\/b&gt; &amp; that/); assert.ok(!page.includes('<b>this</b>'));
-  assert.equal((page.match(/data-inbox=/g) || []).length, 1);
+  assert.equal((page.match(/data-inbox=/g) || []).length, 2, "the Needs you card and its row in the Waiting for approval dropdown (issue #1101)");
   assert.match(page, /<form method="post" action="\/inbox"[^>]*><input type="hidden" name="proof"/);
   assert.ok(!page.includes(TOKEN));
   const view = JSON.parse((await s.get('/api/view.json')).body); assert.ok(view.panels.needsYou.some(a => a.id === `inbox-${id}`));
