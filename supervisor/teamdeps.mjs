@@ -4,10 +4,9 @@
 import { parseDependsOn, evaluateDependencies, prerequisiteState, waitText } from './dependencies.mjs';
 import { installedShaOf, gitAncestor } from './depinstalled.mjs';
 
-const MAX_LOOKUPS = 30;      // issues fetched by number in one pass, when they fall outside the cached lists
 const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''); return m ? Number(m[1]) : null; };
-// States that justify stopping a job that is already running. `unknown` only holds new starts: a lookup that failed once must not kill work.
-const DEFINITE = new Set(['open', 'merged_not_installed', 'closed_not_planned']);
+// Any unmet state stops a running job (rule 4), `unknown` included: a failed lookup is never met. The stop uses no attempt, so it costs nothing.
+const DEFINITE = new Set(['open', 'merged_not_installed', 'closed_not_planned', 'unknown']);
 
 // Tests and the tick may set team.depEnv = { installedSha(), isAncestor(a, b) }; otherwise the real install and repository are read.
 function environment(team) {
@@ -20,6 +19,18 @@ function environment(team) {
 const mergedFor = (merged, d) => (merged || []).filter(m => m.number === d || (m.closingIssuesReferences || []).some(r => r?.number === d) || issueOfBranch(m.headRefName) === d)
   .map(m => ({ state: 'MERGED', mergeSha: m.mergeCommit?.oid ?? m.mergeSha ?? null }));
 
+// A closed prerequisite outside the cached merged list: its closing pull requests are read by number and remembered once merged.
+async function findMergedPulls(team, issue) {
+  if (issue.state !== 'CLOSED' || typeof team.gh.getPull !== 'function') return;
+  for (const ref of issue.closedByPullRequestsReferences || []) {
+    if (!ref?.number || team.depPulls.has(ref.number) || (team.merged || []).some(m => m.number === ref.number)) continue;
+    try {
+      const pr = await team.gh.getPull(ref.number);
+      if (String(pr?.state).toUpperCase() === 'MERGED') team.depPulls.set(ref.number, pr);
+    } catch { /* unknown, never met */ }
+  }
+}
+
 export async function refreshDependencies(team, issues, prs) {
   const open = (issues || []).filter(i => i.state === 'OPEN');
   const byNo = new Map((issues || []).map(i => [i.number, i]));
@@ -27,19 +38,22 @@ export async function refreshDependencies(team, issues, prs) {
   for (const i of open) for (const d of parseDependsOn(i.body, i.number).numbers) wanted.add(d);
   // A prerequisite outside the cached lists is fetched by number; a closed one is remembered, an open one is asked again each pass.
   team.depFetched ??= new Map();
-  let lookups = 0;
+  team.depPulls ??= new Map();   // merged pull requests found by number, for prerequisites older than the cached merged list
   for (const d of wanted) {
     if (byNo.has(d)) continue;
     const kept = team.depFetched.get(d);
-    if (kept?.state === 'CLOSED') { byNo.set(d, kept); continue; }
-    if (lookups++ >= MAX_LOOKUPS || typeof team.gh.getIssue !== 'function') continue;
-    try { const got = await team.gh.getIssue(d); if (got) { team.depFetched.set(d, got); byNo.set(d, got); } } catch { /* unknown, never met */ }
+    if (kept?.state === 'CLOSED') { byNo.set(d, kept); await findMergedPulls(team, kept); continue; }
+    if (typeof team.gh.getIssue !== 'function') continue;
+    try {
+      const got = await team.gh.getIssue(d);
+      if (got) { team.depFetched.set(d, got); byNo.set(d, got); await findMergedPulls(team, got); }
+    } catch { /* unknown, never met */ }
   }
   const { installedSha, isAncestor } = environment(team);
   const lookup = d => {
     const openPr = (prs || []).find(p => p.number === d);
     if (openPr) return { pr: { state: 'OPEN' } };
-    const issue = byNo.get(d) || null, candidates = mergedFor(team.merged, d);
+    const issue = byNo.get(d) || null, candidates = mergedFor([...(team.merged || []), ...team.depPulls.values()], d);
     const best = candidates.find(c => prerequisiteState({ issue, pr: c, installedSha, isAncestor }) === 'installed') || candidates[candidates.length - 1] || null;
     return { issue, pr: best };
   };

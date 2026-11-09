@@ -169,13 +169,33 @@ test('a running job whose issue gains an unmet prerequisite stops cleanly, waits
   assert.deepEqual(started(await w.team.plan()), [20], 'issue 9 waits; issue 20 may start');
 });
 
-test('an unknown prerequisite holds new starts but does not stop a running job', async t => {
+test('an unknown prerequisite also stops a running job cleanly, with no attempt (rule 4)', async t => {
   const id = 'd'.repeat(32);
   const w = world(t, { issues: [issue(9, 'Depends on: #77')], active: [{ id, provider: 'claude', status: 'running' }] });
   w.team.s.jobs[id] = { kind: 'implement', agent: 'claude', key: '9', issue: 9, branch: 'claude/issue-9-x', at: 500 };
   await w.team.plan();
   await enforceDependencies(w.team, {});
-  assert.deepEqual(w.stopped, []);
+  assert.deepEqual(w.stopped, [id]);
+  assert.equal(w.team.s.jobs[id].dependencyStop.reasons[0], '#77 status unknown');
+});
+
+test('any number of references resolves: every one is looked up, none is left unknown by a cap', async t => {
+  const refs = Array.from({ length: 45 }, (_, k) => k + 100);
+  const { team } = world(t, { issues: [issue(5, `Depends on: ${refs.map(n => `#${n}`).join(', ')}`)] });
+  const asked = [];
+  team.gh.getIssue = async n => { asked.push(n); return issue(n); };
+  await team.plan();
+  assert.deepEqual(asked.sort((a, b) => a - b), refs);
+  assert.ok(team.dependencies.byIssue.get(5).dependsOn.every(d => d.state === 'open'));
+});
+
+test('a prerequisite merged long ago, outside the cached merged list, is found through its closing pull request', async t => {
+  const old = { ...issue(20, '', 'CLOSED', 'COMPLETED'), closedByPullRequestsReferences: [{ number: 90 }] };
+  const { team } = world(t, { issues: [issue(5, 'Depends on: #20')] });
+  team.gh.getIssue = async () => old;
+  team.gh.getPull = async n => ({ number: n, state: 'MERGED', headRefName: 'claude/issue-20-x', mergeCommit: { oid: MERGED_IN }, closingIssuesReferences: [{ number: 20 }] });
+  assert.deepEqual(started(await team.plan()), [5]);
+  assert.equal(team.dependencies.byIssue.get(5).dependsOn[0].state, 'installed');
 });
 
 test('the supervisor and the MCP server say the same words for each state', () => {

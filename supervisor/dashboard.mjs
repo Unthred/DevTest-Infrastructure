@@ -35,6 +35,8 @@ import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './nam
 
 const sha7 = s => String(s || '').slice(0, 7);
 const ACTIVE = ['queued', 'running', 'paused_limit', 'paused_manual'];
+// Issue #1103: only what a stopped job reported as open still holds an issue besides its Depends on line.
+const reportedWaits = (S, n, byNo, prs) => waitingOnRefs({ body: '' }, byNo, prs, S.waitingOn?.[n]?.items || []);
 export const EXHAUSTED = 0.995;       // a window at or above this fraction used counts as exhausted
 export const windowLabel = (w, provider) => {
   if (w.type === 'five_hour') return '5-hour';
@@ -166,8 +168,6 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
   for (const [agent, a] of Object.entries(c.agents)) for (const n of a.issues) {
     const issue = byNo.get(n);
     if (!issue || issue.state !== 'OPEN' || team.delivered?.has(n)) continue;
-    const deps = c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body);
-    const open = deps.filter(d => byNo.get(d)?.state !== 'CLOSED');
     const prOf = prs.find(p => agentOfBranch(c, p.headRefName) && new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName));
     const hasPr = !!prOf && agentOfBranch(c, prOf.headRefName) === agent;
     const taker = plan.find(x => x.type === 'implement' && x.issue === n && x.reassignedFrom === agent);
@@ -176,8 +176,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     const running = activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n);
     let reason, waits, dep = Team.dependencyTools.exclusion(team, n)?.text;   // issue #1103
     if (dep) reason = dep; else if (issue.labels.includes('needs-homeowner')) reason = 'needs the homeowner';
-    else if (open.length) reason = `blocked by ${open.map(d => names.issue(d).text).join(', ')}`;
-    else if ((waits = waitingOnRefs(issue, byNo, prs, S.waitingOn?.[n]?.items || [])).length) reason = `waiting on ${waits.map(d => names.issue(d).text).join(', ')}`;   // issue #1023
+    else if ((waits = reportedWaits(S, n, byNo, prs)).length) reason = `waiting on ${waits.map(d => names.issue(d).text).join(', ')}`;   // issue #1023
     else if (running) reason = 'being implemented now';
     else if (hasPr) reason = 'PR open';
     else if (prOf || moved) reason = `reassigned for allowance to ${moved?.agent || agentOfBranch(c, prOf.headRefName)}${prOf ? `; ${names.pr(prOf.number).text} open` : ''}`;
@@ -249,8 +248,7 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
     if (issue.labels.includes('needs-homeowner')) { part(0, `waiting for homeowner: ${names.issue(n).text} needs the homeowner`, 'issue', n); continue; }
     if (mine.some(p => new RegExp(`/issue-${n}(\\D|$)`).test(p.headRefName))) continue;
     openIssues++;
-    const open = (c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => byNo.get(d)?.state !== 'CLOSED');
-    if (open.length) open.forEach(d => blockers.add(d));
+    (Team.dependencyTools.exclusion(team, n)?.refs || []).forEach(d => blockers.add(d));   // issue #1103: the Depends on line
   }
   if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => names.issue(d).text).join(', ')}` }); for (const d of blockers) links.push({ text: names.issue(d).text, url: url('issues', d) }); }
   else if (openIssues && !(m && m.mode !== 'normal')) parts.push({ rank: 3, text: 'has an open issue but nothing started it yet (limits or a lease may be holding it)' });

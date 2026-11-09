@@ -757,15 +757,9 @@ export class Team {
     if (!issue) return null; if (dependency) return dependency;
     const label = EXCLUDING_LABELS.find(l => (issue.labels || []).includes(l));
     if (label) return { kind: 'label', label, text: label === 'needs-homeowner' ? 'needs the homeowner' : `labelled ${label}` };
-    const open = (this.c.depends_on_overrides?.[n] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => issueByNo.get(d)?.state !== 'CLOSED');
-    if (open.length) return { kind: 'prerequisite', refs: open, text: `blocked by ${open.map(d => `#${d}`).join(', ')}` };
-    for (const p of issue.pullPrerequisites ?? pullPrerequisites(issue.title, issue.body)) {   // a cached issue has no body, only the parsed list
-      const live = prs.find(x => x.number === p);
-      if (live) return { kind: 'pr-wait', refs: [p], text: `waiting for PR #${p}${live.title ? ` ${live.title}` : ''} to merge` };
-      if (!(this.merged || []).some(m => m.number === p)) return { kind: 'pr-closed', refs: [p], text: `PR #${p} was closed without merging` };
-    }
-    // Issue #1023: prose dependencies and the items a stopped implement job reported wait the same way; the issue starts on the first tick after they merge or close.
-    const waits = waitingOnRefs(issue, issueByNo, prs, this.s?.waitingOn?.[n]?.items || []);
+    // Issue #1103: the Depends on line (dependencyExclusion above) is the only dependency source read from an issue; the V1 forms no longer hold it.
+    // Only what a stopped job itself reported as open (waiting_on, issue #1023) still holds the issue, so it does not restart at once.
+    const waits = waitingOnRefs({ body: '' }, issueByNo, prs, this.s?.waitingOn?.[n]?.items || []);
     if (waits.length) return { kind: 'waiting_on', refs: waits, text: `waiting on ${waits.map(d => `#${d}`).join(', ')}` };
     return null;
   }
@@ -3418,8 +3412,9 @@ export class Team {
     let issue = null;
     if (accepted.length) {
       const marker = `<!-- devtest-split v1 pr=${j.pr} job=${id} -->`;
+      const opening = `${marker}\nDepends on: #${j.pr}\n`;   // issue #1103: the follow-up waits for the PR through the one dependency line
       issue = await this.gh.findIssueByMarker(marker);
-      if (!issue) issue = await this.gh.createIssue(`Follow-up from PR #${j.pr}: findings outside the original scope`, `${marker}\nSplit out of PR #${j.pr} by Foreman during the final fix round (job \`${id}\`). These reviewer findings are outside the acceptance criteria of the original issue and the homeowner's comments; the PR is re-reviewed against the original scope.\n\n${accepted.map(x => `- ${x.finding}`).join('\n')}`);
+      if (!issue) issue = await this.gh.createIssue(`Follow-up from PR #${j.pr}: findings outside the original scope`, `${opening}Split out of PR #${j.pr} by Foreman during the final fix round (job \`${id}\`). These reviewer findings are outside the acceptance criteria of the original issue and the homeowner's comments; the PR is re-reviewed against the original scope.\n\n${accepted.map(x => `- ${x.finding}`).join('\n')}`);
       const agent = j.agent;
       const q = this.s.unblock.queued[agent] ||= [];
       if (!q.includes(issue)) q.push(issue);

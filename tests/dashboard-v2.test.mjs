@@ -429,10 +429,10 @@ test('#212 an issue in no agent list is eligible: no Needs-you card; exclusions 
   c.mergedNumbers = [203];
   const v = await needsOf(await serve(t, { cache: c }));
   assert.ok(!v.panels.needsYou.some(x => x.id === 'unqueued'));
-  assert.ok(v.panels.needsYou.some(x => x.id === 'prclosed-81'), 'closed without merging needs the homeowner');
+  assert.ok(!v.panels.needsYou.some(x => x.id === 'prclosed-81'), 'the old Follow-up form no longer raises a card (issue #1103)');
   assert.ok(!v.panels.needsYou.some(x => x.id === 'prclosed-80' || x.id === 'prclosed-82'));
   const ex = Object.fromEntries((v.excluded || []).map(e => [e.number, e]));
-  assert.match(ex[79].reason, /labelled epic/); assert.match(ex[80].reason, /waiting for PR #201 The open PR to merge/); assert.match(ex[81].reason, /closed without merging/);
+  assert.match(ex[79].reason, /labelled epic/); assert.ok(!ex[80] && !ex[81], 'the old Follow-up wording no longer excludes (issue #1103)');
   assert.ok(!ex[77] && !ex[82] && !ex[78], 'eligible, merged-PR and closed issues are not excluded');
 });
 test('legend (issue #160): hiding keeps the item in the legend, the last visible series cannot be hidden, Show all restores', async () => {

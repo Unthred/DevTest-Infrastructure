@@ -40,12 +40,12 @@ test('each excluding label keeps an issue out; an unrelated label does not', asy
   assert.deepEqual(implemented(await world(t, { issues: [issue(7, '', ['enhancement', 'bug'])] }).team.plan()), [7]);
 });
 
-test('a prerequisite keeps an issue out until it closes', async t => {
-  const open = world(t, { issues: [issue(8, '**Prerequisites:** #7.'), issue(7)] });
-  assert.deepEqual(implemented(await open.team.plan()), [7], 'only the prerequisite is started');
-  assert.match(open.team.exclusion(8, new Map(open.team.view.issues.map(i => [i.number, i])), []).text, /blocked by #7/);
-  const closed = world(t, { issues: [issue(8, '**Prerequisites:** #7.'), issue(7, '', [], 'CLOSED')] });
-  assert.deepEqual(implemented(await closed.team.plan()), [8]);
+test('the old Prerequisites line no longer keeps an issue out; only the Depends on line does (issue #1103)', async t => {
+  const old = world(t, { issues: [issue(8, '**Prerequisites:** #7.'), issue(7)] });
+  assert.deepEqual(implemented(await old.team.plan()), [7, 8]);
+  const line = world(t, { issues: [issue(8, 'Depends on: #7'), issue(7)] });
+  assert.deepEqual(implemented(await line.team.plan()), [7], 'only the prerequisite is started');
+  assert.match(line.team.exclusion(8, new Map(line.team.view.issues.map(i => [i.number, i])), []).text, /#7 still open/);
 });
 
 test('config order and agent assignment still win', async t => {
@@ -57,21 +57,9 @@ test('config order and agent assignment still win', async t => {
   assert.deepEqual(implemented(await world(t, { issues: [issue(5), issue(25), issue(30)], cfg: solo }).team.plan()), [30]);
 });
 
-test('a follow-up for an open PR is excluded with the reason, and becomes eligible when the PR merges', async t => {
-  const followUp = issue(9, 'Follow-up to PR #3: tidy up');
-  const waiting = world(t, { issues: [followUp], pulls: [pr(3, 'feature/x')] });
-  assert.deepEqual(implemented(await waiting.team.plan()), []);
-  assert.deepEqual({ kind: 'pr-wait', text: 'waiting for PR #3 PR title 3 to merge' }, (({ kind, text }) => ({ kind, text }))(waiting.team.exclusion(9, new Map([[9, followUp]]), [pr(3, 'feature/x')])));
-  const merged = world(t, { issues: [followUp], merged: [{ number: 3, headRefName: 'claude/issue-1-x', closingIssuesReferences: [] }] });
-  assert.deepEqual(implemented(await merged.team.plan()), [9]);
-});
-
-test('a follow-up whose PR was closed without merging stays out and is reported as pr-closed', async t => {
-  const followUp = issue(9, 'x\n<!-- devtest-split v1 pr=3 job=abc -->');
-  const w = world(t, { issues: [followUp] });
-  assert.deepEqual(implemented(await w.team.plan()), []);
-  const ex = w.team.exclusion(9, new Map([[9, followUp]]), []);
-  assert.equal(ex.kind, 'pr-closed'); assert.match(ex.text, /PR #3 was closed without merging/);
+test('follow-up wording and the split marker no longer hold an issue (issue #1103)', async t => {
+  const w = world(t, { issues: [issue(9, 'Follow-up to PR #3: tidy up\n<!-- devtest-split v1 pr=4 job=abc -->')], pulls: [pr(3, 'feature/x')] });
+  assert.deepEqual(implemented(await w.team.plan()), [9]);
 });
 
 test('parsers: PR references are not issue prerequisites; PR phrasing variants are found', () => {
@@ -89,12 +77,4 @@ test('an issue is eligible even when excluding labels do not exist in the reposi
   const w = world(t, { issues: [issue(7)] });
   w.team.gh.listLabels = async () => [];
   assert.deepEqual(implemented(await w.team.plan()), [7]);
-});
-
-test('a follow-up whose PR merged outside the bounded merged list becomes eligible; a CLOSED PR does not', async t => {
-  const w = world(t, { issues: [issue(7, 'Follow-up to PR #3'), issue(8, 'Follow-up to PR #4')] });
-  w.team.gh.getMergedPull = async n => ({ number: n, state: n === 3 ? 'MERGED' : 'CLOSED' });
-  assert.deepEqual(implemented(await w.team.plan()), [7]);
-  const ex = w.team.exclusion(8, new Map(w.team.view.issues.map(i => [i.number, i])), []);
-  assert.equal(ex.kind, 'pr-closed');
 });

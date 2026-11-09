@@ -829,7 +829,7 @@ test('continue (#50): an agent continues its own draft PR, bounded by max_fix_at
   assert.equal((await claudeDraft.team.plan()).find(x => x.agent === 'claude')?.type === 'continue', false);  // issue 3 is not claude's
   const closed = world(t, { pulls: [draft], issues: [issue(3, 'CLOSED')] });
   assert.equal((await closed.team.plan()).find(x => x.agent === 'codex'), undefined);
-  const blocked = world(t, { pulls: [draft], issues: [issue(3, 'OPEN', 'Prerequisites: #9'), issue(9)] });
+  const blocked = world(t, { pulls: [draft], issues: [issue(3, 'OPEN', 'Depends on: #9'), issue(9)] });
   assert.equal((await blocked.team.plan()).find(x => x.agent === 'codex'), undefined);
   const held = world(t, { pulls: [draft], issues: [issue(3, 'OPEN', '', ['needs-homeowner'])] });
   assert.equal((await held.team.plan()).find(x => x.agent === 'codex'), undefined);

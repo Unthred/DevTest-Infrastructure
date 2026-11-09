@@ -26,12 +26,18 @@ export function ghRunner(run = (args, input) => spawnSync('gh', args, { encoding
   };
 }
 
-const ISSUE_FIELDS = 'number,title,state,stateReason,body,labels';   // issue #1103: stateReason says whether an issue closed as completed or not planned
+// issue #1103: stateReason says whether an issue closed as completed or not planned; closedBy... names the pull requests that closed it
+const ISSUE_FIELDS = 'number,title,state,stateReason,body,labels,closedByPullRequestsReferences';
+// state and mergeCommit: issue #1103 reads old merged prerequisites by number
+const PULL_FIELDS = [
+  'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels',
+  'closingIssuesReferences,createdAt,state,mergeCommit'
+].join(',');
 export function githubClient(config, gh = ghRunner()) {
   const repo = config.repository;
   const boardItems = new Map();
   const json = args => JSON.parse(gh(args) || 'null');
-  const PR_FIELDS = 'number,title,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,url,labels,closingIssuesReferences,createdAt';
+  const PR_FIELDS = PULL_FIELDS;
   const withLabels = prs => (Array.isArray(prs) ? prs.map(p => ({ ...p, labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l.name)) })) : prs);
   return {
     listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),

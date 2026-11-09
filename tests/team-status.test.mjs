@@ -43,8 +43,8 @@ test('2. next: plain reasons why nothing will start', async () => {
   let s = await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, pulls: [pr(36, 'claude/issue-30-x', H(1), { statusCheckRollup: [{ status: 'IN_PROGRESS' }] })], issues: [issue(30)] } });
   assert.ok(s.next.waiting.some(w => w.agent === 'claude' && /PR #36 pr 36 \(for #30 issue 30\): waiting on CI/.test(w.text)), JSON.stringify(s.next));
   // blocked by a prerequisite
-  s = await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, pulls: [], issues: [issue(2, 'OPEN', 'Prerequisites: #9'), issue(9)] } });
-  assert.ok(s.next.waiting.some(w => w.agent === 'codex' && /#2 issue 2: blocked by #9 issue 9/.test(w.text)), JSON.stringify(s.next));
+  s = await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, pulls: [], issues: [issue(2, 'OPEN', 'Depends on: #9'), issue(9)] } });
+  assert.ok(s.next.waiting.some(w => w.agent === 'codex' && /#2 issue 2: waiting for #9 still open/.test(w.text)), JSON.stringify(s.next));
   // agent busy
   s = await status({ jobs: [job()] });
   assert.ok(s.next.waiting.some(w => w.agent === 'claude' && /busy with its current job/.test(w.text)));
@@ -174,7 +174,7 @@ test('idle reasons (#50): each idle agent states why in plain words', async () =
   a = await idle({ pulls: [pr(28, 'codex/issue-3-x', H(2), { isDraft: true })], issues: [issue(2, 'CLOSED'), issue(3)] });
   assert.match(a.text, /about to start continue #3/);
   // all issues blocked by #3
-  a = await idle({ pulls: [], issues: [issue(2, 'OPEN', 'Prerequisites: #3'), issue(3, 'OPEN', 'Prerequisites: #77'), issue(77)] });
+  a = await idle({ pulls: [], issues: [issue(2, 'OPEN', 'Depends on: #3'), issue(3, 'OPEN', 'Depends on: #77'), issue(77)] });
   assert.match(a.text, /all issues blocked by #3 issue 3, #77 issue 77/);
   // waiting for review of #29
   a = await idle({ pulls: [pr(29, 'codex/issue-2-x', H(3))], issues: [issue(2), issue(3, 'CLOSED')] });
