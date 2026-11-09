@@ -19,19 +19,37 @@ function environment(team) {
 const mergedFor = (merged, d) => (merged || []).filter(m => m.number === d || (m.closingIssuesReferences || []).some(r => r?.number === d) || issueOfBranch(m.headRefName) === d)
   .map(m => ({ state: 'MERGED', mergeSha: m.mergeCommit?.oid ?? m.mergeSha ?? null }));
 
-// A closed prerequisite outside the cached merged list: its closing pull requests are read by number and remembered once merged.
+// Pull requests found by number are remembered: merged ones in team.depPulls, ones closed without a merge in team.depClosed.
+function noteSettledPull(team, pr, closes = null) {
+  const state = String(pr?.state).toUpperCase();
+  // The issue that named this pull request as its closer is recorded on it, so the match does not depend on the pull request's own list.
+  if (state === 'MERGED') team.depPulls.set(pr.number, closes == null ? pr : { ...pr, closingIssuesReferences: [...(pr.closingIssuesReferences || []), { number: closes }] });
+  else if (state === 'CLOSED') team.depClosed.add(pr.number);
+}
+
+// A closed prerequisite: its closing pull requests are read by number, whether or not the issue was in the cached list.
 async function findMergedPulls(team, issue) {
   if (issue.state !== 'CLOSED' || typeof team.gh.getPull !== 'function') return;
   for (const ref of issue.closedByPullRequestsReferences || []) {
     if (!ref?.number || team.depPulls.has(ref.number) || (team.merged || []).some(m => m.number === ref.number)) continue;
-    try {
-      const pr = await team.gh.getPull(ref.number);
-      if (String(pr?.state).toUpperCase() === 'MERGED') team.depPulls.set(ref.number, pr);
-    } catch { /* unknown, never met */ }
+    try { noteSettledPull(team, await team.gh.getPull(ref.number), issue.number); } catch { /* unknown, never met */ }
   }
 }
 
-export async function refreshDependencies(team, issues, prs) {
+// A number that names a pull request, not an issue: `gh issue view` gives MERGED, or CLOSED with no reason. Read it as a pull request.
+async function findPullByNumber(team, issue) {
+  const state = String(issue.state).toUpperCase();
+  const asPull = state === 'MERGED' || (state === 'CLOSED' && !issue.stateReason);
+  if (!asPull || typeof team.gh.getPull !== 'function' || team.depPulls.has(issue.number) || team.depClosed.has(issue.number)) return;
+  try {
+    const pr = await team.gh.getPull(issue.number);
+    if (pr && pr.number === issue.number) noteSettledPull(team, pr);
+  } catch { /* unknown, never met */ }
+}
+
+// `merged` defaults to the merged list the planner loaded; the stop step passes its own.
+export async function refreshDependencies(team, issues, prs, merged = team.merged) {
+  if (team.depFromCache) return team.dependencies;   // the dashboard's copy restored from the tick: cached issues carry no body, so it cannot be recomputed
   const open = (issues || []).filter(i => i.state === 'OPEN');
   const byNo = new Map((issues || []).map(i => [i.number, i]));
   const wanted = new Set();
@@ -39,22 +57,28 @@ export async function refreshDependencies(team, issues, prs) {
   // A prerequisite outside the cached lists is fetched by number; a closed one is remembered, an open one is asked again each pass.
   team.depFetched ??= new Map();
   team.depPulls ??= new Map();   // merged pull requests found by number, for prerequisites older than the cached merged list
+  team.depClosed ??= new Set();  // pull requests found closed without a merge
   for (const d of wanted) {
-    if (byNo.has(d)) continue;
-    const kept = team.depFetched.get(d);
-    if (kept?.state === 'CLOSED') { byNo.set(d, kept); await findMergedPulls(team, kept); continue; }
-    if (typeof team.gh.getIssue !== 'function') continue;
-    try {
-      const got = await team.gh.getIssue(d);
-      if (got) { team.depFetched.set(d, got); byNo.set(d, got); await findMergedPulls(team, got); }
-    } catch { /* unknown, never met */ }
+    if (!byNo.has(d)) {
+      const kept = team.depFetched.get(d);
+      if (kept?.state === 'CLOSED') byNo.set(d, kept);
+      else if (typeof team.gh.getIssue === 'function') {
+        try {
+          const got = await team.gh.getIssue(d);
+          if (got) { team.depFetched.set(d, got); byNo.set(d, got); }
+        } catch { /* unknown, never met */ }
+      }
+    }
+    const found = byNo.get(d);
+    if (found) { await findMergedPulls(team, found); await findPullByNumber(team, found); }
   }
   const { installedSha, isAncestor } = environment(team);
   const lookup = d => {
     const openPr = (prs || []).find(p => p.number === d);
     if (openPr) return { pr: { state: 'OPEN' } };
-    const issue = byNo.get(d) || null, candidates = mergedFor([...(team.merged || []), ...team.depPulls.values()], d);
-    const best = candidates.find(c => prerequisiteState({ issue, pr: c, installedSha, isAncestor }) === 'installed') || candidates[candidates.length - 1] || null;
+    const issue = byNo.get(d) || null, candidates = mergedFor([...(merged || []), ...team.depPulls.values()], d);
+    const installed = candidates.find(c => prerequisiteState({ issue, pr: c, installedSha, isAncestor }) === 'installed');
+    const best = installed || candidates[candidates.length - 1] || (team.depClosed.has(d) ? { state: 'CLOSED' } : null);
     return { issue, pr: best };
   };
   const result = evaluateDependencies({ issues: open, lookup, installedSha, isAncestor });
@@ -92,18 +116,47 @@ export function dependencyGate(team, act) {
 }
 
 // A job already running whose issue gained an unmet prerequisite stops cleanly. It is not a failure: the stop is marked so ingest counts no attempt.
+// The check runs on facts read in this pass: the tick runs it before plan(), and every pass builds a new Team.
 export async function enforceDependencies(team, report) {
-  if (!team.dependencies || typeof team.jobs.stop !== 'function') return;
-  for (const j of await team.jobs.listActive()) {
+  if (typeof team.jobs.stop !== 'function') return;
+  const active = await team.jobs.listActive();
+  if (!active.length) return;
+  if (!team.depFromCache) {
+    const merged = await (team.gh.listMergedPulls?.() ?? []);
+    await refreshDependencies(team, await team.gh.listIssues(), await team.gh.listPulls(), merged);
+  }
+  if (!team.dependencies) return;
+  for (const j of active) {
+
     const rec = team.s.jobs[j.id];
     if (!rec || rec.dependencyStop || rec.kind === 'inbox' && !Number.isSafeInteger(rec.issue)) continue;
     const n = issueOfAction(team, { issue: rec.issue, pr: rec.pr, branch: rec.branch }), e = n != null ? dependencyEntry(team, n) : null;
     if (!e || e.met || !(e.malformed || e.cycle || e.dependsOn.some(d => DEFINITE.has(d.state)))) continue;
     rec.dependencyStop = { at: team.clock.now(), reasons: e.reasons };
+    refundAttempt(team, rec);
     team.save();
     await team.jobs.stop(j.id);
     (report.actions ||= []).push({ type: 'dependency-stop', result: `stopped job ${j.id.slice(0, 8)} on #${n}: ${waitText(e)}; it waits and uses no attempt` });
   }
+}
+
+// Which attempt counter a lane charges at launch, as [counter, key]; a secret-scan-only fix charges none.
+export function chargedCounter(act) {
+  switch (act.type) {
+    case 'review': return ['reviewAttempts', act.key];
+    case 'fix': return ['fixAttempts', act.key];
+    case 'continue': return ['continueAttempts', act.pr];
+    case 'rebase': return ['rebaseAttempts', act.key];
+    case 'cifix': return act.scanOnly ? null : ['fixAttempts', act.key];
+    default: return null;
+  }
+}
+
+// A dependency stop uses no attempt: the attempt the lane charged when the job started is given back, once, as the stop is made.
+function refundAttempt(team, rec) {
+  const charged = chargedCounter({ type: rec.kind, key: rec.key, pr: rec.pr, scanOnly: team.s.scanOnlyRounds?.[rec.pr] > 0 });
+  const counts = charged ? team.s[charged[0]] : null;
+  if (counts && charged[1] != null && counts[charged[1]] > 0) counts[charged[1]]--;
 }
 
 // The tick's cap step: the inbox time cap, then the dependency stops (the second runs even when the first throws).

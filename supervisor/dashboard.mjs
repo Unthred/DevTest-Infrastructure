@@ -124,6 +124,7 @@ function cacheBackedTeam(config, root, cache, jobs, state, snapshots = [], now =
   const { allowanceOf, limitedOf, usage } = planningInputs({ config, jobs, probes: cache.probes, snapshots, events, now });
   const team = new Team({ config, root, gh, jobs: jobsApi, git: null, register, allowanceOf, limitedOf, usage, clock: { now: () => now }, timeZone: tz });
   team.s = { ...team.s, ...state }; team.dependencies = Team.dependencyTools.fromPlain(cache.dependencies); // the state the caller read
+  team.depFromCache = !!team.dependencies;   // issue #1103: without tick data plan() works it out from the issues it was given
   for (const k of ['verdicts', 'jobs', 'fixAttempts', 'continueAttempts', 'reviewAttempts', 'reviewRefusals', 'notified', 'posted', 'merged', 'implemented', 'budget', 'rebaseAttempts', 'escalations', 'unusable', 'unblock', 'refusedReviews']) team.s[k] ||= {};
   for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'escalated', 'queued']) team.s.unblock[k] ||= {};
   team.s.unblock.log ||= [];
