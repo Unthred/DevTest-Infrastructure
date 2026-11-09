@@ -36,3 +36,12 @@ export function reserveOut(m) {
   const refusal = m ? reserveRefusal(m, 'implement', REVIEWS_ONLY_TYPES) : null;
   return refusal ? { why: `starts no new implement work (${refusal.slice(0, 160)})`, until: m.resetsAt ?? null } : null;
 }
+
+// The reserve counts open PRs, so a lane that runs outside a tick reads them first: judged without them it would see a margin-only reserve.
+// Returns a refusal when they cannot be read, else null with the team's modes set.
+export async function budgetsWithPulls(team) {
+  if (!team.view && !team.nameView) await team.loadNames();
+  if (!team.view && !team.nameView) return { started: false, why: 'the open pull requests could not be read, so the allowance reserve cannot be judged' };
+  team.modes = team.budgets();
+  return null;
+}

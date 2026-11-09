@@ -28,7 +28,7 @@ import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
-import { candidateRows, workRank, modelCapacity, reserveOut } from './capacityteam.mjs';
+import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
 import { weeklyWindow } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
@@ -2169,7 +2169,7 @@ export class Team {
     if (inbox >= roleCount(L, 'inbox')) return { started: false, why: 'no free inbox slot' };
     const gate = admit ? admit() : { ok: true };
     if (!gate.ok) return { started: false, why: gate.why || 'the host is busy' };
-    this.modes = this.budgets();
+    const unread = await budgetsWithPulls(this); if (unread) return unread;
     let agent = null;
     for (const [name, a] of this.agents()) {
       if (this.limitedOf(name).out || this.providerSlotFull(a.provider, 'inbox', usedBy)) continue;
