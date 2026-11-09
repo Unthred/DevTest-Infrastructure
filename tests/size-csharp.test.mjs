@@ -44,3 +44,39 @@ test('only the @code block of a razor file is measured, with file line numbers',
 test('an unterminated string names the problem', () => {
   assert.throws(() => measureCsharp('A.cs', 'class A { string s = "abc;\n}'), /unterminated string/);
 });
+
+const unitsOf = (name, src) => Object.fromEntries(measureCsharp(name, src).map(u => [u.key, u]));
+
+test('a class with an attribute that takes arguments is measured as a class', () => {
+  const src = `[Route("api/x")]\npublic class Big\n{\n    void M()\n    {\n${body(3)}    }\n}\n`;
+  const by = unitsOf('Big.cs', src);
+  assert.equal(by['class:Big'].lines, 10);
+  assert.equal(by['function:Big>M'].lines, 6);
+});
+
+test('razor markup quotes and multi-line attribute values do not break the scan', () => {
+  const src = `<div class="a\n  b" title='x "y'>it's</div>\n@code {\n    void Click()\n    {\n    }\n}\n<p>"</p>\n`;
+  const units = measureCsharp('C.razor', src);
+  assert.deepEqual(units.map(u => [u.key, u.startLine]), [['function:Click', 4]]);
+});
+
+test('interpolated raw strings are blanked', () => {
+  const src = 'class A\n{\n    void M()\n    {\n        var s = $"""\n            {x} } "quoted" {\n            """;\n    }\n}\n';
+  assert.equal(unitsOf('A.cs', src)['function:A>M'].lines, 6);
+});
+
+test('#if branches that each open a brace count only the first branch', () => {
+  const src = 'class A\n{\n#if NET8\n    void M() {\n#else\n    void M(int a) {\n#endif\n        Step();\n    }\n}\n';
+  const by = unitsOf('A.cs', src);
+  assert.equal(by['function:A>M'].params, 0);
+  assert.equal(by['class:A'].lines, 10);
+});
+
+test('constructor initialisers and generic constraints with nested parentheses keep the real name and parameters', () => {
+  const src = 'class A\n{\n    A(int x, int y) : base(f(x), g(y))\n    {\n    }\n    void G<T>(T a) where T : new()\n    {\n    }\n}\n';
+  const by = unitsOf('A.cs', src);
+  assert.equal(by['function:A>A'].params, 2);
+  assert.equal(by['function:A>G'].params, 1);
+  assert.equal(by['function:A>base'], undefined);
+  assert.equal(by['function:A>new'], undefined);
+});

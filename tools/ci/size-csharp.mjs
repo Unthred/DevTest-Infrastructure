@@ -7,25 +7,55 @@ const TYPE_WORD = /\b(class|struct|record|interface)\s+([A-Za-z_]\w*)/;
 const CHAR_LITERAL = /^'(\\[^']+|[^\\'])'/;
 const NOT_METHOD = new Set(['if', 'for', 'foreach', 'while', 'switch', 'catch', 'using', 'lock', 'fixed', 'when', 'else', 'try', 'finally', 'do', 'unsafe', 'checked', 'unchecked']);
 
-// Replace comments, strings and char literals with spaces, keeping every newline so line numbers survive.
-export function blankNonCode(src) {
+// Index just past the "#endif" line that closes the conditional whose "#else" or "#elif" line starts at `from`.
+function endOfConditional(src, from) {
+  let depth = 1;
+  let i = from;
+  while (i < src.length) {
+    const eol = src.indexOf('\n', i);
+    const stop = eol < 0 ? src.length : eol;
+    const directive = /^\s*#\s*(if|endif)\b/.exec(src.slice(i, stop));
+    if (directive) depth += directive[1] === 'if' ? 1 : -1;
+    i = stop + 1;
+    if (depth === 0) return Math.min(stop, src.length);
+  }
+  return src.length;
+}
+
+// End of the preprocessor directive at `i`; an #else or #elif extends to the end of its conditional.
+function directiveEnd(src, i) {
+  const eol = src.indexOf('\n', i);
+  const lineEnd = eol < 0 ? src.length : eol;
+  const branch = /^#\s*(else|elif)\b/.test(src.slice(i, lineEnd));
+  return branch ? endOfConditional(src, lineEnd + 1) : lineEnd;
+}
+
+// Replace comments, strings, char literals and preprocessor lines with spaces, keeping every newline so line numbers survive. Only the
+// first branch of an #if is kept: the branches share their closing braces, so counting all of them would never balance. With
+// untilBalanced the scan starts at an opening "{" and stops after its matching "}" (used for @code blocks inside razor markup).
+function scan(src, from = 0, untilBalanced = false) {
   let out = '';
-  let i = 0;
+  let i = from;
+  let depth = 0;
   const blank = s => s.replace(/[^\n]/g, ' ');
   const take = n => { out += blank(src.slice(i, i + n)); i += n; };
   while (i < src.length) {
     const rest = src.slice(i, i + 4);
-    if (rest.startsWith('//')) {
+    const raw = /^\$*"{3,}/.exec(rest);
+    if (src[i] === '#' && /^[ \t]*$/.test(src.slice(src.lastIndexOf('\n', i - 1) + 1, i))) {
+      take(directiveEnd(src, i) - i);
+    } else if (rest.startsWith('//')) {
       const end = src.indexOf('\n', i);
       take((end < 0 ? src.length : end) - i);
     } else if (rest.startsWith('/*')) {
       const end = src.indexOf('*/', i + 2);
       if (end < 0) throw new Error('unterminated comment');
       take(end + 2 - i);
-    } else if (rest.startsWith('"""')) {
-      const end = src.indexOf('"""', i + 3);
+    } else if (raw) {
+      const quotes = raw[0].replace(/\$/g, '');
+      const end = src.indexOf(quotes, i + raw[0].length);
       if (end < 0) throw new Error('unterminated raw string');
-      take(end + 3 - i);
+      take(end + quotes.length - i);
     } else if (/^(\$@|@\$|@)"/.test(rest)) {
       const start = src.indexOf('"', i) + 1;
       let j = start;
@@ -44,10 +74,18 @@ export function blankNonCode(src) {
       take(CHAR_LITERAL.exec(src.slice(i, i + 12))[0].length);
     } else {
       out += src[i];
+      if (src[i] === '{') depth++;
+      if (src[i] === '}') depth--;
       i++;
+      if (untilBalanced && depth === 0) return { text: out, end: i };
     }
   }
-  return out;
+  if (untilBalanced) throw new Error('unclosed @code block');
+  return { text: out, end: i };
+}
+
+export function blankNonCode(src) {
+  return scan(src).text;
 }
 
 function countParams(header) {
@@ -74,12 +112,39 @@ function matchingOpen(text, close) {
   return -1;
 }
 
-// "where T : class" and ": base(...)" follow the parameter list; cut them so the header ends at the ")".
-function stripTrailers(header) {
-  return header.replace(/\bwhere\s+\w+\s*:[^)]*$/, '').replace(/\s*:\s*(base|this)\s*\([^)]*\)\s*$/, '').trimEnd();
+// Leading attribute lists such as [Route("api/x")] are not part of the declaration; their parentheses must not hide a class keyword.
+function stripAttributes(header) {
+  let h = header.trimStart();
+  while (h.startsWith('[')) {
+    let depth = 0;
+    let j = 0;
+    for (; j < h.length; j++) {
+      if (h[j] === '[') depth++;
+      else if (h[j] === ']' && --depth === 0) break;
+    }
+    if (depth !== 0) break;
+    h = h.slice(j + 1).trimStart();
+  }
+  return h;
 }
 
-function classify(header) {
+// "where T : new()" constraints and ": base(f(a), g(a))" initialisers follow the parameter list; cut them so the header ends at the ")".
+function stripTrailers(header) {
+  const constraint = /\bwhere\s+\w+\s*:/.exec(header);
+  const h = (constraint ? header.slice(0, constraint.index) : header).trimEnd();
+  const initialiser = /\s*:\s*(base|this)\s*\(/.exec(h);
+  if (!initialiser) return h;
+  const open = initialiser.index + initialiser[0].length - 1;
+  let depth = 0;
+  for (let j = open; j < h.length; j++) {
+    if (h[j] === '(') depth++;
+    else if (h[j] === ')' && --depth === 0) return j === h.length - 1 ? h.slice(0, initialiser.index).trimEnd() : h;
+  }
+  return h;
+}
+
+function classify(rawHeader) {
+  const header = stripAttributes(rawHeader);
   const type = TYPE_WORD.exec(header);
   if (type && !header.slice(0, type.index).includes('(')) return { kind: 'class', name: type[2] };
   const h = stripTrailers(header);
@@ -126,28 +191,22 @@ export function measureCsharpUnits(blanked, lineOffset = 0) {
   return units;
 }
 
-// Blocks of C# inside a .razor file: the body of every @code and @functions directive.
-function razorBlocks(blanked) {
+// Blocks of C# inside a .razor file: the body of every @code and @functions directive. Only those bodies are tokenised, because markup
+// holds quotes and apostrophes that are not C# strings.
+function razorBlocks(src) {
   const blocks = [];
   const directive = /@(code|functions)\s*\{/g;
   let m;
-  while ((m = directive.exec(blanked))) {
+  while ((m = directive.exec(src))) {
     const open = m.index + m[0].length - 1;
-    let depth = 0;
-    let j = open;
-    for (; j < blanked.length; j++) {
-      if (blanked[j] === '{') depth++;
-      else if (blanked[j] === '}' && --depth === 0) break;
-    }
-    if (depth !== 0) throw new Error('unclosed @code block');
-    blocks.push({ text: blanked.slice(open, j + 1), lineOffset: blanked.slice(0, open).split('\n').length - 1 });
-    directive.lastIndex = j;
+    const { text, end } = scan(src, open, true);
+    blocks.push({ text, lineOffset: src.slice(0, open).split('\n').length - 1 });
+    directive.lastIndex = end;
   }
   return blocks;
 }
 
 export function measureCsharp(name, src) {
-  const blanked = blankNonCode(src);
-  if (!name.endsWith('.razor')) return measureCsharpUnits(blanked);
-  return razorBlocks(blanked).flatMap(b => measureCsharpUnits(b.text, b.lineOffset));
+  if (!name.endsWith('.razor')) return measureCsharpUnits(blankNonCode(src));
+  return razorBlocks(src).flatMap(b => measureCsharpUnits(b.text, b.lineOffset));
 }

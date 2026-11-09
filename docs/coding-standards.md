@@ -105,6 +105,7 @@ The reviewer must challenge architectural deterioration even when the implementa
 - A baselined unit that grows fails. Each line over 160 characters is its own unit, keyed by the start of its text, so a lengthened line fails whatever happens to other lines. A new long line in a healthy file is normally a warning, but lines are paired with removed or edited long lines of the same file by start text and then by length, so a new long line written in the same change that removes or rewrites another long line of that file can be read as growth of the old one and fail.
 - A unit that newly crosses a threshold fails when its file is already in the baseline as over the file threshold; in a healthy file it is a warning annotation, because thresholds are warnings and the reviewer judges.
 - A unit that shrinks passes; the check prints the smaller baseline, and committing it (`--update-baseline`) is part of the change, so the gain cannot be lost again.
+- The C# measure is a heuristic: expression-bodied members (`=>`) have no braces and are not measured, only the first branch of an `#if` is counted, and in a .razor file only the @code and @functions bodies are tokenised. A file whose strings or braces it cannot tokenise fails and is named rather than being skipped.
 - Reviewers block on new architectural deterioration in the changed code (the ratchet is the mechanical part of that). Old debt the change did not worsen is a follow-up.
 
 ## Definition of done
