@@ -101,3 +101,41 @@ test('the CLI needs no state root: it works where the default one cannot be crea
   const r = spawnSync(process.execPath, ['supervisor/cli.mjs', 'verdict-check', write(good()), '--pr', '7', '--head', HEAD], { encoding: 'utf8', env });
   assert.equal(r.status, 0, r.stderr);
 });
+
+test('a full 40-character upper-case headSha is repaired', () => {
+  const r = checkVerdictFile(write({ ...good(), headSha: HEAD.toUpperCase() }), expect);
+  assert.equal(r.verdict?.headSha, HEAD);
+  assert.match(r.repairs[0], /headSha/);
+});
+
+test('the repair write leaves no temporary file and the CLI and ingest agree with --checklist', () => {
+  const ticket = 'e'.repeat(32), root = tmp(), dir = path.join(root, 'team', 'inbox', ticket);
+  fs.mkdirSync(dir, { recursive: true });
+  const full = { ...good(), requirements: [{ requirement: 'r', status: 'met', evidence: 'e' }], descriptionClaims: [{ claim: 'c', status: 'true', evidence: 'e' }] };
+  fs.writeFileSync(path.join(dir, 'verdict.json'), JSON.stringify({ ...full, headSha: HEAD.slice(0, 8) }));
+  const ex = { ...expect, checklist: true };
+  assert.ok(readInboxVerdict(root, ticket, ex).verdict);
+  assert.ok(!fs.existsSync(path.join(dir, 'verdict.json.tmp')));
+  assert.equal(cli(path.join(dir, 'verdict.json'), ['--checklist']).status, 0);
+  const noReq = write(good());   // a checklist is required: both refuse, with the same error
+  assert.equal(cli(noReq, ['--checklist']).status, 1);
+  assert.match(cli(noReq, ['--checklist']).stderr, new RegExp(checkVerdictFile(noReq, ex).error.slice(0, 20)));
+});
+
+test('the repair prompt lets the repair run use verdict-check', () => {
+  assert.match(fs.readFileSync('supervisor/team.mjs', 'utf8'), /except \/root\/bin\/ai-supervisor verdict-check \$\{inbox\}\/verdict\.json/);
+});
+
+test('blocked-report counts blocked review jobs, tokens and repairs per day', async () => {
+  const { blockedReport, renderBlockedReport } = await import('../supervisor/blocked-report.mjs');
+  const t = s => Date.parse(s + 'T12:00:00Z');
+  const jobs = [
+    { kind: 'review', status: 'blocked', createdAt: t('2026-11-04'), usage: { inputTokens: 1000000, outputTokens: 500000 } },
+    { kind: 'review', status: 'blocked', createdAt: t('2026-11-04'), usage: { inputTokens: 500000, outputTokens: 0 } },
+    { kind: 'review', status: 'completed', createdAt: t('2026-11-05'), verdictRepairs: ['x'] },
+    { kind: 'implement', status: 'blocked', createdAt: t('2026-11-05') },
+  ];
+  const rep = blockedReport(jobs, { from: t('2026-11-03'), to: t('2026-11-06') });
+  assert.deepEqual(rep.days.map(d => [d.day, d.blocked, d.tokens, d.repaired]), [['2026-11-03', 0, 0, 0], ['2026-11-04', 2, 2000000, 0], ['2026-11-05', 0, 0, 1], ['2026-11-06', 0, 0, 0]]);
+  assert.match(renderBlockedReport(rep), /\| 2026-11-04 \| 2 \| 2\.00M \| 0 \|/);
+});

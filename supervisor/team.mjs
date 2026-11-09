@@ -604,7 +604,7 @@ export function repairVerdict(v, expect) {
     if (pick.length === 1) { out[pick[0]] = out[k]; delete out[k]; repairs.push(`field ${k.slice(0, 40)} renamed to ${pick[0]}`); }
   }
   const h = out.headSha;
-  if (typeof h === 'string' && h !== expect.head && /^[0-9a-fA-F]{7,39}$/.test(h) && SHA.test(expect.head || '') && expect.head.startsWith(h.toLowerCase())) {
+  if (typeof h === 'string' && h !== expect.head && /^[0-9a-fA-F]{7,40}$/.test(h) && SHA.test(expect.head || '') && expect.head.startsWith(h.toLowerCase())) {
     out.headSha = expect.head; repairs.push(`headSha ${h.slice(0, 12)} expanded to the reviewed head`);
   }
   return { v: out, repairs };
@@ -630,7 +630,7 @@ export function checkVerdictFile(file, expect, { repair = false } = {}) {
     try {
       const dir = path.dirname(file);
       fs.copyFileSync(file, path.join(dir, 'verdict.original.json'));
-      fs.writeFileSync(file, JSON.stringify(fixed.v, null, 2) + '\n');
+      const tmp = file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(fixed.v, null, 2) + '\n'); fs.renameSync(tmp, file);   // atomic: a full disk cannot leave a truncated verdict.json
       fs.writeFileSync(path.join(dir, 'verdict.repairs.json'), JSON.stringify({ repairs: fixed.repairs }) + '\n');
     } catch { return first; }   // if the repair cannot be recorded, it is not applied
   }
@@ -3668,7 +3668,7 @@ export class Team {
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review-${act.pr}`), branch: `${a.branch_prefix}review-${act.pr}`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.legacyPostMerge ? 'Post-merge review (D-021)' : act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],
         prompt: reviewPrompt({ decision, pr: act.pr, head: act.head, branch: act.branch, repository: this.c.repository, inbox, previousBlocking: !!previous, secondOpinion: !!act.secondOpinion, postMerge: !!act.postMerge, legacyPostMerge: !!act.legacyPostMerge, splitOut: this.splitOut(act.pr, inbox), requirementsFile: rq?.file }), postcondition: { kind: 'verdict', ticket, pr: act.pr, head: act.head, ...(rq ? { checklist: true } : {}) },
-        repairPrompt: `Task: repair the verdict file ${inbox}/verdict.json and stop. Do not review the pull request again, do not read the diff, do not run tests or any other command. Open that file, change only what the error above names, keep every finding and the verdict you reached (unless the error forces CHANGES), and write it back to the same path. Rules: JSON with exactly the fields pr (${act.pr}), headSha (${act.head}), verdict (PASS or CHANGES), findings (each {kind: blocking|follow-up, text}), commandsRun (strings; at least one for PASS)${rq ? ', requirements (each {requirement, status: met|not-met|not-applicable, evidence}; at least one) and descriptionClaims (each {claim, status: true|false|unverifiable, evidence}; a false claim may add materiality: material|immaterial and, for immaterial, a reason)' : ''}. Do not touch anything else.` };
+        repairPrompt: `Task: repair the verdict file ${inbox}/verdict.json and stop. Do not review the pull request again, do not read the diff, do not run tests or any other command except /root/bin/ai-supervisor verdict-check ${inbox}/verdict.json --pr ${act.pr} --head ${act.head}${rq ? ' --checklist' : ''}, which you run after writing the file until it prints OK. Open that file, change only what the error above names, keep every finding and the verdict you reached (unless the error forces CHANGES), and write it back to the same path. Rules: JSON with exactly the fields pr (${act.pr}), headSha (${act.head}), verdict (PASS or CHANGES), findings (each {kind: blocking|follow-up, text}), commandsRun (strings; at least one for PASS)${rq ? ', requirements (each {requirement, status: met|not-met|not-applicable, evidence}; at least one) and descriptionClaims (each {claim, status: true|false|unverifiable, evidence}; a false claim may add materiality: material|immaterial and, for immaterial, a reason)' : ''}. Do not touch anything else.` };
       meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.secondOpinion ? { secondOpinion: true } : {}), ...(act.postMerge ? { postMerge: true } : {}), ...(act.legacyPostMerge ? { legacyPostMerge: true } : {}), ...(rq ? { checklist: true, requirementsHash: rq.hash } : {}) };
       bump = () => { this.s.reviewAttempts[act.key] = (this.s.reviewAttempts[act.key] || 0) + 1; };
     } else if (act.type === 'fix') {

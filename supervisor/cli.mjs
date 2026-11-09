@@ -27,6 +27,7 @@ import { publishStatusIssue } from './statusissue.mjs';
 import { currentStatus } from './teamstatus.mjs';
 import { alertSender } from './alert.mjs';
 import { advanceWatchlist, factsFromCache } from './watchlist.mjs';
+import { blockedReport, renderBlockedReport } from './blocked-report.mjs';
 import { readCache, readJobs, readEvents, readSnapshots, readLastSnapshot, readTeamState, recordTick, addPassPhases, readVersion, tickOutcome, storeProbes, mergeProbes } from './dashdata.mjs';
 import { idleReport, renderIdleReport, passStats, renderPassStats } from './idlecause.mjs';
 import { readTimeline, recordTimeline, githubBackfill, storageReport, computeGaps, allSnapshots } from './history.mjs';
@@ -615,6 +616,12 @@ async function main() {
       const release = await homeownerLock(root, 'request-review', queueOf(root, 'request-review', [a._[1], a._[2]]));
       try { console.log(JSON.stringify(await (await teamFor(root, registry)).requestReReview(a._[1], a._[2]))); } finally { release(); }
       return;
+    }
+    if (a._[0] === 'blocked-report') {   // issue #1056: blocked review jobs and tokens per day; local records only
+      const to = a.to ? Date.parse(a.to) : Date.now(), from = a.from ? Date.parse(a.from) : to - Number(a.days ?? 7) * 86400000;
+      if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new SupervisorError('usage: team blocked-report [--days N | --from ISO_TIME [--to ISO_TIME]] [--json]');
+      const rep = blockedReport(readJobs(root), { from, to });
+      console.log(a.json === true ? JSON.stringify(rep, null, 2) : renderBlockedReport(rep)); return;
     }
     if (a._[0] === 'idle-report') {   // issue #487: idle time by cause for a time range; reads local records only (no GitHub, no model)
       const config = loadTeamConfig(teamConfigFile, root), to = a.to ? Date.parse(a.to) : Date.now();
