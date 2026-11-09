@@ -9,7 +9,7 @@ import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
 import { homeownerQuestion } from './homeowner-question.mjs';
-import { stoppedAttention, rearmView } from './faultview.mjs';
+import { stoppedAttention, rearmView, endNote, withEndNote } from './faultview.mjs';
 import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
@@ -592,7 +592,7 @@ export function describeFor(j, { names, state }) {
     const pr = rec?.pr ?? j.issue, start = j.createdAt || 0;
     verdict = (verdictIndex(state.verdicts).get(String(pr)) || []).map(([, v]) => v).filter(v => !v.at || v.at >= start).reduce((best, v) => (!best || (v.at || 0) < (best.at || 0) ? v : best), null);
   } else if (['implement', 'continue'].includes(kind)) opened = rec?.pr ?? names.prOfIssue(rec?.issue ?? j.issue);
-  return redact(describeJob({ ...j, kind }, { names, rec, verdict, opened }), 400);
+  return redact(withEndNote(describeJob({ ...j, kind }, { names, rec, verdict, opened }), endNote(j, rec)), 400);   // issue #1109
 }
 
 // Which model made a decision (issue #140): provider, model and effort of the job that produced it, as recorded on the job.

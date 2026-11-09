@@ -19,3 +19,14 @@ export function stoppedAttention(team) {
 }
 
 export const rearmView = (rearm, up) => (rearm ? { at: rearm.at, scopes: rearm.scopes, items: [...(rearm.items || []), ...(up?.items || [])] } : null);
+
+// Issue #1109: one line on a job row saying that a stop or an infrastructure fault used no attempt, for foreman_jobs and foreman_why_blocked.
+export function endNote(job, rec) {
+  if (job?.status === 'stopped' && job.stop?.reason === 'manual_stop') return redact(`stopped by ${job.stop.by}; no attempt used, agent not parked, automatic restart off`, 160);
+  if (job?.status === 'stopped' && job.stop) return redact(`stopped by ${job.stop.by} (${job.stop.reason}); automatic restart off`, 160);
+  const cause = rec?.infraFault || rec?.attemptRefunded;
+  if (cause === 'manual_stop') return 'stopped; attempt released';
+  if (cause) return redact(`infrastructure fault (${cause}); no attempt used${rec.attemptRefunded ? ', attempt released' : ''}`, 160);
+  return null;
+}
+export const withEndNote = (text, note) => (note ? `${text} (${note})` : text);

@@ -29,6 +29,8 @@ export class FaultFlow {
   // A job ended: when it is an infrastructure fault, record it, park the agent and refund the attempt. Returns the classification.
   onEnd(id, j, job, report) {
     const cls = faults.classifyEnd(job);
+    // Issue #1109: a deliberate stop uses no attempt either, but it does not park the agent.
+    if (cls.kind === 'none') { if (this.refund(j)) { j.attemptRefunded = cls.cause; (report.stopRefunds ||= []).push({ job: id.slice(0, 8), agent: j.agent }); this.save(); } return cls; }
     if (cls.kind !== 'infra' || j.infraFault) return cls;
     j.infraFault = cls.cause;
     // The agent never started: the issue is queued again (a job that spent tokens may hold partial work, so it keeps the existing path).
@@ -67,8 +69,32 @@ export class FaultFlow {
     this.save();
     return found;
   }
+  // Once, on install (issue #1109): every attempt a finished job used for an infrastructure fault or a stop is released, for every counter,
+  // one log line per job. A job that did real work keeps its attempt. Each job is released at most once (attemptRefunded), so a rerun changes nothing.
+  async releaseInfraAttempts(getJob, log) {
+    const s = this.state();
+    if (s.infraAttemptsReleased) return [];
+    s.infraAttemptsReleased = this.now();
+    const released = [];
+    for (const [id, j] of Object.entries(s.jobs || {})) {
+      if (!COUNTERS[j.kind] || j.attemptRefunded) continue;
+      let job = null;
+      try { job = await getJob(id); } catch { job = null; }
+      // A missing or unreadable record is classified as infrastructure by faults.classifyEnd(null), so it is released too.
+      if (job && !['stopped', 'blocked', 'failed', 'waiting_on', 'completed'].includes(job.status)) continue;
+      const cls = faults.classifyEnd(job);
+      if (cls.kind === 'work' || !this.refund(j)) continue;
+      j.attemptRefunded = cls.cause;
+      const ref = j.pr != null ? `PR #${j.pr}` : j.issue != null ? `issue #${j.issue}` : 'no reference';
+      released.push({ job: id.slice(0, 8), ref, cause: cls.cause });
+      log(`released the ${j.kind} attempt of job ${id.slice(0, 8)} on ${ref}: it ended on ${redact(cls.cause, 40)}, not on the work`);
+    }
+    this.save();
+    return released;
+  }
   // Once per ingest pass: probe the parked agents that are due, and (once, on install) clear the caps faults set earlier.
-  async step(report, cap) {
+  async step(report, cap, getJob = null) {
+    if (getJob) await this.releaseInfraAttempts(getJob, line => (report.infraAttemptsReleased ||= []).push(line));
     await this.probeDue(report);
     const cleared = this.clearLegacyCaps(cap, line => (report.infraCapsCleared ||= []).push(line));
     if (cleared.length) this.save();
