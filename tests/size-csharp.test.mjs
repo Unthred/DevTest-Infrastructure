@@ -65,6 +65,11 @@ test('interpolated raw strings are blanked', () => {
   assert.equal(unitsOf('A.cs', src)['function:A>M'].lines, 6);
 });
 
+test('raw strings with four or more quote delimiters are blanked', () => {
+  const src = 'class A\n{\n    void M()\n    {\n        var s = $"""" \n            {x} } """ inner\n            """";\n    }\n}\n';
+  assert.equal(unitsOf('A.cs', src)['function:A>M'].lines, 6);
+});
+
 test('#if branches that each open a brace count only the first branch', () => {
   const src = 'class A\n{\n#if NET8\n    void M() {\n#else\n    void M(int a) {\n#endif\n        Step();\n    }\n}\n';
   const by = unitsOf('A.cs', src);

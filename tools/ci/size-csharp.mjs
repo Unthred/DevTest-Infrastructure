@@ -22,6 +22,8 @@ function endOfConditional(src, from) {
   return src.length;
 }
 
+const RAW_OPEN = /\$*"{3,}/y;
+
 // End of the preprocessor directive at `i`; an #else or #elif extends to the end of its conditional.
 function directiveEnd(src, i) {
   const eol = src.indexOf('\n', i);
@@ -41,7 +43,9 @@ function scan(src, from = 0, untilBalanced = false) {
   const take = n => { out += blank(src.slice(i, i + n)); i += n; };
   while (i < src.length) {
     const rest = src.slice(i, i + 4);
-    const raw = /^\$*"{3,}/.exec(rest);
+    // The delimiter holds three or more quotes, so it is read from the source, not from the 4-character window.
+    RAW_OPEN.lastIndex = i;
+    const raw = RAW_OPEN.exec(src);
     if (src[i] === '#' && /^[ \t]*$/.test(src.slice(src.lastIndexOf('\n', i - 1) + 1, i))) {
       take(directiveEnd(src, i) - i);
     } else if (rest.startsWith('//')) {
