@@ -4,6 +4,7 @@
 // functions (the line-length check still sees them). Any unbalanced or unterminated construct raises an error that names the file.
 
 import { createHash } from 'node:crypto';
+import { measureCsharp } from './size-csharp.mjs';
 
 export const THRESHOLDS = { function: 50, class: 400, file: 500, razor: 250, params: 6, line: 160 };
 
@@ -265,8 +266,8 @@ export function measureFile(name, text) {
     over.push({ unit: `${name}::${l.key}`, kind: 'long-line', threshold: THRESHOLDS.line, size: l.length, line: l.line });
   }
   let methods = 0;
-  if (isJs) {
-    for (const u of measureUnits(text)) {
+  if (isJs || /\.(cs|razor)$/.test(name)) {
+    for (const u of isJs ? measureUnits(text) : measureCsharp(name, text)) {
       if (u.method && u.lines > 1) methods++;   // one-line accessors are not counted
       const limit = u.kind === 'class' ? THRESHOLDS.class : THRESHOLDS.function;
       if (u.lines > limit) over.push({ unit: `${name}::${u.key}`, kind: u.kind, threshold: limit, size: u.lines, line: u.startLine });
