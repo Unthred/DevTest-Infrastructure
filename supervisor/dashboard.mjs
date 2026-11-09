@@ -20,6 +20,7 @@ import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
 import { consolidateNeedsYou } from './needsyou.mjs';
+import { collectAssignments, idleRuleText, assignmentFields } from './issueassign.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex, readUpgrades } from './suphealth.mjs';
 import { stageOf, readVerification } from './livechecks.mjs';
@@ -253,8 +254,8 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
     (Team.dependencyTools.exclusion(team, n)?.refs || []).forEach(d => blockers.add(d));   // issue #1103: the Depends on line
   }
   if (openIssues && blockers.size) { parts.push({ rank: 3, text: `all issues blocked by ${[...blockers].sort((x, y) => x - y).map(d => names.issue(d).text).join(', ')}` }); for (const d of blockers) links.push({ text: names.issue(d).text, url: url('issues', d) }); }
-  else if (openIssues && !(m && m.mode !== 'normal')) parts.push({ rank: 3, text: 'has an open issue but nothing started it yet (limits or a lease may be holding it)' });
-  if (!parts.length) return { text: 'no open issue or pull request is assigned to it', links: [] };
+  else if (openIssues && !(m && m.mode !== 'normal')) parts.push({ rank: 3, text: idleRuleText(agent, a.issues.length, team.assignments) });   // issue #1121
+  if (!parts.length) return { text: idleRuleText(agent, a.issues.length, team.assignments), links: [] };
   parts.sort((x, y) => x.rank - y.rank);
   return { text: parts.slice(0, 3).map(x => x.text).join('; '), links: links.slice(0, 6) };
 }
@@ -665,6 +666,17 @@ export function refsOf({ names, cache, jobs, state }) {
 // First-seen times of inconsistent checks, per PR head (see stuckChecks). In memory: a restart restarts the clock.
 const stuckSeen = new Map();
 export const stuckSeenFor = pr => { const k = `${pr.number}:${pr.headRefOid}`; if (!stuckSeen.has(k)) { for (const o of [...stuckSeen.keys()]) if (o.startsWith(`${pr.number}:`)) stuckSeen.delete(o); stuckSeen.set(k, new Map()); } return stuckSeen.get(k); };
+// Open issues the planner leaves out, and issues held by an open PR, with the reason (moved out of buildView unchanged, issue #1121).
+function excludedIssues({ team, c, config, names }) {
+  const byNoAll = new Map((c.issues || []).map(i => [i.number, i]));
+  const excluded = (c.issues || []).filter(i => i.state === 'OPEN' && !team.delivered?.has(i.number)).sort((x, y) => x.number - y.number).flatMap(i => {
+    const ex = team.exclusion(i.number, byNoAll, c.pulls || []);
+    if (ex) return [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: ex.kind, reason: redact(ex.kind === 'prerequisite' ? `blocked by ${ex.refs.map(d => names.issue(d).text).join(', ')}` : ex.text, 300) }];
+    const held = (c.pulls || []).find(p => agentOfBranch(config, p.headRefName) && new RegExp(`/issue-${i.number}(\\D|$)`).test(p.headRefName));
+    return held ? [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: 'pr-open', reason: `held by open ${names.pr(held.number).text}` }] : [];
+  });
+  return excluded;
+}
 export function buildView({ config, root, jobs, events, state, cache, snapshots, now, register = '', registerUnreadable = false, tz = 'UTC', running, lastSeen = null, configError = null, history = null, watchlist = null }) {
   const states = agentStates(config, jobs, now);
   const allowance = latestAllowance(jobs, cache?.probes);
@@ -673,14 +685,9 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
   return team.plan().then(async plan => {
     const names = makeNamer({ repo: config.repository, issues: c.issues, pulls: c.pulls, merged: c.merged, mergeLog: state.mergeLog, stateJobs: state.jobs, titles: state.titles });
     const queues = reasons(team, c, jobs, plan, states, names, now);
-    const byNoAll = new Map((c.issues || []).map(i => [i.number, i]));
     team.view = { prs: c.pulls || [], issues: c.issues || [] }; team.merged = await team.gh.listMergedPulls();
-    const excluded = (c.issues || []).filter(i => i.state === 'OPEN' && !team.delivered?.has(i.number)).sort((x, y) => x.number - y.number).flatMap(i => {
-      const ex = team.exclusion(i.number, byNoAll, c.pulls || []);
-      if (ex) return [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: ex.kind, reason: redact(ex.kind === 'prerequisite' ? `blocked by ${ex.refs.map(d => names.issue(d).text).join(', ')}` : ex.text, 300) }];
-      const held = (c.pulls || []).find(p => agentOfBranch(config, p.headRefName) && new RegExp(`/issue-${i.number}(\\D|$)`).test(p.headRefName));
-      return held ? [{ number: i.number, name: redact(names.issue(i.number).text, 300), kind: 'pr-open', reason: `held by open ${names.pr(held.number).text}` }] : [];
-    });
+    const excluded = excludedIssues({ team, c, config, names });
+    team.assignments = collectAssignments(team, { cache: c, plan, states, activeJobs: jobs.filter(j => ACTIVE.includes(j.status)) });   // issue #1121: read by idleReason and the view
     const lastTick = [...(snapshots || [])].sort((x, y) => y.at - x.at)[0] || null;
     const agents = Object.entries(config.agents).map(([name, a]) => {
       const s = states[name], j = s.job;
@@ -754,7 +761,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const budget = budgetView(team);
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {
-      ...extra,
+      ...assignmentFields(extra, team.assignments, names),   // issue #1121: extra plus assignments, faults and the issue rows' explanation
       // Issue #866: the headline progress numbers, from the same records the rest of the view uses.
       headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), now }),
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
