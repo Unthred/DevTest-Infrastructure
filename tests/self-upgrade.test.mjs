@@ -1057,6 +1057,17 @@ test('issue #692: gh and git connection wording is recognised, unanchored networ
     'git fetch failed: Failed to connect to github.com port 443: Connection refused', GH_ERR]) assert.ok(isGithubConnectionError(r), r);
   for (const r of ['connect ECONNREFUSED 127.0.0.1:80', 'spawnSync docker ETIMEDOUT', 'ECONNRESET', 'tcp connect error', 'EAI_AGAIN', 'network is unreachable', undefined]) assert.ok(!isGithubConnectionError(r), String(r));
 });
+test('issue #692: git failures carry timeout and SSH wording the classifier recognises', async () => {
+  const { gitFailureMessage } = await import('../supervisor/gitfail.mjs');
+  const killed = { status: null, signal: 'SIGTERM', stderr: '', error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
+  assert.ok(isGithubConnectionError(gitFailureMessage(['fetch', '--quiet', 'origin'], killed)), 'a hung fetch');
+  assert.ok(!isGithubConnectionError(gitFailureMessage(['status'], killed)), 'a hung local command is a real fault');
+  for (const line of ['Connection reset by 140.82.1.1 port 22', 'Connection closed by 140.82.1.1 port 22', 'kex_exchange_identification: Connection closed by remote host', 'fatal: the remote end hung up unexpectedly', 'ssh: connect to host github.com port 22: Connection timed out']) {
+    assert.ok(isGithubConnectionError(gitFailureMessage(['fetch'], { status: 128, stderr: `${line}\nfatal: Could not read from remote repository.\n` })), line);
+  }
+  assert.ok(!isGithubConnectionError(gitFailureMessage(['fetch'], { status: 128, stderr: 'fatal: bad object abc\n' })), 'a non-network git error');
+  assert.ok(!isGithubConnectionError(gitFailureMessage(['fetch'], { status: 1, stderr: '' })), 'no output at all');
+});
 test('issue #692: a real fault anywhere in the tick, or a lasting outage, still rolls back and latches', async t => {
   const w = world(t); await w.up.step();
   assert.equal(await w.up.verifyPending({ running: TO, ok: false, reason: GH_ERR, reasons: [GH_ERR, "TypeError: Cannot read properties of undefined (reading 'x')"] }), 'rolled-back');

@@ -52,7 +52,7 @@ export const ENV_RETRY_MAX_MS = 4 * 60 * 60 * 1000;
 // GitHub-only failures last LIVE_RETRY_MAX_MS (24 h), when it rolls back and latches with that stated reason.
 // Only text that names GitHub (the host, or a failed gh/git call) counts; a bare ECONNREFUSED or ETIMEDOUT from other code is a real fault.
 const GH_ANCHOR = /github\.com|^\s*(?:gh|git)\b[^:\n]*\bfailed:/i;
-const GH_TRANSPORT = /error connecting to|could not resolve host|tcp connect error|\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EOF)\b|network is unreachable|no route to host|connection (?:timed out|reset by peer|refused)|i\/o timeout|TLS handshake timeout|context deadline exceeded|Client\.Timeout|dial tcp|proxyconnect|failed to connect to|temporary failure in name resolution/i;
+const GH_TRANSPORT = /error connecting to|could not resolve host|tcp connect error|\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EOF)\b|network is unreachable|no route to host|connection (?:timed out|reset by peer|refused)|i\/o timeout|TLS handshake timeout|context deadline exceeded|Client\.Timeout|dial tcp|proxyconnect|failed to connect to|connection (?:closed|reset) by|kex_exchange_identification|remote end hung up unexpectedly|ssh: connect to host|operation timed out|temporary failure in name resolution/i;
 export const isGithubConnectionError = reason => { const t = String(reason || ''); return GH_ANCHOR.test(t) && GH_TRANSPORT.test(t); };
 // A live tick that keeps failing only on GitHub for this long is no longer a blip: it rolls back and latches with a clear reason.
 export const LIVE_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
