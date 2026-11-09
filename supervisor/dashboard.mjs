@@ -24,6 +24,7 @@ import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex, readUpgrades } from './suphealth.mjs';
 import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
+import { budgetView } from './budgetview.mjs';
 import { hasProbe } from './probe.mjs';
 import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
@@ -629,19 +630,8 @@ function activity({ config, jobs, events, state, cache, snapshots, now, incident
   return rows.filter(r => Number.isFinite(r.at)).sort((a, b) => b.at - a.at).slice(0, ACTIVITY_LIMIT).map(r => ({ ...r, text: redact(r.text, 300) }));
 }
 
-// Weekly burn and scheduling mode per agent, as the planner sees it (issue #56). Figures are the provider's own readings.
-export function budgetView(team) {
-  const out = {};
-  for (const [name, m] of Object.entries(team.modes || {})) {
-    const typical = m.costs?.cost ? { implement: m.costs.cost('implement'), review: m.costs.cost('review'), fix: m.costs.cost('fix') } : {};
-    out[name] = { mode: m.mode, label: MODE_LABEL[m.mode], reason: redact(m.reason || '', 300), until: m.until ?? null, known: m.known, used: m.used, resetsAt: m.resetsAt, hoursLeft: m.hoursLeft, ratePerHour: m.ratePerHour, rateSource: m.rateSource,
-      projected: m.projected, runsOutAt: m.runsOutAt, shortWindow: m.shortWindow, overage: m.overage, creditsAvailable: m.creditsAvailable, jobCost: typical,
-      held: Object.fromEntries(Object.entries(team.held?.[name] || {}).map(([k, v]) => [k, redact(v, 300)])) };
-  }
-  return out;
-}
-
 const untilText = (until, team) => (Number.isFinite(until) ? ` until ${new Intl.DateTimeFormat('en-GB', { timeZone: team.timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(until)).replace(',', '')}` : '');
+export { budgetView };
 export const REGISTER_NOTE = 'Cannot read docs/DECISIONS.md from origin/main: the real tick would refuse to launch jobs.';
 // Role slots (issue #148): who holds the implementer and reviewer slot right now, with the model and the work. A job the dispatcher has
 // no record of (started by hand) counts against the implementer slot, as the planner counts it.

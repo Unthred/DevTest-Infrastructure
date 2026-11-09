@@ -10,6 +10,8 @@
 // Paid overage and credits are never enabled or relied on: an agent that has nothing left waits.
 import { SupervisorError } from './core.mjs';
 import { redact } from './redact.mjs';
+import { highWaterHold, reserveRefusal } from './capacityrule.mjs';
+import { isWeekly } from './capacity.mjs';
 
 export const HOUR = 3600000;
 export const DEFAULT_BUDGET = { enabled: true, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
@@ -21,26 +23,36 @@ const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 // Issue #680: a projection never holds work back, so these settings do nothing now. They are still accepted (and range-checked as before) so an installed
 // team.local.json that sets them keeps loading.
 const LEGACY_KEYS = ['projected_limit', 'recent_min_window_hours', 'recent_min_samples'];
+const CAPACITY_KEYS = ['starting_capacity', 'reserve_margin'];   // issue #1116
 const KEYS = ['enabled', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
 
 export function validateBudgetConfig(b, agentNames) {
   if (b === undefined) return;
   if (!b || typeof b !== 'object' || Array.isArray(b)) throw new SupervisorError('invalid budget config');
-  const bad = Object.keys(b).find(k => !KEYS.includes(k) && !LEGACY_KEYS.includes(k));
+  const bad = Object.keys(b).find(k => ![...KEYS, ...LEGACY_KEYS, ...CAPACITY_KEYS].includes(k));
   if (bad) throw new SupervisorError(`invalid budget config: unknown key ${bad}`);
   const num = (k, lo, hi) => { if (k in b && !(Number.isFinite(b[k]) && b[k] >= lo && b[k] <= hi)) throw new SupervisorError(`invalid budget config: ${k}`); };
   if ('enabled' in b && typeof b.enabled !== 'boolean') throw new SupervisorError('invalid budget config: enabled');
   num('projected_limit', 0.5, 1.5); num('high_water', 0.5, 1); num('high_water_min_hours', 0, 168); num('recent_hours', 1, 168); num('recent_min_window_hours', 0, 168); num('recent_min_samples', 2, 10000); num('exhausted_at', 0.9, 1);
   num('probe_age_hours', 0.25, 48); num('probe_interval_minutes', 5, 1440);
+  validateCapacityKeys(b, agentNames);
   if ('probe' in b && typeof b.probe !== 'boolean') throw new SupervisorError('invalid budget config: probe');
   if ('can_take_over' in b && !(Array.isArray(b.can_take_over) && b.can_take_over.every(n => agentNames.includes(n))))
     throw new SupervisorError('invalid budget config: can_take_over must list configured agents');
+}
+// Issue #1116: starting_capacity maps an agent to its weekly capacity in tokens; reserve_margin is the share of capacity kept on top of the projected need.
+function validateCapacityKeys(b, agentNames) {
+  if ('reserve_margin' in b && !(Number.isFinite(b.reserve_margin) && b.reserve_margin >= 0 && b.reserve_margin <= 0.5)) throw new SupervisorError('invalid budget config: reserve_margin');
+  if (!('starting_capacity' in b)) return;
+  const c = b.starting_capacity;
+  const ok = c && typeof c === 'object' && !Array.isArray(c) && Object.entries(c).every(([n, v]) => agentNames.includes(n) && Number.isFinite(v) && v > 0);
+  if (!ok) throw new SupervisorError('invalid budget config: starting_capacity must map configured agents to a positive token count');
 }
 export const budgetSettings = config => ({ ...DEFAULT_BUDGET, ...(config?.budget || {}) });
 // Whether an agent's role lets it take another agent's implementation work. Default: every agent may.
 export const mayTakeOver = (config, agent) => (Array.isArray(config?.budget?.can_take_over) ? config.budget.can_take_over.includes(agent) : true);
 
-export const isWeekly = w => /^seven_day|week/.test(w?.type || '') || (Number.isFinite(w?.windowMinutes) && w.windowMinutes >= 10000);
+export { isWeekly };
 const live = (allowance, now) => (allowance?.windows || []).filter(w => Number.isFinite(w.utilization) && Number.isFinite(w.resetsAt) && w.resetsAt > now);
 const top = ws => [...ws].sort((a, b) => b.utilization - a.utilization)[0] || null;
 // The weekly window that matters (the most used one when a provider reports several), or null when unknown or already reset.
@@ -110,7 +122,7 @@ const pct = v => `${Math.round(v * 100)}%`;
 const hrs = h => (h >= 48 ? `${Math.round(h / 24 * 10) / 10} days` : `${Math.round(h)}h`);
 
 // One agent's weekly burn and mode. `latched` is the mode the dispatcher recorded earlier this window (team state).
-export function assessAgent({ allowance, jobs = [], history = [], settings = DEFAULT_BUDGET, now, latched = null }) {
+export function assessAgent({ allowance, jobs = [], history = [], settings = DEFAULT_BUDGET, now, latched = null, capacity = null }) {
   const out = { mode: 'normal', reason: null, until: null, known: false, used: null, resetsAt: null, hoursLeft: null, ratePerHour: null, rateSource: null, projected: null, runsOutAt: null,
     shortWindow: null, observedAt: allowance?.observedAt ?? null, overage: allowance?.billing?.usingOverage === true, creditsAvailable: allowance?.billing?.creditsAvailable === true, costs: { perToken: null, typical: {}, cost: () => null } };
   if (settings.enabled === false) { out.reason = 'allowance-aware scheduling is switched off'; return out; }
@@ -145,8 +157,8 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   // Issue #680 (homeowner decision, 5 Nov 2026: the aim is to maximise the processing the server can do, not to spread work over the week): the rate,
   // the projection and runsOutAt are an estimate for display and for choosing between agents. They never set a mode and no latch comes from one.
   const est = `weekly ${pct(out.used)}; estimate at reset ${pct(out.projected)} (${hrs(out.hoursLeft)} left, ${out.rateSource}), for information only`;
-  // reviews_only: at or above the high-water mark with more than high_water_min_hours to go (actual use, not a forecast)
-  if (out.used >= settings.high_water && out.hoursLeft > settings.high_water_min_hours) return { ...out, rule: 'high-water', mode: 'reviews_only', until: weekly.resetsAt, reason: `weekly ${pct(out.used)}: at or above ${pct(settings.high_water)} with more than ${settings.high_water_min_hours}h to go` };
+  const hold = highWaterHold({ out, weekly, settings, capacity });
+  if (hold) return hold;
   // Hysteresis, for the high-water rule only: once reviews-only for that reason in a weekly window, stay so until that window resets.
   // Issue #110: a fresh probe reading taken after the latch was set is new evidence; the check above found the agent below the high-water mark, so the latch is released.
   // A latch recorded without a rule is an older one: a forecast latch is ignored (it clears on the first tick), but a genuine high-water latch
@@ -166,6 +178,8 @@ export function admits(a, type, pendingReviews = 0) {
   if (a.mode === 'waiting') return { ok: false, why: a.reason };
   if (a.mode === 'reviews_only' && !REVIEWS_ONLY_TYPES.has(type)) return { ok: false, why: `reviews only: ${a.reason}` };
   if (!a.known) return { ok: true };
+  const refusal = reserveRefusal(a, type, REVIEWS_ONLY_TYPES);   // issue #1116: the planner invariant
+  if (refusal) return { ok: false, why: refusal };
   const cost = a.costs.cost(type), review = a.costs.cost('review');
   if (cost === null) return { ok: true };
   const reserve = type === 'review' ? 0 : pendingReviews * (review || 0);

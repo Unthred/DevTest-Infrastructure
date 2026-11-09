@@ -14,6 +14,19 @@ Only what the dispatcher already has, with no model call and no extra provider c
 - `projected = used + rate × hours to reset`; `runsOutAt` when the rate would reach 100 %. **These are an estimate, for information (issue #680, homeowner decision 5 Nov 2026: the aim is not to spread work over the week but to maximise the processing the server can do).** They are shown on the dashboard and in `team status`, and the spare-allowance reviewer choice uses them to pick between agents. The spare score is `1 − projected` (a fixed full week; the retired `projected_limit` no longer shifts where an unknown reading ranks against known agents). A projection never sets a mode, never latches, and never holds work back.
 - **Cost of one job** (estimate, used for rule 4 and the reserve): the median rise in weekly use per token between consecutive job readings in this window, times the median tokens of the last ten jobs of that kind. Interactive use in between also counts, so the estimate is high, not low. With fewer than two samples the cost is *unknown*, and an unknown cost never holds a job back.
 
+## Allowance in real capacity (issue #1116)
+
+Plans differ hugely (15 percent of one is a day or two of implementing, 15 percent of another a few hours), so percentages are not compared across agents. `supervisor/capacity.mjs` (pure functions over plain data, no dispatcher object; the rule helpers are in `capacityrule.mjs`; the dispatcher builds plain candidate rows and passes them in) is the one place allowance is computed in a common unit, **tokens per week**, and every consumer calls it.
+
+- **Learned capacity.** Tokens a job spent divided by the rise in the agent's reported weekly use between that job's reading and the one before, summed per weekly window; the latest `capacity_windows` (4) usable windows are then combined (total tokens over total rise, so a bigger window weighs more). A window counts only when its use rose by at least 3 percentage points. **At least two usable windows are needed: one window is never trusted alone.** Interactive use between readings also raises the use, so the figure errs low, not high. Confidence: *medium* from two windows, *high* from three or more that agree within a factor of two.
+- **Starting value.** `budget.starting_capacity` maps an agent to its weekly capacity in tokens. It is used until the history is trusted, and the dashboard says so. With neither a trusted history nor a starting value the agent has **no capacity** and today's fixed 85 percent rule applies; the reason says so.
+- **Figures per agent** (dashboard Agents and Usage pages, `team status`, `foreman_status`, `foreman_budget`): *used percent* (the provider's weekly reading), *learned capacity* (tokens a week, with source and confidence), *remaining capacity* (capacity x unused share), *reserve amount* and the *reason* for the current mode.
+- **Reserve.** What the open pull requests are projected to need before the reset, plus a margin: every open agent PR needs one review and one fix round (median tokens of the last ten finished jobs of each kind), plus `reserve_margin` (default 0.05) of the capacity. An agent whose remaining capacity is **at or below** the reserve, with more than `high_water_min_hours` to the reset, is reviews-only, latched to the reset as before. `high_water` is now only the fallback when no capacity is known. Zero open PRs leave only the margin.
+- **Planner invariant.** `admits` refuses implement and continue when remaining capacity (after the cost already planned this tick) is at or below the reserve; reviews and repairs of its own PRs are what the reserve is for. In the last `high_water_min_hours` before the reset the agent stays in normal mode (nothing is latched), but it counts as out for takeover (`ownerOut`), so its ready issues go to an agent with capacity instead of sitting idle. The tick computes the reserve from the pull requests read at the start of the tick, so the recorded, alerted and latched mode matches the planner's.
+- **Implement slots and model choice.** A contested implementer slot goes to the agent with the most remaining capacity relative to need (owner-first and out-owner order still come first). The cheaper model is kept when remaining capacity is within twice the reserve, not at a percentage; with no known capacity the `allowance_threshold` percentage applies as before.
+- **Choosing between agents.** The spare score (review choice, role ranking) is remaining capacity relative to the projected need when every agent has a capacity; otherwise the old spare share (1 minus projected use). Takeover of an out agent's ready implement work goes to the eligible agent with the most remaining capacity relative to its need; if several implements fit the capacity and the slots, the taker may run more than one (`limits.overall` and admission still apply).
+- **Invalid figures.** A negative, missing or non-numeric usage figure gives no capacity decision; the fixed share rule applies and the reason names the problem.
+
 ## Modes
 | Mode | When | May start |
 |---|---|---|
@@ -51,7 +64,9 @@ Fix-round re-reviews are diff-scoped (#45). When the reviewer is low (not `norma
 |---|---|---|
 | `enabled` | `true` | `false` makes every agent `normal` |
 | `projected_limit` | — | retired (issue #680): still accepted in `team.local.json` and ignored, so an installed file keeps loading |
-| `high_water` | `0.85` | weekly use at or above which … |
+| `high_water` | `0.85` | the fallback when no capacity is known: weekly use at or above which … |
+| `starting_capacity` | — | per agent, weekly capacity in tokens, used until the learned figure is trusted (issue #1116) |
+| `reserve_margin` | `0.05` | share of the capacity kept on top of the projected need of open PRs (issue #1116) |
 | `high_water_min_hours` | `24` | … with more than this many hours to the reset makes it `reviews_only` |
 | `recent_hours` | `24` | readings used for the recent rate (the estimate) |
 | `recent_min_window_hours`, `recent_min_samples` | — | retired (issues #627, #680): accepted and ignored |

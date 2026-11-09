@@ -28,6 +28,9 @@ import { redact, redactLong } from './redact.mjs';
 import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
+import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
+import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
+import { weeklyWindow } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
@@ -709,6 +712,7 @@ export class Team {
     const utilization = this.allowanceOf(act.agent), mode = this.modes?.[act.agent]?.mode;
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
     const base = { modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low };
+    Object.assign(base, modelCapacity(mode, this.modes?.[act.agent]?.capacity));   // issue #1116
     const first = resolveModel(base);
     let { fields, warnings } = first;
     // Issue #316 (homeowner decision 2 Nov 2026): a writing job never runs on a model its agent is configured to review with, and never
@@ -990,8 +994,11 @@ export class Team {
     if (!this.usage) return null;
     const now = this.clock.now(), settings = budgetSettings(this.c), out = {};
     for (const [name, a] of this.agents()) {
-      const allowance = this.usage.allowance?.[a.provider] || null;
-      out[name] = assessAgent({ allowance, jobs: (this.usage.jobs || []).filter(j => j.provider === a.provider), history: weeklyHistory(this.usage.snapshots, name, allowance), settings, now, latched: this.s.budget[name] || null });
+      const allowance = this.usage.allowance?.[a.provider] || null, jobs = (this.usage.jobs || []).filter(j => j.provider === a.provider);
+      const used = weeklyWindow(allowance, now)?.utilization ?? null;
+      const capacity = capacityFor({ name, used, jobs, settings, prs: (this.view || this.nameView)?.prs, owns: pr => agentOfBranch(this.c, pr.headRefName) });
+      out[name] = assessAgent({ allowance, jobs, history: weeklyHistory(this.usage.snapshots, name, allowance), settings, now, latched: this.s.budget[name] || null, capacity });
+      out[name].capacity = capacity;
     }
     return out;
   }
@@ -1178,13 +1185,11 @@ export class Team {
     const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
     return !!issue && this.overlapHold(agent, n, issue, type);
   }
-  // Issue #402: spare allowance of an agent, from the projection the budget already holds: the whole week (1) minus the projected weekly use
-  // at the reset, unclamped. It only chooses between agents (issue #680); it never holds work back so that any difference in projection counts. An unknown reading (no usage data, a stale or reset window) scores 0: behind any reviewer that
-  // is known to have spare, ahead of one projected to run out.
+  // Issues #402, #1116: spare allowance, only to choose between agents (never holds work back): remaining capacity relative to need when every
+  // agent's capacity is known, else the week minus the projected use; an unknown reading scores 0 (capacity.mjs).
+  rankRows() { return candidateRows(this.agents().map(([n]) => n), this.modes, n => mayTakeOver(this.c, n) && !this.limitedOf(n).out); }
   spareScore(agent) {
-    const m = this.modes?.[agent];
-    if (!m?.known || !Number.isFinite(m.projected)) return 0;
-    return 1 - m.projected;
+    return spareScoreOf(this.rankRows(), agent);
   }
   // True when `provider` already runs its limits.provider_roles count in `role` (no such limit: never).
   providerSlotFull(provider, role, usedBy) {
@@ -1214,7 +1219,7 @@ export class Team {
   reviewWhy(agent, act, prs) {
     if (act.secondOpinion || act.postMerge) return null;
     const pr = prs.find(p => p.number === act.pr); if (!pr) return null;
-    const fig = n => { const m = this.modes?.[n]; return m?.known && Number.isFinite(m.projected) ? `${n} estimate ${Math.round(m.projected * 100)}% at its reset` : `${n} reading unknown`; };
+    const fig = n => figure(n, this.modes?.[n]);
     const others = this.otherReviewers(agent, pr);
     if (!others.length) {
       const rest = this.agents().map(([n]) => n).filter(n => n !== agent).map(n => `${n}: ${this.reviewRefusal(n, pr, `${verdictKey(pr.number, pr.headRefOid)}:${n}`) ? 'it wrote this head' : this.limitedOf(n).out ? 'out of allowance' : 'cannot review now'}`);
@@ -1237,7 +1242,7 @@ export class Team {
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
     // An owner at a usage limit ranks last, so another agent can take its ready issue (#104).
-    return (act.type === 'implement' ? 10 : 0) + (act.reassignedFrom ? 1 : 0) + (act.type === 'implement' && !act.reassignedFrom && this.ownerOut(agent) ? 20 : 0);
+    return workRank(act, this.ownerOut(agent), this.spareScore(agent));
   }
 
   // The issue a draft PR continues for `agent`, or null when the draft is not continuable (not mine, not an owned issue, issue closed,
@@ -1522,7 +1527,7 @@ export class Team {
     // a started job stay with their author. The issue keeps its owner; the work is done on this agent's branch, so the owner (or
     // another agent) reviews it and D-011 holds. Ownership returns once the owner has allowance again and no work has started.
     if (!B || B.mode !== 'normal' || !B.known || !mayTakeOver(this.c, agent) || this.limitedOf(agent).out) return null;   // an agent at a usage limit takes nothing over either
-    for (const [other, o] of this.agents()) {
+    for (const [other] of mayTakeFrom(this.rankRows(), agent) ? this.agents() : []) {
       const ob = this.ownerOut(other);
       if (other === agent || !ob) continue;
       for (const n of this.issuesOf(other)) {
@@ -1668,6 +1673,8 @@ export class Team {
   ownerOut(agent) {
     const m = this.modes?.[agent];
     if (m && m.mode !== 'normal') return { why: `is ${MODE_LABEL[m.mode]} (${String(m.reason || '').slice(0, 160)})`, until: m.until ?? null };
+    const held = reserveOut(m);
+    if (held) return held;
     const l = this.limitedOf(agent);
     return l?.out ? { why: `is out of allowance (${String(l.reason || 'usage limit').slice(0, 160)})`, until: l.until ?? null } : null;
   }
@@ -2163,7 +2170,7 @@ export class Team {
     if (inbox >= roleCount(L, 'inbox')) return { started: false, why: 'no free inbox slot' };
     const gate = admit ? admit() : { ok: true };
     if (!gate.ok) return { started: false, why: gate.why || 'the host is busy' };
-    this.modes = this.budgets();
+    const unread = await budgetsWithPulls(this); if (unread) return unread;
     let agent = null;
     for (const [name, a] of this.agents()) {
       if (this.limitedOf(name).out || this.providerSlotFull(a.provider, 'inbox', usedBy)) continue;
