@@ -36,7 +36,7 @@ import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
-import { refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
+import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -1049,15 +1049,22 @@ export class Team {
   fixCount(pr) { return Object.entries(this.s.fixAttempts).reduce((n, [k, v]) => n + (k === String(pr) || k.startsWith(`${pr}:`) ? v : 0), 0); }
   agentOfProvider(provider) { return this.agents().find(([, a]) => a.provider === provider)?.[0] || null; }
 
+  // The lists the stop step read in this pass, handed over once so plan() does not read them again (issue #1118).
+  async readLists() {
+    const held = this.passReads;
+    this.passReads = null;
+    return held || { prs: await this.gh.listPulls(), issues: await this.gh.listIssues(), merged: await (this.gh.listMergedPulls?.() ?? []) };
+  }
+
   async plan() {
     const actions = [];
     this.picked = new Set();   // issues already given to an agent in this plan (one taker per issue)
-    const [prs, issues] = [await this.gh.listPulls(), await this.gh.listIssues()];
+    const { prs, issues, merged } = await this.readLists();
     this.view = { prs, issues };
     const issueByNo = new Map(issues.map(i => [i.number, i]));
     // Delivered work: an issue with a merged PR linked to it (closing reference or its issue-<n> branch) is never re-planned.
     this.delivered = new Set();
-    this.merged = await (this.gh.listMergedPulls?.() ?? []);
+    this.merged = merged;
     this.refreshTitles(prs, issues, this.merged);
     // A PR referenced by a follow-up that is in neither list may have merged outside the bounded merged window: ask GitHub for its
     // state (cached per Team) and only call it closed-unmerged when GitHub says so (issue #212 review).
@@ -1327,7 +1334,7 @@ export class Team {
     if (this.waitingOnDecision([pr]).length) return 'decision';
     const m = /\/issue-(\d+)(\D|$)/.exec(pr.headRefName || ''), issue = m ? issueByNo?.get(Number(m[1])) : null;
     if (!issue) return null;
-    const deps = this.c.depends_on_overrides?.[issue.number] ?? issue.prerequisites ?? prerequisites(issue.body);
+    const deps = openDependencies(this, issue.number);   // issue #1118: the Depends on line is the one source
     const open = deps.find(d => issueByNo.get(d)?.state === 'OPEN' && !prs.some(p => p !== pr && agentOfBranch(this.c, p.headRefName) && new RegExp('/issue-' + d + '(\\D|$)').test(p.headRefName)));
     return open ? 'waits-on-#' + open : null;
   }
@@ -2374,7 +2381,7 @@ export class Team {
     let issueList = this.view?.issues || this.nameView?.issues; if (!issueList && issueNo != null) { try { issueList = await this.gh.listIssues(); } catch { issueList = []; } }   // reuses the tick's issue read; lists only when none is held
     const view = new Map((issueList || []).map(i => [i.number, i]));
     const issue = issueNo != null ? view.get(issueNo) : null;
-    const openPrerequisites = issue ? (this.c.depends_on_overrides?.[issueNo] ?? issue.prerequisites ?? prerequisites(issue.body)).filter(d => view.get(d)?.state === 'OPEN') : [];
+    const openPrerequisites = issue ? openDependencies(this, issueNo) : [];
     const stop = failcause.stopKey(job), at = Number.isFinite(job.updatedAt) ? job.updatedAt : now;
     const repeats = failcause.repeatsOf(fc, { pr: j.pr ?? null, issue: issueNo, stop, at, id });
     const cls = forced || failcause.classifyFailure({ job, entry: j, events, host, refusal: j.refusal || null, repeats, fixLimitReached: j.pr != null && this.fixCount(j.pr) >= this.c.limits.max_fix_attempts, openPrerequisites });
@@ -3710,16 +3717,6 @@ export class Team {
       const raw = JSON.parse(fs.readFileSync(path.join(this.dir, 'inbox', String(p.ticket || 'none'), 'waiting-on.json'), 'utf8'));
       if (Array.isArray(raw?.waiting_on)) for (const d of raw.waiting_on.slice(0, 10)) if (Number.isSafeInteger(d) && d > 0 && d !== job.issue) want.add(d);
     } catch { /* nothing was reported */ }
-    try {
-      const issue = Number.isSafeInteger(job.issue) ? await this.gh.getIssue?.(job.issue) : null;
-      if (issue) {
-        const pd = proseDependencies(issue.body);
-        const ov = this.c.depends_on_overrides?.[job.issue];
-        const pre = ov ?? issue.prerequisites ?? prerequisites(issue.body);   // the planner's own set: an override replaces the Prerequisites line
-        for (const d of [...pd.prs, ...pd.numbers, ...pre]) if (d !== job.issue) want.add(d);
-        if (ov) { const allowed = new Set([...pd.prs, ...pd.numbers, ...ov]); for (const d of [...want]) if (!allowed.has(d)) want.delete(d); }   // an override also bars items only the replaced Prerequisites line or the agent named
-      }
-    } catch { /* the body is optional evidence */ }
     const out = [];
     for (const d of [...want].slice(0, 20)) {
       if ((openPulls || []).some(x => x.number === d)) { out.push(d); continue; }

@@ -90,10 +90,11 @@ const withBody = (n, body, state = 'OPEN') => ({ ...issue(n), body, state });
 const parked = n => Array.from({ length: n }, (_, i) => pr(100 + i, `codex/issue-${200 + i}-x`, H(i + 1), { labels: ['needs-homeowner'] }));
 
 test('deadlock case: PRs waiting on an unstarted prerequisite do not fill the cap, so implement starts', async t => {
-  const issues = [withBody(5, ''), withBody(6, ''), ...[0, 1].map(i => withBody(200 + i, 'Prerequisites: #5')), ];
+  const issues = [withBody(5, ''), withBody(6, ''), ...[0, 1].map(i => withBody(200 + i, 'Depends on: #5')), ];
   const pulls = [0, 1].map(i => pr(100 + i, `codex/issue-${200 + i}-x`, H(i + 1)));
   // issue 5 is open and has no PR: both PRs wait on it
   const team = world(t, { cfg: config(2), pulls, issues });
+  team.dependencies = { byIssue: new Map([200, 201].map(n => [n, { dependsOn: [{ number: 5, state: 'open' }], met: false, reasons: [] }])) };   // from the Depends on line
   assert.equal(team.pauseInfo(pulls, issues), null);
   assert.ok((await team.plan()).some(a => a.type === 'implement'));
   // once #5 has a PR of its own it counts again, and the pair counts against the cap

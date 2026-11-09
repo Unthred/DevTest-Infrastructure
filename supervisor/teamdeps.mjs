@@ -51,6 +51,28 @@ async function findPullByNumber(team, issue) {
   } catch { /* unknown, never met */ }
 }
 
+// Closed results do not change, so they are kept in the state file and the next pass (a new Team) does not ask GitHub again.
+// Only the fields the decision reads are kept. depFetched: closed issues, depPulls: merged pull requests, depClosed: pull requests closed unmerged.
+const keepIssue = i => ({ number: i.number, state: i.state, stateReason: i.stateReason ?? null, closedByPullRequestsReferences: i.closedByPullRequestsReferences || [] });
+const keepPull = p => ({ number: p.number, state: p.state, headRefName: p.headRefName ?? '', mergeCommit: p.mergeCommit ?? null, closingIssuesReferences: p.closingIssuesReferences || [] });
+function loadRemembered(team) {
+  if (team.depFetched) return team.s.depCache;
+  const kept = team.s.depCache ||= { issues: {}, pulls: {}, closed: [] };
+  team.depFetched = new Map(Object.values(kept.issues).map(i => [i.number, i]));
+  team.depPulls = new Map(Object.values(kept.pulls).map(p => [p.number, p]));
+  team.depClosed = new Set(kept.closed);
+  return kept;
+}
+function rememberedChanged(team, kept) {
+  const issues = Object.fromEntries([...team.depFetched].filter(([, i]) => i.state === 'CLOSED').map(([n, i]) => [n, keepIssue(i)]));
+  const pulls = Object.fromEntries([...team.depPulls].map(([n, p]) => [n, keepPull(p)]));
+  const closed = [...team.depClosed].sort((a, b) => a - b);
+  const next = JSON.stringify({ issues, pulls, closed });
+  if (next === JSON.stringify(kept)) return false;
+  Object.assign(kept, { issues, pulls, closed });
+  return true;
+}
+
 // `merged` defaults to the merged list the planner loaded; the stop step passes its own.
 export async function refreshDependencies(team, issues, prs, merged = team.merged) {
   if (team.depFromCache) return team.dependencies;   // the dashboard's copy restored from the tick: cached issues carry no body, so it cannot be recomputed
@@ -59,9 +81,7 @@ export async function refreshDependencies(team, issues, prs, merged = team.merge
   const wanted = new Set();
   for (const i of open) for (const d of parseDependsOn(i.body, i.number).numbers) wanted.add(d);
   // A prerequisite outside the cached lists is fetched by number; a closed one is remembered, an open one is asked again each pass.
-  team.depFetched ??= new Map();
-  team.depPulls ??= new Map();   // merged pull requests found by number, for prerequisites older than the cached merged list
-  team.depClosed ??= new Set();  // pull requests found closed without a merge
+  const remembered = loadRemembered(team);
   for (const d of wanted) {
     if (!byNo.has(d)) {
       const kept = team.depFetched.get(d);
@@ -85,6 +105,7 @@ export async function refreshDependencies(team, issues, prs, merged = team.merge
     const best = installed || candidates[candidates.length - 1] || (team.depClosed.has(d) ? { state: 'CLOSED' } : null);
     return { issue, pr: best };
   };
+  if (rememberedChanged(team, remembered)) team.save();
   const result = evaluateDependencies({ issues: open, lookup, installedSha, isAncestor });
   const now = team.clock.now(), wait = (team.s.depWait ||= {});
   for (const [n, e] of result.byIssue) {
@@ -98,6 +119,11 @@ export async function refreshDependencies(team, issues, prs, merged = team.merge
 }
 
 export function dependencyEntry(team, number) { return team.dependencies?.byIssue.get(number) || null; }
+
+// The prerequisites of an issue that are still open, from its Depends on line (the one dependency source).
+export function openDependencies(team, number) {
+  return (dependencyEntry(team, number)?.dependsOn || []).filter(d => d.state === 'open').map(d => d.number);
+}
 
 // The exclusion record for an issue whose prerequisites are not all installed (see Team.exclusion).
 export function dependencyExclusion(team, number) {
@@ -128,8 +154,9 @@ export async function enforceDependencies(team, report) {
   const active = await team.jobs.listActive();
   if (!active.length) return;
   if (!team.depFromCache) {
-    const merged = await (team.gh.listMergedPulls?.() ?? []);
-    await refreshDependencies(team, await team.gh.listIssues(), await team.gh.listPulls(), merged);
+    const issues = await team.gh.listIssues(), prs = await team.gh.listPulls(), merged = await (team.gh.listMergedPulls?.() ?? []);
+    team.passReads = { issues, prs, merged };   // plan() takes these once instead of reading the same lists again in this pass
+    await refreshDependencies(team, issues, prs, merged);
   }
   if (!team.dependencies) return;
   for (const j of active) {
@@ -162,6 +189,7 @@ export function chargedCounter(act) {
 // A dependency stop uses no attempt: the attempt the lane charged when the job started is given back, once, as the stop is made.
 // A scan-only round is counted in scanOnlyRounds instead; the launch records on the job which kind of fix it was.
 function refundAttempt(team, rec) {
+  if (rec.escalated && rec.pr != null) delete team.s.unblock?.escalated?.[rec.pr];   // the one final round was not used either
   if (rec.scanOnly) {
     const rounds = team.s.scanOnlyRounds;
     if (rounds?.[rec.pr] > 0) rounds[rec.pr]--;
@@ -188,7 +216,7 @@ export function dependencyFromPlain(plain) {
   if (!plain?.issues) return null;
   return { byIssue: new Map(Object.entries(plain.issues).map(([n, e]) => [Number(n), e])), installedSha: null, evaluatedAt: plain.evaluatedAt };
 }
-// Needs you items: a malformed line, a loop, and a prerequisite closed as not planned (the line needs repointing).
+// Needs you items: a malformed line, a loop, a prerequisite closed as not planned (the line needs repointing) and one closed with no pull request.
 export function dependencyAttention(cache) {
   const out = [], issues = cache?.dependencies?.issues || {}, seen = new Set();
   for (const [key, e] of Object.entries(issues)) {
@@ -204,6 +232,10 @@ export function dependencyAttention(cache) {
         ref: { kind: 'issue', n: e.cycle[0] }, action: 'Remove one Depends on reference to break the loop.' });
     }
     for (const d of e.dependsOn || []) {
+      if (d.unlinked) {
+        out.push({ id: `dependency-unlinked-${n}-${d.number}`, text: `#${n} waits on #${d.number}, which was closed as completed with no linked pull request`, ref,
+          action: `Foreman cannot tell whether #${d.number} is installed. Remove it from the Depends on line of #${n}, or name the pull request that delivered it.` });
+      }
       if (d.state !== 'closed_not_planned') continue;
       out.push({ id: `dependency-notplanned-${n}-${d.number}`, text: `#${n} waits on #${d.number}, which was closed as not planned or superseded`, ref,
         action: `Repoint the Depends on line of #${n} to the issue that replaced #${d.number}, or remove it.` });

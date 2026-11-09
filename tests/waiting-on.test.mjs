@@ -52,9 +52,9 @@ test('the implement prompt tells a job to report an open prerequisite instead of
 });
 
 test('post-condition: no PR and an open prerequisite sets waitingOn; a PR clears it; closed items and bad reports count for nothing', async t => {
-  const w = world(t, { issues: [issue(9, 'Depends on #20'), issue(20), issue(21, '', 'CLOSED')], pulls: [] });
+  const w = world(t, { issues: [issue(9, 'Depends on: #20, #22'), issue(20), issue(21, '', 'CLOSED')], pulls: [] });
   const ticket = 'f'.repeat(32), inbox = path.join(w.team.dir, 'inbox', ticket); fs.mkdirSync(inbox, { recursive: true });
-  fs.writeFileSync(path.join(inbox, 'waiting-on.json'), JSON.stringify({ waiting_on: [21, 'x', -3, 9, 22] }));
+  fs.writeFileSync(path.join(inbox, 'waiting-on.json'), JSON.stringify({ waiting_on: [20, 21, 'x', -3, 9, 22] }));
   const check = w.team.postconditions();
   const job = { issue: 9, postcondition: { kind: 'pr_opened', branch: 'claude/issue-9-x', ticket } };
   assert.equal(await check(job), false); assert.deepEqual(job.waitingOn, [20], 'only the open one; self, closed, unknown and malformed are dropped');
@@ -81,18 +81,14 @@ test('a waiting_on implement job is recorded without a failure, notice or implem
   assert.deepEqual(implemented(await w.team.plan()), [9], 'queued again on the first tick after the merge');
 });
 
-test('a depends_on_overrides entry replaces the Prerequisites line on the stop path too (issue #1023 review)', async t => {
-  const w = world(t, { issues: [issue(9, 'Prerequisites: #20'), issue(20), issue(30)], pulls: [] });
-  w.team.c.depends_on_overrides = { 9: [] };
+test('issue #1118: the issue body is not read for the stop; only the reported numbers count', async t => {
+  const w = world(t, { issues: [issue(9, 'Prerequisites: #20\nDepends on: #20\nafter PR 20'), issue(20), issue(30)], pulls: [] });
+  w.team.c.depends_on_overrides = { 9: [20] };
   const ticket = 'e'.repeat(32), inbox = path.join(w.team.dir, 'inbox', ticket); fs.mkdirSync(inbox, { recursive: true });
-  fs.writeFileSync(path.join(inbox, 'waiting-on.json'), JSON.stringify({ waiting_on: [20] }));
+  fs.writeFileSync(path.join(inbox, 'waiting-on.json'), JSON.stringify({ waiting_on: [30] }));
   const job = { issue: 9, postcondition: { kind: 'pr_opened', branch: 'claude/issue-9-x', ticket } };
   assert.equal(await w.team.postconditions()(job), false);
-  assert.equal(job.waitingOn, undefined, 'the overridden Prerequisites item is not a prerequisite');
-  w.team.c.depends_on_overrides = { 9: [30] };
-  const j2 = { issue: 9, postcondition: { kind: 'pr_opened', branch: 'claude/issue-9-x', ticket } };
-  await w.team.postconditions()(j2);
-  assert.deepEqual(j2.waitingOn, [30], 'an override naming an open item still holds');
+  assert.deepEqual(job.waitingOn, [30], 'the body, its Depends on line and the override add nothing');
 });
 
 test('issue #1107: a waiting_on end goes through the one classifier and is neither a fault nor an attempt', async t => {
