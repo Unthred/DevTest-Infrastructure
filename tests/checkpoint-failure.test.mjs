@@ -98,10 +98,12 @@ test('drive: a checkpoint_failed stop restarts when auto-resume is on, and is a 
 
 const NOW = 10 * 3600000;
 const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n';
+// Tokens were spent, so the stop is a work outcome, not an infrastructure fault (issue #1107).
+const stopped = status => ({ id: 'a'.repeat(32), status, lastEvent: 'checkpoint_failed', usage: { inputTokens: 100 } });
 function world(t, jobStatus) {
   const dir = tmp(t);
   const gh = { issues: [{ number: 23, title: 'A', state: 'OPEN', body: '', labels: [] }], prs: [], listPulls: async () => [], getPull: async () => null, listIssues: async () => gh.issues, board: async () => {}, listMergedPulls: async () => [], listClosedPulls: async () => [], comment: async () => {}, addLabel: async () => {}, removeLabel: async () => {} };
-  const jobs = { listActive: async () => [], get: async () => ({ id: 'a'.repeat(32), status: jobStatus, lastEvent: 'checkpoint_failed' }), create: async () => ({ id: 'b'.repeat(32) }) };
+  const jobs = { listActive: async () => [], get: async () => stopped(jobStatus), create: async () => ({ id: 'b'.repeat(32) }) };
   const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, limits: { roles: { implementer: 2, reviewer: 2 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [23] } }, board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } };
   const team = new Team({ config, root: stateRoot(path.join(dir, 'state')), gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register: REGISTER, clock: { now: () => NOW } });
   team.s.implemented[23] = NOW - 60000; team.s.jobs['a'.repeat(32)] = { kind: 'implement', agent: 'claude', issue: 23, branch: 'claude/issue-23-a', ingested: false, at: NOW - 120000 };
