@@ -38,6 +38,7 @@ import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
+import { runControl, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -1067,7 +1068,9 @@ export class Team {
   async plan() {
     const actions = [];
     this.picked = new Set();   // issues already given to an agent in this plan (one taker per issue)
-    const { prs, issues, merged } = await this.readLists();
+    const lists = await this.readLists();   // issue #1115: parked PRs stay out of the planner view
+    const { issues, merged } = lists;
+    const prs = unparkedPulls(lists.prs);
     this.view = { prs, issues };
     const issueByNo = new Map(issues.map(i => [i.number, i]));
     // Delivered work: an issue with a merged PR linked to it (closing reference or its issue-<n> branch) is never re-planned.
@@ -2109,6 +2112,7 @@ export class Team {
         if (st.kind === 'issue_draft') await this.postIssueDraft(dir, st, l.item, report);
         if (st.kind === 'action' && st.state === 'approved') await this.runInboxAction(dir, st, l.item, report);
         if (st.kind === 'host_value' && st.state === 'approved') this.runHostValue(dir, st, l.item, report);
+        if (st.kind === 'control' && st.state === 'approved') await runControl(this, dir, st, l.item, inboxStore, report);
       } catch (error) { (report.skipped ||= []).push({ what: `inbox ${st.id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
     }
   }
@@ -2226,6 +2230,7 @@ export class Team {
     if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
     if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
+    if (action === 'unpark') return unparkApproved(n, depsOf(this));   // issue #1115
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
     const tk = rec.issue != null && !['review', 'fix', 'rebase', 'cifix'].includes(rec.kind) ? 'issue' : 'pull', tgt = rec.pr ?? rec.issue;

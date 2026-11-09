@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { createProtocol } from './protocol.mjs';
-import { createTools } from './tools.mjs';
+import { createToolset as createTools } from './toolset.mjs';   // the read tools, foreman_propose and the control tools (issue #1115)
 import { createViewSource, readHost, getJson } from './source.mjs';
 import { createCallLog } from './calllog.mjs';
 import { createReports } from './reports.mjs';

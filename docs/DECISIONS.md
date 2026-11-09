@@ -349,3 +349,12 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rationale: Cheaper models for low risk work save tokens; independence only needs a different model per PR.
 - Rejected: Escalating any other writing job; letting Opus write.
 - Superseded-by: none
+
+## D-038 — The overseer may hold work back or stop a job without a click
+- Status: agent-proposal
+- Date: 2026-11-09
+- Source: the pausing direction agreed on 9 Nov 2026 in V2 item 2; issue #1115; narrows D-031 ("nothing runs without an approval") for two holding actions only
+- Decision: The inbox gains a kind `control` with exactly two fixed names: `park` (apply the existing `parked` label to one issue or pull request through Foreman's own label path) and `stop_job` (the supported stop of one job). Foreman runs a control item on its next pass without a dashboard click, never counts it against the pending limit, and records who, when, why and the result in its status and in the dashboard view. Releasing stays a click: `unpark` is an ordinary `action` item the homeowner approves on the dashboard. A control item cannot merge, approve, release, start a job or change a limit; every other D-031 rule (shape, size, secret and attribution refusal, content hash, audit) applies unchanged.
+- Rationale: A runaway job spent allowance for several minutes while waiting for a click that could only stop it. Holding back and stopping lose nothing that cannot be reversed by one approved unpark or a new job, so the click adds delay without protection; releasing is the direction that needs it.
+- Rejected: A click for park and stop; a direct unpark; a free-form command in a control item.
+- Superseded-by: none
