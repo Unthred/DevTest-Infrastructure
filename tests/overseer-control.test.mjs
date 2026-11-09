@@ -41,7 +41,7 @@ const control = (action, target, reason = 'it is burning allowance') => ({ kind:
 // A proposal as the MCP account writes it, picked up and run by one tick.
 async function run(w, item) { const sent = w.mcp.propose(item); await w.team.processInbox(rep()); return inbox.statusOf(w.dir, sent.id); }
 
-test('park: labels the issue through the label path, runs without a click, records who and why, and the planner then skips it', async t => {
+test('park: labels the issue as the App identity, runs without a click, records who and why, and the planner then skips it', async t => {
   const w = world(t);
   const before = (await w.team.plan()).filter(a => a.pr === 5 || a.issue === 23);
   assert.ok(before.some(a => a.pr === 5 && a.type === 'rebase'), 'the conflicting pull request is planned for a rebase before it is parked');

@@ -11,7 +11,11 @@ export const ORIGIN_PATTERN = /^https?:\/\/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(
 export const LOCAL_FILE = 'team.local.json';
 export const REFUSED_FILE = root => path.join(root, 'team', 'refused-origins.json');
 const DEFAULT_PORT_ORIGIN = /^http:\/\/[^/]*:80$|^https:\/\/[^/]*:443$/;
+// Issue #1115: github_app travels as one string "<app_id>:<installation_id>:<absolute key file>" (the key itself is never a value here).
+export const GITHUB_APP_VALUE = /^[1-9]\d{0,14}:[1-9]\d{0,14}:\/[^\s:]{1,200}$/;
+export const parseGithubApp = v => { const [a, i, ...k] = String(v).split(':'); return { app_id: Number(a), installation_id: Number(i), key_file: k.join(':') }; };
 export const HOST_KEYS = {
+  github_app: { list: false, noun: 'GitHub App', check: v => typeof v === 'string' && GITHUB_APP_VALUE.test(v), toValue: parseGithubApp },
   'dashboard.allowed_origins': { list: true, noun: 'dashboard origin', check: v => typeof v === 'string' && ORIGIN_PATTERN.test(v) && !DEFAULT_PORT_ORIGIN.test(v) },
 };
 export const validateHostValue = (key, value) => Object.hasOwn(HOST_KEYS, key) && HOST_KEYS[key].check(value);
@@ -38,7 +42,7 @@ export function applyHostValue({ root, key, value, validate = () => {}, now = Da
   if (text !== null) { try { cur = JSON.parse(text); } catch { throw new Error('team.local.json is not valid JSON'); } }
   if (!cur || typeof cur !== 'object' || Array.isArray(cur)) throw new Error('team.local.json is not a JSON object');
   const next = structuredClone(cur);
-  setPath(next, key, old => HOST_KEYS[key].list ? [...new Set([...(Array.isArray(old) ? old : []), value])] : value);
+  setPath(next, key, old => HOST_KEYS[key].list ? [...new Set([...(Array.isArray(old) ? old : []), value])] : (HOST_KEYS[key].toValue ? HOST_KEYS[key].toValue(value) : value));
   if (JSON.stringify(next) === JSON.stringify(cur)) return { changed: false, backup: null };
   validate(next);
   let backup = null;

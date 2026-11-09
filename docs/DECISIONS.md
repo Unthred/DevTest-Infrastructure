@@ -354,7 +354,16 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Status: agent-proposal
 - Date: 2026-11-09
 - Source: the pausing direction agreed on 9 Nov 2026 in V2 item 2; issue #1115; narrows D-031 ("nothing runs without an approval") for two holding actions only
-- Decision: The inbox gains a kind `control` with exactly two fixed names: `park` (apply the existing `parked` label to one issue or pull request through Foreman's own label path) and `stop_job` (the supported stop of one job). Foreman runs a control item on its next pass without a dashboard click, never counts it against the pending limit, and records who, when, why and the result in its status and in the dashboard view. Releasing stays a click: `unpark` is an ordinary `action` item the homeowner approves on the dashboard. A control item cannot merge, approve, release, start a job or change a limit; every other D-031 rule (shape, size, secret and attribution refusal, content hash, audit) applies unchanged.
+- Decision: The inbox gains a kind `control` with exactly two fixed names: `park` (apply the existing `parked` label to one issue or pull request through Foreman's GitHub App identity (D-039)) and `stop_job` (the supported stop of one job). Foreman runs a control item on its next pass without a dashboard click, never counts it against the pending limit, and records who, when, why and the result in its status and in the dashboard view. Releasing stays a click: `unpark` is an ordinary `action` item the homeowner approves on the dashboard. A control item cannot merge, approve, release, start a job or change a limit; every other D-031 rule (shape, size, secret and attribution refusal, content hash, audit) applies unchanged.
 - Rationale: A runaway job spent allowance for several minutes while waiting for a click that could only stop it. Holding back and stopping lose nothing that cannot be reversed by one approved unpark or a new job, so the click adds delay without protection; releasing is the direction that needs it.
 - Rejected: A click for park and stop; a direct unpark; a free-form command in a control item.
+- Superseded-by: none
+
+## D-039 — Foreman's GitHub App private key is held in an owner-only file on Tower
+- Status: agent-proposal
+- Date: 2026-11-09
+- Source: issue #1115 (park as Foreman's GitHub App); review of PR #1125; relates to D-008
+- Decision: The private key of Foreman's GitHub App is kept in a file on Tower outside Git, mode 600, a regular file and not a link; Foreman refuses to read it otherwise. The App needs Issues and Pull requests write only. The installation token is minted per call and never stored or logged.
+- Rationale: Foreman signs a JWT on every park, and the supervisor has no scoped OpenBao identity yet (docs/secrets.md: none exists). A file with the same owner-only rule as the OpenBao token file is the same exposure that token already has. Moving the key into OpenBao is a follow-up once a scoped read identity exists.
+- Rejected: The owner's gh login (it is the owner account); the key in an environment variable or argument (visible to other processes).
 - Superseded-by: none

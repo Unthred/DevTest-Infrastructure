@@ -35,6 +35,7 @@ import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admit
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
+import { raiseGithubAppOffer } from './githubappoffer.mjs';
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
@@ -2127,6 +2128,7 @@ export class Team {
   async raiseHostValues(report) {
     const dir = this.inboxDir(); if (!dir) return;
     if (inboxStore.allStatuses(dir).some(x => x.kind === 'host_value' && x.state === 'pending')) return;   // one at a time
+    if (raiseGithubAppOffer({ inboxStore, dir, root: this.root, configured: this.c.github_app, now: this.clock.now(), report })) return;
     const allowed = this.c.dashboard?.allowed_origins || [];
     for (const { origin } of readRefusedOrigins(this.root)) {
       if (allowed.includes(origin)) continue;

@@ -88,8 +88,8 @@ export function githubClient(config, gh = ghRunner()) {
     },
     updateIssueBody: async (n, body) => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'edit', String(n), '--repo', repo, '--body-file', '-'], redactTopology(body)); },
     pinIssue: async n => { if (!Number.isSafeInteger(n) || n < 1) throw new SupervisorError('invalid issue number'); gh(['issue', 'pin', String(n), '--repo', repo]); },
-    addLabel: async (n, label, { create = true } = {}) => {   // issue #1115: create:false adds an existing label (parked) without recolouring it
-      if (create) gh(['label', 'create', label, '--repo', repo, '--force', '--color', 'B60205', '--description', 'Needs a homeowner decision']);
+    addLabel: async (n, label) => {
+      gh(['label', 'create', label, '--repo', repo, '--force', '--color', 'B60205', '--description', 'Needs a homeowner decision']);
       gh(['issue', 'edit', String(n), '--repo', repo, '--add-label', label]);
     },
     // --match-head-commit makes GitHub refuse the merge if the head moved after the verdict.

@@ -1,5 +1,5 @@
 // Issue #1115 review fixes: the App identity write, the wake for a control item, and a parked PR staying in the planner's view.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -120,4 +120,53 @@ test('a parked conflicting pull request does not hold the rebase slot from anoth
     assert.ok(actions.some(a => a.type === 'rebase' && a.pr === 60), 'the unparked PR is rebased');
     assert.ok(!actions.some(a => a.pr === 50), 'the parked PR gets no action');
   } finally { fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+// ---- fix round 3: the App identity is delivered through a host value, and the key file must be owner-only.
+import { readKeyFile } from '../supervisor/appidentity.mjs';
+import { applyHostValue, validateHostValue } from '../supervisor/hostvalue.mjs';
+import { githubAppOffer, raiseGithubAppOffer, OFFER_FILE } from '../supervisor/githubappoffer.mjs';
+
+const made = [];
+const scratch = () => { const d = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'ghapp-')); made.push(d); return d; };
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
+
+test('key file: owner-only regular file is read; group-readable and symlink are refused', () => {
+  const d = scratch(), key = path.join(d, 'k.pem');
+  fs.writeFileSync(key, 'pem', { mode: 0o600 });
+  assert.equal(readKeyFile(key).toString(), 'pem');
+  fs.chmodSync(key, 0o640);
+  assert.throws(() => readKeyFile(key), /owner only/);
+  fs.chmodSync(key, 0o600);
+  fs.symlinkSync(key, path.join(d, 'link.pem'));
+  assert.throws(() => readKeyFile(path.join(d, 'link.pem')), /regular file/);
+});
+
+test('host value github_app: shape checked, applied as an object into team.local.json', () => {
+  assert.equal(validateHostValue('github_app', '7:9:/k/app.pem'), true);
+  for (const bad of ['7:9:rel.pem', '0:9:/k', '7:9', 'x:1:/k', '7:9:/k a']) assert.equal(validateHostValue('github_app', bad), false, bad);
+  const root = scratch();
+  assert.equal(applyHostValue({ root, key: 'github_app', value: '7:9:/k/app.pem' }).changed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'team.local.json'), 'utf8')).github_app, config.github_app);
+});
+
+test('github app offer: a valid line is offered once, nothing when configured or malformed', () => {
+  const root = scratch();
+  assert.equal(githubAppOffer(root, undefined), null);
+  fs.mkdirSync(path.dirname(OFFER_FILE(root)), { recursive: true });
+  fs.writeFileSync(OFFER_FILE(root), '7:9:/k/app.pem\n');
+  assert.equal(githubAppOffer(root, undefined), '7:9:/k/app.pem');
+  assert.equal(githubAppOffer(root, config.github_app), null);
+  fs.writeFileSync(OFFER_FILE(root), 'garbage');
+  assert.equal(githubAppOffer(root, undefined), null);
+});
+
+test('github app offer: raised as one pending host_value item, once', () => {
+  const root = scratch(), dir = path.join(root, 'inbox');
+  fs.mkdirSync(path.dirname(OFFER_FILE(root)), { recursive: true });
+  fs.writeFileSync(OFFER_FILE(root), '7:9:/k/app.pem\n');
+  const report = {}, args = { inboxStore: inbox, dir, root, configured: undefined, now: 1e12, report };
+  assert.equal(raiseGithubAppOffer(args), true);
+  assert.equal(raiseGithubAppOffer(args), false);
+  assert.equal(inbox.allStatuses(dir).filter(s => s.kind === 'host_value' && s.state === 'pending').length, 1);
 });

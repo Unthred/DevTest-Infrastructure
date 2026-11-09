@@ -1,5 +1,6 @@
 // Issue #1115: a GitHub write made as Foreman's GitHub App, never as the owner account. The App is configured in team.json as
-// github_app { app_id, installation_id, key_file }; key_file is a path to the App's private key (PEM) on Tower, readable only by the supervisor.
+// github_app { app_id, installation_id, key_file } (set in the host's team.local.json through an approved host_value item); key_file is a path to
+// the App's private key (PEM) on Tower. The key is refused unless it is a regular, non-symlink file readable by its owner only (decision D-039).
 // Without that setting every App write is refused by name, so nothing falls back to the owner login.
 // The key and the tokens are never logged or placed in an argument list: the JWT and the installation token travel only in request headers.
 import fs from 'node:fs';
@@ -17,6 +18,14 @@ export const appConfigured = config => {
   const a = config?.github_app;
   return !!(a && Number.isSafeInteger(a.app_id) && Number.isSafeInteger(a.installation_id) && typeof a.key_file === 'string' && a.key_file);
 };
+
+// Owner-only rule as for the OpenBao token file (docs/secrets.md): a regular file, not a symlink, no group or other access.
+export function readKeyFile(file) {
+  const st = fs.lstatSync(file);
+  if (!st.isFile() || st.isSymbolicLink()) throw new SupervisorError('the GitHub App key file must be a regular file, not a link');
+  if (st.mode & 0o077) throw new SupervisorError('the GitHub App key file must be readable by its owner only (chmod 600)');
+  return fs.readFileSync(file);
+}
 
 export function appJwt({ appId, key, now = Date.now() }) {
   const iat = Math.floor(now / 1000) - 30;
@@ -36,7 +45,7 @@ async function installationToken(app, { fetchFn, readKey, now }) {
 }
 
 // Adds an existing label to an issue or pull request as the App. Never creates or recolours the label.
-export async function addLabelAsApp(config, n, label, { fetchFn = fetch, readKey = f => fs.readFileSync(f), now = Date.now() } = {}) {
+export async function addLabelAsApp(config, n, label, { fetchFn = fetch, readKey = readKeyFile, now = Date.now() } = {}) {
   if (!appConfigured(config)) throw new SupervisorError('Foreman has no GitHub App identity configured (github_app in team.local.json), so it will not label as the owner account');
   const token = await installationToken(config.github_app, { fetchFn, readKey, now });
   const res = await fetchFn(`${API}/repos/${config.repository}/issues/${Number(n)}/labels`, { method: 'POST', headers: { ...headers(token), 'content-type': 'application/json' }, body: JSON.stringify({ labels: [label] }) });
