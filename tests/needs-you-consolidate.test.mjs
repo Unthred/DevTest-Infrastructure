@@ -27,6 +27,8 @@ async function view(t, { issues = [], pulls = [], state = {}, jobs = [] } = {}) 
     cache: { tick: { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 }, pulls, issues: compactIssues(issues) } });
 }
 const item = (id, ref, extra = {}) => ({ id, text: `text ${id}`, ref, severity: 'action', action: `act ${id}`, ...extra });
+// The cached evaluation of a Depends on line: the issue waits on these numbers.
+const waits = (...ns) => ({ dependsOn: ns.map(number => ({ number, state: 'open' })) });
 const cache = { pulls: [{ number: 5 }, { number: 6 }], issues: [{ number: 10, state: 'OPEN' }, { number: 11, state: 'CLOSED' }] };
 
 test('real item appears; a card with an unrelated or missing ref stays', () => {
@@ -58,7 +60,8 @@ test('a review limit and a self-check on one PR merge into one item', () => {
   assert.equal(r.needsYou.length, 1); assert.equal(r.needsYou[0].id, 'reviewlimit-5'); assert.match(r.needsYou[0].action, /Also open/);
 });
 test('order: whole-system items, then what blocks the most issues, then the oldest', () => {
-  const c = { pulls: [], issues: [{ number: 10, state: 'OPEN' }, { number: 20, state: 'OPEN', prerequisites: [10] }, { number: 21, state: 'OPEN', prerequisites: [10] }, { number: 30, state: 'OPEN' }, { number: 31, state: 'OPEN' }] };
+  const c = { pulls: [], issues: [{ number: 10, state: 'OPEN' }, { number: 20, state: 'OPEN' }, { number: 21, state: 'OPEN' }, { number: 30, state: 'OPEN' }, { number: 31, state: 'OPEN' }],
+    dependencies: { issues: { 20: waits(10), 21: waits(10) } } };
   const r = consolidateNeedsYou([item('homeowner-31', { kind: 'issue', n: 31 }, { since: 1 }), item('homeowner-30', { kind: 'issue', n: 30 }, { since: 2 }), item('homeowner-10', { kind: 'issue', n: 10 }, { since: 9 }), item('tick-failed', null)], { cache: c });
   assert.deepEqual(r.needsYou.map(i => i.id), ['tick-failed', 'homeowner-10', 'homeowner-31', 'homeowner-30']);
 });
@@ -102,13 +105,15 @@ test('one shared count: health, label, list and the MCP reading agree', async t 
 });
 
 // Issue #759: review follow-ups.
-test('blocks counts dependants from issue bodies, overrides, and through the issue a PR closes', () => {
+test('blocks counts dependants from the Depends on line, and through the issue a PR closes', () => {
   const c = { pulls: [{ number: 20, headRefName: 'claude/issue-7-x' }, { number: 21, headRefName: 'claude/issue-8-x' }],
-    issues: [{ number: 5, state: 'OPEN', body: 'Prerequisites: #7' }, { number: 6, state: 'OPEN', body: '' }, { number: 7, state: 'OPEN', body: '' }, { number: 8, state: 'OPEN', body: '' }] };
-  const run = overrides => consolidateNeedsYou([item('homeowner-8', { kind: 'issue', n: 8 }, { since: 1 }), item('homeowner-7', { kind: 'issue', n: 7 }, { since: 2 }), item('fixlimit-20', { kind: 'pull', n: 20 }, { since: 3 }), item('fixlimit-21', { kind: 'pull', n: 21 }, { since: 0 })], { cache: c, overrides }).needsYou;
-  const r = run({});
+    issues: [{ number: 5, state: 'OPEN' }, { number: 6, state: 'OPEN' }, { number: 7, state: 'OPEN' }, { number: 8, state: 'OPEN' }], dependencies: { issues: { 5: waits(7) } } };
+  const items = [item('homeowner-8', { kind: 'issue', n: 8 }, { since: 1 }), item('homeowner-7', { kind: 'issue', n: 7 }, { since: 2 }),
+    item('fixlimit-20', { kind: 'pull', n: 20 }, { since: 3 }), item('fixlimit-21', { kind: 'pull', n: 21 }, { since: 0 })];
+  const run = dependencies => consolidateNeedsYou(items, { cache: { ...c, dependencies } }).needsYou;
+  const r = run(c.dependencies);
   assert.deepEqual(r.map(x => [x.id, x.blocks]), [['homeowner-7', 1], ['fixlimit-20', 1], ['fixlimit-21', 0], ['homeowner-8', 0]]);
-  const o = run({ 5: [8] }); assert.equal(o.find(x => x.id === 'homeowner-8').blocks, 1); assert.equal(o.find(x => x.id === 'homeowner-7').blocks, 0);
+  const o = run({ issues: { 5: waits(8) } }); assert.equal(o.find(x => x.id === 'homeowner-8').blocks, 1); assert.equal(o.find(x => x.id === 'homeowner-7').blocks, 0);
 });
 test('a refused verdict shares the one item with other causes on the same PR', () => {
   const r = consolidateNeedsYou([item('fixlimit-5', { kind: 'pull', n: 5 }), item('noreviewer-refused-5', { kind: 'pull', n: 5 })], { cache });
@@ -127,20 +132,13 @@ test('a PR counts every issue it closes, and issues that wait on it by PR number
   const c = { pulls: [{ number: 20, headRefName: 'claude/issue-7-x', closingIssuesReferences: [{ number: 8 }, { number: 9 }] }, { number: 21, headRefName: 'claude/issue-30-x' }],
     issues: [
       { number: 7, state: 'OPEN' }, { number: 8, state: 'OPEN' }, { number: 9, state: 'OPEN' },
-      { number: 1, state: 'OPEN', body: 'Prerequisites: #8' }, { number: 2, state: 'OPEN', body: 'Prerequisites: #9' },
-      { number: 3, state: 'OPEN', body: 'Prerequisites: #7' },                                   // names the branch issue, not a closing reference
-      { number: 4, state: 'OPEN', title: 'x', body: 'Blocked by PR #20' },
-      { number: 5, state: 'OPEN', body: 'Prerequisites: PR #20' },
-      { number: 6, state: 'OPEN', body: 'Prerequisites: #8\nBlocked by PR #20' },                  // both routes: still one
-      { number: 12, state: 'CLOSED', body: 'Blocked by PR #20' },                                  // closed issues never count
-      { number: 13, state: 'OPEN', body: 'Blocked by PR #99' }] };                                 // another PR
+      { number: 1, state: 'OPEN' }, { number: 2, state: 'OPEN' }, { number: 3, state: 'OPEN' }, { number: 4, state: 'OPEN' }, { number: 5, state: 'OPEN' },
+      { number: 6, state: 'OPEN' }, { number: 12, state: 'CLOSED' }, { number: 13, state: 'OPEN' }],
+    // a number may name an issue or a pull request
+    dependencies: { issues: { 1: waits(8), 2: waits(9), 3: waits(7), 4: waits(20), 5: waits(20), 6: waits(8, 20), 12: waits(20), 13: waits(99) } } };
   const r = consolidateNeedsYou([item('fixlimit-20', { kind: 'pull', n: 20 }), item('fixlimit-21', { kind: 'pull', n: 21 })], { cache: c }).needsYou;
   assert.equal(r.find(x => x.id === 'fixlimit-20').blocks, 6);   // issues 1, 2, 3, 4, 5, 6
   assert.equal(r.find(x => x.id === 'fixlimit-21').blocks, 0);
-});
-test('an issue with a cached pullPrerequisites list counts towards that PR', () => {
-  const c = { pulls: [{ number: 20, headRefName: 'claude/issue-7-x' }], issues: [{ number: 4, state: 'OPEN', pullPrerequisites: [20] }, { number: 5, state: 'OPEN', pullPrerequisites: [21] }] };
-  assert.equal(consolidateNeedsYou([item('fixlimit-20', { kind: 'pull', n: 20 })], { cache: c }).needsYou[0].blocks, 1);
 });
 
 const limitState = (head, extra = {}) => ({ verdicts: { [`1:${head}`]: { verdict: 'CHANGES', reviewer: 'x' } }, fixAttempts: { [`1:${head}`]: 2 }, jobs: {}, unblock: { escalated: {}, pr: {}, day: {}, log: [] }, ...extra });

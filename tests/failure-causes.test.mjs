@@ -93,7 +93,7 @@ function world(t, { inbox = true, host = okHost } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'failcause-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const inboxDir = path.join(dir, 'inbox'); fs.mkdirSync(inboxDir);
   const gh = { pulls: [prOf(40, 'codex/issue-30-x', H(1))], listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null,
-    listIssues: async () => [{ number: 5, title: 'Five', state: 'OPEN', body: 'Prerequisites: #4', labels: [] }, { number: 4, title: 'Four', state: 'OPEN', body: '', labels: [] }],
+    listIssues: async () => [{ number: 5, title: 'Five', state: 'OPEN', body: 'Depends on: #4', labels: [] }, { number: 4, title: 'Four', state: 'OPEN', body: '', labels: [] }],
     listMergedPulls: async () => [], comment: async () => {}, hasComment: async () => false, findIssueByMarker: async () => null, board: async () => {}, addLabel: async () => {}, removeLabel: async () => {} };
   const jobs = { states: {}, listActive: async () => [], get: async id => jobs.states[id] || null, create: async () => ({ id: 'x'.repeat(32) }) };
   const team = new Team({ config: config(inbox ? inboxDir : null), root: stateRoot(path.join(dir, 'state')), gh, jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null }, register: '## D-020 — x\n- Status: homeowner-approved\n',
@@ -106,6 +106,7 @@ test('a job killed by a full disk records environment; a job stopped on an open 
   const w = world(t, { host: { ...okHost, diskFreeMb: 12 } });
   add(w, 'disk', { kind: 'review', pr: 40, head: H(1) }, job({ id: 'disk', status: 'failed', lastEvent: 'crash', incompleteReason: { cause: 'crash', detail: 'the run ended with crash (exit 1)' } }));
   const w2 = world(t);
+  w2.team.dependencies = { byIssue: new Map([[5, { dependsOn: [{ number: 4, state: 'open' }], met: false, reasons: [] }]]) };   // what the tick evaluated from the Depends on line
   add(w2, 'pre', { kind: 'implement', issue: 5 }, job({ id: 'pre', kind: 'implement', status: 'blocked', lastEvent: 'context_too_large', incompleteReason: undefined }));
   const report = { ingested: [], skipped: [] }, report2 = { ingested: [], skipped: [] };
   await w.team.ingest(report); await w2.team.ingest(report2);

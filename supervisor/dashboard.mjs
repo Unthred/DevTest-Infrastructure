@@ -316,7 +316,7 @@ export function heldIssues({ cache, state = {}, splitting = new Set(), pauseText
   }
   return out;
 }
-function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), held = new Set(), withheld = new Map(), proposals = [], fixCount, excluded = [], pauseText = null }) {
+function attentionItems({ config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled, state = {}, limits = {}, names, gated = null, unreviewed = [], escalating = new Set(), held = new Set(), withheld = new Map(), proposals = [], fixCount, pauseText = null }) {
   const planName = a => (['implement', 'continue'].includes(a.type) ? names.issue(a.issue ?? a.ref) : names.pr(a.pr ?? a.ref)).text;
   const items = [], add = (id, text, ref, x = {}) => items.push({ id, text: redact(text, 300), ref: ref || null, ...(x.tried ? { tried: redact(x.tried, 300) } : {}), ...(x.action ? { action: redact(x.action, 300) } : {}), ...(x.links?.length ? { links: cleanLinks(x.links) } : {}), ...(Number.isFinite(x.since) ? { since: x.since } : {}) });
   const web = (kind, n) => `https://github.com/${config.repository}/${kind === 'pull' ? 'pull' : 'issues'}/${n}`;
@@ -407,10 +407,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     else add(`noreviewer-${u.pr}`, `${what} at ${sha7(u.head)} has no reviewer that is independent and available: ${u.reasons.join('; ')}`, { kind: 'pull', n: u.pr },
       { tried, action: `${unblock}, or review the PR by hand.`, links: [{ text: what, url: web('pull', u.pr) }] });
   }
-  // Issue #212: exclusions are listed on the Work page; only a follow-up whose PR closed unmerged needs the homeowner. #1103: so does a bad Depends on line.
+  // Issue #212: exclusions are listed on the Work page; #1103: a bad Depends on line needs the homeowner.
   for (const x of Team.dependencyTools.attention(cache)) add(x.id, x.text, x.ref, { action: x.action });
-  for (const e of excluded) if (e.kind === 'pr-closed') add(`prclosed-${e.number}`, `${names.issue(e.number).text}: ${e.reason}`, { kind: 'issue', n: e.number },
-    { tried: 'Foreman held this follow-up until its pull request merged; the PR was closed without merging, so it will not become eligible by itself.', action: 'Close the issue, remove the reference to the PR, or reopen the PR.', links: [{ text: names.issue(e.number).text, url: web('issue', e.number) }] });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
     // Issue #297: an issue that is closed, labelled epic or has an accepted split has nothing left to decide.
@@ -692,7 +690,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       return base;
     });
     const pauseText = team.pauseText(c.pulls || [], c.issues || []);
-    const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, excluded, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), held: new Set((c.pulls || []).filter(p => team.carriedHold(p)).map(p => p.number)), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), held: new Set((c.pulls || []).filter(p => team.carriedHold(p)).map(p => p.number)), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
     // Issue #124: each pending inbox item is one Approve/Reject card. Nothing here runs anything; the card posts to the dashboard's own write route.
     if (config.inbox?.dir) for (const card of inboxCards(config.inbox.dir)) attention.push({ id: `inbox-${card.id}`, inboxId: card.id, inboxKind: card.kind, text: card.broken ? `An inbox item cannot be shown: ${card.broken}` : `Overseer proposal (${card.kind === 'prompt' ? 'run as a job' : 'post as an issue'}): ${card.title}`, ref: null, severity: 'action', inbox: card, action: card.broken ? 'Reject it; the overseer can propose it again.' : card.will });
@@ -936,7 +934,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const tickAt = cache.tick?.at ?? null;
   const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
-  const consolidated = consolidateNeedsYou(attention, { cache, overrides: config.depends_on_overrides });
+  const consolidated = consolidateNeedsYou(attention, { cache });
   const needsYou = consolidated.needsYou.map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);

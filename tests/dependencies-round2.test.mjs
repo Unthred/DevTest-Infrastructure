@@ -101,3 +101,48 @@ test('a Team restored from the dashboard cache keeps its dependencies; body-less
   assert.equal(cached.team.exclusion(9, new Map([[9, issue(9)]]), []).kind, 'dependency');
   assert.equal(await refreshDependencies(cached.team, [], []), cached.team.dependencies);
 });
+
+// ---- review follow-ups (issue #1118)
+const runningJob = (id, extra = {}) => ({ kind: 'implement', agent: 'claude', key: '9', issue: 9, branch: 'claude/issue-9-x', at: 500, ...extra });
+
+test('a real tick stops a running job whose issue gained an unmet prerequisite', async t => {
+  const id = 'd'.repeat(32);
+  const w = world(t, { issues: [issue(9, 'Depends on: #20'), issue(20)], active: [{ id, provider: 'claude', status: 'running' }] });
+  w.team.s.jobs[id] = runningJob(id);
+  const report = await w.team.tickPass({ dryRun: false });
+  assert.deepEqual(w.stopped, [id], `skipped: ${JSON.stringify(report.skipped)}`);
+  assert.ok(w.team.s.jobs[id].dependencyStop, 'the stop is marked so ingest counts no attempt');
+});
+
+test('a stop that throws marks and refunds nothing, so the next pass looks again', async t => {
+  const id = 'c'.repeat(32);
+  const w = world(t, { issues: [issue(9, 'Depends on: #20'), issue(20)], active: [{ id, provider: 'claude', status: 'running' }] });
+  w.team.s.jobs[id] = { ...runningJob(id), kind: 'review', pr: 50, key: 'k' };
+  w.team.s.reviewAttempts.k = 1;
+  w.team.jobs.stop = async () => { throw new Error('terminal job cannot be stopped'); };
+  await assert.rejects(enforceStops(w.team, {}), /terminal job/);
+  assert.equal(w.team.s.jobs[id].dependencyStop, undefined);
+  assert.equal(w.team.s.reviewAttempts.k, 1, 'the attempt is not given back');
+  w.team.jobs.stop = async sid => { w.stopped.push(sid); };
+  await enforceStops(w.team, {});
+  assert.deepEqual(w.stopped, [id]);
+  assert.equal(w.team.s.reviewAttempts.k, 0);
+});
+
+test('a dependency stop of a secret-scan-only round gives back that round, and an ordinary cifix after one still refunds its attempt', async t => {
+  const scan = 'b'.repeat(32), plain = 'a'.repeat(32);
+  const w = world(t, { issues: [issue(9, 'Depends on: #20'), issue(20)], active: [{ id: scan, provider: 'claude', status: 'running' }] });
+  w.team.s.jobs[scan] = { ...runningJob(scan), kind: 'cifix', pr: 50, key: 'k', scanOnly: true };
+  w.team.s.scanOnlyRounds[50] = 2;
+  w.team.s.fixAttempts.k = 1;
+  await enforceStops(w.team, {});
+  assert.equal(w.team.s.scanOnlyRounds[50], 1);
+  assert.equal(w.team.s.fixAttempts.k, 1, 'a scan-only round never charged a fix attempt');
+  const w2 = world(t, { issues: [issue(9, 'Depends on: #20'), issue(20)], active: [{ id: plain, provider: 'claude', status: 'running' }] });
+  w2.team.s.jobs[plain] = { ...runningJob(plain), kind: 'cifix', pr: 50, key: 'k' };
+  w2.team.s.scanOnlyRounds[50] = 2;
+  w2.team.s.fixAttempts.k = 1;
+  await enforceStops(w2.team, {});
+  assert.equal(w2.team.s.fixAttempts.k, 0, 'an ordinary cifix is refunded even after an earlier scan-only round');
+  assert.equal(w2.team.s.scanOnlyRounds[50], 2);
+});

@@ -6,7 +6,6 @@
 //   - Order: what blocks the most other work first, then the oldest.
 // Pure: no I/O. The caller supplies the attention items and the lists it already holds.
 import { redact } from './redact.mjs';
-import { prerequisites, pullPrerequisites } from './team.mjs';
 
 // Lower is more specific: the primary cause of a merged item is the lowest-ranked one present.
 const RANK = ['breaker', 'fixlimit', 'retrycap', 'reviewlimit', 'reviewrefused', 'noreviewer-refused', 'noreviewer', 'selfcheck', 'homeowner-pr', 'decision-proposal', 'stalled', 'job', 'homeowner', 'split', 'prclosed', 'rebase-lost', 'stale-mark', 'ci'];
@@ -18,7 +17,7 @@ const refKey = ref => (ref && ref.kind && Number.isSafeInteger(ref.n) ? `${ref.k
 // A stall item lists PRs; Foreman progresses by itself unless a reason says the homeowner must act.
 export const needsHomeowner = item => item.homeowner !== false;
 
-export function consolidateNeedsYou(attention, { cache = {}, overrides = {} } = {}) {
+export function consolidateNeedsYou(attention, { cache = {} } = {}) {
   const pulls = Array.isArray(cache.pulls) ? cache.pulls : null, issues = Array.isArray(cache.issues) && cache.issues.length ? cache.issues : null;
   const openPr = pulls ? new Set(pulls.map(p => p.number)) : null;
   const issueState = issues ? new Map(issues.map(i => [i.number, i])) : null;
@@ -38,9 +37,8 @@ export function consolidateNeedsYou(attention, { cache = {}, overrides = {} } = 
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(a);
   }
-  // Prerequisites come from the issue body (the GitHub cache carries no parsed list) unless depends_on_overrides names them.
-  const depsOf = i => overrides?.[i.number] ?? i.prerequisites ?? prerequisites(i.body);
-  const prDepsOf = i => i.pullPrerequisites ?? pullPrerequisites(i.title, i.body);
+  // Issue #1118: the one dependency source is the Depends on line, read from the evaluation the tick cached (a number may name an issue or a pull request).
+  const depsOf = i => (cache.dependencies?.issues?.[i.number]?.dependsOn || []).filter(d => d.state !== 'installed').map(d => d.number);
   const openIssues = () => (issues || []).filter(i => i.state === 'OPEN');
   // A pull request blocks what every issue it closes blocks (all closing references and the branch's issue), plus every open issue
   // that waits on the PR by number ("Blocked by PR #N", "Prerequisites: PR #N"). Each blocked issue counts once.
@@ -51,7 +49,7 @@ export function consolidateNeedsYou(attention, { cache = {}, overrides = {} } = 
       const closes = new Set((p?.closingIssuesReferences || []).map(r => r?.number).filter(Number.isSafeInteger));
       const branch = Number(/\/issue-(\d+)(\D|$)/.exec(p?.headRefName || '')?.[1]);
       if (Number.isSafeInteger(branch)) closes.add(branch);
-      for (const i of openIssues()) if ([...closes].some(c => depsOf(i).includes(c)) || prDepsOf(i).includes(ref.n)) blocked.add(i.number);
+      for (const i of openIssues()) if ([ref.n, ...closes].some(c => depsOf(i).includes(c))) blocked.add(i.number);
     } else for (const i of openIssues()) if (depsOf(i).includes(ref.n)) blocked.add(i.number);
     return blocked.size;
   };

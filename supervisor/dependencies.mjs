@@ -56,6 +56,12 @@ export function prerequisiteState({ issue = null, pr = null, installedSha = null
   return inside ? 'installed' : 'merged_not_installed';
 }
 
+// Issue #1118: closed as completed with no pull request linked to it, so nothing can ever prove it is installed (a failed lookup is not this).
+function closedWithoutPull({ issue = null, pr = null } = {}) {
+  if (pr || !issue || String(issue.state).toUpperCase() !== 'CLOSED') return false;
+  return !(issue.closedByPullRequestsReferences || []).length;
+}
+
 // Dependency cycles among the given { number -> [prerequisite numbers] }. Each cycle is listed once, as its sorted members.
 export function findCycles(graph) {
   const cycles = new Map(), done = new Set();
@@ -79,7 +85,10 @@ export function evaluateDependencies({ issues, lookup, installedSha, isAncestor 
   for (const c of cycles) for (const n of c) inCycle.set(n, c);
   const out = new Map();
   for (const [number, p] of parsed) {
-    const dependsOn = p.numbers.map(d => ({ number: d, state: prerequisiteState({ ...lookup(d), installedSha, isAncestor }) }));
+    const dependsOn = p.numbers.map(d => {
+      const facts = lookup(d), state = prerequisiteState({ ...facts, installedSha, isAncestor });
+      return { number: d, state, ...(state === 'unknown' && closedWithoutPull(facts) ? { unlinked: true } : {}) };
+    });
     const cycle = inCycle.get(number) || null;
     const reasons = [];
     if (p.malformed) reasons.push(`malformed Depends on line: ${p.malformed}`);
