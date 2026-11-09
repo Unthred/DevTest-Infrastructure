@@ -10,7 +10,7 @@
 //               plus a margin; an agent whose remaining capacity falls to the reserve is reviews-only.
 //
 // Without a trusted capacity nothing here guesses: the caller falls back to the fixed high-water share and says so.
-import { isWeekly, weeklyWindow, mayTakeOver } from './budget.mjs';
+export const isWeekly = w => /^seven_day|week/.test(w?.type || '') || (Number.isFinite(w?.windowMinutes) && w.windowMinutes >= 10000);
 
 export const ALLOWANCE_DEFAULTS = { reserve_margin: 0.05, capacity_windows: 4, min_window_delta: 0.03, min_trusted_windows: 2 };
 const RESET_TOLERANCE_MS = 10 * 60000;
@@ -127,14 +127,20 @@ export function capacityView(s) {
     remaining: round(s.remaining), reserve: round(s.reserve), need: round(s.need), belowReserve: s.belowReserve, text: s.text ?? s.reason };
 }
 
-// One agent's capacity summary for a tick: the weekly use of its live window, its job history and the open pull requests that `owns` accepts
-// (each is projected to need a review and a fix round before the reset). `settings` carries the optional starting capacity and reserve margin.
-export function capacityFor({ name, allowance, jobs, settings, now, prs, owns }) {
-  const weekly = weeklyWindow(allowance, now);
+// One agent's capacity summary for a tick: the weekly use of its live window (null when unknown), its job history and the open pull requests that
+// `owns` accepts (each is projected to need a review and a fix round before the reset). `settings` carries the optional starting capacity and reserve margin.
+export function capacityFor({ name, used, jobs, settings, prs, owns }) {
   const options = { ...ALLOWANCE_DEFAULTS, reserve_margin: settings.reserve_margin ?? ALLOWANCE_DEFAULTS.reserve_margin };
   const openPrs = (prs || []).filter(owns).length;
-  return summarise({ used: weekly ? weekly.utilization : null, jobs, openPrs, configured: settings.starting_capacity?.[name] ?? null, options });
+  return summarise({ used, jobs, openPrs, configured: settings.starting_capacity?.[name] ?? null, options });
 }
+
+// The one definition of remaining capacity: capacity x unused share, where `used` may include cost already planned this tick.
+export const remainingOf = (capacity, used) => capacity * (1 - used);
+
+// Whether the cheaper model is kept: remaining capacity is within twice the reserve (what the open work needs plus the margin). Null when the
+// capacity is not known, so the caller keeps the percentage threshold it has today.
+export const lowOnCapacity = s => (s?.basis === 'absolute' ? s.remaining <= 2 * s.reserve : null);
 
 // Takeover goes to the agent with the most remaining capacity relative to its need. `agents` lists { agent, mode, summary, legacy, eligible }
 // in config order; true when another eligible agent scores strictly higher. Only when every capacity is known, so the comparison is in the
@@ -145,17 +151,10 @@ export function betterTaker(agent, agents) {
   return agents.some(a => a.agent !== agent && a.eligible && scores[a.agent] > scores[agent]);
 }
 
-// The dispatcher's agents as ranking candidates. `team` is the dispatcher (agents(), modes, c, limitedOf); eligible means it may take work over now.
-function candidates(team) {
-  return team.agents().map(([n]) => {
-    const m = team.modes?.[n];
-    const eligible = m?.mode === 'normal' && m.known === true && mayTakeOver(team.c, n) && !team.limitedOf(n).out;
-    return { agent: n, summary: m?.capacity, legacy: m?.known && Number.isFinite(m.projected) ? 1 - m.projected : 0, eligible };
-  });
-}
-export const spareScoreOf = (team, agent) => headroomScores(candidates(team))[agent] ?? 0;
-// The agents whose implementation work `agent` may take over: none while another eligible agent has more headroom.
-export const takeoverSources = (team, agent) => (betterTaker(agent, candidates(team)) ? [] : team.agents());
+// `candidates` are plain rows { agent, summary, legacy, eligible } in config order, built by the dispatcher (eligible: it may take work over now).
+export const spareScoreOf = (candidates, agent) => headroomScores(candidates)[agent] ?? 0;
+// True when `agent` may take over implementation work: no other eligible agent has more headroom.
+export const mayTakeFrom = (candidates, agent) => !betterTaker(agent, candidates);
 
 // How the review choice names an agent's headroom: its remaining capacity when known, else the old percentage estimate.
 export function figure(name, m) {

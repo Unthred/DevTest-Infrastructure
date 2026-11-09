@@ -11,6 +11,7 @@
 import { SupervisorError } from './core.mjs';
 import { redact } from './redact.mjs';
 import { highWaterHold, reserveRefusal } from './capacityrule.mjs';
+import { isWeekly } from './capacity.mjs';
 
 export const HOUR = 3600000;
 export const DEFAULT_BUDGET = { enabled: true, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
@@ -51,7 +52,7 @@ export const budgetSettings = config => ({ ...DEFAULT_BUDGET, ...(config?.budget
 // Whether an agent's role lets it take another agent's implementation work. Default: every agent may.
 export const mayTakeOver = (config, agent) => (Array.isArray(config?.budget?.can_take_over) ? config.budget.can_take_over.includes(agent) : true);
 
-export const isWeekly = w => /^seven_day|week/.test(w?.type || '') || (Number.isFinite(w?.windowMinutes) && w.windowMinutes >= 10000);
+export { isWeekly };
 const live = (allowance, now) => (allowance?.windows || []).filter(w => Number.isFinite(w.utilization) && Number.isFinite(w.resetsAt) && w.resetsAt > now);
 const top = ws => [...ws].sort((a, b) => b.utilization - a.utilization)[0] || null;
 // The weekly window that matters (the most used one when a provider reports several), or null when unknown or already reset.

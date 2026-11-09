@@ -1,5 +1,6 @@
 // Issue #1116: the reserve rule and the planner invariant, as pure decisions over the capacity summary (capacity.mjs).
 // Kept apart from budget.mjs, which calls it, so this file imports nothing from there.
+import { remainingOf } from './capacity.mjs';
 const pct = v => `${Math.round(v * 100)}%`;
 
 // The reviews-only hold from the high-water mark. With a known capacity the mark is the absolute reserve; without one it is the fixed share
@@ -20,5 +21,5 @@ export function highWaterHold({ out, weekly, settings, capacity }) {
 export function reserveRefusal(a, type, reviewsOnlyTypes) {
   const cap = a?.capacity;
   if (cap?.basis !== 'absolute' || reviewsOnlyTypes.has(type) || type === 'review') return null;
-  return cap.capacity * (1 - a.used) <= cap.reserve ? `remaining capacity is at or below the reserve (${cap.text})` : null;
+  return remainingOf(cap.capacity, a.used) <= cap.reserve ? `remaining capacity is at or below the reserve (${cap.text})` : null;
 }

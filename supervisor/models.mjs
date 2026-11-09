@@ -73,13 +73,15 @@ export function resolveModel(ctx) {
   const threshold = ctx.modelsConfig.allowance_threshold ?? DEFAULT_THRESHOLD;
   if (type === 'rebase') ctx = { ...ctx, escalation: null };
   let entry = table[type], source = 'configured', reason = `configured for ${type}`;
-  const hot = Number.isFinite(ctx.utilization) && ctx.utilization >= threshold;
+  // Issue #1116: with a known capacity the cheaper model is kept on remaining capacity (ctx.capacityLow), not on a percentage that means a different amount on each plan.
+  const hot = ctx.capacityLow ?? (Number.isFinite(ctx.utilization) && ctx.utilization >= threshold);
+  const hotText = ctx.capacityLow != null ? 'remaining capacity within twice the reserve' : `weekly allowance ${Math.round(ctx.utilization * 100)}% >= ${Math.round(threshold * 100)}%`;
   if (type === 'review' && ctx.reReview && ctx.low && table.low && !ctx.entryOverride) { entry = table.low; source = 'allowance'; reason = 'fix-round re-review while the allowance is low: lower-cost entry'; }
-  else if (hot && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `weekly allowance ${Math.round(ctx.utilization * 100)}% >= ${Math.round(threshold * 100)}%: cheaper model kept for ${type}`; }
+  else if (hot && !STRONG_TYPES.has(type)) { source = 'allowance'; reason = `${hotText}: cheaper model kept for ${type}`; }
   // Issue #316 (homeowner decision 2 Nov 2026): a repair job never moves to a stronger model by itself. The configured entry is kept and
   // the retry is a fresh session with the review findings; the old `strong` entry is accepted in a config but no longer used.
   else if (ctx.escalation && REPAIR_TYPES.has(type)) reason = `${type} keeps its configured model (${ctx.escalation.reason}): a fresh session with the review findings, no automatic move to a stronger model`;
-  else if (hot) reason = `${type} keeps its model although weekly allowance is ${Math.round(ctx.utilization * 100)}%`;
+  else if (hot) reason = `${type} keeps its model although ${ctx.capacityLow != null ? 'remaining capacity is low' : `weekly allowance is ${Math.round(ctx.utilization * 100)}%`}`;
   const checked = checkEntry(entry, ctx.manifestModels);
   const fields = { modelSource: source, modelReason: reason.slice(0, 200) };
   if (checked.model) fields.model = checked.model;

@@ -27,7 +27,9 @@ import { redact, redactLong } from './redact.mjs';
 import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
-import { capacityFor, spareScoreOf, takeoverSources, figure } from './capacity.mjs';
+import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
+import { candidateRows, workRank, modelCapacity, reserveOut } from './capacityteam.mjs';
+import { weeklyWindow } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
@@ -709,6 +711,7 @@ export class Team {
     const utilization = this.allowanceOf(act.agent), mode = this.modes?.[act.agent]?.mode;
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
     const base = { modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low };
+    Object.assign(base, modelCapacity(mode, this.modes?.[act.agent]?.capacity));   // issue #1116
     const first = resolveModel(base);
     let { fields, warnings } = first;
     // Issue #316 (homeowner decision 2 Nov 2026): a writing job never runs on a model its agent is configured to review with, and never
@@ -991,7 +994,8 @@ export class Team {
     const now = this.clock.now(), settings = budgetSettings(this.c), out = {};
     for (const [name, a] of this.agents()) {
       const allowance = this.usage.allowance?.[a.provider] || null, jobs = (this.usage.jobs || []).filter(j => j.provider === a.provider);
-      const capacity = capacityFor({ name, allowance, jobs, settings, now, prs: this.view?.prs, owns: pr => agentOfBranch(this.c, pr.headRefName) });
+      const used = weeklyWindow(allowance, now)?.utilization ?? null;
+      const capacity = capacityFor({ name, used, jobs, settings, prs: (this.view || this.nameView)?.prs, owns: pr => agentOfBranch(this.c, pr.headRefName) });
       out[name] = assessAgent({ allowance, jobs, history: weeklyHistory(this.usage.snapshots, name, allowance), settings, now, latched: this.s.budget[name] || null, capacity });
       out[name].capacity = capacity;
     }
@@ -1182,8 +1186,9 @@ export class Team {
   }
   // Issues #402, #1116: spare allowance, only to choose between agents (never holds work back): remaining capacity relative to need when every
   // agent's capacity is known, else the week minus the projected use; an unknown reading scores 0 (capacity.mjs).
+  rankRows() { return candidateRows(this.agents().map(([n]) => n), this.modes, n => mayTakeOver(this.c, n) && !this.limitedOf(n).out); }
   spareScore(agent) {
-    return spareScoreOf(this, agent);
+    return spareScoreOf(this.rankRows(), agent);
   }
   // True when `provider` already runs its limits.provider_roles count in `role` (no such limit: never).
   providerSlotFull(provider, role, usedBy) {
@@ -1236,7 +1241,7 @@ export class Team {
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
     // An owner at a usage limit ranks last, so another agent can take its ready issue (#104).
-    return (act.type === 'implement' ? 10 : 0) + (act.reassignedFrom ? 1 : 0) + (act.type === 'implement' && !act.reassignedFrom && this.ownerOut(agent) ? 20 : 0);
+    return workRank(act, this.ownerOut(agent), this.spareScore(agent));
   }
 
   // The issue a draft PR continues for `agent`, or null when the draft is not continuable (not mine, not an owned issue, issue closed,
@@ -1521,7 +1526,7 @@ export class Team {
     // a started job stay with their author. The issue keeps its owner; the work is done on this agent's branch, so the owner (or
     // another agent) reviews it and D-011 holds. Ownership returns once the owner has allowance again and no work has started.
     if (!B || B.mode !== 'normal' || !B.known || !mayTakeOver(this.c, agent) || this.limitedOf(agent).out) return null;   // an agent at a usage limit takes nothing over either
-    for (const [other] of takeoverSources(this, agent)) {
+    for (const [other] of mayTakeFrom(this.rankRows(), agent) ? this.agents() : []) {
       const ob = this.ownerOut(other);
       if (other === agent || !ob) continue;
       for (const n of this.issuesOf(other)) {
@@ -1667,6 +1672,8 @@ export class Team {
   ownerOut(agent) {
     const m = this.modes?.[agent];
     if (m && m.mode !== 'normal') return { why: `is ${MODE_LABEL[m.mode]} (${String(m.reason || '').slice(0, 160)})`, until: m.until ?? null };
+    const held = reserveOut(m);
+    if (held) return held;
     const l = this.limitedOf(agent);
     return l?.out ? { why: `is out of allowance (${String(l.reason || 'usage limit').slice(0, 160)})`, until: l.until ?? null } : null;
   }
