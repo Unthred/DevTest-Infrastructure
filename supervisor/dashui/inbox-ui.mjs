@@ -1,6 +1,8 @@
 // Inbox decision logic for the dashboard script (issue #856). No DOM here: app.js passes in what to disable, label and show, so the order
 // of events (both buttons off at once, the pressed one labelled, a refusal giving them back with the reason) is the same code the tests run.
 
+import { bindApproveAll } from './approve-all.mjs';
+
 export const PRESSED = { approve: 'Approved ✓', reject: 'Rejected ✗' };
 export const OUTCOME_LABEL = { approve: 'Approved', reject: 'Rejected' };
 // Issue #925: what an approved item says until the tick takes it ({t} is the time); a rejected one is final at once.
@@ -33,3 +35,6 @@ export async function runDecision({ decision, post, ui }) {
 
 // The Needs you heading count after a card leaves: "Needs you (3)" -> "Needs you (2)"; no count when none are left.
 export const lowerCount = (heading, by = 1) => String(heading).replace(/\((\d+)\)/, (m, n) => (Number(n) - by > 0 ? `(${Number(n) - by})` : '')).trim();
+
+// Issue #1101: the "Waiting for approval" dropdown's Approve all and live badge, bound once in the browser (app.js already loads this file).
+if (typeof document !== 'undefined') bindApproveAll(postDecision);

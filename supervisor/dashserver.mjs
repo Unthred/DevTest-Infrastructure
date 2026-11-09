@@ -12,6 +12,8 @@ import { applyAction, readWatchlist } from './watchlist.mjs';
 import { createViewStore, VIEW_STALE_MS } from './viewstore.mjs';
 import { createWorkerBuild } from './viewworker.mjs';
 import { buildView } from './dashboard.mjs';
+import { withApprovals } from './approvals.mjs';
+import { approvalsStream } from './approvals-stream.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
 import fs from 'node:fs';
@@ -100,11 +102,17 @@ export async function currentView({ root, config, now = Date.now(), tz = default
   const register = registerCached(config);
   const hot = readSnapshots(root), tl = readTimeline(root);
   const history = { timeline: timeline ? tl : [], gaps: timeline ? computeGaps(tl, allSnapshots(root, hot), now) : [], storage: storageReport(root, { now, timeline: tl, ...(statfs ? { statfs } : {}) }), ...(allTime ? { chartSnapshots: allSnapshots(root, hot) } : {}) };
-  return buildView({ config: validateTeamConfig(config), root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root), snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register });
+  const checked = validateTeamConfig(config);   // the validated configuration carries the inbox folder the approvals list reads
+  const view = await buildView({
+    config: checked, root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root),
+    snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register,
+  });
+  return withApprovals(view, checked);
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
 export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/refresh.mjs': ['refresh.mjs', 'text/javascript; charset=utf-8'], '/static/chartopts.mjs': ['chartopts.mjs', 'text/javascript; charset=utf-8'], '/static/grid.mjs': ['grid.mjs', 'text/javascript; charset=utf-8'], '/static/appbar.mjs': ['appbar.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
+  '/static/approve-all.mjs': ['approve-all.mjs', 'text/javascript; charset=utf-8'],
   '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/inbox-ui.mjs': ['inbox-ui.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
@@ -290,10 +298,8 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
-    if (req.method === 'POST' && reqPath === '/mark-read') return markRead(req, res, send);
-    if (req.method === 'POST' && reqPath === '/watch') return watch(req, res, send);
-    if (req.method === 'POST' && reqPath === '/inbox') return inbox(req, res, send);
-    if (req.method === 'POST' && reqPath === '/breaker-resume') return breakerResume(req, res, send);
+    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/breaker-resume': breakerResume };
+    if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.
     const probePath = req.method === 'POST' ? /^\/probe\/([A-Za-z0-9_-]{1,40})$/.exec(reqPath) : null;
@@ -337,6 +343,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         const issue = Number.isSafeInteger(s.issue) && s.issue > 0 && s.issue < 900000000 ? s.issue : null;
         return page(send, 200, `Inbox item ${esc(s.id.slice(0, 8))}`, `<p><code>${esc(s.id)}</code></p><ul><li>Kind: ${esc(s.kind || 'unknown')}</li><li>State: ${esc(s.state || 'unknown')}</li>${s.title ? `<li>Title: ${esc(String(s.title).slice(0, 200))}</li>` : ''}${issue ? `<li>GitHub issue: <a href="/work/issue/${issue}">#${issue}</a></li>` : ''}${s.reason ? `<li>Reason: ${esc(String(s.reason).slice(0, 300))}</li>` : ''}</ul>`);
       }
+      if (path === '/api/approvals/events') return approvalsStream({ req, res, headers: HEADERS, active: activeStreams, read: async () => (await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: false, allTime: false })).view.panels?.approvals });
       if ((m = /^\/api\/jobs\/([a-f0-9]{32})\/(events|transcript\.json)$/.exec(path))) {
         const id = m[1], q = new URLSearchParams(search);
         const afterRaw = req.headers['last-event-id'] ?? q.get('after') ?? '0', after = /^\d{1,12}$/.test(String(afterRaw)) ? Number(afterRaw) : 0;

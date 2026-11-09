@@ -62,7 +62,7 @@ document.addEventListener('submit', async e => {
       list.prepend(li); box.hidden = false; $('.inbox-decided-n', box).textContent = String($$('li', list).length);
       row.remove();
       const h = $('#h-needs'); if (h) h.textContent = lowerCount(h.textContent);
-    } } });
+    } } }).then(() => refresher?.refresh(true, { live: true }));   // issue #1101: the "Waiting for approval" list and badge are re-read from the server now
 });
 // An Undo link disappears when its window ends, so it is never offered after the server would refuse it.
 setInterval(() => { for (const f of $$('form.inbox-undo')) if (Date.now() > Number(f.dataset.undoUntil)) f.remove(); }, 1000);
