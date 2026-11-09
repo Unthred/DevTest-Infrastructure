@@ -6,13 +6,17 @@ const FORM_TAIL = '</button></form>';
 const form = (esc, id, decision, label) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}">`
   + `<input type="hidden" name="decision" value="${decision}"><button class="btn inbox-${decision}" type="submit">${label}${FORM_TAIL}`;
 
-const STRONG_NOTE = '<span class="sub">Needs the typed pull request number; decide it on its pull request.</span>';
-const decideNote = (esc, r) => {
-  const where = r.link ? `<a href="${esc(r.link)}" rel="noopener">Decide it here</a>` : 'Decide it where it is raised';
-  return `<span class="sub">${where}; it has no button here.</span>`;
+const actionForm = (esc, control) => {
+  const action = `<input type="hidden" name="action" value="${esc(control.action)}">`;
+  const target = `<input type="hidden" name="target" value="${esc(control.target)}">`;
+  const reason = '<label>Why <input name="reason" maxlength="300" required></label>';
+  const button = `<button class="btn" type="submit">${esc(control.label)}</button>`;
+  return `<form method="post" action="/decision" class="decision-form">${action}${target}${reason}${button}</form>`;
 };
+
+const STRONG_NOTE = '<span class="sub">Needs the typed pull request number; decide it on its pull request.</span>';
 const buttons = (esc, r) => {
-  if (r.tier === 'decision') return decideNote(esc, r);
+  if (r.tier === 'decision') return r.error ? `<span class="sub" role="alert">${esc(r.error)}</span>` : r.controls.map(c => actionForm(esc, c)).join('');
   if (r.tier === 'strong') return STRONG_NOTE;
   return (r.canApprove ? form(esc, r.id, 'approve', 'Approve') : '') + form(esc, r.id, 'reject', 'Reject');
 };

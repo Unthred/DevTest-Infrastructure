@@ -42,6 +42,7 @@ import { recordRefusedOrigin } from './hostvalue.mjs';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
+import { handleDecision } from './decision-route.mjs';
 import { underSupervisedJob } from './breaker.mjs';
 import { isLocalPeer, peerPid as defaultPeerPid } from './peerpid.mjs';
 
@@ -167,8 +168,7 @@ export function healthData({ root, config, now, recorderDir }) {
     recorder: recorderDir ? readRecorder(recorderDir, now - 7 * DAY_MS, now) : { status: 'missing', note: 'No recorder log folder is configured.', files: 0, samples: 0, hourly: [], days: [] } };
 }
 export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
-  // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
-  // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
+  // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served while one shared rebuild runs. ttl 0 (tests) rebuilds on every request, still shared.
   // `statfs` is a test seam reaching only the in-process build; the worker build cannot receive a function, so refuse the combination (issue #841).
   if (offload && statfs) throw new Error('handler: the statfs option is not supported with offload: true');
   const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
@@ -264,6 +264,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
+  const decision = (req, res, send) => handleDecision({ req, send, root, source, allowedHost, originAllowed, refuseWith, refuseHost, refuseOrigin, tooLarge, badProof, now, wake, invalidate: () => store.invalidate() });
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
   // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
@@ -299,7 +300,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
-    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/breaker-resume': breakerResume };
+    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume };
     if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.

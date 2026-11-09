@@ -11,6 +11,7 @@ import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
 import { approvals } from './approvals-ui.mjs';
+import { decisionControls as dc } from './decision-ui.mjs';
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
 import { healthPage } from './healthpage.mjs';
@@ -400,20 +401,13 @@ function robustnessCard(view) {
     + (r.rearm ? `<p class="sub">Re-armed after ${escT(r.rearm.scopes.join(', '))} cleared: ${escT(r.rearm.items.join(', '))}.</p>` : '');
   return card({ id: 'robustness', title: 'Job liveness and retries', span: 12, body, cls: 'panel', type: 'info' });
 }
-// Issue #124: the Approve/Reject card of one inbox item. The item's own text is shown in full (escaped), so the click is informed.
-// Issue #977: every inbox item shows its short id (the first 8 characters, as the overseer quotes it) beside its kind, as a link to /inbox/<id>.
-// The full id sits in a hidden span so the list search matches either.
 const KIND_WORD = { prompt: 'prompt', issue_draft: 'issue draft', action: 'action', host_value: 'host value' };
 const inboxTag = (id, kind) => (/^[a-f0-9]{32}$/.test(String(id)) ? `<span class="inbox-tag"><a class="inbox-id" href="/inbox/${id}" title="Direct link to this item"><code>${id.slice(0, 8)}</code></a>${KIND_WORD[kind] ? ` <span class="inbox-kind">${KIND_WORD[kind]}</span>` : ''}<span class="inbox-fullid" hidden>${id}</span></span>` : '');
 const inboxForm = (id, decision, label, cls) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="decision" value="${decision}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
-const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div><div class="inbox-err" role="alert" hidden></div></div>`;
-// Issue #856: what was chosen and when ("Approved 06:20"), shown beside the title. dashui/app.js rewrites the time in the viewer's zone from data-lms.
+const ib = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div><div class="inbox-err" role="alert" hidden></div></div>`;
 const OUTCOME = { approve: ['Approved', 'approved', '✓'], reject: ['Rejected', 'rejected', '✗'] };
-// Issue #925: an approval nothing has acted on yet says it is waiting for a free slot; once the tick has taken it, it reads plainly "Approved".
-// Issue #971: a prompt is queued for, then running in, the inbox lane; the time it waited is shown.
 const outcomeSpan = (decision, ms, state, c = {}) => { const [label, cls] = OUTCOME[decision] || OUTCOME.reject, laneWait = c.lane === 'inbox' && Number.isFinite(c.waitedMs) ? ` (waited ${dur(c.waitedMs)})` : '', wait = c.lane === 'inbox' && decision === 'approve' && (state === 'approved' || state === 'running') ? (state === 'approved' ? `, queued for the inbox lane${laneWait}` : `, running in the inbox lane${laneWait}`) : decision === 'approve' && state === 'approved' ? ', waiting for a free slot' : ''; return `<span class="inbox-outcome ${cls}" ${lms(ms, `${label} {t}${wait}`, true)}>${label} ${esc(utc(ms).slice(11, 16))} UTC${wait}</span>`; };
 const undoForm = c => (c.undoUntil ? `<form method="post" action="/inbox" class="inbox-form inbox-undo" data-undo-until="${Math.round(c.undoUntil)}"><input type="hidden" name="id" value="${esc(c.id)}"><input type="hidden" name="decision" value="undo"><button class="linkbtn" type="submit">Undo</button></form>` : '');
-// The collapsed "Decided today" list (newest first). It is also rendered, hidden and empty, while a proposal is pending, so the script can move a decided card into it.
 function decidedBlock(view) {
   const list = view.panels.inboxDecided || [], pending = view.panels.needsYou.some(a => a.inbox);
   if (!list.length && !pending) return '';
@@ -422,7 +416,7 @@ function decidedBlock(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
+  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</div>${a.tried&&`<div class="sub">Tried: ${esc(a.tried)}</div>`||''}<div class="sub">Decision: ${esc(a.decision)}</div>${dc(a,esc)}${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox&&ib(a.inbox)||''}${a.command&&cmdBlock(a.command)||''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer&&`<div class="acts">${overseerBtn(a.overseer)}</div>`||''}` }));
   return (items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check')) + decidedBlock(view);
 }

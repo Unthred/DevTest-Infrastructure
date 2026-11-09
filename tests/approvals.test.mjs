@@ -121,9 +121,44 @@ test('list: decisions waiting on the homeowner are listed with their options; ot
   assert.equal(d.tier, 'decision'); assert.equal(d.kindLabel, 'Decision'); assert.match(d.options, /^Choose one: raise the limit/); assert.equal(d.link, 'https://github.com/o/r/pull/77');
   assert.deepEqual(approveAllIds(rows), [a], 'a decision is never in Approve all');
   const html = approvalsDropdown({ rows, esc, ago: () => '3 min ago' });
-  assert.match(html, /data-approvals-count>3</); assert.match(html, /Options: Choose one/); assert.match(html, /Decide it here/);
+  assert.match(html, /data-approvals-count>3</); assert.match(html, /Options: Choose one/); assert.match(html, /action="\/decision"/);
   const decisionRow = html.split('<li ').find(x => x.includes('data-tier="decision"'));
-  assert.ok(!/<form|value="approve"/.test(decisionRow), 'no Approve or Reject form on a decision row');
+  assert.match(decisionRow, /extra_fix_round/); assert.ok(!/name="decision" value="approve"/.test(decisionRow), 'no generic approval form on a decision row');
+});
+test('list: every mapped decision appears in Waiting for approval with its card control', t => {
+  const dir = makeInbox(t);
+  const retry = {
+    id: 'retrycap-review-77',
+    ref: { kind: 'pull', n: 77 },
+    text: 'Review retry cap',
+    action: 'Choose an action.',
+    since: 1,
+  };
+  const refused = {
+    id: 'reviewrefused-78',
+    ref: { kind: 'pull', n: 78 },
+    text: 'Review verdict refused',
+    action: 'Choose an action.',
+    since: 2,
+  };
+  const job = {
+    id: `job-${'a'.repeat(32)}`,
+    ref: { kind: 'pull', n: 79 },
+    text: 'Stopped job',
+    action: 'Choose an action.',
+    since: 3,
+  };
+  const rows = pendingApprovals(dir, [retry, refused, job]);
+  assert.deepEqual(rows.map(row => row.id), [retry.id, refused.id, job.id]);
+  assert.deepEqual(rows.map(row => row.controls.map(control => control.action)), [
+    ['clear_retry_cap', 'new_review_attempt'],
+    ['new_review_attempt'],
+    ['resume_job', 'close_job'],
+  ]);
+  const html = approvalsDropdown({ rows, esc, ago: () => '1 min ago' });
+  for (const action of ['clear_retry_cap', 'new_review_attempt', 'resume_job', 'close_job']) {
+    assert.match(html, new RegExp(`name="action" value="${action}"`));
+  }
 });
 test('list: an action never shows its target job id, in the title or the why', t => {
   const dir = makeInbox(t); drop(dir, ACTION); inbox.scan(dir, 1000);

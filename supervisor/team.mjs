@@ -48,7 +48,7 @@ import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostd
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
-
+import { grantFixRound } from './decision-actions.mjs';
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
@@ -2211,8 +2211,7 @@ export class Team {
     await this.runAction({ type: 'inbox', agent, key: id, inboxId: id, title: next.item.title }, report);
     return { started: inboxStore.statusOf(dir, id)?.state === 'running', id, agent };
   }
-  // Issue #629: an approved named action. 'running' is recorded BEFORE the effect, so a crash leaves it unrepeated (at most once); a refusal
-  // is a normal outcome: the item ends 'failed' with the reason and nothing is changed. The audit log and the unblock log record it.
+  // Issue #629: an action is recorded running before its effect, so a crash leaves it unrepeated; a refusal ends failed with an audit trail.
   async runInboxAction(dir, st, item, report) {
     const id = st.id, now = () => this.clock.now();
     if (!inboxStore.claim(dir, id, 'approved', { state: 'running' }, now())) return;   // issue #856: an Undo won; run nothing
@@ -2234,6 +2233,7 @@ export class Team {
     const n = Number(target);
     if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
+    if (action === 'extra_fix_round') return grantFixRound(this, n, reason);
     if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
     if (action === 'unpark') return unparkApproved(n, depsOf(this));   // issue #1115
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
