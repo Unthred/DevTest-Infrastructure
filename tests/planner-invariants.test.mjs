@@ -8,6 +8,7 @@ async function planState(t, state) {
   const plan = await world.team.plan();
   return {
     plan,
+    team: world.team,
     pulls: world.pulls,
     issues: world.issues,
     breaker: { verdicts: world.team.s.verdicts, breaker: world.team.s.breaker, config: world.team.c },
@@ -33,8 +34,19 @@ test('planner invariant harness accepts a valid plan and boundary states', async
       { number: 1, title: 'Issue 1', state: 'OPEN', body: '', labels: [], agent: 'claude' },
       { number: 2, title: 'Issue 2', state: 'OPEN', body: '', labels: [], agent: 'codex' },
     ],
+    activeJobs: [
+      { id: 'active-claude', provider: 'claude', status: 'running' },
+      { id: 'active-codex', provider: 'codex', status: 'running' },
+    ],
+    jobRecords: {
+      'active-claude': { kind: 'implement', agent: 'claude', issue: 90 },
+      'active-codex': { kind: 'implement', agent: 'codex', issue: 91 },
+    },
   });
   assertPlanInvariants(slotsFull);
+  assert.deepEqual(slotsFull.plan, []);
+  assert.match(slotsFull.team.held.claude.implement, /implementer slot full/);
+  assert.match(slotsFull.team.held.codex.implement, /implementer slot full/);
   assert.deepEqual(invariantViolations({ ...empty, plan: validPlan() }), []);
 });
 

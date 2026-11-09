@@ -43,7 +43,8 @@ export function createPlannerWorld(t, state) {
     listMergedPulls: async () => [],
     getPull: async number => pulls.find(pull => pull.number === number) || null,
   };
-  const jobs = { listActive: async () => [] };
+  const activeJobs = copy(state.activeJobs || []);
+  const jobs = { listActive: async () => activeJobs };
   const git = { worktreeFor: async () => null };
   const team = new Team({
     config: configFor(state),
@@ -56,6 +57,7 @@ export function createPlannerWorld(t, state) {
     limitedOf: () => ({ out: false }),
   });
   team.s.verdicts = copy(state.verdicts || {});
+  Object.assign(team.s.jobs, copy(state.jobRecords || {}));
   if (state.breaker) team.s.breaker = { ...team.s.breaker, ...copy(state.breaker) };
   return { team, pulls, issues };
 }
