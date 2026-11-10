@@ -34,8 +34,9 @@ import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, readDiskSamples, readRecorder, DAY_MS, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
-import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, scanInboxNow } from './wake.mjs';
+import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, inboxScanDone } from './wake.mjs';
 import * as inboxStore from './inbox.mjs';
+import { controlsOf } from './controlactions.mjs';
 import { fileURLToPath } from 'node:url';
 import { recordRefusedOrigin } from './hostvalue.mjs';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
@@ -382,7 +383,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       const q0 = new URLSearchParams(search);
       const prepared = await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: route?.page === 'timeline', allTime: q0.get('range') === 'all' });
       const view = { ...prepared.view, pageData: pageData(prepared) };   // pages and the JSON carry the freshness of the prepared copy
-      if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify({ ...view, pageData: pageData(prepared) }));
+      if (path === '/api/view.json') return send(200, 'application/json; charset=utf-8', JSON.stringify({ ...view, controls: controlsOf(source(), inboxStore) }));   // issue #1115
       // Issue #481: only the Next element, so a page that polls during a long tick does not re-fetch a whole page (a watch page carries its transcript).
       if (path === '/api/next') return send(200, 'text/html; charset=utf-8', nextTickHtml(view, view.generatedAt) || '<span class="muted">none</span>');
       if (path === '/api/processes') {
@@ -410,7 +411,7 @@ export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot })
   const inboxDir = (() => { try { return src().inbox?.dir || null; } catch { return null; } })();
   const watcher = inboxDir ? inboxWatcher({ dir: inboxDir, onNew: () => {
     // Issue #985: validate the new proposal here and now (waiting -> pending), even while a pass runs. A scan that cannot run falls back to the wake.
-    try { const c = src(), r = scanInboxNow({ root, inboxDir: c.inbox.dir, scan: inboxStore.scan, maxPending: c.inbox.max_pending }); if (r.scanned) return; } catch { /* fall back to a pass */ }
+    try { if (inboxScanDone(root, src(), inboxStore.scan)) return; } catch { /* fall back to a pass */ }
     try { defaultWake(root, 'inbox', src()); } catch { /* the schedule is the fallback */ }
   } }) : { stop() {} };
   server.once('close', () => watcher.stop());
