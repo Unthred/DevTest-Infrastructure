@@ -42,8 +42,8 @@ prepare_version_dir() {
     if dir_in_use "$dir"; then printf 'version directory left by an earlier attempt is in use by a running process\n' >&2; return 1; fi
     rm -rf -- "$dir"
     printf 'leftover version directory from an earlier attempt removed; rebuilding\n'
-    return 0
   fi
-  # Only a directory this attempt creates is marked, so a rollback never removes one that existed before the attempt.
+  # The marker is written whenever this attempt will create the directory (fresh or rebuilt), so a rollback removes it;
+  # a directory that was kept (installed, in use) never gets one and is never removed.
   : >"$state/.created-$commit"
 }

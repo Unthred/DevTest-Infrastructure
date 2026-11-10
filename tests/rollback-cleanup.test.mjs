@@ -134,16 +134,21 @@ test('rollback note and install record say what was cleaned up, and a failed rol
   assert.equal('cleanup' in rollbackInstall(TO, 'n', bad), false);
 });
 
-test('boundary through the real swap: a leftover that existed before the attempt is rebuilt but its rollback leaves it alone', t => {
+test('a leftover the swap rebuilt is this attempt\'s own directory: its rollback removes it and the retry installs', t => {
   const w = world(t);
   fs.mkdirSync(w.versionDir(TO), { recursive: true });
-  assert.equal(w.prepare(TO).status, 0);
-  assert.equal(fs.existsSync(w.marker(TO)), false, 'a pre-existing directory is never marked as created by the attempt');
+  fs.writeFileSync(path.join(w.versionDir(TO), 'stale'), 'old');
+  const p = w.prepare(TO);
+  assert.equal(p.status, 0, p.stderr);
+  assert.match(p.stdout, /leftover .* removed; rebuilding/);
+  assert.ok(fs.existsSync(w.marker(TO)), 'the rebuilt directory is marked as created by this attempt');
   fs.mkdirSync(w.versionDir(TO), { recursive: true });
   w.installNew();
   const r = w.rollback(FROM, TO);
-  assert.match(r.stdout, /kept \(it existed before the attempt\)/);
-  assert.ok(fs.existsSync(w.versionDir(TO)));
+  assert.match(r.stdout, /cleanup: removed version directory /);
+  assert.equal(fs.existsSync(w.versionDir(TO)), false);
+  assert.equal(fs.existsSync(w.marker(TO)), false);
+  assert.equal(w.prepare(TO).status, 0, 'the same commit can be retried');
 });
 
 test('invalid: a process started through the current symlink keeps the directory it was running from', async t => {
@@ -180,5 +185,19 @@ test('valid: the calling process, running from the directory or the current syml
     const r = spawnSync('bash', ['-c', 'bash "$1" --supervisor "$2" "$3"; : "$0"', via, tools('rollback-supervisor.sh'), TO, FROM], { encoding: 'utf8', env: w.env });
     assert.match(r.stdout, /cleanup: removed version directory/, r.stdout + r.stderr);
     assert.equal(fs.existsSync(w.versionDir(TO)), false);
+  }
+});
+
+test('the two copies of the in-use scan (swap and rollback) are identical', () => {
+  const fn = (file, name) => {
+    const text = fs.readFileSync(tools(file), 'utf8');
+    const start = text.indexOf(`${name}() {`);
+    const indent = text.slice(text.lastIndexOf('\n', start) + 1, start);
+    const end = start + text.slice(start).search(/\n *\}\n/) + 1;
+    return text.slice(start, end).split('\n').map(l => l.startsWith(indent) ? l.slice(indent.length) : l).join('\n');
+  };
+  for (const name of ['self_and_ancestors', 'dir_in_use']) {
+    assert.ok(fn('version-dir.sh', name).length > 20, name);
+    assert.equal(fn('rollback-supervisor.sh', name), fn('version-dir.sh', name), name);
   }
 });
