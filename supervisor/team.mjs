@@ -25,6 +25,7 @@ import { usageLimitSkip } from './tickskips.mjs';
 import { entryApproved } from './decisions.mjs';
 import { STANDARDS_STEP, STANDARDS_BLOCKING } from './standards-prompt.mjs';
 import { redact, redactLong } from './redact.mjs';
+import { isSecretScanner } from './secret-scanner.mjs';
 import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
@@ -48,7 +49,7 @@ import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostd
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
-import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
+import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
@@ -432,12 +433,11 @@ export function failingChecks(rollup, retried = false) {
 // Third-party check output (issue #142). The cifix job cannot read a non-Actions check (GitGuardian, other apps) with gh run view, so the
 // dispatcher reads the check-runs API and hands the job the check name, conclusion and output title/summary/text as bounded, redacted
 // task data. Free text from the check is never interpolated unvalidated: it is JSON-encoded, truncated and passed through redact().
-const SECRET_SCANNER = /gitguardian|gitleaks|trufflehog|secret[ -]?scan|detect-secrets/i;
 const CHECK_LIMITS = { checks: 8, title: 200, summary: 800, text: 1500 };
 // Longest requirements text handed to a reviewer or fix job; beyond it the file ends with a visible [CUT: ...] marker (issue #319).
 export const REQUIREMENTS_MAX = 30000;
 const cleanText = (value, max) => redact(value, max).replace(/\s+/g, ' ').trim();
-export const isSecretScanner = check => SECRET_SCANNER.test(`${check?.name || ''} ${check?.app || ''}`);
+export { isSecretScanner };
 export const scannerOnly = names => names.length > 0 && names.every(name => isSecretScanner({ name }));
 export function checkDetails(runs, names) {
   const want = new Set(names), out = [];
@@ -3741,7 +3741,7 @@ export class Team {
         const pr = await this.gh.getPull(p.pr);
         return !!pr && SHA.test(pr.headRefOid) && pr.headRefOid !== p.baseHead && await tablePostcondition(p, job, pr, this.gh.pullBody);
       }
-      if (p.kind === 'continued') { const pr = await this.gh.getPull(p.pr); return !!pr && SHA.test(pr.headRefOid) && (pr.headRefOid !== p.baseHead || pr.isDraft === false); }
+      if (p.kind === 'continued') return continuedPostcondition(p, job, await this.gh.getPull(p.pr), this.gh.pullBody);
       if (p.kind === 'rebased') {   // a new head that GitHub reports mergeable (it computes this lazily, so re-ask a few times)
         const why = text => { job.postconditionDetail = text; return false; };   // issue #460: the reason an incomplete rebase records
         for (let i = 0; i < 4; i++) {

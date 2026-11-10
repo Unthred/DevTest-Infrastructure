@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Team, ciFixPrompt, fixPrompt, implementPrompt, reviewPrompt } from '../supervisor/team.mjs';
+import { Team, ciFixPrompt, continuePrompt, fixPrompt, implementPrompt, reviewPrompt } from '../supervisor/team.mjs';
 import { requirementsTableError } from '../supervisor/requirements-table.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -21,8 +21,8 @@ const temp = t => {
 
 const pull = body => ({ number: 19, headRefName: 'codex/issue-19-check', headRefOid: HEAD, body });
 
-function team(t, body) {
-  const pr = pull(body);
+function team(t, body, { isDraft = false } = {}) {
+  const pr = { ...pull(body), isDraft };
   return new Team({
     config: {
       schema_version: 1,
@@ -66,12 +66,26 @@ test('a homeowner-only row needs the stated reason, and a fix cannot complete wi
   assert.match(job.postconditionDetail, /Not met/);
 });
 
-test('implement and fix prompts require the table, claim check and real runtime path; reviewers receive it', () => {
+test('drafts may record unfinished work, but a continue job cannot ready one without a valid table', async t => {
+  const incomplete = valid.replace('| Met |', '| Not met |');
+  const draft = team(t, incomplete, { isDraft: true });
+  const opened = { kind: 'implement', postcondition: { kind: 'pr_opened', branch: 'codex/issue-19-check' } };
+  assert.equal(await draft.postconditions()(opened), true);
+
+  const ready = team(t, incomplete);
+  const job = { kind: 'continue', postcondition: { kind: 'continued', pr: 19, baseHead: HEAD } };
+  assert.equal(await ready.postconditions()(job), false);
+  assert.match(job.postconditionDetail, /Not met/);
+  assert.equal(await team(t, valid).postconditions()({ kind: 'continue', postcondition: { kind: 'continued', pr: 19, baseHead: HEAD } }), true);
+});
+
+test('writer prompts require the table, claim check and real runtime path; reviewers receive it', () => {
   const implement = implementPrompt({ issue: 19, branch: 'codex/issue-19-check' });
   const fix = fixPrompt({ pr: 19, head: HEAD, branch: 'codex/issue-19-check' });
   const ciFix = ciFixPrompt({ pr: 19, head: HEAD, branch: 'codex/issue-19-check', checks: [], checkDetails: [] });
+  const continued = continuePrompt({ pr: 19, issue: 19, head: HEAD, branch: 'codex/issue-19-check' });
   const review = reviewPrompt({ pr: 19, head: HEAD, branch: 'codex/issue-19-check', repository: 'o/r', inbox: '/inbox' });
-  for (const prompt of [implement, fix, ciFix]) {
+  for (const prompt of [implement, fix, ciFix, continued]) {
     assert.match(prompt, /Requirements check/);
     assert.match(prompt, /every issue requirement/);
     assert.match(prompt, /Check every PR-description claim against the diff/);
