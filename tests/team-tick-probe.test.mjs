@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './helpers/isolated-env.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '..', 'supervisor', 'cli.mjs'), register = path.join(here, '..', 'docs', 'DECISIONS.md');
@@ -28,7 +29,7 @@ function world(t, { held = true } = {}) {
   // Claude was held until a reset time that has now passed and has no newer reading: a probe is owed ("reset").
   const now = Date.now();
   if (held) fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ budget: { claude: { mode: 'waiting', until: now - 10 * 60000, since: now - 30 * 3600000, reason: 'weekly 100%: used up', alerted: true } } }));
-  const run = args => spawnSync(process.execPath, [cli, 'team', 'tick', ...args, '--state-root', root], { encoding: 'utf8', timeout: 90000, env: { ...process.env, TMPDIR: dir, PATH: `${bin}:${process.env.PATH}` } });
+  const run = args => spawnSync(process.execPath, [cli, 'team', 'tick', ...args, '--state-root', root], { encoding: 'utf8', timeout: 90000, env: isolatedEnv(dir, { TMPDIR: dir }, bin) });
   const calls = () => (fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8').split('\n').filter(Boolean).length : 0);
   return { run, calls, root };
 }

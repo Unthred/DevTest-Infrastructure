@@ -8,6 +8,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold, HOLD_MAX_MS } from '../supervisor/handinstall.mjs';
 import { SelfUpgrade } from '../supervisor/upgrade.mjs';
+import { isolatedEnv } from './helpers/isolated-env.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const FROM = H('a'), TO = H('b');
@@ -110,7 +111,7 @@ test('a due restart during the hold waits and is reported, and is not lost (real
   fs.mkdirSync(path.join(w.root, 'team'), { recursive: true });
   fs.writeFileSync(path.join(w.root, 'team', 'hand-install.hold'), JSON.stringify({ at: Date.now(), pid: process.pid, to: TO }));
   const cli = path.resolve(import.meta.dirname, '../supervisor/cli.mjs');
-  const env = { ...process.env, AI_SUPERVISOR_STATE_ROOT: w.root };
+  const env = isolatedEnv(w.root, { AI_SUPERVISOR_STATE_ROOT: w.root });
   const held = spawnSync(process.execPath, [cli, 'reconcile', '--state-root', w.root], { encoding: 'utf8', env, timeout: 60000 });
   assert.ok(held.stdout.trim(), held.stderr);
   const heldOut = JSON.parse(held.stdout.trim().split('\n').pop());

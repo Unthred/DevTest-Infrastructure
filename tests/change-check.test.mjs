@@ -12,6 +12,7 @@ import { Team, unfinishedChecks } from '../supervisor/team.mjs';
 import { stateRoot, createJob, processStart } from '../supervisor/core.mjs';
 import { readSnapshots, readCache } from '../supervisor/dashdata.mjs';
 import { passStats, renderPassStats } from '../supervisor/idlecause.mjs';
+import { isolatedEnv } from './helpers/isolated-env.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = 'o/r', SHA1 = 'a'.repeat(40), SHA2 = 'b'.repeat(40);
@@ -256,7 +257,7 @@ function world(t, { prs = [], issues = [] } = {}) {
     capabilities: { launch: 'supported', resume: 'supported', session_status: 'supported', usage_limit_detection: 'supported', reset_time_parsing: 'supported', checkpoint: 'supported', non_interactive: 'supported' }, billing: { model: 'subscription', fallback_to_other_billing: false } });
   const providers = {}; for (const id of ['fake', 'claude', 'codex']) { fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify(manifest(id))); providers[id] = { adapter: 'base', manifest: id + '.json' }; }
   const registry = path.join(dir, 'registry.json'); fs.writeFileSync(registry, JSON.stringify({ schemaVersion: 1, providers }));
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_STATE_ROOT: root, FAKE_GH_DIR: gh };
+  const env = isolatedEnv(dir, { AI_SUPERVISOR_STATE_ROOT: root, FAKE_GH_DIR: gh }, bin);
   t.after(() => fs.rmSync(dir, { maxRetries: 8, retryDelay: 250, recursive: true, force: true }));
   const cli = path.join(code, 'supervisor', 'cli.mjs');
   const run = (args = ['reconcile']) => spawnSync(process.execPath, [cli, ...args, '--state-root', root, '--registry', registry], { encoding: 'utf8', timeout: 120000, env });
@@ -368,7 +369,7 @@ test('real process: a replay pass that did something enters the chain window, an
   const file = path.join(w.root, 'jobs', job.id + '.json'), j = JSON.parse(fs.readFileSync(file, 'utf8')); const sleeper = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 120000)'], { stdio: 'ignore' }); t.after(() => sleeper.kill());   // a live worker, so dead-worker detection leaves the job running
   j.status = 'running'; j.workerPid = sleeper.pid; j.workerStart = processStart(sleeper.pid); fs.writeFileSync(file, JSON.stringify(j));
   const i0 = w.issueReads(), p0 = w.probes();
-  const child = spawn(process.execPath, [w.cli, 'reconcile', '--state-root', w.root, '--registry', w.registry], { env: { ...process.env, PATH: `${path.join(w.dir, 'bin')}:${process.env.PATH}`, AI_SUPERVISOR_STATE_ROOT: w.root, FAKE_GH_DIR: w.gh }, stdio: 'ignore' });
+  const child = spawn(process.execPath, [w.cli, 'reconcile', '--state-root', w.root, '--registry', w.registry], { env: isolatedEnv(w.dir, { AI_SUPERVISOR_STATE_ROOT: w.root, FAKE_GH_DIR: w.gh }, path.join(w.dir, 'bin')), stdio: 'ignore' });
   const done = new Promise(res => child.on('exit', code => res(code)));
   const until = async (cond, ms) => { for (let n = 0; n < ms / 100 && !cond(); n++) await new Promise(r => setTimeout(r, 100)); return cond(); };
   t.after(() => child.kill());

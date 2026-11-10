@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runMigrations, readMigrationState, readIncidents, LOCAL_FILE } from '../supervisor/migrations.mjs';
 import { applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
+import { isolatedEnv } from './helpers/isolated-env.mjs';
 
 const shippedFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'supervisor', 'team.json');
 const realDir = path.join(path.dirname(shippedFile), 'migrations');
@@ -255,7 +256,7 @@ test('issue #315: a live tick held by another process skips: no migration runs, 
   fs.mkdirSync(lock, { recursive: true });
   // the owner is a live process: this test's own pid and start time
   fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }));
-  const r = spawnSync(process.execPath, [cli, 'team', 'tick', '--state-root', root], { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(process.execPath, [cli, 'team', 'tick', '--state-root', root], { encoding: 'utf8', timeout: 60000, env: isolatedEnv(root) });
   assert.match(r.stdout, /another tick is running/);
   assert.equal(fs.existsSync(path.join(root, 'team', 'migrations.json')), false);
   assert.equal(fs.readFileSync(path.join(root, LOCAL_FILE), 'utf8'), before);

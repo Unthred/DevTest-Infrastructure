@@ -4,7 +4,7 @@
 // evidence. Local file reads only, bounded in files, size and age; no model call.
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
+import { agentHome } from './agenthome.mjs';
 
 const GIT_WRITE = /\bgit\b[^\n]*?\b(commit|push|rebase|cherry-pick|am|merge)\b/;
 const MAX_FILES = 80, MAX_BYTES = 40 * 1024 * 1024, MAX_AGE_MS = 14 * 86400000;
@@ -32,7 +32,7 @@ export function claudeLogFiles(home, now) {
 
 // Returns { provider: 'claude', models: [raw model ids], sessions: [id prefixes] } when a session log proves a write of this head on
 // this branch, else null (no evidence: the writer stays unknown).
-export function findHeadWriter({ head, branch, home = process.env.HOME || os.homedir(), now = Date.now(), files = null }) {
+export function findHeadWriter({ head, branch, home = agentHome(), now = Date.now(), files = null }) {
   if (!/^[0-9a-f]{40}$/.test(head || '') || !branch) return null;
   const models = new Set(), sessions = new Set();
   for (const file of files || claudeLogFiles(home, now)) {
@@ -59,7 +59,7 @@ export function findHeadWriter({ head, branch, home = process.env.HOME || os.hom
 // no printed head exists. The harness-written session log must hold a git write command for this branch; the models of those turns are the
 // writer. The caller binds the record to the pull request's current head and may only record a head that GitHub reports. Same
 // log-only trust as findHeadWriter: nothing the agent says about itself is read.
-export function findSessionWriter({ session, branch, home = process.env.HOME || os.homedir(), now = Date.now(), files = null, since = null }) {
+export function findSessionWriter({ session, branch, home = agentHome(), now = Date.now(), files = null, since = null }) {
   if (!/^[\w-]{8,64}$/.test(session || '') || !branch) return null;
   const models = new Set();
   for (const file of files || claudeLogFiles(home, now)) {
