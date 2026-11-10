@@ -12,6 +12,7 @@ async function planState(t, state) {
     pulls: world.pulls,
     issues: world.issues,
     breaker: { verdicts: world.team.s.verdicts, breaker: world.team.s.breaker, config: world.team.c },
+    unavailableAgents: state.unavailableAgents,
     state,
     seed: state.seed,
   };
@@ -69,6 +70,7 @@ test('planner invariant harness catches each included invalid rule', () => {
       expected: 'breaker-halt',
     }],
     ['parked', { ...base, issues: [{ number: 1, labels: ['parked'] }], plan: [{ type: 'fix', pr: 10 }], expected: 'parked' }],
+    ['agent-can-start', { ...base, plan: [{ type: 'fix', pr: 10, agent: 'codex' }], unavailableAgents: ['codex'], expected: 'agent-can-start' }],
     ['one-action-per-pr', { ...base, plan: [{ type: 'fix', pr: 10 }, { type: 'review', pr: 10 }], expected: 'one-action-per-pr' }],
   ];
   for (const [name, context] of cases) {

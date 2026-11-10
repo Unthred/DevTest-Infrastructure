@@ -45,6 +45,7 @@ import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
+import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
@@ -1114,18 +1115,11 @@ export class Team {
     const active = await this.jobs.listActive();
     this.activeIds = new Set(active.map(j => j.id));
     await this.findStaleMarks(prs, issueByNo, active);
-    // Slots are counted per role (issue #148). A running job's role comes from the dispatcher's own record of it; a job it has no
-    // record of (started by hand) is counted against the implementer slot, the conservative reading.
-    const used = Object.fromEntries(ROLES.map(r => [r, 0]));
-    // Issue #380: a job paused on a usage limit runs no process, so it holds neither a role slot nor a place under the overall cap; the
-    // provider with allowance can use them. It keeps its place (the job record) and resumes only inside the limits (resumeDecision).
-    const occupying = active.filter(j => j.status !== 'paused_limit');
-    for (const j of occupying) used[roleOfType(this.s.jobs[j.id]?.kind)]++;
-    // Issue #402: running jobs per provider and role, for limits.provider_roles (a provider's own cap inside the shared role slots).
-    const usedBy = {};
-    for (const j of occupying) { const k = `${j.provider}:${roleOfType(this.s.jobs[j.id]?.kind)}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    // A live Inbox record is its own lane even before processInbox adopts it.
+    const inboxStatuses = this.inboxDir() ? inboxStore.allStatuses(this.inboxDir()) : [];
+    const { occupying, used, usedBy, total: occupiedTotal } = activeSlotUse({ active, records: this.s.jobs, roles: ROLES, roleOfType, inboxStatuses });
     this.usedBy0 = { ...usedBy };
-    let total = occupying.filter(j => roleOfType(this.s.jobs[j.id]?.kind) !== 'inbox').length;   // issue #971: the inbox lane is outside limits.overall
+    let total = occupiedTotal;   // the Inbox lane is outside limits.overall
     const L = this.c.limits;
     const usedAtStart = { ...used }, totalAtStart = total;   // slots filled by jobs already running, before this tick plans any
     this.taken = new Set(); this.plannedUse = {}; this.gateStops = [];
@@ -1391,9 +1385,16 @@ export class Team {
     return null;
   }
   chooseOpen(agent, a, prs, issueByNo, role = null) {
+    const unavailable = new Set();
     for (let i = 0; i < 200; i++) {
-      const act = this.choose(agent, a, prs, issueByNo, role);
+      const act = this.choose(agent, a, prs, issueByNo, role, { unavailable });
       if (!act) return null;
+      const wait = unavailableStart(agent, act, this.limitedOf(agent));
+      if (wait) {
+        this.hold(agent, act.type, wait, act.pr ?? null);
+        unavailable.add(`${act.type}:${act.key}`);
+        continue;
+      }
       const g = this.gateReason({ agent, ...act });
       if (!g) return act;
       this.taken.add(`${act.type}:${act.key}`);
@@ -1411,14 +1412,14 @@ export class Team {
     this.hold(agent, act.type, `${act.type}${ref != null ? ` #${ref}` : ''} skipped (${role || 'lane'}): ${g.why}`, act.pr ?? null);
     this.gateStops.push({ type: act.type, ref, agent, lane: role, kind: g.kind, cause: g.cause, attempts: g.attempts ?? null });
   }
-  choose(agent, a, prs, issueByNo, role = null, { implementOnly = false } = {}) {
+  choose(agent, a, prs, issueByNo, role = null, { implementOnly = false, unavailable = new Set() } = {}) {
     const L = this.c.limits, up = unparkedPulls(prs);   // issue #1115: parked PRs get no action but still count as open PRs below
     const paused = !!this.pauseInfo(prs, [...issueByNo.values()]);
     // While new work is paused the implementer slot also takes reviews (review independence, D-024, is still checked below).
     const impl = role !== 'reviewer' && role !== 'rebaser', rev = role === 'reviewer' || role === null || (role === 'implementer' && paused && !implementOnly);
     const repair = impl && !implementOnly;
     const rebasing = (role === 'rebaser' || role === null) && !implementOnly;   // issue #460: only the rebaser slot (or an unscoped probe) plans a rebase
-    const busy = (kind, key) => Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key) || !!this.taken?.has(`${kind}:${key}`);
+    const busy = (kind, key) => unavailable.has(`${kind}:${key}`) || Object.values(this.s.jobs).some(j => j.kind === kind && j.key === key && !j.ingested) || this.worktreeUnusable(kind, key) || !!this.taken?.has(`${kind}:${key}`);
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
     // chosen instead. The reason is kept for the dashboard and `team status`.
@@ -1431,7 +1432,7 @@ export class Team {
       if (approved) {
         const m = this.modelFor({ agent, key: 'wb:implement' }, 'implement', {}, true);
         if (m.writeRefusal?.startsWith('no permitted writer')) this.hold(agent, 'inbox', m.writeRefusal);
-        else if (!this.limitedOf(agent).out && allow('implement')) return { type: 'inbox', key: approved.id, inboxId: approved.id, title: approved.item.title };
+        else if (!unavailable.has(`inbox:${approved.id}`) && allow('implement')) return { type: 'inbox', key: approved.id, inboxId: approved.id, title: approved.item.title };
       }
       if (role === 'inbox') return null;
     }
@@ -1541,7 +1542,6 @@ export class Team {
     for (const n of this.candidates(agent)) {
       const issue = this.implementable(n, prs, issueByNo, busy);
       if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue)) continue;
-      if (this.limitedOf(agent).out) return null;   // an owner at its usage limit does not start its own implement job; another agent may take it over
       if (!allow('implement')) return null;
       return { type: 'implement', issue: n, title: issue.title, key: String(n) };
     }
