@@ -32,3 +32,15 @@ export async function repairFalseFailures({ inboxDir, jobs, getJob, ingest, term
   }
   return repaired;
 }
+
+// The Team's wiring for the repair, so the Team itself only makes one call.
+export async function repairInbox(team, dir, report, terminal) {
+  const repaired = await repairFalseFailures({
+    inboxDir: dir,
+    jobs: team.s.jobs,
+    getJob: id => team.jobs.get(id),
+    ingest: (id, rec, job) => team.ingestInbox(id, rec, job),
+    terminal,
+  });
+  (report.actions ||= []).push(...repaired);
+}

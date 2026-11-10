@@ -82,6 +82,9 @@ test('invalid: a job that truly fails shows failed with its real reason, and a v
   await gone.team.runAction(gone.act, rep());
   assert.equal(gone.created.length, 0);
   assert.notEqual(inbox.statusOf(gone.dir, gone.id).state, 'failed', 'the real item is untouched');
+  const missing = inbox.statusOf(gone.dir, 'f'.repeat(32));
+  assert.equal(missing.state, 'failed', 'the vanished item itself ends failed');
+  assert.match(missing.reason, /unknown item/);
 });
 
 test('boundary: two paths racing at once (Promise.all) start one job and record no failure', async t => {
@@ -114,6 +117,7 @@ test('repair: a false failure of a finished job is replaced by the job real outc
   assert.equal(st.state, 'done');
   assert.equal(st.job, jobId.slice(0, 8));
   assert.match(st.result, /Config changed/);
+  assert.equal(st.reason, null, 'the stale false-failure reason is cleared');
   assert.equal(r.actions.some(a => a.type === 'inbox-status-repaired'), true);
   inbox.finish(w.dir, w.id, { state: 'failed', reason: 'the agent reported that it did not achieve the task', result: 'x' }, 7000);
   await w.team.processInbox(rep());

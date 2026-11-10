@@ -33,7 +33,9 @@ import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } 
 import { weeklyWindow } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
-import * as inboxStore from './inbox.mjs'; import { repairFalseFailures } from './inboxrepair.mjs';
+import * as inboxStore from './inbox.mjs';
+import { inboxEndPatch } from './inboxoutcome.mjs';
+import { repairInbox } from './inboxrepair.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
@@ -2100,8 +2102,9 @@ export class Team {
   }
   // Each tick: pick up new items (validate, cap, refuse), fail approved items that changed on disk, and post approved issue drafts once.
   async processInbox(report) {
-    const dir = this.inboxDir(); if (!dir) return; const now = this.clock.now();
-    for (const a of await repairFalseFailures({ inboxDir: dir, jobs: this.s.jobs, getJob: x => this.jobs.get(x), ingest: (x, j, job) => this.ingestInbox(x, j, job), terminal: TERMINAL })) (report.actions ||= []).push(a);   // issue #1122
+    const dir = this.inboxDir(); if (!dir) return;
+    const now = this.clock.now();
+    await repairInbox(this, dir, report, TERMINAL);   // issue #1122
     scanInboxNow({ root: this.root, inboxDir: dir, scan: inboxStore.scan, maxPending: this.c.inbox.max_pending, now });   // issue #985: the dashboard's watcher may have scanned already
     for (const st of inboxStore.allStatuses(dir)) {
       // Issue #985: a job the fast lane started while this pass (or none) ran is adopted into the team state here, once.
@@ -2345,12 +2348,7 @@ export class Team {
   ingestInbox(id, j, job) {
     const dir = this.inboxDir(); if (!dir || !j.inboxId) return;
     const ended = job.childEndedAt ?? job.updatedAt; if (Number.isFinite(ended)) j.endedAt = ended;   // closes the window in which a reflog commit counts as this job's
-    let summary = '';
-    if (job.status === 'completed') { try { summary = fs.readFileSync(path.join(this.dir, 'inbox', String(j.ticket || 'none'), 'inbox-result.txt'), 'utf8'); } catch { /* checked by the post-condition */ } }
-    // Issue #995 part 4: a prompt that did not achieve its task ends failed, with the agent's own summary shown in the Inbox.
-    const outcome = job.status === 'completed' ? robust.inboxOutcome(summary) : { ok: false, why: j.capStopped ? `stopped after the ${Math.round(inboxMaxMs(this.c.limits) / 60000)}-minute inbox time cap (limits.inbox_max_minutes)` : `the job ended ${job.status}` };
-    const result = outcome.ok ? summary.trim() : `${outcome.why}${summary.trim() ? `. Agent summary: ${summary.trim()}` : '; it left no summary'}`;
-    inboxStore.finish(dir, j.inboxId, { state: outcome.ok ? 'done' : 'failed', job: id.slice(0, 8), ...(outcome.ok ? {} : { reason: outcome.why }), result }, this.clock.now());
+    inboxStore.finish(dir, j.inboxId, inboxEndPatch({ id, j, job, teamDir: this.dir, capMs: inboxMaxMs(this.c.limits) }), this.clock.now());
   }
   async ingest(report, guard = (_, fn) => fn()) {
     for (const [id, j] of Object.entries(this.s.jobs)) {

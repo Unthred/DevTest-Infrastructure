@@ -297,7 +297,7 @@ export function approvedItems(inboxDir, kind) {
 export function finish(inboxDir, id, patch, now = Date.now()) {
   const clean = { ...patch };
   if (clean.result !== undefined) clean.result = redactLong(String(clean.result), LIMITS.resultChars, ' [cut]');
-  if (clean.reason !== undefined) clean.reason = redactLong(String(clean.reason), LIMITS.reasonChars, ' [cut]');
+  if (clean.reason != null) clean.reason = redactLong(String(clean.reason), LIMITS.reasonChars, ' [cut]');
   setStatus(inboxDir, id, clean, now);
   audit(inboxDir, { id, event: clean.state || 'update', kind: statusOf(inboxDir, id)?.kind, hash: statusOf(inboxDir, id)?.hash }, now);
 }
