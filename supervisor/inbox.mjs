@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
 import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
 
-export const KINDS = ['prompt', 'issue_draft', 'action'];
+export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
 // Issue #855: kinds only Foreman raises itself (raiseHostValue). The overseer cannot submit one: scan() validates files without `internal`.
 export const INTERNAL_KINDS = ['host_value'];
 // Issue #629: named actions for cases that needed a terminal. Each is a fixed name with one target of a fixed shape (a pull request or issue
@@ -21,12 +21,17 @@ export const ACTIONS = {
   close_job: { target: 'job', noun: 'job', will: 'Close this stopped job of a pull request that a newer head has overtaken. Unpushed work is saved to a branch on the remote first; the job is closed only once nothing local is unsaved.' },
   stop_job: { target: 'job', noun: 'job', will: 'Stop this running or paused job.' },
   resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
+  unpark: { target: 'pr', noun: 'issue or pull request', will: 'Remove the parked label from this issue or pull request so the planner may take it again (issue #1115). Refused when it is not parked.' },
 };
+// Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
+// or approves anything). Two fixed names, one target each.
+export const CONTROLS = { park: { target: 'pr' }, stop_job: { target: 'job' } };
 const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
+FIELDS.control = FIELDS.action;
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
 // status record keeps the history. A rejected item keeps its file until the undo window has passed, because Undo returns it to pending.
@@ -69,9 +74,10 @@ export const displayChanges = text => redactLong(flat(text), flat(text).length +
 export function validateItem(raw, { internal = false } = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: 'the item is not a JSON object' };
   if (!KINDS.includes(raw.kind) && !(internal && INTERNAL_KINDS.includes(raw.kind))) return { ok: false, reason: `unknown kind (accepted: ${KINDS.join(', ')})` };
+  const named = raw.kind === 'action' || raw.kind === 'control';
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
-  const bodyKey = raw.kind === 'prompt' ? 'prompt' : raw.kind === 'action' ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
+  const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
     if (v === undefined && k === 'why') continue;
@@ -86,9 +92,9 @@ export function validateItem(raw, { internal = false } = {}) {
     if (displayChanges(v) && !(raw.kind === 'host_value' && k === 'key')) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
   }
   if (/[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
-  if (raw.kind === 'action') {
-    const spec = Object.hasOwn(ACTIONS, raw.action) ? ACTIONS[raw.action] : null;
-    if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(ACTIONS).join(', ')})` };
+  if (named) {
+    const table = raw.kind === 'control' ? CONTROLS : ACTIONS, spec = Object.hasOwn(table, raw.action) ? table[raw.action] : null;
+    if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(table).join(', ')})` };
     if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
   }
   if (raw.kind === 'host_value') {
@@ -138,7 +144,7 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
   sweepFinished(inboxDir, now);
   let names = [];
   try { names = fs.readdirSync(d.items); } catch { return { picked: 0 }; }
-  let picked = 0;
+  let picked = 0, controls = 0;
   let pending = allStatuses(inboxDir).filter(s => s.state === 'pending').length;
   for (const name of names.sort()) {
     const m = /^([a-f0-9]{32})\.json$/.exec(name);
@@ -151,13 +157,17 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
     let raw; try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { refuse('not valid JSON'); continue; }
     const v = validateItem(raw), hash = hashOf(raw);
     if (!v.ok) { setStatus(inboxDir, id, { state: 'refused', reason: v.reason, kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, reason: v.reason }, now); picked++; continue; }
+    if (v.item.kind === 'control') {   // issue #1115: no card and no pending slot; the tick runs it and records who, why and the result
+      setStatus(inboxDir, id, { state: 'approved', kind: 'control', hash, createdAt: now, title: v.item.title, control: { action: v.item.action, target: v.item.target, reason: v.item.reason, by: 'overseer' } }, now);
+      audit(inboxDir, { id, event: 'control', kind: 'control', hash }, now); picked++; controls++; continue;
+    }
     if (pending >= maxPending) { setStatus(inboxDir, id, { state: 'refused', reason: `${maxPending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
     setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now }, now);
     audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash }, now);
     pending++; picked++;
   }
   prune(inboxDir, now);
-  return { picked };
+  return { picked, controls };
 }
 function sweepFinished(inboxDir, now) {
   for (const s of allStatuses(inboxDir)) {
