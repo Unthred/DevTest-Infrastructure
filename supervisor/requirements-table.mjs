@@ -43,7 +43,7 @@ export async function requirementsTableForPull(pr, pullBody) {
 }
 
 export async function tablePostcondition(postcondition, job, pr, pullBody) {
-  const required = postcondition.kind === 'pr_opened' || ['fix', 'cifix'].includes(job.kind);
+  const required = ['implement', 'fix', 'cifix'].includes(job.kind);
   if (!required) return true;
   const error = await requirementsTableForPull(pr, pullBody);
   if (error) job.postconditionDetail = error;

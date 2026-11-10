@@ -49,9 +49,9 @@ function team(t, body) {
 test('valid requirements table accepts the PR; an unmet row names the blocker', async t => {
   assert.equal(requirementsTableError(valid), null);
   const accepted = team(t, valid);
-  assert.equal(await accepted.postconditions()({ postcondition: { kind: 'pr_opened', branch: 'codex/issue-19-check', requirementsTable: true } }), true);
+  assert.equal(await accepted.postconditions()({ kind: 'implement', postcondition: { kind: 'pr_opened', branch: 'codex/issue-19-check' } }), true);
   const rejected = team(t, valid.replace('| Met |', '| Not met |'));
-  const job = { postcondition: { kind: 'pr_opened', branch: 'codex/issue-19-check', requirementsTable: true } };
+  const job = { kind: 'implement', postcondition: { kind: 'pr_opened', branch: 'codex/issue-19-check' } };
   assert.equal(await rejected.postconditions()(job), false);
   assert.match(job.postconditionDetail, /Opens a PR only after a check.*Not met/);
 });
