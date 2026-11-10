@@ -33,8 +33,7 @@ import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } 
 import { weeklyWindow } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
-import * as inboxStore from './inbox.mjs';
-import { repairFalseFailures } from './inboxrepair.mjs';
+import * as inboxStore from './inbox.mjs'; import { repairFalseFailures } from './inboxrepair.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
