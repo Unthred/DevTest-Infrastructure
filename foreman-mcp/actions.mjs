@@ -79,14 +79,18 @@ export const DECISION_ACTIONS = Object.freeze([
   { type: 'closed_pr', match: /^prclosed-/, actions: ['reopen', 'park'] },
   { type: 'stalled', match: /^stalled-/, actions: ['merge', 'approve', 'park'] },
   { type: 'breaker', match: /^breaker-halt$/, actions: ['resume_breaker'] },
+  { type: 'homeowner_steps', match: /^homeowner-steps-/, actions: ['approve', 'merge', 'park'] },
+  { type: 'rebase_lost', match: /^rebase-lost(?:-changes)?-/, actions: ['new_review_attempt', 'park'] },
+  { type: 'selfcheck_review', match: /^selfcheck-review-/, actions: ['new_review_attempt', 'park'] },
+  { type: 'agent_fault', match: /^agentfault-/, actions: ['park'] },
 ]);
 
-const targetOf = item => String(item?.ref?.n || /-(\d+)$/.exec(String(item?.id || ''))?.[1] || '');
+const targetOf = item => String(item?.ref?.n || item?.ref || /-(\d+)$/.exec(String(item?.id || ''))?.[1] || '');
 export function decisionType(item) { return DECISION_ACTIONS.find(rule => rule.match.test(String(item?.id || '')))?.type || null; }
 export function controlsForDecision(item) {
   const rule = DECISION_ACTIONS.find(entry => entry.match.test(String(item?.id || '')));
   if (!rule) return { type: null, controls: [], error: 'Foreman has no action mapping for this decision type.' };
-  const target = rule.type.includes('job') ? String(item.id).slice(4, 12) : targetOf(item);
+  const target = rule.type.includes('job') ? /(?:^job-|^superseded-job-)([a-f0-9]{8})/.exec(String(item.id))?.[1] || '' : targetOf(item);
   const names = rule.type === 'retry_cap' && item?.ref?.kind === 'issue' ? ['clear_retry_cap'] : rule.actions;
   const controls = names.map(action => ({ action, ...ACTIONS[action], target }));
   return { type: rule.type, controls, error: controls.every(control => validAction(control.action, control.target)) ? null : 'Foreman produced an invalid decision action.' };

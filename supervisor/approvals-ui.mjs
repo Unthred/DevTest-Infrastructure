@@ -6,10 +6,14 @@ import { decisionForm } from './decision-ui.mjs';
 const FORM_TAIL = '</button></form>';
 const form = (esc, id, decision, label) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}">`
   + `<input type="hidden" name="decision" value="${decision}"><button class="btn inbox-${decision}" type="submit">${label}${FORM_TAIL}`;
+const strongForm = (esc, r) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(r.id)}">`
+  + '<input type="hidden" name="decision" value="approve"><label>Type PR #'
+  + `${esc(r.target)} to confirm <input name="confirm" inputmode="numeric" required></label><button class="btn inbox-approve" type="submit">Approve</button></form>`
+  + form(esc, r.id, 'reject', 'Reject');
 
 const buttons = (esc, r) => {
   if (r.tier === 'decision') return r.error ? `<span class="sub" role="alert">${esc(r.error)}</span>` : r.controls.map(c => decisionForm(esc, c)).join('');
-  if (r.tier === 'strong') return '<span class="sub">A strong confirmation is required on this card.</span>';
+  if (r.tier === 'strong') return strongForm(esc, r);
   return (r.canApprove ? form(esc, r.id, 'approve', 'Approve') : '') + form(esc, r.id, 'reject', 'Reject');
 };
 const whyBlock = (esc, r) => {

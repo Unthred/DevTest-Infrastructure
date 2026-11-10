@@ -48,7 +48,7 @@ import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostd
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
-import { grantFixRound } from './decision-actions.mjs';
+import { applyDecisionAction } from './decision-actions.mjs';
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
@@ -2232,9 +2232,8 @@ export class Team {
   async applyInboxAction({ action, target, reason }, report) {
     const n = Number(target);
     if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
-    if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
-    if (action === 'extra_fix_round') return grantFixRound(this, n, reason);
-    if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
+    const decision = await applyDecisionAction(this, action, n, reason);
+    if (decision) return decision;
     if (action === 'unpark') return unparkApproved(n, depsOf(this));   // issue #1115
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
@@ -2263,19 +2262,19 @@ export class Team {
   // Only records at the cap are removed; refused when the pull request is not open or nothing is capped for it.
   async clearRetryCap(n, reason) {
     const pr = (await this.gh.listPulls()).find(p => p.number === n);
-    if (!pr) throw new SupervisorError(`PR #${n} is not open`);
     const cap = robust.sameCauseCap(this.c.limits);
     const keys = Object.entries(this.s.sameCause || {}).filter(([k, v]) => k.slice(k.indexOf(':') + 1) === String(n) && v.count >= cap).map(([k]) => k);
     if (!keys.length) throw new SupervisorError(`PR #${n} has no retry cap in place; nothing to clear`);
     for (const k of keys) delete this.s.sameCause[k];
     // A capped rebase has also spent its attempts, and choose() skips a rebase at the limit; lower that counter by one (as grantReviewAttempt does) so it is planned again.
-    if (keys.some(k => k.startsWith('rebase:')) && SHA.test(pr.headRefOid)) {
+    if (pr && keys.some(k => k.startsWith('rebase:')) && SHA.test(pr.headRefOid)) {
       const rk = verdictKey(n, pr.headRefOid), max = this.c.limits.max_fix_attempts;
       if ((this.s.rebaseAttempts[rk] || 0) >= max) this.s.rebaseAttempts[rk] = max - 1;
     }
     this.save();
-    this.logUnblock({}, { target: n, tk: 'pull', what: 'cleared the retry cap', why: `homeowner approved on the dashboard: ${reason}`, result: keys.join(', ') });
-    return `PR #${n}: retry cap cleared for ${keys.map(k => k.slice(0, k.indexOf(':'))).join(', ')}`;
+    const kind = pr ? 'pull' : 'issue';
+    this.logUnblock({}, { target: n, tk: kind, what: 'cleared the retry cap', why: `homeowner approved on the dashboard: ${reason}`, result: keys.join(', ') });
+    return `${kind === 'pull' ? 'PR' : 'issue'} #${n}: retry cap cleared for ${keys.map(k => k.slice(0, k.indexOf(':'))).join(', ')}`;
   }
   // One more review attempt at the same head, for attempts spent by Foreman's own faults. Only counters that reached the limit move, each by
   // one, so the total stays bounded; refused when the head already has a verdict, a live review, or any attempt left.

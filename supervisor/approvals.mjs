@@ -2,11 +2,14 @@
 // (withApprovals); the Queue table and the overseer MCP can call it later. It reuses the inbox's own pending cards, so it cannot disagree with the
 // Inbox about what is pending, and adds the decisions Needs you holds for him. It lists nothing else from Needs you.
 import { pendingCards } from './inbox.mjs';
-import { controlsForDecision } from '../foreman-mcp/actions.mjs';
+import { ACTIONS, controlsForDecision } from '../foreman-mcp/actions.mjs';
 
 // Words for the homeowner. The raw kind names are internal.
 export const KIND_LABEL = { prompt: 'Prompt', issue_draft: 'Issue draft', action: 'Action', host_value: 'Configuration value' };
-export const tierOf = kind => (['merge', 'approve', 'verdict'].includes(kind) ? 'strong' : 'click');
+export const tierOf = card => {
+  if (card?.kind === 'action' && Object.hasOwn(ACTIONS, card.action)) return ACTIONS[card.action].tier;
+  return ['merge', 'approve', 'verdict'].includes(card?.kind ?? card) ? 'strong' : 'click';
+};
 
 // Job ids and hashes are internal; none is shown to the homeowner.
 const plain = text => String(text ?? '').replace(/\b[0-9a-f]{8,}\b/g, '').replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim();
@@ -18,8 +21,10 @@ export function toApprovalRows(cards) {
   return cards.map(c => ({
     id: c.id,
     kind: c.kind,
+    action: c.action ?? null,
+    target: c.target ?? null,
     kindLabel: KIND_LABEL[c.kind] || 'Proposal',
-    tier: tierOf(c.kind),
+    tier: tierOf(c),
     canApprove: !c.broken,
     title: c.broken ? 'An item that cannot be shown' : c.title,
     why: c.broken ? `It cannot be approved: ${c.broken}` : (plain(c.why) || whatApprovingDoes(c.will) || null),
@@ -62,6 +67,7 @@ export const approveAllIds = rows => rows.filter(r => r.tier === 'click' && r.ca
 export function withApprovals(view, config) {
   if (!view?.panels) return view;   // a degraded view has no panels to list from
   for (const item of view.panels.needsYou || []) {
+    if (item.inbox) continue;
     const mapped = controlsForDecision(item);
     item.decisionControls = mapped;
   }

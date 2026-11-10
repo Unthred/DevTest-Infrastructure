@@ -54,7 +54,8 @@ test('Approve all: Click tier only; a Strong tier item is never in it', () => {
   const html = approvalsDropdown({ rows, esc, ago: () => '1 min ago' });
   assert.ok(html.includes('Approve all (1)'));
   const strongRow = html.split('<li ').filter(s => s.includes('data-tier="strong"')).join('');
-  assert.ok(!/value="approve"/.test(strongRow), 'no Approve form on a Strong tier row');
+  assert.match(strongRow, /name="confirm"/, 'a Strong tier row requires its typed confirmation');
+  assert.match(strongRow, /value="approve"/, 'a Strong tier row can be approved after confirmation');
 });
 test('dropdown: button with count badge, rows with title, kind and age but no ids, an empty state, a script for Approve all', t => {
   const dir = makeInbox(t); const id = drop(dir, PROMPT); inbox.scan(dir, 1000);

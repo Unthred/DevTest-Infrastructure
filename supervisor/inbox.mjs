@@ -231,7 +231,7 @@ export function failedCards(inboxDir, now = Date.now()) {
 // window (UNDO_MS) lets a wrong click be taken back while nothing has acted on it.
 export const UNDO_MS = 30000;
 const titleOf = (inboxDir, id) => { const l = loadItem(inboxDir, id); return l.ok ? redactLong(String(l.item.title ?? '').replace(/\s+/g, ' '), LIMITS.title, ' [cut]').trim() : null; };
-export function decide(inboxDir, id, decision, now = Date.now()) {
+export function decide(inboxDir, id, decision, now = Date.now(), { homeownerOverride = false } = {}) {
   if (!['approve', 'reject'].includes(decision)) return { ok: false, reason: 'unknown decision' };
   const s = statusOf(inboxDir, id);
   if (!s) return { ok: false, reason: 'unknown item' };
@@ -244,7 +244,7 @@ export function decide(inboxDir, id, decision, now = Date.now()) {
   const loaded = decision === 'approve' ? loadItem(inboxDir, id) : null;
   const decisionReason = loaded?.ok && loaded.item.kind === 'action' ? loaded.item.reason : null;
   const outcome = decision === 'approve'
-    ? { decidedBy: 'homeowner', ...(decisionReason ? { decisionReason } : {}) }
+    ? { decidedBy: 'homeowner', ...(decisionReason ? { decisionReason } : {}), ...(homeownerOverride ? { homeownerOverride: true } : {}) }
     : { result: 'rejected by the homeowner; nothing was done' };
   setStatus(inboxDir, id, {
     state,
