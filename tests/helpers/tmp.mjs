@@ -15,5 +15,19 @@ export function tmpDir(prefix) {
   made.add(d);
   return d;
 }
+
+export async function removeWithRetries(dir, attempts = 60) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 1, retryDelay: 100 });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError;
+}
 export const trackedTmpDirs = () => [...made];
 export const cleanTmpDirs = clean;

@@ -59,7 +59,7 @@ import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
-import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
+import { activeProviderSlotUse, activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 import { holdRefusedRebase, noHeadDetail, STOP_STEP } from './rebaserefusal.mjs';
 import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
 import { isCiteRepair } from './incomplete.mjs';
@@ -1174,12 +1174,12 @@ export class Team {
       if (!byRole && !byTotal) continue;
       const holders = (byRole ? occupying.filter(j => roleOfType(this.s.jobs[j.id]?.kind) === role) : occupying).map(nameOf);
       const text = `${role} slot full${byRole ? '' : ' (overall cap reached)'}: ${holders.slice(0, 5).join('; ') || 'running jobs'}`;
-      for (const [agent, a] of this.agents()) { const act = this.choose(agent, a, prs, issueByNo, role); if (act) this.hold(agent, act.type, text); }
+      for (const [agent, a] of this.agents()) { const act = this.chooseOpen(agent, a, prs, issueByNo, role); if (act) this.hold(agent, act.type, text); }
     }
     // Issue #402: a provider at its own limits.provider_roles count holds only that provider's work; the other provider's slot is free.
     for (const role of ROLES) for (const [agent, a] of this.agents()) {
       if (!this.providerSlotFull(a.provider, role, this.usedBy0 || {})) continue;
-      const act = this.choose(agent, a, prs, issueByNo, role);
+      const act = this.chooseOpen(agent, a, prs, issueByNo, role);
       if (act) this.hold(agent, act.type, `${a.provider} ${role} slot full (limits.provider_roles ${this.c.limits.provider_roles[a.provider][role]})`);
     }
   }
@@ -1211,8 +1211,8 @@ export class Team {
   // The same check against the jobs running or queued right now, for a route outside the planner (the one resume of a transiently stopped job).
   async providerRoleFull(provider, role) {
     if (!Number.isSafeInteger(this.c.limits.provider_roles?.[provider]?.[role])) return false;
-    const usedBy = {};
-    for (const a of await this.jobs.listActive()) if (['queued', 'running'].includes(a.status)) { const k = `${a.provider}:${roleOfType(this.s.jobs[a.id]?.kind)}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    const inboxStatuses = this.inboxDir() ? inboxStore.allStatuses(this.inboxDir()) : [];
+    const usedBy = activeProviderSlotUse({ active: (await this.jobs.listActive()).filter(job => ['queued', 'running'].includes(job.status)), records: this.s.jobs, roles: ROLES, roleOfType, inboxStatuses });
     return this.providerSlotFull(provider, role, usedBy);
   }
   // Agents other than `agent` that could review this pull request now: independent of its writers, with allowance and attempts left.

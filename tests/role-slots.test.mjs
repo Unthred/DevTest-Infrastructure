@@ -29,7 +29,7 @@ function world(t, { pulls = [], issues = [issue(5), issue(6), issue(2)], out = {
   const inbox = inboxJob ? path.join(dir, 'inbox') : null;
   if (inbox) {
     fs.mkdirSync(path.join(inbox, 'status'), { recursive: true });
-    const status = { id: inboxJob.id, state: 'running', adopt: { id: inboxJob.id, rec: { kind: 'inbox' } } };
+    const status = { id: inboxJob.id, state: 'running', lane: 'inbox', ...(inboxJob.adopted === false ? {} : { adopt: { id: inboxJob.id, rec: { kind: 'inbox' } } }) };
     fs.writeFileSync(path.join(inbox, 'status', `${inboxJob.id}.json`), JSON.stringify(status));
   }
   const calls = { created: [] };
@@ -243,11 +243,59 @@ test('#1123: an Inbox job uses only its lane with and without an adopted job rec
     const w = world(t, {
       issues: [issue(5)],
       active: [{ id, provider: 'claude', status: 'running' }],
-      inboxJob: { id }
+      inboxJob: { id, adopted }
     });
     if (adopted) w.team.s.jobs[id] = { kind: 'inbox', agent: 'claude', key: 'prompt' };
     assert.deepEqual((await w.team.plan()).map(a => [a.type, a.issue]), [['implement', 5]], adopted ? 'adopted' : 'unadopted');
   }
+});
+
+test('#1133: an Inbox job between creation and adoption uses only its lane', async t => {
+  const id = 'c'.repeat(32);
+  const w = world(t, {
+    issues: [issue(5)],
+    active: [{ id, provider: 'claude', status: 'running' }],
+    inboxJob: { id, adopted: false }
+  });
+  assert.deepEqual((await w.team.plan()).map(action => [action.type, action.issue]), [['implement', 5]]);
+});
+
+test('#1133: the transient Inbox record counts toward its provider Inbox cap', async t => {
+  const id = 'd'.repeat(32);
+  const cfg = config({ limits: limits({ provider_roles: { claude: { inbox: 1 } } }) });
+  const w = world(t, {
+    cfg,
+    active: [{ id, provider: 'claude', status: 'running' }],
+    inboxJob: { id, adopted: false }
+  });
+  assert.equal(await w.team.providerRoleFull('claude', 'inbox'), true);
+});
+
+test('#1133: an unadopted Inbox record is matched to its own active job', async t => {
+  const id = 'e'.repeat(32);
+  const cfg = config({ limits: limits({ provider_roles: { claude: { inbox: 1 } } }) });
+  const w = world(t, {
+    cfg,
+    active: [
+      { id: 'other-running-job', provider: 'codex', status: 'running' },
+      { id, provider: 'claude', status: 'running' }
+    ],
+    inboxJob: { id, adopted: false }
+  });
+  assert.equal(await w.team.providerRoleFull('claude', 'inbox'), true);
+  assert.equal(await w.team.providerRoleFull('codex', 'inbox'), false);
+});
+
+test('#1133: a limited agent keeps its allowance hold when a slot is full', async t => {
+  const w = world(t, {
+    pulls: [pr(77, 'codex/issue-2-x', H(7), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] })],
+    issues: [issue(5)],
+    out: { codex: 'Codex limit' }
+  });
+  running(w, 'running-implement', 'implement', 'claude', { issue: 5 });
+  await w.team.plan();
+  assert.match(w.team.held.codex.cifix, /out of allowance/);
+  assert.doesNotMatch(w.team.held.codex.cifix, /slot full/);
 });
 
 test('#1123: the 21:01 slot state gives Claude the freed work in the same tick', async t => {
