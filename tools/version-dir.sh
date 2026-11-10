@@ -2,11 +2,23 @@
 # Sourced by tools/upgrade-supervisor.sh (issue #1120). Decides what the swap does with versions/<commit> when it already exists.
 # tools/rollback-supervisor.sh carries its own copy of dir_in_use because the dispatcher runs it as a single file.
 
-# True when a running process (other than this one) has the directory (or the optional ALIAS, the current symlink that pointed at it) as its working directory or on its command line.
+# PIDs of this process and its ancestors: the caller (for example the reconcile run) is not another user of the directory.
+self_and_ancestors() {
+  local pid=$$ stat
+  while [ -n "$pid" ] && [ "$pid" -gt 0 ] 2>/dev/null; do
+    printf '%s\n' "$pid"
+    stat=$(cat "/proc/$pid/stat" 2>/dev/null) || break
+    stat=${stat##*) }
+    stat=${stat#* }
+    pid=${stat%% *}
+  done
+}
+# True when a running process (other than this one and its ancestors) has the directory (or the optional ALIAS, the current symlink that pointed at it) as its working directory or on its command line.
 dir_in_use() {
-  local dir=$1 alias=${2:-} p cwd cmd
+  local dir=$1 alias=${2:-} p cwd cmd skip
+  skip=" $(self_and_ancestors | tr '\n' ' ')"
   for p in /proc/[0-9]*; do
-    [ "${p#/proc/}" != "$$" ] || continue
+    case "$skip" in *" ${p#/proc/} "*) continue ;; esac
     cwd=$(readlink "$p/cwd" 2>/dev/null) || cwd=
     case "$cwd" in "$dir"|"$dir"/*) return 0 ;; esac
     if [ -n "$alias" ]; then case "$cwd" in "$alias"|"$alias"/*) return 0 ;; esac; fi

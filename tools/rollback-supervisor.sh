@@ -19,10 +19,22 @@ if [ "${1:-}" = "--supervisor" ]; then
   printf 'supervisor restored to %s from %s\n' "$previous" "$backup"
   # Issue #1120: remove the version directory this attempt created (marked by upgrade-supervisor.sh), so the same commit can be retried.
   # Never the installed version, a directory a running process uses, or one that existed before the attempt (no marker).
+  # PIDs of this process and its ancestors: the caller (for example the reconcile run) is not another user of the directory.
+  self_and_ancestors() {
+    local pid=$$ stat
+    while [ -n "$pid" ] && [ "$pid" -gt 0 ] 2>/dev/null; do
+      printf '%s\n' "$pid"
+      stat=$(cat "/proc/$pid/stat" 2>/dev/null) || break
+      stat=${stat##*) }
+      stat=${stat#* }
+      pid=${stat%% *}
+    done
+  }
   dir_in_use() {
-    local dir=$1 alias=${2:-} p cwd cmd
+    local dir=$1 alias=${2:-} p cwd cmd skip
+    skip=" $(self_and_ancestors | tr '\n' ' ')"
     for p in /proc/[0-9]*; do
-      [ "${p#/proc/}" != "$$" ] || continue
+      case "$skip" in *" ${p#/proc/} "*) continue ;; esac
       cwd=$(readlink "$p/cwd" 2>/dev/null) || cwd=
       case "$cwd" in "$dir"|"$dir"/*) return 0 ;; esac
       if [ -n "$alias" ]; then case "$cwd" in "$alias"|"$alias"/*) return 0 ;; esac; fi

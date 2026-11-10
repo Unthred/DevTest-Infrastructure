@@ -28,7 +28,7 @@ function world(t) {
   const rollback = (from, to) => spawnSync('bash', [tools('rollback-supervisor.sh'), '--supervisor', to, from], { encoding: 'utf8', env });
   // The installer made the new version current before the live tick failed.
   const installNew = () => { fs.rmSync(path.join(state, 'current')); fs.symlinkSync(`versions/${TO}`, path.join(state, 'current')); };
-  return { state, versionDir, marker, prepare, rollback, installNew };
+  return { state, env, versionDir, marker, prepare, rollback, installNew };
 }
 
 test('valid: a rollback removes the version directory its own attempt created', t => {
@@ -168,4 +168,17 @@ test('lastInstall shows what the rollback cleaned up', async t => {
   fs.writeFileSync(path.join(root, 'team', 'self-upgrade.json'), JSON.stringify({ install: { ...rollbackInstall(TO, 'live tick failed', { ok: true, cleanup: 'removed version directory abc' }), at: Date.now() } }));
   const { installs } = await import('../supervisor/installs.mjs');
   assert.equal(installs(root, { running: null }).lastInstall.cleanup, 'removed version directory abc');
+});
+
+test('valid: the calling process, running from the directory or the current symlink, does not count as a user of it', t => {
+  const w = world(t);
+  for (const via of [path.join(w.versionDir(TO), 'supervisor', 'cli.mjs'), path.join(w.state, 'current', 'supervisor', 'cli.mjs')]) {
+    assert.equal(w.prepare(TO).status, 0);
+    fs.mkdirSync(w.versionDir(TO), { recursive: true });
+    w.installNew();
+    // The parent shell stands in for the reconcile run: its command line names a file inside the directory.
+    const r = spawnSync('bash', ['-c', 'bash "$1" --supervisor "$2" "$3"; : "$0"', via, tools('rollback-supervisor.sh'), TO, FROM], { encoding: 'utf8', env: w.env });
+    assert.match(r.stdout, /cleanup: removed version directory/, r.stdout + r.stderr);
+    assert.equal(fs.existsSync(w.versionDir(TO)), false);
+  }
 });
