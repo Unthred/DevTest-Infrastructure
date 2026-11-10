@@ -83,3 +83,39 @@ test('invalid: a job that truly fails shows failed with its real reason, and a v
   assert.equal(gone.created.length, 0);
   assert.notEqual(inbox.statusOf(gone.dir, gone.id).state, 'failed', 'the real item is untouched');
 });
+
+test('boundary: two paths racing at once (Promise.all) start one job and record no failure', async t => {
+  const w = world(t);
+  await Promise.all([w.team.runAction(w.act, rep()), w.team.runAction(w.act, rep())]);
+  assert.equal(w.created.length, 1);
+  assert.equal(inbox.statusOf(w.dir, w.id).state, 'running');
+});
+
+test('boundary: an item undone after the planner picked it stays pending, not failed', async t => {
+  const w = world(t);
+  assert.equal(inbox.undo(w.dir, w.id, 3).ok, true);
+  await w.team.runAction(w.act, rep());
+  assert.equal(w.created.length, 0);
+  assert.equal(inbox.statusOf(w.dir, w.id).state, 'pending');
+});
+
+test('repair: a false failure of a finished job is replaced by the job real outcome; a real failure is untouched', async t => {
+  const w = world(t);
+  await w.team.runAction(w.act, rep());
+  const [jobId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox');
+  const ticketDir = path.join(w.team.dir, 'inbox', String(rec.ticket));
+  fs.mkdirSync(ticketDir, { recursive: true });
+  fs.writeFileSync(path.join(ticketDir, 'inbox-result.txt'), 'STATUS: done\nConfig changed.');
+  inbox.finish(w.dir, w.id, { state: 'failed', reason: 'the item is not an approved prompt', result: 'nothing was done' }, 5500);   // the 9 Nov state
+  w.team.jobs.get = async () => ({ status: 'completed', updatedAt: 6000 });
+  const r = rep();
+  await w.team.processInbox(r);
+  const st = inbox.statusOf(w.dir, w.id);
+  assert.equal(st.state, 'done');
+  assert.equal(st.job, jobId.slice(0, 8));
+  assert.match(st.result, /Config changed/);
+  assert.equal(r.actions.some(a => a.type === 'inbox-status-repaired'), true);
+  inbox.finish(w.dir, w.id, { state: 'failed', reason: 'the agent reported that it did not achieve the task', result: 'x' }, 7000);
+  await w.team.processInbox(rep());
+  assert.equal(inbox.statusOf(w.dir, w.id).state, 'failed', 'a real failure stays');
+});

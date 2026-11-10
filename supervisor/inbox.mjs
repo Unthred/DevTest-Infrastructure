@@ -292,9 +292,10 @@ export function finish(inboxDir, id, patch, now = Date.now()) {
   audit(inboxDir, { id, event: clean.state || 'update', kind: statusOf(inboxDir, id)?.kind, hash: statusOf(inboxDir, id)?.hash }, now);
 }
 // Issue #1122: a path that finds the item unusable records a failure only when no other path owns it. An item already running, done or failed
-// belongs to the path that claimed it, and a second "failed" would overwrite its real outcome.
+// belongs to the path that claimed it, and a second "failed" would overwrite its real outcome.  A pending or rejected item (undone after the
+// planner picked it) stays as the homeowner left it.
 export function failUnlessClaimed(inboxDir, id, reason, now = Date.now()) {
-  if (['running', 'done', 'failed'].includes(statusOf(inboxDir, id)?.state)) return false;
+  if (['running', 'done', 'failed', 'pending', 'rejected'].includes(statusOf(inboxDir, id)?.state)) return false;
   finish(inboxDir, id, { state: 'failed', reason, result: 'nothing was done' }, now);
   return true;
 }

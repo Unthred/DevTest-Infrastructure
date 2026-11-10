@@ -34,6 +34,7 @@ import { weeklyWindow } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
+import { repairFalseFailures } from './inboxrepair.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
@@ -2093,8 +2094,8 @@ export class Team {
   }
   // Each tick: pick up new items (validate, cap, refuse), fail approved items that changed on disk, and post approved issue drafts once.
   async processInbox(report) {
-    const dir = this.inboxDir(); if (!dir) return;
-    const now = this.clock.now();
+    const dir = this.inboxDir(); if (!dir) return; const now = this.clock.now();
+    for (const a of await repairFalseFailures({ inboxDir: dir, jobs: this.s.jobs, getJob: x => this.jobs.get(x), ingest: (x, j, job) => this.ingestInbox(x, j, job), terminal: TERMINAL })) (report.actions ||= []).push(a);   // issue #1122
     scanInboxNow({ root: this.root, inboxDir: dir, scan: inboxStore.scan, maxPending: this.c.inbox.max_pending, now });   // issue #985: the dashboard's watcher may have scanned already
     for (const st of inboxStore.allStatuses(dir)) {
       // Issue #985: a job the fast lane started while this pass (or none) ran is adopted into the team state here, once.
