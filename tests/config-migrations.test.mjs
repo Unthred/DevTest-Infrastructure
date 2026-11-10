@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runMigrations, readMigrationState, readIncidents, LOCAL_FILE } from '../supervisor/migrations.mjs';
 import { applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
-import { isolatedEnv } from './helpers/isolated-env.mjs';
+import { isolatedEnv, INERT_ALERTS } from './helpers/isolated-env.mjs';
 
 const shippedFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'supervisor', 'team.json');
 const realDir = path.join(path.dirname(shippedFile), 'migrations');
@@ -261,7 +261,7 @@ test('issue #315: a live tick held by another process skips: no migration runs, 
   const { processStart } = await import('../supervisor/core.mjs');
   const root = tmp(t);
   const cli = path.join(path.dirname(shippedFile), 'cli.mjs');
-  put(root, { enabled: true });
+  put(root, { enabled: true, alerts: INERT_ALERTS });
   const before = fs.readFileSync(path.join(root, LOCAL_FILE), 'utf8');
   const lock = path.join(root, 'team', 'tick.lock');
   fs.mkdirSync(lock, { recursive: true });

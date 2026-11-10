@@ -97,6 +97,9 @@ test('every test that starts a live supervisor tick uses the isolated environmen
     const text = fs.readFileSync(path.join(dir, name), 'utf8');
     const live = startsCli.test(text) && liveCommand.test(text) && enablesTeam.test(text);
     if (live && !text.includes('isolatedEnv(')) missing.push(name);
+    // Migration 003 gives a local file without an alerts section the Unraid channel, so its fixture names an inert command.
+    const writesLocal = /team\.local\.json/.test(text) && enablesTeam.test(text);
+    if (live && writesLocal && !text.includes('INERT_ALERTS')) missing.push(`${name} (alerts fixture)`);
   }
   assert.deepEqual(missing, [], `start these with env: isolatedEnv(dir): ${missing.join(', ')}`);
 });

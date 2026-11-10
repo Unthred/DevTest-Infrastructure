@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { isolatedEnv } from './helpers/isolated-env.mjs';
+import { isolatedEnv, INERT_ALERTS } from './helpers/isolated-env.mjs';
 
 const install = new URL('../tools/install-reconcile-user-script.sh', import.meta.url).pathname;
 const remove = new URL('../tools/remove-reconcile-user-script.sh', import.meta.url).pathname;
@@ -115,7 +115,7 @@ test('issue #35 reconcile exits nonzero when the team tick fails, so the generat
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-rc35-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
   writeExe(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n');
-  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
+  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true, alerts: INERT_ALERTS }));
   const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
   const r = spawnSync(process.execPath, [cli, 'reconcile'], { encoding: 'utf8', env: isolatedEnv(root, { AI_SUPERVISOR_STATE_ROOT: root }, bin) });
   assert.match(r.stdout, /"team":\{"error"/); assert.equal(r.status, 1);

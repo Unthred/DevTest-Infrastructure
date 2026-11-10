@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { isolatedEnv } from './helpers/isolated-env.mjs';
+import { isolatedEnv, INERT_ALERTS } from './helpers/isolated-env.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '..', 'supervisor', 'cli.mjs'), register = path.join(here, '..', 'docs', 'DECISIONS.md');
@@ -25,7 +25,7 @@ function world(t, { held = true } = {}) {
   exe('gh', 'echo "[]"');
   exe('git', `case "$*" in *"show origin/main:docs/DECISIONS.md"*) cat '${register}';; esac\nexit 0`);
   exe('claude', `echo probe >> '${marker}'`);   // records the call and prints nothing: the probe finds no reading
-  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true }));
+  fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true, alerts: INERT_ALERTS }));
   // Claude was held until a reset time that has now passed and has no newer reading: a probe is owed ("reset").
   const now = Date.now();
   if (held) fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ budget: { claude: { mode: 'waiting', until: now - 10 * 60000, since: now - 30 * 3600000, reason: 'weekly 100%: used up', alerted: true } } }));
@@ -43,6 +43,11 @@ test('a live tick probes a held agent with a stale reading before planning; a dr
   assert.equal(live.calls(), 1, 'one probe for the held agent');
   const state = JSON.parse(fs.readFileSync(path.join(live.root, 'team', 'state.json'), 'utf8'));
   assert.ok(state.probes?.claude?.at, 'the attempt is recorded, so it is not repeated inside the interval');
+  // Issue #1144: the real entry point ran migration 003 here. A test root keeps its inert alert command and never gets the
+  // Unraid channel, so a test file run directly (no NODE_TEST_CONTEXT) still cannot reach the notify script.
+  const local = JSON.parse(fs.readFileSync(path.join(live.root, 'team.local.json'), 'utf8'));
+  assert.deepEqual(local.alerts, INERT_ALERTS);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(live.root, 'team', 'migrations.json'), 'utf8')).applied >= 3, true, 'migrations ran in this tick');
 });
 
 test('a live tick with no held agent runs no probe', t => {

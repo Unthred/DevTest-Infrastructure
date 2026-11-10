@@ -6,6 +6,11 @@ import path from 'node:path';
 
 export const ISOLATED_KEYS = ['HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME'];
 
+// The alerts section for a team.local.json that a live test tick reads. The shipped migration 003 names the Unraid channel in
+// any local file that has no alerts section, so a fixture without one would route its alerts to the real notify script whenever
+// NODE_TEST_CONTEXT is missing (a test file run directly). This command accepts the text and does nothing with it.
+export const INERT_ALERTS = { command: [process.execPath, '-e', ''] };
+
 // binDir, when given, goes first on PATH (the test's stub gh, git or provider CLIs).
 export function isolatedEnv(dir, extra = {}, binDir = null) {
   const home = path.join(dir, 'home');

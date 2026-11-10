@@ -8,11 +8,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { handInstall, handInstallHold, HOLD_MAX_MS } from '../supervisor/handinstall.mjs';
 import { SelfUpgrade } from '../supervisor/upgrade.mjs';
-import { isolatedEnv } from './helpers/isolated-env.mjs';
+import { isolatedEnv, INERT_ALERTS } from './helpers/isolated-env.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const FROM = H('a'), TO = H('b');
-const LOCAL = '{\n  "enabled": true,\n  "limits": { "x": 1 }\n}\n';
+const LOCAL = JSON.stringify({ enabled: true, limits: { x: 1 }, alerts: INERT_ALERTS }, null, 2) + '\n';
 
 function world(t, over = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'handinst-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
