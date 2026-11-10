@@ -11,6 +11,7 @@ const tempRoot = () => fs.mkdtempSync(path.join(process.env.TMPDIR, 'decision-ac
 test('each declared decision type has a valid action and unknown types are visible errors', () => {
   assert.equal(assertDecisionTable(), true);
   for (const row of DECISION_ACTIONS) assert.ok(row.actions.length && row.actions.every(name => ACTIONS[name]));
+  assert.match(ACTIONS.close_job.will, /Unpushed work is saved to a branch on the remote first/);
   const mapped = controlsForDecision({ id: 'retrycap-review-12', ref: { n: 12 } });
   assert.deepEqual(mapped.controls.map(c => c.action), ['clear_retry_cap', 'new_review_attempt']);
   assert.equal(mapped.error, null);
