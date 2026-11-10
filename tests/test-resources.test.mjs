@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { decideGrant, checkClass, readBudget, admit, cgroupWrapper, runLimited, killRecord, validateResourceConfig, classCaps } from '../supervisor/resources.mjs';
 import { applyLocalOverride } from '../supervisor/team.mjs';
+import { processInfo } from '../supervisor/core.mjs';
 
 const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'foreman-574-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
@@ -81,21 +82,31 @@ const alive = pid => {
   try { return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8')); } catch { return true; }
 };
 
+const sameLiveProcess = ({ pid, start }) => {
+  const info = processInfo(pid);
+  return info?.start === start && info.state !== 'Z' && info.state !== 'X';
+};
+
 test('an over-limit fake job is killed as a unit: children die with it and the result records why', async t => {
   const d = tmp(t), pidFile = path.join(d, 'child.pid');
   // The parent spawns a grandchild that records its pid, then both hold memory beyond the 64 MB grant.
   const script = `const {spawn}=require('child_process'),fs=require('fs');
     const hold=()=>{globalThis.b=Buffer.alloc(150*1024*1024,1);setInterval(()=>{},1000)};
-    if(process.argv[2]==='child'){hold();}else{const c=spawn(process.execPath,[__filename,'child'],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));hold();}`;
+    const start=()=>fs.readFileSync('/proc/self/stat','utf8').split(' ')[21];
+    if(process.argv[2]==='child'){
+      fs.writeFileSync(${JSON.stringify(pidFile)},[process.pid,start()].join(':'));hold();
+    }else{spawn(process.execPath,[__filename,'child'],{stdio:'ignore'});hold();}`;
   const f = path.join(d, 'job.cjs'); fs.writeFileSync(f, script);
   const r = await runLimited([process.execPath, f], { env: process.env, limits: { memory_mb: 64, cpus: 1 }, klass: 'suite', id: 'j1', intervalMs: 50 });
   assert.equal(r.code, 137);
   assert.equal(r.kill.reason, 'memory-limit'); assert.equal(r.kill.class, 'suite'); assert.equal(r.kill.suggested_class, 'small'); assert.equal(r.kill.limit_mb, 64);
   assert.ok(r.kill.observed_mb >= 64);
-  const grand = Number(fs.readFileSync(pidFile, 'utf8'));
+  const [pid, start] = fs.readFileSync(pidFile, 'utf8').split(':');
+  const grand = { pid: Number(pid), start };
   // Poll (bounded) instead of a fixed wait: teardown of a 150 MB process can lag on a loaded runner.
-  for (let i = 0; i < 100 && alive(grand); i++) await new Promise(res => setTimeout(res, 50));
-  assert.equal(alive(grand), false, 'the grandchild is gone with its group');
+  // A PID reused by another concurrent test is not the grandchild this test started.
+  for (let i = 0; i < 100 && sameLiveProcess(grand); i++) await new Promise(res => setTimeout(res, 50));
+  assert.equal(sameLiveProcess(grand), false, 'the grandchild is gone with its group');
 });
 
 test('a job inside its limit exits normally with its own code and no kill record', async () => {
