@@ -4,6 +4,7 @@
 import { MODE_LABEL } from './budget.mjs';
 import { reserveOut } from './capacityteam.mjs';
 import { redact } from './dashdata.mjs';
+import { explanationText } from './dashassign.mjs';
 
 // Wait kinds that mean the issue is not stuck: it is running, has its PR, or starts on this tick.
 export const MOVING_KINDS = new Set(['running', 'pr-open', 'next']);
@@ -119,7 +120,7 @@ export function idleRuleText(agent, listedCount, assignments) {
 export function assignmentFields(extra, assignments, names) {
   const rows = (assignments || []).map(a => ({ ...a, name: redact(names.issue(a.number).text, 300), rule: redact(a.rule, 300), wait: a.wait && { ...a.wait, text: redact(a.wait.text, 300) } }));
   const by = new Map(rows.map(r => [r.number, r]));
-  const status = r => (r?.fault ? `FAULT: ${r.fault}` : r?.wait ? `${r.agent || 'no agent'}: ${r.wait.text}` : null);
-  const issues = extra.issues.map(i => ({ ...i, assignment: by.get(i.number) ?? null, reason: i.reason || status(by.get(i.number)) }));
+  const status = r => (r ? explanationText(r) : null);
+  const issues = extra.issues.map(i => ({ ...i, assignment: by.get(i.number) ?? null, reason: [i.reason, status(by.get(i.number))].filter(Boolean).join(' | ') }));
   return { ...extra, assignments: rows, assignmentFaults: rows.filter(r => r.fault).map(r => ({ issue: r.number, fault: r.fault })), issues };
 }
