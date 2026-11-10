@@ -54,6 +54,18 @@ if [ "${1:-}" = "--supervisor" ]; then
   if [ -f "$state/versions/$previous/tools/install-foreman-mcp.sh" ] && [ -d "$state/versions/$previous/foreman-mcp" ]; then
     AI_SUPERVISOR_STATE_DIR="$state" bash "$state/versions/$previous/tools/install-foreman-mcp.sh" "$state/versions/$previous" "$previous" || printf 'foreman-mcp restore failed\n' >&2
   fi
+  # Issue #1144: migration 003 adds alerts.channel, which the previous version's validator rejects, and team.local.json lives
+  # outside versions/. Take back exactly what 003 added so the restored version can load its configuration, and mark 003 as not
+  # applied so a later install runs it again. A file that names anything else under alerts is left alone.
+  # The script is fetched from the failed version on its own, so the undo is inline rather than a file beside it.
+  undo='const fs = require("fs"), p = process.argv[1] + "/team.local.json", m = process.argv[1] + "/team/migrations.json";
+    const local = JSON.parse(fs.readFileSync(p, "utf8")), a = local.alerts;
+    if (!a || Object.keys(a).length !== 1 || a.channel !== "unraid") process.exit(0);
+    delete local.alerts; fs.writeFileSync(p + ".tmp", JSON.stringify(local, null, 2) + "\n", { mode: 0o600 }); fs.renameSync(p + ".tmp", p);
+    try { const s = JSON.parse(fs.readFileSync(m, "utf8")); if (s.applied >= 3) { s.applied = 2; fs.writeFileSync(m, JSON.stringify(s) + "\n", { mode: 0o600 }); } } catch {}'
+  if [ -f "$state/team.local.json" ]; then
+    "$(command -v node || printf '/usr/local/bin/node')" -e "$undo" "$state" || printf 'alert channel migration not undone\n' >&2
+  fi
   exit 0
 fi
 commit=${1:?usage: rollback-supervisor.sh COMMIT}

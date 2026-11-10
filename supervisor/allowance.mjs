@@ -7,7 +7,7 @@
 // Only the "allowed" / "not reached" states have been observed live. The exhausted-state values are NOT captured, so
 // every limit derived here is `verified: false` and the manifests keep the capability `unverified`.
 import fs from 'node:fs';
-import os from 'node:os';
+import { agentHome } from './agenthome.mjs';
 import path from 'node:path';
 
 const seconds = value => (Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : null);
@@ -67,7 +67,7 @@ export const hasReading = allowance => Array.isArray(allowance?.windows) && allo
 export function billingRisk(allowance) { return allowance?.billing?.usingOverage === true; }
 
 // Codex: the rollout file of the thread is the only place the CLI records limits. Read its tail; never any message text.
-export function codexRolloutFile(threadId, home = process.env.HOME || os.homedir(), now = Date.now()) {
+export function codexRolloutFile(threadId, home = agentHome(), now = Date.now()) {
   if (!/^[a-zA-Z0-9-]{8,64}$/.test(threadId || '')) return null;
   for (let back = 0; back < 3; back++) {
     const day = new Date(now - back * 86400000);
@@ -105,7 +105,7 @@ export function codexAllowanceFromRollout(file, tailBytes = 262144) {
 // bounded local file read: the newest few rollouts of the last two days, their tails only, the rate_limits counts only.
 // observedAt is the record's own timestamp, so the age shown is the age of the reading, not of the probe. Returns null
 // when no rollout holds a reading. Claude Code has no model-free source: its limits arrive only in a live stream.
-export function codexAllowanceProbe({ home = process.env.HOME || os.homedir(), now = Date.now(), maxFiles = 12, tailBytes = 262144 } = {}) {
+export function codexAllowanceProbe({ home = agentHome(), now = Date.now(), maxFiles = 12, tailBytes = 262144 } = {}) {
   const files = [];
   for (let back = 0; back < 2; back++) {
     const day = new Date(now - back * 86400000);

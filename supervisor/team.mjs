@@ -17,6 +17,7 @@ import * as failcause from './failcause.mjs';
 import { FaultFlow, withParking, causeOfEnd } from './faultflow.mjs';
 import { applyRetryCap } from './retrycap.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
+import { validateAlertsConfig } from './alert.mjs';
 import { configureDisplay, formatCost, validateDisplay } from './money.mjs';
 import { validateResourceConfig } from './resources.mjs';
 import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, isOpusModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
@@ -288,11 +289,7 @@ export function applyLocalOverride(shipped, local) {
   if ('display' in local) { try { out.display = validateDisplay({ ...(out.display || {}), ...local.display }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }   // issue #1097
   if ('dashboard' in local) { validateDashboard(local.dashboard); out.dashboard = { ...local.dashboard }; }
   if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
-  if ('alerts' in local) {
-    const cmd = local.alerts?.command;
-    if (!Array.isArray(cmd) || !cmd.length || !cmd.every(x => typeof x === 'string') || !path.isAbsolute(cmd[0]) || Object.keys(local.alerts).length !== 1) throw new SupervisorError('invalid team.local.json: alerts.command must be an absolute program plus arguments');
-    out.alerts = { command: cmd };
-  }
+  if ('alerts' in local) out.alerts = validateAlertsConfig(local.alerts);
   if ('interim_review' in local) {   // retired (issue #152): tolerated so an installed team.local.json keeps working; only weekly_at is read
     const o = local.interim_review;
     if (!o || typeof o !== 'object' || Array.isArray(o) || Object.keys(o).some(k => !['enabled', 'weekly_at'].includes(k))) throw new SupervisorError('invalid team.local.json: interim_review may set only enabled and weekly_at');

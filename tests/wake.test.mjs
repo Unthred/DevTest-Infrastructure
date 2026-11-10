@@ -245,7 +245,7 @@ function plannerWorld(t, { tweak = () => {}, issue = 950, open = true } = {}) {
   const providers = {};
   for (const id of ['fake', 'claude', 'codex']) { fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify(manifest(id))); providers[id] = { adapter: 'base', manifest: id + '.json' }; }
   const registry = path.join(dir, 'registry.json'); fs.writeFileSync(registry, JSON.stringify({ schemaVersion: 1, providers }));
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, AI_SUPERVISOR_STATE_ROOT: root };
+  const env = isolatedEnv(dir, { AI_SUPERVISOR_STATE_ROOT: root }, bin);
   t.after(() => cleanupWhenQuiet(root, () => fs.rmSync(dir, { maxRetries: 8, retryDelay: 250, recursive: true, force: true })));
   removeLater(dir);   // last resort at the end of the file's run, if a late writer beat the removal (issue #1007)
   const cli = path.join(code, 'supervisor', 'cli.mjs');
@@ -285,6 +285,7 @@ test('overlap, queued fire and exactly one more pass, with real processes', asyn
   assert.equal(pendingRequest(w.root), null);
 });
 import { spawn } from 'node:child_process';
+import { isolatedEnv } from './helpers/isolated-env.mjs';
 function require_spawn(w, args) { return spawn(process.execPath, [w.cli, ...args, '--state-root', w.root, '--registry', w.registry], { stdio: 'ignore', env: w.env }); }
 
 test('a wake pass is recorded with its trigger and a scheduled pass as schedule; idle-report shows both and the cap', async t => {

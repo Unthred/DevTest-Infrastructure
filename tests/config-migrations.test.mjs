@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runMigrations, readMigrationState, readIncidents, LOCAL_FILE } from '../supervisor/migrations.mjs';
 import { applyLocalOverride, validateTeamConfig } from '../supervisor/team.mjs';
+import { isolatedEnv, INERT_ALERTS } from './helpers/isolated-env.mjs';
 
 const shippedFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'supervisor', 'team.json');
 const realDir = path.join(path.dirname(shippedFile), 'migrations');
@@ -114,8 +115,8 @@ test('the shipped migrations remove limits.per_agent, so the shipped roles apply
   put(root, { enabled: true, limits: { per_agent: 2, max_fix_attempts: 3, provider_roles: { codex: { implementer: 1 } } } });
   assert.equal(validate(local(root)).limits.roles.implementer, 2);   // before: the old key overrides the roles' slot count
   const r = await runMigrations({ root, dir: realDir, validate });
-  assert.deepEqual(r.applied.map(a => a.number), [1, 2]);
-  assert.deepEqual(local(root), { enabled: true, limits: { max_fix_attempts: 3 } });
+  assert.deepEqual(r.applied.map(a => a.number), [1, 2, 3]);
+  assert.deepEqual(local(root), { enabled: true, limits: { max_fix_attempts: 3 }, alerts: { channel: 'unraid' } });
   const cfg = validate(local(root));
   assert.deepEqual(cfg.limits.roles, shipped().limits.roles); assert.equal('per_agent' in cfg.limits, false);
   assert.equal(cfg.limits.roles.implementer, 1);
@@ -139,6 +140,17 @@ test('shipped 002 removes only the temporary Codex implementer cap', async () =>
   assert.deepEqual(migrate({ limits: { provider_roles: { codex: { implementer: 1 } } } }), {});
   const intentional = { limits: { provider_roles: { codex: { implementer: 2 } } } };
   assert.equal(migrate(intentional), intentional);
+});
+
+test('shipped 003 names the unraid channel only when no alert route is configured', async () => {
+  const { migrate } = await import('../supervisor/migrations/003-explicit-alert-channel.mjs');
+  const input = { enabled: true };
+  assert.deepEqual(migrate(input), { enabled: true, alerts: { channel: 'unraid' } });
+  assert.deepEqual(input, { enabled: true });
+  const command = { alerts: { command: ['/usr/local/bin/notify'] } };
+  assert.equal(migrate(command), command);
+  const invalid = { alerts: {} };
+  assert.equal(migrate(invalid), invalid);
 });
 
 test('shipped 001 negative: per_agent stays when limits.roles is set locally; a file without per_agent is unchanged; limits empties away', async () => {
@@ -249,13 +261,13 @@ test('issue #315: a live tick held by another process skips: no migration runs, 
   const { processStart } = await import('../supervisor/core.mjs');
   const root = tmp(t);
   const cli = path.join(path.dirname(shippedFile), 'cli.mjs');
-  put(root, { enabled: true });
+  put(root, { enabled: true, alerts: INERT_ALERTS });
   const before = fs.readFileSync(path.join(root, LOCAL_FILE), 'utf8');
   const lock = path.join(root, 'team', 'tick.lock');
   fs.mkdirSync(lock, { recursive: true });
   // the owner is a live process: this test's own pid and start time
   fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, start: processStart(process.pid) }));
-  const r = spawnSync(process.execPath, [cli, 'team', 'tick', '--state-root', root], { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(process.execPath, [cli, 'team', 'tick', '--state-root', root], { encoding: 'utf8', timeout: 60000, env: isolatedEnv(root) });
   assert.match(r.stdout, /another tick is running/);
   assert.equal(fs.existsSync(path.join(root, 'team', 'migrations.json')), false);
   assert.equal(fs.readFileSync(path.join(root, LOCAL_FILE), 'utf8'), before);

@@ -845,12 +845,12 @@ test('alert sender (#50): no configured channel is a failed delivery, never a si
   const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alert-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const log = () => fs.readFileSync(path.join(root, 'team', 'alerts.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  await assert.rejects(alertSender(root, {}, { notify: '/nonexistent/notify' })('x'), /no alert channel/);
+  await assert.rejects(alertSender(root, {}, { notify: '/nonexistent/notify', log: () => {} })('x'), /no alert channel/);
   assert.equal(log().at(-1).delivered, false);
   const calls = [];
-  await alertSender(root, {}, { notify: process.execPath, run: (p, a) => (calls.push([p, a]), { status: 0 }) })('hello');
+  await alertSender(root, { alerts: { channel: 'unraid' } }, { notify: process.execPath, run: (p, a) => (calls.push([p, a]), { status: 0 }) })('hello');
   assert.equal(log().at(-1).delivered, true); assert.equal(calls[0][0], process.execPath); assert.ok(calls[0][1].includes('hello'));
-  await assert.rejects(alertSender(root, {}, { notify: process.execPath, run: () => ({ status: 1 }) })('x'), /failed/);
+  await assert.rejects(alertSender(root, { alerts: { channel: 'unraid' } }, { notify: process.execPath, run: () => ({ status: 1 }) })('x'), /failed/);
   await alertSender(root, { alerts: { command: ['/bin/true'] } }, { run: () => ({ status: 0 }) })('y'); assert.equal(log().at(-1).delivered, true);
 });
 

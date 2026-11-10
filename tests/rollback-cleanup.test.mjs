@@ -201,3 +201,29 @@ test('the two copies of the in-use scan (swap and rollback) are identical', () =
     assert.equal(fn('rollback-supervisor.sh', name), fn('version-dir.sh', name), name);
   }
 });
+
+// Issue #1144: migration 003 adds alerts.channel, which the previous version rejects. The rollback takes back what it added.
+function localAfterRollback(t, local, applied = 3) {
+  const w = world(t);
+  const file = path.join(w.state, 'team.local.json'), migrations = path.join(w.state, 'team', 'migrations.json');
+  fs.mkdirSync(path.dirname(migrations), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(local));
+  fs.writeFileSync(migrations, JSON.stringify({ applied, failed: null }));
+  w.installNew();
+  const r = w.rollback(FROM, TO);
+  assert.equal(r.status, 0, r.stderr);
+  return { local: JSON.parse(fs.readFileSync(file, 'utf8')), applied: JSON.parse(fs.readFileSync(migrations, 'utf8')).applied };
+}
+
+test('issue #1144: a rollback removes the alerts.channel that migration 003 added and marks 003 not applied', t => {
+  const after = localAfterRollback(t, { enabled: true, limits: { x: 1 }, alerts: { channel: 'unraid' } });
+  assert.deepEqual(after.local, { enabled: true, limits: { x: 1 } });
+  assert.equal(after.applied, 2);
+});
+
+test('issue #1144: a rollback leaves an alerts.command configuration and the migration state alone', t => {
+  const local = { enabled: true, alerts: { command: ['/usr/local/bin/notify'] } };
+  const after = localAfterRollback(t, local);
+  assert.deepEqual(after.local, local);
+  assert.equal(after.applied, 3);
+});
