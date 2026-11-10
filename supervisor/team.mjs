@@ -64,7 +64,7 @@ import { holdRefusedRebase, noHeadDetail, STOP_STEP } from './rebaserefusal.mjs'
 import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
 import { isCiteRepair } from './incomplete.mjs';
 import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, finishDescriptionRound, roundSpec } from './descround.mjs';
-
+import { recordCreatedInboxJob } from './inboxlaunch.mjs';
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
@@ -3664,7 +3664,7 @@ export class Team {
       let job;
       try { job = await this.jobs.create(spec); }   // a lease conflict throws here, before any attempt is counted
       catch (error) { if (unclaim) unclaim(); throw error; }
-      if (announce) await announce();
+      await recordCreatedInboxJob({ inboxDir: this.inboxDir(), act, job, now: () => this.clock.now(), announce });
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
       Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job
       this.save();

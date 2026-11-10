@@ -29,8 +29,9 @@ function world(t, { pulls = [], issues = [issue(5), issue(6), issue(2)], out = {
   const inbox = inboxJob ? path.join(dir, 'inbox') : null;
   if (inbox) {
     fs.mkdirSync(path.join(inbox, 'status'), { recursive: true });
-    const status = { id: inboxJob.id, state: 'running', lane: 'inbox', ...(inboxJob.adopted === false ? {} : { adopt: { id: inboxJob.id, rec: { kind: 'inbox' } } }) };
-    fs.writeFileSync(path.join(inbox, 'status', `${inboxJob.id}.json`), JSON.stringify(status));
+    const statusId = inboxJob.statusId || inboxJob.id;
+    const status = { id: statusId, state: 'running', lane: 'inbox', ...(inboxJob.adopted === false ? { activeJob: inboxJob.id } : { adopt: { id: inboxJob.id, rec: { kind: 'inbox' } } }) };
+    fs.writeFileSync(path.join(inbox, 'status', `${statusId}.json`), JSON.stringify(status));
   }
   const calls = { created: [] };
   const gh = { pulls, issues, listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues, listMergedPulls: async () => [],
@@ -255,7 +256,7 @@ test('#1133: an Inbox job between creation and adoption uses only its lane', asy
   const w = world(t, {
     issues: [issue(5)],
     active: [{ id, provider: 'claude', status: 'running' }],
-    inboxJob: { id, adopted: false }
+    inboxJob: { id, statusId: 'a'.repeat(32), adopted: false }
   });
   assert.deepEqual((await w.team.plan()).map(action => [action.type, action.issue]), [['implement', 5]]);
 });
@@ -266,7 +267,7 @@ test('#1133: the transient Inbox record counts toward its provider Inbox cap', a
   const w = world(t, {
     cfg,
     active: [{ id, provider: 'claude', status: 'running' }],
-    inboxJob: { id, adopted: false }
+    inboxJob: { id, statusId: 'b'.repeat(32), adopted: false }
   });
   assert.equal(await w.team.providerRoleFull('claude', 'inbox'), true);
 });
@@ -280,7 +281,7 @@ test('#1133: an unadopted Inbox record is matched to its own active job', async 
       { id: 'other-running-job', provider: 'codex', status: 'running' },
       { id, provider: 'claude', status: 'running' }
     ],
-    inboxJob: { id, adopted: false }
+    inboxJob: { id, statusId: 'c'.repeat(32), adopted: false }
   });
   assert.equal(await w.team.providerRoleFull('claude', 'inbox'), true);
   assert.equal(await w.team.providerRoleFull('codex', 'inbox'), false);

@@ -5,8 +5,8 @@ export function activeSlotUse({ active, records, roles, roleOfType, inboxStatuse
     .filter(status => status?.state === 'running' && status.adopt?.rec?.kind === 'inbox' && status.adopt.id)
     .map(status => status.adopt.id));
   const unadoptedInboxIds = new Set(inboxStatuses
-    .filter(status => status?.state === 'running' && status.lane === 'inbox' && !status.adopt?.id && status.id)
-    .map(status => status.id));
+    .filter(status => status?.state === 'running' && status.lane === 'inbox' && !status.adopt?.id && status.activeJob)
+    .map(status => status.activeJob));
   const occupying = active.filter(job => job.status !== 'paused_limit');
   const used = Object.fromEntries(roles.map(role => [role, 0]));
   const usedBy = {};
