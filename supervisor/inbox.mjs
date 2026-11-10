@@ -291,6 +291,13 @@ export function finish(inboxDir, id, patch, now = Date.now()) {
   setStatus(inboxDir, id, clean, now);
   audit(inboxDir, { id, event: clean.state || 'update', kind: statusOf(inboxDir, id)?.kind, hash: statusOf(inboxDir, id)?.hash }, now);
 }
+// Issue #1122: a path that finds the item unusable records a failure only when no other path owns it. An item already running, done or failed
+// belongs to the path that claimed it, and a second "failed" would overwrite its real outcome.
+export function failUnlessClaimed(inboxDir, id, reason, now = Date.now()) {
+  if (['running', 'done', 'failed'].includes(statusOf(inboxDir, id)?.state)) return false;
+  finish(inboxDir, id, { state: 'failed', reason, result: 'nothing was done' }, now);
+  return true;
+}
 // A job needs an issue number for its lease; an inbox job has none, so it gets a unique number far above any real issue (never looked up).
 export const placeholderIssue = id => 900000000 + parseInt(String(id).slice(0, 6), 16);
 // Issue #855: Foreman raises ONE pending item for a host-specific value it observed. The id is derived from the key and value, so a repeat

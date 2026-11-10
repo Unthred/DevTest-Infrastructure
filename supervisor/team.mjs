@@ -3651,7 +3651,7 @@ export class Team {
     } else if (act.type === 'inbox') {
       // Issue #124: re-read the approved item from disk at the moment of use; a changed file is not run.
       const l = inboxStore.loadItem(this.inboxDir(), act.inboxId);
-      if (!l.ok || l.status.state !== 'approved' || l.item.kind !== 'prompt') { inboxStore.finish(this.inboxDir(), act.inboxId, { state: 'failed', reason: l.ok ? 'the item is not an approved prompt' : l.reason, result: 'nothing was done' }, this.clock.now()); return; }
+      if (!l.ok || l.status.state !== 'approved' || l.item.kind !== 'prompt') { inboxStore.failUnlessClaimed(this.inboxDir(), act.inboxId, l.ok ? 'the item is not an approved prompt' : l.reason, this.clock.now()); return; }
       const dirTicket = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(dirTicket, { recursive: true, mode: 0o700 });
       const resultFile = path.join(dirTicket, 'inbox-result.txt'), short = act.inboxId.slice(0, 8), branch = `${a.branch_prefix}inbox-${short}`;
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-inbox-${short}`), branch, base: 'origin/main' });
