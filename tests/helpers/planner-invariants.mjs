@@ -44,6 +44,7 @@ export function createPlannerWorld(t, state) {
     getPull: async number => pulls.find(pull => pull.number === number) || null,
   };
   const activeJobs = copy(state.activeJobs || []);
+  const unavailable = new Set(state.unavailableAgents || []);
   const jobs = { listActive: async () => activeJobs };
   const git = { worktreeFor: async () => null };
   const team = new Team({
@@ -54,7 +55,7 @@ export function createPlannerWorld(t, state) {
     git,
     register: REGISTER,
     clock: { now: () => 1000 },
-    limitedOf: () => ({ out: false }),
+    limitedOf: agent => unavailable.has(agent) ? { out: true, reason: 'fixture unavailable' } : { out: false },
   });
   team.s.verdicts = copy(state.verdicts || {});
   Object.assign(team.s.jobs, copy(state.jobRecords || {}));
@@ -64,7 +65,7 @@ export function createPlannerWorld(t, state) {
 
 const branchIssue = branch => Number(/\/issue-(\d+)(?:\D|$)/.exec(branch || '')?.[1]);
 
-export function invariantViolations({ plan, pulls, issues, breaker }) {
+export function invariantViolations({ plan, pulls, issues, breaker, unavailableAgents = [] }) {
   const pullByNumber = new Map(pulls.map(pull => [pull.number, pull]));
   const issueByNumber = new Map(issues.map(issue => [issue.number, issue]));
   const violations = [];
@@ -73,6 +74,7 @@ export function invariantViolations({ plan, pulls, issues, breaker }) {
     return pull ? breaker.verdicts?.[`${pull.number}:${pull.headRefOid}`] : null;
   };
   for (const action of plan) {
+    if (action.agent && unavailableAgents.includes(action.agent)) violations.push({ invariant: 'agent-can-start', action });
     const verdict = latestVerdict(action);
     if (action.type === 'merge' && verdict?.verdict === 'CHANGES') violations.push({ invariant: 'merge-current-changes', action });
     if (blocks(breaker.breaker, breaker.config.breaker, action)) violations.push({ invariant: 'breaker-halt', action });

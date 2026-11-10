@@ -109,16 +109,36 @@ test('no team.local.json: migrations are recorded as applied and no file or back
   assert.equal(readIncidents(root)[0].changed, false);
 });
 
-test('the shipped 001 removes limits.per_agent, so the shipped roles apply (one implementer)', async t => {
+test('the shipped migrations remove limits.per_agent, so the shipped roles apply (one implementer)', async t => {
   const root = tmp(t);
-  put(root, { enabled: true, limits: { per_agent: 2, max_fix_attempts: 3 } });
+  put(root, { enabled: true, limits: { per_agent: 2, max_fix_attempts: 3, provider_roles: { codex: { implementer: 1 } } } });
   assert.equal(validate(local(root)).limits.roles.implementer, 2);   // before: the old key overrides the roles' slot count
   const r = await runMigrations({ root, dir: realDir, validate });
-  assert.deepEqual(r.applied.map(a => a.number), [1]);
+  assert.deepEqual(r.applied.map(a => a.number), [1, 2]);
   assert.deepEqual(local(root), { enabled: true, limits: { max_fix_attempts: 3 } });
   const cfg = validate(local(root));
   assert.deepEqual(cfg.limits.roles, shipped().limits.roles); assert.equal('per_agent' in cfg.limits, false);
   assert.equal(cfg.limits.roles.implementer, 1);
+});
+
+test('shipped 002 removes only the temporary Codex implementer cap', async () => {
+  const { migrate } = await import('../supervisor/migrations/002-remove-codex-implementer-stopgap.mjs');
+  const input = {
+    enabled: true,
+    limits: { provider_roles: { codex: { implementer: 1, reviewer: 2 }, claude: { reviewer: 1 } }, overall: 3 }
+  };
+  const output = migrate(input);
+  assert.deepEqual(output, {
+    enabled: true,
+    limits: { provider_roles: { codex: { reviewer: 2 }, claude: { reviewer: 1 } }, overall: 3 }
+  });
+  assert.deepEqual(input, {
+    enabled: true,
+    limits: { provider_roles: { codex: { implementer: 1, reviewer: 2 }, claude: { reviewer: 1 } }, overall: 3 }
+  });
+  assert.deepEqual(migrate({ limits: { provider_roles: { codex: { implementer: 1 } } } }), {});
+  const intentional = { limits: { provider_roles: { codex: { implementer: 2 } } } };
+  assert.equal(migrate(intentional), intentional);
 });
 
 test('shipped 001 negative: per_agent stays when limits.roles is set locally; a file without per_agent is unchanged; limits empties away', async () => {

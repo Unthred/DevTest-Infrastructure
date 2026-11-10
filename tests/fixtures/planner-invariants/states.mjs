@@ -46,6 +46,12 @@ export const FIXTURE_STATES = [
     issues: [issue(1, 'claude', ['parked'])],
   },
   {
+    name: 'unavailable agent receives no action',
+    pulls: [],
+    issues: [issue(1, 'claude'), issue(2, 'codex')],
+    unavailableAgents: ['codex'],
+  },
+  {
     name: 'one merge action is emitted for one eligible PR',
     pulls: [pull(12, 'claude', 1)],
     issues: [issue(1, 'claude')],

@@ -24,8 +24,14 @@ const pr = (n, branch, head, extra = {}) => ({ number: n, title: `t${n}`, headRe
 const issue = (n, state = 'OPEN') => ({ number: n, title: `Issue ${n} title here`, state, body: '', labels: [] });
 const manifest = { claude: { aliases: ['opus', 'sonnet', 'haiku'], efforts: ['low', 'medium', 'high'] }, codex: { aliases: ['big', 'mid'], efforts: ['low', 'medium', 'high'] } };
 
-function world(t, { pulls = [], issues = [issue(5), issue(6), issue(2)], out = {}, cfg = config(), active = [] } = {}) {
+function world(t, { pulls = [], issues = [issue(5), issue(6), issue(2)], out = {}, cfg = config(), active = [], inboxJob = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roles-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const inbox = inboxJob ? path.join(dir, 'inbox') : null;
+  if (inbox) {
+    fs.mkdirSync(path.join(inbox, 'status'), { recursive: true });
+    const status = { id: inboxJob.id, state: 'running', adopt: { id: inboxJob.id, rec: { kind: 'inbox' } } };
+    fs.writeFileSync(path.join(inbox, 'status', `${inboxJob.id}.json`), JSON.stringify(status));
+  }
   const calls = { created: [] };
   const gh = { pulls, issues, listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues, listMergedPulls: async () => [],
     comment: async () => {}, addLabel: async () => {}, hasComment: async () => false, board: async () => {} };
@@ -33,7 +39,18 @@ function world(t, { pulls = [], issues = [issue(5), issue(6), issue(2)], out = {
     create: async spec => { const id = (++jobs.seq).toString(16).padStart(32, '0'); calls.created.push(spec); jobs.states[id] = { id, status: 'queued', provider: spec.provider }; return { id }; } };
   const git = { ensureWorktree: async o => o.path, worktreeFor: async () => null };
   const limitedOf = agent => (out[agent] ? { out: true, reason: out[agent] } : { out: false });
-  const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: REGISTER, clock: { now: () => 1_800_000_000_000 }, limitedOf, providerModels: manifest });
+  const teamConfig = inbox ? { ...cfg, inbox: { dir: inbox } } : cfg;
+  const team = new Team({
+    config: teamConfig,
+    root: stateRoot(path.join(dir, 'state')),
+    gh,
+    jobs,
+    git,
+    register: REGISTER,
+    clock: { now: () => 1_800_000_000_000 },
+    limitedOf,
+    providerModels: manifest
+  });
   return { gh, jobs, team, calls };
 }
 // Record a running job the way the dispatcher does, so the slot it holds is known.
@@ -189,6 +206,63 @@ test('an owner at its usage limit does not start its own implement job; the othe
   const plan = await w.team.plan();
   assert.ok(!plan.some(a => a.agent === 'codex' && a.type === 'implement'));
   assert.deepEqual(plan.filter(a => a.agent === 'claude' && a.type === 'implement').map(a => a.issue).sort(), [5, 6]);
+});
+
+test('#1123: a limited repair is held before allocation, so a ready agent receives the slot', async t => {
+  const failed = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'project-contract' }];
+  const w = world(t, { pulls: [pr(1117, 'codex/issue-1117-x', H(7), { statusCheckRollup: failed })], issues: [issue(5)], out: codexOut });
+  const acts = await w.team.plan();
+  assert.deepEqual(acts.map(a => [a.agent, a.type, a.issue]), [['claude', 'implement', 5]]);
+  assert.match(w.team.held.codex.cifix, /out of allowance/);
+  assert.ok(!acts.some(a => a.agent === 'codex'), 'a limited action is never planned');
+});
+
+test('#1123: a parked repair is held before allocation, so a ready agent receives the slot', async t => {
+  const failed = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'project-contract' }];
+  const w = world(t, { pulls: [pr(1117, 'codex/issue-1117-x', H(7), { statusCheckRollup: failed })], issues: [issue(5)] });
+  w.team.s.infra = { parked: { codex: { cause: 'provider_outage' } } };
+  const acts = await w.team.plan();
+  assert.deepEqual(acts.map(a => [a.agent, a.type, a.issue]), [['claude', 'implement', 5]]);
+  assert.match(w.team.held.codex.cifix, /parked: provider outage/);
+  assert.ok(!acts.some(a => a.agent === 'codex'), 'a parked action is never planned');
+});
+
+test('#1123: both limited agents leave a healthy tick with no planned work', async t => {
+  const w = world(t, { issues: [issue(5), issue(2)], out: { claude: 'Claude limit', codex: 'Codex limit' } });
+  const report = await w.team.tick();
+  assert.deepEqual(report.actions, []);
+  assert.deepEqual(w.calls.created, []);
+  assert.equal(report.skipped.length, 0);
+  assert.match(w.team.held.claude.implement, /out of allowance/);
+  assert.match(w.team.held.codex.implement, /out of allowance/);
+});
+
+test('#1123: an Inbox job uses only its lane with and without an adopted job record', async t => {
+  for (const adopted of [false, true]) {
+    const id = `${adopted ? 'a' : 'b'}`.repeat(32);
+    const w = world(t, {
+      issues: [issue(5)],
+      active: [{ id, provider: 'claude', status: 'running' }],
+      inboxJob: { id }
+    });
+    if (adopted) w.team.s.jobs[id] = { kind: 'inbox', agent: 'claude', key: 'prompt' };
+    assert.deepEqual((await w.team.plan()).map(a => [a.type, a.issue]), [['implement', 5]], adopted ? 'adopted' : 'unadopted');
+  }
+});
+
+test('#1123: the 21:01 slot state gives Claude the freed work in the same tick', async t => {
+  const failed = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'project-contract' }];
+  const cfg = config({ limits: limits({ roles: { implementer: 2, reviewer: 1 }, overall: 3 }) });
+  const pulls = [
+    pr(1117, 'codex/issue-1117-x', H(7), { statusCheckRollup: failed }),
+    pr(1114, 'codex/issue-1114-x', H(4))
+  ];
+  const w = world(t, { cfg, pulls, issues: [issue(1119)], out: codexOut });
+  w.team.s.verdicts[`1114:${H(4)}`] = { verdict: 'CHANGES', reviewer: 'claude' };
+  const acts = await w.team.plan();
+  assert.deepEqual(acts.map(a => [a.agent, a.type, a.issue]), [['claude', 'implement', 1119]]);
+  assert.match(w.team.held.codex.cifix, /out of allowance/);
+  assert.match(w.team.held.codex.fix, /out of allowance/);
 });
 
 test('load spreads: with one PR from each agent and ready issues, the second slot goes to the agent without a job this tick', async t => {
