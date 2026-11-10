@@ -43,7 +43,7 @@ import { ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { decideInboxForm } from './inbox-decision.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
-import { handleDecision } from './decision-route.mjs';
+import { decisionHandler } from './decision-route.mjs';
 import { underSupervisedJob } from './breaker.mjs';
 import { isLocalPeer, peerPid as defaultPeerPid } from './peerpid.mjs';
 
@@ -265,7 +265,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
-  const decision = (req, res, send) => handleDecision({ req, send, root, source, allowedHost, originAllowed, refuseWith, refuseHost, refuseOrigin, tooLarge, badProof, now, wake, invalidate: () => store.invalidate() });
+  const decisionAction = decisionHandler({ root, source, allowedHost, originAllowed, refuseWith, refuseHost, refuseOrigin, tooLarge, badProof, now, wake, invalidate: () => store.invalidate() });
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
   // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
@@ -301,7 +301,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
-    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume };
+    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decisionAction, '/breaker-resume': breakerResume };
     if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.

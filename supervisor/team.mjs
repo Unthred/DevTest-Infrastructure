@@ -2264,7 +2264,10 @@ export class Team {
     const pr = (await this.gh.listPulls()).find(p => p.number === n);
     const cap = robust.sameCauseCap(this.c.limits);
     const keys = Object.entries(this.s.sameCause || {}).filter(([k, v]) => k.slice(k.indexOf(':') + 1) === String(n) && v.count >= cap).map(([k]) => k);
-    if (!keys.length) throw new SupervisorError(`PR #${n} has no retry cap in place; nothing to clear`);
+    if (!keys.length) {
+      if (!pr) throw new SupervisorError(`PR #${n} is not open`);
+      throw new SupervisorError(`PR #${n} has no retry cap in place; nothing to clear`);
+    }
     for (const k of keys) delete this.s.sameCause[k];
     // A capped rebase has also spent its attempts, and choose() skips a rebase at the limit; lower that counter by one (as grantReviewAttempt does) so it is planned again.
     if (pr && keys.some(k => k.startsWith('rebase:')) && SHA.test(pr.headRefOid)) {

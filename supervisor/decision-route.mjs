@@ -2,6 +2,8 @@ import { recordDecisionAction } from './decision-request.mjs';
 import { proofValid, reserveCooldown, releaseCooldown, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { ACTIONS } from '../foreman-mcp/actions.mjs';
 
+export const decisionHandler = context => (req, res, send) => handleDecision({ ...context, req, send });
+
 export async function handleDecision({
   req, send, root, source, allowedHost, originAllowed, refuseWith, refuseHost,
   refuseOrigin, tooLarge, badProof, now, wake, invalidate,

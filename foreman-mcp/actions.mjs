@@ -33,6 +33,10 @@ export const ACTIONS = Object.freeze({
     target: 'issue', noun: 'issue', label: 'Reopen issue', tier: 'click',
     will: 'Clear this issue’s implemented mark so Foreman can start it again. Refused while a pull request, a live job or saved work for it exists.',
   },
+  unpark: {
+    target: 'number', noun: 'work item', label: 'Unpark this work', tier: 'click',
+    will: 'Remove the parked label so Foreman may plan this work again. Refused when it is not parked.',
+  },
   park: {
     target: 'number', noun: 'work item', label: 'Park this work', tier: 'click',
     will: 'Keep this work parked until its cause is resolved.',

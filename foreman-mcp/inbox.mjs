@@ -9,10 +9,12 @@ import { redact } from './redact.mjs';
 import { ACTIONS, validAction } from './actions.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
-const EXTRA_ACTIONS = { unpark: /^[1-9]\d{0,8}$/ };
 const CONTROLS = { park: /^[1-9]\d{0,8}$/, stop_job: /^[a-f0-9]{8}$/ };
 const ID_RE = /^[a-f0-9]{32}$/;
-const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
+const ATTRIBUTION = [
+  /\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i,
+  /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i,
+];
 
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
 export function checkProposal(args) {
@@ -36,8 +38,8 @@ export function checkProposal(args) {
   }
   if (/[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
   if (kind === 'action') {
-    if (!Object.hasOwn(ACTIONS, item.action) && !Object.hasOwn(EXTRA_ACTIONS, item.action)) return { ok: false, error: `action must be one of: ${[...Object.keys(ACTIONS), ...Object.keys(EXTRA_ACTIONS)].join(', ')}` };
-    if (!(EXTRA_ACTIONS[item.action]?.test(item.target) || validAction(item.action, item.target))) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
+    if (!Object.hasOwn(ACTIONS, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(ACTIONS).join(', ')}` };
+    if (!validAction(item.action, item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
   }
   if (kind === 'control') {
     if (!Object.hasOwn(CONTROLS, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(CONTROLS).join(', ')}` };
