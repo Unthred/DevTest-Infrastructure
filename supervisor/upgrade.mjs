@@ -317,7 +317,7 @@ export class SelfUpgrade {
   async alert(key, text) {
     if (this.s.alerted[key]) return;
     this.s.alerted[key] = this.clock.now(); this.save();
-    try { await this.d.alert(text); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
+    try { await this.d.alert(text); } catch (error) { console.error(`ai-supervisor: upgrade alert ${key} not delivered: ${error?.message || error}`); }
   }
 
   // Issue #695: when the batching window since the last finished install ends (null = no window: first install, or min_install_gap_minutes 0).

@@ -7,7 +7,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
+import { SupervisorError, WorktreeUnusable, LeaseHeld, processStart } from './core.mjs';
+import { stateSaver } from './statesave.mjs';
+import { alertThenRecord } from './alertflow.mjs';
 import { takeBreakerResumeRequests, discardBreakerResumeRequests } from './breakerresume.mjs';
 import { takeHomeownerRequests, discardHomeownerRequest } from './homeownerqueue.mjs';
 import { stallCheck, stallLimitMs } from './stall.mjs';
@@ -703,7 +705,7 @@ export class Team {
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
   }
-  save() { atomicJson(this.file, this.s); }
+  save() { (this.saveState ||= stateSaver({ file: this.file, alertOf: () => this.alert }))(this.s); }   // logs and alerts a failed save, then throws
   // Model and effort for one job (issue #64). Escalation: an earlier attempt of the same work ended incomplete on the cheaper
   // model, or the PR has drawn CHANGES twice. Allowance: reported weekly use at or above the threshold keeps the cheap model
   // for everything but implement/continue. Both reasons are stored on the job. Invalid values degrade to the CLI default.
@@ -1044,8 +1046,8 @@ export class Team {
       else if (a.mode === 'reviews_only' && (prev.rule ?? null) !== (a.rule ?? null)) { prev.rule = a.rule ?? null; this.save(); }   // issue #680: an older latch gets its rule on the next tick
       const e = this.s.budget[agent];
       if (e.alerted || !this.alert) continue;
-      try { await this.alert(`Allowance: ${modeLine(agent, { ...a, mode: e.mode, reason: e.reason, until: e.until }, this.timeZone)}`); e.alerted = true; this.save(); }
-      catch { (report.skipped ||= []).push({ what: `alert allowance ${agent}`, reason: 'alert delivery failed; will retry' }); }
+      const text = `Allowance: ${modeLine(agent, { ...a, mode: e.mode, reason: e.reason, until: e.until }, this.timeZone)}`;
+      await alertThenRecord(this, { report, what: `alert allowance ${agent}`, text, sent: () => { e.alerted = true; } });
     }
   }
   // Fix attempts (CHANGES fixes and CI fixes) are counted per PR, across heads: a fix that pushes a new head and is then rejected
@@ -2423,7 +2425,7 @@ export class Team {
   breakerFailed(error, report) {
     this.s.breaker.error = { at: this.clock.now(), message: redact(String(error?.message || error), 200) };
     (report.breaker ||= {}).error = this.s.breaker.error.message;
-    try { this.save(); } catch { /* the report above still carries it */ }
+    try { this.save(); } catch (error) { report.breaker.saveError = String(error?.message || error).slice(0, 300); }   // logged and alerted by the saver
   }
   async ingestOneInner(id, j, report) {
       const job = await this.jobs.get(id);
@@ -2794,7 +2796,7 @@ export class Team {
     await this.postNotice(target, `lease holder=${id || 'unknown'}`, text);
     await this.gh.addLabel(target, 'needs-homeowner');
     this.s.notified[key] = this.clock.now(); this.save();
-    if (this.alert) { try { await this.alert(`Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600)); } catch { (report.skipped ||= []).push({ what: 'alert lease holder', reason: 'alert delivery failed' }); } }
+    await alertThenRecord(this, { report, what: 'alert lease holder', text: `Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600) });
   }
   // A notice carries a stable marker and is never retried blindly: if GitHub accepted an earlier attempt but the response
   // was lost, the marker is already there and nothing is posted twice (same approach as verdict ingestion).
@@ -3167,10 +3169,8 @@ export class Team {
       });
       const akey = `churn-alert:${pr.number}:${pr.headRefOid}`;   // like the fix-limit alert: recorded as sent only when the channel accepted it
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
-        try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
-          this.s.notified[akey] = this.clock.now(); this.save();
-        } catch { (report.skipped ||= []).push({ what: `alert churn ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
+        const text = `Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`;
+        await alertThenRecord(this, { report, what: `alert churn ${pr.number}`, text, sent: () => { this.s.notified[akey] = this.clock.now(); } });
       }
     }
   }
@@ -3204,10 +3204,8 @@ export class Team {
       // Immediate alert to the AI channel (#50, #39): recorded as sent only when the channel accepted it, so an undelivered
       // alert is retried on the next tick; a failing channel never undoes the notice.
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
-        try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
-          this.s.notified[akey] = this.clock.now(); this.save();
-        } catch { (report.skipped ||= []).push({ what: `alert fix-limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
+        const text = `Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`;
+        await alertThenRecord(this, { report, what: `alert fix-limit ${pr.number}`, text, sent: () => { this.s.notified[akey] = this.clock.now(); } });
       }
     }
   }
@@ -3255,7 +3253,7 @@ export class Team {
     try {
       await this.flag(target, { key: `limit:${room.key}`, kind: 'limit', tk });
       await this.postNotice(target, `unblock-limit ${room.key}`, `**Needs the homeowner.** Foreman stopped unblocking by itself: it reached ${room.text}. Nothing further is retried, resumed or escalated automatically for this scope until the limit resets (day) or you raise it in team.local.json. Required: look at what is stuck (#${target}) and decide.`);
-      if (this.alert) { try { await this.alert(`Needs the homeowner: Foreman reached ${room.text}; automatic unblocking has stopped. #${target}`); } catch { (report.skipped ||= []).push({ what: 'alert unblock limit', reason: 'alert delivery failed' }); } }
+      await alertThenRecord(this, { report, what: 'alert unblock limit', text: `Needs the homeowner: Foreman reached ${room.text}; automatic unblocking has stopped. #${target}` });
     } catch (error) { delete u.limit[room.key]; this.save(); throw error; }
     (report.notified ||= []).push({ target, unblockLimit: room.key });
   }
