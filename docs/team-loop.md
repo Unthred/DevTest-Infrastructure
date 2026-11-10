@@ -332,4 +332,4 @@ A rollback latch written before this change whose only cause was a usage-limit r
 
 The old latch records only the first fault of the failed tick, so a tick whose first item was a usage-limit skip and whose later item was a real error also looks skip-only and is cleared. The install is checked again by a live tick under the new rule, so a repeat of the real error fails it.
 
-**Homeowner steps.** On a host that is latched now, reach this change by `clear-latch` (or a hand-install, which has no latch check); the automatic install then proceeds. A latch with another cause (for example `upgrade script failed: swap: version already installed`) is not cleared by this change and needs `clear-latch` once the cause is understood.
+**Homeowner steps.** On a host that is latched now, reach this change by `ai-supervisor self-upgrade clear-latch` (or a hand-install, which has no latch check); the automatic install then proceeds. A latch with another cause (for example `upgrade script failed: swap: version already installed`) is not cleared by this change and needs `ai-supervisor self-upgrade clear-latch` once the cause is understood.

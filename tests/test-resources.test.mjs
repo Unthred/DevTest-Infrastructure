@@ -89,13 +89,19 @@ const sameLiveProcess = ({ pid, start }) => {
 
 test('an over-limit fake job is killed as a unit: children die with it and the result records why', async t => {
   const d = tmp(t), pidFile = path.join(d, 'child.pid');
-  // The parent spawns a grandchild that records its pid, then both hold memory beyond the 64 MB grant.
+  // The parent waits for its grandchild to publish its identity, then both hold memory beyond the 64 MB grant.
   const script = `const {spawn}=require('child_process'),fs=require('fs');
     const hold=()=>{globalThis.b=Buffer.alloc(150*1024*1024,1);setInterval(()=>{},1000)};
     const start=()=>fs.readFileSync('/proc/self/stat','utf8').split(' ')[21];
     if(process.argv[2]==='child'){
       fs.writeFileSync(${JSON.stringify(pidFile)},[process.pid,start()].join(':'));hold();
-    }else{spawn(process.execPath,[__filename,'child'],{stdio:'ignore'});hold();}`;
+    }else{
+      spawn(process.execPath,[__filename,'child'],{stdio:'ignore'});
+      const ready=setInterval(()=>{
+        if(!fs.existsSync(${JSON.stringify(pidFile)}))return;
+        clearInterval(ready);hold()
+      },1)
+    }`;
   const f = path.join(d, 'job.cjs'); fs.writeFileSync(f, script);
   const r = await runLimited([process.execPath, f], { env: process.env, limits: { memory_mb: 64, cpus: 1 }, klass: 'suite', id: 'j1', intervalMs: 50 });
   assert.equal(r.code, 137);
