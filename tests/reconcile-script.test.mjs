@@ -83,7 +83,7 @@ test('issue #35 the generated script runs under env -i, finds gh and node throug
   assert.match(fs.readFileSync(w.log, 'utf8').trim().split('\n').at(-1), /rc=[1-9]/);
 });
 
-test('issue #35 the log is trimmed only above the threshold, under the lock; an overlapping run still runs and its log write waits for the lock (issue #448)', t => {
+test('issue #35 the log is trimmed only above threshold, under the lock; an overlapping run still runs and its log write waits for the lock (#448)', async t => {
   const w = cronWorld(t);
   runInstall(w.env);
   w.cron(); const small = fs.readFileSync(w.log, 'utf8'); w.cron();
@@ -94,11 +94,22 @@ test('issue #35 the log is trimmed only above the threshold, under the lock; an 
   assert.ok(trimmed.length < 400000); assert.match(trimmed.trim().split('\n').at(-1), /rc=0/);
   // hold the lock briefly: the run is NOT skipped; its log line is written once the lock is free (never lost, never racing)
   const before = fs.readFileSync(w.log, 'utf8');
-  const holder = spawn('flock', [`${w.log}.lock`, 'sleep', '1']);
-  t.after(() => holder.kill());
-  const deadline = performance.now() + 2000; while (performance.now() < deadline) { const probe = spawnSync('flock', ['-n', `${w.log}.lock`, 'true']); if (probe.status !== 0) break; }
-  assert.equal(w.cron().status, 0);
-  const after = fs.readFileSync(w.log, 'utf8');
+  // Own process group, killed and reaped before the test returns, so nothing can touch the world folder after it is removed (test-guard leak, #1146).
+  const holder = spawn('flock', [`${w.log}.lock`, 'sleep', '1'], { stdio: 'ignore', detached: true });
+  const holderGone = new Promise(resolve => holder.once('close', resolve));
+  let after;
+  try {
+    const deadline = performance.now() + 2000;
+    while (performance.now() < deadline) {
+      const probe = spawnSync('flock', ['-n', `${w.log}.lock`, 'true']);
+      if (probe.status !== 0) break;
+    }
+    assert.equal(w.cron().status, 0);
+    after = fs.readFileSync(w.log, 'utf8');
+  } finally {
+    try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already finished */ }
+    await holderGone;
+  }
   assert.ok(after.length > before.length, 'the line of the overlapping run was written after the lock was released');
   assert.match(after.trim().split('\n').at(-1), /rc=0 \{"team"/);
 });

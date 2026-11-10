@@ -93,3 +93,8 @@ test('writer prompts require the table, claim check and real runtime path; revie
   }
   assert.match(review, /implementer's `## Requirements check` table/);
 });
+
+test('a table written without the outer pipes has no readable three-column header', () => {
+  const bare = valid.split('\n').map(line => line.replace(/^\| ?| ?\|$/g, '')).join('\n');
+  assert.match(requirementsTableError(bare), /three-column header/);
+});
