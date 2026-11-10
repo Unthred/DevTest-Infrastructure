@@ -39,8 +39,8 @@ import { raiseGithubAppOffer } from './githubappoffer.mjs';
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
-import { validGithubApp } from './appidentity.mjs';
-import { runControl, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
+import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -143,10 +143,8 @@ function validateHealth(h) {
   const w = h.disk_warn_percent ?? HEALTH_DEFAULTS.disk_warn_percent, a = h.disk_alert_percent ?? HEALTH_DEFAULTS.disk_alert_percent;
   if (!pct(w) || !pct(a) || w >= a) throw new SupervisorError('invalid team config: health disk levels must be percentages with warn below alert');
 }
-// issue #1115: github_app is optional; when present it needs both ids and an absolute key file
 function validateOptionalSections(c) {
-  validateSelfUpgrade(c.self_upgrade);
-  if ('github_app' in c && !validGithubApp(c.github_app)) throw new SupervisorError('invalid team config: github_app needs app_id, installation_id and an absolute key_file');
+  validateSelfUpgrade(c.self_upgrade); assertGithubApp(c);   // issue #1115
 }
 function validateSelfUpgrade(u) {
   if (u === undefined) return;
@@ -268,14 +266,13 @@ export const touchesPaths = (files, globs) => files.some(f => globs.some(g => gl
 // copy is never edited. Only operational knobs may be overridden; repository, paths, providers, access and board come
 // from the reviewed file in Git.
 export const LOCAL_OVERRIDE = 'team.local.json';
-const HOST_ONLY_KEYS = ['github_app'];   // issue #1115: set per host, never in the public shipped file
 export function applyLocalOverride(shipped, local) {
   if (local == null) return shipped;
   if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const keys = Object.keys(local).filter(k => !HOST_ONLY_KEYS.includes(k));
+  const keys = Object.keys(local).filter(k => k !== 'github_app');   // issue #1115: host-only, never in the public shipped file
   const bad = keys.filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard', 'display'].includes(k));
   if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
-  const out = structuredClone({ ...shipped, ...(local.github_app && { github_app: local.github_app }) });   // issue #1115
+  const out = structuredClone(withHostGithubApp(shipped, local));   // issue #1115
   if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
   if ('test_tmp_root' in local) { if (typeof local.test_tmp_root !== 'string' || !path.isAbsolute(local.test_tmp_root)) throw new SupervisorError('invalid team.local.json: test_tmp_root must be an absolute path'); out.test_tmp_root = local.test_tmp_root; }
   if ('reports_dir' in local) { if (typeof local.reports_dir !== 'string' || !path.isAbsolute(local.reports_dir)) throw new SupervisorError('invalid team.local.json: reports_dir must be an absolute path'); out.reports_dir = local.reports_dir; }   // issue #882
@@ -2116,10 +2113,7 @@ export class Team {
       try {
         const l = inboxStore.loadItem(dir, st.id);
         if (!l.ok) { if (st.state === 'approved') inboxStore.finish(dir, st.id, { state: 'failed', reason: l.reason, result: 'nothing was done' }, now); continue; }
-        if (st.kind === 'issue_draft') await this.postIssueDraft(dir, st, l.item, report);
-        if (st.kind === 'action' && st.state === 'approved') await this.runInboxAction(dir, st, l.item, report);
-        if (st.kind === 'host_value' && st.state === 'approved') this.runHostValue(dir, st, l.item, report);
-        if (st.kind === 'control' && st.state === 'approved') await runControl(this, dir, st, l.item, inboxStore, report);
+        await dispatchApproved(this, inboxStore, dir, st, l.item, report);
       } catch (error) { (report.skipped ||= []).push({ what: `inbox ${st.id.slice(0, 8)}`, reason: String(error?.message || error).slice(0, 200) }); }
     }
   }
@@ -2127,8 +2121,8 @@ export class Team {
   // value filled in. The item id comes from the key and value, so a repeat raises nothing. Approval merges it into team.local.json (backup, parse check).
   async raiseHostValues(report) {
     const dir = this.inboxDir(); if (!dir) return;
-    if (inboxStore.allStatuses(dir).some(x => x.kind === 'host_value' && x.state === 'pending')) return;   // one at a time
-    if (raiseGithubAppOffer({ inboxStore, dir, root: this.root, configured: this.c.github_app, now: this.clock.now(), report })) return;
+    if (inboxStore.allStatuses(dir).some(x => x.kind === 'host_value' && x.state === 'pending')   // one at a time
+      || raiseGithubAppOffer({ inboxStore, dir, root: this.root, configured: this.c.github_app, now: this.clock.now(), report })) return;
     const allowed = this.c.dashboard?.allowed_origins || [];
     for (const { origin } of readRefusedOrigins(this.root)) {
       if (allowed.includes(origin)) continue;

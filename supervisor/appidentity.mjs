@@ -51,3 +51,14 @@ export async function addLabelAsApp(config, n, label, { fetchFn = fetch, readKey
   const res = await fetchFn(`${API}/repos/${config.repository}/issues/${Number(n)}/labels`, { method: 'POST', headers: { ...headers(token), 'content-type': 'application/json' }, body: JSON.stringify({ labels: [label] }) });
   if (!res.ok) throw new SupervisorError(`GitHub App label write failed (HTTP ${res.status})`);
 }
+
+// The App setting is host-only: it comes from team.local.json and is checked there, so a malformed value fails the override by name.
+export function withHostGithubApp(shipped, local) {
+  if (!('github_app' in local)) return shipped;
+  if (!validGithubApp(local.github_app)) throw new SupervisorError('invalid team.local.json: github_app needs app_id, installation_id and an absolute key_file');
+  return { ...shipped, github_app: local.github_app };
+}
+
+export function assertGithubApp(config) {
+  if ('github_app' in config && !validGithubApp(config.github_app)) throw new SupervisorError('invalid team config: github_app needs app_id, installation_id and an absolute key_file');
+}

@@ -97,3 +97,12 @@ export function controlRecords(inboxDir, inboxStore, limit = 50) {
     at: s.createdAt ?? null, result: s.state === 'refused' ? s.reason ?? null : s.result ?? null }));
 }
 export const controlsOf = (config, store) => (config.inbox?.dir ? controlRecords(config.inbox.dir, store) : []);
+
+// Runs one approved inbox item by its kind; kept out of Team so adding a kind does not grow that class.
+export async function dispatchApproved(team, inboxStore, dir, st, item, report) {
+  if (st.kind === 'issue_draft') await team.postIssueDraft(dir, st, item, report);
+  if (st.state !== 'approved') return;
+  if (st.kind === 'action') await team.runInboxAction(dir, st, item, report);
+  if (st.kind === 'host_value') team.runHostValue(dir, st, item, report);
+  if (st.kind === 'control') await runControl(team, dir, st, item, inboxStore, report);
+}
