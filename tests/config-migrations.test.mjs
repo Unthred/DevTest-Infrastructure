@@ -115,8 +115,8 @@ test('the shipped migrations remove limits.per_agent, so the shipped roles apply
   put(root, { enabled: true, limits: { per_agent: 2, max_fix_attempts: 3, provider_roles: { codex: { implementer: 1 } } } });
   assert.equal(validate(local(root)).limits.roles.implementer, 2);   // before: the old key overrides the roles' slot count
   const r = await runMigrations({ root, dir: realDir, validate });
-  assert.deepEqual(r.applied.map(a => a.number), [1, 2]);
-  assert.deepEqual(local(root), { enabled: true, limits: { max_fix_attempts: 3 } });
+  assert.deepEqual(r.applied.map(a => a.number), [1, 2, 3]);
+  assert.deepEqual(local(root), { enabled: true, limits: { max_fix_attempts: 3 }, alerts: { channel: 'unraid' } });
   const cfg = validate(local(root));
   assert.deepEqual(cfg.limits.roles, shipped().limits.roles); assert.equal('per_agent' in cfg.limits, false);
   assert.equal(cfg.limits.roles.implementer, 1);
@@ -140,6 +140,17 @@ test('shipped 002 removes only the temporary Codex implementer cap', async () =>
   assert.deepEqual(migrate({ limits: { provider_roles: { codex: { implementer: 1 } } } }), {});
   const intentional = { limits: { provider_roles: { codex: { implementer: 2 } } } };
   assert.equal(migrate(intentional), intentional);
+});
+
+test('shipped 003 names the unraid channel only when no alert route is configured', async () => {
+  const { migrate } = await import('../supervisor/migrations/003-explicit-alert-channel.mjs');
+  const input = { enabled: true };
+  assert.deepEqual(migrate(input), { enabled: true, alerts: { channel: 'unraid' } });
+  assert.deepEqual(input, { enabled: true });
+  const command = { alerts: { command: ['/usr/local/bin/notify'] } };
+  assert.equal(migrate(command), command);
+  const invalid = { alerts: {} };
+  assert.equal(migrate(invalid), invalid);
 });
 
 test('shipped 001 negative: per_agent stays when limits.roles is set locally; a file without per_agent is unchanged; limits empties away', async () => {
