@@ -183,10 +183,10 @@ test('idle reasons (#50): each idle agent states why in plain words', async () =
   a = await idle({ pulls: [], issues: [issue(2, 'OPEN', '', ['needs-homeowner']), issue(3, 'CLOSED')] });
   assert.match(a.text, /waiting for homeowner: #2 issue 2 needs the homeowner/);
   a = await idle({ pulls: [], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] });
-  assert.match(a.text, /no open issue or pull request is assigned/);
+  assert.match(a.text, /rule: agents\.codex\.issues lists 2 issues, 0 still open; no open issue is assigned to codex/);
   // a running agent has no idle reason; the terminal rendering carries the reason
   const s = await status({ jobs: [job()] }); assert.equal(s.agents.find(x => x.name === 'claude').idleReason, null);
-  assert.match(text(await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, merged: [], pulls: [], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] } })), /codex: idle: no open issue/);
+  assert.match(text(await status({ cache: { tick: tick(), fetchedAt: NOW - MIN, merged: [], pulls: [], issues: [issue(2, 'CLOSED'), issue(3, 'CLOSED')] } })), /codex: idle: rule: /);
 });
 
 test('issue #83 upgrade accepts both launcher forms that exec /root/bin/ai-supervisor and refuses any other', t => {
