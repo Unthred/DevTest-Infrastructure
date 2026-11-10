@@ -2,8 +2,10 @@
 // normal refusal: { outcome: 'done' | 'refused', changed, text }. The caller records who, when, why and the result in the item's status.
 // Nothing here merges, approves or releases work except unpark, which only runs after the homeowner approved it on the dashboard.
 import { addLabelAsApp } from './appidentity.mjs';
+import { redact } from './redact.mjs';
 const PARKED = 'parked';
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
+const displayText = value => (value == null ? null : redact(value, 300));
 // The planner reads pull requests through this, so a parked one gets no rebase, fix, review or merge.
 export const unparkedPulls = prs => (Array.isArray(prs) ? prs.filter(p => !p.labels?.includes(PARKED)) : prs);
 const done = (changed, text) => ({ outcome: 'done', changed, text });
@@ -93,8 +95,16 @@ export async function runControl(team, dir, st, item, inboxStore, report) {
 // Text is redacted and bounded again here, as for every inbox card.
 export function controlRecords(inboxDir, inboxStore, limit = 50) {
   return inboxStore.allStatuses(inboxDir).filter(s => s.kind === 'control' && s.control).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, limit).map(s => ({
-    id: s.id.slice(0, 8), action: s.control.action, target: s.control.target, by: s.control.by || 'overseer', reason: s.control.reason, state: s.state, changed: s.control.changed ?? null,
-    at: s.createdAt ?? null, result: s.state === 'refused' ? s.reason ?? null : s.result ?? null }));
+    id: s.id.slice(0, 8),
+    action: s.control.action,
+    target: s.control.target,
+    by: s.control.by || 'overseer',
+    reason: displayText(s.control.reason),
+    state: s.state,
+    changed: s.control.changed ?? null,
+    at: s.createdAt ?? null,
+    result: displayText(s.state === 'refused' ? s.reason : s.result)
+  }));
 }
 export const controlsOf = (config, store) => (config.inbox?.dir ? controlRecords(config.inbox.dir, store) : []);
 

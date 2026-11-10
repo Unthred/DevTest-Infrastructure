@@ -105,6 +105,35 @@ test('records: who, when, why and result are readable through foreman_why_blocke
   assert.equal(jobs.jobs[0].controls[0].reason, 'runaway rebase'); assert.match(jobs.jobs[0].controls[0].result, /stopped/);
   assert.deepEqual(controlsFor(undefined, { number: 1 }), []);
 });
+test('control records and MCP augmentation redact and bound free text', async () => {
+  const raw = ['token', '=', 'test-', 'value-', 'assembled-', 'at-', 'runtime-', 'only'].join('');
+  const long = Array.from({ length: 200 }, () => 'x').join(' ');
+  const store = { allStatuses: () => [{
+    id: 'a'.repeat(32),
+    kind: 'control',
+    control: { action: 'park', target: '23', reason: raw, changed: true },
+    state: 'done',
+    result: long,
+    createdAt: 1
+  }] };
+  const controls = controlRecords('', store);
+  assert.equal(controls[0].reason, 'token=[secret]');
+  assert.equal(controls[0].result.length, 300);
+  const view = {
+    controls: [{ ...controls[0], reason: raw }],
+    attention: [],
+    queues: {},
+    issues: [{ number: 23, title: 'T', state: 'OPEN', labels: [] }],
+    prs: [],
+    excluded: [],
+    panels: {},
+    display: {}
+  };
+  const tools = createTools({ source: { get: async () => ({ view, ageMs: 0 }) }, readHost: () => ({}) });
+  const out = await tools.call('foreman_why_blocked', { kind: 'issue', number: 23 });
+  assert.doesNotMatch(out.text, new RegExp(raw));
+  assert.match(out.text, /token=\[redacted\]/);
+});
 test('a refusal is recorded with its reason, and the tools wait for and return the result', async t => {
   const w = world(t);
   const tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: w.mcp, controlWaitMs: 5000 });

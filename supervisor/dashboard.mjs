@@ -742,7 +742,11 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const names = [...new Set(Object.values(states).flatMap(x => x.unknownRecords || []))]; if (names.length) attention.push({ id: 'unknown-job-records', text: redact(`Agent state is Unknown because of job record(s) this version cannot read: ${names.join(', ')}. Fix or delete them in the jobs directory (they stop counting after 7 days).`, 300), ref: null, severity: 'warning' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
-    { const f = faultAttention((team.assignments || []).filter(a => a.fault).map(a => ({ issue: a.number, fault: a.fault }))); if (f) attention.push(f); }   // issue #1121
+    const assignmentFaults = (team.assignments || [])
+      .filter(a => a.fault)
+      .map(a => ({ issue: a.number, fault: a.fault }));
+    const assignmentWarning = faultAttention(assignmentFaults);
+    if (assignmentWarning) attention.push(assignmentWarning);   // issue #1121
     // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.
     { const w = sup.ticks.filter(t => Number.isFinite(t.at)).at(-1)?.warnings || [];
       if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told the team needs you.', ref: null, severity: 'action' });

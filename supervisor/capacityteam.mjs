@@ -1,5 +1,5 @@
 // Issue #1116: how the dispatcher's decisions use the capacity summaries (capacity.mjs): ranking rows, the implement rank, the model context
-// and the "out for takeover" reason. Plain data in, plain data out; the dispatcher gathers the inputs.
+// and the "out for takeover" reason. Most helpers are pure; budgetsWithPulls is the dispatcher boundary that refreshes GitHub data first.
 import { lowOnCapacity } from './capacity.mjs';
 import { reserveRefusal } from './capacityrule.mjs';
 import { REVIEWS_ONLY_TYPES } from './budget.mjs';
