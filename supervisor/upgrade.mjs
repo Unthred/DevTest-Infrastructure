@@ -4,7 +4,7 @@
 // Order of checks per tick (cheapest first): rollback latch, verification of a pending upgrade, hourly rate limit, detection,
 // upgrader guard, review/CI eligibility, quiet wait, pre-checks, upgrade, dry-run health check. The "next live tick" health
 // check is `verifyPending`, called by the CLI with the outcome of the live tick that ran under the new version.
-import { mcpNeedsInstall } from './mcpinstall.mjs';
+import { mcpNeedsInstall } from './mcpinstall.mjs'; import { cleanupFrom, rollbackNote, rollbackInstall } from './rollbackcleanup.mjs';
 import { dropStaleLatch } from './tickskips.mjs';
 export { liveTickOutcome, classifySkips } from './tickskips.mjs';   // issue #302, #1119: what a live tick says about the new version
 import fs from 'node:fs';
@@ -643,8 +643,8 @@ export class SelfUpgrade {
     let result = { ok: false, reason: 'rollback not attempted' };
     try { result = await this.d.rollback(from, to); } catch (error) { result = { ok: false, reason: String(error?.message || error).slice(0, 160) }; }
     delete this.s.pending; this.s.lastFinishedAt = this.clock.now(); this.s.urgent = { reason: 'the previous install rolled back', at: this.clock.now() };
-    const note = result.ok ? reason : `${reason}; ROLLBACK FAILED (${result.reason}), manual repair needed`;
-    this.noteInstall({ result: result.ok ? 'rolled_back' : 'rollback_failed', sha: to, reason: note.slice(0, 200) }); this.save();
+    const note = rollbackNote(reason, result);
+    this.noteInstall(rollbackInstall(to, note, result)); this.save();
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(this.latchFile, JSON.stringify({ at: this.clock.now(), from, to, reason: note }), { mode: 0o600 });
     this.record({ from, to, prs, checks, result: result.ok ? 'rolled_back' : 'rollback_failed', reason: note });
@@ -777,7 +777,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
         const script = path.join(dir, 'rollback-supervisor.sh');
         fs.writeFileSync(script, git('show', `${from}:tools/rollback-supervisor.sh`), { mode: 0o700 });
         const r = run('bash', [script, '--supervisor', to, from]);
-        return r.status === 0 ? { ok: true } : { ok: false, reason: tail(r) };
+        return r.status === 0 ? { ok: true, cleanup: cleanupFrom(r.stdout) } : { ok: false, reason: tail(r) };
       } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     },
     restartDashboard: async (sha, opts = {}) => restartDashboardServer(sha, { wrapper, health: httpHealth, ...opts }),
