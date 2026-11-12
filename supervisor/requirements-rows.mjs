@@ -5,9 +5,13 @@
 export const normalizedStatus = value => String(value || '').trim().toLowerCase().replace(/\s+/g, '-');
 
 const HOMEOWNER_REASON = /credentials|approval|physical action/i;
+// A conditional requirement ("when V2 item 6 is merged") whose condition is not met is not applicable. The evidence must name the item
+// and say it is still open or not merged, so Not applicable cannot be used to skip work that does apply.
+const CONDITION_ITEM = /(?:#\d+|\b(?:issue|pull request|PR|item)\s+\d+)/i;
+const CONDITION_UNMET = /\b(?:still open|not (?:yet )?(?:merged|closed|installed))\b/i;
 const AFTER_INSTALL_CHECKER = /\b(homeowner|overseer)\b/i;
 
-export const ALLOWED_STATUSES = 'Met, Homeowner-only (evidence names the required credentials, approval or physical action), or After install (evidence names who checks it: homeowner or overseer)';
+export const ALLOWED_STATUSES = 'Met, Homeowner-only (evidence names the required credentials, approval or physical action), After install (evidence names who checks it: homeowner or overseer), or Not applicable (a conditional requirement whose condition is not met; evidence names the item that is still open or not merged)';
 
 export function rowRefusal(requirement, status, evidence) {
   const named = `requirement "${String(requirement).slice(0, 160)}"`;
@@ -20,6 +24,10 @@ export function rowRefusal(requirement, status, evidence) {
   if (kind === 'after-install') {
     if (AFTER_INSTALL_CHECKER.test(evidence)) return null;
     return `${named} is After install but its evidence does not say who checks it. Allowed statuses: ${ALLOWED_STATUSES}. Name the homeowner or overseer in the evidence.`;
+  }
+  if (kind === 'not-applicable') {
+    if (CONDITION_ITEM.test(evidence) && CONDITION_UNMET.test(evidence)) return null;
+    return `${named} is Not applicable but its evidence does not name the open item its condition waits on. Allowed statuses: ${ALLOWED_STATUSES}. Name the issue or pull request (for example #1148) and say it is still open or not merged; otherwise finish the work and set it to Met.`;
   }
   return `${named} is ${status}. Allowed statuses: ${ALLOWED_STATUSES}. If this check needs the change installed on Tower, set the status to After install and name who checks it; otherwise finish the work and set it to Met with a file, line and test.`;
 }
