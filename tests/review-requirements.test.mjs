@@ -312,6 +312,9 @@ test('#559: TOP_LEVEL_DIRS and ROOT_FILES match the real repository root', async
   for (const f of files) assert.ok(ROOT_FILES.has(f), 'ROOT_FILES lacks ' + f);
   for (const f of ROOT_FILES) assert.ok(files.has(f), 'ROOT_FILES has an untracked file: ' + f);
 });
+test('#1194: package.json is a known root file for review claims', () => {
+  assert.ok(ROOT_FILES.has('package.json'));
+});
 test('#479: widened count slips still refuse effect claims', async t => {
   for (const claim of ['adds 3 tests that fix the retry loop', 'adds 3 new tests so the gate passes', 'removes the retry loop and 2 lines', 'touches 3 files in supervisor/ and improves retries', 'adds retry handling in 3 files',
     // Issue #513: a slash alone does not make a token a path; it must start at a top-level directory.
