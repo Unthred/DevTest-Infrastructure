@@ -13,7 +13,7 @@ import { readAudit, writeSwitch, requestUndo, readSwitch } from '../supervisor/d
 import { DIRECT, RESTRICTED, readValue, notDirectReason } from '../supervisor/directspec.mjs';
 import { shape, applyDependsEdits } from '../supervisor/directqueue.mjs';
 import { createToolset as createTools } from '../foreman-mcp/toolset.mjs';
-import { createInbox } from '../foreman-mcp/inbox.mjs';
+import { createInbox, checkProposal } from '../foreman-mcp/inbox.mjs';
 
 const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n- Date: 2026-10-30\n';
 const JOB = 'c3'.repeat(16), SHORT = JOB.slice(0, 8), PAUSED = 'd4'.repeat(16), DONE = 'e5'.repeat(16), HEAD = 'a1'.repeat(20);
@@ -300,4 +300,28 @@ test('the real pause and stop of a job on disk (the steps the supervisor uses): 
     assert.throws(() => overseerPause(root, readJob(root, job.id), procs), /terminal job cannot be paused/);
     assert.throws(() => overseerStop(root, readJob(root, job.id), 'manual_stop', procs), /terminal job cannot be stopped/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('start_job: a blocked or failed job (such as one out of retries) is refused and not resumed', async t => {
+  const w = world(t);
+  for (const status of ['blocked', 'failed']) {
+    w.jobs.states[PAUSED].status = status; w.jobs.states[PAUSED].lastEvent = 'retry_exhausted'; w.jobs.states[PAUSED].attempts = 3;
+    const r = await run(w, control('start_job', PAUSED.slice(0, 8)));
+    assert.equal(r.state, 'refused'); assert.match(r.reason, /needs the homeowner/); assert.deepEqual(w.calls.resumed, []);
+  }
+});
+
+test('assign: an issue on another agent\'s list, assigned to codex, is offered to codex and not to the list owner', async t => {
+  const w = world(t);
+  w.team.s.unblock.queued = { claude: [21] };
+  assert.ok(w.team.candidates('claude').includes(21));
+  const st = await run(w, control('assign', 21, 'x', 'codex')); assert.equal(st.state, 'done');
+  assert.ok(!w.team.candidates('claude').includes(21)); assert.ok(w.team.candidates('codex').includes(21));
+});
+
+test('propose: a full 32-character job id passes the early MCP check for the job actions', () => {
+  for (const action of ['close_job', 'stop_job', 'resume_job']) {
+    assert.equal(checkProposal({ kind: 'action', title: 't', action, target: 'c3'.repeat(16), reason: 'r' }).ok, true);
+    assert.equal(checkProposal({ kind: 'action', title: 't', action, target: 'c3'.repeat(14), reason: 'r' }).ok, false);
+  }
 });
