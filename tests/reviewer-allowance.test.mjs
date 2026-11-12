@@ -216,3 +216,12 @@ test('issue 1188: no review is planned for a head whose author job is repairing 
   const other = await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 0.5, codex: 0.5 }, active: [{ id: 'w0', status: 'queued', incompleteReason: { cause: 'postcondition_not_met', detail: 'no pull request' } }] });
   assert.equal(other.acts.length, 1, 'an ordinary incomplete retry does not hold review');
 });
+
+test('issue 1188: the active-job projection the dispatcher uses keeps a cite repair visible', async () => {
+  const { activeJobSummary, isCiteRepair } = await import('../supervisor/incomplete.mjs');
+  const stored = { id: 'j1', provider: 'claude', status: 'queued', secretField: 'x', incompleteReason: { cause: 'postcondition_not_met', detail: 'requirements table cites do not match the pull request: row "1"' } };
+  const summary = activeJobSummary(stored);
+  assert.equal(isCiteRepair(summary), true);
+  assert.equal('secretField' in summary, false);
+  assert.equal(isCiteRepair(activeJobSummary({ id: 'j2', provider: 'claude', status: 'running' })), false);
+});

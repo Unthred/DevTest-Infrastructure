@@ -20,3 +20,6 @@ export function markIncomplete(job) {
 
 // A live job whose last incomplete attempt was a failed cite list is still repairing; the team holds review of its PR meanwhile.
 export const isCiteRepair = job => /^requirements table cites do not match/.test(String(job?.incompleteReason?.detail || ''));
+
+// What listActive reports for a live job. incompleteReason is kept so the team can see a cite repair in progress (issue #1188).
+export const activeJobSummary = job => ({ id: job.id, provider: job.provider, status: job.status, ...(job.incompleteReason ? { incompleteReason: job.incompleteReason } : {}) });
