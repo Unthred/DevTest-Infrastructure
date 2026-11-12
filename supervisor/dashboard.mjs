@@ -27,7 +27,7 @@ import { afterInstallAttention, installedPrsOf } from './afterinstall-view.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
 import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
-import { budgetView, usageReading } from './budgetview.mjs';
+import { assignmentFaults, budgetView, usageReading } from './budgetview.mjs';
 import { hasProbe } from './probe.mjs';
 import { annotateQueues, nextWhyFields } from './holdreason.mjs';
 import { hostPressureView } from './hostpressure.mjs';
@@ -743,7 +743,10 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const names = [...new Set(Object.values(states).flatMap(x => x.unknownRecords || []))]; if (names.length) attention.push({ id: 'unknown-job-records', text: redact(`Agent state is Unknown because of job record(s) this version cannot read: ${names.join(', ')}. Fix or delete them in the jobs directory (they stop counting after 7 days).`, 300), ref: null, severity: 'warning' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
-    { const f = faultAttention((team.assignments || []).filter(a => a.fault).map(a => ({ issue: a.number, fault: a.fault }))); if (f) attention.push(f); }   // issue #1121
+    const { faults: assignmentFaultsFromTick, refusal: assignmentFaultRefusal } = assignmentFaults(team.assignments);
+    const assignmentWarning = faultAttention(assignmentFaultsFromTick);
+    if (assignmentWarning) attention.push(assignmentWarning);
+    if (assignmentFaultRefusal) attention.push({ id: 'assignment-fault-refused', text: `An assignment fault was refused because ${assignmentFaultRefusal}.`, ref: null, severity: 'warning' });
     // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.
     { const w = sup.ticks.filter(t => Number.isFinite(t.at)).at(-1)?.warnings || [];
       if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told the team needs you.', ref: null, severity: 'action' });
