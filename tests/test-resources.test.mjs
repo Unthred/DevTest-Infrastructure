@@ -89,7 +89,7 @@ const sameLiveProcess = ({ pid, start }) => {
 
 test('an over-limit fake job is killed as a unit: children die with it and the result records why', async t => {
   const d = tmp(t), pidFile = path.join(d, 'child.pid'), startFile = path.join(d, 'start');
-  // Both processes wait until the test has read the grandchild identity before they exceed the 64 MB grant.
+  // Both processes wait until the test has read the grandchild identity before they exceed the 256 MB grant.
   const script = `const {spawn}=require('child_process'),fs=require('fs');
     const hold=()=>{globalThis.b=Buffer.alloc(150*1024*1024,1);setInterval(()=>{},1000)};
     const start=()=>fs.readFileSync('/proc/self/stat','utf8').split(' ')[21];
@@ -104,7 +104,9 @@ test('an over-limit fake job is killed as a unit: children die with it and the r
   const f = path.join(d, 'job.cjs'); fs.writeFileSync(f, script);
   const limited = runLimited([process.execPath, f], {
     env: process.env,
-    limits: { memory_mb: 64, cpus: 1 },
+    // Two idle Node processes can already exceed 64 MB on a busy CI runner.
+    // Their combined 300 MB allocation still deterministically exceeds this cap.
+    limits: { memory_mb: 256, cpus: 1 },
     klass: 'suite',
     id: 'j1',
     intervalMs: 50
@@ -117,8 +119,11 @@ test('an over-limit fake job is killed as a unit: children die with it and the r
   fs.writeFileSync(startFile, '');
   const r = await limited;
   assert.equal(r.code, 137);
-  assert.equal(r.kill.reason, 'memory-limit'); assert.equal(r.kill.class, 'suite'); assert.equal(r.kill.suggested_class, 'small'); assert.equal(r.kill.limit_mb, 64);
-  assert.ok(r.kill.observed_mb >= 64);
+  assert.equal(r.kill.reason, 'memory-limit');
+  assert.equal(r.kill.class, 'suite');
+  assert.equal(r.kill.suggested_class, 'small');
+  assert.equal(r.kill.limit_mb, 256);
+  assert.ok(r.kill.observed_mb >= 256);
   // Poll (bounded) instead of a fixed wait: teardown of a 150 MB process can lag on a loaded runner.
   // A PID reused by another concurrent test is not the grandchild this test started.
   for (let i = 0; i < 100 && sameLiveProcess(grand); i++) await new Promise(res => setTimeout(res, 50));
