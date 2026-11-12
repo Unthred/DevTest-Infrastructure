@@ -34,7 +34,7 @@ import { probesOwed } from './probesdue.mjs';
 import { refreshBeforeAdmission } from './admissionrefresh.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
-import { weeklyWindow } from './budget.mjs';
+import { weeklyWindow, shortWindowOf } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
@@ -1005,8 +1005,9 @@ export class Team {
     const now = this.clock.now(), settings = budgetSettings(this.c), out = {};
     for (const [name, a] of this.agents()) {
       const allowance = this.usage.allowance?.[a.provider] || null, jobs = (this.usage.jobs || []).filter(j => j.provider === a.provider);
-      const used = weeklyWindow(allowance, now)?.utilization ?? null;
-      const capacity = capacityFor({ name, used, jobs, settings, prs: (this.view || this.nameView)?.prs, owns: pr => agentOfBranch(this.c, pr.headRefName) });
+      const weekly = weeklyWindow(allowance, now), used = weekly?.utilization ?? null;
+      const shortWindow = shortWindowOf(allowance, now);
+      const capacity = capacityFor({ name, used, resetsAt: weekly?.resetsAt ?? null, shortWindow, jobs, settings, prs: (this.view || this.nameView)?.prs, owns: pr => agentOfBranch(this.c, pr.headRefName) });
       out[name] = assessAgent({ allowance, jobs, history: weeklyHistory(this.usage.snapshots, name, allowance), settings, now, latched: this.s.budget[name] || null, capacity });
       out[name].capacity = capacity;
     }

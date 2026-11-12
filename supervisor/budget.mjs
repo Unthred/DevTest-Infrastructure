@@ -26,7 +26,7 @@ const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 // Issue #680: a projection never holds work back, so these settings do nothing now. They are still accepted (and range-checked as before) so an installed
 // team.local.json that sets them keeps loading.
 const LEGACY_KEYS = ['projected_limit', 'recent_min_window_hours', 'recent_min_samples'];
-const CAPACITY_KEYS = ['starting_capacity', 'reserve_margin'];   // issue #1116
+const CAPACITY_KEYS = ['starting_capacity', 'capacity', 'reserve_margin'];   // issue #1116
 const KEYS = ['enabled', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
 KEYS.push('reading_max_age_minutes');   // issue #1163
 
@@ -48,10 +48,12 @@ export function validateBudgetConfig(b, agentNames) {
 // Issue #1116: starting_capacity maps an agent to its weekly capacity in tokens; reserve_margin is the share of capacity kept on top of the projected need.
 function validateCapacityKeys(b, agentNames) {
   if ('reserve_margin' in b && !(Number.isFinite(b.reserve_margin) && b.reserve_margin >= 0 && b.reserve_margin <= 0.5)) throw new SupervisorError('invalid budget config: reserve_margin');
-  if (!('starting_capacity' in b)) return;
-  const c = b.starting_capacity;
-  const ok = c && typeof c === 'object' && !Array.isArray(c) && Object.entries(c).every(([n, v]) => agentNames.includes(n) && Number.isFinite(v) && v > 0);
-  if (!ok) throw new SupervisorError('invalid budget config: starting_capacity must map configured agents to a positive token count');
+  for (const key of ['starting_capacity', 'capacity']) {
+    if (!(key in b)) continue;
+    const c = b[key];
+    const ok = c && typeof c === 'object' && !Array.isArray(c) && Object.entries(c).every(([n, v]) => agentNames.includes(n) && Number.isFinite(v) && v > 0);
+    if (!ok) throw new SupervisorError(`invalid budget config: ${key} must map configured agents to a positive token count`);
+  }
 }
 export const budgetSettings = config => ({ ...DEFAULT_BUDGET, ...(config?.budget || {}) });
 // Whether an agent's role lets it take another agent's implementation work. Default: every agent may.
@@ -62,6 +64,11 @@ const live = (allowance, now) => (allowance?.windows || []).filter(w => Number.i
 const top = ws => [...ws].sort((a, b) => b.utilization - a.utilization)[0] || null;
 // The weekly window that matters (the most used one when a provider reports several), or null when unknown or already reset.
 export const weeklyWindow = (allowance, now) => top(live(allowance, now).filter(isWeekly));
+// Issue #1167: the short (non-weekly) window shown beside the weekly capacity figure, or null.
+export function shortWindowOf(allowance, now) {
+  const w = top(live(allowance, now).filter(x => !isWeekly(x)));
+  return w ? { used: w.utilization, resetsAt: w.resetsAt } : null;
+}
 const median = xs => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const sameReset = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 10 * 60000;
 const tokens = j => (j?.usage ? (j.usage.inputTokens || 0) + (j.usage.outputTokens || 0) : 0);
