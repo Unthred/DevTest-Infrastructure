@@ -30,6 +30,10 @@ The one place that states how an issue (a work item) and its pull request are wr
 
 Any other status, an empty cell, a missing heading, a wrong header or a table with no rows leaves the post condition unmet, and the refusal names the row. Items from the before-the-PR list must be `Met`, `Homeowner-only` or, for an unmet condition, `Not applicable`; never mark one After install to avoid finishing it. The rules above are those of `supervisor/requirements-rows.mjs` as of #1177 and #1184; if they change, change this section with them.
 
+### Cite check (issue #1188)
+
+After the shape check, `supervisor/requirements-cites.mjs` checks every Evidence cell against the pull request: a cited file exists in the head, a cited `file:line` is inside a changed hunk (test files are exempt), a named test appears in the cited test file, a cited command is an allowed verification command, and the row count equals the issue's items under Wanted, Requirements, Acceptance, Live checks, Before the PR, After install and Follow-ups. Run `node tools/check-requirement-cites.mjs` as the last step. A failed cite comes back as one list (row, cite, reason) in the same job, limited to 2 repairs, not a fix round, and review waits meanwhile.
+
 ## Who follows what
 
 The implement, fix, CI fix and review prompts point at this document. The reviewer checks the pull request against it: a missing, malformed or unsupported row, a citation to an unchanged line, or an after-install item presented as met is a blocking finding.

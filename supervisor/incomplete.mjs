@@ -17,3 +17,6 @@ export function markIncomplete(job) {
   job[key] = (job[key] || 0) + 1;
   return true;
 }
+
+// A live job whose last incomplete attempt was a failed cite list is still repairing; the team holds review of its PR meanwhile.
+export const isCiteRepair = job => /^requirements table cites do not match/.test(String(job?.incompleteReason?.detail || ''));

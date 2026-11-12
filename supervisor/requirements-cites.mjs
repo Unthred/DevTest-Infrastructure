@@ -61,7 +61,8 @@ const commandsIn = evidence => {
   return spans.filter(span => COMMAND_START.test(span));
 };
 
-const testNamesIn = evidence => [...String(evidence).matchAll(TEST_NAME)].map(m => m[1] || m[2] || m[3]);
+// A quoted glob after --test is the command's file pattern, not a test name: drop it before reading names.
+const testNamesIn = evidence => [...String(evidence).replace(/--test(?:-\S+)?\s+(?:"[^"]*"|'[^']*')/g, ' ').matchAll(TEST_NAME)].map(m => m[1] || m[2] || m[3]);
 
 const inRanges = (ranges, from, to) => ranges.some(([a, b]) => from >= a && to <= b);
 

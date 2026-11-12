@@ -58,6 +58,7 @@ import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRoun
 import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 import { holdRefusedRebase, noHeadDetail, STOP_STEP } from './rebaserefusal.mjs';
 import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
+import { isCiteRepair } from './incomplete.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
@@ -1103,6 +1104,7 @@ export class Team {
     this.recordReviewWaits(prs);
     const active = await this.jobs.listActive();
     this.activeIds = new Set(active.map(j => j.id));
+    this.citeRepairIds = new Set(active.filter(isCiteRepair).map(j => j.id));   // issue #1188
     await this.findStaleMarks(prs, issueByNo, active);
     // A live Inbox record is its own lane even before processInbox adopts it.
     const inboxStatuses = this.inboxDir() ? inboxStore.allStatuses(this.inboxDir()) : [];
@@ -1478,6 +1480,7 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
+      if (this.authorRepairing(pr)) continue;   // issue #1188
       if (this.s.verdicts[key] || this.carryPending(pr) || busy('review', `${key}:${agent}`) || this.reviewInFlight(pr) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
       // Independence (issue #152): a review on the model that wrote the head is refused.
@@ -1604,6 +1607,10 @@ export class Team {
   // Issue #433: a head with a review job in flight (running, queued or paused) for any reviewing agent is not planned for review by another
   // agent. A paused job holds no slot (#380), so without this the freed slot would start a second review of the same head. A job on a
   // different head does not count (a moved head is stale and the new head is planned); a job whose agent could not review this head (reviewRefusal) is no review.
+  // Issue #1188: review of a head waits while the author's job is repairing failed Requirements cites in the same job.
+  authorRepairing(pr) {
+    return Object.entries(this.s.jobs).some(([id, j]) => this.citeRepairIds?.has(id) && !j.ingested && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)));
+  }
   reviewInFlight(pr) {
     return Object.values(this.s.jobs).some(j => j.kind === 'review' && !j.ingested && j.pr === pr.number && j.head === pr.headRefOid && this.c.agents[j.agent] && !this.reviewRefusal(j.agent, pr, j.key));
   }

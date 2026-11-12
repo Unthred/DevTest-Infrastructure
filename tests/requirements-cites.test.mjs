@@ -173,3 +173,13 @@ test('a cite repair stays in the same job, is limited to 2, and is not a fix rou
   assert.ok(!result.incompleteRetries);
   
 });
+
+test('a ## Requirements section counts as acceptance items, with Acceptance and Live checks', () => {
+  const issue = '## Requirements\n1. One\n2. Two\n3. Three\n\n## Acceptance\n- Tests: a\n- On Tower after install: b\n\n## Live checks\n- GET /x -> 200\n';
+  assert.equal(issueAcceptanceItems(issue).length, 6);
+});
+
+test('the mandated full-suite command is not read as a named test', () => {
+  const full = ['Does the thing', 'Met', '`supervisor/new-thing.mjs:3`; test `does the thing` in `tests/new-thing.test.mjs`; `/root/bin/ai-supervisor test-slot run -- node --test "tests/**/*.test.mjs"`'];
+  assert.deepEqual(problems([full]), []);
+});

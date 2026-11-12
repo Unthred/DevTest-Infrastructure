@@ -206,3 +206,13 @@ test('one resume after a transient stop waits while the job\'s provider is at it
   const none = await run({ limits: { roles: { implementer: 1, reviewer: 3 }, overall: 6 }, active: [{ id: 'r1', provider: 'claude', status: 'running' }], states: { r1: { kind: 'review', agent: 'claude', pr: 20 } } });
   assert.deepEqual(none.resumed, ['j1']);                   // no provider_roles: as before
 });
+
+test('issue 1188: no review is planned for a head whose author job is repairing failed Requirements cites', async t => {
+  const base = await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 0.5, codex: 0.5 } });
+  assert.equal(base.acts.length, 1, 'a review is planned when no repair is running');
+  const detail = 'requirements table cites do not match the pull request: row "1": a.mjs:3: not in the diff';
+  const repairing = await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 0.5, codex: 0.5 }, active: [{ id: 'w0', status: 'queued', incompleteReason: { cause: 'postcondition_not_met', detail } }] });
+  assert.deepEqual(repairing.acts, []);
+  const other = await plan(t, { pulls: sonnetPr, written: bothWritten, projected: { claude: 0.5, codex: 0.5 }, active: [{ id: 'w0', status: 'queued', incompleteReason: { cause: 'postcondition_not_met', detail: 'no pull request' } }] });
+  assert.equal(other.acts.length, 1, 'an ordinary incomplete retry does not hold review');
+});

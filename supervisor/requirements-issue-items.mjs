@@ -1,6 +1,6 @@
 // Issue #1188: how many rows the Requirements check table must have. The acceptance items are the numbered or bulleted lines under
-// the issue's Wanted, Acceptance, Before the PR, After install and Follow-ups headings. An issue with no such list is not counted.
-const ITEM_HEADING = /^#{1,6}\s*(?:wanted|acceptance(?:\s+(?:criteria|list|items))?|before the pr|after install|follow-?ups?)\b/i;
+// the issue's Wanted, Requirements, Acceptance, Live checks, Before the PR, After install and Follow-ups headings. An issue with no such list is not counted.
+const ITEM_HEADING = /^#{1,6}\s*(?:wanted|acceptance(?:\s+(?:criteria|list|items))?|requirements?|live checks?|before the pr|after install|follow-?ups?)\b/i;
 const ITEM_LINE = /^\s*(?:\d+[.)]|[-*])\s+(?:\[[ xX]\]\s+)?(\S.*)$/;
 
 export function issueAcceptanceItems(issueBody) {
