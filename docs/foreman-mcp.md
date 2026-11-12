@@ -144,7 +144,7 @@ Every alert is appended to `<state root>/team/alerts.jsonl` with its delivery re
 
 ## Writing issues (issue #1177)
 
-When the overseer writes or edits an issue, use [`work-item-template.md`](work-item-template.md): a "Wanted (before the PR)" list and a separate "After install (checked on Tower)" list with who checks each item. Never put an on-Tower acceptance check among the before-the-PR requirements; no implement job can satisfy it.
+When the overseer writes or edits an issue, use [`work-item-template.md`](work-item-template.md): a "Wanted (before the PR)" list and a separate "After install (checked on Tower)" list with who checks each item. Follow [the dependency declaration format](ai/dependency-format.md) for any prerequisites. Never put an on-Tower acceptance check among the before-the-PR requirements; no implement job can satisfy it.
 
 ## Homeowner stop record (`foreman_stop_record`, issue #1161)
 - Takes no arguments. Reads the reason of the upgrade latch (`/api/installs.json`) and any Needs you item about a pause, latch or stop, finds the `.md` or `.txt` file paths those reasons name, and returns for each: `path`, `modified`, `bytes`, `text` (redacted with the usual MCP redaction, then cut at 10,000 characters; `truncated` says so).

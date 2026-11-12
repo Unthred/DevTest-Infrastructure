@@ -217,17 +217,20 @@ test('parseDependsOn: accepts only one standalone list and rejects ambiguous dec
     assert.deepEqual(p.numbers, [], name);
   }
   assert.equal(parseDependsOn('"V2 item 33. Cards. Depends on: #1156"').malformed, null, 'quoted title');
+  assert.match(parseDependsOn('V2 item 33. "Cards". Depends on: #1156').malformed, /own line/, 'balanced quote before declaration');
   assert.equal(parseDependsOn('> V2 item 33. Cards. Depends on: #1156').malformed, null, 'quoted block');
   assert.equal(parseDependsOn('see `Depends on: #5` in code').malformed, null, 'inline code');
 });
 
-test('the separately installed MCP parser stays in step with Foreman', () => {
+test('Foreman imports the parser used by MCP proposals', () => {
+  assert.equal(parseDependsOn, parseMcpDependsOn);
   for (const [body, self] of [
     ['Depends on: #12, #15', null],
     ['Depends on: none', null],
     ['V2 item 33. Cards. Depends on: #1156, #1157', null],
     ['"Depends on: #12"', null],
     ['`Depends on: #12`', null],
+    ['V2 item 33. "Cards". Depends on: #1156', null],
     ['Depends on: #9\nDepends on: #10', null],
     ['Depends on: #9', 9],
   ]) assert.deepEqual(parseMcpDependsOn(body, self), parseDependsOn(body, self), body);

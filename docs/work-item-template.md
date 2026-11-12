@@ -3,7 +3,7 @@
 Every issue the overseer writes, and every issue an implement job reads, keeps two separate acceptance lists. An implement job can only meet the first; the second can only be checked once the change runs on Tower.
 
 ```
-Depends on: #N, #M   (or none)
+Optional prerequisite declaration: follow [the dependency declaration format](ai/dependency-format.md).
 
 ## What happened
 ...

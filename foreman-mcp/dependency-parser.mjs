@@ -1,12 +1,20 @@
-// The MCP process is installed separately, so it keeps this pure dependency declaration parser locally.
-// tests/dependencies.test.mjs keeps its behaviour aligned with Foreman's copy.
 const LINE = /^[ \t]*(?:[-*][ \t]+)?\**depends[ \t]+on\**[ \t]*:\**[ \t]*(.*?)[ \t]*$/i;
 const DECLARATION = /\bdepends[ \t]+on\b[ \t]*:/i;
 const LIST = /^#\d+(?:[ \t]*,[ \t]*#\d+)*$/;
 export const DEPENDS_ON_EXAMPLE = 'Depends on: #12, #15';
 
 const withoutCode = body => String(body || '').replace(/```[\s\S]*?```/g, m => m.replace(/[^\n]/g, ' ')).replace(/`[^`\n]*`/g, m => ' '.repeat(m.length));
-const quotedDeclaration = line => /^\s*>/.test(line) || /["“][^"”]*$/.test(line.slice(0, line.search(DECLARATION)));
+const hasOpenQuote = text => {
+  let straight = false;
+  let curly = 0;
+  for (const character of text) {
+    if (character === '"') straight = !straight;
+    if (character === '“') curly++;
+    if (character === '”') curly = Math.max(0, curly - 1);
+  }
+  return straight || curly > 0;
+};
+const quotedDeclaration = line => /^\s*>/.test(line) || hasOpenQuote(line.slice(0, line.search(DECLARATION)));
 const declarations = body => withoutCode(body).split('\n').filter(line => DECLARATION.test(line) && !quotedDeclaration(line));
 
 export function dependencyRefusal(parsed) {
