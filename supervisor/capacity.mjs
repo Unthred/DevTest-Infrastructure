@@ -10,6 +10,7 @@
 //               plus a margin; an agent whose remaining capacity falls to the reserve is reviews-only.
 //
 // Without a trusted capacity nothing here guesses: the caller falls back to the fixed high-water share and says so.
+
 export const isWeekly = w => /^seven_day|week/.test(w?.type || '') || (Number.isFinite(w?.windowMinutes) && w.windowMinutes >= 10000);
 
 export const ALLOWANCE_DEFAULTS = { reserve_margin: 0.05, capacity_windows: 4, min_window_delta: 0.03, min_trusted_windows: 2 };
@@ -48,6 +49,7 @@ export function capacitySamples(jobs) {
   const perWindow = [];
   for (let i = 1; i < readings.length; i++) {
     const delta = readings[i].used - readings[i - 1].used;
+    // A fall in use, including an applied limit reset (issue #1159), has a negative delta and is skipped here, so it never feeds capacity.
     if (!sameReset(readings[i].resetsAt, readings[i - 1].resetsAt) || readings[i].tokens <= 0 || delta <= 0) continue;
     let entry = perWindow.find(w => sameReset(w.resetsAt, readings[i].resetsAt));
     if (!entry) perWindow.push(entry = { resetsAt: readings[i].resetsAt, tokens: 0, delta: 0 });

@@ -12,6 +12,7 @@ import { SupervisorError } from './core.mjs';
 import { redact } from './redact.mjs';
 import { highWaterHold, reserveRefusal } from './capacityrule.mjs';
 import { isWeekly } from './capacity.mjs';
+import { restoredIn, sinceLastReset } from './resetdetect.mjs';
 
 export const HOUR = 3600000;
 export const DEFAULT_BUDGET = { enabled: true, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
@@ -72,7 +73,8 @@ export function weeklyHistory(snapshots, agent, current = null) {
 // Recent burn in fraction-of-allowance per hour, from readings of the same weekly window over the last `hours`.
 // Needs two readings at least two hours apart; otherwise null (the window average is used alone).
 export function recentRate(history, resetsAt, now, hours) {
-  const pts = history.filter(p => sameReset(p.resetsAt, resetsAt) && now - p.at <= hours * HOUR && p.at <= now);
+  // Issue #1159: readings from before a limit reset the homeowner applied describe use that was given back, so they are left out.
+  const pts = sinceLastReset(history, resetsAt).filter(p => sameReset(p.resetsAt, resetsAt) && now - p.at <= hours * HOUR && p.at <= now);
   if (pts.length < 2) return null;
   const span = (pts.at(-1).at - pts[0].at) / HOUR;
   return span >= 2 ? Math.max(0, (pts.at(-1).used - pts[0].used) / span) : null;
@@ -135,7 +137,8 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (short) out.shortWindow = { used: short.utilization, resetsAt: short.resetsAt };
   if (weekly) {
     const windowH = (weekly.windowMinutes || WEEK_MINUTES) / 60, hoursLeft = (weekly.resetsAt - now) / HOUR;
-    const average = weekly.utilization / Math.max(windowH * MIN_ELAPSED_FRACTION, windowH - hoursLeft);
+    // The window average counts what an applied reset gave back, or the burn would read lower than it was (issue #1159).
+    const average = (weekly.utilization + restoredIn(history, weekly.resetsAt)) / Math.max(windowH * MIN_ELAPSED_FRACTION, windowH - hoursLeft);
     // Just after a reset little has been used and a short burst extrapolates wildly (4% used read as 299%, issue #619). The recent rate
     // is blended in gradually (issue #698): weight 0 until the window has run half the recent-rate span, rising linearly to 1 at the full
     // span, so the estimate has no cliff at recent_hours (4% used, +4% in 3 h read 29% at 23 h and 196% at 24 h with a hard cutoff).

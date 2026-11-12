@@ -17,7 +17,7 @@ import { healthPage } from './healthpage.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
-
+import { resetsCard } from './resetscard.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -789,7 +789,8 @@ function usagePage(view, query, path) {
     { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
   const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
     emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
-  return { title: 'Usage & cost', body: `${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
+  const limits = resetsCard({ esc, card, badge, lt }, view.limitResets);
+  return { title: 'Usage & cost', body: `${grid('usage', limits + win + chart + tokChart + byModel + failed + table_)}` };
 }
 function reviewsPage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
@@ -1021,7 +1022,6 @@ function processesPage(view, query, pathname, route) {
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
 const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, health: (view, query, path, route) => healthPage(route, { esc, card, grid, empty, legend, plainTable, diagSpark, utc }), evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
-
 export const PAGE_NAMES = Object.keys(PAGES);
 
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
