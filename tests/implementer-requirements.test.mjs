@@ -195,3 +195,12 @@ test('the dashboard view lists the After install item of a PR once an upgrade re
   fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), `${JSON.stringify({ at: 1, prs: [7], result: 'verified' })}\n`);
   assert.deepEqual(view().map(i => i.id), ['after-install-7']);
 });
+
+test('issue #1184: an acceptance bullet that says after install cannot be marked Homeowner-only, even with a reason', () => {
+  for (const req of ['Acceptance: on Tower after install, Needs you shows the outstanding steps', 'Acceptance: on Tower the check runs once installed']) {
+    const refusal = rowRefusal(req, 'Homeowner-only', 'needs homeowner approval and credentials');
+    assert.match(refusal, /set the status to After install/);
+  }
+  assert.equal(rowRefusal('Acceptance: on Tower after install, x', 'After install', 'Checked by the overseer'), null);
+  assert.equal(rowRefusal('Create the GitHub App', 'Homeowner-only', 'needs homeowner credentials'), null);
+});
