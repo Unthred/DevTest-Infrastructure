@@ -6,7 +6,7 @@ const ACTION = 'action="/limit-resets"';
 const hidden = (name, value) => `<input type="hidden" name="${name}" value="${value}">`;
 const button = (h, id, action, label) => {
   const form = `<form method="post" ${ACTION} class="inline">`;
-  return `${form}${hidden('action', action)}${hidden('id', h.esc(id))}<button type="submit">${label}</button></form>`;
+  return `${form}${hidden('action', action)}${hidden('id', h.esc(id))}<button class="btn" type="submit">${label}</button></form>`;
 };
 
 function selectOf(h, name, options, current) {
@@ -25,7 +25,7 @@ function resetRow(h, r) {
   const used = r.usedAt ? ` ${h.badge('info', 'used')}` : '';
   const toggle = r.usedAt ? button(h, r.id, 'unuse', 'Mark available') : button(h, r.id, 'use', 'Mark used');
   const editHidden = `${hidden('action', 'edit')}${hidden('id', h.esc(r.id))}`;
-  const editForm = `<form method="post" ${ACTION}>${editHidden}${fields(h, r)}<button type="submit">Save</button></form>`;
+  const editForm = `<form method="post" ${ACTION}>${editHidden}${fields(h, r)}<button class="btn" type="submit">Save</button></form>`;
   const helps = `<p class="sub helps" data-helps="${r.helps.yes ? 'yes' : 'no'}">Helps Foreman now: ${h.esc(r.helps.text)}</p>`;
   const head = `<b>${h.esc(r.limitLabel)}</b>, ${h.esc(scope)}; ${h.badge(r.severity, r.text)}${used}`;
   return `<li data-reset="${h.esc(r.id)}" data-expiry="${h.esc(SEV_WORD[r.severity] || r.severity)}">${head}${helps}`
@@ -48,7 +48,7 @@ export function resetsCard(h, view) {
   const sections = Object.entries(view.byAgent).map(([agent, a]) => agentSection(h, agent, a)).join('');
   const agentSelect = selectOf(h, 'agent', view.agents.map(a => [a, a]));
   const agentLabel = `<label>Agent ${agentSelect}</label>`;
-  const form = `<form method="post" ${ACTION}>${hidden('action', 'add')}${agentLabel} ${fields(h)} <button type="submit">Add</button></form>`;
+  const form = `<form method="post" ${ACTION}>${hidden('action', 'add')}${agentLabel} ${fields(h)} <button class="btn" type="submit">Add</button></form>`;
   const add = `<details${sections ? '' : ' open'}><summary>Record a reset</summary>${form}</details>`;
   const intro = sections ? '' : '<p class="sub">No limit resets recorded. Foreman cannot read them from the provider, so record each one you hold.</p>';
   return h.card({ id: 'u-resets', title: 'Limit resets', span: 12, movable: true, body: `${intro}${sections}${add}` });
