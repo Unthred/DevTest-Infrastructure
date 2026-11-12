@@ -34,8 +34,10 @@ export function classifyEnd(job) {
   if (job.status === 'completed') return work('completed');
   // Issue #1109: the stop marker written by the stop command outlasts any later event a dying worker records.
   // Issue #1179: the marker counts whatever status a dying worker wrote afterwards (blocked, failed), and whatever stop reason the action gave.
-  if (job.lastEvent === 'manual_stop') return { kind: 'none', cause: 'manual_stop' };
-  if (job.stop && typeof job.stop === 'object' && /^[a-z_]{1,32}$/.test(String(job.stop.reason)) && !WORK_STOPS.has(job.stop.reason)) return { kind: 'none', cause: String(job.stop.reason), by: String(job.stop.by || 'homeowner').slice(0, 32) };
+  if (job.lastEvent === 'manual_stop' && !(job.stop && typeof job.stop === 'object')) return { kind: 'none', cause: 'manual_stop' };
+  if (job.stop && typeof job.stop === 'object' && /^[a-z_]{1,32}$/.test(String(job.stop.reason)) && !WORK_STOPS.has(job.stop.reason)) return { kind: 'none', cause: String(job.stop.reason), by: String(job.stop.by || 'homeowner').slice(0, 32), why: String(job.stop.why || '').slice(0, 200) };
+  // A record from before this fix: the worker's exit save dropped the marker, leaving status stopped with the last event still 'started'.
+  if (job.status === 'stopped' && job.lastEvent === 'started') return { kind: 'none', cause: 'manual_stop', by: 'unknown', why: '' };
   if (job.status === 'waiting_on') return { kind: 'none', cause: 'waiting_on' };   // stopped on an open prerequisite: neither a try nor a fault
   const reason = job.incompleteReason && typeof job.incompleteReason === 'object' ? job.incompleteReason : {};
   const stop = String(reason.cause || job.lastEvent || job.status);

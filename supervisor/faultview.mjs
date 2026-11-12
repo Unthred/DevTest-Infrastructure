@@ -22,6 +22,7 @@ export const rearmView = (rearm, up) => (rearm ? { at: rearm.at, scopes: rearm.s
 
 // Issue #1109: one line on a job row saying that a stop or an infrastructure fault used no attempt, for foreman_jobs and foreman_why_blocked.
 export function endNote(job, rec) {
+  if (rec?.stoppedBy && job?.status === 'stopped') return redact(`stopped by ${rec.stoppedBy.by}${rec.stoppedBy.why ? `: ${rec.stoppedBy.why}` : ''}; no fault, agent not parked`, 160);
   if (job?.status === 'stopped' && job.stop?.reason === 'manual_stop') return redact(`stopped by ${job.stop.by}; no attempt used, agent not parked, automatic restart off`, 160);
   if (job?.status === 'stopped' && job.stop) return redact(`stopped by ${job.stop.by} (${job.stop.reason}); automatic restart off`, 160);
   const cause = rec?.infraFault || rec?.attemptRefunded;

@@ -92,3 +92,37 @@ test('a work stop reason on the marker stays a work outcome', () => {
   const c = faults.classifyEnd({ status: 'stopped', lastEvent: 'idle_timeout', stop: { by: 'overseer', reason: 'idle_timeout' }, usage: { inputTokens: 5, outputTokens: 1 } });
   assert.equal(c.kind, 'work');
 });
+
+// The real stop path: the stop command writes the record from another process while the worker runs; the worker's exit save must keep it.
+test('a stop written during a run survives the worker exit save and classifies as no fault', async t => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const { saveJob, readJob, stateRoot } = await import('../supervisor/core.mjs');
+  const { runProcess } = await import('../supervisor/process.mjs');
+  const { stopJob } = await import('../supervisor/stopjob.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop1179-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  const root = stateRoot(path.join(dir, 'state')), id = 'c'.repeat(32), clock = { now: () => Date.now(), sleep: async () => {} };
+  fs.mkdirSync(path.join(root, 'jobs'), { recursive: true });
+  const job = { id, kind: 'review', worktree: dir, attempts: 1, status: 'running', lastEvent: 'started', provider: 'claude', role: 'devtest', scope: 's', allowedActions: ['read'], prompt: 'p', autoRestart: true };
+  saveJob(root, job, clock);
+  const adapter = { command: () => [process.execPath, '-e', 'setTimeout(()=>{}, 700)'], observe: () => ({}), preflight: () => true };
+  const running = runProcess(root, job, { manifest: { launch: { env_allowlist: ['PATH'] } } }, adapter, clock, {});
+  await new Promise(r => setTimeout(r, 250));
+  stopJob(root, readJob(root, id), { by: 'homeowner', why: 'duplicate review being closed', clock });
+  await running;
+  const disk = readJob(root, id);
+  assert.equal(disk.status, 'stopped');
+  assert.deepEqual([disk.stop.by, disk.stop.why, disk.lastEvent, disk.autoRestart], ['homeowner', 'duplicate review being closed', 'manual_stop', false]);
+  const c = faults.classifyEnd(disk);
+  assert.deepEqual([c.kind, c.by, c.why], ['none', 'homeowner', 'duplicate review being closed']);
+  const rec = { kind: 'review', agent: 'claude', pr: 1174 }, f = flowOf();
+  f.onEnd(id, rec, disk, {});
+  assert.equal(f.parked('claude'), null);
+  assert.deepEqual(f.infra.counts, {});
+  assert.deepEqual([rec.stoppedBy.by, rec.stoppedBy.why], ['homeowner', 'duplicate review being closed']);
+});
+
+test('a stopped record from before the fix (status stopped, last event started, no marker) is not a fault', () => {
+  const c = faults.classifyEnd({ status: 'stopped', lastEvent: 'started', usage: {} });
+  assert.deepEqual([c.kind, c.cause], ['none', 'manual_stop']);
+});

@@ -136,10 +136,10 @@ function realJobs(root, registry) {
     rearm: async id => { const job = readJob(root, id); if (job.status !== 'queued' || !(job.nextAttemptAt > Date.now())) return false; job.nextAttemptAt = Date.now(); saveJob(root, job, realClock, true); return true; },
     // Issue #629: the homeowner's approved stop, the same steps as `ai-supervisor stop ID`
     transcriptMtime: async id => transcriptMtime(transcriptFile(root, id)),   // issue #995: the job's heartbeat
-    stop: async (id, reason = 'manual_stop') => {
+    stop: async (id, reason = 'manual_stop', { by = 'overseer', why = '' } = {}) => {
       const job = readJob(root, id);
       if (terminal.has(job.status)) throw new SupervisorError('terminal job cannot be stopped');
-      stopJob(root, job, { reason, by: 'overseer', signal: workerSignal(job, { processStart, childAlive }, 'SIGTERM') });
+      stopJob(root, job, { reason, by, why, signal: workerSignal(job, { processStart, childAlive }, 'SIGTERM') });
     },
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };

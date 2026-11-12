@@ -2229,7 +2229,7 @@ export class Team {
     if (action === 'stop_job') {
       if (TERMINAL.has(job.status)) throw new SupervisorError(`job ${target} already ended (${job.status})`);
       if (typeof this.jobs.stop !== 'function') throw new SupervisorError('this supervisor cannot stop a job');
-      await this.jobs.stop(id); log(`stopped the ${rec.kind} job ${target}`, 'stopped'); return `job ${target} stopped`;
+      await this.jobs.stop(id, 'manual_stop', { by: 'homeowner', why: reason }); log(`stopped the ${rec.kind} job ${target}`, 'stopped'); return `job ${target} stopped`;
     }
     if (action === 'resume_job') {
       if (!['paused_manual', 'paused_limit', 'blocked', 'failed'].includes(job.status)) throw new SupervisorError(`job ${target} is ${job.status}, not resumable`);
