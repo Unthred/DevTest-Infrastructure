@@ -20,6 +20,7 @@ import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
 import { allowanceBody as allowanceCard } from './allowancecard.mjs';
+import { allowanceStats } from './appbaralloc.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -474,6 +475,7 @@ function statusBar(view, route, head = '', crumbs = '') {
   return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} DevTest team</div>${head}
 ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" data-bar="health" data-bar-name="Health" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
 ${agentStat(view)}
+${allowanceStats({ esc, lt, dur, badge }, view)}
 <div class="stat" data-bar="last-tick" data-bar-name="Last tick"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat" data-bar="next-tick" data-bar-name="Next tick"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
 ${pageDataStat(view)}

@@ -516,3 +516,15 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .approvals-panel{margin-top:var(--sp2);max-height:60vh;overflow:auto}.approval-row{padding:var(--sp2) 0;border-top:1px solid var(--line)}
 .approval-row .acts{display:flex;flex-wrap:wrap;gap:var(--sp2)}
 @media (max-width:600px){.approvals-panel .btn{min-height:44px}.approvals{width:100%}}
+
+/* app bar allowance items (issue #1178): both figures per agent; level shown as colour AND a text marker; wraps on a phone */
+.allowance-item .al-link{display:flex;flex-wrap:wrap;align-items:center;gap:0 var(--sp3);color:inherit;text-decoration:none;min-height:44px}
+.allowance-item .al-name{text-transform:none}
+.al-win{white-space:nowrap}.al-k{color:var(--mut)}
+.al-win[data-level=high] .al-pct,.al-win[data-level=high] .al-lvl,.al-win[data-level=high] .al-mark{color:var(--warning)}
+.al-win[data-level=near] .al-pct,.al-win[data-level=near] .al-lvl,.al-win[data-level=near] .al-mark{color:var(--action);font-weight:700}
+.al-unknown{color:var(--mut);font-style:italic}
+@media(max-width:639px){
+  .statusbar>.allowance-item{grid-column:1/-1;white-space:normal}
+  .allowance-item .al-link{gap:0 var(--sp2)}.al-win{white-space:normal}.al-reset{display:block}
+}

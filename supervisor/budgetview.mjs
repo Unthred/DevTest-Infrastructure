@@ -49,3 +49,6 @@ export function budgetView(team) {
   }
   return out;
 }
+
+// Issue #1178: the scheduler's own marks, so the app bar's levels agree with it (high water, and the used-up mark).
+export const budgetThresholds = settings => ({ highWater: settings.high_water, exhaustedAt: settings.exhausted_at });
