@@ -2,6 +2,7 @@
 // archives, merge and unblock overflow is appended to archive files, and a deduplicated, allowlisted timeline of everything the
 // team did is kept from the first job. The tick WRITES these files; the dashboard only READS them. No function here calls GitHub or a
 // model, except `githubBackfill`, which runs only from the explicit `history backfill` command with an injected gh runner.
+import { limitResetEntries } from './resetsentries.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -60,7 +61,7 @@ export function archiveOverflow(root, which, entries) {
 }
 
 // ---- the timeline: allowlisted fields only, redacted free text, deduplicated by id
-export const KINDS = ['job', 'verdict', 'merge', 'rebase', 'unblock', 'migration'];
+export const KINDS = ['job', 'verdict', 'merge', 'rebase', 'unblock', 'migration', 'limit_reset'];
 export const SOURCES = ['live', 'job-record', 'github'];
 const int = v => (Number.isSafeInteger(v) && v > 0 ? v : undefined);
 const word = (v, max = 40) => (typeof v === 'string' && /^[A-Za-z0-9 _.:/-]+$/.test(v) ? v.slice(0, max) : undefined);
@@ -129,7 +130,7 @@ export function verdictEntry(key, v, stage) {
 export const mergeEntry = m => ({ id: `merge:${m.pr}`, at: m.mergedAt, kind: 'merge', pr: m.pr, issue: m.issue ?? undefined, agent: m.agent ?? undefined, reviewer: m.reviewer ?? undefined });
 
 // Called from the tick. Best effort for the caller; returns the number of new entries.
-export const recordTimeline = (root, inputs) => appendTimeline(root, collectEntries({ ...inputs, root }));
+export const recordTimeline = (root, inputs) => appendTimeline(root, [...collectEntries({ ...inputs, root }), ...limitResetEntries({ root, config: inputs.config })]);
 // Called where a verdict is about to be deleted, so the review outcome stays in the timeline.
 export function archiveVerdict(root, key, v, stage) { const e = verdictEntry(key, v, stage); return e ? appendTimeline(root, [e]) : 0; }
 
@@ -187,6 +188,7 @@ export function entryText(e) {
   else if (e.kind === 'merge') t = `merged ${ref}${e.agent ? ` (${e.agent})` : ''}${e.reviewer ? `, reviewed by ${e.reviewer}` : ''}`;
   else if (e.kind === 'rebase') t = `rebase of ${ref}${e.head ? ` to ${e.head}` : ''}${e.detail ? `: ${e.detail}` : ''}`;
   else if (e.kind === 'unblock') t = `Foreman unblocked ${ref}: ${e.detail || ''}`;
+  else if (e.kind === 'limit_reset') t = `${who}${e.detail || 'limit reset applied'}`;
   else t = `config migration ${e.detail || ''} ${e.event || ''}`;
   return redact(t.replace(/\s+/g, ' ').trim(), 300);
 }
