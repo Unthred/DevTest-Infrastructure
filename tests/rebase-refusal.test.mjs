@@ -128,6 +128,7 @@ test('rebase-stop records the agent\'s stop, the post-condition reads it, and th
   const stop = args => execFileSync(process.execPath, [cli, 'rebase-stop', ...args], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root }, stdio: ['ignore', 'pipe', 'pipe'] });
   assert.throws(() => stop(['--worktree', w.agent, '--old', w.oldHead]), 'negative: a stop without a reason is refused');
   assert.equal(readRefusal(w.agent, w.oldHead), null);
+  assert.throws(() => stop(['--worktree', path.join(root, 'missing'), '--old', w.oldHead, '--reason', 'x']), 'negative: no note written means a non-zero exit');
   assert.deepEqual(JSON.parse(stop(['--worktree', w.agent, '--old', w.oldHead, '--reason', 'seven files conflict and the two sides are different designs'])), { stopped: true });
   const note = readRefusal(w.agent, w.oldHead);
   assert.equal(note.reason, 'agent-stop');
@@ -146,6 +147,5 @@ test('rebase-stop records the agent\'s stop, the post-condition reads it, and th
 });
 
 test('the rebase prompt tells the agent to run rebase-stop when it cannot finish', () => {
-  
   assert.match(rebasePrompt({ pr: 7, head: 'a'.repeat(40), base: 'main', branch: 'b' }), /ai-supervisor rebase-stop --worktree <this worktree> --old <oldHead from step 1> --reason/);
 });

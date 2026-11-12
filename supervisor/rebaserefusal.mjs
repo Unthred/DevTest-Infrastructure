@@ -23,7 +23,8 @@ export function recordRefusal(worktree, { oldHead, reason, message }) {
 // Issue #1207: a rebase the agent cannot finish (conflicts that are not mechanical, a check it may not fix, a tool denied) used to be
 // reported only in chat, so the planner ran the same prompt again and got the same stop. The agent now records it with rebase-stop.
 export const STOPPED = 'agent-stop';
-export const STOP_STEP = fs.readFileSync(new URL('./rebase-stop-step.txt', import.meta.url), 'utf8').trim();   // the prompt sentence that tells the agent to call it
+// The prompt sentence that tells the agent to call rebase-stop.
+export const STOP_STEP = fs.readFileSync(new URL('./rebase-stop-step.txt', import.meta.url), 'utf8').trim();
 export function recordStop(worktree, { oldHead, message }) {
   recordRefusal(worktree, { oldHead, reason: STOPPED, message });
 }
@@ -55,8 +56,13 @@ export async function holdRefusedRebase(team, id, j, job) {
   if ((team.s.rebaseAttempts[j.key] || 0) < left) team.s.rebaseAttempts[j.key] = left;
   team.save();
   const text = note ? note.message : `the guard refused (${job.rebaseRefused})`;
-  const what = note?.reason === STOPPED ? 'could not be finished by the agent, which stopped and reported why' : 'was resolved locally but the guarded push refused it, so nothing was pushed';
-  const body = NOTICE.replace('{what}', () => what).replace('{base}', () => j.base || 'main').replace('{head}', () => team.commitRef(j.head)).replace('{message}', () => text);
+  const what = note?.reason === STOPPED
+    ? 'could not be finished by the agent, which stopped and reported why'
+    : 'was resolved locally but the guarded push refused it, so nothing was pushed';
+  const body = NOTICE.replace('{what}', () => what)
+    .replace('{base}', () => j.base || 'main')
+    .replace('{head}', () => team.commitRef(j.head))
+    .replace('{message}', () => text);
   await team.postNotice(j.pr, `rebase-refused job=${id}`, body);
   await team.gh.addLabel(j.pr, 'needs-homeowner');
 }

@@ -1,7 +1,9 @@
 // The guarded commands a rebase job calls (the prompt names exactly these). Returns true when `command` was one of them.
 import { SupervisorError } from './core.mjs';
 import { prepareRebase, pushRebase } from './rebasecheck.mjs';
-import { recordStop } from './rebaserefusal.mjs';
+import { recordStop, readRefusal } from './rebaserefusal.mjs';
+
+export const REBASE_USAGE = 'rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA | rebase-stop --worktree DIR --old SHA --reason TEXT';
 
 const need = (a, flags, usage) => { if (!flags.every(f => a[f])) throw new SupervisorError(`usage: ${usage}`); };
 
@@ -17,7 +19,10 @@ export function rebaseCommand(command, a) {
   } else if (command === 'rebase-stop') {   // issue #1207
     need(a, ['worktree', 'old', 'reason'], 'rebase-stop --worktree DIR --old OLD_HEAD --reason TEXT');
     recordStop(a.worktree, { oldHead: a.old, message: a.reason });
-    console.log(JSON.stringify({ stopped: true }));
+    // recordStop is best effort; tell the agent when no note was written instead of reporting success.
+    const written = readRefusal(a.worktree, a.old);
+    console.log(JSON.stringify({ stopped: Boolean(written) }));
+    if (!written) process.exitCode = 3;
   } else return false;
   return true;
 }
