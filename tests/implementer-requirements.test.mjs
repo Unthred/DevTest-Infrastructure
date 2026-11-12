@@ -166,6 +166,12 @@ test('the Homeowner-only refusal points at After install', () => {
   assert.match(rowRefusal('Acceptance on Tower', 'Homeowner-only', 'needs Tower'), /set the status to After install/);
 });
 
+test('Not applicable needs evidence naming the open item its condition waits on', () => {
+  assert.equal(rowRefusal('Browser test when V2 item 6 is merged', 'Not applicable', 'V2 item 6 (#1148) is still open'), null);
+  assert.match(rowRefusal('Browser test when V2 item 6 is merged', 'Not applicable', 'not needed'), /does not name the open item/);
+  assert.match(rowRefusal('Browser test', 'Not applicable', '#1148 was merged yesterday'), /does not name the open item/);
+});
+
 test('the review path records After install rows and afterInstallDone ends them', async t => {
   const tm = team(t, `${valid}${afterRow}\n`);
   await tm.applyDoneRule(19, HEAD, { verdict: 'PASS', findings: [] });
