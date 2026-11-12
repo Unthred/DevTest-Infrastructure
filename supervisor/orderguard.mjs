@@ -18,10 +18,10 @@ const APPROVED = (title, capMs) => `waiting for an approved inbox prompt "${Stri
 // What stops an approved prompt from starting now, or null.
 export function cannotStart(team, id) {
   const halt = breaker.blocks(team.s.breaker, team.c.breaker, { type: 'inbox', issue: null });
-  if (halt) return { why: `the circuit breaker halted new ${halt.cause === '@global' ? 'jobs' : 'inbox prompts'} (${halt.cause})`, halt };
+  if (halt) return { kind: 'breaker', why: `the circuit breaker halted new ${halt.cause === '@global' ? 'jobs' : 'inbox prompts'} (${halt.cause})`, halt };
   const agents = team.agents().map(([n]) => n);
-  if (agents.length && agents.every(n => team.limitedOf(n).out)) return { why: 'every agent is at a usage limit', halt: null };
-  if (team.worktreeUnusable('inbox', id)) return { why: 'its worktree is unusable (a stale lease or a foreign directory)', halt: null };
+  if (agents.length && agents.every(n => team.limitedOf(n).out)) return { kind: 'limit', why: 'every agent is at a usage limit', halt: null };
+  if (team.worktreeUnusable('inbox', id)) return { kind: 'worktree', why: 'its worktree is unusable (a stale lease or a foreign directory)', halt: null };
   return null;
 }
 
@@ -59,10 +59,13 @@ export function holdEdges(team, capMs) {
   const edges = [];
   for (const p of approvedPrompts(team, capMs)) {
     if (p.ignored && !p.blocked) continue;   // aged out or dropped: it holds nothing
-    if (!p.dropped) edges.push({ id: `order-guard:${p.id}`, waiter: 'implement-picks', waitsFor: `prompt:${p.id}`, priority: 1, text: `new implement picks wait for the approved prompt "${String(p.title).slice(0, 60)}"` });
+    const h = p.blocked?.halt, clearedByImplement = (h?.types || []).includes('implement');
+    // The guard ignores a blocked prompt, so its edge is `latent`: it counts for cycle detection (the guard applies it the moment the
+    // prompt could start) but is never reported as a hold that is lasting.
+    if (!p.dropped && (!p.blocked || clearedByImplement)) edges.push({ id: `order-guard:${p.id}`, waiter: 'implement-picks', waitsFor: `prompt:${p.id}`, priority: 1, latent: !!p.ignored, text: `new implement picks wait for the approved prompt "${String(p.title).slice(0, 60)}"` });
     if (p.blocked) {
-      const h = p.blocked.halt, clearedByImplement = (h?.types || []).includes('implement');
-      edges.push({ id: `breaker:${h?.cause || 'limit'}:${p.id}`, waiter: `prompt:${p.id}`, waitsFor: h && clearedByImplement ? 'implement-picks' : 'homeowner', priority: 3,
+      const id = p.blocked.kind === 'breaker' ? `breaker:${h.cause}:${p.id}` : `${p.blocked.kind}:${p.id}`;
+      edges.push({ id, waiter: `prompt:${p.id}`, waitsFor: h && clearedByImplement ? 'implement-picks' : 'homeowner', priority: 3,
         text: `the prompt "${String(p.title).slice(0, 60)}" waits for ${p.blocked.why}${clearedByImplement ? ', which ends when an implement job succeeds' : ''}` });
     }
   }
@@ -70,7 +73,13 @@ export function holdEdges(team, capMs) {
 }
 
 export const LONG_HOLD_MS = 30 * 60000;
-const OWNER = { 'order-guard': { owner: 'overseer', control: 'reject or undo the prompt on its Inbox card' }, breaker: { owner: 'homeowner', control: 'Resume on the Breaker card, or ai-supervisor team breaker resume' } };
+// Each hold kind has its own owner and the control that clears it.
+const OWNER = {
+  'order-guard': { owner: 'overseer', control: 'reject or undo the prompt on its Inbox card' },
+  breaker: { owner: 'homeowner', control: 'Resume on the Breaker card, or ai-supervisor team breaker resume' },
+  limit: { owner: 'nobody to act, it ends when an agent usage limit resets', control: 'wait for the reset, or reject or undo the prompt on its Inbox card' },
+  worktree: { owner: 'overseer', control: 'repair or remove the unusable worktree named on the job, or reject or undo the prompt on its Inbox card' },
+};
 
 // Each pass: find holds that wait for each other and drop the lowest priority hold of each cycle (it is remembered in s.holdDrops so the guard
 // ignores that prompt and the Needs you item stays while the prompt is waiting); remember when each hold was first seen, for the 30 minute owner item.
@@ -84,9 +93,9 @@ export function checkHolds(team, capMs, report) {
     s.holdDrops[drop.id] = { at: now, prompt: drop.waitsFor.replace(/^prompt:/, ''), dropped: drop.id, holds: cycles[i].map(h => ({ id: h.id, text: h.text })) };
     (report.holdCycles ||= []).push({ dropped: drop.id, holds: cycles[i].map(h => h.id) });
   });
-  const live = new Set(edges.filter(h => !dropped.some(d => d.id === h.id)).map(h => h.id));
+  const live = new Set(edges.filter(h => !h.latent && !dropped.some(d => d.id === h.id)).map(h => h.id));
   for (const id of Object.keys(s.holdSeen)) if (!live.has(id)) delete s.holdSeen[id];
-  for (const h of edges) if (live.has(h.id)) s.holdSeen[h.id] ||= { since: now, text: h.text };
+  for (const h of edges) if (live.has(h.id) && !h.latent) s.holdSeen[h.id] ||= { since: now, text: h.text };
   if (dropped.length) team.save();
 }
 

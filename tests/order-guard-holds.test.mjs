@@ -124,12 +124,48 @@ test('holdgraph: findCycle and breakCycles on plain data', () => {
   assert.equal(breakCycles([h('a', 'x', 'x', 1)]).dropped.length, 1, 'a hold that waits for itself');
 });
 
-test('a hold that lasts over 30 minutes shows its owner and its control', async t => {
-  const w = world(t); approve(w, PROMPT);
-  w.team.checkHolds({});
+test('a hold that lasts over 30 minutes shows its owner and its control (cap raised so the guard still holds, checked through the tick)', async t => {
+  const w = world(t); w.team.c.limits.inbox_max_minutes = 60; w.team.c.limits.roles.inbox = 0; approve(w, PROMPT);
+  await w.team.tickPass();
   assert.deepEqual(w.team.holdItems().filter(i => i.id.startsWith('stalled-hold')), [], 'young: no item');
   w.clock.t += 31 * MIN;
+  await w.team.tickPass();
   const [item] = w.team.holdItems().filter(i => i.id.startsWith('stalled-hold'));
   assert.match(item.text, /Owner: overseer/);
   assert.match(item.action, /reject or undo the prompt/);
+});
+
+test('a prompt blocked by a usage limit has its own owner and control, and no order guard hold is reported for it', async t => {
+  const w = world(t); w.team.c.limits.inbox_max_minutes = 60; approve(w, PROMPT);
+  w.team.limitedOf = () => ({ out: true });
+  await w.team.tickPass();
+  w.clock.t += 31 * MIN;
+  await w.team.tickPass();
+  const items = w.team.holdItems().filter(i => i.id.startsWith('stalled-hold'));
+  assert.equal(items.length, 1, 'only the limit hold');
+  assert.match(items[0].text, /every agent is at a usage limit/);
+  assert.match(items[0].text, /usage limit resets/);
+  assert.doesNotMatch(items[0].action + items[0].text, /Breaker|breaker|new implement picks wait/);
+});
+
+test('tick: replay of 12 Nov with the halt of implement jobs only: the prompt itself starts', async t => {
+  const w = world(t); approve(w, PROMPT); halt(w, ['implement']);
+  await w.team.tickPass();
+  assert.deepEqual(startedKinds(w), ['inbox'], 'the prompt starts under an implement halt');
+});
+
+test('foreman_propose accepts effect for a prompt, refuses other values and other kinds, and the approval card shows it', async t => {
+  const { checkProposal } = await import('../foreman-mcp/inbox.mjs');
+  const ok = checkProposal({ kind: 'prompt', title: 'Diagnose', prompt: 'List open issues.', effect: 'read_only' });
+  assert.equal(ok.ok, true); assert.equal(ok.item.effect, 'read_only');
+  assert.equal(checkProposal({ kind: 'prompt', title: 'Diagnose', prompt: 'List open issues.' }).ok, true, 'effect stays optional');
+  assert.match(checkProposal({ kind: 'prompt', title: 'D', prompt: 'x', effect: 'harmless' }).error, /effect must be one of/);
+  assert.match(checkProposal({ kind: 'issue_draft', title: 'D', body: 'x', effect: 'read_only' }).error, /unknown argument: effect/);
+  // the item the proposer wrote passes the supervisor's own validation, and the card tells the homeowner about the exemption
+  assert.equal(inbox.validateItem(ok.item).ok, true);
+  const w = world(t), id = 'c'.repeat(32);
+  fs.writeFileSync(path.join(w.dir, 'items', `${id}.json`), JSON.stringify(ok.item));
+  inbox.scan(w.dir, w.clock.t);
+  const [card] = inbox.pendingCards(w.dir);
+  assert.match(card.will, /declares it read only: it does not hold new implement work back/);
 });
