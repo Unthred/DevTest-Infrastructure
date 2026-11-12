@@ -58,7 +58,8 @@ import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRoun
 import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 import { holdRefusedRebase, noHeadDetail, STOP_STEP } from './rebaserefusal.mjs';
 import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
-import { isCiteRepair } from './incomplete.mjs'; import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, finishDescriptionRound, roundSpec } from './descround.mjs';
+import { isCiteRepair } from './incomplete.mjs';
+import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, finishDescriptionRound, roundSpec } from './descround.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
@@ -621,7 +622,7 @@ export function reclassifyFalseClaims(v) {
   const findings = [...v.findings];
   for (const c of bad) {
     const text = `False description claim (the reviewer called it immaterial, but it is about behaviour, safety, scope or what was verified, so it is material): ${c.claim.slice(0, 600)} Evidence: ${String(c.evidence || '').slice(0, 800)}`.slice(0, 2000);
-    if (findings.length < 50) findings.push({ kind: 'blocking', text });
+    if (findings.length < 50) findings.push({ kind: 'blocking', scope: 'description', text });   // issue #1226: about the pull request text only
   }
   return { ...v, verdict: 'CHANGES', descriptionClaims: v.descriptionClaims.map(c => wrong(c) ? { ...c, materiality: 'material' } : c), findings };
 }
@@ -2507,8 +2508,8 @@ export class Team {
         }
       }
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
-      if (j.kind === 'inbox') this.ingestInbox(id, j, job); if (j.description && job.status === 'completed') await finishDescriptionRound(this, id, j, report);
-      if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
+      if (j.kind === 'inbox') this.ingestInbox(id, j, job);
+      if (job.status === 'completed') await (j.description ? finishDescriptionRound(this, id, j, report) : j.escalated && this.processSplit(id, j, report));   // a description round is never escalated
       if (j.kind === 'rebase' && job.status !== 'completed') { this.recordIncompleteRebase(id, j, job, report); await holdRefusedRebase(this, id, j, job); }
       if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
       // Issue #579: an implement job that ended without completing leaves no pull request; the issue's mark is surfaced at once (findStaleMarks).
@@ -3537,7 +3538,6 @@ export class Team {
   // Issue #362: history is kept before a capped or replaced record goes. Best effort: archiving must never stop the tick.
   archiveOverflow(which, entries) { try { archiveOverflow(this.root, which, entries); } catch (error) { console.error(`ai-supervisor: ${which} archive failed: ${error?.name || 'Error'}`); } }
   archiveVerdict(key, v, stage) { try { archiveVerdict(this.root, key, v, stage); } catch (error) { console.error(`ai-supervisor: verdict archive failed: ${error?.name || 'Error'}`); } }
-
   // Issue #881: a board move is best effort. A failure is a tick warning naming the issue and status, never an action failure, and the steps after it
   // still run. After a GitHub rate limit, moves are held (state.board.pending, newest status per issue) until the reset time GitHub reported, then
   // flushBoard() replays them so the board catches up.
@@ -3763,7 +3763,8 @@ export class Team {
         return why('a new head was pushed but GitHub did not report it mergeable');
       }
       if (p.kind === 'inbox_result') { try { return fs.readFileSync(path.join(this.dir, 'inbox', String(p.ticket || 'none'), 'inbox-result.txt'), 'utf8').trim().length > 0; } catch { return false; } }
-      if (p.kind === 'split_drafted') return !readSplitDraft(this.root, p.ticket).error; if (p.kind === 'description_edited') return descriptionEdited(this, p, job);
+      if (p.kind === 'split_drafted') return !readSplitDraft(this.root, p.ticket).error;
+      if (p.kind === 'description_edited') return descriptionEdited(this, p, job);
       if (p.kind === 'pr_opened') {
         const open = await this.gh.listPulls();
         const pr = open.find(x => x.headRefName === p.branch);

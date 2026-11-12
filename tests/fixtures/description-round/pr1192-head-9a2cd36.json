@@ -1,16 +1,44 @@
-{
-  "note": "The verdict recorded for PR 1192 at head 9a2cd366a60eeae426d7dddbea98466bbd6e70a0 (issue #1164), findings as the reviewer wrote them. The one blocking finding is about the description text only; its scope is marked description as a reviewer following the #1226 prompt marks it.",
-  "pr": 1192,
-  "head": "9a2cd366a60eeae426d7dddbea98466bbd6e70a0",
-  "fixRoundsUsed": 3,
-  "verdict": {
-    "verdict": "CHANGES",
-    "reviewer": "claude",
-    "findings": [
-      { "kind": "follow-up", "text": "Previous blocking 1 (MCP-side refusals not audited): RESOLVED. A malformed target or value reaches supervisor/inbox.mjs validateControl, which refuses it and auditRefusedControl writes the record." },
-      { "kind": "follow-up", "text": "Previous blocking 2 (backoff start not undoable): RESOLVED. supervisor/directjobs.mjs startWaiting now returns undo {op:'pause_job'}." },
-      { "kind": "follow-up", "text": "Previous blocking 3 (undo of a stop skipped resume checks): RESOLVED. restartStopped now calls checkResumable." },
-      { "kind": "blocking", "scope": "description", "text": "False description claim: dashrender.mjs has a 2-line edit (one import, one card) with its line count unchanged at 1044 Evidence: The 2-line edit (one import, one card) is accurate. Line count goes 1037 -> 1038 against the merge base; 1044 is the size baseline value." }
-    ]
-  }
-}
+{"pr": 1192, "headSha": "9a2cd366a60eeae426d7dddbea98466bbd6e70a0", "verdict": "PASS",
+"findings": [
+{"kind": "follow-up", "text": "Previous blocking 1 (MCP-side refusals not audited): RESOLVED. foreman-mcp/directspec.mjs checkControl now only checks the action name; checkProposal still refuses unprintable, overlong, secret-shaped and attribution text. A malformed target or value reaches supervisor/inbox.mjs validateControl, which refuses it and auditRefusedControl writes the record (audit text goes through directstore clip/redactLong on read). New tests refusedAndAudited cover 'abc', a 28-char id, start_job 'zzzz', set_rank '10000' and 'first', set_depends_on '12', assign 'Codex', park with a proposal id, and the MCP tool path foreman_set_priority 'urgent'."},
+{"kind": "follow-up", "text": "Previous blocking 2 (backoff start not undoable): RESOLVED. supervisor/directjobs.mjs startWaiting now returns undo {op:'pause_job'}; reverseDirect routes it to directPause, and the real pause (stopjob.mjs overseerPause) accepts a queued job. Test 'undo: a start of a job waiting out its backoff is reversed by a pause'."},
+{"kind": "follow-up", "text": "Previous blocking 3 (undo of a stop skipped resume checks): RESOLVED. restartStopped now calls checkResumable(deps.team, ..., deps.roleOf, ['stopped']), which applies the PR closed/newer head check, allowance, circuit breaker and providerRoleFull. jobresume.mjs gained an optional 'allowed' parameter defaulting to RESUMABLE, so the homeowner's resume_job and direct start_job are unchanged. Test 'undo of a stop goes through the checks of a resume' covers no free slot and PR closed, with no resume call."},
+{"kind": "follow-up", "text": "Previous blocking 4 (false dashrender claim): RESOLVED as to substance. The description now says dashrender.mjs has a 2-line edit (one import, one card), which matches the diff. A residual immaterial slip: it says the line count is 'unchanged at 1044'; the file goes from 1037 at the merge base to 1038 (1044 is the size-baseline.json value, and check-size reports it as smaller than the baseline, so the ratchet gate holds). Fix the wording. Separately, one added line in a file over the 500-line threshold is a small ratchet growth against the merge base; the check-size gate accepts it against its baseline, so this is a follow-up only."}
+],
+"commandsRun": [
+"gh pr view 1192 --json headRefOid,title,body (head 9a2cd366a60eeae426d7dddbea98466bbd6e70a0 confirmed)",
+"git clone --no-local https://github.com/Unthred/DevTest-Infrastructure.git $TMPDIR/pr1192; git fetch origin pull/1192/head; git checkout (HEAD 9a2cd366)",
+"node tools/validate-project.mjs (validate-project: OK)",
+"/root/bin/ai-supervisor test-slot run --no-reuse -- node --test --test-reporter=dot \"tests/**/*.test.mjs\" (exit 0, no failures)",
+"node tools/ci/check-size.mjs (0 failures)",
+"git diff c3158f1 565ec40 (fix-round diff) and git diff origin/main...HEAD -- supervisor/inbox.mjs supervisor/dashrender.mjs",
+"wc -l supervisor/dashrender.mjs at merge base (1037) and head (1038)"
+],
+"requirements": [
+{"requirement": "1. Each control is a separate MCP tool with a required reason", "status": "met", "evidence": "foreman-mcp/controltools.mjs TOOLS; tests/direct-control.test.mjs 'the MCP tools' checks required reason for each write tool. Not changed by the fix."},
+{"requirement": "2. Every direct action audited (who, what, target, before/after, reason, time); dashboard shows it; MCP reads it back", "status": "met", "evidence": "Fix: foreman-mcp/directspec.mjs checkControl passes malformed items to Foreman; supervisor/inbox.mjs auditRefusedControl; directrun.mjs appendAudit; directcard.mjs; foreman-mcp/controlview.mjs directLog. Tests refusedAndAudited."},
+{"requirement": "3. Each action validates the target and refuses clearly with the reason", "status": "met", "evidence": "supervisor/inbox.mjs validateControl (target pattern, readValue); directjobs.mjs STARTABLE, resolveJob; jobresume.mjs checkResumable."},
+{"requirement": "4. Idempotent, returns resulting state", "status": "met", "evidence": "changed:false paths in directjobs.mjs/directedits.mjs; before/after returned as resulting in controltools.mjs; test checks resulting.before/after."},
+{"requirement": "5. Homeowner can undo or reverse any direct action from the dashboard", "status": "met", "evidence": "Fix: directjobs.mjs startWaiting undo pause_job; restartStopped via checkResumable; directactions.mjs reverseDirect; directcard.mjs Undo form; tests for both."},
+{"requirement": "6. One dashboard switch turns direct control off; default on", "status": "met", "evidence": "supervisor/directstore.mjs switch, directrun.mjs refusal when off; tests/direct-control.test.mjs 'switch off', tests/direct-dashboard.test.mjs."},
+{"requirement": "7. Cannot widen limits, bypass review gates, or approve own proposals", "status": "met", "evidence": "supervisor/directspec.mjs notDirectReason refuses restricted names; job/number target patterns refuse a 32-hex proposal id (test now via refusedAndAudited on park); STARTABLE excludes blocked/failed; undo of stop now enforces breaker/slot/allowance."},
+{"requirement": "8. Job ids: 8-character form everywhere, full form where unambiguous", "status": "met", "evidence": "JOB_TARGET in foreman-mcp/directspec.mjs and supervisor inbox TARGET_RE.job; resolveJob ambiguity refusal; test 'job ids'."},
+{"requirement": "Tests: valid, boundary and invalid input per action; refusal per restricted action; audit for every success and refusal; switch off refuses all; Playwright audit view and undo", "status": "met", "evidence": "tests/direct-control.test.mjs (including new refusedAndAudited cases), tests/direct-dashboard.test.mjs, tests/direct-control-browser.mjs + browser/direct-control-scenario.mjs. Browser run not repeated by me (not part of the node test suite)."},
+{"requirement": "Live checks after install (owner comment): foreman_start_job on a paused job appears in the direct audit with Undo; switch off refuses and audits", "status": "met", "evidence": "Listed under 'Live checks' on #1164 by the owner; PR marks it After install; no homeowner step needed (self-upgrade restarts dashboard and installs MCP copy)."},
+{"requirement": "Notes: control code kept separate from Needs you card code (#1154-#1156, #1158)", "status": "met", "evidence": "New code in supervisor/direct*.mjs, jobresume.mjs, dashwrites.mjs; no card modules in the diff."},
+{"requirement": "Notes: reconcile with V2 doc item 2", "status": "met", "evidence": "PR description states the V2 document is not in the repository and reconciles with D-038 and the issue text; D-040 proposal added in docs/DECISIONS.md as agent-proposal."}
+],
+"descriptionClaims": [
+{"claim": "A malformed target or value is no longer refused at the MCP: it goes to Foreman, which refuses and audits it; only unprintable, overlong or secret-shaped text and a non-name action are refused at the MCP", "status": "true", "evidence": "foreman-mcp/directspec.mjs checkControl; foreman-mcp/inbox.mjs checkProposal; supervisor/inbox.mjs scan auditRefusedControl"},
+{"claim": "Start of a job waiting out its backoff now undoes with pause_job", "status": "true", "evidence": "supervisor/directjobs.mjs startWaiting undo {op:'pause_job'}"},
+{"claim": "Undo of a stop goes through checkResumable with stopped allowed", "status": "true", "evidence": "supervisor/directjobs.mjs restartStopped; supervisor/jobresume.mjs allowed parameter"},
+{"claim": "Direct start limited to paused or waiting jobs; blocked or failed need the homeowner's resume", "status": "true", "evidence": "supervisor/directjobs.mjs STARTABLE = ['paused_manual','paused_limit'] plus startWaiting for queued"},
+{"claim": "Queue edits live in team state (directQueue), read by Team.candidates and the dependency check; GitHub issue text is not edited", "status": "true", "evidence": "supervisor/directqueue.mjs, team.mjs, teamdeps.mjs"},
+{"claim": "stopJob now writes with force so a stop of a manually paused job is not ignored", "status": "true", "evidence": "supervisor/stopjob.mjs diff; tests/stopped-not-fault.test.mjs"},
+{"claim": "D-040 added as agent-proposal; D-038 marked superseded in part", "status": "true", "evidence": "docs/DECISIONS.md diff"},
+{"claim": "node tools/validate-project.mjs OK; full test suite passes; check-size 0 failures", "status": "true", "evidence": "reproduced on a fresh --no-local clone at 9a2cd366"},
+{"claim": "dashrender.mjs has a 2-line edit (one import, one card) with its line count unchanged at 1044", "status": "false", "evidence": "The 2-line edit (one import, one card) is accurate. Line count goes 1037 -> 1038 against the merge base; 1044 is the size baseline value.", "materiality": "immaterial", "reason": "a line-count slip; the scope of the edit is described correctly and the check-size gate passes"},
+{"claim": "cli.mjs shrank 732 to 729, dashserver.mjs 426 to 429, foreman-mcp/inbox.mjs 97 to 105", "status": "unverifiable", "evidence": "not counted; immaterial line counts, check-size passes"},
+{"claim": "Browser check passed at desktop-1280 and phone-390", "status": "unverifiable", "evidence": "the browser scenario exists in tests/direct-control-browser.mjs; I did not rerun it in this fix-round review"},
+{"claim": "No homeowner step needed to install; live checks listed on #1164", "status": "true", "evidence": "owner comment on #1164 contains the Live checks heading and 'No homeowner step is needed to install'; no migration or host value is required by the diff"}
+]}

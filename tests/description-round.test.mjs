@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Team, validateVerdict, reviewPrompt } from '../supervisor/team.mjs';
+import { Team, validateVerdict, reviewPrompt, readInboxVerdict } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { isDescriptionOnly, planDescriptionRound, DESCRIPTION_ROUND_LIMIT } from '../supervisor/descround.mjs';
 import { collectEntries, entryText } from '../supervisor/history.mjs';
@@ -13,7 +13,9 @@ import { collectEntries, entryText } from '../supervisor/history.mjs';
 const H = n => String(n).repeat(40).slice(0, 40);
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
 const table = '## Requirements check\n\n| Requirement | Status | Evidence |\n| --- | --- | --- |\n| One | Met | supervisor/descround.mjs:1; node --test |\n';
-const real = JSON.parse(fs.readFileSync(new URL('./fixtures/description-round/pr1192-head-9a2cd36.json', import.meta.url), 'utf8'));
+// The verdict file exactly as the reviewer wrote it for PR 1192 (a PASS with one false description claim), not a hand-made CHANGES.
+const realFile = new URL('./fixtures/description-round/pr1192-head-9a2cd36.json', import.meta.url);
+const real = { pr: 1192, head: '9a2cd366a60eeae426d7dddbea98466bbd6e70a0', fixRoundsUsed: 3, ticket: '0123456789abcdef0123456789abcdef' };
 const config = () => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
   limits: { roles: { implementer: 2, reviewer: 2 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 3 },
@@ -106,7 +108,15 @@ test('a description round pushes no commit: no push or edit permission, own post
 
 test('real verdict of PR 1192 at head 9a2cd36 starts a description round and no fix round, even at the fix limit', async t => {
   const w = world(t, { head: real.head });
-  w.team.s.verdicts[`${real.pr}:${real.head}`] = { ...real.verdict, at: 500 };
+  const inbox = path.join(w.team.root, 'team', 'inbox', real.ticket);
+  fs.mkdirSync(inbox, { recursive: true });
+  fs.copyFileSync(realFile, path.join(inbox, 'verdict.json'));
+  const read = readInboxVerdict(w.team.root, real.ticket, { pr: real.pr, head: real.head, checklist: true });   // the dispatcher's real reader
+  assert.equal(read.error, undefined);
+  assert.equal(JSON.parse(fs.readFileSync(realFile, 'utf8')).verdict, 'PASS');
+  assert.equal(read.verdict.verdict, 'CHANGES');
+  assert.deepEqual(read.verdict.findings.filter(f => f.kind === 'blocking').map(f => f.scope), ['description']);
+  w.team.s.verdicts[`${real.pr}:${real.head}`] = { ...read.verdict, at: 500 };
   const pull = { ...w.gh.pulls[0], number: real.pr };
   w.gh.pulls = [pull];
   w.team.s.fixAttempts[`${real.pr}:${H(1)}`] = real.fixRoundsUsed;
@@ -114,7 +124,6 @@ test('real verdict of PR 1192 at head 9a2cd36 starts a description round and no 
   const actions = (await w.team.plan()).filter(x => x.agent === 'claude');
   assert.equal(actions.length, 1);
   assert.deepEqual([actions[0].type, actions[0].description, actions[0].escalated], ['fix', true, undefined]);
-  assert.equal(real.verdict.findings.filter(f => f.kind === 'blocking').length, 1);
   await w.team.tick();   // the real tick launches it
   assert.equal(w.team.fixCount(real.pr), 3);   // not counted as a fix round
   assert.deepEqual(w.calls.created.map(c => c.postcondition.kind), ['description_edited']);
