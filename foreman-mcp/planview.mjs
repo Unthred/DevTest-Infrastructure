@@ -11,6 +11,9 @@ export function outcomeOf(planned, action) {
   return row.outcome === 'launched' ? { outcome: 'launched', reason: null } : { outcome: 'held', kind: row.kind, reason: row.reason };
 }
 
+// The paused jobs of this issue or pull request whose resume check threw on the last tick, with the message.
+export const resumeChecksFor = (checks, number) => (checks || []).filter(c => c.ref === number).map(({ job, message, ticks }) => ({ job, message, ticks }));
+
 // The plan with the recorded outcome of each action next to it.
 export const withReasons = (plan, planned) => (plan || []).map(a => ({ ...a, lastTick: outcomeOf(planned, a) }));
 

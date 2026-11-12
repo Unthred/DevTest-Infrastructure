@@ -9,7 +9,7 @@ import { inboxSearchTool } from './inbox-search-tools.mjs';
 import { mismatches, needsYouGroups, rebaseStats, itemTimeline, gbpOf } from './insights.mjs';
 import { hostActivity } from './source.mjs';
 import { dependencySkips } from './dependencyview.mjs';
-import { withReasons, plannedFor } from './planview.mjs';
+import { withReasons, plannedFor, resumeChecksFor } from './planview.mjs';
 import { issueViews, faultViews } from './assignmentview.mjs';
 import { budgetBrief, readingBrief } from './budgetfigures.mjs';
 
@@ -104,7 +104,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         const n = Number(args.number), kind = args.kind;
         if (!Number.isInteger(n) || n < 1 || !['pr', 'issue'].includes(kind)) throw new Error('give kind "pr" or "issue" and a positive integer number');
         return withView(v => {
-          const out = { kind, number: n, lastTick: plannedFor(v.planned, n) };   // issue #1223: the reason the last tick recorded for each planned action
+          const out = { kind, number: n, lastTick: plannedFor(v.planned, n), resumeChecks: resumeChecksFor(v.resumeChecks, n) };   // issue #1223: the reason the last tick recorded for each planned action
           const queueItems = Object.entries(v.queues || {}).flatMap(([agent, items]) => (items || []).filter(i => i.ref === n && (kind === 'pr' ? ['pr', 'review'].includes(i.type) : i.type === 'issue')).map(i => ({ agent, type: i.type, order: i.order ?? null, next: !!i.next, reason: i.reason })));
           out.queue = queueItems; if (kind === 'issue') Object.assign(out, issueViews(v, n));   // #1103 dependencies, #1121 assignment
           out.needsYou = (v.attention || []).filter(a => a.ref?.n === n && (kind === 'pr' ? a.ref?.kind === 'pull' : a.ref?.kind === 'issue')).map(a => ({ text: a.text, tried: a.tried, action: a.action, severity: a.severity }));

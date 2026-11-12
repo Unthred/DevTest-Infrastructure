@@ -10,8 +10,10 @@ export function tallyResumeChecks(state, paused, now) {
     const c = job.resumeCheck, old = prev[job.id];
     if (!c || !Number.isFinite(c.lastAt)) continue;
     if (old && c.lastAt <= old.lastTickAt) continue;   // no new failure since the last tick: the run of failing ticks ends
-    const ticks = old && old.message === c.message ? old.ticks + 1 : 1;
-    next[job.id] = { job: job.id, message: c.message, ticks, since: old && old.message === c.message ? old.since : c.firstAt, lastTickAt: now };
+    const same = old && old.message === c.message;
+    const ticks = same ? old.ticks + 1 : 1;
+    const ref = Number.isSafeInteger(job.issue) ? job.issue : null;
+    next[job.id] = { job: job.id, ref, message: c.message, ticks, since: same ? old.since : c.firstAt, lastTickAt: now };
     rows.push(next[job.id]);
   }
   state.resumeChecks = next;
@@ -36,5 +38,6 @@ export async function checkResumeChecks(team, report) {
     if (job) paused.push(job);
   }
   const rows = tallyResumeChecks(team.s, paused, team.clock.now());
-  if (rows.length) report.resumeChecks = rows.slice(0, 10).map(r => ({ job: r.job.slice(0, 8), message: r.message, ticks: r.ticks }));
+  if (rows.length) report.resumeChecks = rows.slice(0, 10).map(r => ({
+      job: r.job.slice(0, 8), ref: r.ref, message: r.message, ticks: r.ticks }));
 }

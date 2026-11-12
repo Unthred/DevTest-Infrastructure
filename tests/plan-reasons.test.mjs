@@ -142,6 +142,11 @@ function world(t, { failCreate = null } = {}) {
     hostPressure: () => ({ hold: false, reasons: [] }) });
   return w;
 }
+const mcp = async (view, name, args = {}) => {
+  const tools = createTools({ source: { get: async () => ({ view, ageMs: 0, stale: false }) }, readHost: () => ({}) });
+  const out = await createProtocol({ tools }).handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }));
+  return JSON.parse(out.result.content[0].text);
+};
 const planned = (r, type) => r.planned.find(p => p.type === type);
 const record = (w, r) => recordTickWithSkips(w.team.root, { ...tickOutcome(r), now: w.clock.now(), team: w.team, actions: r.actions, jobs: [], ingested: 0, startedAt: w.clock.now() });
 const lastSnapshot = w => readSnapshots(w.team.root).at(-1);
@@ -256,10 +261,54 @@ test('a recorded planner hold (here the order guard) explains an attempt that le
   assert.deepEqual(w.team.selfCheckItems().filter(i => i.id.startsWith('unexplained-hold')), []);
 });
 
+// each reason the planner notes for the one pull request, through the real tick with a start that leaves no trace
+const NOTED = {
+  slot: 'codex review slot full (limits.provider_roles 1)',
+  overlap: overlapText({ type: 'review', issue: 2, pr: 10, file: 'supervisor/team.mjs', other: 3, prs: [{ number: 11, headRefName: 'claude/issue-3-x' }] }),
+  reading_stale: 'the allowance reading is stale (30 minutes old); it is refreshed before the next start',
+  retry_cap: 'retry cap: 2 attempts with the same cause (no_verdict)',
+  order_guard: 'waiting for a running inbox prompt that changes queue order or config' };
+for (const [kind, text] of Object.entries(NOTED)) {
+  test(`reason ${kind}: a planned review the planner noted a hold for is held with that kind, through Team.tick`, async t => {
+    const w = world(t);
+    w.team.execute = async () => {};
+    const plan = w.team.plan.bind(w.team);
+    w.team.plan = async (...a) => { const actions = await plan(...a); w.team.hold('claude', 'review', text, 10); return actions; };
+    const r = await w.team.tick();
+    assert.deepEqual([planned(r, 'review').outcome, planned(r, 'review').kind], ['held', kind]);
+    assert.equal(planned(r, 'review').reason, text);
+    assert.deepEqual(w.team.selfCheckItems().filter(i => i.id.startsWith('unexplained')), []);
+  });
+}
+
+test('overlap: the tick record of a held review names both items', async t => {
+  const w = world(t);
+  w.team.execute = async () => {};
+  const plan = w.team.plan.bind(w.team);
+  w.team.plan = async (...a) => { const actions = await plan(...a); w.team.hold('claude', 'review', NOTED.overlap, 10); return actions; };
+  const r = await w.team.tick();
+  record(w, r);
+  const row = lastSnapshot(w).planned.find(p => p.ref === 10);
+  assert.match(row.reason, /PR #10 \(issue #2\).*issue #3 \(PR #11\)/);
+});
+
+test('another item\'s hold is never borrowed: PR 10 starts nothing while PR 99 has a hold, and stays unexplained', async t => {
+  const w = world(t);
+  w.team.execute = async () => {};
+  const plan = w.team.plan.bind(w.team);
+  w.team.plan = async (...a) => { const actions = await plan(...a); w.team.hold('claude', 'review', 'review of PR #99 waits: issue #98 also edits', 99); return actions; };
+  const r = await w.team.tick();
+  assert.equal(planned(r, 'review').kind, 'unexplained');
+  assert.ok(w.team.selfCheckItems().some(i => i.id.startsWith('unexplained-hold')));
+  const held = await w.team.tick({ hold: { to: 'abcdef0123' } });
+  assert.equal(planned(held, 'review').kind, 'upgrade');
+  assert.doesNotMatch(planned(held, 'review').reason, /PR #99/);
+});
+
 // ---- the ledger by reason, with the texts the planner really writes ----
 test('PlanLedger and kindOfReason: every reason of the list is recorded for the action it holds', () => {
   const texts = {
-    slot: 'implement slot full: codex review on PR #9',
+    slot: 'implement slot full: codex review on PR #9',   // a full slot or the overall cap drops the action in the planner, so both are kind slot
     overlap: overlapText({ type: 'rebase', issue: 1139, pr: 1139, file: 'supervisor/team.mjs', other: 1133, prs: [{ number: 1140, headRefName: 'claude/issue-1133-x' }] }),
     retry_cap: 'retry cap: 2 attempts with the same cause (no_verdict); needs the homeowner',
     breaker: 'circuit breaker: cause review halted new review jobs until the homeowner resumes',
@@ -286,24 +335,38 @@ test('paused job db849b9f with an expired resume time and a throwing gate: the m
   const w = world(t);
   const id = 'db849b9f' + '0'.repeat(24);
   w.jobs.active = [{ id, status: 'paused_limit', provider: 'codex' }];
-  const rec = { id, status: 'paused_limit', provider: 'codex', kind: 'implement', resumeAt: NOW - HOUR };
+  // the check really throws inside drive(); the job record it leaves is what the tick reads
+  const s = sandbox(t), job = await createJob(s.root, s.spec, s.registry);
+  job.status = 'paused_limit';
+  saveJob(s.root, job);
+  let calls = 0, saved = null;
+  const gate = async () => { if (++calls > 1) return { stale: true, reason: 'end' }; throw new Error('lock directory unreadable'); };
+  await drive(s.root, job, s.registry, { now: () => NOW, sleep: async () => { saved = JSON.parse(JSON.stringify(job.resumeCheck)); } }, async () => ({}), 4, null, gate);
+  assert.equal(saved.message, 'lock directory unreadable');
+  const rec = { id, status: 'paused_limit', provider: 'codex', kind: 'implement', issue: 1166, resumeAt: NOW - HOUR };
   w.jobs.states[id] = rec;
-  const failTick = (minute) => { rec.resumeCheck = { message: 'lock directory unreadable', stack: 'at x', firstAt: NOW, lastAt: w.clock.t + minute * 60000 - 1000, count: 5 }; };
+  const failTick = () => { rec.resumeCheck = { ...saved, lastAt: w.clock.t - 1000 }; };
   const reports = [];
   for (let i = 0; i < FAILING_TICKS; i++) {
     w.clock.t = NOW + i * 5 * MIN;
-    failTick(0);
+    failTick();
     reports.push(await w.team.tick());
     record(w, reports.at(-1));
     const items = w.team.selfCheckItems().filter(x => x.id.startsWith('resume-check'));
     assert.equal(items.length, i + 1 < FAILING_TICKS ? 0 : 1, `after tick ${i + 1}`);
   }
-  assert.deepEqual(reports[0].resumeChecks, [{ job: 'db849b9f', message: 'lock directory unreadable', ticks: 1 }]);
+  assert.deepEqual(reports[0].resumeChecks, [{ job: 'db849b9f', ref: 1166, message: 'lock directory unreadable', ticks: 1 }]);
   assert.equal(reports[2].resumeChecks[0].ticks, 3);
   assert.deepEqual(lastSnapshot(w).resumeChecks, reports[2].resumeChecks, 'the tick record holds the message');
   const item = w.team.selfCheckItems().find(x => x.id.startsWith('resume-check'));
   assert.match(item.text, /db849b9f/);
   assert.match(item.text, /lock directory unreadable/);
+  // foreman_why_blocked for the issue returns the message the tick recorded
+  const v = await buildView({ config: config(), root: w.dir, jobs: [], events: [], state: JSON.parse(JSON.stringify(w.team.s)), snapshots: [], now: w.clock.now(), tz: 'UTC',
+    cache: { ...readCache(w.team.root), fetchedAt: w.clock.now(), pulls: [pull], issues: compactIssues([issue(2)]), probes: { claude: claudeAllowance } } });
+  const why = await mcp(v, 'foreman_why_blocked', { kind: 'issue', number: 1166 });
+  assert.deepEqual(why.resumeChecks, [{ job: 'db849b9f', message: 'lock directory unreadable', ticks: 3 }]);
+  assert.deepEqual((await mcp(v, 'foreman_why_blocked', { kind: 'issue', number: 7 })).resumeChecks, []);
   // a tick with no new failure ends the run
   w.clock.t += 5 * MIN;
   await w.team.tick();

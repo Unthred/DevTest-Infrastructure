@@ -12,6 +12,6 @@ export function applyRetryCap(team, actions, report) {
     const rows = gated.map(x => ({ type: x.type, ref: x.ref, cause: x.cause, attempts: x.attempts, agent: x.agent, lane: x.lane }));
     report.retryCapped = [...(report.retryCapped || []), ...rows];
   }
-  for (const a of stopped) team.hold(a.agent, a.type, `retry cap: ${cap} attempts with the same cause (${causeOf(a)}); needs the homeowner`);
+  for (const a of stopped) team.hold(a.agent, a.type, `retry cap: ${cap} attempts with the same cause (${causeOf(a)}); needs the homeowner`, a.pr ?? a.issue ?? null);
   return kept;
 }

@@ -232,6 +232,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
   const ledger = team?.tickLedger ?? {};   // issue #1223: what each planned action did this tick, and the resume checks that threw
   cache.planned = Array.isArray(ledger.planned) ? ledger.planned : (prev.planned ?? null);
+  cache.resumeChecks = Array.isArray(ledger.planned) ? (ledger.resumeChecks || []) : (prev.resumeChecks ?? null);   // the paused jobs whose check threw, for foreman_why_blocked
   if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.mergedNumbers = (team.merged || []).map(x => x.number).filter(Number.isSafeInteger); cache.fetchedAt = now;
     // file lists the tick read for the second-opinion hold (null = unreadable), so the page shows the same hold as the tick
     cache.pullFiles = team.files instanceof Map ? Object.fromEntries([...team.files].map(([n, f]) => [n, Array.isArray(f) ? f.slice(0, 300).map(x => redact(String(x), 200)) : null])) : (prev.pullFiles || {}); }

@@ -17,7 +17,7 @@ import * as breaker from './breaker.mjs';
 import * as failcause from './failcause.mjs';
 import { FaultFlow, withParking, causeOfEnd } from './faultflow.mjs';
 import { applyRetryCap } from './retrycap.mjs';
-import { PlanLedger, heldReasonOf, closeLedger, planItems } from './planledger.mjs';
+import { PlanLedger, heldReasonOf, closeLedger, planItems, breakerHoldText } from './planledger.mjs';
 import { overlapText } from './overlaptext.mjs';
 import { launchPlanned } from './launchplanned.mjs';
 import { checkResumeChecks } from './resumefailures.mjs';
@@ -1916,7 +1916,7 @@ export class Team {
     try {
       const { kept, stopped } = breaker.filterActions(this.s.breaker, limits, actions);
       if (stopped.length) { (report.breaker ||= {}).stopped = stopped.map(x => ({ type: x.action.type, ref: x.action.pr ?? x.action.issue ?? null, agent: x.action.agent ?? null, cause: x.cause })); }
-      for (const x of stopped) this.hold(x.action.agent, x.action.type, `circuit breaker: ${x.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + x.cause} halted new ${x.action.type} jobs until the homeowner resumes`);
+      for (const x of stopped) this.hold(x.action.agent, x.action.type, breakerHoldText(x), x.action.pr ?? x.action.issue ?? null);
       return kept;
     } catch (error) { this.breakerFailed(error, report); return actions; }
   }

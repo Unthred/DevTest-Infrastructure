@@ -4,11 +4,13 @@
 import { redact } from './redact.mjs';
 import { resumeCheckItems } from './resumefailures.mjs';
 
-export const HOLD_KINDS = Object.freeze(['slot', 'limit', 'lease', 'overlap', 'allowance', 'reading_stale', 'retry_cap', 'order_guard', 'error',
+export const HOLD_KINDS = Object.freeze(['slot', 'lease', 'overlap', 'allowance', 'reading_stale', 'retry_cap', 'order_guard', 'error',
   'breaker', 'upgrade', 'host_pressure', 'admission', 'unexplained']);
 export const UNEXPLAINED_TEXT = 'planned but neither started nor held, and no reason was recorded';
 const REASON_CHARS = 300;
 const MAX_ENTRIES = 40;
+
+export const breakerHoldText = x => `circuit breaker: ${x.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + x.cause} halted new ${x.action.type} jobs until the homeowner resumes`;
 
 export const keyOf = a => `${a.type}:${a.agent ?? '-'}:${a.pr ?? a.issue ?? '-'}`;
 
@@ -73,8 +75,9 @@ export function unexplainedItems(state) {
 // Needs you items Foreman raises about its own planning: unexplained holds and resume checks that keep throwing.
 export const planItems = state => [...unexplainedItems(state), ...resumeCheckItems(state)];
 
-// The hold the planner already noted for an action: for the one pull request, else for the agent and type.
-export const heldReasonOf = team => a => team.heldPr?.[`${a.agent}:${a.type}:${a.pr}`] ?? team.held?.[a.agent]?.[a.type] ?? null;
+// The hold the planner noted for this one pull request. The list kept per agent and job type joins the holds of other items, so it is
+// never used as one item's reason: an action with no hold of its own stays unexplained.
+export const heldReasonOf = team => a => team.heldPr?.[`${a.agent}:${a.type}:${a.pr ?? a.issue}`] ?? null;
 
 // Ends a tick's ledger: settles it into the report, remembers unexplained holds for the Needs you list, and hands the tick record
 // (dashdata.recordTick reads team.tickLedger) what each planned action did and which resume checks threw.
