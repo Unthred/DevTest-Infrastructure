@@ -95,7 +95,7 @@ test('guard detects regressions in mutated copies of the real CSS (negative case
   const same = rawCss + '\n@media(min-width:1100px){.statusbar{flex-wrap:nowrap}}';
   const compound = rawCss + '\n@media (min-width:1100px) and (max-width:1900px){.statusbar{ flex-wrap: nowrap }}';
   const adjacent = rawCss.replace('.statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}', (m) => m + '\n  .statusbar{flex-wrap:nowrap}');
-  const adjacentCompound = rawCss.replace('(max-width:1439px){.statusbar{gap:var(--sp2)}', (m) => m + '\n.statusbar{flex-wrap:nowrap}');
+  const adjacentCompound = rawCss.replace('(min-width:1100px){.statusbar{gap:var(--sp2)}', (m) => m + '\n.statusbar{flex-wrap:nowrap}');
   assert.notEqual(adjacent, rawCss, 'mutation did not apply');
   assert.notEqual(adjacentCompound, rawCss, 'mutation did not apply');
   const removed = rawCss.replace('.statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}', '.statusbar{gap:var(--sp2) var(--sp3)}');

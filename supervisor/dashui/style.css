@@ -294,10 +294,10 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
   .statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}
   .statusbar>*{flex:none;white-space:nowrap}.statusbar>h1{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
-/* 1100-1439px: the full bar is wider than the viewport, so the stat labels go first (values keep their badges and titles), then the role below 1280px */
-@media(min-width:1100px) and (max-width:1439px){.statusbar{gap:var(--sp2)}.statusbar .stat .k{display:none}}
-/* issue #1221: at 1100-1439px the whole bar (brand, title, agent items, Edit bar, pin, theme) must fit one row: the brand shows its icon only (the name stays for screen readers) and the three buttons are smaller */
-@media(min-width:1100px) and (max-width:1439px){
+/* 1100px and wider: the bar with agent items is wider than the viewport at 1440 too, so the stat labels go first (values keep their badges and titles) */
+@media(min-width:1100px){.statusbar{gap:var(--sp2)}.statusbar .stat .k{display:none}}
+/* issue #1221: at 1100px and wider the whole bar (brand, title, agent items, Edit bar, pin, theme) must fit one row: the brand shows its icon only (the name stays for screen readers) and the three buttons are smaller */
+@media(min-width:1100px){
   .statusbar{column-gap:var(--sp1)}.brand{margin-right:var(--sp1)}
   .brand-name{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .statusbar>.theme,.statusbar>.stickybtn{min-width:36px;min-height:36px}.statusbar>.barbtn{min-height:36px;padding:0 var(--sp2)}

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Tower-only browser check of the app bar agent items (issues #1178, #1221), in the pinned Chromium container (same path as tests/appbar-allowance-browser.mjs).
 // Renders the real Usage page from a throwaway supervisor state, with the real figures of 12 Nov 2026 put into the view (claude idle, weekly 14%, 5 hour 1%; codex paused on an Implementer job, weekly 31%, no 5 hour figure), stages the real static files and
-// runs browser/appbar-allowance-scenario.mjs at a laptop and a phone width. Results go to the directory in argv[2]. Run `node browser/prepare-cache.mjs` first.
+// runs browser/appbar-allowance-scenario.mjs at 1280, 1440, 1920 and a phone width. Results go to the directory in argv[2]. Run `node browser/prepare-cache.mjs` first.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -60,7 +60,7 @@ try {
   fs.mkdirSync(storageRoot, { recursive: true, mode: 0o700 }); fs.mkdirSync(outDir, { recursive: true });
   const pkg = lock.packages['playwright-core'];
   await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] });
-  for (const profile of ['desktop-1280', 'phone-390'])
+  for (const profile of ['desktop-1280', 'desktop-1440', 'desktop-1920', 'phone-390'])
     await run(profile, { phase: 'test', command: ['node', '/src/browser/appbar-allowance-scenario.mjs', '--target', 'fixture', '--profile', profile, '--name', `appbar-allowance-${profile}`] }, site);
 } finally { fs.rmSync(storageRoot, { recursive: true, force: true }); fs.rmSync(site, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); stage.cleanup(); }
 if (failures.length) { console.error(`APP BAR ALLOWANCE BROWSER CHECK FAILED (${failures.length}):\n${failures.join('\n')}`); process.exit(1); }

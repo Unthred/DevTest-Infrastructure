@@ -150,6 +150,15 @@ function syncClasses(live, prev, next) {
 }
 
 // Apply fresh regions to the live page. Returns the number of regions changed. `known` is the Map of what the previous fetch held.
+// A status-bar item the viewer opened (an agent item's detail, issue #1221) stays open, and keeps focus, when its text is refreshed.
+function replaceStat(doc, el, fresh) {
+  const wasOpen = el.querySelector('details[open]') !== null, hadFocus = el.contains(doc.activeElement);
+  const node = doc.importNode(fresh, true);
+  el.replaceWith(node);
+  if (wasOpen) node.querySelectorAll('details').forEach(d => { d.open = true; });
+  if (hadFocus) node.querySelector('summary')?.focus({ preventScroll: true });
+}
+
 export function applyFresh({ doc, fresh, known, hooks = {} }) {
   const live = readRegions(doc), diff = diffRegions(sigs(known), sigs(fresh));
   const y = doc.defaultView?.scrollY ?? 0, x = doc.defaultView?.scrollX ?? 0;
@@ -157,7 +166,7 @@ export function applyFresh({ doc, fresh, known, hooks = {} }) {
   for (const k of diff.changed) {
     if (k === 'stats') {
       const nowEls = live.get('stats').els, newEls = fresh.get('stats').els;
-      if (nowEls.length === newEls.length) nowEls.forEach((el, i) => { if (el.outerHTML !== newEls[i].outerHTML) el.replaceWith(doc.importNode(newEls[i], true)); });
+      if (nowEls.length === newEls.length) nowEls.forEach((el, i) => { if (el.outerHTML !== newEls[i].outerHTML) replaceStat(doc, el, newEls[i]); });
       else { const anchor = nowEls[0]; for (const e of newEls) anchor?.before(doc.importNode(e, true)); for (const e of nowEls) e.remove(); }
       hooks.afterStats?.(); n++; continue;
     }

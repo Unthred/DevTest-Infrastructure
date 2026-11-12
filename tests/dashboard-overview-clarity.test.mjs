@@ -296,10 +296,10 @@ test('time: the plain-time guard itself catches a bare UTC clock time', () => {
 });
 
 // Review of PR #422 (head 13bb894): the project browser at 1280px found the bar wider than the viewport (1379px) and a card header
-// wider than a 390px phone. CSS guards: the 1100-1439px tier sheds stat labels, and phone card headers wrap their range buttons.
-test('css: the one-row bar sheds labels between 1100 and 1439px and phone card headers wrap (browser overflow findings)', () => {
+// wider than a 390px phone. CSS guards: the 1100px and wider tier sheds stat labels, and phone card headers wrap their range buttons.
+test('css: the one-row bar sheds labels from 1100px up and phone card headers wrap (browser overflow findings)', () => {
   const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
-  assert.match(css, /@media\(min-width:1100px\) and \(max-width:1439px\)\{[\s\S]*?\.statusbar \.stat \.k\{display:none\}/);
+  assert.match(css, /@media\(min-width:1100px\)\{\.statusbar\{gap:var\(--sp2\)\}[\s\S]*?\.statusbar \.stat \.k\{display:none\}/);
   assert.match(css, /@media\(max-width:639px\)\{[\s\S]*?\.agent-item \.ai-role\{display:none\}/);
   assert.match(css, /\.card>header \.ranges\{flex-wrap:wrap\}/);
 });

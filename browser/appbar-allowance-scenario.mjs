@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 // Runs INSIDE the pinned Playwright container (no network; one declared target, like capture.mjs). Checks the app bar agent items (issues #1178, #1221) in a real browser against the real Usage page render: one item per agent with name, state dot, role, weekly and 5 hour %, the bar on one row at 1280, the tooltip, the detail opened by a tap, no sideways scroll, a saved layout restored and a saved layout with the two old items migrated. Writes <name>.json and a screenshot to /out.
-// Usage page, an item can be removed and restored (desktop), and the narrow layout still shows both figures. Writes <name>.json and a screenshot to /out.
 // Usage: node appbar-allowance-scenario.mjs --target fixture --profile <name> --page /card.html --name <stem>
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,6 +43,13 @@ try {
   if (desktop) { await claude.locator('summary').focus(); await page.keyboard.press('Enter'); } else await claude.locator('summary').tap();
   check('opening the item shows the detail with the reset times and the OK wording', await claude.locator('.ai-detail').isVisible() && /OK, resets/.test(await claude.locator('.ai-detail').innerText()) && (await claude.locator('.ai-detail time').count()) === 2);
   check('the open detail causes no sideways scroll', await noScroll());
+  // The periodic refresh swaps the status-bar figures; an open detail (and its focus) must survive it (a fresher reading age is served).
+  const pagePath = arg('page') || '/card.html';
+  await page.route(`**${pagePath}`, async r => { const res = await r.fetch(); await r.fulfill({ response: res, body: (await res.text()).replace('Read 14m ago', 'Read 15m ago') }); });
+  await page.locator('.refresh-now').click();
+  await page.waitForFunction(() => /Read 15m ago/.test(document.querySelector('[data-bar="agent-claude"] summary')?.title || ''), null, { timeout: 5000 });
+  check('an open detail stays open after the page refreshes the figures', await claude.locator('details').evaluate(d => d.open) && await claude.locator('.ai-detail').isVisible());
+  await page.unroute(`**${pagePath}`);
   await page.screenshot({ path: path.join(out, `${name}-detail.png`) });
   await Promise.all([page.waitForURL('**/usage'), claude.locator('.ai-detail a', { hasText: 'Usage page' }).click()]);
   check('the item links to the Usage page', /\/usage$/.test(page.url()), page.url());
