@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
 import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
+import { STRONG_ACTIONS, isStrongAction, confirmRefusal } from './strongtier.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
 // Issue #855: kinds only Foreman raises itself (raiseHostValue). The overseer cannot submit one: scan() validates files without `internal`.
@@ -22,6 +23,8 @@ export const ACTIONS = {
   stop_job: { target: 'job', noun: 'job', will: 'Stop this running or paused job.' },
   resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
   unpark: { target: 'pr', noun: 'issue or pull request', will: 'Remove the parked label from this issue or pull request so the planner may take it again (issue #1115). Refused when it is not parked.' },
+  // Issue #1158: the strong tier. Approved only with a typed pull request number on the exact head shown; see strongtier.mjs.
+  ...Object.fromEntries(Object.entries(STRONG_ACTIONS).map(([name, a]) => [name, { target: a.target, noun: a.noun, will: a.will, strong: true }])),
 };
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
@@ -205,7 +208,8 @@ export function pendingCards(inboxDir) {
     const l = loadItem(inboxDir, s.id);
     if (!l.ok) return { id: s.id, kind: s.kind, createdAt: s.createdAt ?? null, broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
-    return { id: s.id, kind: it.kind, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
+    return { id: s.id, kind: it.kind, ...(it.kind === 'action' ? { action: it.action, target: it.target } : {}),
+      createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
       will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
       text: it.kind === 'host_value' ? `${it.key} += ${it.value}` : clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
   });
@@ -238,7 +242,9 @@ export function failedCards(inboxDir, now = Date.now()) {
 // window (UNDO_MS) lets a wrong click be taken back while nothing has acted on it.
 export const UNDO_MS = 30000;
 const titleOf = (inboxDir, id) => { const l = loadItem(inboxDir, id); return l.ok ? redactLong(String(l.item.title ?? '').replace(/\s+/g, ' '), LIMITS.title, ' [cut]').trim() : null; };
-export function decide(inboxDir, id, decision, now = Date.now()) {
+// Issue #1158: `confirm` is { typed, shownHead, liveHead, tier? } from the card's form. A strong action is approved only when confirmRefusal() passes,
+// and the status then keeps the confirmed head, which the tick must find unchanged. Rejecting needs no confirmation.
+export function decide(inboxDir, id, decision, now = Date.now(), confirm = null) {
   if (!['approve', 'reject'].includes(decision)) return { ok: false, reason: 'unknown decision' };
   const s = statusOf(inboxDir, id);
   if (!s) return { ok: false, reason: 'unknown item' };
@@ -246,6 +252,12 @@ export function decide(inboxDir, id, decision, now = Date.now()) {
   if (decision === 'approve') {
     const l = loadItem(inboxDir, id);
     if (!l.ok) { setStatus(inboxDir, id, { state: 'refused', reason: l.reason }, now); audit(inboxDir, { id, event: 'refused', kind: s.kind, hash: s.hash, reason: l.reason }, now); return { ok: false, reason: l.reason }; }
+    if (l.item.kind === 'action' && isStrongAction(l.item.action)) {
+      const why = confirmRefusal(l.item, confirm);
+      if (why) return { ok: false, reason: why };
+      // Written while the item is still pending: the approval below then cannot be seen without the head it was confirmed against.
+      setStatus(inboxDir, id, { confirm: { by: 'homeowner', typed: String(confirm.typed).trim(), head: confirm.shownHead, at: now } }, now);
+    }
   }
   const state = decision === 'approve' ? 'approved' : 'rejected';
   setStatus(inboxDir, id, { state, decision, decidedAt: now, title: titleOf(inboxDir, id), ...(decision === 'reject' ? { result: 'rejected by the homeowner; nothing was done' } : {}) }, now);
@@ -262,7 +274,7 @@ export function undo(inboxDir, id, now = Date.now()) {
     if (!s) return { ok: false, reason: 'unknown item' };
     if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
     if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
-    const { decision, decidedAt, title, result, ...rest } = s;
+    const { decision, decidedAt, title, result, confirm, ...rest } = s;
     writeAtomic(file, { ...rest, state: 'pending', id, updatedAt: now });
     audit(inboxDir, { id, event: 'undone', kind: s.kind, hash: s.hash }, now);
     return { ok: true, state: 'pending' };

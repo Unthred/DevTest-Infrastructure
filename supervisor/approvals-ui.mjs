@@ -8,7 +8,7 @@ const FORM_TAIL = '</button></form>';
 const form = (esc, id, decision, label) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}">`
   + `<input type="hidden" name="decision" value="${decision}"><button class="btn inbox-${decision}" type="submit">${label}${FORM_TAIL}`;
 
-const STRONG_NOTE = '<span class="sub">Needs the typed pull request number; decide it on its pull request.</span>';
+const strongNote = (esc, r) => `<span class="sub">Needs the typed pull request number: <a href="#att-inbox-${esc(r.id)}">decide it on its card in Needs you</a>.</span>`;
 // Issue #1156: a decision row shows the card (reason, clear condition, its routine controls); the link is context only.
 const decideNote = (esc, r) => {
   const link = r.link ? ` <a href="${esc(r.link)}" rel="noopener">Open it</a>` : '';
@@ -16,7 +16,7 @@ const decideNote = (esc, r) => {
 };
 const buttons = (esc, r) => {
   if (r.tier === 'decision') return decideNote(esc, r);
-  if (r.tier === 'strong') return STRONG_NOTE;
+  if (r.tier === 'strong') return strongNote(esc, r);
   return (r.canApprove ? form(esc, r.id, 'approve', 'Approve') : '') + form(esc, r.id, 'reject', 'Reject');
 };
 const whyBlock = (esc, r) => {

@@ -5,6 +5,7 @@
 //   - Duplicates: causes on one pull request or issue merge into one item that counts its causes and keeps each as history.
 //   - Order: what blocks the most other work first, then the oldest.
 // Pure: no I/O. The caller supplies the attention items and the lists it already holds.
+import { withHeads } from './strongtier.mjs';
 import { redact } from './redact.mjs';
 
 // Lower is more specific: the primary cause of a merged item is the lowest-ranked one present.
@@ -47,7 +48,7 @@ export function consolidateNeedsYou(attention, { cache = {} } = {}) {
     if (k && a.ref.kind === 'pull' && openPr && !openPr.has(a.ref.n)) { dropped.push({ id: a.id, why: 'the pull request is no longer open' }); continue; }
     if (k && a.ref.kind === 'issue' && issueState?.has(a.ref.n) && (issueState.get(a.ref.n).state !== 'OPEN')) { dropped.push({ id: a.id, why: 'the issue is no longer open' }); continue; }
     if (!needsHomeowner(a)) { notices.push({ ...a, severity: 'info' }); continue; }
-    live.push(a);
+    live.push(a.inbox ? { ...a, inbox: withHeads([a.inbox], pulls)[0] } : a);   // issue #1158: a strong card carries the head it acts on
   }
   const groups = new Map(), out = [];
   for (const a of live) {
