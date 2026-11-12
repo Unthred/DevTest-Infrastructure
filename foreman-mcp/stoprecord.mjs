@@ -12,15 +12,27 @@ export function stopDirsFrom(env, fsApi = fs) {
   const fromEnv = String(env.FOREMAN_MCP_STOP_DIRS || '').split(':').filter(Boolean);
   if (fromEnv.length) return fromEnv;
   let cfg = {};
-  if (env.FOREMAN_MCP_CONFIG) { try { cfg = JSON.parse(fsApi.readFileSync(env.FOREMAN_MCP_CONFIG, 'utf8')); } catch { cfg = {}; } }
+  if (env.FOREMAN_MCP_CONFIG) {
+    try {
+      cfg = JSON.parse(fsApi.readFileSync(env.FOREMAN_MCP_CONFIG, 'utf8'));
+    } catch {
+      cfg = {};
+    }
+  }
   return Array.isArray(cfg.stopDirs) && cfg.stopDirs.length ? cfg.stopDirs.map(String) : DEFAULT_STOP_DIRS;
 }
-const PATH_IN_TEXT = /\/[A-Za-z0-9._\/-]+\.(?:md|txt)\b/g;
+// An absolute path only: it must start the text or follow whitespace or an opening bracket or quote, so a relative doc path or a URL
+// inside a reason is not mistaken for a stop record.
+const PATH_IN_TEXT = /(?<=^|[\s(\["'`])\/[A-Za-z0-9._\/-]+\.(?:md|txt)\b/g;
 
 // Pure: the distinct record paths a set of reason texts name, with the text each came from.
 export function namedPaths(reasons) {
   const seen = new Map();
-  for (const r of reasons) for (const p of String(r.text ?? '').match(PATH_IN_TEXT) ?? []) if (!seen.has(p)) seen.set(p, r.source);
+  for (const r of reasons) {
+    for (const p of String(r.text ?? '').match(PATH_IN_TEXT) ?? []) {
+      if (!seen.has(p)) seen.set(p, r.source);
+    }
+  }
   return [...seen].map(([file, source]) => ({ file, source }));
 }
 
@@ -28,6 +40,12 @@ export function namedPaths(reasons) {
 export function insideAllowed(file, dirs) {
   const resolved = path.resolve(file);
   return dirs.map(d => path.resolve(d)).some(d => path.dirname(resolved) === d);
+}
+
+function openRefusal(error) {
+  if (error.code === 'ENOENT') return 'the named file does not exist';
+  if (error.code === 'ERR_ACCESS_DENIED') return 'the server has no read permission for this directory (STOP_DIR must match stopDirs)';
+  return 'the file cannot be read (it may be a symbolic link)';
 }
 
 function readRecord(file, dirs, fsApi, redactText) {
@@ -38,7 +56,7 @@ function readRecord(file, dirs, fsApi, redactText) {
   if (!allowedReal.includes(realParent)) return { path: file, refused: 'the directory is not in the allowed stop-record directories' };
   let fd;
   try { fd = fsApi.openSync(path.join(realParent, path.basename(resolved)), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); }
-  catch (error) { return { path: file, refused: error.code === 'ENOENT' ? 'the named file does not exist' : 'the file cannot be read (it may be a symbolic link)' }; }
+  catch (error) { return { path: file, refused: openRefusal(error) }; }
   try {
     const s = fsApi.fstatSync(fd);
     if (!s.isFile()) return { path: file, refused: 'not a regular file' };
@@ -59,32 +77,58 @@ function noStop(list, unavailable, redactText) {
   return { stop: false, note, ...(holds.length ? { automaticHolds: holds } : {}), ...(unavailable.length ? { unavailable } : {}) };
 }
 
+const DESCRIPTION = [
+  'Why Foreman is held by a homeowner stop: reads the stop record file named by the current upgrade latch or pause reason',
+  '(path, modified time, redacted text, cut if long) so its scope, resume conditions and resume note can be read without a Tower session.',
+  'Only the file the reason names, and only inside the allowed stop-record directories; any other path is refused.',
+  'Says so when there is no stop. Read-only.',
+].join(' ');
+
 // reasons(): [{ source, text }] from the current latch and pause records. Throws nothing; a source that fails is reported in `unavailable`.
 export function stopRecordTool({ reasons, dirs = DEFAULT_STOP_DIRS, fsApi = fs, redact: redactText }) {
   return {
     name: 'foreman_stop_record',
-    description: 'Why Foreman is held by a homeowner stop: reads the stop record file named by the current upgrade latch or pause reason (path, modified time, redacted text, cut if long) so the stop\'s scope, resume conditions and resume note can be read without a Tower session. Only the file the reason names, and only inside the allowed stop-record directories; any other path is refused. Says so when there is no stop. Read-only.',
+    description: DESCRIPTION,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run() {
       const { list, unavailable } = await reasons();
       const named = namedPaths(list);
       if (!named.length) return noStop(list, unavailable, redactText);
-      return { stop: true, records: named.map(n => ({ source: n.source, ...(insideAllowed(n.file, dirs) ? readRecord(n.file, dirs, fsApi, redactText) : { path: n.file, refused: 'the path is not in the allowed stop-record directories' }) })), ...(unavailable.length ? { unavailable } : {}) };
+      const records = named.map(n => ({
+        source: n.source,
+        ...(insideAllowed(n.file, dirs)
+          ? readRecord(n.file, dirs, fsApi, redactText)
+          : { path: n.file, refused: 'the path is not in the allowed stop-record directories' }),
+      }));
+      return { stop: true, records, ...(unavailable.length ? { unavailable } : {}) };
     },
   };
 }
 
 // The reasons come from the same dashboard endpoints the other tools use: the install record's latch and the Needs you items.
+const HOLD_ID = /pause|latch|stop/i;
+const HOLD_TEXT = /\b(paused|latched|homeowner stop)\b/i;
 export function viewReasons({ source, getPath }) {
   return async () => {
-    const list = [], unavailable = [];
+    const list = [];
+    const unavailable = [];
     if (getPath) {
-      try { const l = (await getPath('/api/installs.json'))?.latch; if (l?.reason) list.push({ source: 'upgrade latch', text: String(l.reason) }); } catch { unavailable.push('install history'); }
+      try {
+        const latch = (await getPath('/api/installs.json'))?.latch;
+        if (latch?.reason) list.push({ source: 'upgrade latch', text: String(latch.reason) });
+      } catch {
+        unavailable.push('install history');
+      }
     }
     try {
-      const v = (await source.get()).view;
-      for (const a of v.attention || []) if (/pause|latch|stop/i.test(a.id || '') || /\b(paused|latched|homeowner stop)\b/i.test(a.text || '')) list.push({ source: `needs you: ${a.id ?? 'item'}`, text: `${a.text ?? ''} ${a.tried ?? ''}` });
-    } catch { unavailable.push('dashboard view'); }
+      const view = (await source.get()).view;
+      for (const a of view.attention || []) {
+        if (!HOLD_ID.test(a.id || '') && !HOLD_TEXT.test(a.text || '')) continue;
+        list.push({ source: `needs you: ${a.id ?? 'item'}`, text: `${a.text ?? ''} ${a.tried ?? ''}` });
+      }
+    } catch {
+      unavailable.push('dashboard view');
+    }
     return { list, unavailable };
   };
 }

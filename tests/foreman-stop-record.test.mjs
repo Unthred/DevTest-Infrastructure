@@ -116,3 +116,9 @@ test('the real stdio server answers foreman_stop_record against a stub dashboard
   assert.equal(out.stop, true);
   assert.match(out.records[0].text, /Resume when X/);
 });
+
+test('a relative doc path or a URL in a hold reason is not a stop record', () => {
+  const text = 'rolled back (see docs/DECISIONS.md and https://github.com/x/y/blob/main/cooperative-work.md)';
+  assert.deepEqual(namedPaths([{ source: 'a', text }]), []);
+  assert.deepEqual(namedPaths([{ source: 'a', text: 'paused: "/mnt/cache/logs/agent-cleanup/foreman-stop.md"' }]).map(n => n.file), ['/mnt/cache/logs/agent-cleanup/foreman-stop.md']);
+});
