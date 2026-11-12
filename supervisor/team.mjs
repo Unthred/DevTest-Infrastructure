@@ -42,6 +42,7 @@ import { repairInbox } from './inboxrepair.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
+import { syncPendingSteps } from './pendingstepssync.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
@@ -1735,7 +1736,7 @@ export class Team {
     if (!dryRun) {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
       await guard('inbox', () => this.processInbox(report)); await guard('time caps', () => enforceStops(this, report)); await guard('host values', () => this.raiseHostValues(report)); await guard('live checks', () => this.verifyInstalled(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
-      await guard('board catch-up', () => this.flushBoard(report));
+      await guard('board catch-up', () => this.flushBoard(report)); await guard('homeowner steps', () => syncPendingSteps(this, report));   // #1155
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));

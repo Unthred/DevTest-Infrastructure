@@ -41,9 +41,9 @@ import { fileURLToPath } from 'node:url';
 import { recordRefusedOrigin } from './hostvalue.mjs';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
-import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
+import { personClickRoutes } from './personclickroutes.mjs';
 import { underSupervisedJob } from './breaker.mjs';
-import { isLocalPeer, peerPid as defaultPeerPid } from './peerpid.mjs';
+import { peerPid as defaultPeerPid } from './peerpid.mjs';
 
 export const DEFAULT_PORT = 8731;
 // Issue #406: ask for a pass now. Only when the team loop is enabled; never throws, never blocks the answer to the homeowner.
@@ -264,42 +264,12 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
-  // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
-  // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
-  // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
-  const breakerResume = async (req, res, send) => {
-    if (req.headers.host !== allowedHost) return refuseHost(req, send);
-    if (!originAllowed(req)) return refuseOrigin(req, send);
-    if (req.headers['sec-fetch-site'] !== 'same-origin' || req.headers['sec-fetch-user'] !== '?1' || supervised()) return send(403, 'text/plain; charset=utf-8', 'resume needs a person clicking the button');
-    const chunks = []; let size = 0;
-    for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
-    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-    if (!proofValid(root, form.get('proof'))) return badProof(send);
-    const scope = form.get('scope') || '', halts = readTeamState(root)?.breaker || {};
-    const known = scope === 'all' ? !!(halts.global || Object.keys(halts.halts || {}).length) : scope === 'global' ? !!halts.global : !!(halts.halts || {})[scope];
-    if (!known) return send(409, 'text/plain; charset=utf-8', 'nothing halted for that scope');
-    const t = now(), slot = reserveCooldown(root, 'breaker-resume', t, BREAKER_RESUME_COOLDOWN_MS);
-    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=breaker-resume-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
-    // Issue #737: a request from this machine must not come from a process that descends from a supervised job, as the CLI route checks
-    // its own caller. A caller that cannot be identified is refused rather than assumed to be a person. Issue #821: the lookup scans /proc
-    // synchronously (about 180 ms on Tower), so it runs only for a request with a valid proof, a halted scope and no cooldown in force.
-    // A refused caller gives the slot back so it cannot lock a person out.
-    if (isLocalPeer(req.socket)) {
-      const pid = peerPid(req.socket);
-      if (!pid || supervised({ env: {}, pid })) {
-        releaseCooldown(root, 'breaker-resume', t);
-        return send(403, 'text/plain; charset=utf-8', pid ? 'resume needs a person clicking the button' : 'resume refused: the calling process could not be identified');
-      }
-    }
-    requestBreakerResume(root, scope, t);
-    try { wake(root, 'approve', source()); } catch { /* the schedule is the fallback */ }   // the request is applied by the next pass
-    store.invalidate();
-    return send(303, 'text/plain; charset=utf-8', 'requested', { location: '/' });
-  };
+  // Resume (issue #626) and Mark done (issue #1155): the person-click posts that only leave a request file for the next tick (personclickroutes.mjs).
+  const { breakerResume, stepDone } = personClickRoutes({ root, allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, supervised, peerPid, now, wake, source, store });
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
-    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/breaker-resume': breakerResume };
+    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/breaker-resume': breakerResume, '/step-done': stepDone };
     if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.

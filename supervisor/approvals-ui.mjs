@@ -45,3 +45,10 @@ export const approvals = (view, nowHtml, esc, ago) => approvalsDropdown({
   esc,
   ago: ms => (Number.isFinite(ms) ? ago(ms, view.generatedAt) : ''),
 }) + nowHtml;
+
+// Issue #1155: Mark done on a Needs you item for a homeowner step of a merged PR (posts to /step-done with the page's access proof). '' for any other item.
+const ent = v => String(v).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+export const stepDoneForm = a => (a?.stepDone
+  ? `<form method="post" action="/step-done" class="step-done"><input type="hidden" name="pr" value="${ent(a.stepDone.pr)}"><input type="hidden" name="index" value="${ent(a.stepDone.index)}">`
+    + '<div class="acts"><button class="btn" type="submit">Mark done</button></div></form>'
+  : '');
