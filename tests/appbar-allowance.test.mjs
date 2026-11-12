@@ -1,11 +1,12 @@
-// Issue #1178: the app bar allowance items. Pure item building from plain data, the markup, and the real page render.
+// Issues #1178, #1221: the app bar agent items (state, role and allowance in one item). Pure item building from plain data, the markup, and the real page render.
 import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { allowanceItems, allowanceStat, levelOf } from '../supervisor/appbaralloc.mjs';
-import { badge, dur, lt, renderRoute } from '../supervisor/dashrender.mjs';
+import { allowanceItems, levelOf } from '../supervisor/appbaralloc.mjs';
+import { agentBarItem, agentBarItems } from '../supervisor/appbaragent.mjs';
+import { dur, lt, renderRoute, utc } from '../supervisor/dashrender.mjs';
 import { currentView } from '../supervisor/dashserver.mjs';
 import { sanitizeBar } from '../supervisor/dashui/appbar.mjs';
 
@@ -15,8 +16,11 @@ const limits = { highWater: 0.85, exhaustedAt: 0.995 };
 const lim = (kind, used, resetsAt, expired = false) => ({ kind, label: kind, used, resetsAt, expired });
 const reading = (ls, extra = {}) => ({ limits: ls, stale: false, ageMinutes: 3, maxAgeMinutes: 60, observedAt: NOW - 180000, ...extra });
 const view = (agents, budget) => ({ agents: agents.map(name => ({ name })), budget: Object.fromEntries(Object.entries(budget).map(([k, r]) => [k, { reading: r }])), budgetLimits: limits });
-const h = { esc: v => String(v ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`), lt, dur, badge };
-const one = (r, name = 'a') => allowanceItems(view([name], { [name]: r }))[0];
+const h = { esc: v => String(v ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`), lt, dur, utc };
+const one = (r, name = 'a', agent = {}) => agentBarItems({ ...view([name], { [name]: r }), agents: [{ name, state: 'idle', ...agent }] })[0];
+const allowanceStat = agentBarItem;
+const text = html => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+const summary = html => /<summary[\s\S]*?<\/summary>/.exec(html)[0];
 
 test('one item per configured agent, including a third synthetic agent, with no agent names in the module', () => {
   const items = allowanceItems(view(['alpha', 'beta', 'zed-3'], {}));
@@ -50,12 +54,17 @@ test('an expired window is unknown, not the old figure', () => {
   assert.doesNotMatch(html, /99%|40%/);
 });
 
-test('a stale reading shows a Stale marker and its age; a fresh one does not', () => {
+test('a stale reading shows a small stale mark; the age and reason are in the tooltip and detail, not the bar', () => {
   const stale = allowanceStat(h, one(reading([lim('weekly_all', 0.2, NOW + H)], { stale: true, ageMinutes: 125 })));
-  assert.match(stale, /data-stale="true"/); assert.match(stale, /Stale/); assert.match(stale, /read 2h 5m ago/); assert.match(stale, /older than the 60 minute limit/);
+  assert.match(summary(stale), /class="ai-stale" data-stale="true"/, 'a small stale mark in the bar'); assert.doesNotMatch(text(summary(stale)), /Stale|read 2h/, 'the words stay out of the bar');
+  assert.match(stale, /Read 2h 5m ago/); assert.match(stale, /older than the 60 minute limit/, 'the stale reason is in the tooltip and the detail');
+  assert.match(summary(stale), /title="[^"]*older than the 60 minute limit/);
   const fresh = allowanceStat(h, one(reading([lim('weekly_all', 0.2, NOW + H)])));
-  assert.match(fresh, /data-stale="false"/); assert.doesNotMatch(fresh, /Stale/); assert.match(fresh, /read 3m ago/);
-  assert.match(allowanceStat(h, one(reading([lim('weekly_all', 0.2, NOW + H)], { ageMinutes: null }))), /age unknown/);
+  assert.match(fresh, /data-stale="false"/); assert.doesNotMatch(fresh, /Stale:/); assert.match(fresh, /Read 3m ago/);
+  const both = summary(allowanceStat(h, one(reading([lim('weekly_all', 0.2, NOW + H), lim('session_5h', 0.1, NOW + H)]))));
+  assert.doesNotMatch(both, /ai-stale/, 'a fresh, complete reading has no stale mark');
+  assert.match(summary(fresh), /class="ai-stale" data-stale="false"/, 'an unknown window still gets the mark, never a 0%');
+  assert.match(allowanceStat(h, one(reading([lim('weekly_all', 0.2, NOW + H)], { ageMinutes: null }))), /Reading age unknown/);
 });
 
 test('markers change exactly at the scheduler thresholds, and are text as well as colour', () => {
@@ -63,18 +72,20 @@ test('markers change exactly at the scheduler thresholds, and are text as well a
   assert.equal(levelOf(0.9949, limits), 'high'); assert.equal(levelOf(0.995, limits), 'near');
   assert.equal(levelOf(0.9, { highWater: 0.9, exhaustedAt: 0.99 }), 'high', 'configured thresholds are used');
   const html = allowanceStat(h, one(reading([lim('weekly_all', 0.86, NOW + H), lim('session_5h', 0.999, NOW + H)])));
-  assert.match(html, /data-window="weekly" data-state="known" data-level="high"[^]*?High/);
-  assert.match(html, /data-window="short" data-state="known" data-level="near"[^]*?Near limit/);
-  assert.match(allowanceStat(h, one(reading([lim('weekly_all', 0.1, NOW + H)]))), />OK</);
+  assert.match(html, /data-window="weekly" data-state="known" data-level="high"[^]*?▲/);
+  assert.match(html, /data-window="short" data-state="known" data-level="near"[^]*?■/);
+  assert.match(html, /data-window="weekly" data-state="known" data-level="high"><b>Week<\/b> 86% <span class="ai-lvl">High</);
+  assert.match(html, /<span class="ai-lvl">Near limit</);
+  assert.match(allowanceStat(h, one(reading([lim('weekly_all', 0.1, NOW + H)]))), /<span class="ai-lvl">OK</);
 });
 
 test('the item links to the Usage page, carries reset times and is an editable bar item', () => {
   const html = allowanceStat(h, one(reading([lim('weekly_all', 0.15, NOW + 5 * H), lim('session_5h', 0.99, NOW + H)]), 'codex'));
-  assert.match(html, /href="\/usage"/);
-  assert.match(html, /data-bar="allowance-codex" data-bar-name="Allowance: codex"/);
+  assert.match(html, /<a href="\/usage">Usage page<\/a>/);
+  assert.match(html, /data-bar="agent-codex" data-bar-name="Agent: codex"/);
   assert.equal((html.match(/<time class="lt" datetime="[^"]+" data-local>/g) || []).length, 2, 'both resets follow the dashboard time zone');
   assert.match(html, /15%/); assert.match(html, /99%/);
-  assert.deepEqual(sanitizeBar({ v: 1, order: [], removed: ['allowance-codex'] }, ['allowance-codex', 'allowance-x']).removed, ['allowance-codex'], 'removable and restorable through the saved bar state');
+  assert.deepEqual(sanitizeBar({ v: 1, order: [], removed: ['agent-codex'] }, ['agent-codex', 'agent-x']).removed, ['agent-codex'], 'removable and restorable through the saved bar state');
 });
 
 test('agent names and reasons are escaped', () => {
@@ -95,7 +106,39 @@ test('the real dashboard view and page render put one item per configured agent 
     assert.deepEqual(v.budgetLimits, { highWater: 0.9, exhaustedAt: 0.995 }, 'the view carries the scheduler thresholds');
     const html = renderRoute(v, { page: 'usage' }, { query: new URLSearchParams(), pathname: '/usage' }).html;
     const bar = html.slice(html.indexOf('<header class="statusbar"'), html.indexOf('</header>'));
-    assert.equal((bar.match(/class="stat allowance-item"/g) || []).length, 2);
-    for (const n of ['claude', 'codex']) assert.ok(bar.indexOf(`data-bar="allowance-${n}"`) > 0 && bar.indexOf(`data-bar="allowance-${n}"`) < bar.indexOf('id="barEdit"'), n);
+    assert.equal((bar.match(/class="stat agent-item"/g) || []).length, 2);
+    assert.doesNotMatch(bar, /data-bar="agents"|allowance-item|agent-badge/, 'the two old items are gone from the default layout');
+    for (const n of ['claude', 'codex']) assert.ok(bar.indexOf(`data-bar="agent-${n}"`) > 0 && bar.indexOf(`data-bar="agent-${n}"`) < bar.indexOf('id="barEdit"'), n);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+const sumText = html => text(summary(html).replace(/ (title|aria-label)="[^"]*"/g, ''));
+
+test('the bar prints name, state dot, role when running, weekly % and 5 hour % only (the real example data of 12 Nov)', () => {
+  const claude = allowanceStat(h, one(reading([lim('weekly_all', 0.14, NOW + 7 * 24 * H), lim('session_5h', 0.01, NOW + 16 * H)]), 'claude'));
+  assert.equal(sumText(claude), 'claude W 14% 5h 1%');
+  assert.match(claude, /<span class="ai-dot" data-state="idle"/);
+  const codex = allowanceStat(h, one(reading([lim('weekly_all', 0.31, NOW + H)]), 'codex', { state: 'paused', jobs: [{ role: 'implementer' }] }));
+  assert.equal(sumText(codex), 'codex Implementer W 31% 5h unknown ◷', 'a paused agent keeps its job role; the unknown window is a word and a mark, never 0%');
+  assert.match(codex, /<span class="ai-dot" data-state="paused"/);
+  assert.doesNotMatch(sumText(claude) + sumText(codex), /OK|High|resets|read |ago|UTC/, 'wording, reset times and age are not printed in the bar');
+});
+
+test('running and paused show the role, several jobs show a count; held is an idle agent with a named hold; every state has its own dot', () => {
+  const r = (agent) => allowanceStat(h, one(reading([lim('weekly_all', 0.1, NOW + H), lim('session_5h', 0.2, NOW + H)]), 'a', agent));
+  assert.equal(sumText(r({ state: 'running', jobs: [{ role: 'implementer' }] })), 'a Implementer W 10% 5h 20%');
+  assert.equal(sumText(r({ state: 'running', jobs: [{ role: 'reviewer' }] })), 'a Reviewer W 10% 5h 20%');
+  assert.equal(sumText(r({ state: 'running', jobs: [{ role: 'reviewer' }, { role: 'rebaser' }] })), 'a 2 jobs W 10% 5h 20%');
+  const held = r({ state: 'idle', idleReason: { text: 'held: an install is in progress' } });
+  assert.match(held, /<span class="ai-dot" data-state="held"/); assert.match(held, /held: an install is in progress/);
+  assert.match(r({ state: 'idle', idleReason: { text: 'nothing to do' } }), /data-state="idle"/);
+  assert.match(r({ state: 'paused' }), /data-state="paused"/);
+  assert.match(r({ state: 'mystery' }), /data-state="unknown"/, 'an unrecognised state is shown as unknown');
+});
+
+test('the tooltip holds the reset times and the reading age; the detail holds the wording', () => {
+  const html = allowanceStat(h, one(reading([lim('weekly_all', 0.14, Date.UTC(2026, 10, 19, 4)), lim('session_5h', 0.01, Date.UTC(2026, 10, 13, 0, 40))], { ageMinutes: 14 }), 'claude'));
+  const title = /<summary title="([^"]*)"/.exec(html)[1];
+  assert.match(title, /Week: 14% OK, resets 2026-11-19 04:00 UTC/); assert.match(title, /5 hour: 1% OK, resets 2026-11-13 00:40 UTC/); assert.match(title, /Read 14m ago/);
+  assert.match(html, /<div class="ai-detail">/);
 });

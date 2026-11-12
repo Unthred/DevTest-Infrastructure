@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Tower-only browser check of the app bar allowance items (issue #1178), in the pinned Chromium container (same path as tests/appbar-allowance-browser.mjs).
-// Renders the real Usage page from a throwaway supervisor state, with synthetic allowance readings put into the view, stages the real static files and
+// Tower-only browser check of the app bar agent items (issues #1178, #1221), in the pinned Chromium container (same path as tests/appbar-allowance-browser.mjs).
+// Renders the real Usage page from a throwaway supervisor state, with the real figures of 12 Nov 2026 put into the view (claude idle, weekly 14%, 5 hour 1%; codex paused on an Implementer job, weekly 31%, no 5 hour figure), stages the real static files and
 // runs browser/appbar-allowance-scenario.mjs at a laptop and a phone width. Results go to the directory in argv[2]. Run `node browser/prepare-cache.mjs` first.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,7 +17,7 @@ import { stageDashui, freezeLivePanels } from './helpers/dashui-stage.mjs';
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.resolve(process.argv[2] || '');
 if (!process.argv[2]) { console.error('usage: node tests/appbar-allowance-browser.mjs <output-dir>'); process.exit(2); }
-const now = Date.now();
+const now = Date.UTC(2026, 10, 12, 23, 30);   // the reading below is 14 minutes old at this time, as on 12 Nov
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'appbaralloc-'));
 for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
 fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: now - 60000, status: 'ok', lastOkAt: now - 60000 }, fetchedAt: now - 60000, pulls: [], issues: [] }));
@@ -25,14 +25,15 @@ fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ mergeLo
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, inbox: { dir: path.join(root, 'inbox') },
   github_app: { app_id: 1, installation_id: 2, key_file: '/nowhere/key.pem' }, limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] } } };
 for (const d of ['items', 'status']) fs.mkdirSync(path.join(root, 'inbox', d), { recursive: true });
-const day = n => new Date(now + n * 86400000).toISOString().slice(0, 10);
 const view = await currentView({ root, config: { ...config, agents: { claude: config.agents.claude, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } } }, now, tz: 'UTC' });
 const lim = (kind, used, resetsAt, expired = false) => ({ kind, label: kind, used, resetsAt, expired });
-const reading = (limits, extra = {}) => ({ limits, stale: false, ageMinutes: 3, maxAgeMinutes: 60, observedAt: now - 180000, ...extra });
-view.budget = {   // synthetic readings: claude's 5 hour window has reset; codex is at 99% on the short window with a stale reading
-  claude: { reading: reading([lim('weekly_all', 0.4, now + 4 * 86400000), lim('session_5h', 0.5, now - 60000, true)]) },
-  codex: { reading: reading([lim('weekly_all', 0.15, now + 3 * 86400000), lim('session_5h', 0.99, now + 3600000)], { stale: true, ageMinutes: 125 }) }
+const reading = limits => ({ limits, stale: false, ageMinutes: 14, maxAgeMinutes: 60, observedAt: now - 14 * 60000 });
+view.budget = {
+  claude: { reading: reading([lim('weekly_all', 0.14, Date.UTC(2026, 10, 19, 4)), lim('session_5h', 0.01, Date.UTC(2026, 10, 13, 0, 40))]) },
+  codex: { reading: reading([lim('weekly_all', 0.31, Date.UTC(2026, 10, 18, 9))]) }
 };
+const codexAgent = view.agents.find(x => x.name === 'codex');
+Object.assign(codexAgent, { state: 'paused', jobs: [{ role: 'implementer' }] });
 const html = freezeLivePanels(renderRoute(view, { page: 'usage' }, { query: new URLSearchParams(), pathname: '/usage' }).html).replace(/<meta http-equiv="refresh"[^>]*>/, '');
 const lock = JSON.parse(fs.readFileSync(path.join(here, 'docker/images.lock.json'), 'utf8'));
 const storageRoot = path.join('/mnt/cache/appdata/devtest-infrastructure/appbaralloc', crypto.randomBytes(6).toString('hex'));

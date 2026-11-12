@@ -81,13 +81,13 @@ test('whitespace around the declaration does not matter', () => {
   assert.deepEqual(desktopWrapValues(normalise('@media(min-width:1100px){ .statusbar { flex-wrap : wrap } }')), ['wrap']);
 });
 
-test('agent badge keeps a minimum height, taller on a phone', () => {
-  const rule = css.match(/(?:^|\})\.agent-badge\{[^}]*\}/)?.[0] ?? '';
-  assert.match(rule, /min-height:24px/);
-  assert.match(mediaBlock('max-width:639px'), /\.agent-badge\{[^}]*min-height:44px/);
+test('agent item summary keeps a minimum height, taller on a phone', () => {
+  const rules = [...css.matchAll(/\.agent-item summary\{[^}]*\}/g)].map(m => m[0]);
+  assert.ok(rules.some(r => /min-height:28px/.test(r)), 'a desktop minimum height');
+  assert.match(mediaBlock('max-width:639px'), /\.agent-item summary\{[^}]*min-height:44px/);
 });
 
-test('the agent-badge comment does not claim a single desktop row', () => {
+test('the agent item comment does not claim a single desktop row', () => {
   assert.doesNotMatch(rawCss, /stays on one row at desktop/);
 });
 
