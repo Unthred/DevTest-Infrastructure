@@ -35,7 +35,9 @@ import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { wakeView } from './wake.mjs';
 import { sinceView } from './since.mjs';
-import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
+import { inboxAttention } from './inboxattention.mjs';
+import * as inboxStore from './inbox.mjs';
+import { pendingCards as inboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -704,8 +706,8 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
     // Issue #124: each pending inbox item is one Approve/Reject card. Nothing here runs anything; the card posts to the dashboard's own write route.
     if (config.inbox?.dir) for (const card of inboxCards(config.inbox.dir)) attention.push({ id: `inbox-${card.id}`, inboxId: card.id, inboxKind: card.kind, text: card.broken ? `An inbox item cannot be shown: ${card.broken}` : `Overseer proposal (${card.kind === 'prompt' ? 'run as a job' : 'post as an issue'}): ${card.title}`, ref: null, severity: 'action', inbox: card, action: card.broken ? 'Reject it; the overseer can propose it again.' : card.will });
-    // Issue #641: a failed or stopped inbox item has no GitHub notice, so it is one Needs you line (for three days after it failed).
-    if (config.inbox?.dir) for (const f of failedInboxCards(config.inbox.dir, now)) attention.push({ id: `inboxfail-${f.id}`, inboxId: f.id, inboxKind: f.kind, text: `An overseer ${f.kind === 'prompt' ? 'job' : f.kind === 'action' ? 'action' : 'item'} failed${f.job ? ` (job ${f.job})` : ''}: ${f.why}`, ref: null, severity: 'action', action: f.job ? `Look at it with ai-supervisor status ${f.job}; the overseer can read the outcome and propose it again.` : 'The overseer can read the outcome and propose it again. It leaves this list three days after it failed.' });
+    // Issues #641, #1154: a failed inbox item is one Needs you line until it has a resolution, and so is a setting an inbox job left changed.
+    if (config.inbox?.dir) attention.push(...inboxAttention(inboxStore, config.inbox.dir, team.c.limits));
     // Issue #943: refusals after pickup, one grouped line per reason.
     if (config.inbox?.dir) refusedInboxGroups(config.inbox.dir, now).forEach((g, i) => attention.push({ id: `inboxrefused-${i}`, text: `${g.count} overseer proposal${g.count === 1 ? ' was' : 's were'} refused: ${g.reason}`, ref: null, severity: 'action', action: 'The overseer can read the reason with foreman_proposal_status and propose again. It leaves this list three days after the latest refusal.' }));
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });

@@ -12,6 +12,7 @@ import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.
 import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
 import { approvals, decisionHtml } from './approvals-ui.mjs';
 import { agentLine } from './agentline.mjs';
+import { needsInboxTag } from './inboxforms.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
 import { healthPage } from './healthpage.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
@@ -20,8 +21,7 @@ import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
-// Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
-// Times inside plain text (warnings, allowance notes) travel as a marker and become <time data-local> at render time.
+// Every time is a <time>: UTC text for no-script and tests, rewritten in the viewer's zone by dashui/app.js; times in plain text travel as a marker.
 export const escT = text => localStamps(esc(text), lt);
 // SVG text cannot hold <time>: the script rewrites any [data-lms] element from its template (data-tpl, "{t}" = the time).
 const lms = (ms, tpl, timeOnly) => `data-lms="${ms}" data-tpl="${esc(tpl)}"${timeOnly ? ' data-tonly' : ''}`;
@@ -422,7 +422,7 @@ function decidedBlock(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}${decisionHtml(a)}${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
+  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${needsInboxTag(a, inboxTag)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}${decisionHtml(a)}${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
   return (items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check')) + decidedBlock(view);
 }
