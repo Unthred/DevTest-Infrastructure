@@ -367,3 +367,12 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rationale: Foreman signs a JWT on every park, and the supervisor has no scoped OpenBao identity yet (docs/secrets.md: none exists). A file with the same owner-only rule as the OpenBao token file is the same exposure that token already has. Moving the key into OpenBao is a follow-up once a scoped read identity exists.
 - Rejected: The owner's gh login (it is the owner account); the key in an environment variable or argument (visible to other processes).
 - Superseded-by: none
+
+## D-040 — A parked item holds the cancelled-CI watch, the transient resume and the owner re-review
+- Status: agent-proposal
+- Date: 2026-11-12
+- Source: issue #1171 (slice 3 of 3 of #1127, split from PR #1139); builds on D-038
+- Decision: A pull request or issue with the `parked` label holds three more behaviours, in addition to the planner's rebase, fix, review and merge. (1) `watchCancelled` makes no rerun and posts no cancelled-CI notice for a parked PR; a watch already begun is kept and acts again once the PR is unparked. (2) `resumeTransient` does not resume a stopped job whose pull request or issue is parked; the job's one resume is kept (it is not marked stale) and is used after release. (3) A re-review of a parked PR is refused, both by the `team` command and by an owner comment: nothing is recorded, the verdict is not set aside, and the comment is not used up, so it counts once the PR is unparked. Each of these starts or repeats work or spends allowance, which is what parking holds back; none of them is lost by waiting.
+- Rationale: D-038 made park the way to hold an item back. A parked PR that still got CI reruns, job resumes or fresh reviews would spend allowance behind the hold. Nothing here is destroyed by holding: the watch, the resume and the comment are all kept.
+- Rejected: Letting the three run for a parked item; dropping the watch, the resume or the decision when an item is parked.
+- Superseded-by: none

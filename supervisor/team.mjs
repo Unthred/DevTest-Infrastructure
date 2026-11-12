@@ -49,6 +49,7 @@ import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
 import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -2869,6 +2870,7 @@ export class Team {
     if (!pr || pr.state === 'CLOSED' || pr.state === 'MERGED' || pr.merged) throw new SupervisorError(`PR #${n} is not open`);
     if (!agentOfBranch(this.c, pr.headRefName)) throw new SupervisorError(`PR #${n} is not on a Foreman branch`);
     if (pr.isDraft || !SHA.test(pr.headRefOid)) throw new SupervisorError(`PR #${n} is a draft or has no readable head`);
+    if (isParked(pr)) throw Object.assign(new SupervisorError(reReviewParkedText(n)), { code: 'parked' });   // issue #1171 (D-040)
     const head = pr.headRefOid, key = verdictKey(n, head), v = this.s.verdicts[key];
     const entry = this.s.reReviews[n] ?? { requests: [] };   // not stored here: a refusal must leave no state behind
     const refuse = (code, text) => Object.assign(new SupervisorError(text), { code });
@@ -2925,7 +2927,7 @@ export class Team {
   // otherwise only a report.skipped entry, so approval comments on a PASS PR cause no noise) and is not used up.
   async scanOwnerComments(report, guard = (_, fn) => fn()) {
     if (!this.c.owner_comment_review?.enabled || !this.gh.prComments) return;
-    for (const pr of await this.gh.listPulls()) {
+    for (const pr of unparkedPulls(await this.gh.listPulls())) {   // issue #1171 (D-040): no re-review is requested for a parked PR, and its owner comment is not used up
       if (!agentOfBranch(this.c, pr.headRefName) || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
       const entry = this.s.reReviews[pr.number];
@@ -3074,7 +3076,7 @@ export class Team {
     // Head moved or PR closed. Skipped when the list is at the listPulls cap (100): a PR beyond it would look closed, and its
     // watch (with the recorded rerun) would be dropped and the rerun repeated.
     if (pulls.length < OPEN_PULLS_CAP) for (const key of Object.keys(this.s.cancelWatch)) if (!open.has(key)) delete this.s.cancelWatch[key];
-    for (const pr of pulls) {
+    for (const pr of unparkedPulls(pulls)) {   // issue #1171 (D-040): a parked PR gets no rerun and no notice; its watch is kept
       if (pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const lone = loneCancelled(pr.statusCheckRollup, this.retried(pr)), key = `${pr.number}:${pr.headRefOid}`;
       if (!lone.length) {
@@ -3311,6 +3313,7 @@ export class Team {
           if (j.kind === 'implement' && !j.endedNoPr) j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
           this.save(); return;
         }   // notifyOne handles it as before
+        if (await jobTargetParked(j, open, this.gh)) return;   // issue #1171 (D-040): a parked item's job is not resumed; the one resume is kept
         if (this.limitedOf(j.agent)?.out) return;   // out of allowance: wait for the reset rather than burn the one resume
         if (breaker.blocks(this.s.breaker, this.c.breaker, { type: j.kind, issue: j.issue ?? null })) return;   // issue #549: a halted job type does not restart either
         if (await this.providerRoleFull(job.provider ?? this.c.agents[j.agent]?.provider, roleOfType(j.kind))) return;   // issue #402: the provider's own role count is full; wait, keeping the one resume
