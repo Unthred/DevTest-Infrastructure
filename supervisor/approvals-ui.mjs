@@ -1,15 +1,18 @@
 // The "Waiting for approval" dropdown on the Now tab (issue #1101): HTML only, from the rows supervisor/approvals.mjs returns. The forms are the
 // Inbox's own (post to /inbox with the page's access proof), so the existing submit handler and the existing approve and reject path decide.
 import { approveAllIds } from './approvals.mjs';
+export { decisionHtml } from './decisioncard-ui.mjs';
+import { decisionHtml } from './decisioncard-ui.mjs';
 
 const FORM_TAIL = '</button></form>';
 const form = (esc, id, decision, label) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}">`
   + `<input type="hidden" name="decision" value="${decision}"><button class="btn inbox-${decision}" type="submit">${label}${FORM_TAIL}`;
 
 const STRONG_NOTE = '<span class="sub">Needs the typed pull request number; decide it on its pull request.</span>';
+// Issue #1156: a decision row shows the card (reason, clear condition, its routine controls); the link is context only.
 const decideNote = (esc, r) => {
-  const where = r.link ? `<a href="${esc(r.link)}" rel="noopener">Decide it here</a>` : 'Decide it where it is raised';
-  return `<span class="sub">${where}; it has no button here.</span>`;
+  const link = r.link ? ` <a href="${esc(r.link)}" rel="noopener">Open it</a>` : '';
+  return `${decisionHtml({ id: r.id, card: r.card, decision: r.options })}${link}`;
 };
 const buttons = (esc, r) => {
   if (r.tier === 'decision') return decideNote(esc, r);
@@ -17,6 +20,7 @@ const buttons = (esc, r) => {
   return (r.canApprove ? form(esc, r.id, 'approve', 'Approve') : '') + form(esc, r.id, 'reject', 'Reject');
 };
 const whyBlock = (esc, r) => {
+  if (r.tier === 'decision') return '';
   if (!r.why && !r.options) return '';
   const why = r.why ? `<div class="sub">${esc(r.why)}</div>` : '';
   const options = r.options ? `<div class="sub">Options: ${esc(r.options)}</div>` : '';
