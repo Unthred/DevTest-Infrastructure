@@ -14,7 +14,7 @@ const TAIL = ' Needs a reason. Repeating it changes nothing and reports the same
 // name, action, arguments (besides reason), how the value is made from the arguments, description. One row per control.
 const TOOLS = [
   ['foreman_start_job', 'start_job', { id: JOB }, null,
-    'Start or resume one paused, blocked, failed or waiting job now, under the same checks as the homeowner\'s resume (allowance, breaker, free slot).'],
+    'Start or resume one paused or waiting job now (a blocked or failed job needs the homeowner), under the same checks as the homeowner\'s resume (allowance, breaker, free slot).'],
   ['foreman_pause_job', 'pause_job', { id: JOB }, null, 'Pause one running or queued job. Undo it with foreman_start_job.'],
   ['foreman_stop_job', 'stop_job', { id: JOB }, null, 'Stop one job (the supported stop): it will not restart and uses no attempt.'],
   ['foreman_park', 'park', { number: NUMBER }, null,

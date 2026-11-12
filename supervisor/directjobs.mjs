@@ -4,11 +4,13 @@
 // be given.
 import { SupervisorError } from './core.mjs';
 import { TERMINAL, findItem, park, stopJob } from './controlactions.mjs';
-import { checkResumable, RESUMABLE } from './jobresume.mjs';
+import { checkResumable } from './jobresume.mjs';
 
 const done = (changed, text, extra = {}) => ({ outcome: 'done', changed, text, ...extra });
 const refused = text => ({ outcome: 'refused', changed: false, text });
 const PARKED = 'parked';
+// Narrower than the homeowner's resume (jobresume RESUMABLE): a blocked or failed job, such as one out of retries, is not the overseer's to restart.
+const STARTABLE = ['paused_manual', 'paused_limit'];
 
 // The one job an id names (8 characters or the full id), or a refusal; a prefix that fits several jobs is ambiguous, never guessed.
 export async function resolveJob(target, deps) {
@@ -70,7 +72,7 @@ export async function directStart(target, deps) {
   const { id, job, rec } = found, state = { status: job.status };
   if (job.status === 'running') return done(false, `job ${target} is already running`, { before: state, after: state });
   if (job.status === 'queued') return startWaiting(id, job, target, deps);
-  if (!RESUMABLE.includes(job.status)) return refused(`job ${target} is ${job.status}; only a paused, blocked, failed or waiting job can be started`);
+  if (!STARTABLE.includes(job.status)) return refused(`job ${target} is ${job.status}; only a paused or waiting job can be started directly. A blocked or failed job, or one that used its retries, needs the homeowner's resume`);
   try { await checkResumable(deps.team, { target, rec, job }, deps.roleOf); } catch (error) {
     if (error instanceof SupervisorError) return refused(error.message);
     throw error;

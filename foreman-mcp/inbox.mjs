@@ -9,7 +9,8 @@ import { redact } from './redact.mjs';
 import { checkControl, controlOf } from './directspec.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, value: 300, waiting: 30, action: 40, target: 40 };
-const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
+const JOB_ID = /^(?:[a-f0-9]{8}|[a-f0-9]{32})$/;   // issue #1164: the short id or the full id
+const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: JOB_ID, stop_job: JOB_ID, resume_job: JOB_ID };   // issue #629: the names Foreman accepts
 // Issue #1115: an approved `unpark` action stays available. Issue #1164: a `control` item names one of the direct controls (directspec.mjs).
 const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen };
 const ID_RE = /^[a-f0-9]{32}$/;
@@ -42,7 +43,7 @@ export function checkProposal(args) {
   if (kind === 'control') return checkControl(item);
   if (named) {
     if (!Object.hasOwn(ALL_ACTIONS, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(ALL_ACTIONS).join(', ')}` };
-    if (!ALL_ACTIONS[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
+    if (!ALL_ACTIONS[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character (or full) job id' };
   }
   return { ok: true, item };
 }

@@ -785,7 +785,12 @@ export class Team {
     const listed = new Set(this.agents().flatMap(([a]) => this.issuesOf(a)));
     return (this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)).map(i => i.number).sort((a, b) => a - b);
   }
-  candidates(agent) { return shape(this.s.directQueue, [...this.issuesOf(agent), ...this.unlisted()], agent); }   // issue #1164: the overseer's queue edits
+  // An issue the overseer assigned to this agent is offered to it even when another agent's list holds it (shape() drops it from that owner's list).
+  assignedTo(agent) {
+    const open = new Set((this.view?.issues || []).filter(i => i.state === 'OPEN').map(i => i.number));
+    return Object.entries(this.s.directQueue?.entries || {}).filter(([n, e]) => e.agent === agent && open.has(Number(n))).map(([n]) => Number(n));
+  }
+  candidates(agent) { return shape(this.s.directQueue, [...new Set([...this.issuesOf(agent), ...this.assignedTo(agent), ...this.unlisted()])], agent); }   // issue #1164: the overseer's queue edits
   // Review independence (issue #152). The models that wrote a pull request head are the models of every implementer job the dispatcher
   // recorded for it (implement, continue, fix, cifix, rebase), by provider and model. Without a record (a PR written by hand) only the
   // branch author's provider is known, so only a reviewer on another provider counts as independent.
