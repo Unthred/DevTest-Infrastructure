@@ -8,7 +8,7 @@ const parkedNumbers = cache => new Set([...(cache?.pulls || []), ...(cache?.issu
 
 export function withDecisionCards(view, config, cache) {
   if (!view?.panels?.needsYou) return view;
-  const ctx = { parked: parkedNumbers(cache), appConfigured: appConfigured(config) };
+  const ctx = { parked: parkedNumbers(cache), appConfigured: appConfigured(config), workers: Object.keys(config?.agents || {}) };
   view.panels.needsYou = view.panels.needsYou.map(a => ({ ...a, card: decisionCard(a, ctx) }));
   return view;
 }

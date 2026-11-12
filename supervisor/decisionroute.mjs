@@ -26,7 +26,7 @@ export function decisionRoute({ root, source, cachedView, store, wake, now, guar
     const slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
     const prepared = await cachedView({ root, config: source(), now: t, configError: source.invalid, timeline: false, allTime: false });
-    const found = resolveClick(prepared.view, { card: form.get('card') || '', control: form.get('control') || '' });
+    const found = resolveClick(prepared.view, { card: form.get('card') || '', control: form.get('control') || '', model: form.get('model') || '', supersededBy: form.get('superseded_by') || '' });
     const r = found.ok ? recordClick(source().inbox.dir, found, t) : found;
     if (!r.ok) {
       releaseCooldown(root, 'inbox', t);

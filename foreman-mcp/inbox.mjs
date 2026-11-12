@@ -10,7 +10,9 @@ import { redact } from './redact.mjs';
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
 // Issue #1115: the releasing direction is an ordinary action (approved on the dashboard); a `control` item may carry only park or stop_job.
-const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen };
+// Issue #1157: the routine actions; extra_fix_round and close_superseded take a PR or issue number, resume_breaker a breaker scope.
+const ROUTINE = { extra_fix_round: ACTIONS.reopen, close_superseded: ACTIONS.reopen, resume_breaker: /^(?:@global|all|[A-Za-z0-9_.-]{1,40})$/ };
+const ALL_ACTIONS = { ...ACTIONS, ...ROUTINE, unpark: ACTIONS.reopen };
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
@@ -22,11 +24,13 @@ export function checkProposal(args) {
   if (!['prompt', 'issue_draft', 'action', 'control'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft", "action" or "control"' };
   const named = kind === 'action' || kind === 'control';
   const bodyKey = kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', allowed = named ? ['kind', 'title', 'action', 'target', 'reason'] : ['kind', 'title', bodyKey, 'why'];
+  if (kind === 'action') allowed.push('model', 'superseded_by');   // issue #1157: optional, one action each
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, error: `unknown argument: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const item = { kind };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = a[k];
+    if (v === undefined && (k === 'model' || (k === 'superseded_by' && a.action !== 'close_superseded'))) continue;
     if (v === undefined && k === 'why') continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
     if (v.length > (LIMITS[k] ?? 40)) return { ok: false, error: `${k} is longer than ${LIMITS[k]} characters` };
@@ -40,6 +44,8 @@ export function checkProposal(args) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
     if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
+    if (item.model && item.action !== 'extra_fix_round') return { ok: false, error: 'model is only accepted with extra_fix_round' };
+    if (item.superseded_by && item.action !== 'close_superseded') return { ok: false, error: 'superseded_by is only accepted with close_superseded' };
   }
   return { ok: true, item };
 }

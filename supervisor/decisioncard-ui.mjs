@@ -3,8 +3,14 @@
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ESC[c]);
 
+// Issue #1157: a control may take one input: the worker for an extra fix round (a choice among the configured ones) or the superseding numbers.
+const input = c => {
+  if (c.input === 'superseded_by') return '<input class="decision-input" type="text" name="superseded_by" required maxlength="60" placeholder="superseded by, e.g. 12, 13" aria-label="Superseded by (issue or pull request numbers)">';
+  if (c.input === 'model') return `<select class="decision-input" name="model" aria-label="Worker"><option value="">Foreman chooses</option>${(c.choices || []).map(m => `<option>${esc(m)}</option>`).join('')}</select>`;
+  return '';
+};
 const control = (id, c) => `<form method="post" action="/decision" class="decision-form"><input type="hidden" name="card" value="${esc(id)}">`
-  + `<input type="hidden" name="control" value="${esc(c.action)}"><button class="btn decision-control" type="submit" title="${esc(c.does)}">${esc(c.label)}</button></form>`;
+  + `<input type="hidden" name="control" value="${esc(c.action)}">${input(c)}<button class="btn decision-control" type="submit" title="${esc(c.does)}">${esc(c.label)}</button></form>`;
 
 // item: a Needs you item with its `card`; `decision` is its by-hand next step text.
 export function decisionHtml(item) {

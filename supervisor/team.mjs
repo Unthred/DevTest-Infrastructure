@@ -46,7 +46,8 @@ import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
-import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { dispatchApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { ROUTINE_ACTIONS, applyRoutine, openExtraFix, fixerOf, spendExtraFix } from './routineactions.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -915,7 +916,7 @@ export class Team {
   }
   // Issue #316: why a writing job (the fix/ci-fix of this PR's author) must not run now, or null. Used by the planner and the dashboard.
   writeBlock(pr, kind = 'fix') {
-    const agent = agentOfBranch(this.c, pr.headRefName);
+    const agent = fixerOf(this, pr);   // issue #1157: the worker an extra fix round names, else the author
     if (!agent || !this.c.agents[agent]) return null;
     return this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key: `wb:${pr.number}` }, kind, {}, true).writeRefusal || null;
   }
@@ -1448,7 +1449,7 @@ export class Team {
     }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
     for (const pr of repair ? up : []) {
-      if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
+      if (fixerOf(this, pr) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const checks = failingChecks(pr.statusCheckRollup, this.retried(pr));
       // Issue #400: a round whose only failing checks are secret scanners cannot be cleared by the fix job (the old commit stays flagged
@@ -1457,17 +1458,17 @@ export class Team {
       // repeats to retry the notice, at most 3 times so it stays bounded. A green scanner check clears both markers (issue #451).
       const scanOnly = scannerOnly(checks);
       if (scanOnly && (this.s.scanOnlyAnnounced[pr.number] || (this.s.scanOnlyRounds[pr.number] || 0) >= 3)) continue;
-      const escalated = !scanOnly && this.fixCount(pr.number) >= L.max_fix_attempts;
+      const extraFix = !scanOnly && !!openExtraFix(this, pr), escalated = !scanOnly && !extraFix && this.fixCount(pr.number) >= L.max_fix_attempts;   // issue #1157: an extra round runs past the limit
       if (busy('cifix', key) || (escalated && (!this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks, key, ...(scanOnly ? { scanOnly: true } : {}), ...(escalated ? { escalated: true } : {}) };
     }
     // fix: my PR with a CHANGES verdict on its current head
     for (const pr of repair ? up : []) {
-      if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
-      const key = verdictKey(pr.number, pr.headRefOid);
-      if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || this.churned(pr.number)) continue;   // issue #864: churn stops the fix loop
-      const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
+      if (fixerOf(this, pr) !== agent) continue;
+      const key = verdictKey(pr.number, pr.headRefOid), extraFix = !!openExtraFix(this, pr);   // issue #1157: one granted round runs past the limit and the churn stop
+      if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || (this.churned(pr.number) && !extraFix)) continue;   // issue #864: churn stops the fix loop
+      const escalated = !extraFix && this.fixCount(pr.number) >= L.max_fix_attempts;
       if ((escalated && (!this.canEscalate(pr.number, pr) || this.carriedHold(pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // an escalating PR stops with one Needs you item
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
@@ -2219,12 +2220,12 @@ export class Team {
     if (hits.length !== 1) throw new SupervisorError(hits.length ? `job id ${prefix} is ambiguous` : `no job ${prefix}`);
     return hits[0];
   }
-  async applyInboxAction({ action, target, reason }, report) {
+  async applyInboxAction({ action, target, reason, model, superseded_by }, report) {
     const n = Number(target);
     if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
     if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
-    if (action === 'unpark') return unparkApproved(n, depsOf(this));   // issue #1115
+    if (ROUTINE_ACTIONS.has(action)) return applyRoutine(this, { action, target, reason, model, superseded_by });   // issues #1115, #1157
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
     const tk = rec.issue != null && !['review', 'fix', 'rebase', 'cifix'].includes(rec.kind) ? 'issue' : 'pull', tgt = rec.pr ?? rec.issue;
@@ -3618,7 +3619,7 @@ export class Team {
       spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, scope: `Fix the CHANGES verdict on PR #${act.pr}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
         prompt: fixPrompt({ pr: act.pr, head: act.head, branch: act.branch, escalatedInbox, requirementsFile: rq?.file }), postcondition: { kind: 'new_head', pr: act.pr, baseHead: act.head } };
       meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) };
-      bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; };
+      bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; spendExtraFix(this, act); };
     } else if (act.type === 'rebase' || act.type === 'cifix') {
       const rebase = act.type === 'rebase';
       let rq = null;
@@ -3635,7 +3636,7 @@ export class Team {
       meta = fixJobMeta(act, rebase, ticket);
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
       bump = () => { if (act.scanOnly) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; if (act.announced) this.s.scanOnlyAnnounced[act.pr] = true; return; }   // issue #400: never counted; later heads are skipped only once the homeowner item exists
-        this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; };
+        this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; spendExtraFix(this, act); };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: 'continue', worktree: wt, issue: act.issue, scope: `Continue draft PR #${act.pr} for issue #${act.issue} on ${act.branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],

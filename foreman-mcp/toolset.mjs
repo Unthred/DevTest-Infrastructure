@@ -4,6 +4,7 @@ import { createTools, CALLS_PER_MINUTE, MAX_TEXT } from './tools.mjs';
 import { controlTools } from './controltools.mjs';
 import { withControls } from './controlview.mjs';
 import { redact } from './redact.mjs';
+import { withRoutineActions } from './proposeschema.mjs';
 
 const WITH_CONTROLS = new Set(['foreman_why_blocked', 'foreman_jobs']);
 
@@ -12,7 +13,7 @@ export function createToolset(options) {
   const extra = options.inbox?.enabled ? controlTools({ inbox: options.inbox, waitMs: options.controlWaitMs ?? 20000 }) : [];
   const own = name => extra.find(d => d.name === name);
   return {
-    list: () => [...base.list(), ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }))],
+    list: () => [...base.list().map(withRoutineActions), ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }))],
     has: name => base.has(name) || !!own(name),
     async call(name, args = {}) {
       const def = own(name);
