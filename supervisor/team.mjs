@@ -46,7 +46,11 @@ import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
-import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { dispatchApproved, processDirectUndos } from './directrun.mjs';
+import { shape, ensureQueue } from './directqueue.mjs';
+import { checkResumable } from './jobresume.mjs';
+import { roleOfType } from './roles.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -190,7 +194,7 @@ export const orderSensitive = () => true;
 export const DEFAULT_REBASERS = 1;
 // The count of a role: the configured one, else 1. limits.roles.rebaser is optional; an absent value is left absent so a config is not rewritten.
 export const roleCount = (L, r) => (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : r === 'rebaser' ? DEFAULT_REBASERS : 1);   // rebaser and inbox default to 1
-export const roleOfType = type => (type === 'review' ? 'reviewer' : type === 'rebase' ? 'rebaser' : type === 'inbox' ? 'inbox' : 'implementer');   // implement, continue, fix, cifix -> implementer; review -> reviewer; rebase -> rebaser
+export { roleOfType };   // implement, continue, fix, cifix -> implementer; review -> reviewer; rebase -> rebaser
 // The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
 // role count is the only change needed. One implementer and one reviewer give 2, as before.
 // Issue #344: the one replaceable function that predicts which files an implement job will edit. No model call: it reads the paths the
@@ -705,6 +709,7 @@ export class Team {
     this.s.titles.issue ||= {}; this.s.titles.pr ||= {};
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
+    ensureQueue(this.s);   // issue #1164
   }
   save() { atomicJson(this.file, this.s); }
   // Model and effort for one job (issue #64). Escalation: an earlier attempt of the same work ended incomplete on the cheaper
@@ -780,7 +785,7 @@ export class Team {
     const listed = new Set(this.agents().flatMap(([a]) => this.issuesOf(a)));
     return (this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)).map(i => i.number).sort((a, b) => a - b);
   }
-  candidates(agent) { return [...this.issuesOf(agent), ...this.unlisted()]; }
+  candidates(agent) { return shape(this.s.directQueue, [...this.issuesOf(agent), ...this.unlisted()], agent); }   // issue #1164: the overseer's queue edits
   // Review independence (issue #152). The models that wrote a pull request head are the models of every implementer job the dispatcher
   // recorded for it (implement, continue, fix, cifix, rebase), by provider and model. Without a record (a PR written by hand) only the
   // branch author's provider is known, so only a reviewer on another provider counts as independent.
@@ -2094,6 +2099,7 @@ export class Team {
     const dir = this.inboxDir(); if (!dir) return;
     const now = this.clock.now();
     await repairInbox(this, dir, report, TERMINAL);   // issue #1122
+    await processDirectUndos(this, dir, report);   // issue #1164: reverse what the homeowner undid on the dashboard
     scanInboxNow({ root: this.root, inboxDir: dir, scan: inboxStore.scan, maxPending: this.c.inbox.max_pending, now });   // issue #985: the dashboard's watcher may have scanned already
     for (const st of inboxStore.allStatuses(dir)) {
       // Issue #985: a job the fast lane started while this pass (or none) ran is adopted into the team state here, once.
@@ -2235,13 +2241,7 @@ export class Team {
       await this.jobs.stop(id); log(`stopped the ${rec.kind} job ${target}`, 'stopped'); return `job ${target} stopped`;
     }
     if (action === 'resume_job') {
-      if (!['paused_manual', 'paused_limit', 'blocked', 'failed'].includes(job.status)) throw new SupervisorError(`job ${target} is ${job.status}, not resumable`);
-      if (typeof this.jobs.resume !== 'function') throw new SupervisorError('this supervisor cannot resume a job');
-      const pr = rec.pr != null ? (await this.gh.listPulls()).find(p => p.number === rec.pr) : null;
-      if (rec.pr != null && (!pr || (rec.head && pr.headRefOid !== rec.head))) throw new SupervisorError(`PR #${rec.pr} is closed or has a newer head, so job ${target} cannot be resumed to any purpose; close it instead`);
-      if (this.limitedOf(rec.agent)?.out) throw new SupervisorError(`${rec.agent} is out of allowance; resume it after the reset`);
-      if (breaker.blocks(this.s.breaker, this.c.breaker, { type: rec.kind, issue: rec.issue ?? null })) throw new SupervisorError(`the circuit breaker has halted new ${rec.kind} jobs; resume the breaker first`);   // issue #713: same rule as resumeTransient (issue #549)
-      if (await this.providerRoleFull(job.provider ?? this.c.agents[rec.agent]?.provider, roleOfType(rec.kind))) throw new SupervisorError('the provider has no free slot for this role right now');
+      await checkResumable(this, { target, rec, job }, roleOfType);
       rec.ingested = false; this.save();
       await this.jobs.resume(id); log(`resumed the ${rec.kind} job ${target}`, 'resumed once'); return `job ${target} resumed`;
     }

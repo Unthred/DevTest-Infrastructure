@@ -2,14 +2,17 @@
 // and the control records added to the answers of foreman_why_blocked and foreman_jobs. Control tools keep their own call budget.
 import { createTools, CALLS_PER_MINUTE, MAX_TEXT } from './tools.mjs';
 import { controlTools } from './controltools.mjs';
-import { withControls } from './controlview.mjs';
+import { withControls, directLog } from './controlview.mjs';
 import { redact } from './redact.mjs';
 
 const WITH_CONTROLS = new Set(['foreman_why_blocked', 'foreman_jobs']);
 
 export function createToolset(options) {
   const base = createTools(options), now = options.now ?? Date.now, calls = [];
-  const extra = options.inbox?.enabled ? controlTools({ inbox: options.inbox, waitMs: options.controlWaitMs ?? 20000 }) : [];
+  const trail = { name: 'foreman_direct_log', description: 'Read back the audit trail of the direct controls (who, what, target, before and after, reason, time, and whether each was undone or refused), newest first, and whether direct control is switched on.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } }, additionalProperties: false }, annotations: { readOnlyHint: true, openWorldHint: false },
+    run: async a => directLog((await options.source.get()).view, a) };
+  const extra = [trail, ...(options.inbox?.enabled ? controlTools({ inbox: options.inbox, waitMs: options.controlWaitMs ?? 20000 }) : [])];
   const own = name => extra.find(d => d.name === name);
   return {
     list: () => [...base.list(), ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }))],

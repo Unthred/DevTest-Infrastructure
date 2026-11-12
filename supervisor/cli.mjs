@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { terminal, leaseKeys, jobProcessesAlive, childAlive, SupervisorError, WorktreeUnusable, gitCommonDir, claimWorker, createJob, defaultRegistry, drive, jobFile, processStart, provider, readJob, resolveJobId, recover, releaseLeases, saveJob, stateRoot, transition, realClock } from './core.mjs';
 import { runProcess } from './process.mjs';
 import { attachProbe } from './faultflow.mjs';
-import { stopJob, workerSignal } from './stopjob.mjs';
+import { stopJob, workerSignal, overseerStop, overseerPause } from './stopjob.mjs';
 import { runMigrations } from './migrations.mjs';
 import { recordSkip } from './skips.mjs';
 import { guardTmp, leakText } from './jobtmp.mjs';
@@ -136,11 +136,8 @@ function realJobs(root, registry) {
     rearm: async id => { const job = readJob(root, id); if (job.status !== 'queued' || !(job.nextAttemptAt > Date.now())) return false; job.nextAttemptAt = Date.now(); saveJob(root, job, realClock, true); return true; },
     // Issue #629: the homeowner's approved stop, the same steps as `ai-supervisor stop ID`
     transcriptMtime: async id => transcriptMtime(transcriptFile(root, id)),   // issue #995: the job's heartbeat
-    stop: async (id, reason = 'manual_stop') => {
-      const job = readJob(root, id);
-      if (terminal.has(job.status)) throw new SupervisorError('terminal job cannot be stopped');
-      stopJob(root, job, { reason, by: 'overseer', signal: workerSignal(job, { processStart, childAlive }, 'SIGTERM') });
-    },
+    stop: async (id, reason = 'manual_stop') => overseerStop(root, readJob(root, id), reason, { processStart, childAlive }),
+    pause: async id => overseerPause(root, readJob(root, id), { processStart, childAlive }),   // issue #1164
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
 }
