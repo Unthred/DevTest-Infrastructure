@@ -26,7 +26,7 @@ import { hasReading, windowExpired } from './allowance.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex, readUpgrades } from './suphealth.mjs';
 import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
-import { budgetView } from './budgetview.mjs';
+import { budgetView, usageReading } from './budgetview.mjs';
 import { hasProbe } from './probe.mjs';
 import { annotateQueues, nextWhyFields } from './holdreason.mjs';
 import { hostPressureView } from './hostpressure.mjs';
@@ -504,7 +504,7 @@ function usageView(config, jobs, states, allowance, now) {
     const windows = al ? al.windows.map(w => ({ label: windowLabel(w, a.provider), utilization: Number.isFinite(w.utilization) ? w.utilization : null, resetsAt: w.resetsAt || null, expired: windowExpired(w, now) })) : [];
     out[agent] = {
       observedAt: al?.observedAt || null, ageMs: al?.observedAt ? now - al.observedAt : null, source: al?.source || null,
-      canProbe: hasProbe(defaultRegistry, a.provider),
+      canProbe: hasProbe(defaultRegistry, a.provider), ...usageReading(al, now, budgetSettings(config)),
       allExpired: windows.length > 0 && windows.every(w => w.expired),
       limit: limited ? limitView(st.job, al, now) : null,
       windows,

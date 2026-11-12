@@ -30,7 +30,7 @@ import { redact, redactLong } from './redact.mjs';
 import { isSecretScanner } from './secret-scanner.mjs';
 import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
-import { probeDue } from './probe.mjs';
+import { probesOwed } from './probesdue.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
 import { weeklyWindow } from './budget.mjs';
@@ -1009,20 +1009,11 @@ export class Team {
     }
     return out;
   }
-  // Allowance probes owed now (issue #110): [{ agent, provider, reason, resetFor }], at most one per provider. Read-only; the caller
-  // runs them and calls noteProbe. Only for providers whose manifest declares a probe (`canProbe`), and never on a dry run.
-  probesDue(canProbe = () => true) {
+  // Allowance probes owed now (issue #110, #1163; supervisor/probesdue.mjs). Read-only; the caller runs them and calls noteProbe. `canProbe`: providers with a probe.
+  probesDue(canProbe = () => true, lastCache = null) {
     const modes = this.budgets();
     if (!modes) return [];
-    const now = this.clock.now(), settings = budgetSettings(this.c), out = [], seen = new Set();
-    for (const [agent, a] of this.agents()) {
-      if (seen.has(a.provider) || !canProbe(a.provider)) continue;
-      // D-019: a job of this provider that stopped on a usage limit waits for its reset; no provider call meanwhile.
-      const limitWait = (this.usage.jobs || []).some(j => j.provider === a.provider && j.status === 'paused_limit' && j.lastEvent === 'usage_limit');
-      const due = probeDue({ mode: modes[agent].mode, stored: this.s.budget[agent] || null, allowance: this.usage.allowance?.[a.provider] || null, state: this.s.probes[agent] || null, settings, now, limitWait });
-      if (due) { seen.add(a.provider); out.push({ agent, provider: a.provider, ...due }); }
-    }
-    return out;
+    return probesOwed({ agents: this.agents(), modes, usage: this.usage, stored: this.s.budget, probeState: this.s.probes, settings: budgetSettings(this.c), now: this.clock.now(), canProbe, lastCache });
   }
   // The attempt is recorded whether or not it produced a reading, so a failing probe cannot run more than once per interval.
   noteProbe(agent, due) { this.s.probes[agent] = { at: this.clock.now(), resetFor: due.resetFor ?? this.s.probes[agent]?.resetFor ?? null }; this.save(); }

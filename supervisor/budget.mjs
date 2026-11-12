@@ -13,9 +13,11 @@ import { redact } from './redact.mjs';
 import { highWaterHold, reserveRefusal } from './capacityrule.mjs';
 import { isWeekly } from './capacity.mjs';
 import { restoredIn, sinceLastReset } from './resetdetect.mjs';
+import { DEFAULT_READING_MAX_AGE_MINUTES, readingInfo } from './readingfresh.mjs';
 
 export const HOUR = 3600000;
 export const DEFAULT_BUDGET = { enabled: true, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
+DEFAULT_BUDGET.reading_max_age_minutes = DEFAULT_READING_MAX_AGE_MINUTES;   // issue #1163
 // Early in a window one or two percent over an hour is noise, not a rate: projections use at least this share of the window as elapsed time (issue #159).
 export const MIN_ELAPSED_FRACTION = 0.05;
 export const REVIEWS_ONLY_TYPES = new Set(['review', 'fix', 'cifix', 'rebase']);
@@ -26,6 +28,7 @@ const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 const LEGACY_KEYS = ['projected_limit', 'recent_min_window_hours', 'recent_min_samples'];
 const CAPACITY_KEYS = ['starting_capacity', 'reserve_margin'];   // issue #1116
 const KEYS = ['enabled', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
+KEYS.push('reading_max_age_minutes');   // issue #1163
 
 export function validateBudgetConfig(b, agentNames) {
   if (b === undefined) return;
@@ -36,6 +39,7 @@ export function validateBudgetConfig(b, agentNames) {
   if ('enabled' in b && typeof b.enabled !== 'boolean') throw new SupervisorError('invalid budget config: enabled');
   num('projected_limit', 0.5, 1.5); num('high_water', 0.5, 1); num('high_water_min_hours', 0, 168); num('recent_hours', 1, 168); num('recent_min_window_hours', 0, 168); num('recent_min_samples', 2, 10000); num('exhausted_at', 0.9, 1);
   num('probe_age_hours', 0.25, 48); num('probe_interval_minutes', 5, 1440);
+  num('reading_max_age_minutes', 5, 1440);
   validateCapacityKeys(b, agentNames);
   if ('probe' in b && typeof b.probe !== 'boolean') throw new SupervisorError('invalid budget config: probe');
   if ('can_take_over' in b && !(Array.isArray(b.can_take_over) && b.can_take_over.every(n => agentNames.includes(n))))
@@ -127,6 +131,7 @@ const hrs = h => (h >= 48 ? `${Math.round(h / 24 * 10) / 10} days` : `${Math.rou
 export function assessAgent({ allowance, jobs = [], history = [], settings = DEFAULT_BUDGET, now, latched = null, capacity = null }) {
   const out = { mode: 'normal', reason: null, until: null, known: false, used: null, resetsAt: null, hoursLeft: null, ratePerHour: null, rateSource: null, projected: null, runsOutAt: null,
     shortWindow: null, observedAt: allowance?.observedAt ?? null, overage: allowance?.billing?.usingOverage === true, creditsAvailable: allowance?.billing?.creditsAvailable === true, costs: { perToken: null, typical: {}, cost: () => null } };
+  out.reading = readingInfo(allowance, now, settings);   // issue #1163: time, age, source and limit kinds of the reading behind every figure here
   if (settings.enabled === false) { out.reason = 'allowance-aware scheduling is switched off'; return out; }
   if (!allowance || !Array.isArray(allowance.windows)) {
     const reported = reportedLimit(allowance, now);

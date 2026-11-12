@@ -214,7 +214,7 @@ function probeAllowances(config) {
   return out;
 }
 async function runDueProbes(root, registry, team, found) {
-  const due = team.probesDue(id => hasProbe(registry, id));
+  const due = team.probesDue(id => hasProbe(registry, id), readCache(root));   // issue #1163: a refresh before admission only while work waits
   for (const d of due) {
     team.noteProbe(d.agent, d);
     const r = await refreshProvider(registry, d.provider);

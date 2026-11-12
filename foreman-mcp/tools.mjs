@@ -7,7 +7,7 @@ import { mismatches, needsYouGroups, rebaseStats, itemTimeline, gbpOf } from './
 import { hostActivity } from './source.mjs';
 import { dependencySkips } from './dependencyview.mjs';
 import { issueViews, faultViews } from './assignmentview.mjs';
-import { budgetBrief } from './budgetfigures.mjs';
+import { budgetBrief, readingBrief } from './budgetfigures.mjs';
 
 const PLAN_NOTE = 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.';
 
@@ -168,7 +168,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       run: async () => { if (!getPath) throw new Error('the configuration is not available on this server'); return getPath('/api/config.json'); } },
     { name: 'foreman_budget', description: 'Per agent allowance and scheduling: the mode and why it holds (or what holds it), when it ends, the weekly window (used, reset time, hours left), the rate behind the estimate and where the rate came from, the estimate at reset (for information only, it never sets a mode), typical job costs, and the thresholds in force (when the dashboard serves its configuration). Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { const cfg = getPath ? await getPath('/api/config.json').catch(() => null) : null; return withView(v => ({
-        agents: Object.fromEntries(Object.entries(v.budget || {}).map(([name, b]) => [name, {
+        agents: Object.fromEntries(Object.entries(v.budget || {}).map(([name, b]) => [name, { reading: readingBrief(b.reading),
           mode: b.mode, label: b.label ?? null, why: b.reason ?? null, endsAt: iso(b.until), known: b.known, capacity: b.capacity ?? null,
           weekly: { used: b.used, resetsAt: iso(b.resetsAt), hoursLeft: Number.isFinite(b.hoursLeft) ? Math.round(b.hoursLeft * 10) / 10 : null },
           rate: { perHour: b.ratePerHour, source: b.rateSource, estimateAtReset: b.projected, runsOutAt: iso(b.runsOutAt), note: 'The estimate is for information only; it does not set a mode (issue #680).' },
