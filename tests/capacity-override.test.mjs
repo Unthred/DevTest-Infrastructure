@@ -54,10 +54,14 @@ test('no comparison when only one of the two exists', () => {
 test('the daily check names a current window that disagrees with the learned value, and is silent when it agrees or has no signal', () => {
   const off = run({ jobs: [...past(100000), ...today(1000000)] });
   assert.equal(off.warnings.length, 1);
-  assert.match(off.warnings[0], /this window so far implies about 10\.0M tokens a week \(2\.0M tokens for 20% of use\), 2\.5 times higher than the learned 4\.0M tokens/);
-  assert.match(off.text, /2\.5 times higher/);
-  assert.deepEqual(run({ jobs: [...past(100000), ...today(300000)] }).warnings, [], 'within a factor of 2');
-  assert.deepEqual(run({ jobs: [...past(100000), ...today(350000)] }).warnings, [], 'just under 2 times');
+  assert.match(off.warnings[0], /this window so far implies about 10\.0M tokens a week \(2\.0M tokens for 20% of use\), 10\.0 times higher than the learned 1\.0M tokens/);
+  assert.match(off.text, /10\.0 times higher/);
+  // The issue's own case: today implies 3.5x the earlier windows. The learned average would absorb today (to well under 2x), so it must be left out.
+  const issueCase = run({ jobs: [...past(100000), ...today(350000)] });
+  assert.equal(issueCase.warnings.length, 1);
+  assert.match(issueCase.warnings[0], /3\.5 times higher than the learned 1\.0M tokens/);
+  assert.deepEqual(run({ jobs: [...past(100000), ...today(150000)] }).warnings, [], 'within a factor of 2');
+  assert.deepEqual(run({ jobs: [...past(100000), ...today(190000)] }).warnings, [], 'just under 2 times');
   assert.deepEqual(run({ jobs: past(100000) }).warnings, [], 'no job in the current window');
   const tiny = [job(1, 0.05, T0 + 2 * WEEK + HOUR, CURRENT), job(9e6, 0.06, T0 + 2 * WEEK + 2 * HOUR, CURRENT)];
   assert.deepEqual(run({ jobs: [...past(100000), ...tiny] }).warnings, [], 'a 1% rise is rounding noise, not a signal');

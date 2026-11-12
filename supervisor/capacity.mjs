@@ -64,8 +64,9 @@ export function capacitySamples(jobs) {
 
 // Capacity in tokens per week. Trusted only from at least `min_trusted_windows` windows that each moved far enough to be a signal;
 // one window, however clean, is not trusted alone (it falls back to the configured starting value).
-export function learnCapacity({ jobs, configured = null, options = ALLOWANCE_DEFAULTS }) {
-  const usable = capacitySamples(jobs).filter(w => w.delta >= options.min_window_delta).slice(-options.capacity_windows);
+// `exceptResetsAt` leaves one window out, so the daily check (issue #1167) compares today with the earlier windows, not with an average that contains today.
+export function learnCapacity({ jobs, configured = null, options = ALLOWANCE_DEFAULTS, exceptResetsAt = null }) {
+  const usable = capacitySamples(jobs).filter(w => w.delta >= options.min_window_delta && !sameReset(w.resetsAt, exceptResetsAt)).slice(-options.capacity_windows);
   const start = Number.isFinite(configured) && configured > 0 ? configured : null;
   if (usable.length >= options.min_trusted_windows) {
     const tokens = usable.reduce((s, w) => s + w.tokens, 0), delta = usable.reduce((s, w) => s + w.delta, 0);
@@ -103,9 +104,11 @@ export function summarise(input) {
   const capacity = fixed ?? learned.capacity;
   const learnedCapacity = learned.source === 'learned' ? learned.capacity : null;
   const note = fixed !== null ? 'configured capacity, set by hand' : learned.note;
+  const prior = Number.isFinite(resetsAt) ? learnCapacity({ jobs, options, exceptResetsAt: resetsAt }) : null;
+  const priorCapacity = prior?.source === 'learned' ? prior.capacity : null;
   const current = Number.isFinite(resetsAt) ? capacitySamples(jobs).find(w => sameReset(w.resetsAt, resetsAt)) : null;
   const warnings = [fixed !== null ? configuredWarning(fixed, learnedCapacity) : null,
-    dailyCheck({ current, learned: learnedCapacity, minDelta: options.min_window_delta })].filter(Boolean);
+    dailyCheck({ current, learned: priorCapacity, minDelta: options.min_window_delta })].filter(Boolean);
   const base = { used: usage.ok ? usage.used : null, capacity, capacitySource: fixed !== null ? 'configured' : learned.source,
     confidence: fixed !== null ? 'configured' : learned.confidence, windows: learned.windows, learnedCapacity, warnings, shortWindow, remaining: null, need: null, reserve: null, belowReserve: null, basis: 'percent' };
   if (!usage.ok) return { ...base, reason: `${usage.reason}; the fixed share rule applies` };
