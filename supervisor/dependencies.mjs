@@ -5,7 +5,8 @@
 
 // `Depends on:` with the colon, optionally bold or bulleted. Without the colon a line is prose and is not a dependency source.
 const LINE = /^[ \t]*(?:[-*>][ \t]+)?\**depends[ \t]+on\**[ \t]*:\**[ \t]*(.*?)[ \t]*$/i;
-const LIST = /^#\d+(?:[ \t]*,[ \t]*#\d+)*$/;
+const MID_LINE = /\bdepends[ \t]+on[ \t]*:\**[ \t]*#\d+.*/i;
+const LIST =/^#\d+(?:[ \t]*,[ \t]*#\d+)*$/;
 
 export const PREREQUISITE_STATES = ['open', 'merged_not_installed', 'installed', 'closed_not_planned', 'unknown'];
 // Kept in step with foreman-mcp/dependencyview.mjs (the MCP server cannot import from here); a test compares the two.
@@ -23,7 +24,13 @@ const withoutCode = body => String(body || '').replace(/```[\s\S]*?```/g, m => m
 // itself is malformed; Foreman never guesses what was meant.
 export function parseDependsOn(body, self = null) {
   const lines = withoutCode(body).split('\n').filter(l => LINE.test(l));
-  if (!lines.length) return { numbers: [], malformed: null, line: null };
+  if (!lines.length) {
+    // Issue #1182: "V2 item 27. Depends on: #1156" is a declaration written mid-sentence. Reading it as "no prerequisites" launched jobs
+    // that stopped on the open prerequisite, so it fails closed: held as malformed until the line stands alone.
+    const inline = MID_LINE.exec(withoutCode(body));
+    if (inline) return { numbers: [], malformed: 'the Depends on line must stand on its own line, not inside a sentence', line: inline[0].trim() };
+    return { numbers: [], malformed: null, line: null };
+  }
   const line = lines[0].trim();
   if (lines.length > 1) return { numbers: [], malformed: 'more than one Depends on line', line };
   const rest = (LINE.exec(lines[0])?.[1] ?? '').replace(/\*+$/, '').trim();

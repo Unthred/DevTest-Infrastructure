@@ -201,3 +201,21 @@ test('a prerequisite merged long ago, outside the cached merged list, is found t
 test('the supervisor and the MCP server say the same words for each state', () => {
   assert.deepEqual(STATE_TEXT, MCP_TEXT);
 });
+
+test('parseDependsOn: a Depends on declaration inside a sentence is held, not read as no prerequisites (issue #1182)', () => {
+  for (const body of ['V2 item 27. Batch 1. Depends on: #1156\nSlice 2 of 3', 'V2 item 30. Depends on: #1156 (decision table and card controls).']) {
+    const p = parseDependsOn(body, 1157);
+    assert.match(p.malformed, /own line/, body);
+    assert.deepEqual(p.numbers, []);
+  }
+  assert.equal(parseDependsOn('Batch 1. Depends on: none. Slices 2 and 3 depend on this one.').malformed, null, 'no number named');
+  assert.equal(parseDependsOn('see `Batch 1. Depends on: #5` in code').malformed, null, 'inside code');
+  assert.equal(parseDependsOn("Batch 1. Depends on: #9\nDepends on: #3").malformed, null, "a standing line wins");
+  assert.deepEqual(parseDependsOn('Batch 1. Depends on: #9\nDepends on: #3').numbers, [3]);
+});
+
+test('evaluateDependencies: an inline Depends on holds the issue so no job starts (issue #1182)', () => {
+  const r = evaluateDependencies({ issues: [{ number: 1157, body: 'V2 item 27. Depends on: #1156' }], lookup: () => ({}), installedSha: INSTALLED, isAncestor: ancestor });
+  assert.equal(r.byIssue.get(1157).met, false);
+  assert.match(r.byIssue.get(1157).reasons[0], /own line/);
+});
