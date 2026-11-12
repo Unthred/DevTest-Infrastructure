@@ -35,7 +35,11 @@ const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
+// Issue #1238: a prompt may declare that it only reads or only reports. Such a prompt never changes queue order or config, so it never holds
+// implement picks. An absent effect means it may change them.
+export const PROMPT_EFFECTS = ['read_only', 'report_only'];
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
+FIELDS.prompt.push('effect');
 FIELDS.control = FIELDS.action;
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
@@ -85,8 +89,9 @@ export function validateItem(raw, { internal = false } = {}) {
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
-    if (v === undefined && k === 'why') continue;
+    if (v === undefined && (k === 'why' || k === 'effect')) continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
+    if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, reason: `effect must be one of ${PROMPT_EFFECTS.join(', ')}` };
     if (v.length > max[k]) return { ok: false, reason: `${k} is longer than ${max[k]} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, reason: `${k} contains control characters` };
     if (raw.kind === 'host_value' && k === 'value') continue;   // checked against its key's exact shape below; the card must show it as it is

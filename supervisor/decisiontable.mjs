@@ -62,6 +62,8 @@ const T = {
   'config-invalid': { clears: 'clears when team.local.json is valid again', actions: [] },
   'migration-failed': { clears: 'clears when the configuration migration succeeds on a later tick', actions: [] },
   'cap-deadlock': { clears: 'clears when one of the open pull requests can move or is closed', actions: [] },
+  'hold-cycle': { clears: 'clears when the prompt that was waiting has run or is undone', actions: [] },
+  'stalled-hold': { clears: 'clears when the hold ends or its control is used', actions: [] },
   'foreman-idle': { clears: 'clears when Foreman starts the waiting work', actions: [] },
   idle: { clears: 'clears when the agent starts the waiting work', actions: [] },
   pause: { clears: 'clears when the agent resumes or the pause is confirmed', actions: [] },

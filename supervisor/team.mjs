@@ -45,6 +45,7 @@ import * as inboxStore from './inbox.mjs';
 import { inboxEndPatch } from './inboxoutcome.mjs';
 import { withReportContract, reportNameFor } from './inboxreport.mjs';
 import { repairInbox } from './inboxrepair.mjs';
+import { orderSensitive, orderGuardReason, checkHolds, holdItems } from './orderguard.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
 import { enforceNoDeferredSteps } from './homeownersteps.mjs';
@@ -193,11 +194,9 @@ export const ROLES = ['implementer', 'reviewer', 'rebaser', 'inbox'];
 export const OVERALL_ROLES = ROLES.filter(r => r !== 'inbox');
 export const DEFAULT_INBOX_MAX_MINUTES = 15;
 export const inboxMaxMs = L => (Number.isFinite(L?.inbox_max_minutes) && L.inbox_max_minutes > 0 ? L.inbox_max_minutes : DEFAULT_INBOX_MAX_MINUTES) * 60000;
-// Prompts that change the queue order or a config file must apply before the planner hands out new implement work (the order guard).
-// Issue #971 (review of #980): keywords cannot tell which prompt changes order or config ('Swap 940 and 935', 'Skip 935', 'Bring 940
-// forward' match nothing), so the guard fails safe: every approved or running prompt holds new implement picks until it has ended.
-// Prompts are short and bounded by limits.inbox_max_minutes, and reviews, fixes and rebases continue meanwhile.
-export const orderSensitive = () => true;
+// Prompts that change the queue order or a config file must apply before the planner hands out new implement work (the order guard,
+// orderguard.mjs). Issue #1238: only a prompt declared read_only or report_only is exempt.
+export { orderSensitive };
 export const DEFAULT_REBASERS = 1;
 // The count of a role: the configured one, else 1. limits.roles.rebaser is optional; an absent value is left absent so a config is not rewritten.
 export const roleCount = (L, r) => (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : r === 'rebaser' ? DEFAULT_REBASERS : 1);   // rebaser and inbox default to 1
@@ -1752,6 +1751,7 @@ export class Team {
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     if (!dryRun) await guard('host pressure', async () => { this.hostPressureState = this.hostPressureNow(); });   // before plan(): the plan reads it (issue #1151)
+    if (!dryRun) await guard('hold cycles', () => this.checkHolds(report));   // issue #1238
     const planSince = Date.now();
     let actions = await this.plan();
     lap('plan', planSince);
@@ -2064,21 +2064,10 @@ export class Team {
     }
     return null;
   }
-  // Issue #971: the reason new implement work waits, or null. An approved prompt not yet started, or a running inbox job, whose text
-  // changes queue order or config holds new implement picks until it ends; a job record older than twice the time cap no longer holds.
-  orderGuard() {
-    const dir = this.inboxDir(); if (!dir) return null;
-    const now = this.clock.now(), stale = 2 * inboxMaxMs(this.c.limits);
-    for (const j of Object.values(this.s.jobs)) if (j.kind === 'inbox' && !j.ingested && j.orderSensitive && now - (j.at || 0) < stale) return 'waiting for a running inbox prompt that changes queue order or config; new implement work starts after it ends';
-    // A job the fast lane started during this pass is held only in its item's status (adopt) until the next pass adopts it.
-    for (const st of inboxStore.allStatuses(dir)) if (st.state === 'running' && st.adopt?.rec?.kind === 'inbox' && !st.adopt.rec.ingested && !this.s.jobs[st.adopt.id] && now - (st.adopt.rec.at || 0) < stale) return 'waiting for a running inbox prompt that changes queue order or config; new implement work starts after it ends';
-    for (const st of inboxStore.approvedItems(dir, 'prompt')) {
-      if (Object.values(this.s.jobs).some(j => j.inboxId === st.id)) continue;
-      const l = inboxStore.loadItem(dir, st.id);
-      if (l.ok) return 'waiting for an approved inbox prompt that changes queue order or config; new implement work starts after it has run';
-    }
-    return null;
-  }
+    // Issue #971 and #1238: the reason new implement work waits, or null (rules in orderguard.mjs).
+  orderGuard() { return orderGuardReason(this, inboxMaxMs(this.c.limits)); }   // issue #1238: the rules live in orderguard.mjs
+  checkHolds(report) { checkHolds(this, inboxMaxMs(this.c.limits), report); }
+  holdItems() { return holdItems(this); }
   // Issue #971: stop a running inbox job that passed limits.inbox_max_minutes. The job's end is then ingested as a failed item.
   async enforceInboxCap(report) {
     const cap = inboxMaxMs(this.c.limits), now = this.clock.now();
