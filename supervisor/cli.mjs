@@ -48,6 +48,7 @@ import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome, classifySkips } from './upgrade.mjs';
 import { dirLock, requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
+import { activeJobSummary } from './incomplete.mjs';
 const self = fileURLToPath(import.meta.url);
 function args(list) {
   const out = { _: [] };
@@ -119,7 +120,7 @@ function realJobs(root, registry) {
       const dir = path.join(root, 'jobs'); const out = [];
       for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) if (name.endsWith('.json')) {
         const j = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-        if (['queued', 'running', 'paused_limit', 'paused_manual'].includes(j.status)) out.push({ id: j.id, provider: j.provider, status: j.status });
+        if (['queued', 'running', 'paused_limit', 'paused_manual'].includes(j.status)) out.push(activeJobSummary(j));
       }
       return out;
     },
