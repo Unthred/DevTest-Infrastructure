@@ -341,8 +341,8 @@ export function safeEnvironment(source = process.env, allowlist = null) {
   for (const key of Object.keys(env)) if (/_API_KEY$|_ACCESS_TOKEN$/.test(key) || ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].includes(key)) delete env[key];
   return env;
 }
-export function transition(root, job, status, kind, clock = realClock) {
-  job.status = status; job.lastEvent = kind; saveJob(root, job, clock);
+export function transition(root, job, status, kind, clock = realClock, force = false) {   // force: a person's stop overrides a manual pause (issue #1164)
+  job.status = status; job.lastEvent = kind; saveJob(root, job, clock, force);
   event(root, job, job.status === status ? kind : 'transition_ignored', clock);
   // Issue #80: a terminal job holds no lease; a stale one would stall every later job on the same worktree.
   if (terminal.has(job.status)) {

@@ -7,15 +7,19 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 import { matchesInboxSearch } from './inbox-search.mjs';
+import { checkControl, controlOf } from './directspec.mjs';
 
-export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
-const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
-// Issue #1115: the releasing direction is an ordinary action (approved on the dashboard); a `control` item may carry only park or stop_job.
+export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, value: 300, waiting: 30, action: 40, target: 40 };
+const JOB_ID = /^(?:[a-f0-9]{8}|[a-f0-9]{32})$/;   // issue #1164: the short id or the full id
+const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: JOB_ID, stop_job: JOB_ID, resume_job: JOB_ID };   // issue #629: the names Foreman accepts
+// Issue #1115: an approved `unpark` action stays available (and release_agent, issue #1179). Issue #1164: a `control` item names one of the direct controls (directspec.mjs).
 const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, release_agent: /^[a-z][a-z0-9_-]{0,11}$/ };
-const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+
+const NAMED = ['kind', 'title', 'action', 'target', 'reason'];
+const fieldsFor = (kind, bodyKey) => (kind === 'control' ? [...NAMED, 'value'] : kind === 'action' ? NAMED : ['kind', 'title', bodyKey, 'why']);
 
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
 export function checkProposal(args) {
@@ -23,13 +27,13 @@ export function checkProposal(args) {
   const kind = a.kind;
   if (!['prompt', 'issue_draft', 'action', 'control'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft", "action" or "control"' };
   const named = kind === 'action' || kind === 'control';
-  const bodyKey = kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', allowed = named ? ['kind', 'title', 'action', 'target', 'reason'] : ['kind', 'title', bodyKey, 'why'];
+  const bodyKey = kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', allowed = fieldsFor(kind, bodyKey);
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, error: `unknown argument: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const item = { kind };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = a[k];
-    if (v === undefined && k === 'why') continue;
+    if (v === undefined && (k === 'why' || (k === 'value' && kind === 'control'))) continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
     if (v.length > (LIMITS[k] ?? 40)) return { ok: false, error: `${k} is longer than ${LIMITS[k]} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, error: `${k} contains control characters` };
@@ -38,10 +42,10 @@ export function checkProposal(args) {
     item[k] = v;
   }
   if (/[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
+  if (kind === 'control') return checkControl(item);
   if (named) {
-    const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
-    if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
-    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name' };
+    if (!Object.hasOwn(ALL_ACTIONS, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(ALL_ACTIONS).join(', ')}` };
+    if (!ALL_ACTIONS[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character (or full) job id, or an agent name' };
   }
   return { ok: true, item };
 }
@@ -74,6 +78,10 @@ export function createInbox({ dir, baseUrl = null }) {
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
       fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
       return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.' };
+    },
+    // Issue #1164: what a finished control item changed (before and after), read from the status file Foreman wrote.
+    controlResult(id) {
+      try { return controlOf(JSON.parse(fs.readFileSync(path.join(status, `${id}.json`), 'utf8'))); } catch { return null; }
     },
     status(id) {
       if (!dir) throw new Error('the inbox is not configured on this server');

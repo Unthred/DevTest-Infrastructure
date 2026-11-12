@@ -68,21 +68,20 @@ test('stop_job: ends the job, leaves it unable to restart, and a second stop rep
   const again = await run(w, control('stop_job', SHORT)); assert.equal(again.state, 'done'); assert.match(again.result, /already ended \(stopped\)/); assert.equal(w.calls.stopped.length, 1);
   const unknown = await run(w, control('stop_job', 'deadbeef')); assert.equal(unknown.state, 'refused'); assert.match(unknown.reason, /no job deadbeef/);
 });
-test('unpark: creates an Inbox item that waits for approval; nothing is released until the homeowner approves', async t => {
+test('unpark: a direct control since issue #1164; the approved unpark action of issue #1115 still waits for a click and refuses a pull request that is not parked', async t => {
   const w = world(t);
   const tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: w.mcp, controlWaitMs: 0 });
   const out = JSON.parse((await tools.call('foreman_unpark', { number: 6, reason: 'the blocker is fixed' })).text);
   assert.equal(out.state, 'submitted'); await w.team.processInbox(rep());
-  assert.equal(inbox.statusOf(w.dir, out.id).state, 'pending'); assert.deepEqual(w.calls.unlabelled, []);
-  assert.equal(inbox.decide(w.dir, out.id, 'approve', 2).ok, true); await w.team.processInbox(rep());
   const st = inbox.statusOf(w.dir, out.id); assert.equal(st.state, 'done'); assert.deepEqual(w.calls.unlabelled, [[6, 'parked']]);
   const w2 = world(t); const id = w2.mcp.propose({ kind: 'action', title: 'unpark 5', action: 'unpark', target: '5', reason: 'x' }).id;
-  await w2.team.processInbox(rep()); inbox.decide(w2.dir, id, 'approve', 2); await w2.team.processInbox(rep());
+  await w2.team.processInbox(rep()); assert.equal(inbox.statusOf(w2.dir, id).state, 'pending'); inbox.decide(w2.dir, id, 'approve', 2); await w2.team.processInbox(rep());
   assert.equal(inbox.statusOf(w2.dir, id).state, 'failed'); assert.match(inbox.statusOf(w2.dir, id).reason, /not parked/);
 });
-test('the control kind cannot be used for anything else: no release, merge or approval, and no state or extra field', t => {
-  for (const action of ['unpark', 'merge', 'approve', 'reopen', 'resume_job']) assert.equal(inbox.validateItem(control(action, 5)).ok, false, action);
-  assert.throws(() => createInbox({ dir: tmp(t, 'x-') }).propose(control('unpark', 5)), /action must be one of: park, stop_job/);
+test('the control kind cannot be used for anything else: no merge or approval, and no state or extra field', t => {
+  for (const action of ['merge', 'approve_review', 'reopen', 'resume_job']) assert.equal(inbox.validateItem(control(action, 5)).ok, false, action);
+  assert.match(inbox.validateItem(control('merge', 5)).reason, /merge is not a direct control: merging is the homeowner's decision/);
+  assert.equal(inbox.validateItem(control('unpark', 5)).ok, true);
   assert.equal(inbox.validateItem({ ...control('park', 5), state: 'done' }).ok, false);
   assert.equal(inbox.validateItem(control('park', '5; rm')).ok, false);
   assert.equal(inbox.validateItem(control('stop_job', 7)).ok, false);
