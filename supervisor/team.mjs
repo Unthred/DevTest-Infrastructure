@@ -56,6 +56,7 @@ import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostd
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
+import { holdRefusedRebase, noHeadDetail } from './rebaserefusal.mjs';
 import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -2500,7 +2501,7 @@ export class Team {
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
       if (j.kind === 'inbox') this.ingestInbox(id, j, job);
       if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
-      if (j.kind === 'rebase' && job.status !== 'completed') this.recordIncompleteRebase(id, j, job, report);
+      if (j.kind === 'rebase' && job.status !== 'completed') { this.recordIncompleteRebase(id, j, job, report); await holdRefusedRebase(this, id, j, job); }
       if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
       // Issue #579: an implement job that ended without completing leaves no pull request; the issue's mark is surfaced at once (findStaleMarks).
       // Issue #597: a completed ingest (a later resume of the same job) clears a stale cause, and a transient stop that resumeTransient
@@ -3746,7 +3747,7 @@ export class Team {
         for (let i = 0; i < 4; i++) {
           const pr = await this.gh.getPull(p.pr);
           if (!pr || !SHA.test(pr.headRefOid)) return why('the pull request head could not be read');
-          if (pr.headRefOid === p.baseHead) return why('no new head was pushed: the branch is unchanged');
+          if (pr.headRefOid === p.baseHead) return why(noHeadDetail(job, p));
           if (pr.mergeable === 'MERGEABLE') return true;
           if (pr.mergeable === 'CONFLICTING') return why('a new head was pushed but the pull request still conflicts with its base');
           await this.sleep(2000);

@@ -1,0 +1,5 @@
+**Needs the homeowner.** The rebase of this pull request onto `{base}` was resolved locally but the guarded push refused it, so nothing was pushed and the branch is unchanged at {head}. Retrying gives the same refusal, so Foreman has stopped rebasing this head.
+
+> {message}
+
+Required: accept the resolution with a deliberate push (force-with-lease against the old head) if it is right, or say how to resolve it. A new head restarts the rebase lane.
