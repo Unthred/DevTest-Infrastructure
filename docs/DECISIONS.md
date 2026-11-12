@@ -2,6 +2,7 @@
 
 Binding architecture and governance decisions for DevTest Infrastructure. Format and rules follow the shared AI-Rules *decision governance* policy.
 
+- This register is frozen (issue #1229): the entries below keep their numbers and are not rewritten. A new decision is proposed as its own file under `docs/decisions/`; see [`decisions/INDEX.md`](decisions/INDEX.md) (generated) and [`ai/decision-proposals.md`](ai/decision-proposals.md).
 - Only `homeowner-approved` entries bind. `agent-proposal` entries are the current best design and stay open to review; `temporary-note` entries carry a retirement condition.
 - Never delete an entry. Replace it by adding a new dated entry and setting `Superseded-by` on the old one.
 - Before significant work, read this file and check the plan against every entry. A change that revives a **Rejected** alternative is blocked until a new dated entry is approved.

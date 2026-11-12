@@ -40,7 +40,7 @@ const T = {
   'after-install': { clears: 'clears when the After install checks of the pull request are marked done', actions: [], later: NO_BUTTON },
   'homeowner-steps': { clears: 'clears when the pull request is merged, closed or its head changes', actions: [], later: NO_BUTTON },
   homeowner: { clears: 'clears when you answer on the issue and the needs-homeowner label is removed', actions: [], later: NO_BUTTON },
-  'decision-proposal': { clears: 'clears when the register entry is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
+  'decision-proposal': { clears: 'clears when the decision (a register entry or its docs/decisions file) is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
   decision: { clears: 'clears when the register entry reads homeowner-approved on main', actions: [], later: NO_BUTTON },
   stalled: { clears: 'clears when the pull request makes progress, merges or closes', actions: ['park'] },
   'stall-check-error': { clears: 'clears when the next stalled-PR check succeeds', actions: [] },
