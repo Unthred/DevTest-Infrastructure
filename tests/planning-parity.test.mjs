@@ -141,6 +141,7 @@ test('`team status` reads the register from origin/main: no warning when readabl
   // repo_path is not overridable locally, so run a copy of the package whose team.json points at the fixture.
   const pkg = tmp(t);
   fs.cpSync(new URL('../supervisor', import.meta.url).pathname, path.join(pkg, 'supervisor'), { recursive: true });
+  fs.cpSync(new URL('../foreman-mcp/dependency-parser.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'dependency-parser.mjs'));
   fs.cpSync(new URL('../foreman-mcp/gbp.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'gbp.mjs'));
   fs.cpSync(new URL('../foreman-mcp/inbox-search.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'inbox-search.mjs'));
   const cli = path.join(pkg, 'supervisor', 'cli.mjs');
