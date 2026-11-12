@@ -86,6 +86,7 @@ Every Needs you card says why Foreman stopped, what clears it, and offers the ro
 - **Later slices.** Where a card's real options are an extra fix round, close as superseded or resume the breaker (slice 2 of #1111), or merge, approve and verdict (slice 3), the card names the slice instead of showing a button. No new action and no strong tier is added here.
 - **Overseer parity.** An overseer `foreman_propose` action keeps its own Approve and Reject card; the table only offers names the inbox already accepts, so a control on a decision card and an overseer proposal run the same action. Who may approve is unchanged.
 - **Waiting for approval.** Decision rows in that dropdown show the same card; the pull request link is context ("Open it").
+- **Browser check.** `node tests/decision-card-browser.mjs <dir>` (Tower only, after `node browser/prepare-cache.mjs`) renders the real Overview for a fix limit pull request from a throwaway state and runs `browser/decision-card-scenario.mjs` in the pinned Chromium container at laptop and phone width: Why and clear condition are present, the control is visible and inside the viewport, no script errors, no sideways scroll.
 
 ## Stale server after a self-upgrade (issue #155)
 
