@@ -21,6 +21,7 @@ import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
 import { allowanceBody as allowanceCard } from './allowancecard.mjs';
 import { allowanceStats } from './appbaralloc.mjs';
+import { stallCard, agentStallMark, pillStallMark } from './stallcard.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -445,7 +446,8 @@ const agentBadge = a => {
   const mid = jobs.length > 1 ? `${jobs.length} jobs` : jobs.length === 1 ? (jobs[0].role === 'reviewer' ? 'Reviewer' : jobs[0].role === 'rebaser' ? 'Rebaser' : jobs[0].role === 'inbox' ? 'Inbox lane' : 'Implementer') : '';
   const st = ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[a.state] || a.state;
   const label = [a.name, mid, st].filter(Boolean).join(' · ');
-  return `<li><a class="agent-badge sev-${esc(stateSev[a.state] || 'info')}" href="/agents/${esc(encodeURIComponent(a.name))}" data-agent="${esc(a.name)}" data-state="${esc(a.state)}" aria-label="${esc(label)}" title="${esc(label)}"><b class="ab-name">${esc(a.name)}</b>${mid ? `<span class="ab-role">${esc(mid)}</span>` : ''}<span class="ab-state">${esc(st)}</span></a></li>`;
+  const link = `<a class="agent-badge sev-${esc(stateSev[a.state] || 'info')}" href="/agents/${esc(encodeURIComponent(a.name))}" data-agent="${esc(a.name)}" data-state="${esc(a.state)}" aria-label="${esc(label)}" title="${esc(label)}"><b class="ab-name">${esc(a.name)}</b>${mid ? `<span class="ab-role">${esc(mid)}</span>` : ''}<span class="ab-state">${esc(st)}</span></a>`;
+  return `<li>${link}${agentStallMark({ esc }, a)}</li>`;
 };
 // Issue #473: one of three states, never "due now". The tick's real schedule (or its live lock) is the source.
 const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -474,6 +476,7 @@ function statusBar(view, route, head = '', crumbs = '') {
   const pill = (href, inner, why) => `<a class="pill" href="${esc(href)}" title="${esc(why)}">${inner}</a>`;
   return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} DevTest team</div>${head}
 ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" data-bar="health" data-bar-name="Health" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
+${pillStallMark(view.health)}
 ${agentStat(view)}
 ${allowanceStats({ esc, lt, dur, badge }, view)}
 <div class="stat" data-bar="last-tick" data-bar-name="Last tick"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
@@ -599,7 +602,9 @@ function overview(view, query) {
     card({ id: 'c-allow', title: `Allowance used (${range})`, span: 6, href: '/usage', expandable: true, tools: rangeSelector('/', query, range), body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }), cls: 'chart-card', type: 'chart' }),
     card({ id: 'c-jobs', title: `Jobs per day (${range})`, span: 6, href: '/activity', expandable: true, body: stackedChart({ days: view.graphs.jobsPerDay, title: 'jobs per day', range, now }), cls: 'chart-card', type: 'chart' })
   ].join('');
-  return { title: 'Overview', body: `${grid('overview', headlineCards(view) + watchingCard(view) + sincePanel(view, query) + panels + kpis + charts)}`, bodyClass: 'overview' };
+  const stalled = stallCard({ esc, lt, dur }, view, card);   // issue #1222: first, ahead of the headline cards
+  const cards = headlineCards(view) + watchingCard(view) + sincePanel(view, query) + panels + kpis + charts;
+  return { title: 'Overview', body: `${grid('overview', stalled + cards)}`, bodyClass: 'overview' };
 }
 
 function agentsPage(view, query, path) {

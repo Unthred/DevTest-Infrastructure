@@ -50,6 +50,7 @@ import { underSupervisedJob } from './breaker.mjs';
 import { isLocalPeer, peerPid as defaultPeerPid } from './peerpid.mjs';
 import { limitResetsRoute } from './resetswrite.mjs';
 import { withLimitResets } from './resetsentries.mjs';
+import { withStall } from './stallview.mjs';
 
 export const DEFAULT_PORT = 8731;
 // Issue #406: ask for a pass now. Only when the team loop is enabled; never throws, never blocks the answer to the homeowner.
@@ -114,7 +115,9 @@ export async function currentView({ root, config, now = Date.now(), tz = default
     config: checked, root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root),
     snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register,
   });
-  return withLimitResets(withApprovals(withDecisionCards(view, checked, readCache(root)), checked), { root, config: checked, snapshots: history.chartSnapshots || hot, now });
+  const decorated = withApprovals(withDecisionCards(view, checked, readCache(root)), checked);
+  const stalled = withStall(decorated, { config: checked, jobs, snapshots: hot, now });
+  return withLimitResets(stalled, { root, config: checked, snapshots: history.chartSnapshots || hot, now });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
