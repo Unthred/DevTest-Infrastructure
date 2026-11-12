@@ -36,6 +36,12 @@ function seedState() {
   fs.writeFileSync(path.join(stateRoot, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at, status: 'ok', lastOkAt: at }, fetchedAt: at, pulls: [], issues: [{ number: 30, title: 'Thirty', state: 'OPEN', labels: [] }] }));
 }
 
+const BUMP_ID = 'b1'.repeat(16);
+function addRunningJob() {
+  const job = { id: BUMP_ID, provider: 'claude', kind: 'implement', issue: 30, branch: 'claude/issue-30-y', status: 'running', createdAt: NOW - 120000, updatedAt: NOW - 60000, attempts: 1, role: 'devtest', model: 'sonnet', effort: 'low' };
+  fs.writeFileSync(path.join(stateRoot, 'jobs', `${job.id}.json`), JSON.stringify(job));
+}
+
 const failures = [];
 const run = async (name, spec, server) => {
   const runId = crypto.randomBytes(8).toString('hex');
@@ -52,9 +58,15 @@ try {
   const pkg = lock.packages['playwright-core'];
   await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] });
   for (const profile of ['desktop-1280', 'phone-390']) {
+    fs.rmSync(path.join(stateRoot, 'jobs', `${BUMP_ID}.json`), { force: true });   // each profile starts from the same records
     const dashboard = handler({ wake: () => {}, root: stateRoot, config, host: '127.0.0.1', port: 8731, now: () => NOW });
     // The browser reaches the socket through a bridge on a port chosen inside the container, so the Host it sends is rewritten to the one the handler serves.
-    const server = http.createServer((req, res) => { req.headers.host = '127.0.0.1:8731'; return dashboard(req, res); });
+    // /__bump is the test's own hook: it adds one running job, so the Jobs card changes and the page's refresh in place has something to swap.
+    const server = http.createServer((req, res) => {
+      if (req.url === '/__bump') { addRunningJob(); res.end('ok'); return; }
+      req.headers.host = '127.0.0.1:8731';
+      return dashboard(req, res);
+    });
     await run(profile, { phase: 'test', command: ['node', '/src/browser/jobs-scenario.mjs', '--target', 'fixture', '--profile', profile, '--name', `jobs-${profile}`] }, server);
   }
 } finally { fs.rmSync(storageRoot, { recursive: true, force: true }); fs.rmSync(stateRoot, { recursive: true, force: true }); stage.cleanup(); }

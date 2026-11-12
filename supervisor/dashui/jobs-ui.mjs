@@ -88,15 +88,32 @@ function bindResize(doc, cols, commit) {
   });
 }
 
+// The tools bar and the views list are drawn by the server inside a card that a refresh in place replaces, so they are made ready again after
+// every swap, and every listener sits on the document (like the column toggle and the grips) so a swapped-in button still works.
+function fillViews(doc, store, chosen = null) {
+  const select = doc.querySelector('[data-jobs-views] select');
+  if (!select || (select.dataset.filled && chosen === null)) return;   // a new select (after a swap) is not filled yet
+  select.dataset.filled = '1';
+  const names = Object.keys(sanitizeViews(readJson(store, KEYS.views, {})));
+  select.replaceChildren(new Option('Choose a view', ''), ...names.map(n => new Option(n, n)));
+  if (chosen) select.value = chosen;
+}
+
+function downloadCsv(doc, csv) {
+  const a = doc.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'jobs.csv'; doc.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 export function bindJobs({ loc = location, store = localStorage, doc = document, fetchFn = fetch } = {}) {
   const target = restoreTarget(loc.search, store.getItem?.(KEYS.last));
   if (target) { loc.replace(target); return; }
   const cols = sanitizeColumns(readJson(store, KEYS.cols, {}));
   const status = text => { const el = doc.querySelector('[data-jobs-status]'); if (el) el.textContent = text; };
   const commit = () => writeJson(store, KEYS.cols, cols);
-  doc.querySelector('[data-jobs-tools]')?.removeAttribute('hidden');
-  applyColumns(doc, cols);
-  new MutationObserver(() => applyColumns(doc, cols)).observe(doc.querySelector('main'), { childList: true, subtree: true });   // a refresh in place swaps the table
+  const ready = () => { doc.querySelector('[data-jobs-tools]')?.removeAttribute('hidden'); fillViews(doc, store); applyColumns(doc, cols); };
+  ready();
+  new MutationObserver(ready).observe(doc.querySelector('main'), { childList: true, subtree: true });   // a refresh in place swaps the whole card
 
   doc.addEventListener('change', e => {
     const k = e.target.dataset?.colToggle;
@@ -106,47 +123,38 @@ export function bindJobs({ loc = location, store = localStorage, doc = document,
   });
   bindResize(doc, cols, commit);
 
-  const select = doc.querySelector('[data-jobs-views] select');
-  const fillViews = () => {
-    const views = sanitizeViews(readJson(store, KEYS.views, {}));
-    if (select) select.replaceChildren(new Option('Choose a view', ''), ...Object.keys(views).map(n => new Option(n, n)));
-    return views;
-  };
-  fillViews();
-  doc.querySelector('[data-jobs-views]')?.addEventListener('submit', e => {
+  doc.addEventListener('submit', e => {
+    if (!e.target.matches?.('[data-jobs-views]')) return;
     e.preventDefault();
     const name = cleanName(e.target.elements.name.value);
     if (!name) { status('Give the view a name first.'); return; }
     const q = lastQuery(loc.search);
     writeJson(store, KEYS.views, saveView(sanitizeViews(readJson(store, KEYS.views, {})), name, q, cols));
     try { store.setItem(KEYS.last, q); } catch { /* not remembered */ }
-    fillViews(); select.value = name; status(`Saved view “${name}”. It opens again the next time you open Jobs.`);
+    fillViews(doc, store, name); status(`Saved view “${name}”. It opens again the next time you open Jobs.`);
   });
-  doc.querySelector('[data-view-apply]')?.addEventListener('click', () => {
-    const v = sanitizeViews(readJson(store, KEYS.views, {}))[select.value];
-    if (!v) { status('Choose a saved view first.'); return; }
-    Object.assign(cols, v.columns); commit(); store.setItem(KEYS.last, v.query); loc.assign(`/work?${v.query}`);
-  });
-  doc.querySelector('[data-view-delete]')?.addEventListener('click', () => {
-    const views = sanitizeViews(readJson(store, KEYS.views, {}));
-    if (!views[select.value]) { status('Choose a saved view first.'); return; }
-    const name = select.value; delete views[name]; writeJson(store, KEYS.views, views); fillViews(); status(`Deleted view “${name}”.`);
-  });
-
-  doc.addEventListener('click', e => {   // a click anywhere on a row opens its panel (the Id is also a plain link)
-    const tr = e.target.closest?.('tr[data-job]');
-    if (!tr || e.target.closest('a,button,input,select')) return;
-    tr.querySelector('[data-job-link]')?.click();
-  });
-  doc.querySelector('[data-jobs-csv]')?.addEventListener('click', async () => {
-    status('Preparing the CSV…');
-    try {
-      const csv = await currentCsv(fetchFn, loc.search, visibleColumns(cols));
-      const a = doc.createElement('a');
-      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-      a.download = 'jobs.csv'; doc.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-      status(`Downloaded jobs.csv (${csv.trim().split('\r\n').length - 1} jobs).`);
-    } catch (error) { status(`The CSV could not be made: ${error.message}`); }
+  doc.addEventListener('click', async e => {
+    const hit = sel => e.target.closest?.(sel);
+    const chosen = doc.querySelector('[data-jobs-views] select')?.value;
+    if (hit('[data-view-apply]')) {
+      const v = sanitizeViews(readJson(store, KEYS.views, {}))[chosen];
+      if (!v) { status('Choose a saved view first.'); return; }
+      Object.assign(cols, v.columns); commit(); store.setItem(KEYS.last, v.query); loc.assign(`/work?${v.query}`);
+    } else if (hit('[data-view-delete]')) {
+      const views = sanitizeViews(readJson(store, KEYS.views, {}));
+      if (!views[chosen]) { status('Choose a saved view first.'); return; }
+      delete views[chosen]; writeJson(store, KEYS.views, views); fillViews(doc, store, ''); status(`Deleted view “${chosen}”.`);
+    } else if (hit('[data-jobs-csv]')) {
+      status('Preparing the CSV…');
+      try {
+        const csv = await currentCsv(fetchFn, loc.search, visibleColumns(cols));
+        downloadCsv(doc, csv);
+        status(`Downloaded jobs.csv (${csv.trim().split('\r\n').length - 1} jobs).`);
+      } catch (error) { status(`The CSV could not be made: ${error.message}`); }
+    } else {   // a click anywhere on a row opens its panel (the Id is also a plain link)
+      const tr = hit('tr[data-job]');
+      if (tr && !hit('a,button,input,select')) tr.querySelector('[data-job-link]')?.click();
+    }
   });
 }
 

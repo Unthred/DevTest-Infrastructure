@@ -76,6 +76,18 @@ try {
   check('opening Jobs again restores the saved view', JSON.stringify(await rowIds()) === JSON.stringify([REBASE]) && page.url().includes('status=blocked') && page.url().includes('group=cause'), page.url());
   check('the saved view is in the list', (await page.locator('[data-jobs-views] select option').allTextContents()).includes('Blocked by cause'));
 
+  // The page refreshes cards in place. A new running job changes the Jobs card, so the tools bar is rebuilt: it must stay usable.
+  await page.evaluate(() => fetch('/__bump'));
+  await page.locator('button.refresh-now').evaluate(b => b.click());
+  const swapped = await page.waitForSelector('[data-chip="status:running"]', { timeout: 5000 }).then(() => true, () => false);
+  check('the refresh in place swapped the Jobs card (the new running job has a filter button)', swapped);
+  check('the tools bar is still shown after the refresh in place', await page.locator('[data-jobs-tools]').isVisible() && await page.locator('[data-jobs-csv]').isVisible());
+  await page.locator('[data-jobs-views] input[name=name]').fill('After refresh');
+  await page.locator('[data-jobs-views] button[type=submit]').click();
+  check('saving a view after the refresh saves it and stays on the Jobs view', /Saved view/.test(await page.locator('[data-jobs-status]').textContent()) && page.url().includes('view=jobs')
+    && (await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('dash.jobs.views') || '{}')))).includes('After refresh'), page.url());
+  check('the saved views list holds the new view after the refresh', (await page.locator('[data-jobs-views] select option').allTextContents()).includes('After refresh'));
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-jobs-csv]').click()]);
   const csv = fs.readFileSync(await download.path(), 'utf8').trimEnd().split('\r\n');
   check('the CSV download is the current table', download.suggestedFilename() === 'jobs.csv' && csv.length === 2 && csv[1].startsWith('60b46719') && /,1\.21,2,3427984$/.test(csv[1]), csv.join(' | '));
