@@ -17,6 +17,10 @@ import * as breaker from './breaker.mjs';
 import * as failcause from './failcause.mjs';
 import { FaultFlow, withParking, causeOfEnd } from './faultflow.mjs';
 import { applyRetryCap } from './retrycap.mjs';
+import { PlanLedger, heldReasonOf, closeLedger, planItems, breakerHoldText } from './planledger.mjs';
+import { overlapText } from './overlaptext.mjs';
+import { launchPlanned } from './launchplanned.mjs';
+import { checkResumeChecks } from './resumefailures.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
 import { validateAlertsConfig } from './alert.mjs';
 import { configureDisplay, formatCost, validateDisplay } from './money.mjs';
@@ -1180,17 +1184,17 @@ export class Team {
   }
   predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
   // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
-  overlapHold(agent, n, issue, type = 'implement') {
+  overlapHold(agent, n, issue, type = 'implement', pr = null) {
     for (const f of this.predictFiles(issue)) {
       const other = this.claimed?.get(f);
-      if (other !== undefined && other !== n) { this.hold(agent, type, `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
+      if (other !== undefined && other !== n) { this.hold(agent, type, overlapText({ type, issue: n, pr, file: f, other, prs: this.view?.prs }), pr); return true; }
     }
     return false;
   }
   // The same refusal for a repair job (rebase, CI fix, fix, continue) on a PR: its issue's expected files must not overlap another writer's.
   repairOverlap(agent, type, pr, issueByNo) {
     const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
-    return !!issue && this.overlapHold(agent, n, issue, type);
+    return !!issue && this.overlapHold(agent, n, issue, type, pr.number);
   }
   // Issues #402, #1116: spare allowance, only to choose between agents (never holds work back): remaining capacity relative to need when every
   // agent's capacity is known, else the week minus the projected use; an unknown reading scores 0 (capacity.mjs).
@@ -1750,10 +1754,11 @@ export class Team {
     const planSince = Date.now();
     let actions = await this.plan();
     lap('plan', planSince);
+    const ledger = new PlanLedger(actions, heldReasonOf(this));
     if (!dryRun) await guard('breaker successes', () => this.backfillSuccesses());
-    actions = this.applyBreaker(actions, report, dryRun);
+    actions = ledger.filtered('breaker', actions, this.applyBreaker(actions, report, dryRun));
     if (!dryRun) await this.rearmOnRecovery(report);
-    actions = applyRetryCap(this, actions, report);   // issue #995
+    actions = ledger.filtered('retry_cap', actions, applyRetryCap(this, actions, report));   // issue #995
     if (!dryRun) await guard('job liveness', () => this.livenessSweep(report));
     if (!dryRun) await guard('temp sweep', () => this.sweepTemp(report));
     if (!dryRun && this.root) await guard('disk samples', async () => recordDiskSample({ root: this.root, now: this.clock.now(), volumes: this.c.health?.volumes ?? DEFAULT_VOLUMES }));
@@ -1763,14 +1768,14 @@ export class Team {
     if (hold) {
       report.held = { reason: `upgrade to ${String(hold.to || '').slice(0, 7) || 'a newer supervisor'} pending`, actions: actions.filter(a => a.type !== 'merge').length,
         agents: [...new Set(actions.filter(a => a.type !== 'merge' && a.agent).map(a => a.agent))] };   // issue #487: the hold belongs to these agents only
-      actions = actions.filter(a => a.type === 'merge');
+      actions = ledger.filtered('upgrade', actions, actions.filter(a => a.type === 'merge'), report.held.reason);
     }
     // Issue #1007: with the root volume or swap nearly full no new job starts (merges are not jobs); the Inbox item names the top consumers.
     if (!dryRun) {
       const pressure = this.hostPressureState || { hold: false, reasons: [] };
       if (pressure.hold) {
         report.held = { ...(report.held || {}), reason: `host pressure: ${pressure.reasons.join(' and ')}`, actions: actions.filter(a => a.type !== 'merge').length };
-        actions = actions.filter(a => a.type === 'merge');
+        actions = ledger.filtered('host_pressure', actions, actions.filter(a => a.type === 'merge'), report.held.reason);
       }
     }
     report.actions = actions;
@@ -1778,15 +1783,9 @@ export class Team {
     if (!dryRun) await this.checkStalls(report);
     if (this.modes) report.allowance = Object.fromEntries(Object.entries(this.modes).map(([n, m]) => [n, { mode: m.mode, reason: m.reason, until: m.until, ...(this.held[n] ? { held: this.held[n] } : {}) }]));
     if (dryRun) return report;
-    for (const act of actions) {
-      // Issue #344: several jobs start in one tick, so the allowance is checked again right before each start; a limit reached while
-      // an earlier job was starting holds the rest until the next tick (merges are not jobs).
-      const l = act.type !== 'merge' ? (await refreshBeforeAdmission(this, act)) || this.limitedOf(act.agent) : null;   // issue #1163: refresh first when due
-      if (l?.out) { (report.skipped ||= []).push(usageLimitSkip(act, l)); continue; }
-      const startSince = Date.now();
-      await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
-      lap('job launches', startSince);
-    }
+    await guard('resume checks', () => checkResumeChecks(this, report));   // issue #1223
+    await launchPlanned(this, actions, report, { guard, lap, ledger, refresh: refreshBeforeAdmission });
+    closeLedger(this, report, ledger);   // issue #1223: every planned action launched or has one reason
     this.save();
     phases.total = Date.now() - t0;
     return report;
@@ -1812,7 +1811,7 @@ export class Team {
     this.save();
     if (applied.length) report.selfChecked = applied.map(f => f.what);
   }
-  selfCheckItems() { return Object.values(this.s.selfcheck?.items || {}); }
+  selfCheckItems() { return [...Object.values(this.s.selfcheck?.items || {}), ...planItems(this.s)]; }
   // Issue #995 part 1: every running job has a heartbeat taken from its transcript, progress stamp or record. No growth for
   // limits.job_idle_minutes cancels it through the normal stop path (the reason is recorded) and the item is planned again. The limit and
   // each job's last activity are kept in state.liveness for the dashboard and `team status`.
@@ -1917,7 +1916,7 @@ export class Team {
     try {
       const { kept, stopped } = breaker.filterActions(this.s.breaker, limits, actions);
       if (stopped.length) { (report.breaker ||= {}).stopped = stopped.map(x => ({ type: x.action.type, ref: x.action.pr ?? x.action.issue ?? null, agent: x.action.agent ?? null, cause: x.cause })); }
-      for (const x of stopped) this.hold(x.action.agent, x.action.type, `circuit breaker: ${x.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + x.cause} halted new ${x.action.type} jobs until the homeowner resumes`);
+      for (const x of stopped) this.hold(x.action.agent, x.action.type, breakerHoldText(x), x.action.pr ?? x.action.issue ?? null);
       return kept;
     } catch (error) { this.breakerFailed(error, report); return actions; }
   }
