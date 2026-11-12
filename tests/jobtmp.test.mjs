@@ -50,7 +50,7 @@ test('host pressure holds over 80% disk or 90% swap and names the top consumers'
   assert.equal(hostPressure({ disk: { percent: 80 }, swap: { percent: 90 }, dirs: [dir] }).hold, false);
   const d = hostPressure({ disk: { percent: 81 }, swap: { percent: 10 }, dirs: [dir] });
   assert.equal(d.hold, true); assert.match(pressureText(d), /root volume is 81% full/); assert.match(pressureText(d), /big/);
-  assert.match(hostPressure({ disk: { percent: 10 }, swap: { percent: 95 }, dirs: [dir] }).reasons[0], /swap is 95%/);
+  assert.equal(hostPressure({ disk: { percent: 10 }, swap: { percent: 95 }, dirs: [dir] }).hold, false);   // issue #1151: swap used alone never holds
   assert.equal(hostPressure({ disk: null, swap: null, dirs: [dir] }).hold, false);
 });
 

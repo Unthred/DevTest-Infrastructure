@@ -82,7 +82,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         slots: (v.slots || []).map(s => s.text), capNotes: v.capNotes, breaker: v.breaker ? { halt: v.breaker.halt, error: v.breaker.error ?? null, byCause: (v.breaker.byCause || []).slice(0, 8).map(({ cost, ...r }) => ({ ...r, costGbpEquivalent: gbpOf(cost, v) })), topFailureCauses: (v.breaker.failCauses?.week || []).slice(0, 5) } : null,
         ...faultViews(v),   // #1107 infra faults apart from work failures; #1121 open issues with no implementer and no reason
         agents: (v.agents || []).map(a => ({ name: a.name, state: a.state, idle: a.idleReason?.text ?? null })),
-        budget: budgetBrief(v.budget),
+        budget: budgetBrief(v.budget), hostPressure: v.hostPressure ?? null,   // issue #1151
         planned: (v.plan || []).map(a => ({ type: a.type, agent: a.agent ?? null, pr: a.pr ?? null, issue: a.issue ?? null, why: a.why ?? null })),
         running: (v.jobs || []).filter(j => ['running', 'queued', 'paused_limit', 'paused_manual'].includes(j.status)).map(j => ({ id: j.fullId, kind: j.kind, ref: j.ref, agent: j.agent, status: j.status, startedAt: iso(j.startedAt) })),
         needsYouCount: v.health?.count ?? v.panels?.needsYou?.length ?? (v.attention || []).filter(a => a.severity === 'action').length })) },

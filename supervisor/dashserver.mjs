@@ -7,6 +7,7 @@
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
 import { readTimeline, computeGaps, allSnapshots, storageReport } from './history.mjs';
+import { hostPressureView } from './hostpressure.mjs';
 import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { applyAction, readWatchlist } from './watchlist.mjs';
 import { createViewStore, VIEW_STALE_MS } from './viewstore.mjs';
@@ -162,8 +163,10 @@ const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, beh
 // Issue #1093: the Health page's data. Disk samples and the recorder are bounded reads of local files; no model or GitHub call.
 export function healthData({ root, config, now, recorderDir }) {
   if (typeof config === 'function') config = config();
-  const h = { ...HEALTH_DEFAULTS, ...validateTeamConfig(config).health };
+  const checked = validateTeamConfig(config);
+  const h = { ...HEALTH_DEFAULTS, ...checked.health };
   return { now, warn: h.disk_warn_percent, alert: h.disk_alert_percent, disk: readDiskSamples(nodePath.join(root, 'dashboard', 'disk-samples.jsonl'), now),
+    hostPressure: hostPressureView(readTeamState(root), checked, now),   // issue #1151
     recorder: recorderDir ? readRecorder(recorderDir, now - 7 * DAY_MS, now) : { status: 'missing', note: 'No recorder log folder is configured.', files: 0, samples: 0, hourly: [], days: [] } };
 }
 export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {

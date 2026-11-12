@@ -2,10 +2,11 @@
 // here. Models run only inside supervised jobs that the dispatcher creates through the existing supervisor.
 // Provider-agnostic (D-012): agents and their providers come from team.json; nothing here names Claude or Codex.
 import { selfCheck, applySelfCheck } from './selfcheck.mjs';
-import { sweepJobTmp, hostPressure, pressureText } from './jobtmp.mjs';
+import { sweepJobTmp } from './jobtmp.mjs';
+import { readHostPressure, recordHostPressure, pressureText, hostPressureConfig } from './hostpressure.mjs';
+import { overlayHostHold } from './holdreason.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import crypto from 'node:crypto';
 import { SupervisorError, WorktreeUnusable, LeaseHeld, atomicJson, processStart } from './core.mjs';
 import { takeBreakerResumeRequests, discardBreakerResumeRequests } from './breakerresume.mjs';
@@ -151,6 +152,7 @@ function validateHealth(h) {
 }
 function validateOptionalSections(c) {
   validateSelfUpgrade(c.self_upgrade); assertGithubApp(c);   // issue #1115
+  hostPressureConfig(c.host_pressure);   // issue #1151
 }
 function validateSelfUpgrade(u) {
   if (u === undefined) return;
@@ -1152,7 +1154,7 @@ export class Team {
       }
     }
     this.holdFullSlots(occupying, usedAtStart, totalAtStart, prs, issueByNo);
-    // Report in team.json agent order (merge first), as before roles: callers and the dashboard read the list in that order.
+    overlayHostHold(this, actions);   // issue #1151: the host's hold is the reason for every planned start it holds
     const order = n => this.agents().findIndex(([x]) => x === n);
     return actions.map((x, i) => [x, i]).sort(([x, i], [y, j]) => (x.type === 'merge' ? -3 : x.type === 'inbox' ? -2 : order(x.agent)) - (y.type === 'merge' ? -3 : y.type === 'inbox' ? -2 : order(y.agent)) || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type) || i - j).map(([x]) => x);
   }
@@ -1738,6 +1740,7 @@ export class Team {
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
+    if (!dryRun) await guard('host pressure', async () => { this.hostPressureState = this.hostPressureNow(); });   // before plan(): the plan reads it (issue #1151)
     const planSince = Date.now();
     let actions = await this.plan();
     lap('plan', planSince);
@@ -1748,7 +1751,6 @@ export class Team {
     if (!dryRun) await guard('job liveness', () => this.livenessSweep(report));
     if (!dryRun) await guard('temp sweep', () => this.sweepTemp(report));
     if (!dryRun && this.root) await guard('disk samples', async () => recordDiskSample({ root: this.root, now: this.clock.now(), volumes: this.c.health?.volumes ?? DEFAULT_VOLUMES }));
-    if (!dryRun) await guard('host pressure', async () => { this.hostPressureState = this.hostPressureNow(); });
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
     if (!dryRun) await guard('self-check', () => this.runSelfCheck(report));
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
@@ -1785,7 +1787,7 @@ export class Team {
   }
 
   // Issue #1007 (seams for tests): the host check and the sweep of job scratch folders.
-  hostPressureNow() { if (typeof this.pressureReader !== 'function' && process.env.NODE_TEST_CONTEXT) return { hold: false, reasons: [] }; return typeof this.pressureReader === 'function' ? this.pressureReader() : hostPressure({ dirs: [os.tmpdir(), path.join(this.root || '', 'tmp')] }); }
+  hostPressureNow() { if (typeof this.pressureReader !== 'function' && process.env.NODE_TEST_CONTEXT) return { hold: false, reasons: [] }; return recordHostPressure(this, typeof this.pressureReader === 'function' ? this.pressureReader() : readHostPressure(this)); }
   async sweepTemp(report) {
     const root = this.root; if (!root) return;
     const owned = (await this.jobs.listActive()).map(j => j.id);
