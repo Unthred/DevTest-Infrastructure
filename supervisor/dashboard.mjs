@@ -424,7 +424,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     if (tj.kind === 'rebase' && tj.rebase?.lost?.length && pr && pr.headRefOid === tj.rebase.newHead)
       add(`rebase-lost-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} dropped ${tj.rebase.lost.length} commit(s): ${tj.rebase.lost.map(c => `${shortCommit(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
     if (tj.kind === 'rebase' && tj.rebase?.lostChanges?.length && pr && pr.headRefOid === tj.rebase.newHead)
-      add(`rebase-lost-changes-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} lost ${tj.rebase.lostChanges.length} change(s): ${tj.rebase.lostChanges.slice(0, 5).map(c => `${c.file} ${c.kind === 'unreferenced' ? c.text + ' (unreferenced)' : c.text}`).join('; ')}`, { kind: 'pull', n: tj.pr });
+      add(`rebase-lost-changes-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} lost ${tj.rebase.lostChanges.length} change(s): ${tj.rebase.lostChanges.slice(0, 5).map(c => `${c.file} ${c.hunk || ''} (${c.kind}) ${c.text}`).join('; ')}`, { kind: 'pull', n: tj.pr });
   }
   for (const pr of cache?.pulls || []) if (!pr.isDraft && !fixLimited.has(pr.number) && checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // Issue #331: a check run whose state contradicts itself for too long. One item per head and check; it clears when the check finishes or the head moves.

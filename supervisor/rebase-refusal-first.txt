@@ -1,0 +1,1 @@
+Restore each named change in the rebased commit it belongs to (edit the file; do not amend, squash, reword or reorder commits), run the checks, then run rebase-push once more. If main removed the change on purpose, do not restore it: run rebase-stop with that statement as the reason.
