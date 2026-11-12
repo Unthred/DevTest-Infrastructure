@@ -46,6 +46,7 @@ export function approveDecisionFile(root, name, approvals) {
   if (!files.has(file)) throw new Error(`no decision file ${file}`);
   const legacy = fs.readFileSync(path.join(root, 'docs/DECISIONS.md'), 'utf8');
   const link = list[list.length - 1].url;
+  if (!link) throw new Error(`the recorded approval of ${name} has no comment url; the approval could not be verified later`);
   const res = approveText(decisionName(name), files.get(file), parseDecisionFiles(files), legacy, link);
   if (res.changed) fs.writeFileSync(path.join(root, file), res.text);
   writeIndex(root);

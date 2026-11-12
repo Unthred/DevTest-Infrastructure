@@ -25,7 +25,7 @@ export function pendingProposals(config, pulls, mainRegister, read = readHeadReg
 export function proposalWords(p, prText) {
   const text = `Decision ${p.id} (${redact(p.title, 120)}) is an agent proposal awaiting your sign-off, added by ${prText}${p.file ? ` as ${p.file}` : ''}`;
   const action = p.file
-    ? `To approve, comment "homeowner-approval: ${p.id}" on the pull request. Foreman then assigns the decision its number once; the name ${p.id} never changes. Or reject the PR.`
+    ? `To approve, comment "homeowner-approval: ${p.id}" on the pull request. Foreman then assigns the decision its number once the proposal is on main; the name ${p.id} never changes. Or reject the PR.`
     : `To approve, comment "homeowner-approval: ${p.id}" on the pull request and set the entry to "Status: homeowner-approved" with its Source linking that comment, or reject the PR.`;
   return { text, action };
 }

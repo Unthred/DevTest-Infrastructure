@@ -65,6 +65,8 @@ import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePromp
 import { isCiteRepair } from './incomplete.mjs';
 import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, finishDescriptionRound, roundSpec } from './descround.mjs';
 import { recordCreatedInboxJob } from './inboxlaunch.mjs';
+import { approveDecisions } from './decisionapprove.mjs';
+
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
@@ -1747,7 +1749,7 @@ export class Team {
     if (!dryRun) {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
       await guard('inbox', () => this.processInbox(report)); await guard('time caps', () => enforceStops(this, report)); await guard('host values', () => this.raiseHostValues(report)); await guard('live checks', () => this.verifyInstalled(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
-      await guard('board catch-up', () => this.flushBoard(report));
+      await guard('board catch-up', () => this.flushBoard(report)); await guard('decision approvals', () => approveDecisions({ gh: this.gh, repoPath: this.c.repo_path, owner: this.ownerLogin(), isOwnerComment: c => this.isOwnerComment(c) }, report));
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
