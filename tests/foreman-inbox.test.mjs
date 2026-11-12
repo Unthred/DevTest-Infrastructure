@@ -252,12 +252,12 @@ async function serve(t, inboxDir) {
 test('dashboard: a pending item is one Approve/Reject card that shows its exact text, escaped; a refused item shows no card', async t => {
   const dir = makeInbox(t), id = drop(dir, { ...GOOD, prompt: 'Do <b>this</b> & that', why: 'tidy' }); drop(dir, { ...GOOD, prompt: TOKEN });
   inbox.scan(dir, 1000);
-  const s = await serve(t, dir), page = (await s.get('/')).body;
+  const s = await serve(t, dir), page = (await s.get('/inbox')).body;
   assert.match(page, new RegExp(`data-inbox="${id}"`)); assert.match(page, /Do &lt;b&gt;this&lt;\/b&gt; &amp; that/); assert.ok(!page.includes('<b>this</b>'));
-  assert.equal((page.match(/data-inbox=/g) || []).length, 2, "the Needs you card and its row in the Waiting for approval dropdown (issue #1101)");
+  assert.equal((page.match(/data-inbox=/g) || []).length, 1, 'the Inbox page owns one proposal card');
   assert.match(page, /<form method="post" action="\/inbox"[^>]*><input type="hidden" name="proof"/);
   assert.ok(!page.includes(TOKEN));
-  const view = JSON.parse((await s.get('/api/view.json')).body); assert.ok(view.panels.needsYou.some(a => a.id === `inbox-${id}`));
+  const view = JSON.parse((await s.get('/api/view.json')).body); assert.ok(view.panels.inbox.some(c => c.id === id));
 });
 test('dashboard: no proof, wrong proof, a foreign origin, a bad id or decision approve nothing; the right proof records the decision', async t => {
   const dir = makeInbox(t), id = drop(dir, GOOD); inbox.scan(dir, 1000);

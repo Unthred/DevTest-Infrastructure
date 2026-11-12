@@ -31,7 +31,7 @@ const postInbox = form => postDecision(fetch.bind(window), form.action, new Form
 document.addEventListener('submit', async e => {
   const form = e.target.closest?.('form.inbox-form'); if (!form) return;
   e.preventDefault();
-  const decision = form.elements.decision.value, item = form.closest('.inbox-item'), row = form.closest('li');
+  const decision = form.elements.decision.value, item = form.closest('.inbox-item'), row = form.closest('li') || item;
   if (decision === 'undo') {
     const btn = form.querySelector('button'); btn.disabled = true;
     const j = await postInbox(form);

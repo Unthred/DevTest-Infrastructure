@@ -347,7 +347,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         const hits = inboxStatuses(dir).filter(s => s.id.startsWith(m[1]));
         if (hits.length !== 1) return refuseWith(send, hits.length ? 409 : 404, hits.length ? 'Ambiguous inbox id' : 'No such inbox item', hits.length ? 'More than one inbox item starts with that id; use the full id.' : 'No inbox item has that id. It may have been cleared after fourteen days.');
         const s = hits[0];
-        if (s.state === 'pending') return send(302, 'text/plain; charset=utf-8', 'found', { location: `/#att-inbox-${s.id}` });
+        if (s.state === 'pending') return send(302, 'text/plain; charset=utf-8', 'found', { location: `/inbox#att-inbox-${s.id}` });
         const issue = Number.isSafeInteger(s.issue) && s.issue > 0 && s.issue < 900000000 ? s.issue : null;
         return page(send, 200, `Inbox item ${esc(s.id.slice(0, 8))}`, `<p><code>${esc(s.id)}</code></p><ul><li>Kind: ${esc(s.kind || 'unknown')}</li><li>State: ${esc(s.state || 'unknown')}</li>${s.title ? `<li>Title: ${esc(String(s.title).slice(0, 200))}</li>` : ''}${issue ? `<li>GitHub issue: <a href="/work/issue/${issue}">#${issue}</a></li>` : ''}${s.reason ? `<li>Reason: ${esc(String(s.reason).slice(0, 300))}</li>` : ''}</ul>`);
       }
