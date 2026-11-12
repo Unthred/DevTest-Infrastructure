@@ -360,7 +360,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         const r = readTranscript(root, id, { after });
         return send(200, 'application/json; charset=utf-8', JSON.stringify({ job: jobInfo(jobRecord(root, id), now()), entries: r.entries, last: r.entries.at(-1)?.seq ?? after }));
       }
-      // Issue #623: two bounded, redacted, read-only records for the Foreman MCP tools (the account there cannot read the state root). #625 installs and breaker, #1197 inbox.
+      // Issues #623, #625, #1197: bounded, redacted, read-only records for the Foreman MCP account, which cannot read the state root.
       if ((m = /^\/api\/jobs\/([a-f0-9]{32})\/outcome\.json$/.exec(path))) { const out = jobOutcome(root, m[1]); return out ? send(200, 'application/json; charset=utf-8', JSON.stringify(out)) : send(404, 'text/plain; charset=utf-8', 'not found'); }
       if (path === '/api/inbox.json') return send(...inboxApiReply(source().inbox?.dir, now()));
       if (path === '/api/discarded.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(discarded(readTeamState(root), 200)));
