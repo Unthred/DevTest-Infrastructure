@@ -163,7 +163,7 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
       audit(inboxDir, { id, event: 'control', kind: 'control', hash }, now); picked++; controls++; continue;
     }
     if (pending >= maxPending) { setStatus(inboxDir, id, { state: 'refused', reason: `${maxPending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
-    setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now }, now);
+    setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now, title: redactLong(v.item.title, LIMITS.title, ' [cut]').trim() }, now);
     audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash }, now);
     pending++; picked++;
   }
@@ -204,7 +204,7 @@ export function loadItem(inboxDir, id) {
 export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {}) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
     const l = loadItem(inboxDir, s.id);
-    if (!l.ok) return { id: s.id, kind: s.kind, state: s.state, createdAt: s.createdAt ?? null, broken: l.reason };
+    if (!l.ok) return { id: s.id, kind: s.kind, state: s.state, createdAt: s.createdAt ?? null, title: s.title ?? null, hash: s.hash?.slice(0, 12) ?? '', broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
     return { id: s.id, kind: it.kind, state: s.state, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), body: it.body, prompt: it.prompt, reason: it.reason, target: it.target,
       will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
@@ -324,7 +324,7 @@ export function raiseHostValue(inboxDir, { key, value, why }, now = Date.now()) 
   fs.mkdirSync(d.items, { recursive: true, mode: 0o755 }); fs.mkdirSync(d.status, { recursive: true, mode: 0o755 });
   const file = path.join(d.items, `${id}.json`);
   try { fs.writeFileSync(file, JSON.stringify(v.item, null, 1) + '\n', { mode: 0o644, flag: 'wx' }); } catch { return { raised: false, id, reason: 'item file exists' }; }
-  setStatus(inboxDir, id, { state: 'pending', kind: 'host_value', hash: hashOf(v.item), createdAt: now }, now);
+  setStatus(inboxDir, id, { state: 'pending', kind: 'host_value', hash: hashOf(v.item), createdAt: now, title: v.item.title }, now);
   audit(inboxDir, { id, event: 'proposed', kind: 'host_value', hash: hashOf(v.item) }, now);
   return { raised: true, id };
 }

@@ -84,6 +84,7 @@ test('route: a JSON decision answers with the state and undo time; the card leav
   const s = await serve(t, dir);
   assert.equal((await view(s)).panels.inbox.length, 2);
   const page0 = (await s.get('/inbox')).body;
+  assert.match(page0, new RegExp(`<li class="inbox-item" id="att-inbox-${a}"[\\s\\S]*?<h3 class="inbox-title t">Tidy docs 1</h3>`), 'the live decision handler receives an Inbox list row and title');
   assert.match(page0, /<details class="inbox-decided" hidden>/, 'an empty list is ready for the script to fill');
   assert.match(page0, /<span class="inbox-outcome" hidden><\/span>/);
   assert.match(page0, /<div class="inbox-err" role="alert" hidden>/);
@@ -97,7 +98,7 @@ test('route: a JSON decision answers with the state and undo time; the card leav
   assert.match(page, /<summary>Decided today \(<span class="inbox-decided-n">1<\/span>\)<\/summary>/);
   assert.match(page, new RegExp(`data-decided="${a}"><span class="inbox-title">Tidy docs 1</span> <span class="inbox-tag">.*?</span></span> <span class="inbox-outcome approved" data-lms="${j.decidedAt}" data-tpl="Approved {t}, queued for the inbox lane \\(waited 0m\\)" data-tonly>Approved \\d\\d:\\d\\d UTC, queued for the inbox lane \\(waited 0m\\)</span>`));
   assert.match(page, /name="decision" value="undo"/);
-  assert.match(page, /1 of 2 proposals/, 'the count dropped');
+  assert.match(page, /1 matching Inbox item/, 'the count dropped');
 });
 test('route: Reject is shown as Rejected, newest decision first; the plain form post still redirects', async t => {
   const dir = makeInbox(t), a = drop(dir, GOOD(1)), b = drop(dir, GOOD(2)); inbox.scan(dir, 1000);
@@ -123,7 +124,7 @@ test('Inbox search is shareable, combines filters and highlights matched title w
   const page = (await server.get('/inbox?search=Reserve+%231104&kind=prompt&state=pending')).body;
   assert.match(page, new RegExp(`data-inbox="${found}"`));
   assert.match(page, /<mark>Reserve<\/mark> digest/);
-  assert.match(page, /1 of 2 proposals/);
+  assert.match(page, /1 matching Inbox item/);
   const empty = (await server.get('/inbox?search=%5B%5D%7B%7D&kind=action')).body;
   assert.match(empty, /No Inbox items match/);
 });

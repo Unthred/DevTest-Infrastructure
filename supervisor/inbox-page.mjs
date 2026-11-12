@@ -1,6 +1,7 @@
-import { highlightInboxText, matchesInboxSearch } from '../foreman-mcp/inbox-search.mjs';
+import { highlightInboxText } from '../foreman-mcp/inbox-search.mjs';
+import { inboxSearchRecords } from '../foreman-mcp/inbox-search-records.mjs';
 
-const KINDS = ['prompt', 'issue_draft', 'action', 'host_value'];
+const KINDS = ['prompt', 'issue_draft', 'action', 'host_value', 'decision'];
 const STATES = ['pending', 'approved', 'rejected', 'running', 'posting', 'done', 'failed', 'refused'];
 
 const highlighted = (text, query, esc) => highlightInboxText(text, query)
@@ -11,12 +12,15 @@ export function inboxCard(card, query, { esc, tag, form }) {
   const title = highlighted(card.title || 'An inbox item that cannot be shown', query, esc);
   const why = card.why ? `<div class="sub">Why: ${highlighted(card.why, query, esc)}</div>` : '';
   const body = highlighted(card.text || '', query, esc);
-  const approve = card.state === 'pending' && !card.broken ? form(card.id, 'approve', 'Approve', 'inbox-approve') : '';
-  const reject = card.state === 'pending' ? form(card.id, 'reject', 'Reject', 'inbox-reject') : '';
-  return `<article class="inbox-item" id="att-inbox-${esc(card.id)}" data-inbox="${esc(card.id)}">
-<h3 class="inbox-title">${title}</h3><div class="sub">${esc(card.kind || 'unknown')} · ${esc(card.state || 'unknown')} ${tag(card.id, card.kind)}</div>${why}
-<pre class="inbox-text">${body}</pre><div class="sub">Content hash ${esc(card.hash || '')}</div>
-<div class="acts">${approve}${reject}</div><div class="inbox-err" role="alert" hidden></div><span class="inbox-outcome" hidden></span></article>`;
+  const approve = !card.decision && card.state === 'pending' && !card.broken ? form(card.id, 'approve', 'Approve', 'inbox-approve') : '';
+  const reject = !card.decision && card.state === 'pending' ? form(card.id, 'reject', 'Reject', 'inbox-reject') : '';
+  const tagHtml = card.decision ? '' : tag(card.id, card.kind);
+  const will = card.will ? `<div class="sub">${esc(card.will)}</div>` : '';
+  const options = card.decision && card.body ? `<div class="sub">Decision: ${highlighted(card.body, query, esc)}</div>` : '';
+  return `<li class="inbox-item" id="att-inbox-${esc(card.id)}" data-inbox="${esc(card.id)}">
+<h3 class="inbox-title t">${title}</h3><div class="sub">${esc(card.kind || 'unknown')} · ${esc(card.state || 'unknown')} ${tagHtml}</div>${why}${will}
+<pre class="inbox-text">${body}</pre>${options}<div class="sub">${card.hash ? `Content hash ${esc(card.hash)}` : ''}</div>
+<div class="acts">${approve}${reject}</div><div class="inbox-err" role="alert" hidden></div><span class="inbox-outcome" hidden></span></li>`;
 }
 
 const option = (value, selected, esc, label = value) => {
@@ -50,14 +54,9 @@ export function inboxSummary(view, esc) {
 export function inboxPage(view, query, { card, decided, esc, form, grid, tag }) {
   const current = filters(query);
   const inbox = view.panels.inboxSearch || view.panels.inbox || [];
-  const visible = inbox.filter(item => {
-    return (current.state || item.state !== 'refused')
-      && (!current.kind || item.kind === current.kind)
-      && (!current.state || item.state === current.state)
-      && matchesInboxSearch(item, current.search);
-  });
+  const visible = inboxSearchRecords({ inbox, approvals: view.panels.approvals || [] }, current);
   const result = visible.length
-    ? `<p class="sub" role="status">${visible.length} of ${inbox.length} proposals</p>${visible.map(item => inboxCard(item, current.search, { esc, tag, form })).join('')}`
+    ? `<p class="sub" role="status">${visible.length} matching Inbox item${visible.length === 1 ? '' : 's'}</p><ul class="panel-list">${visible.map(item => inboxCard(item, current.search, { esc, tag, form })).join('')}</ul>`
     : `<div class="empty"><b>No Inbox items match</b><span>${current.search ? `No items match “${esc(current.search)}”.` : 'No overseer proposals are waiting.'}</span></div>`;
   const body = searchForm(current, esc) + result + decided(view);
   return {

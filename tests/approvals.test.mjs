@@ -62,6 +62,7 @@ test('dropdown: button with count badge, rows with title, kind and age but no id
   assert.match(html, /Waiting for approval <span class="badge" data-approvals-count>1<\/span>/);
   const visible = html.replace(/<[^>]*>/g, ' ');
   assert.match(visible, /Tidy the docs/); assert.match(visible, /Prompt · 12 min ago/); assert.ok(!visible.includes(id) && !/[0-9a-f]{12}/.test(visible), 'no hex ids in what is read');
+  assert.match(html, /<h3 class="inbox-title t">Tidy the docs<\/h3>/);
   assert.match(html, /<details><summary>Why<\/summary>/); assert.match(html, /value="approve"/); assert.match(html, /value="reject"/);
   const empty = approvalsDropdown({ rows: [], esc, ago: () => '' });
   assert.match(empty, /Nothing waiting for you/); assert.match(empty, /data-approvals-count>0</); assert.ok(!empty.includes('data-approve-all'));

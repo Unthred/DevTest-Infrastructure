@@ -122,6 +122,7 @@ export function createInbox({ dir, baseUrl = null }) {
           why: item?.why ?? null,
           reason: item?.reason ?? s.reason ?? null,
           target: item?.target ?? null,
+          result: s.result ?? null,
           kind: item?.kind ?? s.kind ?? null,
           state: s.state ?? 'unknown',
           issue: s.issue ?? null,
@@ -130,8 +131,10 @@ export function createInbox({ dir, baseUrl = null }) {
           createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : null,
           updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
         };
-        if ((!kind || record.kind === kind) && (!state || record.state === state) && matchesInboxSearch(record, search)) records.push(record);
+        if ((!state && record.state === 'refused') || (kind && record.kind !== kind) || (state && record.state !== state)) continue;
+        if (matchesInboxSearch(record, search)) records.push(record);
       }
+      records.sort((left, right) => Date.parse(right.createdAt || '') - Date.parse(left.createdAt || ''));
       return { search, kind: kind || null, state: state || null, count: records.length, shown: Math.min(records.length, cap), items: records.slice(0, cap) };
     },
   };

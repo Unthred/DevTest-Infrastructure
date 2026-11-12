@@ -49,7 +49,14 @@ test('Inbox MCP search shares the matcher and combines kind and state filters', 
   fs.writeFileSync(path.join(items, `${id}.json`), JSON.stringify(proposal));
   scan(root, 1000);
   const tools = createTools({
-    source: { get: async () => ({ view: {}, ageMs: 0 }) },
+    source: { get: async () => ({ view: { panels: { approvals: [{
+      id: 'retrycap-1104',
+      tier: 'decision',
+      title: 'Retry cap decision for pull request #1104',
+      why: 'The review cap was reached.',
+      options: 'Allow another review.',
+      link: 'https://example.test/pull/1104',
+    }] } }, ageMs: 0 }) },
     readHost: () => ({}),
     inbox: createInbox({ dir: root }),
   });
@@ -61,6 +68,10 @@ test('Inbox MCP search shares the matcher and combines kind and state filters', 
   const result = JSON.parse(found.text);
   assert.equal(result.count, 1);
   assert.equal(result.items[0].id, id);
+  const decision = await tools.call('foreman_inbox_items', { search: 'retry #1104', kind: 'decision' });
+  const decisionResult = JSON.parse(decision.text);
+  assert.equal(decisionResult.count, 1);
+  assert.equal(decisionResult.items[0].id, 'retrycap-1104');
   const none = await tools.call('foreman_inbox_items', { search: 'reserve absent' });
   assert.equal(JSON.parse(none.text).count, 0);
 });

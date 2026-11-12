@@ -27,7 +27,7 @@ const whyBlock = (esc, r) => {
   return `<details><summary>Why</summary>${why}${options}</details>`;
 };
 
-const row = (esc, r, age) => `<li class="inbox-item approval-row" data-inbox="${esc(r.id)}" data-tier="${r.tier}"><div class="t">${esc(r.title)}</div>`
+const row = (esc, r, age) => `<li class="inbox-item approval-row" data-inbox="${esc(r.id)}" data-tier="${r.tier}"><h3 class="inbox-title t">${esc(r.title)}</h3>`
   + `<div class="sub">${esc(r.kindLabel)}${age ? ` · ${esc(age)}` : ''}</div>`
   + whyBlock(esc, r)
   + `<div class="acts">${buttons(esc, r)}</div>`

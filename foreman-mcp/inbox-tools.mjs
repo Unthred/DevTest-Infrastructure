@@ -4,7 +4,7 @@ const SEARCH_SCHEMA = {
   type: 'object',
   properties: {
     search: { type: 'string', maxLength: 200 },
-    kind: { type: 'string', enum: ['prompt', 'issue_draft', 'action', 'host_value'] },
+    kind: { type: 'string', enum: ['prompt', 'issue_draft', 'action', 'host_value', 'decision'] },
     state: { type: 'string', enum: ['pending', 'approved', 'rejected', 'running', 'posting', 'done', 'failed', 'refused'] },
     limit: { type: 'integer', minimum: 1, maximum: 100 },
   },
@@ -34,14 +34,14 @@ const STATUS_SCHEMA = {
   additionalProperties: false,
 };
 
-export function inboxToolDefs(inbox) {
+export function inboxToolDefs(inbox, search = null) {
   if (!inbox.enabled) return [];
   return [
     {
       name: 'foreman_inbox_items',
-      description: 'Search Inbox items exactly as the dashboard does: every typed word must appear across the title, proposal text, why, kind, state, or linked issue or pull request number. Search is case- and punctuation-insensitive; 1104 and #1104 are equivalent. Optional kind and state filters combine with search. Read-only.',
+      description: 'Search Inbox items and homeowner decisions exactly as the dashboard does: every typed word must appear across the title, proposal text, why, kind, state, or linked issue or pull request number. Search is case- and punctuation-insensitive; 1104 and #1104 are equivalent. Optional kind and state filters combine with search. Read-only.',
       inputSchema: SEARCH_SCHEMA,
-      run: args => inbox.list(args),
+      run: args => search ? search(args) : inbox.list(args),
     },
     {
       name: 'foreman_propose',
