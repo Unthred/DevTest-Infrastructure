@@ -1,0 +1,16 @@
+{
+  "note": "The verdict recorded for PR 1192 at head 9a2cd366a60eeae426d7dddbea98466bbd6e70a0 (issue #1164), findings as the reviewer wrote them. The one blocking finding is about the description text only; its scope is marked description as a reviewer following the #1226 prompt marks it.",
+  "pr": 1192,
+  "head": "9a2cd366a60eeae426d7dddbea98466bbd6e70a0",
+  "fixRoundsUsed": 3,
+  "verdict": {
+    "verdict": "CHANGES",
+    "reviewer": "claude",
+    "findings": [
+      { "kind": "follow-up", "text": "Previous blocking 1 (MCP-side refusals not audited): RESOLVED. A malformed target or value reaches supervisor/inbox.mjs validateControl, which refuses it and auditRefusedControl writes the record." },
+      { "kind": "follow-up", "text": "Previous blocking 2 (backoff start not undoable): RESOLVED. supervisor/directjobs.mjs startWaiting now returns undo {op:'pause_job'}." },
+      { "kind": "follow-up", "text": "Previous blocking 3 (undo of a stop skipped resume checks): RESOLVED. restartStopped now calls checkResumable." },
+      { "kind": "blocking", "scope": "description", "text": "False description claim: dashrender.mjs has a 2-line edit (one import, one card) with its line count unchanged at 1044 Evidence: The 2-line edit (one import, one card) is accurate. Line count goes 1037 -> 1038 against the merge base; 1044 is the size baseline value." }
+    ]
+  }
+}

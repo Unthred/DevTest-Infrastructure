@@ -58,7 +58,7 @@ import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRoun
 import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 import { holdRefusedRebase, noHeadDetail, STOP_STEP } from './rebaserefusal.mjs';
 import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
-import { isCiteRepair } from './incomplete.mjs';
+import { isCiteRepair } from './incomplete.mjs'; import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, finishDescriptionRound, roundSpec } from './descround.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
@@ -524,7 +524,7 @@ export function validateVerdict(v, expect) {
   if (!SHA.test(v.headSha || '') || v.headSha !== expect.head) return 'verdict is for a different head';
   if (!['PASS', 'CHANGES'].includes(v.verdict)) return 'verdict must be PASS or CHANGES';
   const strings = (a, max, len) => Array.isArray(a) && a.length <= max && a.every(x => typeof x === 'string' && x.length > 0 && x.length <= len);
-  if (!Array.isArray(v.findings) || v.findings.length > 50 || !v.findings.every(f => f && typeof f === 'object' && !Array.isArray(f) && Object.keys(f).length === 2 &&
+  if (!Array.isArray(v.findings) || v.findings.length > 50 || !v.findings.every(f => f && typeof f === 'object' && !Array.isArray(f) && hasFindingKeys(f) &&
     ['blocking', 'follow-up'].includes(f.kind) && typeof f.text === 'string' && f.text.length > 0 && f.text.length <= 2000))
     return 'findings must be bounded objects with kind blocking or follow-up and text';
   if (!strings(v.commandsRun, 100, 500) || (v.verdict === 'PASS' && v.commandsRun.length === 0)) return 'commandsRun must list the commands run (required for PASS)';
@@ -1467,10 +1467,10 @@ export class Team {
       if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || this.churned(pr.number)) continue;   // issue #864: churn stops the fix loop
-      const escalated = this.fixCount(pr.number) >= L.max_fix_attempts;
+      const description = descriptionRoundFor(this, pr), escalated = !description && this.fixCount(pr.number) >= L.max_fix_attempts;   // issue #1226
       if ((escalated && (!this.canEscalate(pr.number, pr) || this.carriedHold(pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // an escalating PR stops with one Needs you item
       if (!allow('fix')) break;
-      return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
+      return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}), ...(description ? { description: true } : {}) };
     }
     // Issue #302: an agent's review jobs all share one review worktree, so it runs one review (or split draft) at a time. While that
     // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
@@ -2507,7 +2507,7 @@ export class Team {
         }
       }
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
-      if (j.kind === 'inbox') this.ingestInbox(id, j, job);
+      if (j.kind === 'inbox') this.ingestInbox(id, j, job); if (j.description && job.status === 'completed') await finishDescriptionRound(this, id, j, report);
       if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
       if (j.kind === 'rebase' && job.status !== 'completed') { this.recordIncompleteRebase(id, j, job, report); await holdRefusedRebase(this, id, j, job); }
       if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
@@ -3189,7 +3189,7 @@ export class Team {
   async notifyFixLimit(report, guard = (_, fn) => fn()) {
     for (const pr of await this.gh.listPulls()) {
       const author = agentOfBranch(this.c, pr.headRefName);
-      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.fixCount(pr.number) < this.c.limits.max_fix_attempts) continue;
+      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.fixCount(pr.number) < this.c.limits.max_fix_attempts || descriptionRoundFor(this, pr)) continue;
       const rejected = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'CHANGES' || this.ciState(pr) === 'red';
       const nkey = `fixlimit:${pr.number}`, akey = `fixlimit-alert:${pr.number}`;
       if (!rejected) continue;
@@ -3623,10 +3623,10 @@ export class Team {
       const fixDir = escalatedInbox || path.join(this.dir, 'inbox', ticket); fs.mkdirSync(fixDir, { recursive: true, mode: 0o700 });
       const rq = await this.writeRequirements(act.branch, fixDir);
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-fix-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
-      spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, scope: `Fix the CHANGES verdict on PR #${act.pr}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
-        prompt: fixPrompt({ pr: act.pr, head: act.head, branch: act.branch, escalatedInbox, requirementsFile: rq?.file }), postcondition: { kind: 'new_head', pr: act.pr, baseHead: act.head } };
-      meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) };
-      bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; };
+      spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, ...await roundSpec(this, act, COMMON,
+        fixPrompt({ pr: act.pr, head: act.head, branch: act.branch, escalatedInbox, requirementsFile: rq?.file })) };
+      meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}), ...(act.description ? { description: true } : {}) };
+      bump = () => countRound(this.s, act);
     } else if (act.type === 'rebase' || act.type === 'cifix') {
       const rebase = act.type === 'rebase';
       let rq = null;
@@ -3763,7 +3763,7 @@ export class Team {
         return why('a new head was pushed but GitHub did not report it mergeable');
       }
       if (p.kind === 'inbox_result') { try { return fs.readFileSync(path.join(this.dir, 'inbox', String(p.ticket || 'none'), 'inbox-result.txt'), 'utf8').trim().length > 0; } catch { return false; } }
-      if (p.kind === 'split_drafted') return !readSplitDraft(this.root, p.ticket).error;
+      if (p.kind === 'split_drafted') return !readSplitDraft(this.root, p.ticket).error; if (p.kind === 'description_edited') return descriptionEdited(this, p, job);
       if (p.kind === 'pr_opened') {
         const open = await this.gh.listPulls();
         const pr = open.find(x => x.headRefName === p.branch);

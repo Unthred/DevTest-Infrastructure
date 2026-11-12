@@ -695,7 +695,7 @@ function issueDetail(view, query, path, route) {
 
 // Issue #362: the whole retained history, from the first job. Read from files only (no GitHub, no model); every field was allowlisted
 // and redacted when it was archived, and the text shown is rebuilt from those fields. Filters are plain GET parameters.
-const KIND_LABEL = { job: 'Job', verdict: 'Review', merge: 'Merge', rebase: 'Rebase', unblock: 'Unblock', migration: 'Migration' };
+const KIND_LABEL = { job: 'Job', verdict: 'Review', merge: 'Merge', rebase: 'Rebase', description: 'Description round', unblock: 'Unblock', migration: 'Migration' };
 const SOURCE_LABEL = { live: 'recorded live', 'job-record': 'from the job record', github: 'backfilled from GitHub' };
 const mib = n => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GiB` : n >= 1024 ** 2 ? `${(n / 1024 ** 2).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`);
 function storageCard(view) {
