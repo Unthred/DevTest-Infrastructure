@@ -27,7 +27,7 @@ import { afterInstallAttention, installedPrsOf } from './afterinstall-view.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
 import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
-import { assignmentFaults, budgetView, usageReading } from './budgetview.mjs';
+import { assignmentFaults, budgetThresholds, budgetView, usageReading } from './budgetview.mjs';
 import { hasProbe } from './probe.mjs';
 import { annotateQueues, nextWhyFields } from './holdreason.mjs';
 import { hostPressureView } from './hostpressure.mjs';
@@ -775,7 +775,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
-      budget, hostPressure: hostPressureView(state, config, now),   // issue #1151
+      budget, budgetLimits: budgetThresholds(budgetSettings(config)), hostPressure: hostPressureView(state, config, now),   // issue #1151
       attention,
       robustness: robustnessView(state, team, jobs, now),
       breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL, failCauses: failCausesOf(state.failCauses, { now }) },

@@ -72,6 +72,7 @@ Each queued issue and open PR shows `est. HH:MM–HH:MM` (p50–p90) on the Next
 - A step type with fewer than 5 recorded jobs shows "no estimate yet" rather than a guess.
 - **Wide ranges are left out (issue #413).** The dashboard shows a range only when its width (p90 − p50) is no more than 50% of the time from now to its midpoint (`MAX_RANGE_SHARE` in `supervisor/estimate.mjs`). A wider range, such as 08:58–16:10 for a job starting this tick with no history, is omitted from the Next panel, the queues and the agent table without replacement text; known waits still show. `team status` prints the stored text unchanged.
 - The Next card no longer repeats the next-tick countdown; the app bar shows it, and its "none" stands when no tick is scheduled.
+- **Allowance items in the app bar** (issue #1178): one editable item per configured agent (`data-bar="allowance-<agent>"`, built by `supervisor/appbaralloc.mjs` from the budget view readings, no agent names in code). It shows the weekly and the 5 hour used percent with reset times, a text level (OK, High, Near limit) at the scheduler's `high_water` and `exhausted_at`, the reading age with a Stale badge past the age limit, and "unknown: <reason>" for a missing, unreported or expired window (never 0%). It links to the Usage page. Tests: `tests/appbar-allowance.test.mjs`; on Tower `node tests/appbar-allowance-browser.mjs <dir>` runs it in Chromium at laptop and phone widths.
 
 ## Needs you panel (issue #141)
 
