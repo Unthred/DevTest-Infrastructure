@@ -1,0 +1,21 @@
+{
+  "now": "2026-11-12T12:00:00.000Z",
+  "valid": {
+    "issues": [{
+      "number": 1148,
+      "title": "Dashboard browser test fixture",
+      "state": "OPEN",
+      "labels": [],
+      "prerequisites": []
+    }],
+    "inbox": {
+      "kind": "action",
+      "title": "Review dashboard fixture",
+      "action": "reopen",
+      "target": "1148",
+      "reason": "Reopen the fixture issue after homeowner approval."
+    }
+  },
+  "long": { "issueCount": 51 },
+  "empty": { "issues": [] }
+}

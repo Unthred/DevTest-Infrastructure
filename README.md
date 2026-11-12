@@ -40,6 +40,7 @@ Start at [AGENTS.md](AGENTS.md) (`CLAUDE.md` points to it). It lists the read or
 | [docs/ci-and-images.md](docs/ci-and-images.md) | CI split, image pin/update/cache policy, `tools/ci/check-ci.mjs` (issue #12) |
 | [docs/ui-review.md](docs/ui-review.md) | UI/UX review skill, accessibility scan and the evidence page (issue #455) |
 | [docs/dotnet-builds.md](docs/dotnet-builds.md) | .NET SDK project discovery and safe command planning (issue #3) |
+| [docs/dashboard-e2e.md](docs/dashboard-e2e.md) | Tower-only dashboard browser checks with fixture state (issue #1148) |
 | [docs/provider-observations.md](docs/provider-observations.md) | What the installed Claude and Codex CLIs expose about limits and resume (static evidence) |
 - [docs/team-loop.md](docs/team-loop.md) — dispatcher, trusted verdicts, merging, post-conditions, D-019 restart, D-020 access.
 - [docs/allowance-scheduling.md](docs/allowance-scheduling.md) — weekly burn projection, reviews-only and waiting modes, reassignment for allowance (issue #56).
