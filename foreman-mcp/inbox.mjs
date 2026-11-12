@@ -15,9 +15,24 @@ const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
 
+// Issue #1154: `resolves` (the id of a failed Inbox item, from foreman_inbox_failures) and `resolution` are ids and words, not text: checked here and kept out of the redactor.
+function splitResolve(args) {
+  const { resolves, resolution, ...rest } = args && typeof args === 'object' ? args : {};
+  if (resolves === undefined && resolution === undefined) return { rest, resolve: {} };
+  if (rest.kind === 'control') return { rest, error: 'a control item cannot resolve a failed item' };
+  if (typeof resolves !== 'string' || !/^([a-f0-9]{8}|[a-f0-9]{32})$/.test(resolves)) {
+    return { rest, error: 'resolves must be the id of a failed Inbox item (8 or 32 hex characters, from foreman_inbox_failures)' };
+  }
+  if (resolution !== undefined && !['re-proposed', 'superseded'].includes(resolution)) {
+    return { rest, error: 'resolution must be "re-proposed" or "superseded"' };
+  }
+  return { rest, resolve: { resolves, ...(resolution === undefined ? {} : { resolution }) } };
+}
+
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
 export function checkProposal(args) {
-  const a = args && typeof args === 'object' ? args : {};
+  const { rest: a, resolve, error: resolveError } = splitResolve(args);
+  if (resolveError) return { ok: false, error: resolveError };
   const kind = a.kind;
   if (!['prompt', 'issue_draft', 'action', 'control'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft", "action" or "control"' };
   const named = kind === 'action' || kind === 'control';
@@ -41,7 +56,7 @@ export function checkProposal(args) {
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
     if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
   }
-  return { ok: true, item };
+  return { ok: true, item: { ...item, ...resolve } };
 }
 
 export function createInbox({ dir, baseUrl = null }) {
@@ -72,6 +87,18 @@ export function createInbox({ dir, baseUrl = null }) {
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
       fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
       return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.' };
+    },
+    // Issue #1154: every failed item, from the status files Foreman writes. Nothing is cut from the list here; the caller bounds the text.
+    failureRows() {
+      if (!dir) throw new Error('the inbox is not configured on this server');
+      let names = []; try { names = fs.readdirSync(status); } catch { return []; }
+      const rows = [];
+      for (const n of names) {
+        if (!/^[a-f0-9]{32}\.json$/.test(n)) continue;
+        let s = null; try { s = JSON.parse(fs.readFileSync(path.join(status, n), 'utf8')); } catch { continue; }
+        if (s?.state === 'failed' && ID_RE.test(String(s.id))) rows.push(s);
+      }
+      return rows.sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0));
     },
     status(id) {
       if (!dir) throw new Error('the inbox is not configured on this server');

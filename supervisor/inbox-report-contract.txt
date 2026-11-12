@@ -2,3 +2,4 @@ Report contract (added by Foreman to every Inbox task):
 - Write your report to the file {{REPORT_FILE}} in the reports folder {{REPORTS_DIR}}. Use only that file name.
 - The first line must be "STATUS: done", "STATUS: nothing_changed" or "STATUS: failed".
 - The last line of the file must be exactly {{MARKER}} on its own line, written only when the report is complete. Nothing may follow it. A report without that final line is read as unfinished.
+- Do not wait on queue state or poll for another job, slot or approval. If the task needs something that is not ready, say so in the report and finish. A job that spends most of its time cap sleeping between checks is flagged and will be stopped by the cap.

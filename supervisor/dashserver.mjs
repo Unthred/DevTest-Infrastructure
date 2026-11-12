@@ -39,7 +39,8 @@ import * as inboxStore from './inbox.mjs';
 import { controlsOf } from './controlactions.mjs';
 import { fileURLToPath } from 'node:url';
 import { recordRefusedOrigin } from './hostvalue.mjs';
-import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
+import { applyInboxDecision, isInboxDecision } from './inboxdecide.mjs';
+import { ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
@@ -254,10 +255,10 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
     if (!proofValid(root, form.get('proof'))) return badProof(send);
     const id = form.get('id') || '', decision = form.get('decision') || '';
-    if (!INBOX_ID.test(id) || !['approve', 'reject', 'undo'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
+    if (!INBOX_ID.test(id) || !isInboxDecision(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
     const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
-    const r = decision === 'undo' ? undoInbox(source().inbox.dir, id, t) : decideInbox(source().inbox.dir, id, decision, t);
+    const r = applyInboxDecision(source().inbox.dir, id, decision, form.get('note'), t);
     if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
     store.invalidate();   // the next page must show this decision, not the copy built before it
     if (decision !== 'undo') { try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ } }   // the decision starts a pass now
