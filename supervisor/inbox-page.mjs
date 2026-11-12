@@ -51,7 +51,8 @@ export function inboxPage(view, query, { card, decided, esc, form, grid, tag }) 
   const current = filters(query);
   const inbox = view.panels.inboxSearch || view.panels.inbox || [];
   const visible = inbox.filter(item => {
-    return (!current.kind || item.kind === current.kind)
+    return (current.state || item.state !== 'refused')
+      && (!current.kind || item.kind === current.kind)
       && (!current.state || item.state === current.state)
       && matchesInboxSearch(item, current.search);
   });
