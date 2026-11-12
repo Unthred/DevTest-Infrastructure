@@ -202,3 +202,15 @@ test('end to end: a clicked park and a clicked clear_retry_cap are each applied 
   const failed = allStatuses(s.inboxDir).filter(x => x.state === 'failed');
   assert.equal(failed.length, 1); assert.match(failed[0].reason, /nothing to clear/); assert.match(failed[0].result, /nothing was changed/);
 });
+
+test('issue 1158: the types a strong action can settle name it, with the confirm rule, and every named action exists', async () => {
+  const { STRONG_FOR, decisionCard } = await import('../supervisor/decisiontable.mjs');
+  const { isStrongAction } = await import('../supervisor/strongtier.mjs');
+  for (const [type, names] of Object.entries(STRONG_FOR)) {
+    assert.ok(names.every(isStrongAction), type);
+    const card = decisionCard({ id: type === 'decision-proposal' ? 'decision-proposal-D-040-12' : `${type}-7`, text: 't', ref: { kind: 'pull', n: 7 } });
+    assert.deepEqual(card.strong, names);
+    assert.match(card.later, /type the pull request number on the head shown/);
+  }
+  assert.deepEqual(decisionCard({ id: 'drift', text: 't' }).strong, []);
+});

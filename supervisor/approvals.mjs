@@ -2,13 +2,14 @@
 // (withApprovals); the Queue table and the overseer MCP can call it later. It reuses the inbox's own pending cards, so it cannot disagree with the
 // Inbox about what is pending, and adds the decisions Needs you holds for him. It lists nothing else from Needs you.
 import { pendingCards } from './inbox.mjs';
+import { isStrongAction } from './strongtier.mjs';
 
 // Words for the homeowner. The raw kind names are internal.
 export const KIND_LABEL = { prompt: 'Prompt', issue_draft: 'Issue draft', action: 'Action', host_value: 'Configuration value' };
-// Strong tier: approvals that carry a typed pull request number confirmation. None is an inbox kind today; the set is the guard, so an item of
-// one of these kinds can never reach Approve all if the list later includes it.
+// Strong tier: approvals that carry a typed pull request number confirmation. Issue #1158: an inbox `action` card is strong when its action NAME is
+// (merge_pr, approve_decision, verdict_pass, verdict_changes); STRONG_KINDS stays as the guard for any kind added later. Never Approve all.
 export const STRONG_KINDS = new Set(['merge', 'approve', 'verdict']);
-export const tierOf = kind => (STRONG_KINDS.has(kind) ? 'strong' : 'click');
+export const tierOf = (kind, action = null) => (STRONG_KINDS.has(kind) || isStrongAction(action) ? 'strong' : 'click');
 // Needs you items that are a choice between options (fix limit, split, retry cap, decision register entries). They get no Approve button here:
 // the choice is made on the pull request or issue, so the row shows the options and links to it.
 export const DECISION_ID = /^(decision-proposal-|decision-|fixlimit-|split-|retrycap-)/;
@@ -24,7 +25,7 @@ export function toApprovalRows(cards) {
     id: c.id,
     kind: c.kind,
     kindLabel: KIND_LABEL[c.kind] || 'Proposal',
-    tier: tierOf(c.kind),
+    tier: tierOf(c.kind, c.action),
     canApprove: !c.broken,
     title: c.broken ? 'An item that cannot be shown' : c.title,
     why: c.broken ? `It cannot be approved: ${c.broken}` : (plain(c.why) || whatApprovingDoes(c.will) || null),

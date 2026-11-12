@@ -39,10 +39,11 @@ import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_RO
 import { buildDiagnostics, readDiskSamples, readRecorder, DAY_MS, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, inboxScanDone } from './wake.mjs';
 import * as inboxStore from './inbox.mjs';
+import { decideFor, viewOpts } from './strongroute.mjs';
 import { controlsOf } from './controlactions.mjs';
 import { fileURLToPath } from 'node:url';
 import { recordRefusedOrigin } from './hostvalue.mjs';
-import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
+import { ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
@@ -263,7 +264,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (!INBOX_ID.test(id) || !['approve', 'reject', 'undo'].includes(decision)) return send(400, 'text/plain; charset=utf-8', 'bad request');
     const t = now(), slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
     if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=inbox-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
-    const r = decision === 'undo' ? undoInbox(source().inbox.dir, id, t) : decideInbox(source().inbox.dir, id, decision, t);
+    const r = await decideFor(inboxStore, source().inbox.dir, { id, decision, form, t }, () => cachedView(viewOpts(root, source, t)));   // issue #1158
     if (!r.ok) { releaseCooldown(root, 'inbox', t); return send(409, 'text/plain; charset=utf-8', r.reason); }
     store.invalidate();   // the next page must show this decision, not the copy built before it
     if (decision !== 'undo') { try { wake(root, 'approve', source()); } catch { /* issue #406: the decision is recorded; the schedule is the fallback */ } }   // the decision starts a pass now

@@ -15,8 +15,9 @@ export const CONTROLS = {
   park: { label: 'Park', target: 'any', does: 'Holds this work back from the planner until you unpark it.' },
 };
 
-const LATER_FIX = 'An extra fix round and closing as superseded arrive with slice 2 of #1111 (new routine actions); merge, approve and verdict with slice 3.';
-const LATER_VERDICT = 'Recording a review verdict from the dashboard arrives with slice 3 of #1111; until then review it on the pull request.';
+const STRONG_HOW = 'The overseer can propose it; it appears as its own card, where you type the pull request number on the head shown to confirm (issue #1158).';
+const LATER_FIX = `An extra fix round and closing as superseded arrive with slice 2 of #1111 (new routine actions). You can also record a homeowner verdict or merge the head (verdict_pass, verdict_changes, merge_pr). ${STRONG_HOW}`;
+const LATER_VERDICT = `You can record a homeowner review verdict for the head (verdict_pass or verdict_changes) or review it on the pull request. ${STRONG_HOW}`;
 const NO_BUTTON = 'Decided on the item itself; there is no routine control for it.';
 
 // type -> { clears, actions, later?, reason? }. `clears` is the plain-words end condition; `reason(item)` overrides the default text.
@@ -40,7 +41,8 @@ const T = {
   'after-install': { clears: 'clears when the After install checks of the pull request are marked done', actions: [], later: NO_BUTTON },
   'homeowner-steps': { clears: 'clears when the pull request is merged, closed or its head changes', actions: [], later: NO_BUTTON },
   homeowner: { clears: 'clears when you answer on the issue and the needs-homeowner label is removed', actions: [], later: NO_BUTTON },
-  'decision-proposal': { clears: 'clears when the register entry is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
+  'decision-proposal': { clears: 'clears when the register entry is homeowner-approved with your recorded approval, or the pull request is closed', actions: [],
+    later: `approve_decision posts your homeowner-approval comment on the pull request; the entry's Status line is then set on the branch. ${STRONG_HOW}` },
   decision: { clears: 'clears when the register entry reads homeowner-approved on main', actions: [], later: NO_BUTTON },
   stalled: { clears: 'clears when the pull request makes progress, merges or closes', actions: ['park'] },
   'stall-check-error': { clears: 'clears when the next stalled-PR check succeeds', actions: [] },
@@ -79,6 +81,9 @@ const T = {
   'board-paused': { clears: 'clears when the GitHub rate limit ends', actions: [] },
 };
 
+// The strong-tier actions (issue #1158) that can settle each type; they are proposals with their own typed-number card, not buttons here.
+export const STRONG_FOR = { fixlimit: ['verdict_pass', 'merge_pr'], churn: ['verdict_pass', 'merge_pr'], noreviewer: ['verdict_pass', 'verdict_changes'],
+  'noreviewer-refused': ['verdict_pass', 'verdict_changes'], 'decision-proposal': ['approve_decision'] };
 export const DECISION_TYPES = Object.freeze(Object.keys(T));
 // The longest matching type wins, so `homeowner-pr-12` is homeowner-pr and `homeowner-12` is homeowner.
 export const typeOf = id => {
@@ -124,5 +129,5 @@ export function decisionCard(item, ctx = {}) {
     const target = targetFor(item, spec);
     if (target && applies(action, target, c)) controls.push({ action, target, label: spec.label, does: spec.does });
   }
-  return { type, reason: reasonOf(item, type), clears: entry.clears, controls, later: entry.later ?? null };
+  return { type, reason: reasonOf(item, type), clears: entry.clears, controls, later: entry.later ?? null, strong: STRONG_FOR[type] ?? [] };
 }

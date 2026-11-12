@@ -510,7 +510,7 @@ export function overlapsRequired(finding, required) {
 }
 const L_MAX = team => team.c.limits.max_fix_attempts;
 const slug = title => String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').split('-').slice(0, 3).join('-') || 'work';
-const verdictKey = (pr, head) => `${pr}:${head}`;
+export const verdictKey = (pr, head) => `${pr}:${head}`;
 
 export function validateVerdict(v, expect) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return 'verdict is not an object';
@@ -1616,7 +1616,7 @@ export class Team {
     if (!author || pr.isDraft || !SHA.test(pr.headRefOid)) return null;
     const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
     const interim = v?.interim === true && v.reviewer === author;
-    if (v?.verdict === 'PASS' && (v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer] && this.carryOk(v, pr) && !this.reqHoldAll && !this.reqHold?.has(pr.number) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) return v;
+    if (v?.verdict === 'PASS' && (v.homeowner === true || ((v.reviewer !== author || (interim && this.interimMergeAllowed()) || (v.independent === true && this.independenceApproved())) && this.c.agents[v.reviewer])) && this.carryOk(v, pr) && !this.reqHoldAll && !this.reqHold?.has(pr.number) && this.ciState(pr) === 'green' && pr.mergeable === 'MERGEABLE' && !this.secondOpinionPending(pr)) return v;
     return null;
   }
   // Rank of a PR in the rebase / merge order (issue #326): the position of its issue in agents.<name>.issues, Infinity when not queued.

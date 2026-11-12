@@ -2,6 +2,8 @@
 // normal refusal: { outcome: 'done' | 'refused', changed, text }. The caller records who, when, why and the result in the item's status.
 // Nothing here merges, approves or releases work except unpark, which only runs after the homeowner approved it on the dashboard.
 import { addLabelAsApp } from './appidentity.mjs';
+import { isStrongAction } from './strongtier.mjs';
+import { runStrong } from './strongactions.mjs';
 const PARKED = 'parked';
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 // The planner reads pull requests through this, so a parked one gets no rebase, fix, review or merge.
@@ -102,7 +104,8 @@ export const controlsOf = (config, store) => (config.inbox?.dir ? controlRecords
 export async function dispatchApproved(team, inboxStore, dir, st, item, report) {
   if (st.kind === 'issue_draft') await team.postIssueDraft(dir, st, item, report);
   if (st.state !== 'approved') return;
-  if (st.kind === 'action') await team.runInboxAction(dir, st, item, report);
+  if (st.kind === 'action' && isStrongAction(item.action)) await runStrong(team, dir, st, item, inboxStore, report);   // issue #1158
+  else if (st.kind === 'action') await team.runInboxAction(dir, st, item, report);
   if (st.kind === 'host_value') team.runHostValue(dir, st, item, report);
   if (st.kind === 'control') await runControl(team, dir, st, item, inboxStore, report);
 }

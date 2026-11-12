@@ -18,6 +18,7 @@ import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
+import { inboxBlock as inboxCardHtml } from './inboxcard-ui.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -405,8 +406,7 @@ function robustnessCard(view) {
 // The full id sits in a hidden span so the list search matches either.
 const KIND_WORD = { prompt: 'prompt', issue_draft: 'issue draft', action: 'action', host_value: 'host value' };
 const inboxTag = (id, kind) => (/^[a-f0-9]{32}$/.test(String(id)) ? `<span class="inbox-tag"><a class="inbox-id" href="/inbox/${id}" title="Direct link to this item"><code>${id.slice(0, 8)}</code></a>${KIND_WORD[kind] ? ` <span class="inbox-kind">${KIND_WORD[kind]}</span>` : ''}<span class="inbox-fullid" hidden>${id}</span></span>` : '');
-const inboxForm = (id, decision, label, cls) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="decision" value="${decision}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
-const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div><div class="inbox-err" role="alert" hidden></div></div>`;
+const inboxBlock = c => inboxCardHtml(esc, c);   // issue #1158: the card moved to inboxcard-ui.mjs
 // Issue #856: what was chosen and when ("Approved 06:20"), shown beside the title. dashui/app.js rewrites the time in the viewer's zone from data-lms.
 const OUTCOME = { approve: ['Approved', 'approved', '✓'], reject: ['Rejected', 'rejected', '✗'] };
 // Issue #925: an approval nothing has acted on yet says it is waiting for a free slot; once the tick has taken it, it reads plainly "Approved".
