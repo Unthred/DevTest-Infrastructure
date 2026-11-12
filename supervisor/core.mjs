@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { limitFromAllowance } from './allowance.mjs';
 import { redact } from './redact.mjs';
 import { markIncomplete } from './incomplete.mjs';
+import { noteGateError } from './gateerror.mjs';
 
 export const defaultRegistry = new URL('./providers.json', import.meta.url).pathname;
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
@@ -369,7 +370,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
     // otherwise it keeps waiting, with the reason on the job record. The gate may hold a lock until the job is marked running.
     let gate = null;
     if (job.status === 'paused_limit' && typeof resumeGate === 'function') {
-      try { gate = await resumeGate(job); } catch (error) { gate = { go: false, reason: 'resume check failed: ' + String(error?.name || 'Error').slice(0, 48) }; }
+      try { gate = await resumeGate(job); } catch (error) { gate = noteGateError(root, job, error, clock, event); }   // issue #1223: message and stack are saved
       if (gate?.stale) { job.resumeWait = null; try { transition(root, job, 'stopped', 'head_moved', clock); } finally { gate.release?.(); } return job; }
       if (!gate?.go) {
         const since = job.resumeWait?.since ?? clock.now();
@@ -380,8 +381,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       }
     }
     try { transition(root, job, 'running', 'started', clock); } finally { gate?.release?.(); }
-    if (job.resumeWait) { job.resumeWait = null; }
-    job.attempts++; job.currentAttemptId = crypto.randomUUID(); saveJob(root, job, clock);
+    job.resumeWait = null; job.resumeCheck = null; job.attempts++; job.currentAttemptId = crypto.randomUUID(); saveJob(root, job, clock);
     let result;
     try { result = await runOnce(config, adapter, job, clock); }
     catch (error) {

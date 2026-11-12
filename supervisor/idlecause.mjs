@@ -36,13 +36,16 @@ const MIN = 60000;
 
 // One tick: the cause recorded for each agent that is idle when the tick ends. `heldAgents` are the agents whose planned work the upgrade
 // hold dropped (null when no upgrade hold applied), `holds` is the planner's per-agent hold text ({ agent: { type: text } }), `plan` the
-// actions the tick planned. A hold applies to the agent it belongs to, not to every idle agent.
-export function classifyIdle({ states, heldAgents = null, holds = {}, plan = [] }) {
+// actions the tick planned and `planned` the tick's ledger of what each planned action did (launched, or held with one reason). A hold applies to the agent it belongs to, not to every idle agent.
+export function classifyIdle({ states, heldAgents = null, holds = {}, plan = [], planned = [] }) {
   const out = {};
   for (const [agent, s] of Object.entries(states || {})) {
     if (s !== 'idle') continue;
     const mine = plan.some(p => p.agent === agent && p.type !== 'merge');
+    // Issue #1223: the hold of the action that is next for this agent (the first planned one the tick did not launch), not holds of other job types.
+    const next = planned.find(p => p.agent === agent && p.outcome === 'held');
     if (heldAgents?.includes(agent)) out[agent] = { cause: 'upgrade' };
+    else if (next) out[agent] = { cause: 'named-hold', hold: redact(`${next.type} #${next.ref}: ${next.reason}`, HOLD_REASON_CHARS) };
     else if (mine) out[agent] = { cause: 'work-planned' };
     else {
       // Each value is itself a ' | '-joined list of reasons (Team.hold), so split it and cut every reason on its own: a figure that

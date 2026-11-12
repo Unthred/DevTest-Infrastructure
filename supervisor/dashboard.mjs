@@ -957,7 +957,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     display: { gbpPerUsd: config.display?.gbp_per_usd ?? DEFAULT_GBP_PER_USD },   // issue #1097: the rate the cost figures were shown with, for the MCP tools
     health: healthOf({ attention, states, teamEnabled, needsYouCount: needsYou.length }), freshness: freshness(tickAt, now),
-    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, dependencies: cache.dependencies ?? null,
+    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, dependencies: cache.dependencies ?? null, planned: cache.planned ?? null,
     wakes: root ? (() => { try { return wakeView(root, now); } catch { return null; } })() : null,   // issue #985
     version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
     panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou,
