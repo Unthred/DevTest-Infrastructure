@@ -51,6 +51,14 @@ function readRecord(file, dirs, fsApi, redactText) {
   } finally { try { fsApi.closeSync(fd); } catch { /* closed */ } }
 }
 
+// A homeowner stop is a hold whose reason names a stop record. A reason that names none is an automatic hold (an upgrade rolled back,
+// the open-PR cap): shown as context, not called a homeowner stop.
+function noStop(list, unavailable, redactText) {
+  const holds = list.map(r => ({ source: r.source, text: redactText(String(r.text).slice(0, 400)) }));
+  const note = 'No homeowner stop: no latch or pause reason names a stop record file. The holds listed, if any, are automatic.';
+  return { stop: false, note, ...(holds.length ? { automaticHolds: holds } : {}), ...(unavailable.length ? { unavailable } : {}) };
+}
+
 // reasons(): [{ source, text }] from the current latch and pause records. Throws nothing; a source that fails is reported in `unavailable`.
 export function stopRecordTool({ reasons, dirs = DEFAULT_STOP_DIRS, fsApi = fs, redact: redactText }) {
   return {
@@ -59,9 +67,8 @@ export function stopRecordTool({ reasons, dirs = DEFAULT_STOP_DIRS, fsApi = fs, 
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run() {
       const { list, unavailable } = await reasons();
-      if (!list.length) return { stop: false, note: 'No upgrade latch or pause reason is set, so there is no homeowner stop record.', ...(unavailable.length ? { unavailable } : {}) };
       const named = namedPaths(list);
-      if (!named.length) return { stop: true, record: null, reasons: list.map(r => ({ source: r.source, text: redactText(String(r.text).slice(0, 400)) })), note: 'A latch or pause is set but its reason names no stop record file.', ...(unavailable.length ? { unavailable } : {}) };
+      if (!named.length) return noStop(list, unavailable, redactText);
       return { stop: true, records: named.map(n => ({ source: n.source, ...(insideAllowed(n.file, dirs) ? readRecord(n.file, dirs, fsApi, redactText) : { path: n.file, refused: 'the path is not in the allowed stop-record directories' }) })), ...(unavailable.length ? { unavailable } : {}) };
     },
   };

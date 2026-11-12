@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { createToolset } from '../foreman-mcp/toolset.mjs';
 import { namedPaths, insideAllowed, stopDirsFrom, STOP_MAX_CHARS } from '../foreman-mcp/stoprecord.mjs';
 
@@ -56,12 +57,18 @@ test('refuses ../ traversal, a subdirectory, a symlink file and a symlinked dire
 test('reports no stop when no latch or pause reason is set', async t => {
   const out = await run(toolsFor({ dirs: [tmp(t)], attention: [{ id: 'h-8', text: '#8 needs you' }] }));
   assert.equal(out.stop, false);
-  assert.match(out.note, /no homeowner stop/);
+  assert.match(out.note, /no homeowner stop/i);
 });
-test('a reason that names no file is shown, with no file read', async t => {
+test('an automatic rollback latch is shown but is not a homeowner stop', async t => {
   const out = await run(toolsFor({ dirs: [tmp(t)], latchReason: 'rolled back: tests failed' }));
-  assert.equal(out.stop, true);
-  assert.match(out.note, /names no stop record/);
+  assert.equal(out.stop, false);
+  assert.match(out.note, /No homeowner stop/);
+  assert.match(out.automaticHolds[0].text, /tests failed/);
+});
+test('the routine open-PR cap item (paused-new-work) is no homeowner stop', async t => {
+  const out = await run(toolsFor({ dirs: [tmp(t)], attention: [{ id: 'paused-new-work', text: 'Paused new work: 5 open PRs (cap 5)' }] }));
+  assert.equal(out.stop, false);
+  assert.match(out.note, /No homeowner stop/);
 });
 test('a pause Needs you item can name the record', async t => {
   const dir = tmp(t), file = path.join(dir, 'p.md'); fs.writeFileSync(file, 'paused for S1');
@@ -87,4 +94,25 @@ test('allowed directories: environment, then the configuration file, then the de
   assert.deepEqual(stopDirsFrom({ FOREMAN_MCP_STOP_DIRS: '/a:/b', FOREMAN_MCP_CONFIG: cfg }), ['/a', '/b']);
   assert.deepEqual(stopDirsFrom({ FOREMAN_MCP_CONFIG: cfg }), ['/x/y']);
   assert.deepEqual(stopDirsFrom({}), ['/mnt/cache/logs/agent-cleanup']);
+});
+
+test('the real stdio server answers foreman_stop_record against a stub dashboard', async t => {
+  const dir = tmp(t), file = path.join(dir, 'foreman-stop.md');
+  fs.writeFileSync(file, '# S1 stop\nResume when X.\n');
+  const http = await import('node:http');
+  const { spawn } = await import('node:child_process');
+  const stub = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(req.url.startsWith('/api/installs') ? { latch: { reason: `paused, see ${file}` } } : { view: { attention: [] } }));
+  });
+  await new Promise(r => stub.listen(0, '127.0.0.1', r));
+  t.after(() => stub.close());
+  const server = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'foreman-mcp', 'server.mjs');
+  const child = spawn(process.execPath, [server], { env: { PATH: process.env.PATH, FOREMAN_MCP_VIEW_URL: `http://127.0.0.1:${stub.address().port}/api/view.json`, FOREMAN_MCP_STOP_DIRS: dir } });
+  t.after(() => child.kill());
+  const answer = new Promise(resolve => { let buf = ''; child.stdout.on('data', d => { buf += d; const l = buf.split('\n').find(x => x.includes('"id":7')); if (l) resolve(JSON.parse(l)); }); });
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'foreman_stop_record', arguments: {} } }) + '\n');
+  const out = JSON.parse((await answer).result.content[0].text);
+  assert.equal(out.stop, true);
+  assert.match(out.records[0].text, /Resume when X/);
 });
