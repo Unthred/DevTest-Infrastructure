@@ -60,7 +60,7 @@ export function archiveOverflow(root, which, entries) {
 }
 
 // ---- the timeline: allowlisted fields only, redacted free text, deduplicated by id
-export const KINDS = ['job', 'verdict', 'merge', 'rebase', 'unblock', 'migration'];
+export const KINDS = ['job', 'verdict', 'merge', 'rebase', 'unblock', 'migration', 'limit_reset'];
 export const SOURCES = ['live', 'job-record', 'github'];
 const int = v => (Number.isSafeInteger(v) && v > 0 ? v : undefined);
 const word = (v, max = 40) => (typeof v === 'string' && /^[A-Za-z0-9 _.:/-]+$/.test(v) ? v.slice(0, max) : undefined);
@@ -186,6 +186,7 @@ export function entryText(e) {
   else if (e.kind === 'verdict') t = `${e.reviewer || 'reviewer'}: ${e.verdict} on ${ref}${e.head ? ` at ${e.head}` : ''}`;
   else if (e.kind === 'merge') t = `merged ${ref}${e.agent ? ` (${e.agent})` : ''}${e.reviewer ? `, reviewed by ${e.reviewer}` : ''}`;
   else if (e.kind === 'rebase') t = `rebase of ${ref}${e.head ? ` to ${e.head}` : ''}${e.detail ? `: ${e.detail}` : ''}`;
+  else if (e.kind === 'limit_reset') t = `${who}${e.detail || 'limit reset applied'}`;
   else if (e.kind === 'unblock') t = `Foreman unblocked ${ref}: ${e.detail || ''}`;
   else t = `config migration ${e.detail || ''} ${e.event || ''}`;
   return redact(t.replace(/\s+/g, ' ').trim(), 300);

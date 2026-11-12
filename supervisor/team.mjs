@@ -33,6 +33,7 @@ import { probeDue } from './probe.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
 import { weeklyWindow } from './budget.mjs';
+import { limitResetStep } from './resetstep.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
@@ -1741,7 +1742,7 @@ export class Team {
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     const planSince = Date.now();
     let actions = await this.plan();
-    lap('plan', planSince);
+    lap('plan', planSince); if (!dryRun) await guard('limit resets', async () => limitResetStep(this, report));   // issue #1162
     if (!dryRun) await guard('breaker successes', () => this.backfillSuccesses());
     actions = this.applyBreaker(actions, report, dryRun);
     if (!dryRun) await this.rearmOnRecovery(report);

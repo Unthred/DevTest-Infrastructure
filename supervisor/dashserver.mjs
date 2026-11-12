@@ -34,6 +34,8 @@ import { DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import nodePath from 'node:path';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
+import { resetsRoute } from './resetroute.mjs';
+import { probeRoute } from './proberoute.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, readDiskSamples, readRecorder, DAY_MS, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, inboxScanDone } from './wake.mjs';
@@ -265,7 +267,10 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
-  const decision = decisionRoute({ root, source, cachedView, store, wake, now, guard: { allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, refuseWith, esc } });
+  const guard = { allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, refuseWith, esc };
+  const decision = decisionRoute({ root, source, cachedView, store, wake, now, guard });
+  const resets = resetsRoute({ root, source, store, wake, now, probe, registry, guard });   // issue #1162
+  const probeWrite = probeRoute({ root, source, store, now, probe, registry, guard });
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
   // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
@@ -301,32 +306,12 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
-    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume };
+    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume, '/resets': resets };
     if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.
     const probePath = req.method === 'POST' ? /^\/probe\/([A-Za-z0-9_-]{1,40})$/.exec(reqPath) : null;
-    if (probePath) {
-      if (req.headers.host !== allowedHost) return refuseHost(req, send);
-      if (!originAllowed(req)) return refuseOrigin(req, send);
-      const chunks = []; let size = 0;
-      for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
-      if (!proofValid(root, new URLSearchParams(Buffer.concat(chunks).toString('utf8')).get('proof'))) return badProof(send);
-      // Cooldown per agent, kept in the state root. An unknown agent is refused before it takes a slot.
-      const agent = probePath[1], at = now();
-      if (!source().agents?.[agent]) return send(404, 'text/plain; charset=utf-8', 'unknown agent');
-      const slot = reserveCooldown(root, `probe:${agent}`, at);
-      if (!slot.ok) return send(429, 'text/plain; charset=utf-8', `too soon, try again at ${new Date(slot.retryAt).toISOString()}\n`, { 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - at) / 1000))) });
-      try {
-        const out = await probe({ root, registry, config: source(), agent, now: at });
-        if (out.error === 'overage-risk' || out.error === 'busy') releaseCooldown(root, `probe:${agent}`, at);   // nothing was spent
-        store.invalidate();   // issue #467: the page after the probe must show its reading
-        return send(303, 'text/plain; charset=utf-8', out.ok ? 'refreshed\n' : 'no reading\n', { location: `/usage?probe=${out.ok ? 'ok' : 'failed'}` });
-      } catch (error) {
-        releaseCooldown(root, `probe:${agent}`, at);
-        return send(error instanceof SupervisorError ? 404 : 500, 'text/plain; charset=utf-8', error instanceof SupervisorError ? 'unknown agent' : 'probe failed');
-      }
-    }
+    if (probePath) return probeWrite(req, res, send, probePath[1]);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain; charset=utf-8', 'read-only dashboard', { allow: 'GET, HEAD' });
     if (req.headers.host !== allowedHost) return send(421, 'text/plain; charset=utf-8', 'unexpected host');   // blocks DNS-rebinding
     const [, search = ''] = (req.url || '/').split('?'), path = reqPath;

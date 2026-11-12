@@ -14,6 +14,7 @@ import { approvals, decisionHtml } from './approvals-ui.mjs';
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
 import { healthPage } from './healthpage.mjs';
+import { limitResetsCard } from './resetcard.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
@@ -789,7 +790,8 @@ function usagePage(view, query, path) {
     { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
   const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
     emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
-  return { title: 'Usage & cost', body: `${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
+  const resets = limitResetsCard(view, { esc, card, badge, lt });   // issue #1162
+  return { title: 'Usage & cost', body: grid('usage', win + resets + chart + tokChart + byModel + failed + table_) };
 }
 function reviewsPage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
@@ -1021,9 +1023,7 @@ function processesPage(view, query, pathname, route) {
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
 const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, health: (view, query, path, route) => healthPage(route, { esc, card, grid, empty, legend, plainTable, diagSpark, utc }), evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
-
 export const PAGE_NAMES = Object.keys(PAGES);
-
 // Returns { status, html }. A drill-down for something that does not exist is a 404 page, not an empty one.
 // REFS is a module-level lookup that the link helpers read; it is set for one synchronous render and cleared after (issue #182).
 export function renderRoute(view, route, opts = {}) {
