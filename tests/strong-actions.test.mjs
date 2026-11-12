@@ -103,7 +103,7 @@ test('merge: GitHub refusing the merge ends refused; a merge GitHub does not sho
   b.gh.merge = async () => {};
   const stB = await approveAndTick(b, idB); assert.equal(stB.state, 'failed'); assert.match(stB.reason, /does not show it merged/);
 });
-test('merge: a supervisor that cannot read the result back refuses before merging anything', async t => {
+test('merge: a supervisor that cannot read the pull request ends failed (getPull throws before merge()) and merges nothing', async t => {
   const w = world(t), id = propose(w, item('merge_pr')); delete w.gh.getPull;
   const st = await approveAndTick(w, id);
   assert.equal(st.state, 'failed'); assert.deepEqual(w.calls.merged, []);
