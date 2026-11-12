@@ -123,7 +123,9 @@ test('a refused rebase spends the head\'s rebase attempts and asks the homeowner
 // Issue #1207: an agent that cannot finish records why with the real rebase-stop command; the same hold follows, with its own wording.
 test('rebase-stop records the agent\'s stop, the post-condition reads it, and the homeowner is asked once', async t => {
   const w = world(t, KEEP);   // nothing was pushed; the agent decides it cannot go on
-  const stop = args => execFileSync(process.execPath, [cli, 'rebase-stop', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'rfss-'));   // the CLI must not touch the real state root
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stop = args => execFileSync(process.execPath, [cli, 'rebase-stop', ...args], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: root }, stdio: ['ignore', 'pipe', 'pipe'] });
   assert.throws(() => stop(['--worktree', w.agent, '--old', w.oldHead]), 'negative: a stop without a reason is refused');
   assert.equal(readRefusal(w.agent, w.oldHead), null);
   assert.deepEqual(JSON.parse(stop(['--worktree', w.agent, '--old', w.oldHead, '--reason', 'seven files conflict and the two sides are different designs'])), { stopped: true });
