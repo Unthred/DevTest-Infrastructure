@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Team, ciFixPrompt, continuePrompt, fixPrompt, implementPrompt, reviewPrompt } from '../supervisor/team.mjs';
-import { requirementsTableError } from '../supervisor/requirements-table.mjs';
+import { afterInstallRows, requirementsTableError } from '../supervisor/requirements-table.mjs';
+import { prompt as corePrompt } from '../supervisor/core.mjs';
 
 const HEAD = 'a'.repeat(40);
 const valid = `## Requirements check
@@ -92,4 +93,46 @@ test('writer prompts require the table, claim check and real runtime path; revie
     assert.match(prompt, /real entry point.*parent processes or concurrent passes/);
   }
   assert.match(review, /implementer's `## Requirements check` table/);
+});
+
+const afterRow = '| Foreman lists the failed jobs on Tower | After install | Checked by the homeowner on Tower after install |';
+
+test('an After install row passes the post condition and stays visible', async t => {
+  const body = `${valid}${afterRow}\n`;
+  assert.equal(requirementsTableError(body), null);
+  assert.deepEqual(afterInstallRows(body).map(r => r.requirement), ['Foreman lists the failed jobs on Tower']);
+  const job = { kind: 'implement', postcondition: { kind: 'pr_opened', branch: 'codex/issue-19-check' } };
+  assert.equal(await team(t, body).postconditions()(job), true);
+});
+
+test('a PR with only After install rows left counts as delivered, a before-PR Homeowner-only row still fails with the named rule', async t => {
+  const onlyAfter = `${valid}${afterRow}\n`;
+  assert.equal(await team(t, onlyAfter).postconditions()({ kind: 'implement', postcondition: { kind: 'pr_opened', branch: 'codex/issue-19-check' } }), true);
+  const bad = valid.replace('| Met |', '| Homeowner-only |').replace('node --test', 'a later decision') + afterRow + '\n';
+  const job = { kind: 'implement', postcondition: { kind: 'pr_opened', branch: 'codex/issue-19-check' } };
+  assert.equal(await team(t, bad).postconditions()(job), false);
+  assert.match(job.postconditionDetail, /Opens a PR only after a check.*Homeowner-only/);
+});
+
+test('refusal text names the row and the allowed statuses and never asks to finish a post install check first', () => {
+  const error = requirementsTableError(valid.replace('| Met |', '| Not met |'));
+  assert.match(error, /Opens a PR only after a check/);
+  assert.match(error, /Allowed statuses: Met, Homeowner-only.*After install/);
+  assert.match(error, /set the status to After install/);
+  assert.doesNotMatch(error, /finish it before the PR/);
+  assert.match(requirementsTableError(`${valid}| Check on Tower | After install | later |\n`), /does not say who checks it/);
+});
+
+test('the second attempt prompt carries the refusal and says finished work stays', () => {
+  const job = { role: 'r', kind: 'implement', issue: 19, worktree: '/w', scope: 's', allowedActions: ['read'], prompt: 'TASK', incompleteReason: { cause: 'postcondition_not_met', detail: 'requirement "X" is Not met. Allowed statuses: Met.' } };
+  const text = corePrompt(job, true);
+  assert.match(text, /requirement "X" is Not met/);
+  assert.match(text, /do not redo it/);
+});
+
+test('the work item template has both lists', () => {
+  const doc = fs.readFileSync(new URL('../docs/work-item-template.md', import.meta.url), 'utf8');
+  assert.match(doc, /## Wanted \(before the PR\)/);
+  assert.match(doc, /## After install \(checked on Tower\)/);
+  assert.match(doc, /homeowner \| overseer/);
 });

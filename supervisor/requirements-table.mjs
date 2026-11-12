@@ -1,6 +1,7 @@
 // The implementer's visible PR checklist is deliberately separate from reviewer verdicts.
 // It makes the author account for every issue requirement before the dispatcher accepts work.
 import { isSecretScanner } from './secret-scanner.mjs';
+import { isAfterInstall, rowRefusal } from './requirements-rows.mjs';
 export const REQUIREMENTS_TABLE_HEADING = 'Requirements check';
 
 const cells = line => line.trim().startsWith('|') && line.trim().endsWith('|')
@@ -30,11 +31,16 @@ export function requirementsTableError(body) {
   for (const row of rows) {
     if (row.length !== 3 || row.some(cell => !cell)) return 'requirements table rows need Requirement, Status and Evidence';
     const [requirement, status, evidence] = row;
-    if (normalized(status) === 'met') continue;
-    if (normalized(status) === 'homeowner-only' && /credentials|approval|physical action/i.test(evidence)) continue;
-    return `requirement "${requirement.slice(0, 160)}" is ${status}; finish it before the PR, or use Homeowner-only with the required credentials, approval or physical action`;
+    const refusal = rowRefusal(requirement, status, evidence);
+    if (refusal) return refusal;
   }
   return null;
+}
+
+// The rows marked After install, for the step raised once the change is installed (#1155).
+export function afterInstallRows(body) {
+  const section = tableSection(body) || [];
+  return section.map(cells).filter(row => row?.length === 3 && isAfterInstall(row[1])).map(([requirement, , evidence]) => ({ requirement, evidence }));
 }
 
 export async function requirementsTableForPull(pr, pullBody) {
@@ -57,7 +63,7 @@ export async function continuedPostcondition(postcondition, job, pr, pullBody) {
   return progressed && await tablePostcondition(postcondition, job, pr, pullBody);
 }
 
-const tableInstruction = action => ` Before ${action}, add or update a visible \`## Requirements check\` table in the pull request description with exactly \`Requirement | Status | Evidence\` columns and one row for every issue requirement. Every row must be \`Met\`, with a file and line plus a test or command that proves it. The only other status is \`Homeowner-only\`, whose evidence states the specific required homeowner credentials, approval or physical action. Do not open or push when a row is not met: finish it first. Check every PR-description claim against the diff; remove or fix any claim the code does not support. For runtime behaviour, test the real entry point and relevant links, parent processes or concurrent passes rather than only a convenient direct call.`;
+const tableInstruction = action => ` Before ${action}, add or update a visible \`## Requirements check\` table in the pull request description with exactly \`Requirement | Status | Evidence\` columns and one row for every issue requirement. Every row from the issue's before-the-PR list must be \`Met\`, with a file and line plus a test or command that proves it; the only other status for it is \`Homeowner-only\`, whose evidence states the specific required homeowner credentials, approval or physical action. A row from the issue's after-install list (a check that can only be made once the change is installed on Tower) uses \`After install\`, and its evidence names who checks it, homeowner or overseer; never try to finish it before the PR. Do not open or push when a before-the-PR row is not met: finish it first. Check every PR-description claim against the diff; remove or fix any claim the code does not support. For runtime behaviour, test the real entry point and relevant links, parent processes or concurrent passes rather than only a convenient direct call.`;
 
 export const reviewerRequirementsTableInstruction = ' Read the implementer\'s \`## Requirements check\` table in the pull request description. Grade every row against the issue requirements and diff; a missing, malformed, unsupported or incomplete row is a blocking finding.';
 
