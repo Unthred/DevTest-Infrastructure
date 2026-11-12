@@ -9,6 +9,9 @@ const HOMEOWNER_REASON = /credentials|approval|physical action/i;
 // and say it is still open or not merged, so Not applicable cannot be used to skip work that does apply.
 const CONDITION_ITEM = /(?:#\d+|\b(?:issue|pull request|PR|item)\s+\d+)/i;
 const CONDITION_UNMET = /\b(?:still open|not (?:yet )?(?:merged|closed|installed))\b/i;
+// A requirement that itself says the check happens on Tower after install is an After install row, whatever the
+// issue calls its list (#1184: issues write it as an "Acceptance: on Tower after install ..." bullet).
+const AFTER_INSTALL_WORDING = /\bafter (?:install|deploy)|\bonce installed\b/i;
 const AFTER_INSTALL_CHECKER = /\b(homeowner|overseer)\b/i;
 
 export const ALLOWED_STATUSES = 'Met, Homeowner-only (evidence names the required credentials, approval or physical action), After install (evidence names who checks it: homeowner or overseer), or Not applicable (a conditional requirement whose condition is not met; evidence names the item that is still open or not merged)';
@@ -18,6 +21,7 @@ export function rowRefusal(requirement, status, evidence) {
   const kind = normalizedStatus(status);
   if (kind === 'met') return null;
   if (kind === 'homeowner-only') {
+    if (AFTER_INSTALL_WORDING.test(requirement)) return `${named} is marked Homeowner-only, but it is a check made on Tower once the change is installed. Do not finish it before the PR: set the status to After install and name who checks it (homeowner or overseer) in the evidence. Homeowner-only is for work needed before the pull request. Allowed statuses: ${ALLOWED_STATUSES}.`;
     if (HOMEOWNER_REASON.test(evidence)) return null;
     return `${named} is Homeowner-only but its evidence does not state the required credentials, approval or physical action. Allowed statuses: ${ALLOWED_STATUSES}. State the specific credentials, approval or physical action in the evidence. If this check can only be made once the change is installed on Tower, set the status to After install instead and name who checks it.`;
   }
