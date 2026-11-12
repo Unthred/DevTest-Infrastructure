@@ -449,6 +449,8 @@ body.layout-editing{overscroll-behavior:contain}
 .inbox-outcome{display:inline-block;font-weight:600;padding:0 var(--sp2);border-radius:var(--r-sm);border:1px solid var(--line)}
 .inbox-outcome.approved{color:var(--ok)}.inbox-outcome.rejected{color:var(--warning)}
 .inbox-form button[disabled]{opacity:.6;cursor:not-allowed}.inbox-form button.greyed{opacity:.35}
+.decision-status{margin-top:var(--sp2)}
+.decision-status[data-state=failed],.decision-status[data-state=cleared]{padding:var(--sp1) var(--sp2);border:1px solid var(--action);border-left-width:4px;border-radius:var(--r-sm);color:var(--action)}
 .inbox-err{margin-top:var(--sp2);padding:var(--sp1) var(--sp2);border:1px solid var(--action);border-left-width:4px;border-radius:var(--r-sm);color:var(--action)}
 .inbox-decided{margin-top:var(--sp3)}.inbox-decided summary{cursor:pointer;min-height:36px;display:flex;align-items:center}
 .inbox-decided-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--sp2)}
