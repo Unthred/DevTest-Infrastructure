@@ -223,7 +223,7 @@ test('#1123: a parked repair is held before allocation, so a ready agent receive
   w.team.s.infra = { parked: { codex: { cause: 'provider_outage' } } };
   const acts = await w.team.plan();
   assert.deepEqual(acts.map(a => [a.agent, a.type, a.issue]), [['claude', 'implement', 5]]);
-  assert.match(w.team.held.codex.cifix, /parked: provider outage/);
+  assert.match(w.team.held.codex.cifix, /parked after an infrastructure fault: provider outage/);
   assert.ok(!acts.some(a => a.agent === 'codex'), 'a parked action is never planned');
 });
 

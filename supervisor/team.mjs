@@ -48,6 +48,7 @@ import { markDone, recordPrSteps } from './afterinstall.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
+import { releaseAgentApproved } from './releaseagent.mjs';
 import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
 import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
@@ -2220,6 +2221,7 @@ export class Team {
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
     if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
     if (action === 'unpark') return unparkApproved(n, depsOf(this));   // issue #1115
+    if (action === 'release_agent') return releaseAgentApproved(target, this.faults);   // issue #1179
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
     const tk = rec.issue != null && !['review', 'fix', 'rebase', 'cifix'].includes(rec.kind) ? 'issue' : 'pull', tgt = rec.pr ?? rec.issue;
@@ -2227,7 +2229,7 @@ export class Team {
     if (action === 'stop_job') {
       if (TERMINAL.has(job.status)) throw new SupervisorError(`job ${target} already ended (${job.status})`);
       if (typeof this.jobs.stop !== 'function') throw new SupervisorError('this supervisor cannot stop a job');
-      await this.jobs.stop(id); log(`stopped the ${rec.kind} job ${target}`, 'stopped'); return `job ${target} stopped`;
+      await this.jobs.stop(id, 'manual_stop', { by: 'homeowner', why: reason }); log(`stopped the ${rec.kind} job ${target}`, 'stopped'); return `job ${target} stopped`;
     }
     if (action === 'resume_job') {
       if (!['paused_manual', 'paused_limit', 'blocked', 'failed'].includes(job.status)) throw new SupervisorError(`job ${target} is ${job.status}, not resumable`);
