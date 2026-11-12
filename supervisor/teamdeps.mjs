@@ -87,8 +87,10 @@ function rememberedChanged(team, kept) {
 
 // `merged` defaults to the merged list the planner loaded; the stop step passes its own.
 export async function refreshDependencies(team, rawIssues, prs, merged = team.merged) {
+  // The dashboard's copy restored from the tick: cached issues carry no body, so it cannot be recomputed.
   if (team.depFromCache) return team.dependencies;
-  const issues = applyDependsEdits(team.s?.directQueue, rawIssues);   // issue #1164: the overseer's Depends on edits   // the dashboard's copy restored from the tick: cached issues carry no body, so it cannot be recomputed
+  // Issue #1164: the overseer's Depends on edits.
+  const issues = applyDependsEdits(team.s?.directQueue, rawIssues);
   const open = (issues || []).filter(i => i.state === 'OPEN');
   const byNo = new Map((issues || []).map(i => [i.number, i]));
   const wanted = new Set();
