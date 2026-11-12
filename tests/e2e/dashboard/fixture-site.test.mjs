@@ -5,7 +5,7 @@ import test from 'node:test';
 import { tmpDir } from '../../helpers/tmp.mjs';
 import { buildFixtureSite } from './fixture-site.mjs';
 
-test('dashboard e2e fixture pages cover valid, empty and malformed state', async () => {
+test('dashboard e2e fixture pages cover valid, empty and malformed dashboard state', async () => {
   const base = tmpDir('dashboard-e2e-fixture-');
   for (const variant of ['valid', 'long', 'empty', 'malformed']) {
     const root = path.join(base, variant, 'state');
@@ -21,8 +21,8 @@ test('dashboard e2e fixture pages cover valid, empty and malformed state', async
       assert.match(work, /Page 1 of 3/);
     } else if (variant === 'empty') assert.match(page, /Nothing needs you/);
     else {
-      assert.match(page, /Fixture state unavailable/);
-      assert.match(page, /Fixture JSON is malformed/);
+      assert.match(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8'), /"now":/);
+      assert.match(page, /dashboard could not read the supervisor state/);
     }
   }
 });

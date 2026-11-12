@@ -56,8 +56,7 @@ try {
     await go('/work/');
     await check('empty work has no-issues state', page.getByText('No issues cached').waitFor());
   } else {
-    await check('malformed fixture has an error heading', page.getByRole('heading', { name: 'Fixture state unavailable' }).waitFor());
-    await check('malformed fixture explains the error', page.getByRole('alert').filter({ hasText: 'Fixture JSON is malformed.' }).waitFor());
+    await check('malformed state has a dashboard error', page.getByText('dashboard could not read the supervisor state').waitFor());
   }
   if (blocked.length) throw new Error(`blocked unexpected request: ${blocked[0]}`);
   await context.close();

@@ -1,7 +1,8 @@
 // Builds real dashboard pages from synthetic state; the browser never sees a live state root.
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
-import { currentView, STATIC } from '../../../supervisor/dashserver.mjs';
+import { currentView, handler, STATIC } from '../../../supervisor/dashserver.mjs';
 import { renderRoute } from '../../../supervisor/dashrender.mjs';
 import { scan } from '../../../supervisor/inbox.mjs';
 
@@ -28,9 +29,8 @@ function writeJson(file, value) {
 }
 
 function readFixture(variant) {
-  const file = variant === 'malformed' ? 'malformed.json' : 'state.json';
-  const raw = fs.readFileSync(new URL(file, FIXTURES), 'utf8');
-  return variant === 'malformed' ? JSON.parse(raw) : JSON.parse(raw)[variant];
+  const raw = fs.readFileSync(new URL('state.json', FIXTURES), 'utf8');
+  return JSON.parse(raw)[variant];
 }
 
 function stageAssets(site) {
@@ -39,17 +39,6 @@ function stageAssets(site) {
   for (const [file] of Object.values(STATIC)) fs.copyFileSync(new URL(file, source), path.join(site, 'static', file));
   fs.mkdirSync(path.join(site, 'api'), { recursive: true });
   fs.writeFileSync(path.join(site, 'api', 'next'), '<span class="muted">none</span>');
-}
-
-function stageError(site, error) {
-  const message = error instanceof SyntaxError ? 'Fixture JSON is malformed.' : 'Fixture state could not be prepared.';
-  const html = [
-    '<!doctype html><html lang="en"><head><meta charset="utf-8">',
-    '<title>Fixture state unavailable</title></head><body><main>',
-    `<h1>Fixture state unavailable</h1><p role="alert">${message}</p>`,
-    '</main></body></html>'
-  ].join('');
-  fs.writeFileSync(path.join(site, 'index.html'), html);
 }
 
 function fixtureIssues(fixture) {
@@ -94,18 +83,50 @@ function makeReadable(dir) {
   }
 }
 
+function malformedState(root) {
+  fs.writeFileSync(path.join(root, 'team', 'state.json'), fs.readFileSync(new URL('malformed.json', FIXTURES), 'utf8'));
+}
+
+function requestDashboard(server, port) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({ host: '127.0.0.1', port, path: '/', headers: { host: `127.0.0.1:${port}` } }, response => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => { body += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, body }));
+    });
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+async function stageDashboardError(site, root, config, now) {
+  const server = http.createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  server.on('request', handler({ root, config, host: '127.0.0.1', port, now: () => now }));
+  try {
+    const response = await requestDashboard(server, port);
+    if (response.status !== 500) throw new Error(`expected malformed state to produce 500, got ${response.status}`);
+    fs.writeFileSync(path.join(site, 'index.html'), response.body);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
 export async function buildFixtureSite({ root, site, variant }) {
   stageAssets(site);
-  try {
-    const fixture = readFixture(variant);
-    const state = JSON.parse(fs.readFileSync(new URL('state.json', FIXTURES), 'utf8'));
-    const now = Date.parse(state.now);
-    writeState(root, fixture, now);
-    const view = await currentView({ root, config: configFor(root), now, tz: 'UTC' });
+  const state = JSON.parse(fs.readFileSync(new URL('state.json', FIXTURES), 'utf8'));
+  const now = Date.parse(state.now);
+  const config = configFor(root);
+  writeState(root, variant === 'malformed' ? {} : readFixture(variant), now);
+  if (variant === 'malformed') {
+    malformedState(root);
+    await stageDashboardError(site, root, config, now);
+  } else {
+    const view = await currentView({ root, config, now, tz: 'UTC' });
     writePage(site, 'index.html', renderRoute(view, { page: 'overview' }, { pathname: '/' }).html);
     writePage(site, 'work/index.html', renderRoute(view, { page: 'work' }, { pathname: '/work' }).html);
-  } catch (error) {
-    stageError(site, error);
   }
   makeReadable(site);
 }
