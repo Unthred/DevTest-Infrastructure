@@ -92,6 +92,7 @@ test('writer prompts require the table, claim check and real runtime path; revie
     assert.match(prompt, /Requirements check/);
     assert.match(prompt, /every issue requirement/);
     assert.match(prompt, /Check every PR-description claim against the diff/);
+    assert.match(prompt, /`Not applicable`, only for a conditional requirement.*\(#N\).*still open or not merged/);
     assert.match(prompt, /real entry point.*parent processes or concurrent passes/);
   }
   assert.match(review, /implementer's `## Requirements check` table/);
@@ -166,6 +167,12 @@ test('the Homeowner-only refusal points at After install', () => {
   assert.match(rowRefusal('Acceptance on Tower', 'Homeowner-only', 'needs Tower'), /set the status to After install/);
 });
 
+test('Not applicable needs evidence naming the open item its condition waits on', () => {
+  assert.equal(rowRefusal('Browser test when V2 item 6 is merged', 'Not applicable', 'V2 item 6 (#1148) is still open'), null);
+  assert.match(rowRefusal('Browser test when V2 item 6 is merged', 'Not applicable', 'not needed'), /does not name the open item/);
+  assert.match(rowRefusal('Browser test', 'Not applicable', '#1148 was merged yesterday'), /does not name the open item/);
+});
+
 test('the review path records After install rows and afterInstallDone ends them', async t => {
   const tm = team(t, `${valid}${afterRow}\n`);
   await tm.applyDoneRule(19, HEAD, { verdict: 'PASS', findings: [] });
@@ -187,4 +194,13 @@ test('the dashboard view lists the After install item of a PR once an upgrade re
   assert.equal(view().length, 0);
   fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), `${JSON.stringify({ at: 1, prs: [7], result: 'verified' })}\n`);
   assert.deepEqual(view().map(i => i.id), ['after-install-7']);
+});
+
+test('issue #1184: an acceptance bullet that says after install cannot be marked Homeowner-only, even with a reason', () => {
+  for (const req of ['Acceptance: on Tower after install, Needs you shows the outstanding steps', 'Acceptance: on Tower the check runs once installed']) {
+    const refusal = rowRefusal(req, 'Homeowner-only', 'needs homeowner approval and credentials');
+    assert.match(refusal, /set the status to After install/);
+  }
+  assert.equal(rowRefusal('Acceptance: on Tower after install, x', 'After install', 'Checked by the overseer'), null);
+  assert.equal(rowRefusal('Create the GitHub App', 'Homeowner-only', 'needs homeowner credentials'), null);
 });

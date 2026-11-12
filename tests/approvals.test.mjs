@@ -131,7 +131,7 @@ test('list: an action never shows its target job id, in the title or the why', t
   const [r] = pendingApprovals(dir);
   assert.ok(r.why.length > 10); assert.ok(!/[0-9a-f]{8}/.test(r.why) && !r.why.includes('Target'), r.why);
   const html = approvalsDropdown({ rows: [r], esc, ago: () => '1 min ago' });
-  assert.ok(!/[0-9a-f]{8}/.test(html.replace(/data-inbox="[^"]*"|name="id" value="[^"]*"/g, '')), 'no hex id in what is read');
+  assert.ok(!/[0-9a-f]{8}/.test(html.replace(/data-inbox="[^"]*"|id="dec-[^"]*"|name="id" value="[^"]*"/g, '')), 'no hex id in what is read');
 });
 test('view: withApprovals puts the one list on the view the dropdown reads', t => {
   const dir = makeInbox(t); drop(dir, PROMPT); inbox.scan(dir, 1000);

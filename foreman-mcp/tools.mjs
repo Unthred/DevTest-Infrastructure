@@ -4,10 +4,12 @@
 import { redact, redactDeep } from './redact.mjs';
 import { createInbox } from './inbox.mjs';
 import { inboxToolDefs } from './inbox-tools.mjs';
+import { inboxCardsTool } from './inbox-cards.mjs';
 import { inboxSearchTool } from './inbox-search-tools.mjs';
 import { mismatches, needsYouGroups, rebaseStats, itemTimeline, gbpOf } from './insights.mjs';
 import { hostActivity } from './source.mjs';
 import { dependencySkips } from './dependencyview.mjs';
+import { withReasons, plannedFor, resumeChecksFor } from './planview.mjs';
 import { issueViews, faultViews } from './assignmentview.mjs';
 import { budgetBrief, readingBrief } from './budgetfigures.mjs';
 
@@ -102,7 +104,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         const n = Number(args.number), kind = args.kind;
         if (!Number.isInteger(n) || n < 1 || !['pr', 'issue'].includes(kind)) throw new Error('give kind "pr" or "issue" and a positive integer number');
         return withView(v => {
-          const out = { kind, number: n };
+          const out = { kind, number: n, lastTick: plannedFor(v.planned, n), resumeChecks: resumeChecksFor(v.resumeChecks, n) };   // issue #1223: the reason the last tick recorded for each planned action
           const queueItems = Object.entries(v.queues || {}).flatMap(([agent, items]) => (items || []).filter(i => i.ref === n && (kind === 'pr' ? ['pr', 'review'].includes(i.type) : i.type === 'issue')).map(i => ({ agent, type: i.type, order: i.order ?? null, next: !!i.next, reason: i.reason })));
           out.queue = queueItems; if (kind === 'issue') Object.assign(out, issueViews(v, n));   // #1103 dependencies, #1121 assignment
           out.needsYou = (v.attention || []).filter(a => a.ref?.n === n && (kind === 'pr' ? a.ref?.kind === 'pull' : a.ref?.kind === 'issue')).map(a => ({ text: a.text, tried: a.tried, action: a.action, severity: a.severity }));
@@ -120,7 +122,9 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         return { matching: total, shown: rows.length, totalTokens: tokens, totalCostGbpEquivalent: gbpOf(cost, v), note: 'Cost is the provider CLI\'s own usage estimate, not a cash charge. Transcripts are not available through this server.', jobs: rows };
       }) },
     { name: 'foreman_plan', description: 'What the planner would do, as the dashboard recomputes it per request from the last tick\'s cached GitHub data (not a live dry run, and before the circuit breaker is applied): planned actions, why work waits, the open-PR cap and the next tick time. breakerHalt says when the breaker has halted jobs, in which case plannedActions may list actions a real tick would drop.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      run: () => withView(v => ({ plannedActions: v.plan || [], breakerHalt: breakerHaltOf(v.breaker), nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [], note: PLAN_NOTE, skippedForDependencies: dependencySkips(v.excluded) })) },
+      run: () => withView(v => ({ plannedActions: withReasons(v.plan, v.planned), breakerHalt: breakerHaltOf(v.breaker),
+        nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [],
+        note: PLAN_NOTE, skippedForDependencies: dependencySkips(v.excluded) })) },
     { name: 'foreman_host', description: 'Tower load average, memory and swap, plus (sampled over about half a second) swap in and out per second, disk wait (CPU iowait, blocked processes, busy percent per disk) and the top processes by memory with their swap, all from /proc. Short process names only, never command lines.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { const base = readHost(); return { ...base, activity: await Promise.resolve().then(() => readActivity()).catch(() => null), readAt: iso(now()) }; } },
     { name: 'foreman_reports', description: 'Reports that hand-run sessions left for the overseer. With no name: the list (name, time, size, and whether it carries the finished marker), newest first. With a name: that one report as text (redacted, truncated if long), headed STATUS: finished or STATUS: UNFINISHED. A report is finished only when its last line is <!-- foreman-report: finished -->; one without it may be half written. Reads one fixed folder only.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'a report name from the list, for example speedup.md' } }, additionalProperties: false },
@@ -217,7 +221,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       }) },
     { name: 'foreman_rebase_stats', description: 'Rebases per merged pull request, reviews per merged pull request, and the time from first recorded activity to merge (mean and median), for all merged pull requests the view holds and, with splitAt (ISO date), before and after that time, so a change to the rebase policy can be measured. Read-only.', inputSchema: { type: 'object', properties: { splitAt: { type: 'string', maxLength: 40 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
       run: args => withView(v => rebaseStats(v, { splitAt: args.splitAt === undefined ? null : String(args.splitAt), limit: args.limit })) },
-    ...inboxToolDefs(inbox, inboxSearchTool(inbox, source)),
+    ...inboxToolDefs(inbox, inboxSearchTool(inbox, source), inboxCardsTool(inbox, source, now)),
   ];
 
   const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

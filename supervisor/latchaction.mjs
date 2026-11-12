@@ -45,6 +45,15 @@ export function latchCardText(latch, ver = null, stop = []) {
   return `${head}${record} ${nextInstall(ver)} Merged work is not installed until the latch is cleared.`;
 }
 
+// The dashboard's Needs you items for the latch: [] when none is set (a missing file); an unreadable file still shows a card.
+export function latchAttention(root, ver) {
+  let latch;
+  try { latch = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.latch'), 'utf8')); } catch (error) { latch = error.code === 'ENOENT' ? null : { reason: 'unreadable latch file' }; }
+  if (!latch) return [];
+  const text = redact(latchCardText(latch, ver, stopLines(latch.reason)), 700);
+  return [{ id: 'upgrade-latched', text, ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' }];
+}
+
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; } };
 
 // The approved action. Refuses (throws, so the item ends 'failed' with the reason and nothing changes) when no latch is set or an install is

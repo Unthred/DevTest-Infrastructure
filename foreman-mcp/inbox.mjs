@@ -7,13 +7,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 import { matchesInboxSearch } from './inbox-search.mjs';
+import { dependencyRefusal, parseDependsOn } from './dependency-parser.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 // issue #629: the names Foreman accepts; issue #1160: clear_latch takes no target (checkProposal fills in the fixed word)
 const NUMBER = /^[1-9]\d{0,8}$/, JOB = /^[a-f0-9]{8}$/;
 const ACTIONS = { new_review_attempt: NUMBER, clear_retry_cap: NUMBER, reopen: NUMBER, close_job: JOB, stop_job: JOB, resume_job: JOB, clear_latch: /^latch$/ };
 // Issue #1115: the releasing direction is an ordinary action (approved on the dashboard); a `control` item may carry only park or stop_job.
-const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen };
+const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, release_agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
@@ -42,10 +43,14 @@ export function checkProposal(args) {
     item[k] = v;
   }
   if (/[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
+  if (kind === 'issue_draft') {
+    const parsed = parseDependsOn(item.body);
+    if (parsed.malformed) return { ok: false, error: dependencyRefusal(parsed) };
+  }
   if (named) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
-    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id (clear_latch takes none)' };
+    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name (clear_latch takes none)' };
   }
   return { ok: true, item };
 }
@@ -68,7 +73,7 @@ export function createInbox({ dir, baseUrl = null }) {
     return { pending, unpicked, total: pending + unpicked, limit };
   }
   return {
-    enabled: !!dir,
+    enabled: !!dir, dir,   // dir: read by foreman_inbox (issue #1197)
     propose(args) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       const c = checkProposal(args);

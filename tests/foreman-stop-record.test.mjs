@@ -52,7 +52,8 @@ test('refuses ../ traversal, a subdirectory, a symlink file and a symlinked dire
   const out = await run(toolsFor({ dirs: [allowed], latchReason: reason }));
   assert.equal(out.records.length, 4);
   for (const r of out.records) { assert.ok(r.refused, JSON.stringify(r)); assert.equal(r.text, undefined); }
-  assert.ok(!JSON.stringify(out).includes('outside') || !out.records.some(r => r.text));
+  const shown = JSON.stringify(out);
+  assert.ok(!shown.includes('"outside"') && !shown.includes('nested'), 'refused files must never be read');
 });
 test('reports no stop when no latch or pause reason is set', async t => {
   const out = await run(toolsFor({ dirs: [tmp(t)], attention: [{ id: 'h-8', text: '#8 needs you' }] }));

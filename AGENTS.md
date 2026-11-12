@@ -6,7 +6,7 @@ Normative for every agent (Claude, Codex or any registered provider). Short on p
 1. The shared AI-Rules loaded by your launcher (host safety, secrets, change control, decision governance). This file adds project rules; it does not replace them.
 2. [`docs/DECISIONS.md`](docs/DECISIONS.md) — binding decisions. Check your plan against every entry before significant work; a conflict stops you until the homeowner approves a new dated entry.
 3. [`docs/ai/CURRENT_HANDOVER.md`](docs/ai/CURRENT_HANDOVER.md) — current state, owners, blockers, next actions.
-4. The issue you are working and its live branch/PR.
+4. The issue you are working and its live branch/PR. Issues and PRs follow [`docs/work-items.md`](docs/work-items.md) (acceptance lists, live checks, the `## Requirements check` table).
 Resume from repository state, never from assumed chat memory.
 
 ## Rules that always apply
@@ -45,4 +45,6 @@ node tools/ci/check-size.mjs
 ```
 
 ## Map
+Foreman MCP tools are listed in [`docs/foreman-mcp.md`](docs/foreman-mcp.md); the Inbox tools are `foreman_inbox` (compact card list, issue #1197), `foreman_inbox_items` (search), `foreman_propose` and `foreman_proposal_status`.
+
 [`README.md`](README.md) · [`docs/cooperative-work.md`](docs/cooperative-work.md) · [`docs/architecture.md`](docs/architecture.md) · [`docs/agent-provider-contract.md`](docs/agent-provider-contract.md) · [`contracts/`](contracts/)

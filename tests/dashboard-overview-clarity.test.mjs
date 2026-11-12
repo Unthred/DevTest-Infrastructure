@@ -29,34 +29,39 @@ const build = (t, { jobs = [], cache = {}, snapshots = [], state = {}, events = 
 const page = (v, route = { page: 'overview' }, qs = '') => renderRoute(v, route, { query: new URLSearchParams(qs), pathname: route.page === 'activity' ? '/activity' : route.page === 'work' ? '/work' : '/' }).html;
 const esc = x => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const header = html => /<header class="statusbar"[\s\S]*?<\/header>/.exec(html)[0];
-const lines = html => [...header(html).matchAll(/<li><a class="agent-badge[^"]*" href="([^"]+)" data-agent="(\w+)" data-state="(\w+)"[^>]*>[\s\S]*?<\/li>/g)].map(m => ({ href: m[1], agent: m[2], state: m[3], html: m[0], text: m[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() }));
+const agentItem = /<div class="stat agent-item" data-bar="agent-(\w+)"[^>]*data-state="(\w+)">[\s\S]*?<\/summary>/g;
+const plain = html => html.replace(/ (title|aria-label)="[^"]*"/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+const lines = html => [...header(html).matchAll(agentItem)].map(m => ({ href: `/agents/${m[1]}`, agent: m[1], state: m[2], html: m[0], text: plain(m[0]) }));
 
-// ---- 1. header per agent: a compact badge (name, role, state), linking to the agent's page (issue #421)
-test('header: both running shows two compact running badges that link to the agent pages', async t => {
+// ---- 1. header per agent: one compact item (name, state dot, role, allowance), its detail linking to the agent's page (issues #421, #1221)
+const NO_READING = 'W unknown 5h unknown ◷';   // these fixtures carry no allowance reading: unknown, never 0%
+test('header: both running shows two compact running items that link to the agent pages', async t => {
   const v = await build(t, { jobs: [job(), job({ id: 'c'.repeat(32), provider: 'codex', kind: 'rebase', issue: 41, branch: 'codex/issue-3-x' })] });
   const l = lines(page(v));
   assert.deepEqual(l.map(x => [x.agent, x.state, x.href]), [['claude', 'running', '/agents/claude'], ['codex', 'running', '/agents/codex']]);
-  assert.equal(l[0].text, 'claude Implementer Running'); assert.equal(l[1].text, 'codex Rebaser Running');   // issue #460: a rebase holds the Rebaser slot
-  assert.match(l[0].html, /aria-label="claude · Implementer · Running"/);
+  assert.equal(l[0].text, `claude Implementer ${NO_READING}`);
+  assert.equal(l[1].text, `codex Rebaser ${NO_READING}`);   // issue #460: a rebase holds the Rebaser slot
+  assert.match(l[0].html, /aria-label="claude: Running \(Implementer\)\./);
+  assert.match(header(page(v)), /<a href="\/agents\/claude">Agent page<\/a>/);
   assert.doesNotMatch(header(page(v)), /title="Overall health"/);
 });
 test('header: a reviewer job shows the Reviewer role; a paused agent shows Paused and no restart text', async t => {
   const v = await build(t, { jobs: [job(), paused()] });
   const html = page(v), l = lines(html);
-  assert.deepEqual(l.map(x => [x.agent, x.state, x.text]), [['claude', 'running', 'claude Implementer Running'], ['codex', 'paused', 'codex Reviewer Paused']]);
-  const agentsOnly = header(html).replace(/<div class="stat"><span class="k">Next<\/span>.*?<\/b><\/div>/s, '');   // the Next stat carries its own times (issue #473)
-  assert.doesNotMatch(agentsOnly, /restarts about|<time/);
+  const want = [['claude', 'running', `claude Implementer ${NO_READING}`], ['codex', 'paused', `codex Reviewer ${NO_READING}`]];
+  assert.deepEqual(l.map(x => [x.agent, x.state, x.text]), want);
+  assert.doesNotMatch(l.map(x => x.html).join(''), /restarts about|<time/, 'the bar line carries no times; the detail has them');
 });
-test('header: an idle agent shows name and state only', async t => {
+test('header: an idle agent shows its name and allowance only', async t => {
   const l = lines(page(await build(t, { jobs: [] })));
-  assert.deepEqual(l.map(x => x.text), ['claude Idle', 'codex Idle']);
+  assert.deepEqual(l.map(x => x.text), [`claude ${NO_READING}`, `codex ${NO_READING}`]);
 });
 test('header: several jobs on one agent show a count, not a role or any description', async t => {
   const v = await build(t, { jobs: [job(), job({ id: 'e'.repeat(32), kind: 'review', issue: 36, branch: 'claude/issue-5-x' })] });
   const a = v.agents.find(x => x.name === 'claude');
   if ((a.jobs || []).length < 2) a.jobs = [a.job, { ...a.job, id: 'e'.repeat(32), role: 'reviewer' }]; // fixture limits may allow one job: force two
   const l = lines(page(v)).find(x => x.agent === 'claude');
-  assert.equal(l.text, 'claude 2 jobs Running');
+  assert.equal(l.text, `claude 2 jobs ${NO_READING}`);
   assert.doesNotMatch(l.html, /Implementer|Reviewer/);
 });
 // The job description appears once, on the Now card: not in the bar, the agent's card or the Next card (issue #421).
@@ -291,11 +296,11 @@ test('time: the plain-time guard itself catches a bare UTC clock time', () => {
 });
 
 // Review of PR #422 (head 13bb894): the project browser at 1280px found the bar wider than the viewport (1379px) and a card header
-// wider than a 390px phone. CSS guards: the 1100-1439px tier sheds stat labels, and phone card headers wrap their range buttons.
-test('css: the one-row bar sheds labels between 1100 and 1439px and phone card headers wrap (browser overflow findings)', () => {
+// wider than a 390px phone. CSS guards: the 1100px and wider tier sheds stat labels, and phone card headers wrap their range buttons.
+test('css: the one-row bar sheds labels from 1100px up and phone card headers wrap (browser overflow findings)', () => {
   const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
-  assert.match(css, /@media\(min-width:1100px\) and \(max-width:1439px\)\{[\s\S]*?\.statusbar \.stat \.k\{display:none\}/);
-  assert.match(css, /@media\(min-width:1100px\) and \(max-width:1279px\)\{[\s\S]*?\.agent-badge \.ab-role\{display:none\}/);
+  assert.match(css, /@media\(min-width:1100px\)\{\.statusbar\{gap:var\(--sp2\)\}[\s\S]*?\.statusbar \.stat \.k\{display:none\}/);
+  assert.match(css, /@media\(max-width:639px\)\{[\s\S]*?\.agent-item \.ai-role\{display:none\}/);
   assert.match(css, /\.card>header \.ranges\{flex-wrap:wrap\}/);
 });
 

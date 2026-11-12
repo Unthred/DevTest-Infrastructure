@@ -1,11 +1,7 @@
 // Issue #1103: dependency gating for every lane. Pure functions only: no I/O, no clock, no GitHub.
-// The one dependency source is a single line in the issue body: `Depends on: #N, #M`. A prerequisite is met only when it is
-// installed: its issue closed as completed, its pull request merged, and that merge commit in the installed version.
-// Only code outside fences counts. Anything after the colon must be a comma-separated list of #N.
-
-// `Depends on:` with the colon, optionally bold or bulleted. Without the colon a line is prose and is not a dependency source.
-const LINE = /^[ \t]*(?:[-*>][ \t]+)?\**depends[ \t]+on\**[ \t]*:\**[ \t]*(.*?)[ \t]*$/i;
-const LIST = /^#\d+(?:[ \t]*,[ \t]*#\d+)*$/;
+// The MCP parser is the single source of truth because both proposal and planning paths use it.
+export { DEPENDS_ON_EXAMPLE, dependencyRefusal, parseDependsOn } from '../foreman-mcp/dependency-parser.mjs';
+import { parseDependsOn } from '../foreman-mcp/dependency-parser.mjs';
 
 export const PREREQUISITE_STATES = ['open', 'merged_not_installed', 'installed', 'closed_not_planned', 'unknown'];
 // Kept in step with foreman-mcp/dependencyview.mjs (the MCP server cannot import from here); a test compares the two.
@@ -16,23 +12,6 @@ export const STATE_TEXT = {
   closed_not_planned: 'closed as not planned',
   unknown: 'status unknown'
 };
-
-const withoutCode = body => String(body || '').replace(/```[\s\S]*?```/g, m => m.replace(/[^\n]/g, ' ')).replace(/`[^`\n]*`/g, m => ' '.repeat(m.length));
-
-// { numbers, malformed, line }. No line: no prerequisites. More than one line, a line that is not a #N list, or an issue naming
-// itself is malformed; Foreman never guesses what was meant.
-export function parseDependsOn(body, self = null) {
-  const lines = withoutCode(body).split('\n').filter(l => LINE.test(l));
-  if (!lines.length) return { numbers: [], malformed: null, line: null };
-  const line = lines[0].trim();
-  if (lines.length > 1) return { numbers: [], malformed: 'more than one Depends on line', line };
-  const rest = (LINE.exec(lines[0])?.[1] ?? '').replace(/\*+$/, '').trim();
-  if (!LIST.test(rest)) return { numbers: [], malformed: 'the Depends on line must be a comma-separated list such as "Depends on: #12, #15"', line };
-  const numbers = [...new Set([...rest.matchAll(/#(\d+)/g)].map(m => Number(m[1])))];
-  if (!numbers.every(Number.isSafeInteger) || numbers.some(n => n < 1)) return { numbers: [], malformed: 'an issue number is out of range', line };
-  if (self != null && numbers.includes(self)) return { numbers: [], malformed: 'an issue cannot depend on itself', line };
-  return { numbers, malformed: null, line };
-}
 
 // The state of one prerequisite. `facts` are looked up by the caller:
 //   issue: { state: 'OPEN'|'CLOSED', stateReason } or null; pr: { state: 'OPEN'|'MERGED'|'CLOSED', mergeSha } or null;
@@ -94,7 +73,7 @@ export function evaluateDependencies({ issues, lookup, installedSha, isAncestor 
     if (p.malformed) reasons.push(`malformed Depends on line: ${p.malformed}`);
     if (cycle) reasons.push(`dependency cycle ${cycle.map(n => `#${n}`).join(' -> ')}`);
     for (const d of dependsOn) if (d.state !== 'installed') reasons.push(`#${d.number} ${STATE_TEXT[d.state]}`);
-    out.set(number, { dependsOn, malformed: p.malformed, cycle, met: reasons.length === 0, reasons });
+    out.set(number, { dependsOn, malformed: p.malformed, line: p.line, cycle, met: reasons.length === 0, reasons });
   }
   return { byIssue: out, cycles };
 }

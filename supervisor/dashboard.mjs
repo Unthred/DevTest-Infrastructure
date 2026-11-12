@@ -13,7 +13,7 @@ import { stoppedAttention, rearmView, endNote, withEndNote } from './faultview.m
 import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
-import { latchCardText, stopLines } from './latchaction.mjs';
+import { latchAttention } from './latchaction.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs, readHeadRegister } from './planning.mjs';
 import { proposalsAdded } from './decisions.mjs';
@@ -28,7 +28,7 @@ import { afterInstallAttention, installedPrsOf } from './afterinstall-view.mjs';
 import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
 import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
-import { budgetView, usageReading } from './budgetview.mjs';
+import { assignmentFaults, budgetThresholds, budgetView, usageReading } from './budgetview.mjs';
 import { hasProbe } from './probe.mjs';
 import { annotateQueues, nextWhyFields } from './holdreason.mjs';
 import { hostPressureView } from './hostpressure.mjs';
@@ -415,7 +415,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       { tried, action: `${unblock}, or review the PR by hand.`, links: [{ text: what, url: web('pull', u.pr) }] });
   }
   // Issue #212: exclusions are listed on the Work page; #1103: a bad Depends on line needs the homeowner.
-  for (const x of Team.dependencyTools.attention(cache)) add(x.id, x.text, x.ref, { action: x.action });
+  for (const x of Team.dependencyTools.attention(cache, now)) add(x.id, x.text, x.ref, { action: x.action, since: x.since });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
     // Issue #297: an issue that is closed, labelled epic or has an accepted split has nothing left to decide.
@@ -717,8 +717,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     // Issue #209: a failed dashboard restart or a fall back to the last good version stays a Needs you item until a restart succeeds.
     try { const f = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).dashboardFailure; if (f && typeof f.reason === 'string') attention.push({ id: 'dashboard-restart-failed', text: redact(`The dashboard server could not be ${f.kind === 'watchdog' ? 'brought back after it stopped answering' : 'restarted after the ' + (f.kind === 'rollback' ? 'rollback' : 'upgrade')}${/^[0-9a-f]{40}$/.test(f.target || '') ? ` on ${sha7(f.target)}` : ''}: ${f.reason}. ${f.recovered ? 'The last good version was started again and is serving now.' : 'Foreman keeps trying on later ticks with a growing delay.'}`, 500), ref: null, severity: 'action', action: 'Check supervisor/dashboard.log, then restart the dashboard server on the installed version.' }); } catch { /* none */ }
     // Issue #302: a rolled-back upgrade pauses all later upgrades (the latch); one Needs you item says why and how to clear it.
-    const latch = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.latch'), 'utf8')); } catch (error) { return error.code === 'ENOENT' ? null : { reason: 'unreadable latch file' }; } })();
-    if (latch) attention.push({ id: 'upgrade-latched', text: redact(latchCardText(latch, ver, stopLines(latch.reason)), 700), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
+    attention.push(...latchAttention(root, ver));
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     // Issue #362: a storage warning is a Needs you item; nothing is ever deleted automatically.
     if (history?.storage?.warnings?.length) attention.push({ id: 'history-storage', text: redact(`History storage: ${history.storage.warnings.join(' ')}`, 400), ref: null, severity: 'warn', action: 'Free space on the volume or move the history archive; Foreman never deletes history by itself.' });
@@ -744,7 +743,10 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const names = [...new Set(Object.values(states).flatMap(x => x.unknownRecords || []))]; if (names.length) attention.push({ id: 'unknown-job-records', text: redact(`Agent state is Unknown because of job record(s) this version cannot read: ${names.join(', ')}. Fix or delete them in the jobs directory (they stop counting after 7 days).`, 300), ref: null, severity: 'warning' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
-    { const f = faultAttention((team.assignments || []).filter(a => a.fault).map(a => ({ issue: a.number, fault: a.fault }))); if (f) attention.push(f); }   // issue #1121
+    const { faults: assignmentFaultsFromTick, refusal: assignmentFaultRefusal } = assignmentFaults(team.assignments);
+    const assignmentWarning = faultAttention(assignmentFaultsFromTick);
+    if (assignmentWarning) attention.push(assignmentWarning);
+    if (assignmentFaultRefusal) attention.push({ id: 'assignment-fault-refused', text: `An assignment fault was refused because ${assignmentFaultRefusal}.`, ref: null, severity: 'warning' });
     // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.
     { const w = sup.ticks.filter(t => Number.isFinite(t.at)).at(-1)?.warnings || [];
       if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told the team needs you.', ref: null, severity: 'action' });
@@ -759,7 +761,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText, inbox, inboxSearch });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
-    if (latch) upgrade = { ...(upgrade || {}), latch: true };
+    if (attention.some(a => a.id === 'upgrade-latched')) upgrade = { ...(upgrade || {}), latch: true };
     const budget = budgetView(team);
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {
@@ -773,7 +775,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
-      budget, hostPressure: hostPressureView(state, config, now),   // issue #1151
+      budget, budgetLimits: budgetThresholds(budgetSettings(config)), hostPressure: hostPressureView(state, config, now),   // issue #1151
       attention,
       robustness: robustnessView(state, team, jobs, now),
       breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL, failCauses: failCausesOf(state.failCauses, { now }) },
@@ -955,7 +957,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     display: { gbpPerUsd: config.display?.gbp_per_usd ?? DEFAULT_GBP_PER_USD },   // issue #1097: the rate the cost figures were shown with, for the MCP tools
     health: healthOf({ attention, states, teamEnabled, needsYouCount: needsYou.length }), freshness: freshness(tickAt, now),
-    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, dependencies: cache.dependencies ?? null,
+    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, dependencies: cache.dependencies ?? null, planned: cache.planned ?? null, resumeChecks: cache.resumeChecks ?? null,
     wakes: root ? (() => { try { return wakeView(root, now); } catch { return null; } })() : null,   // issue #985
     version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
     panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou,

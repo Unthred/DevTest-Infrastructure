@@ -6,13 +6,13 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { validateItem, hashOf, dirs, allStatuses, finish } from './inbox.mjs';
 
-const LIVE = new Set(['approved', 'running']);
-const refuse = (status, text) => ({ ok: false, status, text });
+export const LIVE = new Set(['approved', 'running']);
+const refuse = (status, text, extra = {}) => ({ ok: false, status, text, ...extra });
 
 // Finds the card in the current view and the control it offers. The target comes from the card, never from the request.
 export function resolveClick(view, { card, control }) {
   const item = (view?.panels?.needsYou || []).find(a => a.id === card);
-  if (!item) return refuse(409, 'That card has already cleared.');
+  if (!item) return refuse(409, 'That card has already cleared. Nothing was changed.', { cleared: true });
   const offered = (item.card?.controls || []).find(c => c.action === control);
   if (!offered) return refuse(409, 'That control no longer applies to this card.');
   return { ok: true, item, control: offered };

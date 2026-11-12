@@ -97,3 +97,18 @@ test('foreman_why_blocked and foreman_status carry the assignment and the faults
   assert.match((await run('foreman_why_blocked', { kind: 'issue', number: 9 })).assignment.fault, /no assignment record/);
   assert.equal((await run('foreman_status', {})).assignmentFaults[0].issue, 8);
 });
+
+// Issue #1171: `act.reassignedFrom || null` in collectAssignments: a name is kept, null and undefined both become null (no "reassigned" text).
+test('collectAssignments: reassignedFrom present, null and undefined', () => {
+  const team = { agents: () => [['claude', { issues: [3] }], ['codex', { issues: [] }]], s: { unblock: { queued: {} }, implemented: {} }, unlisted: () => [], delivered: new Set(),
+    timeZone: 'UTC', held: {}, modes: {}, limitedOf: () => null, pauseText: () => null, modelFor: ({ agent }) => ({ model: `${agent}-m` }), exclusion: () => null };
+  const rule = reassignedFrom => {
+    const act = { type: 'implement', issue: 3, agent: 'codex', ...(reassignedFrom === 'absent' ? {} : { reassignedFrom }) };
+    const rows = collectAssignments(team, { cache: { issues: [{ number: 3, state: 'OPEN', headRefName: '', labels: [] }], pulls: [] }, plan: [act], states: {}, activeJobs: [] });
+    return rows[0].rule;
+  };
+  assert.match(rule('claude'), /reassigned from claude for allowance/);
+  assert.doesNotMatch(rule(null), /reassigned/);
+  assert.doesNotMatch(rule(undefined), /reassigned/);
+  assert.doesNotMatch(rule('absent'), /reassigned/);
+});

@@ -20,6 +20,7 @@ import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
 import { allowanceBody as allowanceCard } from './allowancecard.mjs';
+import { agentBarHtml } from './appbaragent.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -423,7 +424,7 @@ function decidedBlock(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<h3 class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</h3>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}${decisionHtml(a)}${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
+  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<h3 class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</h3>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}${decisionHtml(a, `att-${a.id}`)}${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
   return (items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check')) + decidedBlock(view);
 }
@@ -437,15 +438,6 @@ function warningsPanel(view) {
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
   return items.length ? `${copyAllBtn(items, 'warnings')}${dlist({ id: 'warnings', label: 'Warnings', noun: 'warnings', rows: items.map((a, n) => dli({ cls: `sev-${a.severity}`, key: `warn-${a.id || n}`, sev: a.severity, num: a.ref?.n, name: a.text, inner: `<div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` })), sorts: ['severity', 'default', 'number', 'name'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'As reported' })}` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
-// Issues #76, #421: one compact badge per agent: name, role, state, linking to the agent's page. The job description is NOT here
-// (it lives once, on the Now card); several jobs show a count instead of a role.
-const agentBadge = a => {
-  const jobs = a.jobs?.length ? a.jobs : a.job ? [a.job] : [];
-  const mid = jobs.length > 1 ? `${jobs.length} jobs` : jobs.length === 1 ? (jobs[0].role === 'reviewer' ? 'Reviewer' : jobs[0].role === 'rebaser' ? 'Rebaser' : jobs[0].role === 'inbox' ? 'Inbox lane' : 'Implementer') : '';
-  const st = ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[a.state] || a.state;
-  const label = [a.name, mid, st].filter(Boolean).join(' · ');
-  return `<li><a class="agent-badge sev-${esc(stateSev[a.state] || 'info')}" href="/agents/${esc(encodeURIComponent(a.name))}" data-agent="${esc(a.name)}" data-state="${esc(a.state)}" aria-label="${esc(label)}" title="${esc(label)}"><b class="ab-name">${esc(a.name)}</b>${mid ? `<span class="ab-role">${esc(mid)}</span>` : ''}<span class="ab-state">${esc(st)}</span></a></li>`;
-};
 // Issue #473: one of three states, never "due now". The tick's real schedule (or its live lock) is the source.
 const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 export function nextTickHtml(view, now) {
@@ -458,7 +450,6 @@ export function nextTickHtml(view, now) {
   // scheduled: the script counts down, then turns the count into "overdue by" and reveals the last tick time
   return `<b data-tick-state="scheduled"><span data-countdown="${n.at}">in ${esc(clock(n.at - now))}</span><span data-after hidden>${last}</span></b>`;
 }
-const agentStat = view => `<div class="stat agent-lines" data-bar="agents" data-bar-name="Agents" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
 // Issue #467: how old the prepared copy behind this page is. Never shown as current once it is old or its rebuild failed.
 export function pageDataStat(view) {
   const d = view.pageData; if (!d || !Number.isFinite(d.ageMs)) return '';
@@ -471,9 +462,9 @@ function statusBar(view, route, head = '', crumbs = '') {
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
   const L = pillLinks({ health: view.health, attention: view.attention, needsYou: view.panels?.needsYou, version: view.version });
   const pill = (href, inner, why) => `<a class="pill" href="${esc(href)}" title="${esc(why)}">${inner}</a>`;
-  return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} DevTest team</div>${head}
+  return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} <span class="brand-name">DevTest team</span></div>${head}
 ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" data-bar="health" data-bar-name="Health" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
-${agentStat(view)}
+${agentBarHtml({ esc, lt, dur, utc }, view)}
 <div class="stat" data-bar="last-tick" data-bar-name="Last tick"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat" data-bar="next-tick" data-bar-name="Next tick"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
 ${pageDataStat(view)}
@@ -693,7 +684,7 @@ function issueDetail(view, query, path, route) {
 
 // Issue #362: the whole retained history, from the first job. Read from files only (no GitHub, no model); every field was allowlisted
 // and redacted when it was archived, and the text shown is rebuilt from those fields. Filters are plain GET parameters.
-const KIND_LABEL = { job: 'Job', verdict: 'Review', merge: 'Merge', rebase: 'Rebase', unblock: 'Unblock', migration: 'Migration' };
+const KIND_LABEL = { job: 'Job', verdict: 'Review', merge: 'Merge', rebase: 'Rebase', description: 'Description round', unblock: 'Unblock', migration: 'Migration' };
 const SOURCE_LABEL = { live: 'recorded live', 'job-record': 'from the job record', github: 'backfilled from GitHub' };
 const mib = n => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GiB` : n >= 1024 ** 2 ? `${(n / 1024 ** 2).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`);
 function storageCard(view) {

@@ -29,6 +29,9 @@ export function controlTools({ inbox, wait = defaultWait, waitMs = 20000 }) {
     { name: 'foreman_unpark', description: 'Ask to release a parked issue or pull request. This cannot release anything itself: it creates an Inbox action item that the homeowner approves with one click on the dashboard. Needs a reason. Read the outcome with foreman_proposal_status.',
       inputSchema: schema({ number: NUMBER, reason: REASON }), annotations: WRITE,
       run: a => { const target = String(a.number); return inbox.propose({ kind: 'action', title: `unpark ${target}`, action: 'unpark', target, reason: a.reason }); } },
+    { name: 'foreman_release_agent', description: 'Ask to release an agent parked after an infrastructure fault (see infraFaults.parked in foreman_status), when you judge the cause benign. This cannot release anything itself: it creates an Inbox action item that the homeowner approves on the dashboard. Needs a reason. Read the outcome with foreman_proposal_status.',
+      inputSchema: schema({ agent: { type: 'string', pattern: '^[a-z][a-z0-9_-]{0,11}$' }, reason: REASON }), annotations: WRITE,
+      run: a => inbox.propose({ kind: 'action', title: `release_agent ${a.agent}`, action: 'release_agent', target: String(a.agent), reason: a.reason }) },
   ];
 }
 const defaultWait = ms => new Promise(r => setTimeout(r, ms));

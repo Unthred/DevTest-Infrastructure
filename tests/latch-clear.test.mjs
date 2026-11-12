@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { spawnSync } from 'node:child_process';
-import { latchCardText, stopLines, clearLatchApproved } from '../supervisor/latchaction.mjs';
+import { latchCardText, latchAttention, stopLines, clearLatchApproved } from '../supervisor/latchaction.mjs';
 import { decisionCard } from '../supervisor/decisiontable.mjs';
 import { Team, upgradeLock } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
@@ -183,4 +183,15 @@ test('job commands resolve a unique short id, through the real CLI, and reject a
     assert.match(cli(root, cmd, '1234567').stderr, /invalid job ID/, `${cmd}: fewer than 8 characters`);
   }
   assert.match(cli(root, 'stop').stderr, /job ID is required/);
+});
+
+test('latchAttention gives no item without a latch, one redacted action item with it, and still shows an unreadable latch', t => {
+  assert.deepEqual(latchAttention(stateWith(t, { latch: null }), null), []);
+  const [item] = latchAttention(stateWith(t), { installed: A, main: B, behind: 3 });
+  assert.equal(item.id, 'upgrade-latched');
+  assert.equal(item.severity, 'action');
+  assert.match(item.text, /rolled back/);
+  const bad = stateWith(t, { latch: null });
+  fs.writeFileSync(latchFile(bad), '{not json');
+  assert.match(latchAttention(bad, null)[0].text, /unreadable latch file/);
 });

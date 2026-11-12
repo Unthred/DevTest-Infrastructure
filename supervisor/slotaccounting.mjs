@@ -24,5 +24,6 @@ export function activeSlotUse({ active, records, roles, roleOfType, inboxStatuse
 export function unavailableStart(agent, action, limit) {
   if (!limit?.out) return null;
   const reason = String(limit.reason || 'usage limit').slice(0, 200);
+  if (limit.parked) return `${action.type} held: ${agent} is parked after an ${reason}`;   // issue #1179: a parked agent is not out of allowance
   return `${action.type} held: ${agent} is out of allowance (${reason})`;
 }

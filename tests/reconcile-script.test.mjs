@@ -95,7 +95,16 @@ test('issue #35 the log is trimmed only above the threshold, under the lock; an 
   // hold the lock briefly: the run is NOT skipped; its log line is written once the lock is free (never lost, never racing)
   const before = fs.readFileSync(w.log, 'utf8');
   const holder = spawn('flock', [`${w.log}.lock`, 'sleep', '1']);
-  t.after(() => holder.kill());
+  // Wait for the holder to exit, then clear the root again: a late flock must not recreate its lock file in a removed root.
+  // (The TMPDIR guard reported a leftover supervisor-cron35 folder.)
+  t.after(async () => {
+    if (holder.exitCode === null && holder.signalCode === null) {
+      const closed = new Promise(resolve => holder.once('close', resolve));
+      holder.kill();
+      await closed;
+    }
+    fs.rmSync(w.root, { recursive: true, force: true });
+  });
   const deadline = performance.now() + 2000; while (performance.now() < deadline) { const probe = spawnSync('flock', ['-n', `${w.log}.lock`, 'true']); if (probe.status !== 0) break; }
   assert.equal(w.cron().status, 0);
   const after = fs.readFileSync(w.log, 'utf8');

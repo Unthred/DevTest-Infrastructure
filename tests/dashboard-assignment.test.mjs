@@ -9,6 +9,8 @@ import { buildView } from '../supervisor/dashboard.mjs';
 import { compactIssues } from '../supervisor/dashdata.mjs';
 import { renderRoute } from '../supervisor/dashrender.mjs';
 import { explanationText, faultAttention } from '../supervisor/dashassign.mjs';
+import { assignmentFaults } from '../supervisor/budgetview.mjs';
+import { Team } from '../supervisor/team.mjs';
 
 const NOW = Date.parse('2026-11-02T20:00:00Z');
 const tick = { at: NOW - 60000, status: 'ok', error: null, lastOkAt: NOW - 60000 };
@@ -50,9 +52,16 @@ test('rendered Work page explains an unlisted issue', async t => {
   assert.match(work, /in no agent&#39;s issue list|in no agent's issue list/);
 });
 
-test('rendered Warnings show the fault warning for an open issue with no implementer and no reason', async t => {
-  const v = await build(t, AGENTS, [issue(30)]);
-  v.panels.warnings.push(faultAttention([{ issue: 50, fault: 'open issue with no implementer and no stated reason' }]));
+test('a fault from the real planner reaches the rendered Warnings panel', async t => {
+  const agents = Team.prototype.agents;
+  Team.prototype.agents = () => [];
+  t.after(() => { Team.prototype.agents = agents; });
+  const v = await build(t, AGENTS, [issue(50)]);
+  assert.deepEqual(v.assignmentFaults, [{ issue: 50, fault: 'open issue with no implementer and no stated reason' }]);
+  const warning = v.panels.warnings.find(w => w.id === 'assignment-fault');
+  assert.equal(warning.text, '1 open issue has no implementer and no stated reason: #50');
+  assert.equal(warning.severity, 'warning');
+  assert.match(warning.overseer, /What is wrong: 1 open issue has no implementer and no stated reason: #50/);
   assert.match(render(v, { page: 'overview' }, '/'), /1 open issue has no implementer and no stated reason: #50/);
 });
 
@@ -60,4 +69,11 @@ test('no fault warning when every open issue is explained', async t => {
   const v = await build(t, AGENTS, [issue(30)]);
   assert.deepEqual(v.assignmentFaults, []);
   assert.ok(!v.panels.warnings.some(w => w.id === 'assignment-fault'));
+  assert.doesNotMatch(render(v, { page: 'overview' }, '/'), /no implementer and no stated reason/);
+});
+
+test('a malformed assignment fault is refused with its reason', () => {
+  const fault = assignmentFaults([{ number: 50, fault: '' }]);
+  assert.deepEqual(fault.faults, []);
+  assert.equal(fault.refusal, 'its reason for issue #50 is missing');
 });

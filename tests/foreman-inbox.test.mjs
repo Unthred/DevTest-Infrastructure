@@ -18,7 +18,7 @@ import { writeToken } from '../supervisor/dashwrite.mjs';
 import { createProtocol } from '../foreman-mcp/protocol.mjs';
 import { createTools } from '../foreman-mcp/tools.mjs';
 import { createInbox, checkProposal } from '../foreman-mcp/inbox.mjs';
-
+import { postIssueDraft } from '../supervisor/issue-drafts.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url)), mcpDir = path.join(here, '..', 'foreman-mcp');
 const tmp = (t, p = 'inbox-') => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 const hex = n => crypto.randomBytes(n).toString('hex');
@@ -752,7 +752,7 @@ test('team: an Undo between the tick snapshot and the effect wins; nothing is po
   const w = world(t); const id = approve(w, DRAFT);
   const stale = inbox.allStatuses(w.dir).find(s => s.id === id);   // the tick's snapshot: approved
   assert.equal(inbox.undo(w.dir, id, 3).ok, true);
-  await w.team.postIssueDraft(w.dir, stale, inbox.loadItem(w.dir, id).item, rep());
+  await postIssueDraft(w.team, w.dir, stale, inbox.loadItem(w.dir, id).item, rep());
   assert.equal(w.calls.issues.length, 0, 'the issue is not posted'); assert.equal(inbox.statusOf(w.dir, id).state, 'pending');
   const a = actionWorld(t); const aid = approve(a, act('stop_job', JOB.slice(0, 8)));
   const astale = inbox.allStatuses(a.dir).find(s => s.id === aid); inbox.undo(a.dir, aid, 3);
