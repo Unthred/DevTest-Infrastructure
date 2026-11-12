@@ -2,6 +2,7 @@
 // over the real status, so the finished job was never written back. This finds those false failures and has the caller re-derive the real
 // outcome (done or failed, with the agent's summary) from the job itself. A real failure never carries this exact reason, so it is never touched.
 import * as inboxStore from './inbox.mjs';
+import { backfillFailures } from './inboxbackfill.mjs';
 
 export const FALSE_FAILURE_REASON = 'the item is not an approved prompt';
 
@@ -43,4 +44,5 @@ export async function repairInbox(team, dir, report, terminal) {
     terminal,
   });
   (report.actions ||= []).push(...repaired);
+  backfillFailures(inboxStore, dir, team.clock.now());   // issue #1154: a cause on every failure; read only prompts that changed nothing put right
 }

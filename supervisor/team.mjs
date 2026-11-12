@@ -40,6 +40,7 @@ import * as inboxStore from './inbox.mjs';
 import { inboxEndPatch } from './inboxoutcome.mjs';
 import { withReportContract, reportNameFor } from './inboxreport.mjs';
 import { repairInbox } from './inboxrepair.mjs';
+import { limitsSnapshot } from './inboxconfig.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
 import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
@@ -2337,7 +2338,7 @@ export class Team {
   ingestInbox(id, j, job) {
     const dir = this.inboxDir(); if (!dir || !j.inboxId) return;
     const ended = job.childEndedAt ?? job.updatedAt; if (Number.isFinite(ended)) j.endedAt = ended;   // closes the window in which a reflog commit counts as this job's
-    inboxStore.finish(dir, j.inboxId, inboxEndPatch({ id, j, job, teamDir: this.dir, capMs: inboxMaxMs(this.c.limits) }), this.clock.now());
+    inboxStore.finish(dir, j.inboxId, inboxEndPatch({ id, j, job, teamDir: this.dir, capMs: inboxMaxMs(this.c.limits), inboxDir: dir, limits: this.c.limits, root: this.root }), this.clock.now());
   }
   async ingest(report, guard = (_, fn) => fn()) {
     for (const [id, j] of Object.entries(this.s.jobs)) {
@@ -3651,7 +3652,7 @@ export class Team {
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-inbox-${short}`), branch, base: 'origin/main' });
       spec = { ...common, kind: 'inbox', worktree: wt, issue: inboxStore.placeholderIssue(act.inboxId), scope: `Overseer prompt ${short}: ${redact(l.item.title, 100)}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
         prompt: withReportContract(inboxPrompt({ title: l.item.title, prompt: l.item.prompt, branch, resultFile }), { reportsDir: this.c.reports_dir, reportName }), postcondition: { kind: 'inbox_result', ticket } };
-      meta = { inboxId: act.inboxId, branch, worktree: wt, ...(this.c.reports_dir ? { reportsDir: this.c.reports_dir, reportName } : {}), ...(orderSensitive(l.item) ? { orderSensitive: true } : {}) };
+      meta = { inboxId: act.inboxId, branch, worktree: wt, ...(this.c.reports_dir ? { reportsDir: this.c.reports_dir, reportName } : {}), ...(orderSensitive(l.item) ? { orderSensitive: true } : {}), limitsBefore: limitsSnapshot(this.c.limits) };
       preclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'approved', { state: 'running', lane: 'inbox', startedAt: this.clock.now(), waitedMs: Math.max(0, this.clock.now() - (l.status.decidedAt || this.clock.now())) }, this.clock.now());   // issue #856: taken just before the effect; an earlier Undo wins
       unclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'running', { state: 'approved', lane: null, startedAt: null, waitedMs: null }, this.clock.now());
       bump = () => inboxStore.finish(this.inboxDir(), act.inboxId, { state: 'running', job: Object.keys(this.s.jobs).find(k => this.s.jobs[k].inboxId === act.inboxId)?.slice(0, 8) }, this.clock.now());

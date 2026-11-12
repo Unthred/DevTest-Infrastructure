@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
 import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
+import { resolveOnPickup, badResolveFields, isOpenFailure } from './inboxresolve.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
 // Issue #855: kinds only Foreman raises itself (raiseHostValue). The overseer cannot submit one: scan() validates files without `internal`.
@@ -32,6 +33,10 @@ export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 10
 export const ID_RE = /^[a-f0-9]{32}$/;
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
 FIELDS.control = FIELDS.action;
+// Issue #1154: a proposal may name the failed item it resolves, and how (re-proposed or superseded).
+const RESOLVES = ['resolves', 'resolution'];
+for (const kind of ['prompt', 'issue_draft']) FIELDS[kind] = [...FIELDS[kind], ...RESOLVES];
+FIELDS.action = [...FIELDS.action, ...RESOLVES];
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
 // status record keeps the history. A rejected item keeps its file until the undo window has passed, because Undo returns it to pending.
@@ -78,7 +83,9 @@ export function validateItem(raw, { internal = false } = {}) {
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
-  for (const k of allowed.filter(k => k !== 'kind')) {
+  const badResolve = badResolveFields(raw);
+  if (badResolve) return { ok: false, reason: badResolve };
+  for (const k of allowed.filter(k => k !== 'kind' && !RESOLVES.includes(k))) {
     const v = raw[k];
     if (v === undefined && k === 'why') continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
@@ -162,6 +169,8 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
       audit(inboxDir, { id, event: 'control', kind: 'control', hash }, now); picked++; controls++; continue;
     }
     if (pending >= maxPending) { setStatus(inboxDir, id, { state: 'refused', reason: `${maxPending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
+    const unresolved = resolveOnPickup({ allStatuses, finish }, inboxDir, v.item, id, now);   // issue #1154: link the failed item this proposal resolves
+    if (unresolved) { refuse(unresolved); continue; }
     setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now }, now);
     audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash }, now);
     pending++; picked++;
@@ -178,7 +187,7 @@ function sweepFinished(inboxDir, now) {
 function prune(inboxDir, now) {
   const d = dirs(inboxDir);
   for (const s of allStatuses(inboxDir)) {
-    if (LIVE.includes(s.state) || !(now - (s.updatedAt || 0) > LIMITS.keepDays * 86400000)) continue;
+    if (LIVE.includes(s.state) || isOpenFailure(s) || !(now - (s.updatedAt || 0) > LIMITS.keepDays * 86400000)) continue;
     for (const f of [path.join(d.items, `${s.id}.json`), path.join(d.status, `${s.id}.json`)]) { try { fs.unlinkSync(f); } catch { /* already gone */ } }
   }
 }
@@ -213,6 +222,7 @@ export function pendingCards(inboxDir) {
 
 // Issue #943: items Foreman refused after pickup (a full queue, a failed check) have no GitHub notice either. They are grouped by reason into one
 // Needs you line each ("N overseer proposals were refused: reason"), for FAILED_SHOW_MS after the latest refusal. No item content is shown.
+export const FAILED_SHOW_MS = 3 * 86400000;   // how long a refusal is shown; a failed item has no such limit (issue #1154)
 export function refusedGroups(inboxDir, now = Date.now()) {
   const groups = new Map();
   for (const s of allStatuses(inboxDir)) {
@@ -223,14 +233,16 @@ export function refusedGroups(inboxDir, now = Date.now()) {
   return [...groups.values()].sort((a, b) => a.newest - b.newest);
 }
 // Issue #641: a failed item (an approved prompt whose job stopped, a failed action or post) has no GitHub notice, so the dashboard shows it as
-// one Needs you line for FAILED_SHOW_MS after it failed. Text is redacted and bounded again for display; no item content is shown.
-export const FAILED_SHOW_MS = 3 * 86400000;
-export function failedCards(inboxDir, now = Date.now()) {
-  return allStatuses(inboxDir).filter(s => s.state === 'failed' && Number.isFinite(s.updatedAt) && now - s.updatedAt >= 0 && now - s.updatedAt <= FAILED_SHOW_MS)
+// one Needs you line. Issue #1154: it stays until it has a resolution (re-proposed, superseded, done by other means, dropped); it never expires.
+// Text is redacted and bounded again for display; no item content is shown.
+export function failedCards(inboxDir) {
+  return allStatuses(inboxDir).filter(s => s.state === 'failed' && !s.resolution && Number.isFinite(s.updatedAt) && Boolean(s.id))     // no expiry (issue #1154)
     .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0)).map(s => {
-      const clip = t => redactLong(String(t ?? '').replace(/\s+/g, ' '), 200, ' [cut]').trim();
-      return { id: s.id, kind: s.kind || null, job: /^[a-f0-9]{8}$/.test(s.job || '') ? s.job : null, why: clip(s.reason || s.result || 'no reason recorded') };
-    });
+    const clip = t => redactLong(String(t ?? '').replace(/\s+/g, ' '), 200, ' [cut]').trim();
+    const job = /^[a-f0-9]{8}$/.test(s.job || '') ? s.job : null;
+    return { id: s.id, kind: s.kind || null, job, cause: s.cause || null, since: Number.isFinite(s.updatedAt) ? s.updatedAt : null,
+      why: clip(s.reason || s.result || 'no reason recorded') };
+  });
 }
 
 // The two decisions. Only a pending item can be decided, once; the hash must still match. Returns { ok, reason?, state?, decidedAt?, undoUntil? }.

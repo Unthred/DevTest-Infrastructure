@@ -79,14 +79,19 @@ export function rebaseNeeded({ probe, pull }) {
 // The prompt asks for a first line `STATUS: done|failed|nothing_changed`. Without it, an obvious "nothing changed" statement still fails.
 export function inboxOutcome(summary) {
   const text = String(summary || '').trim();
-  if (!text) return { ok: false, why: 'it left no summary' };
+  if (!text) return { ok: false, why: 'it left no summary', code: 'no_summary' };
   const m = /^status:\s*([a-z_ -]+)/i.exec(text);
   if (m) {
     const v = m[1].trim().toLowerCase().replace(/[ -]+/g, '_');
     if (v === 'done') return { ok: true };
-    return { ok: false, why: v === 'nothing_changed' ? 'the agent reported that it changed nothing' : 'the agent reported that it did not achieve the task' };
+    if (v === 'nothing_changed') return { ok: false, why: 'the agent reported that it changed nothing', code: 'nothing_changed' };
+    return { ok: false, why: 'the agent reported that it did not achieve the task', code: 'failed' };
   }
-  if (/^(nothing (was )?(changed|done)|no changes?( were)? made|failed|could not|unable to)\b/i.test(text)) return { ok: false, why: 'the summary says the task was not achieved' };
+  const notAchieved = /^(nothing (was )?(changed|done)|no changes?( were)? made|failed|could not|unable to)\b/i.test(text);
+  if (notAchieved) {
+    const code = /^(nothing|no change)/i.test(text) ? 'nothing_changed' : 'failed';
+    return { ok: false, why: 'the summary says the task was not achieved', code };
+  }
   return { ok: true };
 }
 
