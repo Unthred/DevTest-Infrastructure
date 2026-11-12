@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { addGroup, cleanGroups, compactGroups, groupOf, overlaps, placeGroup, removeGroups, sanitizeLayout, toSaved, withoutCard } from '../supervisor/dashui/grid.mjs';
-import { addBarItem, barToSaved, moveBarItem, removeBarItem, sanitizeBar } from '../supervisor/dashui/appbar.mjs';
+import { addBarItem, barToSaved, migrateSaved, moveBarItem, removeBarItem, sanitizeBar } from '../supervisor/dashui/appbar.mjs';
 import { STATIC } from '../supervisor/dashserver.mjs';
 import { busyReason } from '../supervisor/dashui/refresh.mjs';
 
@@ -83,19 +83,19 @@ test('the layout bar sits on the right, and the picker, box select and group con
 });
 
 test('app bar: order, removal and adding back; bad saved data falls back to the server order', () => {
-  const items = ['health', 'agents', 'last-tick', 'next-tick'];
+  const items = ['health', 'pg', 'last-tick', 'next-tick'];
   assert.deepEqual(sanitizeBar(null, items), { order: items, removed: [] });
   for (const bad of [4, 'x', [], { v: 2 }, { v: 1, order: 'x', removed: 7 }]) assert.deepEqual(sanitizeBar(bad, items), { order: items, removed: [] }, JSON.stringify(bad));
-  assert.deepEqual(sanitizeBar({ v: 1, order: ['next-tick', 'zzz', 'health'], removed: ['agents', 'agents'] }, items), { order: ['next-tick', 'health', 'last-tick'], removed: ['agents'] }, 'unknown dropped, unlisted keep server order, removed are not in the order');
+  assert.deepEqual(sanitizeBar({ v: 1, order: ['next-tick', 'zzz', 'health'], removed: ['pg', 'pg'] }, items), { order: ['next-tick', 'health', 'last-tick'], removed: ['pg'] }, 'unknown dropped, unlisted keep server order, removed are not in the order');
   assert.deepEqual(sanitizeBar({ v: 1, order: ['theme', 'brand'], removed: ['sticky'] }, items), { order: items, removed: [] }, 'fixed items are not editable');
   let s = sanitizeBar(null, items);
-  s = moveBarItem(s, 'agents', -1); assert.deepEqual(s.order, ['agents', 'health', 'last-tick', 'next-tick']);
-  assert.equal(moveBarItem(s, 'agents', -1), s, 'already first'); assert.equal(moveBarItem(s, 'next-tick', 1), s, 'already last');
+  s = moveBarItem(s, 'pg', -1); assert.deepEqual(s.order, ['pg', 'health', 'last-tick', 'next-tick']);
+  assert.equal(moveBarItem(s, 'pg', -1), s, 'already first'); assert.equal(moveBarItem(s, 'next-tick', 1), s, 'already last');
   assert.equal(moveBarItem(s, 'nope', 1), s);
-  s = removeBarItem(s, 'health'); assert.deepEqual(s, { order: ['agents', 'last-tick', 'next-tick'], removed: ['health'] });
+  s = removeBarItem(s, 'health'); assert.deepEqual(s, { order: ['pg', 'last-tick', 'next-tick'], removed: ['health'] });
   assert.equal(removeBarItem(s, 'health'), s, 'removing twice changes nothing');
-  s = addBarItem(s, 'health'); assert.deepEqual(s, { order: ['agents', 'last-tick', 'next-tick', 'health'], removed: [] });
-  assert.equal(addBarItem(s, 'agents'), s, 'adding one that is on the bar changes nothing');
+  s = addBarItem(s, 'health'); assert.deepEqual(s, { order: ['pg', 'last-tick', 'next-tick', 'health'], removed: [] });
+  assert.equal(addBarItem(s, 'pg'), s, 'adding one that is on the bar changes nothing');
   assert.deepEqual(sanitizeBar(JSON.parse(JSON.stringify(barToSaved(s))), items), s, 'round trip');
 });
 
@@ -103,7 +103,9 @@ test('the app bar renders named items, an Edit bar button, and the module is ser
   const { renderPage } = await import('../supervisor/dashrender.mjs').then(m => ({ renderPage: m.renderPage || null }));
   assert.ok(STATIC['/static/appbar.mjs']);
   const src = fs.readFileSync(new URL('../supervisor/dashrender.mjs', import.meta.url), 'utf8');
-  for (const id of ['brand', 'health', 'agents', 'last-tick', 'next-tick', 'page-data']) assert.ok(src.includes(`data-bar="${id}"`), id);
+  for (const id of ['brand', 'health', 'last-tick', 'next-tick', 'page-data']) assert.ok(src.includes(`data-bar="${id}"`), id);
+  const agentSrc = fs.readFileSync(new URL('../supervisor/appbaragent.mjs', import.meta.url), 'utf8');
+  assert.ok(agentSrc.includes('data-bar="${h.esc(id)}"'), 'the agent items are named bar items');
   assert.ok(src.includes('id="barEdit"'));
   assert.match(css, /\.statusbar>\.bar-removed\{display:none!important\}/);
   assert.ok(appJs.includes("from './appbar.mjs'")); void renderPage;
@@ -127,4 +129,23 @@ test('a stats swap repaints the app bar, and bar editing holds the refresh', () 
   assert.match(appJs, /afterStats:[^\n]*repaintBar\?\.\(\)/);
   assert.match(appJs, /repaintBar = paint/);
   assert.equal(busyReason({ barEditing: true }), 'app bar editing');
+});
+
+// Issue #1221: the status pill ('agents') and the allowance items ('allowance-<agent>') became one 'agent-<agent>' item per agent.
+test('a saved layout that lists the old items is migrated, not left blank', () => {
+  const items = ['health', 'agent-claude', 'agent-codex', 'last-tick'];
+  const m = sanitizeBar({ v: 1, order: ['last-tick', 'allowance-codex', 'agents', 'allowance-claude'], removed: [] }, items);
+  assert.deepEqual(m, { order: ['last-tick', 'agent-codex', 'agent-claude', 'health'], removed: [] }, 'old ids keep their place');
+  const pill = sanitizeBar({ v: 1, order: ['agents', 'health'], removed: [] }, items);
+  assert.deepEqual(pill.order, ['agent-claude', 'agent-codex', 'health', 'last-tick'], 'the pill becomes every agent item');
+  assert.deepEqual(sanitizeBar({ v: 1, order: [], removed: ['allowance-codex'] }, items).removed, ['agent-codex'], 'a removed allowance item stays removed');
+  const gone = sanitizeBar({ v: 1, order: [], removed: ['agents'] }, items).removed;
+  assert.deepEqual(gone, ['agent-claude', 'agent-codex'], 'a removed pill removes the agent items');
+  const mixed = sanitizeBar({ v: 1, order: ['allowance-claude'], removed: ['agents'] }, items);
+  assert.deepEqual(mixed, { order: ['agent-claude', 'health', 'last-tick'], removed: ['agent-codex'] }, 'an allowance item on the bar wins over a removed pill');
+  const same = { v: 1, order: ['health'], removed: [] };
+  assert.equal(migrateSaved(same, items), same, 'a layout without old ids is untouched');
+  assert.equal(migrateSaved(null, items), null);
+  const fresh = sanitizeBar({ v: 1, order: ['agent-codex'], removed: [] }, items).order;
+  assert.deepEqual(fresh, ['agent-codex', 'health', 'agent-claude', 'last-tick'], 'a new layout is unchanged');
 });

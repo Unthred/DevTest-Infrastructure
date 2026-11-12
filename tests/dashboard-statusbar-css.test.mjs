@@ -81,13 +81,13 @@ test('whitespace around the declaration does not matter', () => {
   assert.deepEqual(desktopWrapValues(normalise('@media(min-width:1100px){ .statusbar { flex-wrap : wrap } }')), ['wrap']);
 });
 
-test('agent badge keeps a minimum height, taller on a phone', () => {
-  const rule = css.match(/(?:^|\})\.agent-badge\{[^}]*\}/)?.[0] ?? '';
-  assert.match(rule, /min-height:24px/);
-  assert.match(mediaBlock('max-width:639px'), /\.agent-badge\{[^}]*min-height:44px/);
+test('agent item summary keeps a minimum height, taller on a phone', () => {
+  const rules = [...css.matchAll(/\.agent-item summary\{[^}]*\}/g)].map(m => m[0]);
+  assert.ok(rules.some(r => /min-height:28px/.test(r)), 'a desktop minimum height');
+  assert.match(mediaBlock('max-width:639px'), /\.agent-item summary\{[^}]*min-height:44px/);
 });
 
-test('the agent-badge comment does not claim a single desktop row', () => {
+test('the agent item comment does not claim a single desktop row', () => {
   assert.doesNotMatch(rawCss, /stays on one row at desktop/);
 });
 
@@ -95,7 +95,7 @@ test('guard detects regressions in mutated copies of the real CSS (negative case
   const same = rawCss + '\n@media(min-width:1100px){.statusbar{flex-wrap:nowrap}}';
   const compound = rawCss + '\n@media (min-width:1100px) and (max-width:1900px){.statusbar{ flex-wrap: nowrap }}';
   const adjacent = rawCss.replace('.statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}', (m) => m + '\n  .statusbar{flex-wrap:nowrap}');
-  const adjacentCompound = rawCss.replace('(max-width:1439px){.statusbar{gap:var(--sp2)}', (m) => m + '\n.statusbar{flex-wrap:nowrap}');
+  const adjacentCompound = rawCss.replace('(min-width:1100px){.statusbar{gap:var(--sp2)}', (m) => m + '\n.statusbar{flex-wrap:nowrap}');
   assert.notEqual(adjacent, rawCss, 'mutation did not apply');
   assert.notEqual(adjacentCompound, rawCss, 'mutation did not apply');
   const removed = rawCss.replace('.statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}', '.statusbar{gap:var(--sp2) var(--sp3)}');
