@@ -23,7 +23,8 @@ import { consolidateNeedsYou } from './needsyou.mjs';
 import { collectAssignments, idleRuleText, assignmentFields } from './issueassign.mjs';
 import { faultAttention } from './dashassign.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
-import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex, readUpgrades } from './suphealth.mjs';
+import { afterInstallAttention, installedPrsOf } from './afterinstall-view.mjs';
+import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
 import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { budgetView } from './budgetview.mjs';
@@ -701,6 +702,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     });
     const pauseText = team.pauseText(c.pulls || [], c.issues || []);
     const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), held: new Set((c.pulls || []).filter(p => team.carriedHold(p)).map(p => p.number)), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    attention.push(...afterInstallAttention({ state, root, names, config }).map(a => ({ ...a, severity: severityOf(a.id) })));
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
     // Issue #124: each pending inbox item is one Approve/Reject card. Nothing here runs anything; the card posts to the dashboard's own write route.
     if (config.inbox?.dir) for (const card of inboxCards(config.inbox.dir)) attention.push({ id: `inbox-${card.id}`, inboxId: card.id, inboxKind: card.kind, text: card.broken ? `An inbox item cannot be shown: ${card.broken}` : `Overseer proposal (${card.kind === 'prompt' ? 'run as a job' : 'post as an issue'}): ${card.title}`, ref: null, severity: 'action', inbox: card, action: card.broken ? 'Reject it; the overseer can propose it again.' : card.will });
@@ -906,7 +908,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const reviewing = new Set(Object.values(queues).flat().filter(q => q.type === 'review').map(q => q.ref));   // issue #76: PRs waiting for a review
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
   // Issue #855: merged, installed or verified. Installed: the PR is in a completed install (upgrade record verified). Verified: its live checks passed.
-  const installedPrs = new Set((() => { try { return readUpgrades(root).filter(r => r.result === 'verified' && Array.isArray(r.prs)).flatMap(r => r.prs); } catch { return []; } })());
+  const installedPrs = installedPrsOf(root);
   const verifiedPrs = new Set(Object.values((() => { try { return readVerification(root); } catch { return {}; } })()).filter(r => r && r.state === 'verified').map(r => r.pr));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
   const prs = [...prNumbers].sort((a, b) => b - a).map(n => {

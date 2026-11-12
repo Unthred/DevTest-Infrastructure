@@ -37,6 +37,7 @@ const T = {
   'selfcheck-review': { clears: 'clears when a review records a verdict at this head or a new head is pushed', actions: ['new_review_attempt', 'park'] },
   selfcheck: { clears: 'clears when the host condition passes the next check', actions: [] },
   'homeowner-pr': { clears: 'clears when the needs-homeowner label is removed: the holding job is resumed, or a new head moves past it', actions: ['park'] },
+  'after-install': { clears: 'clears when the After install checks of the pull request are marked done', actions: [], later: NO_BUTTON },
   'homeowner-steps': { clears: 'clears when the pull request is merged, closed or its head changes', actions: [], later: NO_BUTTON },
   homeowner: { clears: 'clears when you answer on the issue and the needs-homeowner label is removed', actions: [], later: NO_BUTTON },
   'decision-proposal': { clears: 'clears when the register entry is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
