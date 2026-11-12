@@ -37,6 +37,7 @@ import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admit
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
 import { inboxEndPatch } from './inboxoutcome.mjs';
+import { withReportContract, reportNameFor } from './inboxreport.mjs';
 import { repairInbox } from './inboxrepair.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
@@ -3644,11 +3645,11 @@ export class Team {
       const l = inboxStore.loadItem(this.inboxDir(), act.inboxId);
       if (!l.ok || l.status.state !== 'approved' || l.item.kind !== 'prompt') { inboxStore.failUnlessClaimed(this.inboxDir(), act.inboxId, l.ok ? 'the item is not an approved prompt' : l.reason, this.clock.now()); return; }
       const dirTicket = path.join(this.dir, 'inbox', ticket); fs.mkdirSync(dirTicket, { recursive: true, mode: 0o700 });
-      const resultFile = path.join(dirTicket, 'inbox-result.txt'), short = act.inboxId.slice(0, 8), branch = `${a.branch_prefix}inbox-${short}`;
+      const resultFile = path.join(dirTicket, 'inbox-result.txt'), short = act.inboxId.slice(0, 8), branch = `${a.branch_prefix}inbox-${short}`, reportName = reportNameFor(act.inboxId);
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-inbox-${short}`), branch, base: 'origin/main' });
       spec = { ...common, kind: 'inbox', worktree: wt, issue: inboxStore.placeholderIssue(act.inboxId), scope: `Overseer prompt ${short}: ${redact(l.item.title, 100)}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
-        prompt: inboxPrompt({ title: l.item.title, prompt: l.item.prompt, branch, resultFile }), postcondition: { kind: 'inbox_result', ticket } };
-      meta = { inboxId: act.inboxId, branch, worktree: wt, ...(orderSensitive(l.item) ? { orderSensitive: true } : {}) };
+        prompt: withReportContract(inboxPrompt({ title: l.item.title, prompt: l.item.prompt, branch, resultFile }), { reportsDir: this.c.reports_dir, reportName }), postcondition: { kind: 'inbox_result', ticket } };
+      meta = { inboxId: act.inboxId, branch, worktree: wt, ...(this.c.reports_dir ? { reportsDir: this.c.reports_dir, reportName } : {}), ...(orderSensitive(l.item) ? { orderSensitive: true } : {}) };
       preclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'approved', { state: 'running', lane: 'inbox', startedAt: this.clock.now(), waitedMs: Math.max(0, this.clock.now() - (l.status.decidedAt || this.clock.now())) }, this.clock.now());   // issue #856: taken just before the effect; an earlier Undo wins
       unclaim = () => inboxStore.claim(this.inboxDir(), act.inboxId, 'running', { state: 'approved', lane: null, startedAt: null, waitedMs: null }, this.clock.now());
       bump = () => inboxStore.finish(this.inboxDir(), act.inboxId, { state: 'running', job: Object.keys(this.s.jobs).find(k => this.s.jobs[k].inboxId === act.inboxId)?.slice(0, 8) }, this.clock.now());
