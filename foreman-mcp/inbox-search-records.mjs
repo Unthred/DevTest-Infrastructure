@@ -12,9 +12,13 @@ const decisionRecord = row => ({
   decision: true,
 });
 
-export function inboxSearchRecords({ inbox = [], approvals = [] }, { search = '', kind = '', state = '' } = {}) {
-  const decisions = approvals.filter(row => row.tier === 'decision').map(decisionRecord);
-  return [...inbox, ...decisions].filter(record => (!kind || record.kind === kind)
+// Every Inbox item plus the decisions Needs you holds, unfiltered (the dashboard's quick filters count from this).
+export function inboxAllRecords({ inbox = [], approvals = [] }) {
+  return [...inbox, ...approvals.filter(row => row.tier === 'decision').map(decisionRecord)];
+}
+
+export function inboxSearchRecords(data, { search = '', kind = '', state = '' } = {}) {
+  return inboxAllRecords(data).filter(record => (!kind || record.kind === kind)
     && (!state || record.state === state)
     && (record.state !== 'refused' || state === 'refused')
     && matchesInboxSearch(record, search));

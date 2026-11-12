@@ -530,3 +530,9 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
   .statusbar>.allowance-item{grid-column:1/-1;white-space:normal}
   .allowance-item .al-link{gap:0 var(--sp2)}.al-win{white-space:normal}.al-reset{display:block}
 }
+/* Inbox quick filters (issue #1217): wrapping rows of toggle links, each at least 44px high so a phone tap lands. */
+.qf-row{display:flex;flex-wrap:wrap;gap:var(--sp2);margin-bottom:var(--sp2)}
+.qf{display:inline-flex;align-items:center;gap:var(--sp2);min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--fg);text-decoration:none;font-weight:600}
+.qf.on{background:var(--link);border-color:var(--link);color:var(--surface)}
+.qf-n{font-variant-numeric:tabular-nums;opacity:.85}
+.empty .btn{min-height:44px;margin-top:var(--sp2)}
