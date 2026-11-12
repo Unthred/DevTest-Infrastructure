@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { limitFromAllowance } from './allowance.mjs';
 import { redact } from './redact.mjs';
+import { markIncomplete } from './incomplete.mjs';
 
 export const defaultRegistry = new URL('./providers.json', import.meta.url).pathname;
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
@@ -404,8 +405,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       // Issue #1023: a run that stopped on a prerequisite that is still open is waiting, not incomplete: no retry, no blocked mark.
       if (Array.isArray(job.waitingOn) && job.waitingOn.length) { delete job.postconditionDetail; transition(root, job, 'waiting_on', 'waiting_on', clock); return job; }
       // Issue #460: say why the attempt was incomplete (the checker may name the detail on job.postconditionDetail).
-      job.incompleteReason = { cause: 'postcondition_not_met', detail: String(job.postconditionDetail || 'the post-condition did not hold').slice(0, 400), attempt: job.attempts }; delete job.postconditionDetail;
-      if ((job.incompleteRetries || 0) < 1) { job.incompleteRetries = (job.incompleteRetries || 0) + 1; job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
+      if (markIncomplete(job)) { job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
       transition(root, job, 'blocked', 'incomplete', clock); return job;
     }
     // Issue #120: a verdict already in place when a limit is reported means the work is done. Issue #127: only kinds whose

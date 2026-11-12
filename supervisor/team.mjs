@@ -3740,9 +3740,9 @@ export class Team {
       }
       if (p.kind === 'new_head') {
         const pr = await this.gh.getPull(p.pr);
-        return !!pr && SHA.test(pr.headRefOid) && pr.headRefOid !== p.baseHead && await tablePostcondition(p, job, pr, this.gh.pullBody);
+        return !!pr && SHA.test(pr.headRefOid) && pr.headRefOid !== p.baseHead && await tablePostcondition(p, job, pr, this.gh.pullBody, this.gh);
       }
-      if (p.kind === 'continued') return continuedPostcondition(p, job, await this.gh.getPull(p.pr), this.gh.pullBody);
+      if (p.kind === 'continued') return continuedPostcondition(p, job, await this.gh.getPull(p.pr), this.gh.pullBody, this.gh);
       if (p.kind === 'rebased') {   // a new head that GitHub reports mergeable (it computes this lazily, so re-ask a few times)
         const why = text => { job.postconditionDetail = text; return false; };   // issue #460: the reason an incomplete rebase records
         for (let i = 0; i < 4; i++) {
@@ -3760,7 +3760,7 @@ export class Team {
       if (p.kind === 'pr_opened') {
         const open = await this.gh.listPulls();
         const pr = open.find(x => x.headRefName === p.branch);
-        if (pr && await tablePostcondition(p, job, pr, this.gh.pullBody)) { delete job.waitingOn; return true; }
+        if (pr && await tablePostcondition(p, job, pr, this.gh.pullBody, this.gh)) { delete job.waitingOn; return true; }
         // Issue #1023: no pull request because a prerequisite is still open is a wait, not an incomplete run.
         const items = await this.openPrerequisites(job, p, open);
         if (items.length) job.waitingOn = items; else delete job.waitingOn;
