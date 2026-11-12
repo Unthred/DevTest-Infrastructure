@@ -32,7 +32,7 @@ function runInstall(env) {
 }
 test('User Scripts reconciliation install and rollback preserve all existing schedules', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   fs.mkdirSync(path.join(root, 'scripts'));
   const existing = { '/existing/script': { script: '/existing/script', frequency: 'custom', id: 'other', custom: '17 6 * * *' } };
   fs.writeFileSync(path.join(root, 'schedule.json'), JSON.stringify(existing));
@@ -54,7 +54,7 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
 // ---- issue #35: the generated script must work under cron's empty environment and never fail silently
 function cronWorld(t, { nodeBody } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron35-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const bin = path.join(root, 'fakebin'), plugin = path.join(root, 'plugin');
   fs.mkdirSync(bin); fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
   const exe = (name, body) => writeExe(path.join(bin, name), `#!/bin/sh\n${body}\n`);
@@ -94,13 +94,13 @@ test('issue #35 the log is trimmed only above the threshold, under the lock; an 
   assert.ok(trimmed.length < 400000); assert.match(trimmed.trim().split('\n').at(-1), /rc=0/);
   // hold the lock briefly: the run is NOT skipped; its log line is written once the lock is free (never lost, never racing)
   const before = fs.readFileSync(w.log, 'utf8');
-  const holder = spawn('flock', [`${w.log}.lock`, 'sleep', '1']);
+  const holder = spawn('flock', [`${w.log}.lock`, 'sleep', '1'], { detached: true });
   // Wait for the holder to exit, then clear the root again: a late flock must not recreate its lock file in a removed root.
   // (The TMPDIR guard reported a leftover supervisor-cron35 folder.)
   t.after(async () => {
     if (holder.exitCode === null && holder.signalCode === null) {
       const closed = new Promise(resolve => holder.once('close', resolve));
-      holder.kill();
+      try { process.kill(-holder.pid); } catch { holder.kill(); }
       await closed;
     }
     fs.rmSync(w.root, { recursive: true, force: true });
@@ -121,7 +121,7 @@ test('issue #35 installing refuses when a required binary cannot be found for th
 });
 
 test('issue #35 reconcile exits nonzero when the team tick fails, so the generated script logs a failing rc', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-rc35-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-rc35-')); t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
   writeExe(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n');
   fs.writeFileSync(path.join(root, 'team.local.json'), JSON.stringify({ enabled: true, alerts: INERT_ALERTS }));
@@ -198,7 +198,7 @@ test('issue #40 the gate script alone: exit 1 on a failing step, 2 on bad argume
 });
 
 test('issue #40 real cli: preflight names a failing gh, an unreadable register and a missing provider, from any cwd, and exits 3', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-pf40-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-pf40-')); t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
   writeExe(path.join(bin, 'gh'), '#!/bin/sh\necho boom >&2; exit 1\n');
   // git: --version style calls succeed, but reading the register from origin/main fails (the false pass at 97f0227)
