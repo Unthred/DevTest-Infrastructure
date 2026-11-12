@@ -1,5 +1,5 @@
 // Issue #1162: the homeowner's limit reset records, kept in Foreman state (<state root>/team/limit-resets.json), never in team.local.json.
-// Source finding (documented in docs/supervisor.md): the captured provider readings (allowance.mjs, probe.mjs) carry only windows with use and reset
+// Source finding (documented in docs/allowance-scheduling.md): the captured provider readings (allowance.mjs, probe.mjs) carry only windows with use and reset
 // time. No reset offer, count or expiry is reported, so the homeowner adds, edits, marks used and deletes records on the dashboard.
 // The same shape serves every agent. Only the dashboard's write route changes this file; the tick keeps its own bookkeeping in resets-seen.json.
 import fs from 'node:fs';
