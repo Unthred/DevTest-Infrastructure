@@ -24,10 +24,11 @@ The one place that states how an issue (a work item) and its pull request are wr
 | Status (case ignored, spaces or hyphens) | Accepted when |
 |---|---|
 | `Met` | Always; the evidence should be a file and line plus a test or command. |
-| `Homeowner-only` | The evidence names the required credentials, approval or physical action (the words `credentials`, `approval` or `physical action`). |
-| `After install` | The evidence names who checks it: `homeowner` or `overseer`. It does not fail the post condition and becomes a Needs you step after install. |
+| `Homeowner-only` | The evidence names the required credentials, approval or physical action (the words `credentials`, `approval` or `physical action`). It is refused whatever the evidence says when the requirement text itself has after-install wording (`after install`, `after deploy`, `once installed`): such a check is After install, not Homeowner-only. |
+| `After install` | The evidence names who checks it: `homeowner` or `overseer`. It does not fail the post condition and becomes a Needs you step after install. A requirement with after-install wording belongs here. |
+| `Not applicable` | Only for a conditional requirement (for example "when #1148 is merged") whose condition is not met. The evidence names the item (`#N`, or `issue`, `PR`, `pull request` or `item` with a number) and says it is `still open` or `not merged` (also `not yet merged`, `not closed`, `not installed`). |
 
-Any other status, an empty cell, a missing heading, a wrong header or a table with no rows leaves the post condition unmet, and the refusal names the row. Items from the before-the-PR list must be `Met` or `Homeowner-only`; never mark one After install to avoid finishing it. This section is updated if the row rules in #1177 change.
+Any other status, an empty cell, a missing heading, a wrong header or a table with no rows leaves the post condition unmet, and the refusal names the row. Items from the before-the-PR list must be `Met`, `Homeowner-only` or, for an unmet condition, `Not applicable`; never mark one After install to avoid finishing it. The rules above are those of `supervisor/requirements-rows.mjs` as of #1177 and #1184; if they change, change this section with them.
 
 ## Who follows what
 

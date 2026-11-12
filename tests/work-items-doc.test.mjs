@@ -35,6 +35,12 @@ test('the table rules in the document are the ones the post condition enforces',
   assert.equal(requirementsTableError(table(['After install', 'the overseer checks it'])), null);
   assert.match(requirementsTableError(table(['Homeowner-only', 'tired'])), /Homeowner-only/);
   assert.match(requirementsTableError(table(['After install', 'later'])), /who checks it/);
+  assert.equal(requirementsTableError(table(['Not applicable', '#1148 is still open'])), null);
+  assert.match(requirementsTableError(table(['Not applicable', 'skipped'])), /Not applicable/);
+  const afterInstallRow = '| on Tower after install the page loads | Homeowner-only | needs homeowner approval |';
+  assert.match(requirementsTableError(table(['Met', 'x']).replace(/\| a \|.*\n/, afterInstallRow + '\n')), /After install/);
+  const doc = fs.readFileSync(path.join(repo, 'docs/work-items.md'), 'utf8');
+  for (const word of ['Not applicable', 'still open', 'not merged', 'after install', 'after deploy', 'once installed']) assert.ok(doc.includes(word), word);
   assert.match(requirementsTableError(table(['Partial', 'x'])), /Allowed statuses/);
 });
 
