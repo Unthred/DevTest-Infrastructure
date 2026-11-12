@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 export const REQUIRED_FILES = [
   'README.md', 'AGENTS.md', 'CLAUDE.md',
   'docs/architecture.md', 'docs/DECISIONS.md', 'docs/cli-contract.md',
-  'docs/agent-provider-contract.md', 'docs/acceptance-gates.md', 'docs/ai/CURRENT_HANDOVER.md',
+  'docs/agent-provider-contract.md', 'docs/acceptance-gates.md', 'docs/work-items.md', 'docs/ai/CURRENT_HANDOVER.md',
   'contracts/cli.v1.json', 'contracts/provider-manifest.v1.schema.json', 'contracts/verdict.v1.schema.json'
 ];
 const STATUSES = new Set(['homeowner-approved', 'agent-proposal', 'temporary-note']);
@@ -74,6 +74,13 @@ function checkSchema(value, schema, defs, where, errors) {
   }
 }
 
+// Issue #1187: the work item format lives once in docs/work-items.md and AGENTS.md must link it in the read order.
+function workItemsLinkFindings(root) {
+  const agents = path.join(root, 'AGENTS.md');
+  if (!fs.existsSync(agents) || /\]\(docs\/work-items\.md\)/.test(fs.readFileSync(agents, 'utf8'))) return [];
+  return [{ check: 'work-items', message: 'AGENTS.md must link docs/work-items.md' }];
+}
+
 export function validate(root) {
   const findings = [];
   const add = (check, message) => findings.push({ check, message });
@@ -125,7 +132,7 @@ export function validate(root) {
       }
     }
   }
-
+  findings.push(...workItemsLinkFindings(root));
   // Handover
   if (has('docs/ai/CURRENT_HANDOVER.md')) {
     const text = read(root, 'docs/ai/CURRENT_HANDOVER.md');

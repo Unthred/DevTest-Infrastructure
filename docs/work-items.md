@@ -1,0 +1,34 @@
+# Work item and pull request format
+
+The one place that states how an issue (a work item) and its pull request are written. Whoever writes an issue, implements it, fixes it or reviews it follows this document, so the rules are the same whichever agent does the work. The issue layout is in [`work-item-template.md`](work-item-template.md); the rules for filling it in are here.
+
+## Acceptance items
+
+- Tag every acceptance item as **before PR** (listed under `## Wanted (before the PR)`) or **after install** (listed under `## After install (checked on Tower)`). An implement job can only meet the first kind.
+- A check that needs the running system but no credential goes under a `## Live checks` heading, in the lines format `supervisor/livechecks.mjs` reads: `- GET /path -> 200` or `- POST /path -> 403 contains "text"`. A path is relative to the dashboard base URL, with no scheme, host or `..`; at most 10 lines. Foreman runs them after the install that contains the change.
+- `Homeowner-only` is only for a credential, an approval or a physical act the agent cannot supply. The row states which one and why. A check that merely needs the installed system is not Homeowner-only: it is After install or a Live check.
+- Name the tests. For each acceptance item say which test proves it, including any browser check, and give one real data example (an actual input and the output expected), not a description of one.
+- Keep items small. Do not give an item files that another open item also changes; split the work or declare `Depends on:` instead.
+
+## The requirements table in the pull request
+
+- The description carries a `## Requirements check` table with exactly the columns `Requirement | Status | Evidence`.
+- One row per acceptance item, and one row per carried follow-up the PR takes on.
+- Evidence cites only lines the PR changes (file and line), plus the test or command that proves the row. A citation to a line the PR did not change is a wrong row.
+- Check every claim in the description against the diff. Remove or fix a claim the code does not support.
+
+## How the post condition reads the table
+
+`supervisor/requirements-table.mjs` finds the heading `Requirements check` (any heading level, case ignored), reads the first three-column table below it and stops at the next heading. Rules for each row, from `supervisor/requirements-rows.mjs`:
+
+| Status (case ignored, spaces or hyphens) | Accepted when |
+|---|---|
+| `Met` | Always; the evidence should be a file and line plus a test or command. |
+| `Homeowner-only` | The evidence names the required credentials, approval or physical action (the words `credentials`, `approval` or `physical action`). |
+| `After install` | The evidence names who checks it: `homeowner` or `overseer`. It does not fail the post condition and becomes a Needs you step after install. |
+
+Any other status, an empty cell, a missing heading, a wrong header or a table with no rows leaves the post condition unmet, and the refusal names the row. Items from the before-the-PR list must be `Met` or `Homeowner-only`; never mark one After install to avoid finishing it. This section is updated if the row rules in #1177 change.
+
+## Who follows what
+
+The implement, fix, CI fix and review prompts point at this document. The reviewer checks the pull request against it: a missing, malformed or unsupported row, a citation to an unchanged line, or an after-install item presented as met is a blocking finding.
