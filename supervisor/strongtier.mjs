@@ -19,7 +19,8 @@ export const STRONG_ACTIONS = {
   verdict_pass: {
     target: 'pr', noun: 'pull request',
     will: 'Record a homeowner PASS verdict for the head shown here, in the store the review gate reads. '
-      + 'The head counts as reviewed and the merge step may merge it once checks are green. It replaces any earlier verdict at this head, which is archived.',
+      + 'The head counts as reviewed and the merge step may merge it once checks are green. It replaces any earlier verdict at this head, which is archived. '
+      + 'Like any PASS it carries across a clean rebase that leaves the patch identical (D-025), so it can then apply to the rebased head.',
   },
   verdict_changes: {
     target: 'pr', noun: 'pull request',
