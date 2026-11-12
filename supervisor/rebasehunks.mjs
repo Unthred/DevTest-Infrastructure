@@ -7,6 +7,9 @@
 //   - on main:  what is left is consumed from the lines main added or removed between the merge base and the base tip;
 //   - folded:   a left-over added line that a longer added line of the new commit contains (both sides edited one line and the
 //               resolution joined them; at least 4 characters, so a brace or a short token proves nothing);
+//   - merged:   a left-over added line whose newly introduced tokens (those not on the old hunk's removed lines) all sit on one added
+//               line of the new commit (a list or call both sides edited and the resolution united, issues #580 and #640);
+//   - exported: `export { X };` when main or the new commit already exports X by its declaration (PR 1131);
 //   - renumbered: a left-over added line whose only difference from a line of the new commit is a number that main's own added
 //     lines also use (D-040 became D-042 because main took D-040).
 // What remains is a finding: { commit, subject, file, hunk, kind: 'missing' | 'altered', text }.
@@ -89,6 +92,31 @@ function foldedInto(u, available) {
   return false;
 }
 
+const words = l => l.match(/[A-Za-z0-9_$]+/g) || [];
+
+// Every token the old hunk introduced on `u` (absent from its removed lines) is on one other added line of the new commit.
+function mergedInto(u, removed, available) {
+  const had = new Set(removed.flatMap(words));
+  const fresh = words(u).filter(w => !had.has(w));
+  if (!fresh.length) return false;
+  for (const [v, n] of available) {
+    if (n <= 0 || v === u) continue;
+    const has = new Set(words(v));
+    if (fresh.every(w => has.has(w))) return true;
+  }
+  return false;
+}
+
+// `export { A, B };` is satisfied when each name is already exported by a declaration in the lines main or the new commit added.
+function exportedAlready(u, ...sources) {
+  const m = /^export \{\s*([\w$,\s]+?)\s*\};?$/.exec(u.trim());
+  if (!m) return false;
+  const declared = sources.flatMap(src => [...src.keys()])
+    .map(l => /^export\s+(?:default\s+)?(?:async\s+)?(?:const|let|var|function\*?|class)\s+([\w$]+)/.exec(l.trim()))
+    .filter(Boolean).map(x => x[1]);
+  return m[1].split(/\s*,\s*/).every(n => declared.includes(n));
+}
+
 // What main changed in `file` between the merge base and the base tip, as fresh counters (a commit consumes its own copy).
 function mainReader(run, mergeBase, base) {
   const cache = new Map();
@@ -127,7 +155,8 @@ function compareCommit(oldHunks, newHunks, readMain, id) {
     const missing = left.filter(({ l, added }) => {
       if (take(added ? s.main.added : s.main.removed, l)) return false;   // main made this change itself
       if (!added) return true;
-      if (foldedInto(l, s.added)) return false;
+      if (foldedInto(l, s.added) || mergedInto(l, h.removed, s.added)) return false;
+      if (exportedAlready(l, s.main.added, s.added)) return false;
       const v = renumberedBy(l, s.added, s.main.runs);
       if (v === null) return true;
       take(s.added, v);

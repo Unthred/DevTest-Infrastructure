@@ -118,7 +118,7 @@ test('a renumbered line is accepted when the old number is one main took; any ot
   assert.equal(bad.out.lostChanges[0].kind, 'altered');
 });
 
-test('regression, PR 1131: supervisor/inbox.mjs "export { ACTIONS };" dropped after main exported the const is named exactly', t => {
+test('regression, PR 1131: supervisor/inbox.mjs "export { ACTIONS };" is not asked back after main exported the const itself', t => {
   const w = world(t, {
     file: 'inbox.mjs',
     base: lines('const ACTIONS = {', '  a: 1,', '};', 'const Z = 1;'),
@@ -127,9 +127,26 @@ test('regression, PR 1131: supervisor/inbox.mjs "export { ACTIONS };" dropped af
     resolution: lines('export const ACTIONS = {', '  a: 1,', '  b: 2,', '};', 'const Z = 2;'),
   });
   const p = push(w);
-  assert.equal(p.out.pushed, false);
-  assert.deepEqual(p.out.lostChanges.map(f => [f.file, f.kind, f.text]), [['inbox.mjs', 'missing', '+ export { ACTIONS };']]);
-  assert.match(p.out.message, /inbox\.mjs, hunk @@/);
+  assert.equal(p.out.pushed, true, JSON.stringify(p.out.lostChanges));
+  assert.equal(remoteHead(w), git(w.agent, 'rev-parse', 'HEAD'));
+});
+
+test('issue #580 kept: a list both sides edited and the resolution united is accepted', t => {
+  const w = world(t, {
+    base: lines('x', "const L = ['a'];", 'y'), feat: lines('x', "const L = ['a', 'b'];", 'y', 'more();'), main: lines('x', "const L = ['a', 'c'];", 'y'),
+    resolution: lines('x', "const L = ['a', 'b', 'c'];", 'y', 'more();'),
+  });
+  const p = push(w);
+  assert.equal(p.out.pushed, true, JSON.stringify(p.out.lostChanges));
+});
+
+test('issue #640 kept: a call both sides edited on the same line, merged into one, is accepted', t => {
+  const w = world(t, {
+    base: lines('x', 'call(a);', 'y'), feat: lines('x', 'call(a, opts);', 'y', 'more();'), main: lines('x', 'invoke(a);', 'y'),
+    resolution: lines('x', 'invoke(a, opts);', 'y', 'more();'),
+  });
+  const p = push(w);
+  assert.equal(p.out.pushed, true, JSON.stringify(p.out.lostChanges));
 });
 
 test('regression, PR 1192: the register entry D-040 renumbered D-042 after main took D-040 is accepted and pushed', t => {
