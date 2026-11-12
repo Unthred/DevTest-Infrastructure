@@ -95,6 +95,11 @@ export function runningSha(file) {
 // This finds only `cli.mjs dashboard serve` processes (never a worker or a job), stops them, and starts the same host and port
 // from the new version. Every effect is injectable so the rule is tested without a real process.
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+async function probeHealth({ until, now, health, host, port, setTimeoutFn, clearTimeoutFn }) {
+  const left = until - now(); if (left <= 0 || !health) return false;
+  let timer; const cut = new Promise(resolve => { timer = setTimeoutFn(() => resolve(false), left); });
+  try { return await Promise.race([Promise.resolve().then(() => health(host, port)).catch(() => false), cut]); } finally { clearTimeoutFn(timer); }
+}
 export function findDashboards(procRoot = '/proc', self = process.pid) {
   const out = [];
   let names = []; try { names = fs.readdirSync(procRoot); } catch { return out; }
@@ -112,7 +117,12 @@ export function findDashboards(procRoot = '/proc', self = process.pid) {
 // not running at all, and `force` restarts one that is on the right version but does not answer. Without them nothing running means
 // nothing to do (the upgrade path never starts a dashboard that was not there). A start that fails or does not answer is tried once
 // more, then the last good command line is started again, so the dashboard is not left down.
-export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500, settleProbes = 3, settleProbeMs = 2000, settleMaxMs = 60000, settleMinMs = 10000, restartMaxMs = 150000, recoverMaxMs = 30000, now = Date.now, logMark = defaultLogMark, logTail = defaultLogTail, revive = null, force = false } = {}) {
+export async function restartDashboardServer(sha, {
+  procRoot = '/proc', wrapper = '/root/bin/ai-supervisor', kill = (pid, sig) => process.kill(pid, sig), start, startOld, health,
+  sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 50, settleMs = 1500, settleProbes = 3, settleProbeMs = 2000,
+  settleMaxMs = 60000, settleMinMs = 10000, restartMaxMs = 150000, recoverMaxMs = 30000, now = Date.now,
+  logMark = defaultLogMark, logTail = defaultLogTail, revive = null, force = false
+} = {}) {
   const startedAt = now();
   const found = findDashboards(procRoot);
   if (!found.length && !revive) return { ok: true, restarted: false, reason: 'no dashboard server was running' };
@@ -124,18 +134,13 @@ export async function restartDashboardServer(sha, { procRoot = '/proc', wrapper 
   for (let i = 0; i < tries && !gone(); i++) await sleep(200);
   if (!gone()) return { ok: false, reason: 'the old dashboard server did not stop' };
   const args = ['dashboard', 'serve', '--host', old.host, ...(old.port ? ['--port', old.port] : [])];
-  // The port cannot be shared, so the old process had to stop first. If the new one does not come up healthy, it is stopped and the
-  // old version is started again with its own original command line, so the dashboard is serving again (issue #135).
+  // The old process must stop before its port can be reused; if the new process is unhealthy, its original command restarts the old version (issue #135).
   const healthPort = old.port || process.env.DASHBOARD_PORT || '8731';
   // Issue #725: an overall deadline (restartMaxMs) bounds the start attempts, not only the settle wait: every health probe is cut off
   // when it arrives, and no further attempt starts after it. Recovery has its own budget (recoverMaxMs) so the old version still gets
   // a fair chance to come back after the deadline has been used up.
   const deadline = startedAt + restartMaxMs;
-  const probe = async until => {
-    const left = until - now(); if (left <= 0 || !health) return false;
-    let timer; const cut = new Promise(r => { timer = setTimeout(() => r(false), left); });
-    try { return await Promise.race([Promise.resolve().then(() => health(old.host, healthPort)).catch(() => false), cut]); } finally { clearTimeout(timer); }
-  };
+  const probe = until => probeHealth({ until, now, health, host: old.host, port: healthPort, setTimeoutFn: health?.timerApi?.set || setTimeout, clearTimeoutFn: health?.timerApi?.clear || clearTimeout });
   const recover = async why => {
     const fresh = findDashboards(procRoot).filter(d => d.version === sha);
     for (const d of fresh) { try { kill(d.pid, 'SIGTERM'); } catch { /* already gone */ } }

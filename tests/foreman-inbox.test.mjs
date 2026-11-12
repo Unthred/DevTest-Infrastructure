@@ -28,7 +28,6 @@ const DRAFT = { kind: 'issue_draft', title: 'Add a retry note', body: 'The probe
 // an inbox directory as the installer lays it out: items/ (the proposing account), status/ (Foreman)
 function makeInbox(t) { const dir = tmp(t); fs.mkdirSync(path.join(dir, 'items')); fs.mkdirSync(path.join(dir, 'status')); return dir; }
 const drop = (dir, item, id = hex(16)) => { fs.writeFileSync(path.join(dir, 'items', `${id}.json`), typeof item === 'string' ? item : JSON.stringify(item)); return id; };
-
 // ---- validation: refused before any card
 test('validateItem: good prompt and issue draft pass; unknown kind, unknown field, oversize, empty and control characters are refused', () => {
   assert.equal(inbox.validateItem(GOOD).ok, true);
@@ -358,6 +357,7 @@ test('team: with every implementer slot busy and the overall cap reached, an app
   assert.equal(w.calls.created.length, 1); assert.equal(w.calls.created[0].kind, 'inbox');
   const st = inbox.statusOf(w.dir, id);
   assert.equal(st.state, 'running'); assert.equal(st.lane, 'inbox'); assert.equal(st.waitedMs, 5000 - st.decidedAt); assert.equal(st.startedAt, 5000);
+  assert.equal(st.activeJob, '00000000000000000000000000000001', 'the transient Inbox status records its created job ID');
   const card = inbox.decidedCards(w.dir, 5000).find(c => c.id === id); assert.equal(card.lane, 'inbox');
 });
 test('team: the inbox lane has its own count: a running prompt fills it, limits.roles.inbox raises it, and implementer work does not fill it', async t => {

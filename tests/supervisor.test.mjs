@@ -8,6 +8,7 @@ import { createJob, drive, readJob, recover, releaseLeases, stateRoot, Superviso
 import * as claude from '../supervisor/adapters/claude.mjs';
 import * as codex from '../supervisor/adapters/codex.mjs';
 import * as base from '../supervisor/adapters/base.mjs';
+import { removeWithRetries } from './helpers/tmp.mjs';
 
 function git(cwd, ...args) { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim(); }
 function writeRegistry(dir, id, adapter, command, capabilities = {}) {
@@ -25,8 +26,8 @@ function writeRegistry(dir, id, adapter, command, capabilities = {}) {
 }
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-test-'));
-  // A detached worker may still be writing when the test ends (ENOTEMPTY on CI), so removal retries.
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  // A detached worker may write its final state after the test ends.
+  t.after(() => removeWithRetries(dir));
   const repo = path.join(dir, 'repo'), worktree = path.join(dir, 'worktree'), state = path.join(dir, 'state');
   fs.mkdirSync(repo);
   git(repo, 'init', '-q', '-b', 'main');
@@ -41,7 +42,6 @@ function fakeClock() {
   const sleeps = [];
   return { now: () => now, sleep: async ms => { sleeps.push(ms); now += ms; }, sleeps };
 }
-
 test('adapter classification distinguishes limits, context, auth, transient, approval and network', () => {
   for (const adapter of [claude, codex]) {
     assert.equal(adapter.observe(JSON.stringify({ type: 'error', message: 'Usage limit reached. Resets at 2026-10-30T05:00:00Z' })).event, 'usage_limit');

@@ -4,12 +4,15 @@ export function activeSlotUse({ active, records, roles, roleOfType, inboxStatuse
   const inboxIds = new Set(inboxStatuses
     .filter(status => status?.state === 'running' && status.adopt?.rec?.kind === 'inbox' && status.adopt.id)
     .map(status => status.adopt.id));
+  const unadoptedInboxIds = new Set(inboxStatuses
+    .filter(status => status?.state === 'running' && status.lane === 'inbox' && !status.adopt?.id && status.activeJob)
+    .map(status => status.activeJob));
   const occupying = active.filter(job => job.status !== 'paused_limit');
   const used = Object.fromEntries(roles.map(role => [role, 0]));
   const usedBy = {};
   let total = 0;
   for (const job of occupying) {
-    const kind = records[job.id]?.kind ?? (inboxIds.has(job.id) ? 'inbox' : undefined);
+    const kind = records[job.id]?.kind ?? (inboxIds.has(job.id) || unadoptedInboxIds.has(job.id) ? 'inbox' : undefined);
     const role = roleOfType(kind);
     used[role]++;
     const providerRole = `${job.provider}:${role}`;
@@ -17,6 +20,10 @@ export function activeSlotUse({ active, records, roles, roleOfType, inboxStatuse
     if (role !== 'inbox') total++;
   }
   return { occupying, used, usedBy, total };
+}
+
+export function activeProviderSlotUse({ active, records, roles, roleOfType, inboxStatuses = [] }) {
+  return activeSlotUse({ active, records, roles, roleOfType, inboxStatuses }).usedBy;
 }
 
 // The planner records this before allocating a slot, rather than leaving a
