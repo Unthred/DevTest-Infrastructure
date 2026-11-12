@@ -4,6 +4,7 @@
 import { redact, redactDeep } from './redact.mjs';
 import { createInbox } from './inbox.mjs';
 import { inboxToolDefs } from './inbox-tools.mjs';
+import { inboxCardsTool } from './inbox-cards.mjs';
 import { inboxSearchTool } from './inbox-search-tools.mjs';
 import { mismatches, needsYouGroups, rebaseStats, itemTimeline, gbpOf } from './insights.mjs';
 import { hostActivity } from './source.mjs';
@@ -217,7 +218,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       }) },
     { name: 'foreman_rebase_stats', description: 'Rebases per merged pull request, reviews per merged pull request, and the time from first recorded activity to merge (mean and median), for all merged pull requests the view holds and, with splitAt (ISO date), before and after that time, so a change to the rebase policy can be measured. Read-only.', inputSchema: { type: 'object', properties: { splitAt: { type: 'string', maxLength: 40 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
       run: args => withView(v => rebaseStats(v, { splitAt: args.splitAt === undefined ? null : String(args.splitAt), limit: args.limit })) },
-    ...inboxToolDefs(inbox, inboxSearchTool(inbox, source)),
+    ...inboxToolDefs(inbox, inboxSearchTool(inbox, source), inboxCardsTool(inbox, source, now)),
   ];
 
   const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

@@ -64,7 +64,7 @@ export function createInbox({ dir, baseUrl = null }) {
     return { pending, unpicked, total: pending + unpicked, limit };
   }
   return {
-    enabled: !!dir,
+    enabled: !!dir, dir,   // dir: read by foreman_inbox (issue #1197)
     propose(args) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       const c = checkProposal(args);

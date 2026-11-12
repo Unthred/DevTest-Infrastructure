@@ -45,4 +45,6 @@ node tools/ci/check-size.mjs
 ```
 
 ## Map
+Foreman MCP tools are listed in [`docs/foreman-mcp.md`](docs/foreman-mcp.md); the Inbox tools are `foreman_inbox` (compact card list, issue #1197), `foreman_inbox_items` (search), `foreman_propose` and `foreman_proposal_status`.
+
 [`README.md`](README.md) · [`docs/cooperative-work.md`](docs/cooperative-work.md) · [`docs/architecture.md`](docs/architecture.md) · [`docs/agent-provider-contract.md`](docs/agent-provider-contract.md) · [`contracts/`](contracts/)
