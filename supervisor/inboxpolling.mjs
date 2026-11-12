@@ -6,7 +6,8 @@ import { readTranscript, transcriptFile, validJobId } from './transcript.mjs';
 const TAIL_BYTES = 2 * 1024 * 1024;
 export const POLLING_SHARE = 0.5;
 const SHELL_TOOLS = new Set(['Bash', 'shell']);   // Claude and Codex name their command tool differently
-const WAITING_COMMAND = /\b(?:sleep|until|while)\b/;
+// Loop or sleep syntax, not the bare word, so `grep while file` is not a wait.
+const WAITING_COMMAND = /\bsleep\s+\d|\b(?:while|until)\b[^\n]*\bdo\b/;
 
 // A call that waits: a Monitor call, or a shell command that sleeps or loops. One definition for every provider.
 export function isWaitingCall(e) {

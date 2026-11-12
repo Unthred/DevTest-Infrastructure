@@ -197,6 +197,7 @@ test('requirement 6: waiting between checks is measured from the transcript time
     line(4, 500, 'assistant', 'waiting', 'assistant'), line(5, 501, 'shell', 'while true; do sleep 30; done'), line(6, 601, 'Read', 'f')];
   fs.writeFileSync(path.join(root, 'transcripts', `${id}.jsonl`), waiting.join('\n') + '\n');
   assert.equal(waitedMs(waiting.map(l => JSON.parse(l))), 300000 + 199000 + 100000, 'loops, Monitor and shell calls count by wall time');
+  assert.equal(waitedMs([JSON.parse(line(1, 0, 'Bash', 'grep while file')), JSON.parse(line(2, 900, 'Read', 'f'))]), 0, 'a command that only mentions the word is not waiting');
   const flagged = pollingOf({ root, jobId: id, capMs: 900000 });
   assert.deepEqual(flagged, { sleptMs: 599000, capMs: 900000 });
   assert.equal(pollingOf({ root, jobId: id, capMs: 3600000 }), null, 'a small share of a long cap is not flagged');
