@@ -93,7 +93,10 @@ export function createInbox({ dir, baseUrl = null }) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       if (typeof search !== 'string' || search.length > 200) throw new Error('search must be text of at most 200 characters');
       if (kind && !['prompt', 'issue_draft', 'action', 'host_value'].includes(kind)) throw new Error('kind is not recognised');
-      if (state && !['pending', 'approved', 'rejected', 'running', 'posting', 'done', 'failed', 'refused'].includes(state)) throw new Error('state is not recognised');
+      const states = ['pending', 'approved', 'rejected', 'running', 'posting', 'done', 'failed', 'refused'];
+      if (state && !states.includes(state)) {
+        throw new Error('state is not recognised');
+      }
       const cap = Number.isInteger(limit) && limit >= 1 && limit <= 100 ? limit : 50;
       const records = [];
       let names = []; try { names = fs.readdirSync(status); } catch { throw new Error('the inbox directory is not available'); }
@@ -104,7 +107,23 @@ export function createInbox({ dir, baseUrl = null }) {
         let item = null;
         const file = path.join(items, name);
         try { if (fs.lstatSync(file).isFile()) item = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* final items have no item file */ }
-        const record = { id: s.id, shortId: s.id.slice(0, 8), title: item?.title ?? s.title ?? null, body: item?.body ?? null, prompt: item?.prompt ?? null, why: item?.why ?? null, reason: item?.reason ?? s.reason ?? null, target: item?.target ?? null, kind: item?.kind ?? s.kind ?? null, state: s.state ?? 'unknown', issue: s.issue ?? null, pr: s.pr ?? null, link: linkFor(s.id), createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : null, updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null };
+        const record = {
+          id: s.id,
+          shortId: s.id.slice(0, 8),
+          title: item?.title ?? s.title ?? null,
+          body: item?.body ?? null,
+          prompt: item?.prompt ?? null,
+          why: item?.why ?? null,
+          reason: item?.reason ?? s.reason ?? null,
+          target: item?.target ?? null,
+          kind: item?.kind ?? s.kind ?? null,
+          state: s.state ?? 'unknown',
+          issue: s.issue ?? null,
+          pr: s.pr ?? null,
+          link: linkFor(s.id),
+          createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : null,
+          updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
+        };
         if ((!kind || record.kind === kind) && (!state || record.state === state) && matchesInboxSearch(record, search)) records.push(record);
       }
       return { search, kind: kind || null, state: state || null, count: records.length, shown: Math.min(records.length, cap), items: records.slice(0, cap) };
