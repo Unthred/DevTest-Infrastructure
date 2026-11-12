@@ -13,6 +13,8 @@ import { createViewStore, VIEW_STALE_MS } from './viewstore.mjs';
 import { createWorkerBuild } from './viewworker.mjs';
 import { buildView } from './dashboard.mjs';
 import { withApprovals } from './approvals.mjs';
+import { withDecisionCards } from './decisioncards.mjs';
+import { decisionRoute } from './decisionroute.mjs';
 import { approvalsStream } from './approvals-stream.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
@@ -108,7 +110,7 @@ export async function currentView({ root, config, now = Date.now(), tz = default
     config: checked, root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root),
     snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register,
   });
-  return withApprovals(view, checked);
+  return withApprovals(withDecisionCards(view, checked, readCache(root)), checked);
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
@@ -236,8 +238,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   };
   // Inbox (issue #124): Approve or Reject one pending overseer proposal. The same write protection as the other posts (D-029): host, origin, the
   // secret proof, and a short cooldown. The decision is recorded only; the next tick acts on an approval. This route is the only way to approve.
-  // Issue #856: the dashboard's script posts with Accept: application/json and gets the outcome as JSON, so a refusal shows on the card instead of a
-  // separate page. Every refusal (host, origin, proof, size, cooldown, item changed) keeps its status code and changes nothing; only the body differs.
+  // Issue #856: the script posts Accept: application/json and gets JSON, so a refusal shows on the card; every refusal changes nothing.
   const inbox = async (req, res, rawSend) => {
     const json = /application\/json/.test(req.headers.accept || '');
     const plainOf = html => String(html).replace(/<h1>[^]*?<\/h1>/, '').replace(/<p><a href[^]*$/, '').replace(/<[^>]*>/g, ' ').replace(/&#(\d+);/g, (m, c) => String.fromCharCode(Number(c))).replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -264,6 +265,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
+  const decision = decisionRoute({ root, source, cachedView, store, wake, now, guard: { allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, refuseWith, esc } });
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
   // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
   // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
@@ -299,7 +301,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   return async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
-    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/breaker-resume': breakerResume };
+    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume };
     if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
     // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
     // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.

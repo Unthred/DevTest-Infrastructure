@@ -121,7 +121,7 @@ test('list: decisions waiting on the homeowner are listed with their options; ot
   assert.equal(d.tier, 'decision'); assert.equal(d.kindLabel, 'Decision'); assert.match(d.options, /^Choose one: raise the limit/); assert.equal(d.link, 'https://github.com/o/r/pull/77');
   assert.deepEqual(approveAllIds(rows), [a], 'a decision is never in Approve all');
   const html = approvalsDropdown({ rows, esc, ago: () => '3 min ago' });
-  assert.match(html, /data-approvals-count>3</); assert.match(html, /Options: Choose one/); assert.match(html, /Decide it here/);
+  assert.match(html, /data-approvals-count>3</); assert.match(html, /Decision: Choose one/); assert.match(html, /Open it/);
   const decisionRow = html.split('<li ').find(x => x.includes('data-tier="decision"'));
   assert.ok(!/<form|value="approve"/.test(decisionRow), 'no Approve or Reject form on a decision row');
 });
