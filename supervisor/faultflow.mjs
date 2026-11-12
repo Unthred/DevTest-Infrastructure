@@ -100,6 +100,8 @@ export class FaultFlow {
     if (cleared.length) this.save();
   }
   items() { return faults.attentionItems(this.infra, this.now(), faults.fixOf); }
+  // Issue #1179: release by an approved action. Returns the released record, or null when the agent was not parked.
+  release(agent, by) { const rec = faults.releaseParked(this.infra, agent, this.now(), by); if (rec) this.save(); return rec; }
   parked(agent) { return faults.isParked(this.infra, agent) ? this.infra.parked[agent] : null; }
   summary() { return faults.summary(this.state().infra || {}, this.now()); }
 }
@@ -109,7 +111,7 @@ export function withParking(limitedOf, flow) {
   return (agent, ...rest) => {
     const rec = flow.parked(agent);
     const base = limitedOf(agent, ...rest);
-    return rec && !base?.out ? { ...(base || {}), out: true, reason: `parked: ${faults.INFRA_LABEL[rec.cause] || rec.cause}`, parked: true } : base;
+    return rec && !base?.out ? { ...(base || {}), out: true, reason: faults.parkedHoldText(agent, rec), parked: true } : base;
   };
 }
 

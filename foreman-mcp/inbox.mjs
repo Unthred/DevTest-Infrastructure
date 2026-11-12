@@ -11,7 +11,7 @@ import { matchesInboxSearch } from './inbox-search.mjs';
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
 // Issue #1115: the releasing direction is an ordinary action (approved on the dashboard); a `control` item may carry only park or stop_job.
-const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen };
+const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, release_agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
@@ -41,7 +41,7 @@ export function checkProposal(args) {
   if (named) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
-    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
+    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name' };
   }
   return { ok: true, item };
 }

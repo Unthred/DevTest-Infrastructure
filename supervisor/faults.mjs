@@ -33,7 +33,9 @@ export function classifyEnd(job) {
   if (!readable) return infra('other_infra', 'the job record is missing or unreadable');
   if (job.status === 'completed') return work('completed');
   // Issue #1109: the stop marker written by the stop command outlasts any later event a dying worker records.
-  if (job.lastEvent === 'manual_stop' || (job.status === 'stopped' && job.stop?.reason === 'manual_stop')) return { kind: 'none', cause: 'manual_stop' };
+  // Issue #1179: the marker counts whatever status a dying worker wrote afterwards (blocked, failed), and whatever stop reason the action gave.
+  if (job.lastEvent === 'manual_stop') return { kind: 'none', cause: 'manual_stop' };
+  if (job.stop && typeof job.stop === 'object' && /^[a-z_]{1,32}$/.test(String(job.stop.reason)) && !WORK_STOPS.has(job.stop.reason)) return { kind: 'none', cause: String(job.stop.reason), by: String(job.stop.by || 'homeowner').slice(0, 32) };
   if (job.status === 'waiting_on') return { kind: 'none', cause: 'waiting_on' };   // stopped on an open prerequisite: neither a try nor a fault
   const reason = job.incompleteReason && typeof job.incompleteReason === 'object' ? job.incompleteReason : {};
   const stop = String(reason.cause || job.lastEvent || job.status);
@@ -72,7 +74,7 @@ export function noteFault(s, { agent, cause, job, ref = null, now }) {
   const continues = back && back.cause === cause && now - back.at < RAISE_AFTER_MS;
   const rec = s.parked[agent] ||= { cause, since: continues ? back.since : now, probes: 0, nextProbeAt: now + backoffMs(0), faults: 0, items: [] };
   delete s.released[agent];
-  rec.cause = cause; rec.faults++;
+  rec.cause = cause; rec.faults++; rec.job = String(job || '').slice(0, 8); rec.lastAt = now;
   if (ref && !rec.items.includes(ref)) rec.items.push(ref);
   if (rec.items.length > 20) rec.items.splice(0, rec.items.length - 20);
   return rec;
@@ -88,12 +90,26 @@ export function noteProbe(s, agent, passed, now) {
   return { released: false, nextProbeAt: rec.nextProbeAt };
 }
 
-const stamp = ms => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+// Issue #1179: release by an approved action (the homeowner judged the cause benign). Returns the record that was parked, or null.
+export function releaseParked(s, agent, now, by = 'homeowner') {
+  const rec = s?.parked?.[agent];
+  if (!rec) return null;
+  delete s.parked[agent];
+  (s.released ||= {})[agent] = { cause: rec.cause, since: rec.since, at: now, by };
+  return rec;
+}
+// The hold text of a parked agent (issue #1179): it names the cause, job, time and next probe, and never says "out of allowance".
+export function parkedHoldText(agent, rec) {
+  const job = rec.job ? `job ${rec.job}` : 'an unnamed job';
+  return `infrastructure fault: ${INFRA_LABEL[rec.cause] || rec.cause}, ${job}, at ${stamp(rec.lastAt ?? rec.since)}; next probe ${stamp(rec.nextProbeAt)}`;
+}
+
+const stamp = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : 'an unknown time');
 // Needs you items: one per parked agent, only once the fault has lasted 30 minutes. Gone when the agent is released.
 export function attentionItems(s, now, fix = (agent, cause) => fixOf(agent, cause)) {
   return Object.entries(s?.parked || {}).filter(([, r]) => now - r.since >= RAISE_AFTER_MS).map(([agent, r]) => ({
     id: `agentfault-${agent}`, agent, cause: r.cause, since: r.since, items: r.items,
-    text: `${agent} is parked: ${INFRA_LABEL[r.cause] || r.cause} since ${stamp(r.since)} UTC (${r.faults} job${r.faults === 1 ? '' : 's'} stopped, none counted as an attempt). Waiting: ${r.items.join(', ') || 'nothing named'}.`,
+    text: `${agent} is parked: ${INFRA_LABEL[r.cause] || r.cause} since ${stamp(r.since)} (${r.faults} job${r.faults === 1 ? '' : 's'} stopped, none counted as an attempt). Waiting: ${r.items.join(', ') || 'nothing named'}.`,
     action: `Fix: ${fix(agent, r.cause)}. Foreman checks again by itself and clears this item when the check passes.`,
   }));
 }
@@ -118,7 +134,7 @@ export function summary(s, now) {
   normalize(s || {});
   return {
     counts: { ...s.counts },
-    parked: Object.entries(s.parked).map(([agent, r]) => ({ agent, ...r, raised: now - r.since >= RAISE_AFTER_MS })),
+    parked: Object.entries(s.parked).map(([agent, r]) => ({ agent, ...r, label: INFRA_LABEL[r.cause] || r.cause, probeSchedule: `${PROBE_BACKOFF_MIN.join(', ')} minutes, then hourly`, text: parkedHoldText(agent, r), raised: now - r.since >= RAISE_AFTER_MS })),
     recent: s.recent.slice(-10),
   };
 }

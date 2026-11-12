@@ -376,3 +376,12 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Rationale: D-038 made park the way to hold an item back. A parked PR that still got CI reruns, job resumes or fresh reviews would spend allowance behind the hold. Nothing here is destroyed by holding: the watch, the resume and the comment are all kept.
 - Rejected: Letting the three run for a parked item; dropping the watch, the resume or the decision when an item is parked.
 - Superseded-by: none
+
+## D-041 — A stopped job is never a fault; a parked agent can be released by an approved action
+- Status: agent-proposal
+- Date: 2026-11-12
+- Source: issue #1179; extends D-033 and builds on the fault rules of issues #1107 and #1109
+- Decision: A job carrying a stop marker (written by an approved `stop_job`, a homeowner stop or a close) is a deliberate stop whatever status or event a dying worker wrote afterwards: it is classified as a stop with its own cause and who stopped it, never as an infrastructure fault, and it does not park the agent, count towards the circuit breaker or the failure causes, or use an attempt. Restarting a job clears its marker. The hold text of a parked agent says it is parked after an infrastructure fault and names the cause, job, time and next probe; it never says "out of allowance". The overseer view lists each parked agent with cause, job, time and probe schedule. D-033's fixed action list gains `release_agent` (target: an agent name): the homeowner approves it on the dashboard, it only removes the park of an agent that is parked, and a real fault parks the agent again.
+- Rationale: 12 Nov 2026: an approved stop of review job a888b4fb was recorded as an `other_infra` fault, parked Claude and held every Claude review, with a hold text claiming the agent was out of allowance.
+- Rejected: Releasing by MCP without an approval; a release that also probes or clears the fault counts.
+- Superseded-by: none

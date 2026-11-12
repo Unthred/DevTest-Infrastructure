@@ -15,6 +15,8 @@ export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
 export const INTERNAL_KINDS = ['host_value'];
 // Issue #629: named actions for cases that needed a terminal. Each is a fixed name with one target of a fixed shape (a pull request or issue
 // number, or the 8-character job id the dashboard shows); the item carries no command, path or free-form argument.
+// Issue #1179: the release of an agent parked after an infrastructure fault.
+const RELEASE_WILL = 'Release this agent from its infrastructure-fault park, for a cause you judge benign. A real fault parks it again. Refused when it is not parked.';
 export const ACTIONS = {
   new_review_attempt: { target: 'pr', noun: 'pull request', will: "Give one more review attempt at the same head of this pull request (use it when attempts were spent by Foreman's own faults). Nothing is merged or approved; the new review decides." },
   clear_retry_cap: { target: 'pr', noun: 'pull request', will: 'Clear the retry cap Foreman put on this pull request (a rebase, fix or review that failed twice for the same cause), so it is planned again. Refused when no cap is in place. Nothing is merged or approved.' },
@@ -23,11 +25,12 @@ export const ACTIONS = {
   stop_job: { target: 'job', noun: 'job', will: 'Stop this running or paused job.' },
   resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
   unpark: { target: 'pr', noun: 'issue or pull request', will: 'Remove the parked label from this issue or pull request so the planner may take it again (issue #1115). Refused when it is not parked.' },
+  release_agent: { target: 'agent', noun: 'agent', will: RELEASE_WILL },
 };
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
 export const CONTROLS = { park: { target: 'pr' }, stop_job: { target: 'job' } };
-const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
+const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/, agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
@@ -96,6 +99,7 @@ export function validateItem(raw, { internal = false } = {}) {
   if (named) {
     const table = raw.kind === 'control' ? CONTROLS : ACTIONS, spec = Object.hasOwn(table, raw.action) ? table[raw.action] : null;
     if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(table).join(', ')})` };
+    if (spec.target === 'agent' && !TARGET_RE.agent.test(raw.target)) return { ok: false, reason: 'target must be an agent name' };   // issue #1179
     if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
   }
   if (raw.kind === 'host_value') {

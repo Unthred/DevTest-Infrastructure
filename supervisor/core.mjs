@@ -494,6 +494,7 @@ export function recover(root, id, force = false) {
   }
   if (job.status === 'running' && !force) { transition(root, job, 'blocked', 'orphaned_worker'); throw new SupervisorError('orphaned worker requires explicit recovery'); }
   acquireLeases(root, job); // terminal states released them (issue #80); refuse if another job took the issue meanwhile
+  delete job.stop;   // issue #1179: a restarted job is judged by how it ends now, not by an earlier stop
   job.workerPid = null; job.workerStart = null; job.childPid = null; job.status = 'queued'; saveJob(root, job, realClock, true);
   event(root, job, 'recovered'); return job;
 }
