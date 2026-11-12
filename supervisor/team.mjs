@@ -32,6 +32,7 @@ import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probeDue } from './probe.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
+import { chooseInboxAgent } from './inboxagent.mjs';
 import { weeklyWindow } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
@@ -2156,22 +2157,16 @@ export class Team {
     this.save();
     return enforceNoDeferredSteps(verdict, body);
   }
-  // Issue #985: the fast lane. Starts the oldest approved prompt now, from a small separate process, even while a full pass runs. It never
-  // writes the team state (a running pass holds its own copy and would overwrite it): the job record goes into the inbox item's status and
-  // the next pass adopts it (processInbox). The planner's rule for the inbox lane: a free inbox slot (not the implementer slots, limits.overall or the open-PR pause), the
-  // provider cap, the agent's allowance and usage limit, and the writer-model rules in modelFor. `admit` is the host-load check hook (#972):
-  // it returns { ok, why }; none is installed yet.
+  // Issue #985: the fast lane starts the oldest approved prompt while a pass runs, keeping its record in the inbox until processInbox adopts it.
+  // Its gates are an inbox slot, provider cap, allowance, writer-model rules and the optional host-load `admit` hook (#972).
   async startApprovedNow(report = {}, { admit = null } = {}) {
     const dir = this.inboxDir(); if (!dir) return { started: false, why: 'no inbox configured' };
     const next = this.inboxNext(); if (!next) return { started: false, why: 'no approved prompt is waiting' };
-    // The gates tickPass applies before any launch: D-020 for full access, and the open-PR pause that holds every new implement job.
     if (this.c.access?.mode === 'full' && !decisionApproved(this.register, this.c.access.decision)) return { started: false, why: `${this.c.access.decision} is not homeowner-approved in the decision register` };
-    // The circuit breaker (#549, #124): an approved prompt is held like any new implement job. Read-only here; the lane never writes state.
     const halt = breaker.blocks(this.s.breaker, this.c.breaker, { type: 'inbox', issue: null });
     if (halt) return { started: false, why: `circuit breaker: ${halt.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + halt.cause} halted new jobs until the homeowner resumes` };
     const L = this.c.limits, active = (await this.jobs.listActive()).filter(j => j.status !== 'paused_limit');
-    // Issue #971: the planner's rule for the inbox lane: its own slot count, not the implementer slots, limits.overall or the open-PR pause.
-    // A job the fast lane started during this pass is in no job record yet, only in its item's status, so it counts from there.
+    // Issue #971: only inbox slots count; a not-yet-adopted fast-lane job is counted from its item status.
     const usedBy = {}; let inbox = 0; const seen = new Set(active.map(j => j.id));
     const adoptIds = new Set(inboxStore.allStatuses(dir).filter(st => st.state === 'running' && st.adopt?.id).map(st => st.adopt.id));
     for (const j of active) { const role = this.s.jobs[j.id] ? roleOfType(this.s.jobs[j.id].kind) : adoptIds.has(j.id) ? 'inbox' : roleOfType(undefined); if (role === 'inbox') inbox++; const k = `${j.provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
@@ -2182,13 +2177,18 @@ export class Team {
     if (inbox >= roleCount(L, 'inbox')) return { started: false, why: 'no free inbox slot' };
     const gate = admit ? admit() : { ok: true };
     if (!gate.ok) return { started: false, why: gate.why || 'the host is busy' };
-    const unread = await budgetsWithPulls(this); if (unread) return unread;
-    let agent = null;
-    for (const [name, a] of this.agents()) {
-      if (this.limitedOf(name).out || this.providerSlotFull(a.provider, 'inbox', usedBy)) continue;
-      const B = this.modes?.[name]; if (B && !admits(B, 'implement', 0).ok) continue;
-      agent = name; break;
-    }
+    const unread = await budgetsWithPulls(this);
+    if (unread) return unread;
+    const choice = chooseInboxAgent({
+      agents: this.agents(),
+      limitedOf: this.limitedOf,
+      providerSlotFull: this.providerSlotFull.bind(this),
+      usedBy,
+      modes: this.modes,
+      admits
+    });
+    if (choice.allowanceRefusal) return { started: false, why: `allowance reserve: ${choice.allowanceRefusal}` };
+    const agent = choice.agent;
     if (!agent) return { started: false, why: 'no agent can take an implement job now (allowance, usage limit or provider cap)' };
     const id = next.id;
     const adopt = () => { const jid = Object.keys(this.s.jobs).find(k => this.s.jobs[k].inboxId === id); if (jid) inboxStore.finish(dir, id, { adopt: { id: jid, rec: this.s.jobs[jid] } }, this.clock.now()); };

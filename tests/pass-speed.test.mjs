@@ -132,6 +132,7 @@ test('the fast lane judges the allowance reserve with the open pull requests cou
     register: REGISTER, clock: { now: () => NOW }, sleep: async () => {}, limitedOf: () => ({ out: false }), usage: { allowance, jobs: [done('review', 1), done('fix', 2)], snapshots: [] } });
   const out = await team.startApprovedNow({});
   assert.equal(out.started, false, 'two open PRs reserve 450k of 1M; 400k is left, so no implement starts');
+  assert.match(out.why, /^allowance reserve: remaining capacity is at or below the reserve/);
   assert.equal(w.created.length, 0);
 });
 

@@ -66,7 +66,13 @@ export function learnCapacity({ jobs, configured = null, options = ALLOWANCE_DEF
     const tokens = usable.reduce((s, w) => s + w.tokens, 0), delta = usable.reduce((s, w) => s + w.delta, 0);
     const each = usable.map(w => w.tokens / w.delta), spread = Math.max(...each) / Math.min(...each);
     const confidence = usable.length >= 3 && spread <= 2 ? 'high' : 'medium';
-    return { capacity: tokens / delta, source: 'learned', confidence, windows: usable.length, note: `learned from ${usable.length} weekly windows (${confidence} confidence)` };
+    return {
+      capacity: tokens / delta,
+      source: 'learned',
+      confidence,
+      windows: usable.length,
+      note: `learned from ${usable.length} weekly windows (${confidence} confidence)`
+    };
   }
   const why = usable.length ? 'only one usable weekly window so far, not trusted alone' : 'no usable history yet';
   if (start !== null) {
@@ -92,7 +98,12 @@ export function projectedNeed({ jobs, openPrs }) {
 export function summarise({ used, jobs, openPrs, configured = null, options = ALLOWANCE_DEFAULTS }) {
   const usage = checkUsage(used);
   const learned = learnCapacity({ jobs, configured, options });
-  const base = { used: usage.ok ? usage.used : null, capacity: learned.capacity, capacitySource: learned.source, confidence: learned.confidence, windows: learned.windows,
+  const base = {
+    used: usage.ok ? usage.used : null,
+    capacity: learned.capacity,
+    capacitySource: learned.source,
+    confidence: learned.confidence,
+    windows: learned.windows,
     remaining: null, need: null, reserve: null, belowReserve: null, basis: 'percent' };
   if (!usage.ok) return { ...base, reason: `${usage.reason}; the fixed share rule applies` };
   if (learned.capacity === null) return { ...base, reason: `${learned.note}; the fixed share rule applies` };
@@ -116,15 +127,27 @@ const tokensText = n => (Number.isFinite(n) ? (n >= 1e6 ? `${(n / 1e6).toFixed(1
 // "42% used of about 6.0M tokens a week (learned from 3 weekly windows); 3.5M left, reserve 0.4M"
 export function describe(s) {
   if (!s || s.basis !== 'absolute') return s?.reason || 'capacity unknown';
-  return `${Math.round(s.used * 100)}% used of about ${tokensText(s.capacity)} a week (${s.reason}); ${tokensText(s.remaining)} left, reserve ${tokensText(s.reserve)}`;
+  const used = `${Math.round(s.used * 100)}% used of about ${tokensText(s.capacity)} a week`;
+  return `${used} (${s.reason}); ${tokensText(s.remaining)} left, reserve ${tokensText(s.reserve)}`;
 }
 
 // The figures the dashboard and the MCP tools show per agent: used percent, learned capacity, remaining capacity, reserve amount, and why.
 export function capacityView(s) {
   if (!s) return null;
   const round = n => (Number.isFinite(n) ? Math.round(n) : null);
-  return { basis: s.basis, usedPercent: Number.isFinite(s.used) ? Math.round(s.used * 1000) / 10 : null, capacity: round(s.capacity), source: s.capacitySource, confidence: s.confidence, windows: s.windows,
-    remaining: round(s.remaining), reserve: round(s.reserve), need: round(s.need), belowReserve: s.belowReserve, text: s.text ?? s.reason };
+  return {
+    basis: s.basis,
+    usedPercent: Number.isFinite(s.used) ? Math.round(s.used * 1000) / 10 : null,
+    capacity: round(s.capacity),
+    source: s.capacitySource,
+    confidence: s.confidence,
+    windows: s.windows,
+    remaining: round(s.remaining),
+    reserve: round(s.reserve),
+    need: round(s.need),
+    belowReserve: s.belowReserve,
+    text: s.text ?? s.reason
+  };
 }
 
 // One agent's capacity summary for a tick: the weekly use of its live window (null when unknown), its job history and the open pull requests that
