@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as robust from './robust.mjs';
+import { reportNote } from './inboxreport.mjs';
 
 // Done clears `reason` (null), so a status repaired from an earlier false failure no longer shows the stale failure text.
 export function inboxEndPatch({ id, j, job, teamDir, capMs }) {
@@ -13,5 +14,9 @@ export function inboxEndPatch({ id, j, job, teamDir, capMs }) {
   const stopped = j.capStopped ? `stopped after the ${Math.round(capMs / 60000)}-minute inbox time cap (limits.inbox_max_minutes)` : `the job ended ${job.status}`;
   const outcome = job.status === 'completed' ? robust.inboxOutcome(summary) : { ok: false, why: stopped };
   const result = outcome.ok ? summary.trim() : `${outcome.why}${summary.trim() ? `. Agent summary: ${summary.trim()}` : '; it left no summary'}`;
-  return { state: outcome.ok ? 'done' : 'failed', job: id.slice(0, 8), reason: outcome.ok ? null : outcome.why, result };
+  // Issue #1147: the named report is checked for every ending (completed, failed, cancelled, cap-stopped);
+  // a job that did not finish is the likeliest to leave a half-written report.
+  const note = reportNote(j);
+  const full = note ? `${result}\n${note}` : result;
+  return { state: outcome.ok ? 'done' : 'failed', job: id.slice(0, 8), reason: outcome.ok ? null : outcome.why, result: full };
 }
