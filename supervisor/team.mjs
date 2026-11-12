@@ -48,6 +48,7 @@ import { markDone, recordPrSteps } from './afterinstall.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
+import { clearLatchApproved } from './latchaction.mjs';
 import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
 import { validateChangeCheck } from './ghchange.mjs';
 import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
@@ -2218,6 +2219,10 @@ export class Team {
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
     if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
     if (action === 'unpark') return unparkApproved(n, depsOf(this));   // issue #1115
+    if (action === 'clear_latch') {   // issue #1160; handinstall.mjs imports team.mjs through upgrade.mjs, so it is loaded here, not at the top
+      const { handInstallHold } = await import('./handinstall.mjs');
+      return clearLatchApproved({ root: this.root, reason }, { upgradeLock, handInstallHold, now: () => this.clock.now() });
+    }
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
     const tk = rec.issue != null && !['review', 'fix', 'rebase', 'cifix'].includes(rec.kind) ? 'issue' : 'pull', tgt = rec.pr ?? rec.issue;
