@@ -42,7 +42,8 @@ import { withReportContract, reportNameFor } from './inboxreport.mjs';
 import { repairInbox } from './inboxrepair.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
-import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
+import { enforceNoDeferredSteps } from './homeownersteps.mjs';
+import { markDone, recordPrSteps } from './afterinstall.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
@@ -1936,6 +1937,7 @@ export class Team {
       try {
         if (r.command === 'reopen') await this.reopen(Number(r.args[0]));
         else if (r.command === 'accept-split') await this.acceptSplit(Number(r.args[0]));
+        else if (r.command === 'after-install-done') markDone(this.s, Number(r.args[0]));
         else await this.requestReReview(r.args[0], r.args[1]);
         (report.notified ||= []).push({ queuedHomeownerRequest: what, applied: true });
         discardHomeownerRequest(r);
@@ -2154,8 +2156,7 @@ export class Team {
   async applyDoneRule(pr, head, verdict) {
     if (!this.gh.pullBody) return verdict;
     let body; try { body = await this.gh.pullBody(pr); } catch { return verdict; }
-    const steps = homeownerSteps(body);
-    if (steps.length) this.s.homeownerSteps[pr] = { head, steps: steps.slice(0, 10), at: this.clock.now() }; else delete this.s.homeownerSteps[pr];
+    recordPrSteps(this.s, pr, head, body, this.clock.now());
     this.save();
     return enforceNoDeferredSteps(verdict, body);
   }

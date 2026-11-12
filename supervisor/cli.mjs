@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import { requestBreakerResume } from './breakerresume.mjs';
-import { queueHomeownerRequest } from './homeownerqueue.mjs';
+import { homeownerCommand, queueHomeownerRequest } from './homeownerqueue.mjs';
 import { resumeAllowed } from './breaker.mjs';
 import { rangeEqual } from './rangediff.mjs';
 import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
@@ -574,11 +574,11 @@ async function main() {
       try { console.log(JSON.stringify(await (await teamFor(root, registry, config)).startApprovedNow({}))); } finally { release(); }
       return;
     }
-    if (a._[0] === 'accept-split') {   // issue #244: the "Accept split" path of the Needs you item
-      const n = Number(a._[1]);
-      if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team accept-split ISSUE');
-      const release = await homeownerLock(root, 'accept-split', queueOf(root, 'accept-split', [n]));
-      try { console.log(JSON.stringify({ issue: n, filed: await (await teamFor(root, registry)).acceptSplit(n) })); } finally { release(); }
+    if (['accept-split', 'after-install-done'].includes(a._[0])) {   // issues #244 (Accept split) and #1177 (After install checks made)
+      const cmd = a._[0], n = Number(a._[1]);
+      if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError(`usage: team ${cmd} ${cmd === 'accept-split' ? 'ISSUE' : 'PR'}`);
+      const release = await homeownerLock(root, cmd, queueOf(root, cmd, [n]));
+      try { console.log(JSON.stringify(await homeownerCommand(await teamFor(root, registry), cmd, n))); } finally { release(); }
       return;
     }
     if (a._[0] === 'breaker') {   // issue #549: the circuit breaker's status, and the homeowner's resume

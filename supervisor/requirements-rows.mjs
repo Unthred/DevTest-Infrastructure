@@ -15,7 +15,7 @@ export function rowRefusal(requirement, status, evidence) {
   if (kind === 'met') return null;
   if (kind === 'homeowner-only') {
     if (HOMEOWNER_REASON.test(evidence)) return null;
-    return `${named} is Homeowner-only but its evidence does not state the required credentials, approval or physical action. Allowed statuses: ${ALLOWED_STATUSES}. State the specific credentials, approval or physical action in the evidence.`;
+    return `${named} is Homeowner-only but its evidence does not state the required credentials, approval or physical action. Allowed statuses: ${ALLOWED_STATUSES}. State the specific credentials, approval or physical action in the evidence. If this check can only be made once the change is installed on Tower, set the status to After install instead and name who checks it.`;
   }
   if (kind === 'after-install') {
     if (AFTER_INSTALL_CHECKER.test(evidence)) return null;

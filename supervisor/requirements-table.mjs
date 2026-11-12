@@ -1,7 +1,7 @@
 // The implementer's visible PR checklist is deliberately separate from reviewer verdicts.
 // It makes the author account for every issue requirement before the dispatcher accepts work.
 import { isSecretScanner } from './secret-scanner.mjs';
-import { isAfterInstall, rowRefusal } from './requirements-rows.mjs';
+import { isAfterInstall, normalizedStatus, rowRefusal } from './requirements-rows.mjs';
 export const REQUIREMENTS_TABLE_HEADING = 'Requirements check';
 
 const cells = line => line.trim().startsWith('|') && line.trim().endsWith('|')
@@ -17,7 +17,7 @@ const tableSection = body => {
   return end < 0 ? rest : rest.slice(0, end);
 };
 
-const normalized = value => String(value || '').trim().toLowerCase().replace(/\s+/g, '-');
+const normalized = normalizedStatus;
 
 export function requirementsTableError(body) {
   const section = tableSection(body);

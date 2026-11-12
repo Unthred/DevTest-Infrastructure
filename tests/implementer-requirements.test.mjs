@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Team, ciFixPrompt, continuePrompt, fixPrompt, implementPrompt, reviewPrompt } from '../supervisor/team.mjs';
 import { afterInstallRows, requirementsTableError } from '../supervisor/requirements-table.mjs';
+import { rowRefusal } from '../supervisor/requirements-rows.mjs';
+import { markDone } from '../supervisor/afterinstall.mjs';
 import { prompt as corePrompt } from '../supervisor/core.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -135,4 +137,54 @@ test('the work item template has both lists', () => {
   assert.match(doc, /## Wanted \(before the PR\)/);
   assert.match(doc, /## After install \(checked on Tower\)/);
   assert.match(doc, /homeowner \| overseer/);
+});
+
+test('a merged and installed PR turns each After install row into a Needs you item until it is done', async () => {
+  const { recordAfterInstall, markAfterInstallDone, afterInstallItems } = await import('../supervisor/afterinstall.mjs');
+  const steps = {};
+  recordAfterInstall(steps, 7, 'a'.repeat(40), `${valid}${afterRow}\n`, 1);
+  const ctx = { steps, merged: [{ pr: 7 }], installed: new Set([7]) };
+  assert.equal(afterInstallItems({ ...ctx, merged: [] }).length, 0, 'not merged yet');
+  assert.equal(afterInstallItems({ ...ctx, installed: new Set() }).length, 0, 'not installed yet');
+  const [item] = afterInstallItems(ctx);
+  assert.equal(item.id, 'after-install-7');
+  assert.match(item.text, /Foreman lists the failed jobs on Tower/);
+  assert.match(item.action, /after-install-done 7/);
+  recordAfterInstall(steps, 7, 'b'.repeat(40), `${valid}${afterRow}\n`, 2);
+  assert.equal(afterInstallItems(ctx).length, 1, 'recording again does not end it');
+  assert.equal(markAfterInstallDone(steps, 7), true);
+  assert.equal(afterInstallItems(ctx).length, 0);
+  assert.equal(markAfterInstallDone(steps, 99), false);
+});
+
+test('the dashboard decision table knows the after-install item', async () => {
+  const { typeOf } = await import('../supervisor/decisiontable.mjs');
+  assert.equal(typeOf('after-install-7'), 'after-install');
+});
+
+test('the Homeowner-only refusal points at After install', () => {
+  assert.match(rowRefusal('Acceptance on Tower', 'Homeowner-only', 'needs Tower'), /set the status to After install/);
+});
+
+test('the review path records After install rows and afterInstallDone ends them', async t => {
+  const tm = team(t, `${valid}${afterRow}\n`);
+  await tm.applyDoneRule(19, HEAD, { verdict: 'PASS', findings: [] });
+  assert.equal(tm.s.afterInstallSteps[19].rows.length, 1);
+  markDone(tm.s, 19);
+  assert.deepEqual(tm.s.afterInstallSteps[19].done, ['Foreman lists the failed jobs on Tower']);
+  assert.throws(() => markDone(tm.s, 5), /no After install checks/);
+});
+
+test('the dashboard view lists the After install item of a PR once an upgrade record shows it installed', async t => {
+  const { afterInstallAttention } = await import('../supervisor/afterinstall-view.mjs');
+  const { recordAfterInstall } = await import('../supervisor/afterinstall.mjs');
+  const root = temp(t);
+  fs.mkdirSync(path.join(root, 'team'));
+  const state = { afterInstallSteps: {}, mergeLog: [{ pr: 7 }] };
+  recordAfterInstall(state.afterInstallSteps, 7, HEAD, `${valid}${afterRow}\n`, 1);
+  const names = { pr: n => ({ text: `PR #${n}` }) };
+  const view = () => afterInstallAttention({ state, root, names, config: { repository: 'o/r' } });
+  assert.equal(view().length, 0);
+  fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), `${JSON.stringify({ at: 1, prs: [7], result: 'verified' })}\n`);
+  assert.deepEqual(view().map(i => i.id), ['after-install-7']);
 });
