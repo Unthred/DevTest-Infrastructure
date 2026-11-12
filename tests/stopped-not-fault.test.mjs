@@ -72,7 +72,7 @@ test('release_agent is an approved action in both validators, never a control it
   assert.equal(validateItem({ ...item, target: 'Claude; rm' }).ok, false);
   assert.equal(validateItem({ ...item, kind: 'control' }).ok, false);
   assert.equal(checkProposal(item).ok, true);
-  assert.equal(checkProposal({ ...item, kind: 'control' }).ok, false);
+  assert.equal(checkProposal({ ...item, kind: 'control' }).ok, true, 'the MCP lets a control name through; Foreman refuses and audits it');
   assert.equal(checkProposal({ ...item, target: '12' }).ok, false);
 });
 

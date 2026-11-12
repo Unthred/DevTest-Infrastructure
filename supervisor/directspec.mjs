@@ -33,6 +33,7 @@ export const RESTRICTED = {
   approve_prompt: 'approving new work to run (an Inbox prompt) is the homeowner\'s decision on the dashboard',
   approve_issue_draft: 'approving a new issue draft is the homeowner\'s decision on the dashboard',
   approve_proposal: 'a proposal is approved only by the homeowner on the dashboard, never by the overseer',
+  release_agent: 'releasing a parked agent is approved by the homeowner on the dashboard',
   merge: 'merging is the homeowner\'s decision',
   approve_review: 'approving a review is the homeowner\'s decision',
   override_verdict: 'overriding a review verdict is the homeowner\'s decision',
