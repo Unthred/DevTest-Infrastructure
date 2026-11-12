@@ -30,6 +30,16 @@ export function expiryOf(expires, now) {
 const tokensText = n => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1e3)}k`);
 const hoursText = h => (h >= 48 ? `${Math.round(h / 24)} days` : `${Math.max(1, Math.round(h))}h`);
 
+// Which limit holds the agent: the weekly high-water hold (reviews only) and an exhausted weekly window are weekly, an exhausted short
+// window is the five-hour limit; any other wait (paid overage, a reported provider limit) is neither, so null. budget.mjs words the
+// exhausted reasons 'weekly N%...' and 'short window N%...'; a test pins these against the real assessAgent.
+export function holdingLimit(budget) {
+  if (budget?.mode === 'reviews_only') return 'weekly';
+  if (budget?.mode !== 'waiting') return null;
+  if (/^weekly \d/.test(budget.reason || '')) return 'weekly';
+  return /^short window \d/.test(budget.reason || '') ? 'five_hour' : null;
+}
+
 // "Helps Foreman now": yes only when the scope covers a model Foreman runs for this agent AND the agent is held by allowance.
 // Otherwise the reason. `budget` is the agent's budget view (mode, used, hoursLeft, capacity, shortWindow).
 export function helpsForeman({ reset, models, budget, expiry, now }) {
@@ -40,6 +50,9 @@ export function helpsForeman({ reset, models, budget, expiry, now }) {
     return no(`covers ${reset.scope} only; Foreman runs ${models.length ? models.join(' and ') : 'no model set in its config'}`);
   }
   if (!budget || budget.mode === 'normal') return no('Foreman is not held by allowance now, so a reset would free nothing');
+  const holder = holdingLimit(budget);
+  if (holder === null) return no(`Foreman is held (${budget.label || budget.mode}) but not by a weekly or five-hour limit, so a reset would free nothing`);
+  if (holder !== reset.limit) return no(`Foreman is held by the ${LIMIT_LABEL[holder]}; a ${LIMIT_LABEL[reset.limit] || reset.limit} reset would free nothing`);
   if (reset.limit === 'five_hour') {
     const left = budget.shortWindow?.resetsAt > now ? (budget.shortWindow.resetsAt - now) / HOUR : null;
     const resets = left === null ? '' : ` resets in ${hoursText(left)}`;

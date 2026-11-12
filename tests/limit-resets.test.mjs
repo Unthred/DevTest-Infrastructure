@@ -42,7 +42,7 @@ async function serve(t) {
 import { appliedResets, isAppliedReset, restoredIn } from '../supervisor/resetdetect.mjs';
 import { capacitySamples, learnCapacity } from '../supervisor/capacity.mjs';
 import { assessAgent, weeklyHistory, DEFAULT_BUDGET } from '../supervisor/budget.mjs';
-import { scopeCovers, expiryOf, helpsForeman, resetsView, modelsOf } from '../supervisor/resetsview.mjs';
+import { scopeCovers, expiryOf, helpsForeman, resetsView, modelsOf, holdingLimit } from '../supervisor/resetsview.mjs';
 import { applyReset, readResets, scopeOf } from '../supervisor/limitresets.mjs';
 import { limitResetEntries } from '../supervisor/resetsentries.mjs';
 import { recordTimeline, readTimeline, entryText } from '../supervisor/history.mjs';
@@ -84,6 +84,29 @@ test('Helps Foreman now: yes only when the scope is covered and the agent is hel
   assert.equal(helpsForeman({ ...base, reset: { limit: 'weekly', scope: 'all', usedAt: NOW }, budget: held }).text, 'already used');
   const unknown = helpsForeman({ ...base, reset: { limit: 'weekly', scope: 'all', usedAt: null }, budget: { ...held, capacity: null } });
   assert.match(unknown.text, /tokens restored not known/);
+});
+
+test('Helps Foreman now matches the reset limit to the window that holds the agent', () => {
+  const base = { models: ['sonnet', 'opus'], expiry: expiryOf('2027-03-08', NOW), now: NOW };
+  const weeklyHold = { mode: 'reviews_only', label: 'reviews only', used: 0.97, hoursLeft: 19, capacity: { capacity: 6e6 }, shortWindow: { used: 0.1, resetsAt: NOW + HOUR } };
+  const fiveHold = { mode: 'waiting', label: 'waiting', reason: 'short window 100%: used up; waits for its reset', used: 0.4, hoursLeft: 100, capacity: { capacity: 1e7 }, shortWindow: { used: 1, resetsAt: NOW + HOUR } };
+  const r = limit => ({ limit, scope: 'all', usedAt: null });
+  const a = helpsForeman({ ...base, reset: r('five_hour'), budget: weeklyHold });
+  assert.equal(a.yes, false, 'a five-hour reset frees nothing under a weekly hold');
+  assert.match(a.text, /held by the weekly limit/);
+  const b = helpsForeman({ ...base, reset: r('weekly'), budget: fiveHold });
+  assert.equal(b.yes, false, 'a weekly reset frees nothing while the five-hour window is exhausted');
+  assert.match(b.text, /held by the five-hour limit/);
+  assert.equal(helpsForeman({ ...base, reset: r('five_hour'), budget: fiveHold }).yes, true);
+  assert.equal(helpsForeman({ ...base, reset: r('weekly'), budget: weeklyHold }).yes, true);
+  assert.equal(helpsForeman({ ...base, reset: r('weekly'), budget: { mode: 'waiting', reason: 'the provider reports paid overage in use', label: 'waiting' } }).yes, false);
+});
+
+test('holdingLimit agrees with the reasons the real budget assessment gives', () => {
+  const win = (type, used, mins) => ({ type, utilization: used, resetsAt: NOW + 5 * HOUR, windowMinutes: mins });
+  const run = windows => assessAgent({ allowance: { observedAt: NOW, windows }, now: NOW });
+  assert.equal(holdingLimit(run([win('seven_day', 0.999, 10080)])), 'weekly');
+  assert.equal(holdingLimit(run([win('seven_day', 0.3, 10080), win('five_hour', 0.999, 300)])), 'five_hour');
 });
 
 test('expiry colouring: amber within 14 days, plain beyond, red once expired', () => {
