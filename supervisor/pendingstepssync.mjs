@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { atomicJson } from './core.mjs';
 import { entryApproved } from './decisions.mjs';
-import { homeownerSteps } from './homeownersteps.mjs';
+import { listedSteps } from './homeownersteps.mjs';
 import * as ps from './pendingsteps.mjs';
 
 export const SCAN_MS = 10 * 60000;
@@ -38,13 +38,13 @@ export async function syncPendingSteps(team, report = {}) {
 async function syncSteps(team, report) {
   const { s, gh, clock } = team, now = clock.now();
   s.pendingSteps ||= {}; s.pendingStepsSeen ||= {};
-  let changed = false;
+  let changed = false, scanning = false;
   for (const r of takeStepDone(team.root)) {
     if (ps.markDone(s.pendingSteps, r.pr, r.index, now)) changed = true;
     try { fs.unlinkSync(r.file); } catch { /* already taken */ }
   }
-  if (now - (s.pendingStepsScanAt || 0) >= SCAN_MS && gh.listMergedPulls && gh.pullBody) { s.pendingStepsScanAt = now; changed = (await scanMerged(team, now, report)) || changed; }
-  if (await detect(team, now)) changed = true;
+  if (now - (s.pendingStepsScanAt || 0) >= SCAN_MS && gh.listMergedSince && gh.pullBody) { s.pendingStepsScanAt = now; scanning = true; changed = (await scanMerged(team, now, report)) || changed; }
+  if (await detect(team, now, scanning)) changed = true;
   if (ps.reraiseDue(s.pendingSteps, now) && team.alert) {
     try { await team.alert(ps.reraiseText(s.pendingSteps)); for (const e of Object.values(s.pendingSteps)) e.raisedAt = now; changed = true; }
     catch { (report.skipped ||= []).push({ what: 'alert homeowner steps', reason: 'alert delivery failed; will retry' }); }
@@ -56,7 +56,7 @@ async function syncSteps(team, report) {
 async function scanMerged(team, now, report) {
   const { s, gh } = team;
   let merged;
-  try { merged = await gh.listMergedPulls(); } catch (error) { (report.skipped ||= []).push({ what: 'homeowner steps scan', reason: String(error?.message || error).slice(0, 200) }); return false; }
+  try { merged = await gh.listMergedSince(now - ps.WINDOW_DAYS * 24 * 3600000); } catch (error) { (report.skipped ||= []).push({ what: 'homeowner steps scan', reason: String(error?.message || error).slice(0, 200) }); return false; }
   let changed = false, bodies = 0;
   for (const p of merged || []) {
     const at = Date.parse(p.mergedAt);
@@ -65,18 +65,18 @@ async function scanMerged(team, now, report) {
     bodies++;
     let body; try { body = await gh.pullBody(p.number); } catch { continue; }   // not seen: the next scan retries
     s.pendingStepsSeen[p.number] = at; changed = true;
-    const steps = homeownerSteps(body);
+    const steps = listedSteps(body);
     if (steps.length && !s.pendingSteps[p.number]) s.pendingSteps[p.number] = ps.newEntry({ title: p.title, steps, mergedAt: at });
   }
   for (const [n, at] of Object.entries(s.pendingStepsSeen)) if (!ps.withinWindow(at, now)) { delete s.pendingStepsSeen[n]; changed = true; }
   return changed;
 }
 
-async function detect(team, now) {
+async function detect(team, now, readComments) {   // PR comments are read with the scan, not on every tick
   const { s, gh } = team, owner = String(team.c.repository || '').split('/')[0];
   const comments = new Map();   // pr -> approvalsFrom(...), read once per pass and only for a PR with an undone decision step
   for (const [n, e] of Object.entries(s.pendingSteps)) {
-    if (e.steps.some(x => !x.done && ps.decisionsIn(x.text).length) && gh.prComments) { try { comments.set(n, ps.approvalsFrom(await gh.prComments(Number(n)), owner)); } catch { /* the register still counts */ } }
+    if (e.steps.some(x => !x.done && ps.decisionsIn(x.text).length) && gh.prComments && readComments) { try { comments.set(n, ps.approvalsFrom(await gh.prComments(Number(n)), owner)); } catch { /* the register still counts */ } }
   }
   const ctx = { appConfigured: !!(team.c.github_app && team.c.github_app.key_file), registerApproved: id => entryApproved(String(team.register || ''), id), commentApproved: (pr, id) => comments.get(String(pr))?.has(id) === true };
   let changed = false;

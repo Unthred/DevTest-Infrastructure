@@ -8,7 +8,7 @@ export const WINDOW_DAYS = 30;                 // the backfill: merged PRs this 
 export const RERAISE_MS = 3 * 24 * 3600000;    // the agreed re-raise interval
 export const MAX_STEPS = 10;
 const DAY = 24 * 3600000;
-const APP_STEP = /github[ _-]app/i;
+const APP_STEP = /github[ _-]app|\bprivate key\b/i;   // the App, its key file or its offer line: all are seen as github_app configured
 const DECISION_ID = /\bD-\d{3}\b/g;
 
 // What a step unlocks is the PR's title: the feature the PR delivered.

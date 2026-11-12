@@ -27,7 +27,7 @@ const cfg = extra => ({ schema_version: 1, enabled: true, repository: 'Unthred/r
 function world(t, { config = {}, register = REGISTER, merged, comments = [] } = {}) {
   const state = tmp(t, 'pstate-'), clock = { t: NOW, now: () => clock.t }, alerts = [];
   const gh = { listPulls: async () => [], listIssues: async () => [], getPull: async () => null, board: async () => {},
-    listMergedPulls: async () => merged ?? [{ number: 1125, title: 'Park and stop through the MCP (#1125)', mergedAt: new Date(NOW - 2 * DAY).toISOString() },
+    listMergedSince: async () => merged ?? [{ number: 1125, title: 'Park and stop through the MCP (#1125)', mergedAt: new Date(NOW - 2 * DAY).toISOString() },
       { number: 900, title: 'Old', mergedAt: new Date(NOW - (WINDOW_DAYS + 5) * DAY).toISOString() }],
     pullBody: async n => { gh.bodyReads.push(n); return BODY; }, bodyReads: [], prComments: async () => comments };
   const jobs = { listActive: async () => [], get: async () => null };
@@ -93,7 +93,7 @@ test('detection: a register entry marked homeowner-approved finishes the decisio
 
 test('no expiry: an outstanding step is still listed 200 days later, long after the 30 day scan window', async t => {
   const w = world(t); await pass(w);
-  w.clock.t += 200 * DAY; w.gh.listMergedPulls = async () => []; await pass(w);
+  w.clock.t += 200 * DAY; w.gh.listMergedSince = async () => []; await pass(w);
   assert.equal(outstanding(w.team.s.pendingSteps).length, 3);
   assert.equal(consolidateNeedsYou([], { cache: {}, pendingSteps: saved(w).pendingSteps, repository: 'o/r' }).needsYou.length, 3);
 });
@@ -187,4 +187,37 @@ test('a done request for an unknown step is discarded and changes nothing', asyn
   await pass(w);
   assert.equal(outstanding(w.team.s.pendingSteps).length, 2);
   assert.deepEqual(fs.readdirSync(path.join(w.root, 'dashboard', 'step-done')), []);
+});
+
+// The real PR #1125 description (trailing completion-state paragraph, key step without the words "GitHub App").
+const REAL_1125 = '## Homeowner steps\n1. Create a GitHub App for the repository with Issues: read and write and Pull requests: read and write, and install it on the repository.\n'
+  + '2. Save its private key on Tower as a file outside Git with mode 600 (owner only; Foreman refuses any other mode).\n'
+  + '3. Write one line `<app_id>:<installation_id>:<absolute key file path>` in `<state root>/team/github-app-offer.txt` (two numbers and a path, no secret).\n'
+  + '4. Comment `homeowner-approval: D-038` and `homeowner-approval: D-039` on this PR.\n\nImplemented: yes. CI/review passed: pending. Deployed: no. Verified working: no.\n';
+
+test('the real PR #1125 body gives 4 steps; github_app finishes 1 to 3 and the approval comment finishes 4', async t => {
+  const w = world(t, { config: { github_app: { app_id: 1, installation_id: 2, key_file: '/k/key.pem' } }, comments: [{ login: 'Unthred', url: 'u', body: 'homeowner-approval: D-038\nhomeowner-approval: D-039' }] });
+  w.gh.pullBody = async () => REAL_1125;
+  await pass(w);
+  const e = w.team.s.pendingSteps[1125];
+  assert.equal(e.steps.length, 4, 'the completion-state paragraph is not a step');
+  assert.deepEqual(e.steps.map(s => s.done), [true, true, true, true]);
+  const w2 = world(t); w2.gh.pullBody = async () => REAL_1125; await pass(w2);
+  assert.match(JSON.stringify(await park(7, { ...depsOf(w2.team), gh: { listPulls: async () => [{ number: 7, labels: [] }], listIssues: async () => [] } })), /homeowner steps 1 to 3 of 4 of PR #1125/);
+});
+
+test('backfill reads by merge date: the scan asks for the whole 30 day window, not the newest page', async t => {
+  const w = world(t); let since = null;
+  w.gh.listMergedSince = async ms => { since = ms; return []; };
+  await pass(w);
+  assert.equal(since, NOW - WINDOW_DAYS * DAY);
+});
+
+test('the real GitHub client reads merged PRs with a date search and a limit above 100', async () => {
+  const { githubClient } = await import('../supervisor/github.mjs');
+  const calls = []; const client = githubClient({ repository: 'Unthred/r' }, args => { calls.push(args); return '[]'; });
+  await client.listMergedSince(Date.parse('2026-10-13T05:00:00Z'));
+  const a = calls[0];
+  assert.ok(a.includes('merged:>=2026-10-13'));
+  assert.ok(Number(a[a.indexOf('--limit') + 1]) > 100);
 });

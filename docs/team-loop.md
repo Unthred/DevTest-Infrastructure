@@ -304,7 +304,7 @@ Merged is a stage, not the end. Each issue moves through **merged** (the pull re
   - **A step outlives the merge (issue #1155).** While the PR is open the step shows as above. Each pass also scans the PRs merged in the last 30 days (this is the backfill on install, and it picks up every later merge), records each `Homeowner steps` section once, and keeps every step in Needs you, naming the PR (`homeowner step 1 of 3 of PR #1125`) and the feature it unlocks (the PR title), until it is done. There is no time based expiry. Earlier the item was tied to the open PR at its reviewed head, so it vanished on merge and PR #1125's steps were never shown.
   - **Done is detected or clicked.** A step naming the GitHub App is done when `github_app` is configured; a step naming `D-0NN` decisions is done when each is `homeowner-approved` in the register or the repository owner commented `homeowner-approval: D-0NN` on the PR. Any other step is marked done with **Mark done** on its Needs you item (a person's click; it leaves a request and the next pass records it).
   - **Reminders.** While any step is outstanding the homeowner is alerted every 3 days (the first alert on the pass that records it). A failed alert is retried on the next pass.
-  - **Refusals name the step.** A park refused because the GitHub App is not configured says so with the outstanding step and PR (`needs the GitHub App, homeowner steps 1 to 2 of 3 of PR #1125`).
+  - **Refusals name the step.** A park refused because the GitHub App is not configured says so with the outstanding step and PR (`needs the GitHub App, homeowner steps 1 to 3 of 4 of PR #1125`).
 
 ## The inbox lane (issue #971)
 
