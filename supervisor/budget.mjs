@@ -27,6 +27,7 @@ const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 // team.local.json that sets them keeps loading.
 const LEGACY_KEYS = ['projected_limit', 'recent_min_window_hours', 'recent_min_samples'];
 const CAPACITY_KEYS = ['starting_capacity', 'capacity', 'reserve_margin'];   // issue #1116
+const SELECTION_KINDS = new Set(['implement', 'continue', 'fix', 'cifix', 'rebase', 'review', 'inbox']);
 const KEYS = ['enabled', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
 KEYS.push('reading_max_age_minutes');   // issue #1163
 
@@ -41,9 +42,30 @@ export function validateBudgetConfig(b, agentNames) {
   num('probe_age_hours', 0.25, 48); num('probe_interval_minutes', 5, 1440);
   num('reading_max_age_minutes', 5, 1440);
   validateCapacityKeys(b, agentNames);
+  validateSelectionKeys(b, agentNames);
   if ('probe' in b && typeof b.probe !== 'boolean') throw new SupervisorError('invalid budget config: probe');
   if ('can_take_over' in b && !(Array.isArray(b.can_take_over) && b.can_take_over.every(n => agentNames.includes(n))))
     throw new SupervisorError('invalid budget config: can_take_over must list configured agents');
+}
+// Issue #1166: configured plan-share defaults are used until an agent has enough job history
+// to learn a cost. Pins are data, never names or branches embedded in scheduler rules.
+function validateSelectionKeys(b, agentNames) {
+  if ('cost_defaults' in b) {
+    const defaults = b.cost_defaults;
+    const valid = defaults && typeof defaults === 'object' && !Array.isArray(defaults)
+      && Object.entries(defaults).every(([agent, kinds]) => agentNames.includes(agent) && kinds && typeof kinds === 'object' && !Array.isArray(kinds)
+        && Object.entries(kinds).every(([kind, value]) => SELECTION_KINDS.has(kind) && value && typeof value === 'object' && !Array.isArray(value)
+          && Object.keys(value).every(k => k === 'weekly' || k === 'short') && Number.isFinite(value.weekly) && value.weekly >= 0 && value.weekly < 1 && Number.isFinite(value.short) && value.short >= 0 && value.short < 1));
+    if (!valid) throw new SupervisorError('invalid budget config: cost_defaults must map configured agents and job types to weekly and short shares');
+  }
+  if ('pins' in b) {
+    const pins = b.pins;
+    const valid = pins && typeof pins === 'object' && !Array.isArray(pins)
+      && Object.entries(pins).every(([issue, pin]) => /^\d+$/.test(issue) && Number(issue) > 0 && pin && typeof pin === 'object' && !Array.isArray(pin)
+        && Object.keys(pin).every(k => k === 'required' || k === 'preferred')
+        && (!('required' in pin) || agentNames.includes(pin.required)) && (!('preferred' in pin) || agentNames.includes(pin.preferred)));
+    if (!valid) throw new SupervisorError('invalid budget config: pins must map an issue to configured required or preferred agents');
+  }
 }
 // Issue #1116: starting_capacity maps an agent to its weekly capacity in tokens; reserve_margin is the share of capacity kept on top of the projected need.
 function validateCapacityKeys(b, agentNames) {

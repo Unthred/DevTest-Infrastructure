@@ -27,7 +27,7 @@ export function overlayHostHold(team, actions) {
 export function nextWhyFields(a, redact) {
   if (a.heldBy) return { ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom } : {}), why: redact(a.heldBy, 300) };
   if (a.reassignedFrom) return { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) };
-  return a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {};
+  return a.why ? { why: redact(a.why, 300) } : {};
 }
 
 // "; held: <reason>" for an agent whose next job the host is holding, otherwise an empty string.

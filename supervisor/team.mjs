@@ -34,6 +34,7 @@ import { probesOwed } from './probesdue.mjs';
 import { refreshBeforeAdmission } from './admissionrefresh.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
+import { chooseAgent, choiceText } from './agentselection.mjs';
 import { weeklyWindow, shortWindowOf } from './budget.mjs';
 import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
@@ -114,7 +115,8 @@ export function validateTeamConfig(input) {
   if (agents.length < 1) throw new SupervisorError('team needs at least one agent');
   const seen = new Set();
   for (const [name, a] of agents) {
-    if (!/^[a-z][a-z0-9-]{1,31}$/.test(name) || !/^[a-z][a-z0-9-]{1,31}$/.test(a.provider || '') || !/^[a-z0-9-]+\/$/.test(a.branch_prefix || '') || !Array.isArray(a.issues) || !a.issues.every(n => Number.isSafeInteger(n) && n > 0))
+    if (!/^[a-z][a-z0-9-]{1,31}$/.test(name) || !/^[a-z][a-z0-9-]{1,31}$/.test(a.provider || '') || !/^[a-z0-9-]+\/$/.test(a.branch_prefix || '') || !Array.isArray(a.issues) || !a.issues.every(n => Number.isSafeInteger(n) && n > 0)
+      || (a.job_types !== undefined && !(Array.isArray(a.job_types) && a.job_types.length && a.job_types.every(k => ['implement', 'continue', 'fix', 'cifix', 'rebase', 'review', 'inbox'].includes(k)))))
       throw new SupervisorError(`invalid agent: ${name}`);
     for (const n of a.issues) { if (seen.has(n)) throw new SupervisorError(`issue ${n} has two owners`); seen.add(n); }
   }
@@ -1136,9 +1138,15 @@ export class Team {
           if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) + 0.1 * actions.filter(x => x.agent === agent).length });   // tie-break: spread load to an agent without a slot this tick
         }
         if (!cands.length) break;
-        const best = cands.sort((x, y) => x.rank - y.rank)[0];   // stable: ties keep the team.json agent order
-        const why = best.act.type === 'review' ? this.reviewWhy(best.agent, best.act, prs) : null;
-        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}) }); used[role]++; if (role !== 'inbox') total++;
+        // Existing lane priority stays intact (repairs before new work, sole reviews before shared
+        // reviews). Within the first eligible priority band, plan-share selection chooses the agent.
+        const firstRank = Math.min(...cands.map(c => Math.floor(c.rank)));
+        const band = cands.filter(c => Math.floor(c.rank) === firstRank);
+        const choice = this.agentChoice(band, role);
+        const best = band.find(c => c.agent === choice.agent) || band[0];
+        const reviewWhy = best.act.type === 'review' ? this.reviewWhy(best.agent, best.act, prs) : null;
+        const why = [choiceText(choice), reviewWhy].filter(Boolean).join('; ');
+        actions.push({ agent: best.agent, ...best.act, selection: choice, ...(why ? { why } : {}) }); used[role]++; if (role !== 'inbox') total++;
         { const k = `${this.c.agents[best.agent].provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
@@ -1192,6 +1200,32 @@ export class Team {
   rankRows() { return candidateRows(this.agents().map(([n]) => n), this.modes, n => mayTakeOver(this.c, n) && !this.limitedOf(n).out); }
   spareScore(agent) {
     return spareScoreOf(this.rankRows(), agent);
+  }
+  // The pure selector receives plan shares, not provider names or raw token totals. History wins
+  // where the budget can estimate a weekly share; the per-agent config supplies both windows
+  // while history is too short. Short-window burn has no retained reading series yet, so its
+  // current rate is conservatively zero rather than invented.
+  agentChoice(candidates, role) {
+    const now = this.clock.now();
+    const issue = candidates.find(c => c.act.issue != null)?.act.issue;
+    return chooseAgent({ now, candidates: candidates.map(({ agent, act }) => {
+      const mode = this.modes?.[agent];
+      const fallback = this.c.budget?.cost_defaults?.[agent]?.[act.type] || null;
+      const learned = mode?.costs?.cost?.(act.type);
+      const weekly = Number.isFinite(learned) ? learned : (fallback?.weekly ?? 0);
+      const short = fallback?.short ?? weekly;
+      return { agent, allowed: this.agentMayDo(agent, act.type), freeSlot: true,
+        reserve: !!reserveOut(mode), out: !!this.ownerOut(agent),
+        weekly: mode?.known ? { used: mode.used, resetsAt: mode.resetsAt } : null,
+        short: mode?.shortWindow ?? null,
+        rate: { weekly: mode?.ratePerHour ?? 0, short: 0 }, expected: { weekly, short },
+        costSource: Number.isFinite(learned) ? 'history' : fallback ? 'configured-default' : 'unavailable',
+        pin: issue == null ? null : (this.c.budget?.pins?.[issue]?.preferred === agent ? agent : null) };
+    }), pin: issue == null ? null : this.c.budget?.pins?.[issue] || null });
+  }
+  agentMayDo(agent, type) {
+    const kinds = this.c.agents?.[agent]?.job_types;
+    return !Array.isArray(kinds) || kinds.includes(type);
   }
   // True when `provider` already runs its limits.provider_roles count in `role` (no such limit: never).
   providerSlotFull(provider, role, usedBy) {
@@ -1375,6 +1409,11 @@ export class Team {
     for (let i = 0; i < 200; i++) {
       const act = this.choose(agent, a, prs, issueByNo, role, { unavailable });
       if (!act) return null;
+      if (!this.agentMayDo(agent, act.type)) {
+        this.hold(agent, act.type, `${act.type} is not enabled for this agent by its job_types`, act.pr ?? null);
+        unavailable.add(`${act.type}:${act.key}`);
+        continue;
+      }
       const wait = unavailableStart(agent, act, this.limitedOf(agent));
       if (wait) {
         this.hold(agent, act.type, wait, act.pr ?? null);
@@ -3669,7 +3708,7 @@ export class Team {
       try { job = await this.jobs.create(spec); }   // a lease conflict throws here, before any attempt is counted
       catch (error) { if (unclaim) unclaim(); throw error; }
       if (announce) await announce();
-      this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
+      this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...(act.selection ? { selection: act.selection } : {}), ...meta, ingested: false, at: this.clock.now() };
       Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job
       this.save();
       await bump(); this.save();

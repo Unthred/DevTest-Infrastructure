@@ -85,7 +85,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         ...faultViews(v),   // #1107 infra faults apart from work failures; #1121 open issues with no implementer and no reason
         agents: (v.agents || []).map(a => ({ name: a.name, state: a.state, idle: a.idleReason?.text ?? null })),
         budget: budgetBrief(v.budget), hostPressure: v.hostPressure ?? null,   // issue #1151
-        planned: (v.plan || []).map(a => ({ type: a.type, agent: a.agent ?? null, pr: a.pr ?? null, issue: a.issue ?? null, why: a.why ?? null })),
+        planned: (v.plan || []).map(a => ({ type: a.type, agent: a.agent ?? null, pr: a.pr ?? null, issue: a.issue ?? null, why: a.why ?? null, selection: a.selection ?? null })),
         running: (v.jobs || []).filter(j => ['running', 'queued', 'paused_limit', 'paused_manual'].includes(j.status)).map(j => ({ id: j.fullId, kind: j.kind, ref: j.ref, agent: j.agent, status: j.status, startedAt: iso(j.startedAt) })),
         needsYouCount: v.health?.count ?? v.panels?.needsYou?.length ?? (v.attention || []).filter(a => a.severity === 'action').length })) },
     { name: 'foreman_review_order', description: 'The order in which each reviewer will review waiting pull requests, taken from the planner\'s own queue, with the reason each one waits or is held; plus open pull requests that are not queued for review and why.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
