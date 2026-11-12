@@ -5,9 +5,9 @@
 // computed from diffs, not guessed:
 //   - covered:  the hunk's added and removed lines are consumed from the same file's added and removed lines of the new commit;
 //   - on main:  what is left is consumed from the lines main added or removed between the merge base and the base tip;
-//   - folded:   a left-over added line that a longer added line of the new commit contains (both sides edited one line and the
+//   - folded:   (the longer line is used up) a left-over added line that a longer added line of the new commit contains (both sides edited one line and the
 //               resolution joined them; at least 4 characters, so a brace or a short token proves nothing);
-//   - merged:   a left-over added line whose newly introduced tokens (those not on the old hunk's removed lines) all sit on one added
+//   - merged:   (only in a hunk that also removed a line) a left-over added line whose newly introduced tokens (those not on the old hunk's removed lines) all sit on one added
 //               line of the new commit (a list or call both sides edited and the resolution united, issues #580 and #640);
 //   - exported: `export { X };` when main or the new commit already exports X by its declaration (PR 1131);
 //   - renumbered: a left-over added line whose only difference from a line of the new commit is a number that main's own added
@@ -88,21 +88,24 @@ function renumberedBy(u, available, mainRuns) {
 function foldedInto(u, available) {
   const t = u.trim();
   if (t.length < 4 || !/[A-Za-z0-9]/.test(t)) return false;
-  for (const [v, n] of available) if (n > 0 && v.length > u.length && v.includes(t)) return true;
+  for (const [v, n] of available) if (n > 0 && v.length > u.length && v.includes(t)) return take(available, v);
   return false;
 }
 
 const words = l => l.match(/[A-Za-z0-9_$]+/g) || [];
 
-// Every token the old hunk introduced on `u` (absent from its removed lines) is on one other added line of the new commit.
+// Only for a hunk that also removed a line (an edit, so main could have edited the same line): every token the hunk introduced on `u`
+// (absent from its removed lines) is on one other added line of the new commit, which is then used up. A pure addition has no line
+// main could have joined, so it is never merged: a dropped line must not hide behind a similar line elsewhere.
 function mergedInto(u, removed, available) {
+  if (!removed.length) return false;
   const had = new Set(removed.flatMap(words));
   const fresh = words(u).filter(w => !had.has(w));
   if (!fresh.length) return false;
   for (const [v, n] of available) {
     if (n <= 0 || v === u) continue;
     const has = new Set(words(v));
-    if (fresh.every(w => has.has(w))) return true;
+    if (fresh.every(w => has.has(w))) return take(available, v);
   }
   return false;
 }

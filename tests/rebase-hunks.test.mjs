@@ -149,6 +149,19 @@ test('issue #640 kept: a call both sides edited on the same line, merged into on
   assert.equal(p.out.pushed, true, JSON.stringify(p.out.lostChanges));
 });
 
+test('a dropped pure addition is refused even when its tokens appear on another added line (merged rule needs both sides to edit a line)', t => {
+  const w = world(t, {
+    base: lines('cfg = {', '  a: 1,', '};', 'x', 'y'),
+    feat: lines('cfg = {', '  a: 1,', '  strict: true,', '};', 'x', 'if (cfg.strict === true) run();', 'y'),
+    main: lines('cfg = {', '  a: 2,', '};', 'x', 'y'),
+    resolution: lines('cfg = {', '  a: 2,', '};', 'x', 'if (cfg.strict === true) run();', 'y'),
+  });
+  const p = push(w);
+  assert.equal(p.out.pushed, false);
+  assert.equal(p.out.lostChanges[0].kind, 'missing');
+  assert.match(p.out.lostChanges[0].text, /strict: true/);
+});
+
 test('regression, PR 1192: the register entry D-040 renumbered D-042 after main took D-040 is accepted and pushed', t => {
   const w = world(t, {
     file: 'DECISIONS.md',
