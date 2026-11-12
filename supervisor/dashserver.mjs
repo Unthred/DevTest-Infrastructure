@@ -42,6 +42,7 @@ import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatch
 import * as inboxStore from './inbox.mjs';
 import { inboxApiReply } from './inbox-api.mjs';
 import { controlsOf } from './controlactions.mjs';
+import { WORK_VIEW_STATIC } from './workviewstatic.mjs';
 import { fileURLToPath } from 'node:url';
 import { recordRefusedOrigin } from './hostvalue.mjs';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
@@ -123,6 +124,7 @@ export async function currentView({ root, config, now = Date.now(), tz = default
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
 export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/refresh.mjs': ['refresh.mjs', 'text/javascript; charset=utf-8'], '/static/chartopts.mjs': ['chartopts.mjs', 'text/javascript; charset=utf-8'], '/static/grid.mjs': ['grid.mjs', 'text/javascript; charset=utf-8'], '/static/appbar.mjs': ['appbar.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
+  ...WORK_VIEW_STATIC,
   '/static/inbox-filter.mjs': ['inbox-filter.mjs', 'text/javascript; charset=utf-8'],
   '/static/approve-all.mjs': ['approve-all.mjs', 'text/javascript; charset=utf-8'],
   '/static/decision-ui.mjs': ['decision-ui.mjs', 'text/javascript; charset=utf-8'],

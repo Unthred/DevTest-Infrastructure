@@ -22,6 +22,7 @@ import { resetsCard } from './resetscard.mjs';
 import { allowanceBody as allowanceCard } from './allowancecard.mjs';
 import { agentBarHtml } from './appbaragent.mjs';
 import { withWorkViews } from './jobs-page.mjs';
+import { workViewHtml } from './workviewrender.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -660,7 +661,8 @@ function workPage(view, query, path) {
     totals: { number: 'count', reviewRounds: 'avg', fixRounds: 'avg', tokens: 'sum' }, emptyState: empty('No pull requests yet', 'Pull requests appear once an agent opens one.', 'list') }) });
   const ex = view.excluded || [];
   const excluded = card({ id: 'excluded', title: `Excluded issues (${ex.length})`, span: 12, movable: false, body: ex.length ? `<ul class="panel-list">${ex.map(e => `<li class="sev-info"><div class="t">${issueLink(e.number)}</div><div class="sub">${esc(e.reason)}</div></li>`).join('')}</ul>` : empty('Nothing is excluded', 'Every open issue is eligible.', 'check') });
-  return { title: 'Work', body: grid('work', queues + issues + excluded + prs, 'fit') };
+  const tableView = card({ id: 'workview', title: 'View', span: 12, movable: false, body: workViewHtml(view) });
+  return { title: 'Work', body: grid('work', tableView + queues + issues + excluded + prs, 'fit') };
 }
 function prDetail(view, query, path, route) {
   const p = view.prs.find(x => x.number === route.id);

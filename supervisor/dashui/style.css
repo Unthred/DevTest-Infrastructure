@@ -590,3 +590,45 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 @media(max-width:640px){.iv-crow>.iv-acts{flex:1 1 100%;margin:0 0 var(--sp2);padding-left:1.8em}.iv-crow .iv-acts .inbox-form{flex:1 1 0}}
 /* A proposal's text keeps its line breaks but wraps long lines, so a long proposal never widens the page on a phone (issue #1262, requirement 6). */
 .inbox-text{white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Work page: view switch, Table and Board (issue #1224) */
+.view-switch{display:flex;flex-wrap:wrap;gap:var(--sp2);margin-bottom:var(--sp2)}
+.vs-btn{min-height:44px}.vs-btn[aria-pressed=true]{background:var(--link);border-color:var(--link);color:var(--surface)}
+.wv-hint{margin:0 0 var(--sp2)}
+body[data-work-view=table] .cards[data-layout=work]>.card:not([data-card=workview]),body[data-work-view=board] .cards[data-layout=work]>.card:not([data-card=workview]){display:none}
+.wv-tools{display:flex;flex-direction:column;gap:var(--sp2);margin-bottom:var(--sp3)}
+.wv-facet{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:center}.wv-facet-t{font-weight:700;min-width:5rem}
+.wv-chip[aria-pressed=true]{background:var(--link);border-color:var(--link);color:var(--surface)}
+.wv-controls{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:center}
+.wv-controls .btn,.wv-controls select,.wv-controls input,.wv-search input{min-height:44px}
+.wv-search input{width:100%;max-width:32rem}
+.wv-colmenu{display:grid;grid-template-columns:repeat(auto-fill,minmax(11rem,1fr));gap:var(--sp2);padding:var(--sp2);border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface2)}
+.wv-col{min-height:32px;display:flex;align-items:center;gap:var(--sp2)}
+.wv-scroll{overflow:auto;max-width:100%;max-height:70vh;border:1px solid var(--line);border-radius:var(--r-sm)}
+.wv-table{border-collapse:collapse;table-layout:fixed;font-size:var(--fs-sm)}
+.wv-table th,.wv-table td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.wv-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.wv-table thead th{position:sticky;top:0;background:var(--surface2);z-index:1}
+.wv-sort{background:none;border:0;color:var(--fg);font-weight:700;cursor:pointer;min-height:32px;padding:0}
+.wv-resize{position:absolute;top:0;right:0;width:8px;height:100%;cursor:col-resize}
+.wv-resize:hover,.wv-resize:focus{background:var(--link);opacity:.5}
+.wv-row{cursor:pointer}.wv-row:hover{background:var(--surface2)}
+.wv-group th{background:var(--info-bg);color:var(--info)}
+.wv-open{background:none;border:0;color:var(--link);font-weight:700;cursor:pointer;min-height:32px;padding:0;text-decoration:underline}
+.wv-state{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.wv-state-held{background:var(--warning-bg);color:var(--warning)}.wv-state-running{background:var(--ok-bg);color:var(--ok)}
+.wv-state-waiting-you{background:var(--action-bg);color:var(--action)}.wv-state-done{background:var(--ok-bg);color:var(--ok)}
+.wv-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(15rem,1fr);gap:var(--sp3);overflow-x:auto;padding-bottom:var(--sp2)}
+.wv-col-board{border:1px solid var(--line);border-radius:var(--r-sm);padding:var(--sp2);background:var(--surface2);min-width:0}
+.wv-col-board h3{margin:0 0 var(--sp2);font-size:var(--fs)}
+.wv-card{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;min-height:44px;margin-bottom:var(--sp2);padding:var(--sp2);border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);color:var(--fg);cursor:pointer;overflow-wrap:anywhere}
+.wv-side{position:fixed;top:0;right:0;bottom:0;width:min(28rem,100vw);overflow:auto;padding:var(--sp4);background:var(--surface);border-left:1px solid var(--line);box-shadow:var(--shadow-lg);z-index:50}
+.wv-side[hidden]{display:none}
+.wv-side-head{display:flex;justify-content:space-between;gap:var(--sp2);align-items:flex-start}.wv-side-head h3{margin:0;overflow-wrap:anywhere}
+.wv,.wv-body{min-width:0;max-width:100%}.wv-scroll{width:100%}
+@media(max-width:640px){.wv-scroll{max-height:60vh}.wv-colmenu{grid-template-columns:1fr}}
+/* The phone layout turns tables into stacked cards; this one has twenty columns and scrolls sideways inside its frame instead. */
+.wv-table{display:table}.wv-table thead{display:table-header-group;position:static;left:auto}.wv-table tbody{display:table-row-group}
+.wv-table tr{display:table-row;border:0;border-radius:0;margin:0;padding:0;background:none}.wv-table th,.wv-table td{display:table-cell;text-align:left}
+.wv-table td{padding:6px 8px;justify-content:normal}.wv-table td.num{text-align:right}.wv-table td::before{content:none}
+.wv-table thead th{position:sticky}.wv-resize{position:absolute}.wv-table thead th{overflow:visible}
