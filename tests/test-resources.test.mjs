@@ -88,27 +88,37 @@ const sameLiveProcess = ({ pid, start }) => {
 };
 
 test('an over-limit fake job is killed as a unit: children die with it and the result records why', async t => {
-  const d = tmp(t), pidFile = path.join(d, 'child.pid');
-  // The parent waits for its grandchild to publish its identity, then both hold memory beyond the 64 MB grant.
+  const d = tmp(t), pidFile = path.join(d, 'child.pid'), startFile = path.join(d, 'start');
+  // Both processes wait until the test has read the grandchild identity before they exceed the 64 MB grant.
   const script = `const {spawn}=require('child_process'),fs=require('fs');
     const hold=()=>{globalThis.b=Buffer.alloc(150*1024*1024,1);setInterval(()=>{},1000)};
     const start=()=>fs.readFileSync('/proc/self/stat','utf8').split(' ')[21];
+    const wait=fn=>{const ready=setInterval(()=>{if(!fn())return;clearInterval(ready);hold()},1)};
     if(process.argv[2]==='child'){
-      fs.writeFileSync(${JSON.stringify(pidFile)},[process.pid,start()].join(':'));hold();
+      fs.writeFileSync(${JSON.stringify(pidFile)},[process.pid,start()].join(':'));
+      wait(()=>fs.existsSync(${JSON.stringify(startFile)}));
     }else{
       spawn(process.execPath,[__filename,'child'],{stdio:'ignore'});
-      const ready=setInterval(()=>{
-        if(!fs.existsSync(${JSON.stringify(pidFile)}))return;
-        clearInterval(ready);hold()
-      },1)
+      wait(()=>fs.existsSync(${JSON.stringify(pidFile)})&&fs.existsSync(${JSON.stringify(startFile)}));
     }`;
   const f = path.join(d, 'job.cjs'); fs.writeFileSync(f, script);
-  const r = await runLimited([process.execPath, f], { env: process.env, limits: { memory_mb: 64, cpus: 1 }, klass: 'suite', id: 'j1', intervalMs: 50 });
+  const limited = runLimited([process.execPath, f], {
+    env: process.env,
+    limits: { memory_mb: 64, cpus: 1 },
+    klass: 'suite',
+    id: 'j1',
+    intervalMs: 50
+  });
+  for (let i = 0; i < 100 && !fs.existsSync(pidFile); i++) await new Promise(res => setTimeout(res, 10));
+  assert.ok(fs.existsSync(pidFile), 'the grandchild publishes its identity before memory pressure begins');
+  const [pid, start] = fs.readFileSync(pidFile, 'utf8').split(':');
+  const grand = { pid: Number(pid), start };
+  assert.equal(sameLiveProcess(grand), true, 'the published identity is a live grandchild');
+  fs.writeFileSync(startFile, '');
+  const r = await limited;
   assert.equal(r.code, 137);
   assert.equal(r.kill.reason, 'memory-limit'); assert.equal(r.kill.class, 'suite'); assert.equal(r.kill.suggested_class, 'small'); assert.equal(r.kill.limit_mb, 64);
   assert.ok(r.kill.observed_mb >= 64);
-  const [pid, start] = fs.readFileSync(pidFile, 'utf8').split(':');
-  const grand = { pid: Number(pid), start };
   // Poll (bounded) instead of a fixed wait: teardown of a 150 MB process can lag on a loaded runner.
   // A PID reused by another concurrent test is not the grandchild this test started.
   for (let i = 0; i < 100 && sameLiveProcess(grand); i++) await new Promise(res => setTimeout(res, 50));
