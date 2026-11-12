@@ -21,6 +21,7 @@ import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
 import { allowanceBody as allowanceCard } from './allowancecard.mjs';
 import { agentBarHtml } from './appbaragent.mjs';
+import { withWorkViews } from './jobs-page.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -1002,6 +1003,7 @@ function processesPage(view, query, pathname, route) {
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
 const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, health: (view, query, path, route) => healthPage(route, { esc, card, grid, empty, legend, plainTable, diagSpark, utc }), evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+PAGES.work = withWorkViews(workPage, { esc, lt, badge, agentTag, prLink, issueLink, copyBtn, card, grid, empty });
 PAGES.inbox = (view, query) => inboxPage(view, query, { card, decided: decidedBlock, esc, form: inboxForm, grid, tag: inboxTag });
 
 export const PAGE_NAMES = Object.keys(PAGES);

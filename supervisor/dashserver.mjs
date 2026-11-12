@@ -50,6 +50,7 @@ import { underSupervisedJob } from './breaker.mjs';
 import { isLocalPeer, peerPid as defaultPeerPid } from './peerpid.mjs';
 import { limitResetsRoute } from './resetswrite.mjs';
 import { withLimitResets } from './resetsentries.mjs';
+import { JOBS_STATIC } from './jobs-page.mjs';
 
 export const DEFAULT_PORT = 8731;
 // Issue #406: ask for a pass now. Only when the team loop is enabled; never throws, never blocks the answer to the homeowner.
@@ -123,6 +124,7 @@ export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=ut
   '/static/approve-all.mjs': ['approve-all.mjs', 'text/javascript; charset=utf-8'],
   '/static/decision-ui.mjs': ['decision-ui.mjs', 'text/javascript; charset=utf-8'],
   '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/inbox-ui.mjs': ['inbox-ui.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
+Object.assign(STATIC, JOBS_STATIC);
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',

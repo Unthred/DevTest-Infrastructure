@@ -545,3 +545,24 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .qf.on{background:var(--link);border-color:var(--link);color:var(--surface)}
 .qf-n{font-variant-numeric:tabular-nums;opacity:.85}
 .empty .btn{min-height:44px;margin-top:var(--sp2)}
+/* Jobs view (issue #1220): the table with resizable and hideable columns, the group rows, and the side panel. */
+.qf-label{align-self:center;color:var(--mut);font-size:var(--fs-sm);min-width:72px}
+.jobs-tools{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:center;margin-bottom:var(--sp3)}
+.jobs-tools[hidden]{display:none}
+.jobs-views{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:end}
+.jobs-views input,.jobs-views select{min-height:44px}
+.jobs-tools .btn,.jobs-cols summary{min-height:44px;display:inline-flex;align-items:center}
+.jobs-col-list{display:flex;flex-wrap:wrap;gap:var(--sp2);padding:var(--sp2) 0}
+.jobs-col-opt{display:inline-flex;align-items:center;gap:4px;min-height:44px}
+.jobs-table th{position:relative}
+.jobs-table .col-grip{position:absolute;right:0;top:0;bottom:0;width:8px;cursor:col-resize;touch-action:none}
+.jobs-table .col-grip:hover,.jobs-table .col-grip:focus-visible{background:var(--link)}
+.jobs-table .col-off{display:none!important}
+.jobs-table tr[data-job]{cursor:pointer}
+.jobs-table tr.on{outline:2px solid var(--link);outline-offset:-2px}
+.jobs-table tr.grp th{background:var(--surface2);color:var(--fg);text-transform:none;letter-spacing:0;white-space:normal}
+.jobs-stat{display:inline-block;margin-right:var(--sp3)}
+.jobs-same-ref{padding-left:var(--sp4)}.jobs-same-ref li[aria-current]{font-weight:700}
+.overseer-note{white-space:pre-wrap;overflow-wrap:anywhere;max-height:16em;overflow:auto}
+@media(max-width:639px){.jobs-table .col-grip{display:none}}
+.jobs-views label,.jobs-views+.sub,.inbox-search label{display:inline-flex;align-items:center;gap:var(--sp2)}
