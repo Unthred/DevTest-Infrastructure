@@ -50,6 +50,12 @@ function world(t, { limited = false } = {}) {
 const control = (action, target, reason = 'discussed with the homeowner', value) => ({ kind: 'control', title: `${action} ${target}`, action, target: String(target), reason, ...(value === undefined ? {} : { value }) });
 async function run(w, item) { const sent = w.mcp.propose(item); await w.team.processInbox(rep()); return inbox.statusOf(w.dir, sent.id); }
 const audit = w => readAudit(w.dir, 200);
+// A malformed target or value reaches Foreman (the MCP account cannot write the audit trail), which refuses it with the reason and audits the refusal.
+async function refusedAndAudited(w, item, pattern) {
+  const before = audit(w).length, s = await run(w, item);
+  assert.equal(s.state, 'refused'); assert.match(s.reason, pattern);
+  const rec = audit(w)[0]; assert.equal(audit(w).length, before + 1); assert.equal(rec.outcome, 'refused'); assert.equal(rec.action, item.action); assert.match(rec.text, pattern);
+}
 const queue = w => shape(w.team.s.directQueue, [21, 22, 23, 24, 30, 40, 50], null);
 
 test('the spec: every direct control has a target kind, and the restricted names are all refused with who decides', () => {
@@ -84,8 +90,9 @@ test('job ids: the short form and the full form both work; an unknown or ambiguo
   w.team.s.jobs[twin] = { kind: 'implement', agent: 'claude', issue: 24, at: 1 }; w.jobs.states[twin] = { id: twin, status: 'running' };
   const ambiguous = await run(w, control('pause_job', SHORT)); assert.equal(ambiguous.state, 'refused'); assert.match(ambiguous.reason, /ambiguous; use the full id/);
   const full = await run(w, control('pause_job', twin)); assert.equal(full.state, 'done'); assert.deepEqual(w.calls.paused.at(-1), twin);
-  assert.throws(() => w.mcp.propose(control('pause_job', 'abc')), /8-character job id/);
-  assert.throws(() => w.mcp.propose(control('pause_job', 'c3'.repeat(14))), /8-character job id/);
+  await refusedAndAudited(w, control('pause_job', 'abc'), /8-character job id/);
+  await refusedAndAudited(w, control('pause_job', 'c3'.repeat(14)), /8-character job id/);
+  await refusedAndAudited(w, control('start_job', 'zzzz'), /8-character job id/);
 });
 
 test('start_job: resumes a paused job once, is idempotent on a running job, refuses an ended one and an agent out of allowance', async t => {
@@ -130,7 +137,10 @@ test('set_rank and move_entry: the planner takes issues in the new order; a rank
   const m2 = await run(w, control('move_entry', 21, 'after 23', 'after 23')); assert.equal(m2.state, 'done');
   const self = await run(w, control('move_entry', 21, 'x', 'before 21')); assert.equal(self.state, 'refused'); assert.match(self.reason, /cannot be placed/);
   const gone = await run(w, control('move_entry', 21, 'x', 'before 31337')); assert.equal(gone.state, 'refused');
-  assert.throws(() => w.mcp.propose(control('set_rank', 21, 'x', '10000')), /set_rank needs a valid value/);
+  await refusedAndAudited(w, control('set_rank', 21, 'x', '10000'), /the value for set_rank /);
+  await refusedAndAudited(w, control('set_rank', 22, 'x', 'first'), /the value for set_rank /);
+  await refusedAndAudited(w, control('set_depends_on', 22, 'x', '12'), /the value for set_depends_on /);
+  await refusedAndAudited(w, control('assign', 22, 'x', 'Codex'), /the value for assign /);
   assert.equal(inbox.validateItem(control('set_rank', 21, 'x', '10000')).ok, false);
 });
 
@@ -197,7 +207,7 @@ test('every restricted action is refused, nothing changes, and the refusal is in
   assert.ok(rows.every(r => r.outcome === 'refused' && r.changed === false && r.by === 'overseer'));
   assert.deepEqual(w.calls, { labelled: [], unlabelled: [], stopped: [], resumed: [], paused: [], rearmed: [] });
   // a proposal id is not a target, so the overseer cannot approve its own proposals through a direct control
-  assert.throws(() => w.mcp.propose(control('park', 'a'.repeat(32))), /target must be an issue or pull request number/);
+  await refusedAndAudited(w, control('park', 'a'.repeat(32)), /target must be an issue or pull request number/);
   assert.equal(inbox.validateItem(control('park', 'a'.repeat(32))).ok, false);
 });
 
@@ -248,6 +258,29 @@ test('undo: park and queue edits and job steps are reversed once; a later edit b
   const refused = audit(w)[0]; assert.equal(refused.action, 'undo'); assert.equal(refused.outcome, 'refused'); assert.match(refused.text, /edited since/);
 });
 
+test('undo: a start of a job waiting out its backoff is reversed by a pause', async t => {
+  const w = world(t);
+  w.jobs.states[JOB].status = 'queued'; w.jobs.states[JOB].nextAttemptAt = 9000;
+  w.jobs.rearm = async id => { w.calls.rearmed.push(id); w.jobs.states[id].nextAttemptAt = 0; return true; };
+  const st = await run(w, control('start_job', SHORT)); assert.equal(st.state, 'done');
+  const rec = audit(w)[0]; assert.equal(rec.changed, true, JSON.stringify(rec)); assert.equal(rec.undoable, true);
+  assert.equal(requestUndo(w.dir, rec.id, 6000).ok, true); await w.team.processInbox(rep());
+  assert.deepEqual(w.calls.paused, [JOB]); assert.equal(audit(w)[0].outcome, 'done');
+});
+
+test('undo of a stop goes through the checks of a resume: no free slot or a closed PR refuses it, and nothing restarts', async t => {
+  for (const [why, setup, pattern] of [
+    ['no free slot', w => { w.team.providerRoleFull = async () => true; }, /no free slot for this role/],
+    ['PR closed', w => { w.team.s.jobs[PAUSED].pr = 99; w.team.s.jobs[PAUSED].head = HEAD; }, /closed or has a newer head/]]) {
+    const w = world(t); await run(w, control('stop_job', PAUSED.slice(0, 8)));
+    const stop = audit(w)[0]; assert.equal(stop.outcome, 'done', why);
+    const calls = w.calls.resumed.length; setup(w);
+    assert.equal(requestUndo(w.dir, stop.id, 6000).ok, true); await w.team.processInbox(rep());
+    const r = audit(w)[0]; assert.equal(r.action, 'undo', why); assert.equal(r.outcome, 'refused', why); assert.match(r.text, pattern, why);
+    assert.equal(w.calls.resumed.length, calls, why);
+  }
+});
+
 test('undo of a queue order change restores the earlier order only while nothing has moved it since', async t => {
   const w = world(t);
   await run(w, control('set_rank', 24, 'x', '1')); const [first] = audit(w);
@@ -266,7 +299,10 @@ test('the MCP tools: one tool per control, each needing a reason, waiting for an
   assert.ok(names.includes('foreman_direct_log')); assert.ok(!names.some(n => /merge|approve|close|delete|limit|restart|reboot/.test(n)), 'no restricted tool');
   for (const tool of tools.list().filter(x => x.name.startsWith('foreman_') && x.annotations?.readOnlyHint === false && x.name !== 'foreman_propose')) assert.ok(tool.inputSchema.required.includes('reason'), tool.name);
   const noReason = await tools.call('foreman_set_priority', { number: 21, priority: 'high' }); assert.equal(noReason.isError, true);
-  const bad = await tools.call('foreman_set_priority', { number: 21, priority: 'urgent', reason: 'x' }); assert.equal(bad.isError, true); assert.match(bad.text, /needs a valid value/);
+  // a malformed value reaches Foreman, which refuses it with the reason and audits the refusal
+  const badCall = tools.call('foreman_set_priority', { number: 21, priority: 'urgent', reason: 'x' });
+  await new Promise(r => setTimeout(r, 50)); await w.team.processInbox(rep());
+  const bad = JSON.parse((await badCall).text); assert.equal(bad.state, 'refused'); assert.match(bad.reason, /the value for set_priority/); assert.equal(audit(w)[0].outcome, 'refused');
   const call = tools.call('foreman_set_priority', { number: 24, priority: 'high', reason: 'the homeowner wants it first' });
   await new Promise(r => setTimeout(r, 50)); await w.team.processInbox(rep());
   const out = JSON.parse((await call).text); assert.equal(out.state, 'done'); assert.deepEqual(out.resulting.after, { priority: 'high' }); assert.deepEqual(out.resulting.before, { priority: 'normal' });

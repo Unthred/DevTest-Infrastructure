@@ -63,7 +63,7 @@ async function startWaiting(id, job, target, deps) {
     { before: { status: 'queued' }, after: { status: 'queued' } });
   const moved = await deps.jobs.rearm(id);
   const text = moved ? `job ${target} no longer waits out its backoff and starts now` : `job ${target} is already queued to start`;
-  return done(moved, text, { before: { status: 'queued', waiting: true }, after: { status: 'queued', waiting: false }, undo: null });
+  return done(moved, text, { before: { status: 'queued', waiting: true }, after: { status: 'queued', waiting: false }, undo: { op: 'pause_job', id } });
 }
 
 export async function directStart(target, deps) {
@@ -83,13 +83,15 @@ export async function directStart(target, deps) {
   return done(true, `job ${target} resumed once with a fresh bounded round`, { before: state, after: { status: 'queued' }, undo: { op: 'pause_job', id } });
 }
 
-// The reverse of a stop: the job comes back as a resume would bring it, if its agent still has allowance.
+// The reverse of a stop: the job comes back through the same checks as the homeowner's resume (free slot, allowance, breaker, PR still open at the same head).
 export async function restartStopped(id, deps) {
   const job = await deps.jobs.get(id), rec = deps.records[id];
   if (!job || !rec) return refused('the job is no longer known to the supervisor');
   if (job.status !== 'stopped') return refused(`job ${id.slice(0, 8)} is ${job.status}, not stopped, so there is nothing to restart`);
-  if (deps.team.limitedOf(rec.agent)?.out) return refused(`${rec.agent} is out of allowance; restart it after the reset`);
-  if (typeof deps.jobs.resume !== 'function') return refused('this supervisor cannot resume a job');
+  try { await checkResumable(deps.team, { target: id.slice(0, 8), rec, job }, deps.roleOf, ['stopped']); } catch (error) {
+    if (error instanceof SupervisorError) return refused(error.message);
+    throw error;
+  }
   rec.ingested = false;
   deps.save();
   await deps.jobs.resume(id);

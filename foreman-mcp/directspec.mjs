@@ -1,6 +1,6 @@
 // Issue #1164: the direct controls the overseer may use, as the MCP server sees them: each name, whether its target is a job or an issue or pull
 // request number, and the shape of its value. The server cannot import from supervisor/, so a test compares this with supervisor/directspec.mjs.
-// This is only an early refusal: Foreman reads the same rules again, and anything outside this list never reaches it as a control.
+// Foreman applies these rules and audits each refusal; checkControl only checks the action name.
 export const NUMBER_TARGET = /^[1-9]\d{0,8}$/;
 export const JOB_TARGET = /^(?:[a-f0-9]{8}|[a-f0-9]{32})$/;
 export const TARGETS = {
@@ -19,18 +19,12 @@ export const VALUES = {
 export const targetPattern = action => (TARGETS[action] === 'job' ? JOB_TARGET : NUMBER_TARGET);
 
 const NAME = /^[a-z][a-z_]{0,29}$/;
-const fail = error => ({ ok: false, error });
-const TARGET_WORDS = { job: 'the 8-character job id (or the full id)', number: 'an issue or pull request number' };
 
-// Checks a `control` item the way Foreman will, so the overseer learns at once. A name outside the direct list goes to Foreman, which refuses it
-// with who decides it and writes the refusal to the audit trail, so the trail holds every refusal.
+// Checks the name of a `control` item. checkProposal has already refused unprintable, overlong or secret-shaped text. A target or value that is merely
+// malformed (a Depends on line without "#", an agent written "Codex") goes on to Foreman, which refuses it with the reason and writes the refusal to the
+// audit trail; the MCP account cannot write that file, so refusing here would leave the refusal out of the trail.
 export function checkControl(item) {
-  const { action, target, value } = item;
-  if (!Object.hasOwn(TARGETS, action)) return NAME.test(action) ? { ok: true, item } : fail('action must be a lower-case name');
-  if (!targetPattern(action).test(target)) return fail(`target must be ${TARGET_WORDS[TARGETS[action]]}`);
-  if (VALUES[action] && !VALUES[action].test(value ?? '')) return fail(`${action} needs a valid value`);
-  if (!VALUES[action] && value !== undefined) return fail(`${action} takes no value`);
-  return { ok: true, item };
+  return NAME.test(item.action) ? { ok: true, item } : { ok: false, error: 'action must be a lower-case name' };
 }
 
 // What a finished control item changed, from the status file Foreman wrote: whether, and the state before and after.

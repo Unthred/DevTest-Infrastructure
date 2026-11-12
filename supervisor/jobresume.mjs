@@ -5,9 +5,10 @@ import * as breaker from './breaker.mjs';
 
 export const RESUMABLE = ['paused_manual', 'paused_limit', 'blocked', 'failed'];
 
-// `target` is the id as the caller named it (it appears in the messages). `roleOf` maps a job kind to its provider role.
-export async function checkResumable(team, { target, rec, job }, roleOf) {
-  if (!RESUMABLE.includes(job.status)) throw new SupervisorError(`job ${target} is ${job.status}, not resumable`);
+// `target` is the id as the caller named it (it appears in the messages). `roleOf` maps a job kind to its provider role. `allowed` is the set of
+// statuses this caller may resume (the undo of a direct stop adds 'stopped').
+export async function checkResumable(team, { target, rec, job }, roleOf, allowed = RESUMABLE) {
+  if (!allowed.includes(job.status)) throw new SupervisorError(`job ${target} is ${job.status}, not resumable`);
   if (typeof team.jobs.resume !== 'function') throw new SupervisorError('this supervisor cannot resume a job');
   const pr = rec.pr != null ? (await team.gh.listPulls()).find(p => p.number === rec.pr) : null;
   if (rec.pr != null && (!pr || (rec.head && pr.headRefOid !== rec.head))) {
