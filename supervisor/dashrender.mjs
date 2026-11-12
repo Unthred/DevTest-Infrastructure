@@ -18,6 +18,7 @@ import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
+import { allowanceBody as allowanceCard } from './allowancecard.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -753,20 +754,8 @@ function activityPage(view, query, path) {
   const body = toggle + activityChips(view, collapsed, query, path) + table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text', 'agent', 'outcome', 'jobKind'], cols, totals: { text: 'count', tokens: 'sum' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') });
   return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (${rows.filter(r => !r.child).length} rows from ${view.activity.length} events)`, span: 12, movable: false, body })) };
 }
-// One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
-// marked and never shown as current; a limit pause says when it resets and on what basis.
-const SOURCE = { job: 'reported to a supervised job', probe: 'refreshed by a minimal probe run (no repository, no tools)', 'session-log': 'read from the local Codex session log (no model call)' };
-function allowanceBody(u, now, name = '') {
-  const l = u.limit;
-  const refresh = u.canProbe && name ? `<form method="post" action="/probe/${encodeURIComponent(name)}" class="probe-form"><button type="submit" class="tbtn" title="Run one minimal probe to read the current allowance (no repository, no tools)">Refresh allowance</button></form>` : '';
-  const limit = l ? `<p class="limit">${badge('action', 'Paused on a usage limit')} ${l.limiting ? `${esc(l.limiting)}. ` : ''}${l.resetsAt ? `resets <b>${lt(l.resetsAt)}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
-  if (!u.windows.length) return `${limit}<p>Allowance: <b>unknown</b></p>${refresh}${empty('No allowance reported', 'The provider has never reported a limit window to the supervisor.', 'info')}`;
-  const used = w => (Number.isFinite(w.utilization) ? `<div class="bar${w.expired ? ' expired' : ''}" role="img" aria-label="${pct(w.utilization)} used${w.expired ? ', expired' : ''}"><b style="width:${Math.min(100, w.utilization * 100)}%"></b></div> ${pct(w.utilization)}${w.expired ? ' <span class="muted">(expired)</span>' : ''}` : 'unknown');
-  const resets = w => (!w.resetsAt ? 'unknown' : w.expired ? `reset ${esc(dur(now - w.resetsAt))} ago; current use unknown` : esc(inFuture(w.resetsAt, now)));
-  const rows = u.windows.map(w => `<tr${w.expired ? ' class="expired"' : ''}><td>${esc(w.label)}</td><td>${used(w)}</td><td>${resets(w)}</td></tr>`).join('');
-  const note = u.allExpired ? `<p class="sub">${badge('warning', 'Expired')} Every window in this reading has reset since; current use is unknown until the provider reports again.</p>` : '';
-  return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${lt(u.observedAt)}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>${refresh}`;
-}
+// One agent's allowance card (issue #75, supervisor/allowancecard.mjs): the helpers it needs are passed in.
+const allowanceBody = (u, now, name = '') => allowanceCard({ esc, badge, lt, dur, pct, inFuture, ago, empty }, u, now, name);
 function usagePage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
   const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now, name) })).join('');
