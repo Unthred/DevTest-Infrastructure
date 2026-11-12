@@ -11,6 +11,7 @@ import { redact } from './redact.mjs';
 export const RANK = [
   'breaker',
   'fixlimit',
+  'churn',
   'retrycap',
   'reviewlimit',
   'reviewrefused',
@@ -90,3 +91,20 @@ const cause = a => ({ id: a.id, text: redact(a.text, 300), ...(a.action ? { acti
 
 // The one count: the consolidated list's length, with the health count as the fallback.
 export const needsYouCount = view => (Array.isArray(view?.panels?.needsYou) ? view.panels.needsYou.length : Number.isSafeInteger(view?.health?.count) ? view.health.count : 0);
+
+// The card for a PR the churn rule stopped (issue #1157). notifyChurn records `churn:<pr>:<head>` once it has raised the notice;
+// the card exists while that head still has a CHANGES verdict, and so offers the routine actions below the fix limit too.
+export function churnStopped(state, pr, verdict) {
+  return verdict === 'CHANGES' && !!state.notified?.[`churn:${pr.number}:${pr.headRefOid}`];
+}
+const CHURN_TRIED = 'The last fix rounds each drew a different set of blocking findings, so more rounds are unlikely to converge. '
+  + 'Foreman posted a needs-homeowner notice on the PR with the findings side by side.';
+// Returns the arguments of the dashboard's `add`: id, text, ref, details.
+export function churnCard(pr, prText, options, links) {
+  return [
+    `churn-${pr.number}`,
+    `${prText}: each fix round drew new, different blocking findings, so Foreman starts no further fix jobs`,
+    { kind: 'pull', n: pr.number },
+    { tried: CHURN_TRIED, action: `Choose one: ${options}. Remove the needs-homeowner label when done.`, links },
+  ];
+}

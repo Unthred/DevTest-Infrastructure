@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 
-export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
+export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40, superseded_by: 60, model: 30 };
 const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
 // Issue #1115: the releasing direction is an ordinary action (approved on the dashboard); a `control` item may carry only park or stop_job.
 // Issue #1157: the routine actions; extra_fix_round and close_superseded take a PR or issue number, resume_breaker a breaker scope.
