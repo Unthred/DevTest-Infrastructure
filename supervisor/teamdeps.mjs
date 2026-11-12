@@ -141,7 +141,8 @@ export function dependencyExclusion(team, number) {
   const e = dependencyEntry(team, number);
   if (!e || e.met) return null;
   const refs = e.dependsOn.filter(d => d.state !== 'installed').map(d => d.number);
-  return { kind: 'dependency', refs, text: waitText(e) };
+  const line = e.malformed && e.line ? ` (offending line: "${e.line}")` : '';
+  return { kind: 'dependency', refs, text: `${waitText(e)}${line}` };
 }
 
 // The issue a lane job or action belongs to: its issue, or the issue named in its pull request's branch.
@@ -221,20 +222,21 @@ export function dependencyPlain(deps) {
   if (!deps) return null;
   return { evaluatedAt: deps.evaluatedAt, installed: deps.installedSha ? String(deps.installedSha).slice(0, 7) : null,
     issues: Object.fromEntries([...deps.byIssue].filter(([, e]) => e.dependsOn.length || e.malformed).map(([n, e]) => [n, {
-      dependsOn: e.dependsOn, malformed: e.malformed, cycle: e.cycle, met: e.met, reasons: e.reasons, since: e.since ?? null }])) };
+      dependsOn: e.dependsOn, malformed: e.malformed, line: e.line ?? null, cycle: e.cycle, met: e.met, reasons: e.reasons, since: e.since ?? null }])) };
 }
 export function dependencyFromPlain(plain) {
   if (!plain?.issues) return null;
   return { byIssue: new Map(Object.entries(plain.issues).map(([n, e]) => [Number(n), e])), installedSha: null, evaluatedAt: plain.evaluatedAt };
 }
 // Needs you items: a malformed line, a loop, a prerequisite closed as not planned (the line needs repointing) and one closed with no pull request.
-export function dependencyAttention(cache) {
+export function dependencyAttention(cache, now = null) {
   const out = [], issues = cache?.dependencies?.issues || {}, seen = new Set();
   for (const [key, e] of Object.entries(issues)) {
     const n = Number(key), ref = { kind: 'issue', n };
     if (e.malformed) {
-      out.push({ id: `dependency-malformed-${n}`, text: `#${n}: the Depends on line is malformed (${e.malformed})`, ref,
-        action: 'Edit the issue so it has one line like "Depends on: #12, #15". Foreman does not guess, so the issue waits until then.' });
+      const line = e.line ? ` Offending line: "${e.line}".` : '';
+      out.push({ id: `dependency-malformed-${n}`, text: `#${n}: the Depends on line is malformed (${e.malformed}).${line}`, ref,
+        action: 'Edit the issue so it has one line like "Depends on: #12, #15", or no Depends on line when it has no prerequisites. Foreman does not guess, so the issue waits until then.' });
     }
     if (e.cycle && !seen.has(e.cycle.join(','))) {
       seen.add(e.cycle.join(','));
@@ -257,12 +259,28 @@ export function dependencyAttention(cache) {
         action: `Repoint the Depends on line of #${n} to the issue that replaced #${d.number}, or remove it.` });
     }
   }
-  return out;
+  return [...out, ...malformedDependencyStalls(cache, now)];
+}
+
+export function malformedDependencyStalls(cache, now, limitMs = 15 * 60000) {
+  const issues = cache?.dependencies?.issues || {};
+  return Object.entries(issues).flatMap(([number, entry]) => {
+    if (!entry.malformed || !Number.isFinite(entry.since) || now - entry.since <= limitMs) return [];
+    const line = entry.line ? ` Offending line: "${entry.line}".` : '';
+    return [{
+      id: `stalled-dependency-${number}`,
+      text: `Issue #${number} has been held by a malformed Depends on line for more than 15 minutes.${line}`,
+      ref: { kind: 'issue', n: Number(number) },
+      since: entry.since,
+      action: 'Edit the issue to use one line like "Depends on: #12, #15", or remove the line when it has no prerequisites.'
+    }];
+  });
 }
 
 // What the dashboard needs, in one object so it adds no import.
 export const dependencyTools = {
   fromPlain: dependencyFromPlain,
   attention: dependencyAttention,
+  stalled: malformedDependencyStalls,
   exclusion: dependencyExclusion
 };

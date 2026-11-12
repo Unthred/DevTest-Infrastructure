@@ -2325,20 +2325,6 @@ export class Team {
     log(`closed the ${rec.kind} job ${id.slice(0, 8)}, overtaken by a newer head of PR #${rec.pr}`, saved);
     return `job ${id.slice(0, 8)} closed (${saved})`;
   }
-  // Posted once only: the state is recorded as 'posting' BEFORE the effect, and the item's marker is looked for on GitHub first, so a lost
-  // response or a repeated tick finds the issue instead of filing a second one. The text is redacted again and must carry no AI attribution.
-  async postIssueDraft(dir, st, item, report) {
-    const id = st.id, mark = inboxStore.marker(id);
-    if (st.state === 'approved' && !inboxStore.claim(dir, id, 'approved', { state: 'posting' }, this.clock.now())) return;   // issue #856: an Undo won; post nothing
-    let n = await this.gh.findIssueByMarker(mark);
-    if (!n) {
-      const title = redact(item.title, 200), body = redactLong(item.body, 8000, ' [cut]');
-      if (inboxStore.attributionShaped(title + body) || inboxStore.secretShaped(title + body)) { inboxStore.finish(dir, id, { state: 'failed', reason: 'the text failed the final check', result: 'nothing was posted' }, this.clock.now()); return; }
-      n = await this.gh.createIssue(title, `${body}\n\n${mark}`);
-    }
-    inboxStore.finish(dir, id, { state: 'done', issue: n, result: `posted as issue #${n}` }, this.clock.now());
-    (report.actions ||= []).push({ type: 'inbox-issue', result: `posted overseer issue draft ${id.slice(0, 8)} as #${n}` });
-  }
   // A finished inbox prompt job: write its outcome back to the item, where the overseer can read it.
   ingestInbox(id, j, job) {
     const dir = this.inboxDir(); if (!dir || !j.inboxId) return;

@@ -7,6 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 import { matchesInboxSearch } from './inbox-search.mjs';
+import { dependencyRefusal, parseDependsOn } from './dependency-parser.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
@@ -38,6 +39,10 @@ export function checkProposal(args) {
     item[k] = v;
   }
   if (/[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
+  if (kind === 'issue_draft') {
+    const parsed = parseDependsOn(item.body);
+    if (parsed.malformed) return { ok: false, error: dependencyRefusal(parsed) };
+  }
   if (named) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };

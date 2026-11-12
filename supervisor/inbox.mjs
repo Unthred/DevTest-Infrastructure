@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
 import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
+import { dependencyRefusal, parseDependsOn } from './dependencies.mjs';
 import { matchesInboxSearch } from '../foreman-mcp/inbox-search.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
@@ -96,6 +97,10 @@ export function validateItem(raw, { internal = false } = {}) {
     if (displayChanges(v) && !(raw.kind === 'host_value' && k === 'key')) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
   }
   if (/[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
+  if (raw.kind === 'issue_draft') {
+    const parsed = parseDependsOn(raw.body);
+    if (parsed.malformed) return { ok: false, reason: dependencyRefusal(parsed) };
+  }
   if (named) {
     const table = raw.kind === 'control' ? CONTROLS : ACTIONS, spec = Object.hasOwn(table, raw.action) ? table[raw.action] : null;
     if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(table).join(', ')})` };

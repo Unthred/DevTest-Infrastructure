@@ -4,6 +4,8 @@ The one place that states how an issue (a work item) and its pull request are wr
 
 ## Acceptance items
 
+- State an issue dependency only as one standalone line, for example `Depends on: #12, #15`. If there are no prerequisites, omit that line; do not write `Depends on: none` or place the declaration in prose or code. Foreman rejects or holds a malformed declaration rather than inferring intent.
+
 - Tag every acceptance item as **before PR** (listed under `## Wanted (before the PR)`) or **after install** (listed under `## After install (checked on Tower)`). An implement job can only meet the first kind.
 - A check that needs the running system but no credential goes under a `## Live checks` heading, in the lines format `supervisor/livechecks.mjs` reads: `- GET /path -> 200` or `- POST /path -> 403 contains "text"`. A path is relative to the dashboard base URL, with no scheme, host or `..`; at most 10 lines. Foreman runs them after the install that contains the change.
 - `Homeowner-only` is only for a credential, an approval or a physical act the agent cannot supply. The row states which one and why. A check that merely needs the installed system is not Homeowner-only: it is After install or a Live check.
