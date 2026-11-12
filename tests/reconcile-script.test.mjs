@@ -63,8 +63,8 @@ test('User Scripts reconciliation install and rollback preserve all existing sch
 });
 // ---- issue #35: the generated script must work under cron's empty environment and never fail silently
 function cronWorld(t, { nodeBody } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron35-'));
   const holders = [];   // background processes started by the test; stopped, with their whole group, before the folder goes
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron35-'));
   t.after(() => {
     for (const h of holders) { try { process.kill(-h.pid, 'SIGKILL'); } catch { try { h.kill('SIGKILL'); } catch { /* already gone */ } } }
     removeFolder(root);
