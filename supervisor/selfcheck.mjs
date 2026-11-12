@@ -46,8 +46,8 @@ export function selfCheck({ pressure = null, state, prs = [], issues = [], activ
     items.push({ id: `selfcheck-review-${j.pr}`, kind: 'review-no-verdict', ref: j.pr, text: `The review of PR #${j.pr} at ${String(j.head).slice(0, 7)} (job ${String(id).slice(0, 8)}) finished but no verdict was recorded${j.refusal ? ` (${redact(j.refusal, 60)})` : ''}, and its attempts are used.`,
       action: `Look at the job (ai-supervisor status ${String(id).slice(0, 8)}), then approve "new_review_attempt" for PR #${j.pr} on the dashboard inbox or have another reviewer review this head.` });
   }
-  // 5. Issue #1007: the root volume or swap is nearly full; new job starts are held by the tick until it recovers.
-  if (pressure) items.push({ id: 'selfcheck-host-pressure', kind: 'host-pressure', ref: null, text: `Host storage or swap is nearly full: ${pressure.text}`, action: 'Free space (remove stale folders in /tmp and <state root>/tmp, or restart the biggest consumer). Job starts resume on their own once the volume is under 80% and swap under 90%.' });
+  // 5. Issues #1007, #1151: host pressure (a full root volume, sustained swap activity or low available memory); the tick holds new job starts until it recovers.
+  if (pressure) items.push({ id: 'selfcheck-host-pressure', kind: 'host-pressure', ref: null, text: `Host pressure is holding new job starts: ${pressure.text}`, action: 'See foreman_host for the measure named above; a full root volume: remove stale folders in /tmp and <state root>/tmp. Starts resume once each measure is inside its limit.' });
   // 4. An implemented mark with no pull request: already a Needs you item (stale-mark-N).
   for (const n of Object.keys(stale || {})) covered.push({ kind: 'implemented-no-pr', ref: Number(n), item: `stale-mark-${n}` });
   return { fixes, items, covered };

@@ -28,6 +28,8 @@ import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { budgetView } from './budgetview.mjs';
 import { hasProbe } from './probe.mjs';
+import { annotateQueues, nextWhyFields } from './holdreason.mjs';
+import { hostPressureView } from './hostpressure.mjs';
 import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
@@ -207,7 +209,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     for (const e of q) { const o = e.type === 'review' ? order.get(e.ref) : null; if (o) { e.order = o.position; e.reason += ` [review order ${o.position} of ${o.of}: ${o.reason}]`; } }
   }
   for (const q of Object.values(queues)) q.sort((x, y) => (y.next - x.next) || (x.type === 'review' && y.type === 'review' && x.order && y.order ? x.order - y.order : x.ref - y.ref));
-  return queues;
+  return annotateQueues(team, queues);
 }
 
 // Why an idle agent is idle, in plain words (issue #50). Homeowner waits first, then what is in flight, then drafts, then blocked issues.
@@ -217,7 +219,7 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
   if (config.enabled === false) return { text: 'the team loop is switched off', links: [] };
   const next = plan.find(a => a.agent === agent);
   // Issue #487: name the hold from the last tick's record for this agent; "on the next tick" only when no hold applied to it.
-  const held = hold?.cause === 'upgrade' ? 'an install is in progress' : hold?.cause === 'named-hold' ? hold.hold : null;
+  const held = team.hostHolds?.[agent] ?? (hold?.cause === 'upgrade' ? 'an install is in progress' : hold?.cause === 'named-hold' ? hold.hold : null);   // issue #1151: the host's reason first
   if (next) return { text: `about to start ${next.type === 'cifix' ? 'fix CI on' : next.type} ${['implement', 'continue'].includes(next.type) ? names.issue(next.issue).text : names.pr(next.pr).text} ${held ? `once the hold clears; held: ${held}` : 'on the next tick'}`, links: [] };
   // A slot or cap hold stops the planner too, so the live plan has no work for this agent: name the hold anyway.
   if (held) return { text: `held: ${held}`, links: [] };
@@ -771,7 +773,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
-      budget,
+      budget, hostPressure: hostPressureView(state, config, now),   // issue #1151
       attention,
       robustness: robustnessView(state, team, jobs, now),
       breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL, failCauses: failCausesOf(state.failCauses, { now }) },
@@ -957,7 +959,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, dependencies: cache.dependencies ?? null,
     wakes: root ? (() => { try { return wakeView(root, now); } catch { return null; } })() : null,   // issue #985
     version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...nextWhyFields(a, redact) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };

@@ -334,3 +334,19 @@ A rollback latch written before this change whose only cause was a usage-limit r
 The old latch records only the first fault of the failed tick, so a tick whose first item was a usage-limit skip and whose later item was a real error also looks skip-only and is cleared. The install is checked again by a live tick under the new rule, so a repeat of the real error fails it.
 
 **Homeowner steps.** On a host that is latched now, reach this change by `clear-latch` (or a hand-install, which has no latch check); the automatic install then proceeds. A latch with another cause (for example `upgrade script failed: swap: version already installed`) is not cleared by this change and needs `clear-latch` once the cause is understood.
+
+## Host pressure hold uses real memory pressure (issue #1151)
+
+Foreman starts no new job while starting one would hurt the host. The hold has three measures, each with a threshold in `team.json` under `host_pressure` (defaults shown; every key is optional):
+
+| Key | Default | Holds starts when |
+| --- | --- | --- |
+| `disk_percent` | 80 | the root volume is used above this percent (unchanged from issue #1007) |
+| `swap_pages_per_second` | 200 | swap pages in plus out per second, averaged over the window, are above this |
+| `swap_window_minutes` | 5 | the averaging window; no swap verdict until the recorded history covers half of it |
+| `min_available_mb` | 1024 | available memory (`MemAvailable`) is below this |
+| `swap_warn_percent` | 90 | never: swap used above this is a warning on the Health page and in `foreman_status`, and does not hold starts |
+
+Swap used percent alone never holds starts: old pages can sit in swap for weeks with no activity (10 Nov 2026: 92% used, zero pages per second, 7.9 GB available, and Foreman started nothing). Swap activity is read from the cumulative `pswpin` and `pswpout` counters in `/proc/vmstat`; each tick keeps its samples in `state.hostPressure`, and a counter that went down (reboot) restarts the window.
+
+One source for the reason. The tick records the verdict in `state.hostPressure` before it plans. Every planning run (the tick, the dashboard, `foreman_plan`, `foreman_why_blocked`) then marks each planned job start with that text (`heldBy`, and as `why`), replaces the agent's other planner holds with it, and appends it to the agent's queue entries. So the agent idle line, `foreman_status`, `foreman_plan`, `foreman_why_blocked`, the Next card and the review order all say "host pressure: swap activity is 500 pages per second over 5 minutes (limit 200)" instead of a leftover allowance-mode text. A record older than 30 minutes is ignored. The Needs you item (`selfcheck-host-pressure`) names the measure and its value. The Health page and `foreman_status.hostPressure` show every measure next to its threshold.
