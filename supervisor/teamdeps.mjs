@@ -1,6 +1,7 @@
 // Issue #1103: dependency gating for every lane, applied to a Team. The decisions are pure (dependencies.mjs); this file gathers the
 // facts (issues, pull requests, the installed version), keeps the "waiting since" record and carries out the mid-run stop.
 // Functions take the Team so team.mjs gains only call sites, never behaviour.
+import { applyDependsEdits } from './directqueue.mjs';
 import { parseDependsOn, evaluateDependencies, prerequisiteState, waitText } from './dependencies.mjs';
 import { installedShaOf, gitAncestor } from './depinstalled.mjs';
 
@@ -85,8 +86,9 @@ function rememberedChanged(team, kept) {
 }
 
 // `merged` defaults to the merged list the planner loaded; the stop step passes its own.
-export async function refreshDependencies(team, issues, prs, merged = team.merged) {
-  if (team.depFromCache) return team.dependencies;   // the dashboard's copy restored from the tick: cached issues carry no body, so it cannot be recomputed
+export async function refreshDependencies(team, rawIssues, prs, merged = team.merged) {
+  if (team.depFromCache) return team.dependencies;
+  const issues = applyDependsEdits(team.s?.directQueue, rawIssues);   // issue #1164: the overseer's Depends on edits   // the dashboard's copy restored from the tick: cached issues carry no body, so it cannot be recomputed
   const open = (issues || []).filter(i => i.state === 'OPEN');
   const byNo = new Map((issues || []).map(i => [i.number, i]));
   const wanted = new Set();

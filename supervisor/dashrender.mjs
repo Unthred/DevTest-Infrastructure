@@ -21,6 +21,7 @@ import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
 import { allowanceBody as allowanceCard } from './allowancecard.mjs';
 import { allowanceStats } from './appbaralloc.mjs';
+import { directCard } from './directcard.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -863,7 +864,7 @@ function supervisorPage(view, query, path) {
   const recent = s.ticks.slice(-5).reverse();
   const ticks = card({ id: 'h-recent', title: 'Recent ticks', span: 12, movable: false, href: '/supervisor/ticks', body: recent.length ? `<ul class="panel-list">${recent.map(t => `<li class="sev-${({ ok: 'ok', partial: 'warning', error: 'action' })[t.status] || 'info'}"><div class="t">${tickStatusBadge(t.status)} ${lt(t.at)} <span class="sub">${esc(ago(t.at, view.generatedAt))}</span></div><div class="sub">${t.ingested.length} verdict(s), ${t.actions.length} action(s), ${t.skipped.length} skipped${t.errors.length ? `, ${t.errors.length} error(s)` : ''}${t.selfUpgrade ? `, self-upgrade ${esc(t.selfUpgrade)}` : ''}</div></li>`).join('')}</ul><p class="sub"><a href="/supervisor/ticks">Full tick history</a> · <a href="/supervisor/upgrades">Upgrade history</a></p>`
     : empty('No tick in the reconcile log', 'The reconcile cron writes one entry every five minutes.', 'clock') });
-  return { title: 'Supervisor', body: grid('supervisor', cards + ticks + leases) };
+  return { title: 'Supervisor', body: grid('supervisor', directCard({ esc, card, badge, lt }, view.direct) + cards + ticks + leases) };   // issue #1164
 }
 function ticksPage(view, query, path) {
   // A row expands through the URL (ticks.open=<time>), like the rest of the table state: bookmarkable, works without script,

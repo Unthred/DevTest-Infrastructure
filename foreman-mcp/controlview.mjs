@@ -16,3 +16,16 @@ export function withControls(name, args, text, controls) {
 function addTo(text, change) {
   try { const out = JSON.parse(text); if (!out || typeof out !== 'object') return text; change(out); return JSON.stringify(out, null, 1); } catch { return text; }
 }
+
+// Issue #1164: the audit trail of the direct controls, as the dashboard publishes it (newest first), with the state of the switch.
+// The overseer reads it back with foreman_direct_log. Anything the view does not carry is reported as unavailable, never guessed.
+export function directLog(view, { limit = 30 } = {}) {
+  const d = view?.direct;
+  if (!d || !Array.isArray(d.audit)) return { available: false, note: 'this dashboard does not publish the direct control trail' };
+  const n = Number.isInteger(limit) ? Math.min(100, Math.max(1, limit)) : 30;
+  return { available: true, enabled: d.enabled !== false, switchedAt: d.switchedAt ?? null, shown: Math.min(n, d.audit.length),
+    entries: d.audit.slice(0, n).map(e => ({
+    id: e.id, at: Number.isFinite(e.at) ? new Date(e.at).toISOString() : null, by: e.by, action: e.action, target: e.target, value: e.value,
+      reason: e.reason, outcome: e.outcome,
+    changed: e.changed, before: e.before, after: e.after, text: e.text, undone: e.undone === true })) };
+}
