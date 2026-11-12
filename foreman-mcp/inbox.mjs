@@ -64,7 +64,7 @@ export function createInbox({ dir, baseUrl = null }) {
     return { pending, unpicked, total: pending + unpicked, limit };
   }
   return {
-    enabled: !!dir,
+    enabled: !!dir, dir,   // dir: read by foreman_inbox (issue #1197)
     propose(args) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       const c = checkProposal(args);
@@ -94,22 +94,6 @@ export function createInbox({ dir, baseUrl = null }) {
         return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'waiting', note: 'Foreman has not picked this item up yet (it does so on its next tick).' };
       }
       return { id, shortId: id.slice(0, 8), link: linkFor(id), state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null, decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null, updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null, issue: s.issue ?? null, job: s.job ?? null };
-    },
-    // Issue #1197: item files Foreman has not picked up yet (no status file), shown as state "submitted". Read only.
-    submitted() {
-      if (!dir) throw new Error('the inbox is not configured on this server');
-      const found = [];
-      let names = []; try { names = fs.readdirSync(items); } catch { throw new Error('the inbox directory is not available'); }
-      for (const name of names.sort()) {
-        const m = /^([a-f0-9]{32})\.json$/.exec(name);
-        if (!m || fs.existsSync(path.join(status, name))) continue;
-        const file = path.join(items, name);
-        const item = readJson(file);
-        let stat = null; try { stat = fs.lstatSync(file); } catch { /* gone */ }
-        if (!item || !stat?.isFile()) continue;
-        found.push({ id: m[1], shortId: m[1].slice(0, 8), kind: item.kind ?? null, title: item.title ?? null, prompt: item.prompt ?? null, state: 'submitted', createdAt: stat.mtime.toISOString() });
-      }
-      return found;
     },
     list({ search = '', kind = '', state = '', limit = 50 } = {}) {
       if (!dir) throw new Error('the inbox is not configured on this server');

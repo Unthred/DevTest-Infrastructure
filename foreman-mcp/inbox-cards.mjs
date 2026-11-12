@@ -2,6 +2,7 @@
 // records foreman_inbox_items reads (inbox.list and the decision records), so the two tools cannot disagree about which cards exist.
 // Pure apart from reading: it writes nothing.
 import { inboxSearchRecords } from './inbox-search-records.mjs';
+import { submittedItems } from './inbox-submitted.mjs';
 
 export const CARD_STATES = ['submitted', 'pending', 'approved', 'running', 'done', 'failed', 'refused', 'rejected'];
 const DEFAULT_LIMIT = 20;
@@ -35,7 +36,7 @@ export function inboxCardsTool(inbox, source, now) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be a whole number from 1 to 100');
     const stored = inbox.list({ limit: 100, state: state === 'submitted' ? '' : state }).items;   // 100 is the list maximum
     const approvals = (await source.get()).view?.panels?.approvals || [];
-    const records = [...inboxSearchRecords({ inbox: stored, approvals }, { state: state === 'submitted' ? '' : state }), ...inbox.submitted()]
+    const records = [...inboxSearchRecords({ inbox: stored, approvals }, { state: state === 'submitted' ? '' : state }), ...submittedItems(inbox.dir)]
       .filter(record => !state || record.state === state);
     const cards = records
       .sort((left, right) => (Date.parse(right.createdAt || '') || 0) - (Date.parse(left.createdAt || '') || 0))   // cards with no time (decisions) last
