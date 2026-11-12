@@ -92,6 +92,7 @@ test('writer prompts require the table, claim check and real runtime path; revie
     assert.match(prompt, /Requirements check/);
     assert.match(prompt, /every issue requirement/);
     assert.match(prompt, /Check every PR-description claim against the diff/);
+    assert.match(prompt, /`Not applicable`, only for a conditional requirement.*\(#N\).*still open or not merged/);
     assert.match(prompt, /real entry point.*parent processes or concurrent passes/);
   }
   assert.match(review, /implementer's `## Requirements check` table/);
