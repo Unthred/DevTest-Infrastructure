@@ -4,7 +4,8 @@ import { requestBreakerResume } from './breakerresume.mjs';
 import { homeownerCommand, queueHomeownerRequest } from './homeownerqueue.mjs';
 import { resumeAllowed } from './breaker.mjs';
 import { rangeEqual } from './rangediff.mjs';
-import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
+import { checkRebase } from './rebasecheck.mjs';
+import { rebaseCommand } from './rebasecli.mjs';
 import { transcriptFile } from './transcript.mjs';
 import { transcriptMtime } from './robust.mjs';
 import path from 'node:path';
@@ -388,16 +389,7 @@ async function main() {
     console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
     return;
   }
-  // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
-  if (command === 'rebase-prepare') {
-    if (!a.worktree || !a.branch) throw new SupervisorError('usage: rebase-prepare --worktree DIR --branch BRANCH');
-    console.log(JSON.stringify(prepareRebase({ worktree: a.worktree, branch: a.branch }), null, 2)); return;
-  }
-  if (command === 'rebase-push') {
-    if (!a.worktree || !a.branch || !a.base || !a.old) throw new SupervisorError('usage: rebase-push --worktree DIR --branch BRANCH --base BASE --old OLD_HEAD');
-    const result = pushRebase({ worktree: a.worktree, branch: a.branch, base: a.base, oldHead: a.old });
-    console.log(JSON.stringify(result, null, 2)); if (!result.pushed) process.exitCode = 3; return;
-  }
+  if (rebaseCommand(command, a)) return;   // issues #158, #1207: the guarded steps of a rebase job
   if (command === 'dry-run' || command === 'start') {
     if (!a.spec) throw new SupervisorError('--spec FILE is required');
     const spec = JSON.parse(fs.readFileSync(a.spec, 'utf8'));

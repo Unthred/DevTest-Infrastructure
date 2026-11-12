@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Team } from '../supervisor/team.mjs';
+import { Team, rebasePrompt } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { prepareRebase } from '../supervisor/rebasecheck.mjs';
 import { readRefusal, noHeadDetail } from '../supervisor/rebaserefusal.mjs';
@@ -118,4 +118,32 @@ test('a refused rebase spends the head\'s rebase attempts and asks the homeowner
   assert.equal(miss.tm.s.rebaseAttempts[key] || 0, 0, 'negative: a rebase that stopped for another reason keeps its attempts');
   assert.equal(miss.calls.comments.length, 0);
   assert.equal(miss.calls.labels.length, 0);
+});
+
+// Issue #1207: an agent that cannot finish records why with the real rebase-stop command; the same hold follows, with its own wording.
+test('rebase-stop records the agent\'s stop, the post-condition reads it, and the homeowner is asked once', async t => {
+  const w = world(t, KEEP);   // nothing was pushed; the agent decides it cannot go on
+  const stop = args => execFileSync(process.execPath, [cli, 'rebase-stop', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.throws(() => stop(['--worktree', w.agent, '--old', w.oldHead]), 'negative: a stop without a reason is refused');
+  assert.equal(readRefusal(w.agent, w.oldHead), null);
+  assert.deepEqual(JSON.parse(stop(['--worktree', w.agent, '--old', w.oldHead, '--reason', 'seven files conflict and the two sides are different designs'])), { stopped: true });
+  const note = readRefusal(w.agent, w.oldHead);
+  assert.equal(note.reason, 'agent-stop');
+  assert.equal(readRefusal(w.agent, 'f'.repeat(40)), null, 'negative: a note for another head is ignored');
+  const job = { worktree: w.agent };
+  assert.match(noHeadDetail(job, { baseHead: w.oldHead }), /agent reported that it cannot finish/);
+  assert.equal(job.incompleteRetries, 1);
+  const key = `7:${H(1)}`, id = 'j'.repeat(32), calls = { comments: [], labels: [] }, tm = team(t, { id, status: 'blocked', lastEvent: 'incomplete', attempts: 1, worktree: w.agent,
+    postcondition: { kind: 'rebased', pr: 7, baseHead: w.oldHead }, incompleteReason: { cause: 'postcondition_not_met', detail: 'x', attempt: 1 }, rebaseRefused: 'agent-stop' }, calls);
+  const j = tm.s.jobs[id] = { kind: 'rebase', agent: 'claude', pr: 7, head: w.oldHead, key, ingested: false, at: 1 };
+  await tm.ingestOne(id, j, { ingested: [] });
+  assert.equal(tm.s.rebaseAttempts[key], 2);
+  assert.equal(calls.comments.length, 1);
+  assert.match(calls.comments[0].body, /could not be finished by the agent[\s\S]*seven files conflict/);
+  assert.doesNotMatch(calls.comments[0].body, /guarded push refused/);
+});
+
+test('the rebase prompt tells the agent to run rebase-stop when it cannot finish', () => {
+  
+  assert.match(rebasePrompt({ pr: 7, head: 'a'.repeat(40), base: 'main', branch: 'b' }), /ai-supervisor rebase-stop --worktree <this worktree> --old <oldHead from step 1> --reason/);
 });
