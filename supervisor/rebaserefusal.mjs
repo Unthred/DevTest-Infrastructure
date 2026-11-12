@@ -20,6 +20,15 @@ export function recordRefusal(worktree, { oldHead, reason, message }) {
   } catch { /* see above */ }
 }
 
+// Issue #1207: a rebase the agent cannot finish (conflicts that are not mechanical, a check it may not fix, a tool denied) used to be
+// reported only in chat, so the planner ran the same prompt again and got the same stop. The agent now records it with rebase-stop.
+export const STOPPED = 'agent-stop';
+// The prompt sentence that tells the agent to call rebase-stop.
+export const STOP_STEP = fs.readFileSync(new URL('./rebase-stop-step.txt', import.meta.url), 'utf8').trim();
+export function recordStop(worktree, { oldHead, message }) {
+  recordRefusal(worktree, { oldHead, reason: STOPPED, message });
+}
+
 // The refusal for exactly this fetched head, or null. A note for another head belongs to an earlier try and is ignored.
 export function readRefusal(worktree, oldHead) {
   try {
@@ -35,7 +44,8 @@ export function noHeadDetail(job, p) {
   if (!note) return 'no new head was pushed: the branch is unchanged';
   job.rebaseRefused = note.reason;
   job.incompleteRetries = Math.max(job.incompleteRetries || 0, 1);   // the one automatic run again would end the same way
-  return `the guarded push was refused (${note.reason}), so no new head was pushed; a retry gives the same result`;
+  return note.reason === STOPPED ? 'the agent reported that it cannot finish this rebase, so no new head was pushed; a retry gives the same result'
+    : `the guarded push was refused (${note.reason}), so no new head was pushed; a retry gives the same result`;
 }
 
 // After a refused rebase: spend the head's rebase attempts so the planner stops, and ask the homeowner once, with the guard's own words.
@@ -46,7 +56,13 @@ export async function holdRefusedRebase(team, id, j, job) {
   if ((team.s.rebaseAttempts[j.key] || 0) < left) team.s.rebaseAttempts[j.key] = left;
   team.save();
   const text = note ? note.message : `the guard refused (${job.rebaseRefused})`;
-  const body = NOTICE.replace('{base}', () => j.base || 'main').replace('{head}', () => team.commitRef(j.head)).replace('{message}', () => text);
+  const what = note?.reason === STOPPED
+    ? 'could not be finished by the agent, which stopped and reported why'
+    : 'was resolved locally but the guarded push refused it, so nothing was pushed';
+  const body = NOTICE.replace('{what}', () => what)
+    .replace('{base}', () => j.base || 'main')
+    .replace('{head}', () => team.commitRef(j.head))
+    .replace('{message}', () => text);
   await team.postNotice(j.pr, `rebase-refused job=${id}`, body);
   await team.gh.addLabel(j.pr, 'needs-homeowner');
 }
