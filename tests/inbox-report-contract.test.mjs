@@ -122,3 +122,30 @@ test('boundary: with no reports folder configured the prompt is unchanged and no
   assert.equal(withReportContract('Task.', { reportsDir: null, reportName: 'x.md' }), 'Task.');
   assert.equal(reportNote({}), '');
 });
+
+const ENDINGS = [
+  ['failed', { status: 'failed', updatedAt: 6000 }, false],
+  ['cancelled', { status: 'cancelled', updatedAt: 6000 }, false],
+  ['cap-stopped', { status: 'cancelled', updatedAt: 6000 }, true],
+];
+for (const [label, job, capStopped] of ENDINGS) {
+  test(`invalid: a ${label} job with a half-written report names it as unfinished`, async t => {
+    const w = world(t);
+    await w.team.runAction(w.act, rep());
+    writeReport(w, 'STATUS: done\npartial');
+    const [jobId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox');
+    if (capStopped) rec.capStopped = true;
+    w.team.ingestInbox(jobId, rec, job);
+    const st = inbox.statusOf(w.dir, w.id);
+    assert.equal(st.state, 'failed');
+    assert.match(st.result, new RegExp(`Report ${w.reportName} is unfinished`));
+  });
+}
+
+test('invalid: a failed job with no report file names it as missing', async t => {
+  const w = world(t);
+  await w.team.runAction(w.act, rep());
+  const [jobId, rec] = Object.entries(w.team.s.jobs).find(([, r]) => r.kind === 'inbox');
+  w.team.ingestInbox(jobId, rec, { status: 'failed', updatedAt: 6000 });
+  assert.match(inbox.statusOf(w.dir, w.id).result, new RegExp(`Report ${w.reportName} is missing`));
+});
