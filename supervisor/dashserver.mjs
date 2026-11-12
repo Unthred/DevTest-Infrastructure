@@ -123,6 +123,8 @@ export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=ut
   '/static/inbox-filter.mjs': ['inbox-filter.mjs', 'text/javascript; charset=utf-8'],
   '/static/approve-all.mjs': ['approve-all.mjs', 'text/javascript; charset=utf-8'],
   '/static/decision-ui.mjs': ['decision-ui.mjs', 'text/javascript; charset=utf-8'],
+  '/static/inbox-views.mjs': ['inbox-views.mjs', 'text/javascript; charset=utf-8'],
+  '/static/inbox-views-ui.mjs': ['inbox-views-ui.mjs', 'text/javascript; charset=utf-8'],
   '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/inbox-ui.mjs': ['inbox-ui.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
 Object.assign(STATIC, JOBS_STATIC);
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
