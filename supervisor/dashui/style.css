@@ -536,3 +536,9 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .qf.on{background:var(--link);border-color:var(--link);color:var(--surface)}
 .qf-n{font-variant-numeric:tabular-nums;opacity:.85}
 .empty .btn{min-height:44px;margin-top:var(--sp2)}
+
+/* Issue #1222: stalled marks in the app bar and the Stalled card */
+.ab-stall,.pill-stall{display:inline-flex;align-items:center;min-height:24px;min-width:24px;justify-content:center;padding:0 var(--sp2);border-radius:999px;background:var(--action-bg);color:var(--action);border:2px solid var(--action);font-weight:700;font-size:var(--fs-xs);text-decoration:none}
+.agent-lines li{display:inline-flex;align-items:center;gap:var(--sp1)}
+.stall-card h4{margin:var(--sp2) 0 var(--sp1)}.stall-card ul{margin:0;padding-left:var(--sp4)}.stall-card [data-no-reason]{color:var(--action)}
+@media(max-width:639px){.ab-stall,.pill-stall{min-height:44px;min-width:44px}}
