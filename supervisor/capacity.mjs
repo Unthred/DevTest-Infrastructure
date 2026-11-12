@@ -10,7 +10,6 @@
 //               plus a margin; an agent whose remaining capacity falls to the reserve is reviews-only.
 //
 // Without a trusted capacity nothing here guesses: the caller falls back to the fixed high-water share and says so.
-import { isAppliedReset } from './resetdetect.mjs';
 
 export const isWeekly = w => /^seven_day|week/.test(w?.type || '') || (Number.isFinite(w?.windowMinutes) && w.windowMinutes >= 10000);
 
@@ -50,8 +49,7 @@ export function capacitySamples(jobs) {
   const perWindow = [];
   for (let i = 1; i < readings.length; i++) {
     const delta = readings[i].used - readings[i - 1].used;
-    // Issue #1159: a reset the homeowner applied is not a window; a pair that spans one says nothing about the size of the week.
-    if (isAppliedReset(readings[i - 1], readings[i])) continue;
+    // A fall in use, including an applied limit reset (issue #1159), has a negative delta and is skipped here, so it never feeds capacity.
     if (!sameReset(readings[i].resetsAt, readings[i - 1].resetsAt) || readings[i].tokens <= 0 || delta <= 0) continue;
     let entry = perWindow.find(w => sameReset(w.resetsAt, readings[i].resetsAt));
     if (!entry) perWindow.push(entry = { resetsAt: readings[i].resetsAt, tokens: 0, delta: 0 });
