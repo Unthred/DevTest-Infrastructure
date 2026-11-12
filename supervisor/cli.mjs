@@ -38,7 +38,7 @@ import { updateIndex } from './issueindex.mjs';
 import { isStatusIssue } from './statusissue.mjs';
 import { redact } from './redact.mjs';
 import { saveWork } from './savework.mjs';
-import { hasProbe, refreshProvider } from './probe.mjs';
+import { admissionProbe } from './admissionprobe.mjs';
 import { probeNow } from './probenow.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
@@ -213,15 +213,11 @@ function probeAllowances(config) {
   }
   return out;
 }
-async function runDueProbes(root, registry, team, found) {
-  const due = team.probesDue(id => hasProbe(registry, id), readCache(root));   // issue #1163: a refresh before admission only while work waits
-  for (const d of due) {
-    team.noteProbe(d.agent, d);
-    const r = await refreshProvider(registry, d.provider);
-    if (r.record) { found[d.provider] = r.record; storeProbes(root, { [d.provider]: r.record }); }
-    else console.error(`ai-supervisor: allowance probe for ${d.agent} (${d.reason}) produced no reading: ${r.error}`);
-  }
-  return Object.keys(found).length > 0;
+// Issue #110: probes owed before planning (a held agent's stale reading); the hook for the refresh at the admission decision (#1163) goes on the returned team.
+async function runDueProbes(root, registry, team, found, rebuild) {
+  const probe = admissionProbe({ registry, root, found });
+  for (const d of team.probesDue(probe.canProbe)) { team.noteProbe(d.agent, d); await probe.run(d); }
+  return Object.assign(Object.keys(found).length ? await rebuild() : team, { admissionProbe: probe });
 }
 // Enable gate (issue #40): everything a live tick needs that a dry-run plan alone would not prove. Read-only, no model call.
 // Provider preflights run against the configured product repository, never the caller's working directory.
@@ -303,7 +299,7 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
       let team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
       // Issue #110: refresh the allowance of a held agent whose reading is stale (or whose reset time has just passed) before
       // planning, so a fresh reading can release the reviews-only latch in this very tick. A dry run or a hold never spends a run.
-      if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
+      if (!dryRun && !hold) team = await runDueProbes(root, registry, team, found, () => teamFor(root, registry, config, true, { wrapGh, ghStats }));
       phasesBefore['team setup'] = Date.now() - setupSince;
       const report = await team.tick({ dryRun, hold, replay: mode === 'replay', beforeChain: () => wrapper?.endReplay() });
       if (!dryRun) {

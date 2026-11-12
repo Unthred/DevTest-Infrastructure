@@ -1,6 +1,6 @@
 // Issue #1163: how old an allowance reading is, where it came from, which provider limit each figure belongs to, and whether a
 // refresh is owed before a job is admitted. Pure functions over plain data: no clock, no file, no probe. The probe that carries a
-// refresh out is probe.mjs; the tick that asks for it is team.probesDue.
+// refresh out is probe.mjs; admissionrefresh.mjs asks for it at the admission decision.
 import { isWeekly } from './capacity.mjs';
 
 const MINUTE = 60000;
@@ -55,6 +55,3 @@ export function usageReading(allowance, now, settings) {
   const kinds = r.limits.map(l => l.label);
   return { stale: r.stale, maxAgeMinutes: r.maxAgeMinutes, sessionTracked: r.sessionTracked, kinds };
 }
-
-// Is any work waiting for an agent to take? The last pass's cache lists the open pull requests and issues. An idle repository owes no refresh.
-export const workWaiting = cache => (cache?.pulls?.length || 0) + (cache?.issues?.length || 0) > 0;

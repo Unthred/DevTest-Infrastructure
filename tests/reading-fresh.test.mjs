@@ -74,12 +74,13 @@ function team(t, allowance) {
 }
 test('team: a normal agent with a 2 hour old reading gets one probe before the next admission; none when fresh', t => {
   const old = team(t, al(0.5, { ageMin: 120 }));
-  assert.deepEqual(old.tm.probesDue(() => true, { pulls: [], issues: [] }), [], 'no work waiting: no probe');
-  const due = old.tm.probesDue(() => true, { issues: [{}] });
+  assert.deepEqual(old.tm.probesDue(() => true), [], 'no job about to be admitted: no probe');
+  assert.deepEqual(old.tm.probesDue(() => true, new Set(['other'])), [], 'a job on another agent does not probe this one');
+  const due = old.tm.probesDue(() => true, new Set(['claude']));
   assert.deepEqual(due.map(d => [d.agent, d.reason]), [['claude', 'stale']]);
   old.tm.noteProbe('claude', due[0]);
-  assert.deepEqual(old.tm.probesDue(() => true, { issues: [{}] }), [], 'one probe, not a second inside the interval');
-  assert.deepEqual(team(t, al(0.5, { ageMin: 10 })).tm.probesDue(() => true, { issues: [{}] }), [], 'fresh and above the reserve: no probe');
+  assert.deepEqual(old.tm.probesDue(() => true, new Set(['claude'])), [], 'one probe, not a second inside the interval');
+  assert.deepEqual(team(t, al(0.5, { ageMin: 10 })).tm.probesDue(() => true, new Set(['claude'])), [], 'fresh and above the reserve: no probe');
 });
 
 test('a probe result above the exhausted threshold blocks the job that triggered the probe', () => {

@@ -31,6 +31,7 @@ import { isSecretScanner } from './secret-scanner.mjs';
 import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probesOwed } from './probesdue.mjs';
+import { refreshBeforeAdmission } from './admissionrefresh.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
 import { weeklyWindow } from './budget.mjs';
@@ -1010,10 +1011,10 @@ export class Team {
     return out;
   }
   // Allowance probes owed now (issue #110, #1163; supervisor/probesdue.mjs). Read-only; the caller runs them and calls noteProbe. `canProbe`: providers with a probe.
-  probesDue(canProbe = () => true, lastCache = null) {
+  probesDue(canProbe = () => true, demand = null) {
     const modes = this.budgets();
     if (!modes) return [];
-    return probesOwed({ agents: this.agents(), modes, usage: this.usage, stored: this.s.budget, probeState: this.s.probes, settings: budgetSettings(this.c), now: this.clock.now(), canProbe, lastCache });
+    return probesOwed({ agents: this.agents(), modes, usage: this.usage, stored: this.s.budget, probeState: this.s.probes, settings: budgetSettings(this.c), now: this.clock.now(), canProbe, demand });
   }
   // The attempt is recorded whether or not it produced a reading, so a failing probe cannot run more than once per interval.
   noteProbe(agent, due) { this.s.probes[agent] = { at: this.clock.now(), resetFor: due.resetFor ?? this.s.probes[agent]?.resetFor ?? null }; this.save(); }
@@ -1767,7 +1768,7 @@ export class Team {
     for (const act of actions) {
       // Issue #344: several jobs start in one tick, so the allowance is checked again right before each start; a limit reached while
       // an earlier job was starting holds the rest until the next tick (merges are not jobs).
-      const l = act.type !== 'merge' ? this.limitedOf(act.agent) : null;
+      const l = act.type !== 'merge' ? (await refreshBeforeAdmission(this, act)) || this.limitedOf(act.agent) : null;   // issue #1163: refresh first when due
       if (l?.out) { (report.skipped ||= []).push(usageLimitSkip(act, l)); continue; }
       const startSince = Date.now();
       await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
