@@ -10,8 +10,9 @@ const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 export function failureRow(s) {
   const r = s.resolution;
   return {
-    proposalId: s.id, shortId: s.id.slice(0, 8), title: s.title ? clip(s.title, 120) : null, kind: s.kind ?? null, jobId: s.job ?? null,
-    cause: s.cause ?? null, evidence: clip(s.evidence || s.reason || s.result || 'no reason recorded', 200), failedAt: iso(s.updatedAt),
+    proposalId: s.id, shortId: s.id.slice(0, 8), state: s.state === 'done' ? 'done' : 'failed', title: s.title ? clip(s.title, 120) : null, kind: s.kind ?? null, jobId: s.job ?? null,
+    cause: s.cause ?? null, evidence: clip(s.evidence || s.correctedFrom || s.reason || s.result || 'no reason recorded', 200), failedAt: iso(s.updatedAt),
+    ...(s.state === 'done' ? { correctedFrom: clip(s.correctedFrom, 200) } : {}),
     resolution: r ? { type: String(r.type), ref: r.ref ? String(r.ref) : null, note: r.note ? clip(r.note, 200) : null, at: iso(r.at) } : null,
   };
 }
@@ -19,16 +20,17 @@ export function failureRow(s) {
 export function inboxFailureTools({ inbox }) {
   return [{
     name: 'foreman_inbox_failures',
-    description: 'Every failed Inbox item (proposal id and title, job id, cause, evidence line, resolution), unresolved first. Causes: time_cap, no_change, no_result, guard_refused, fault, allowance. An item stays in Needs you until it has a resolution. Record re-proposed or superseded with foreman_propose and `resolves` (the proposalId or shortId here); dropping or "done by other means" needs the homeowner on the dashboard. Read-only.',
+    description: 'Every failed Inbox item, and every item Foreman corrected from a failure to done (state "done", with correctedFrom) (proposal id and title, job id, cause, evidence line, resolution), unresolved first. Causes: time_cap, no_change, no_result, guard_refused, fault, allowance. An item stays in Needs you until it has a resolution. Record re-proposed or superseded with foreman_propose and `resolves` (the proposalId or shortId here); dropping or "done by other means" needs the homeowner on the dashboard. Read-only.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: () => {
       const all = inbox.failureRows().map(failureRow);
-      const ordered = [...all.filter(r => !r.resolution), ...all.filter(r => r.resolution)].map(r => JSON.stringify(r));
+      const open = r => r.state === 'failed' && !r.resolution;
+      const ordered = [...all.filter(open), ...all.filter(r => !open(r))].map(r => JSON.stringify(r));
       let used = 0; const rows = [];
       for (const line of ordered) { const cost = JSON.stringify(line).length + 3; if (used + cost > BUDGET) break; used += cost; rows.push(line); }
-      const unresolved = all.filter(r => !r.resolution).length;
-      return { total: all.length, unresolved, rows, ...(rows.length < all.length ? { omitted: all.length - rows.length, note: 'resolved rows were left out to fit the answer' } : {}) };
+      const unresolved = all.filter(r => r.state === 'failed' && !r.resolution).length;
+      return { total: all.length, unresolved, rows, ...(rows.length < all.length ? { omitted: all.length - rows.length, note: 'the last rows (resolved or corrected ones first) were left out to fit the answer' } : {}) };
     },
   }];
 }

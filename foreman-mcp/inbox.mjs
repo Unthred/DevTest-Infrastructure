@@ -88,7 +88,8 @@ export function createInbox({ dir, baseUrl = null }) {
       fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
       return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.' };
     },
-    // Issue #1154: every failed item, from the status files Foreman writes. Nothing is cut from the list here; the caller bounds the text.
+    // Issue #1154: every failed item, from the status files Foreman writes, plus items Foreman corrected from a failure (shown as done, so the overseer
+    // sees they were re-judged). Nothing is cut from the list here; the caller bounds the text.
     failureRows() {
       if (!dir) throw new Error('the inbox is not configured on this server');
       let names = []; try { names = fs.readdirSync(status); } catch { return []; }
@@ -96,7 +97,7 @@ export function createInbox({ dir, baseUrl = null }) {
       for (const n of names) {
         if (!/^[a-f0-9]{32}\.json$/.test(n)) continue;
         let s = null; try { s = JSON.parse(fs.readFileSync(path.join(status, n), 'utf8')); } catch { continue; }
-        if (s?.state === 'failed' && ID_RE.test(String(s.id))) rows.push(s);
+        if ((s?.state === 'failed' || (s?.state === 'done' && s.correctedFrom)) && ID_RE.test(String(s.id))) rows.push(s);
       }
       return rows.sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0));
     },

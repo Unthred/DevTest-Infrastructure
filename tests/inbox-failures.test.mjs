@@ -11,7 +11,7 @@ import { isReadOnlyPrompt } from '../supervisor/inboxcause.mjs';
 import { backfillFailures } from '../supervisor/inboxbackfill.mjs';
 import { inboxAttention } from '../supervisor/inboxattention.mjs';
 import { resolveByHomeowner } from '../supervisor/inboxresolve.mjs';
-import { sleptMs, pollingOf } from '../supervisor/inboxpolling.mjs';
+import { waitedMs, pollingOf } from '../supervisor/inboxpolling.mjs';
 import { changedLimits } from '../supervisor/inboxconfig.mjs';
 import http from 'node:http';
 import { handler } from '../supervisor/dashserver.mjs';
@@ -140,13 +140,27 @@ test('requirement 4: the MCP accepts resolves, and foreman_inbox_failures lists 
   assert.equal(body.total, 40); assert.equal(body.unresolved, 39); assert.equal(body.rows.length, 40, 'nothing cut from the list'); assert.equal(body.omitted, undefined);
   const rows = body.rows.map(r => JSON.parse(r));
   assert.equal(rows[0].resolution, null); assert.equal(rows[39].resolution.type, 'dropped'); assert.equal(rows[39].resolution.note, 'no longer wanted');
-  assert.deepEqual(Object.keys(rows[0]).sort(), ['cause', 'evidence', 'failedAt', 'jobId', 'kind', 'proposalId', 'resolution', 'shortId', 'title']);
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['cause', 'evidence', 'failedAt', 'jobId', 'kind', 'proposalId', 'resolution', 'shortId', 'state', 'title']);
   assert.ok(!rows.some(r => r.proposalId === okId), 'done items are not listed');
   // far past the answer bound: resolved rows go first and the answer says so, never a half-cut row
   for (let i = 0; i < 90; i++) { const id = drop(dir, { ...PROMPT, prompt: `more ${i}` }); inbox.scan(dir, NOW, { maxPending: 300 }); inbox.finish(dir, id, { state: 'failed', cause: 'fault', evidence: 'y'.repeat(150), reason: 'r' }, NOW + 100 + i); }
   const big = JSON.parse((await tools.call('foreman_inbox_failures', {})).text);
   assert.equal(big.total, 130); assert.ok(big.omitted > 0); assert.equal(big.rows.length + big.omitted, 130);
   assert.ok(big.rows.every(r => JSON.parse(r).resolution === null), 'unresolved rows are kept first');
+});
+
+test('acceptance: a failed item corrected to done is still listed, shown as done, so the overseer sees it was re-judged', async t => {
+  const dir = makeInbox(t), a = drop(dir, PROMPT), b = drop(dir, { ...PROMPT, prompt: 'two' });
+  inbox.scan(dir, NOW);
+  inbox.finish(dir, a, { state: 'failed', kind: 'prompt', title: 'Verify issue 924 is installed', job: '867710c6', reason: 'the agent reported that it changed nothing', result: 'Agent summary: STATUS: nothing_changed\nVerified read-only.' }, NOW);
+  inbox.finish(dir, b, { state: 'failed', job: 'd674cc94', reason: 'stopped after the 15-minute inbox time cap', result: 'stopped' }, NOW + 1);
+  backfillFailures(inbox, dir, NOW + 2);
+  const tools = createToolset({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: createInbox({ dir }) });
+  const body = JSON.parse((await tools.call('foreman_inbox_failures', {})).text);
+  const rows = body.rows.map(r => JSON.parse(r));
+  assert.equal(body.unresolved, 1);
+  assert.equal(rows[0].jobId, 'd674cc94'); assert.equal(rows[0].state, 'failed'); assert.equal(rows[0].cause, 'time_cap');
+  assert.equal(rows[1].jobId, '867710c6'); assert.equal(rows[1].state, 'done'); assert.match(rows[1].correctedFrom, /changed nothing/);
 });
 
 test('requirement 5: a setting an Inbox job changed and did not restore is a Needs you line naming the setting and the value now in force', t => {
@@ -174,14 +188,17 @@ test('requirement 5: the end-of-job patch compares the snapshot taken at start w
   assert.equal(patch({}, { a: 2 }).configChanges, null, 'a job started before the snapshot existed is not judged');
 });
 
-test('requirement 6: sleeping between checks is measured from the transcript; most of the cap flags the job, and the prompt contract forbids waiting', t => {
-  assert.equal(sleptMs('while true; do sleep 30; done; sleep 2m; sleep 1.5'), 30000 + 120000 + 1500);
+test('requirement 6: waiting between checks is measured from the transcript timestamps; most of the cap flags the job, and the prompt contract forbids waiting', t => {
   const root = tmp(t), id = hex(16);
   fs.mkdirSync(path.join(root, 'transcripts'));
-  const line = (seq, command) => JSON.stringify({ v: 1, seq, at: NOW, kind: 'tool_call', tool: 'Bash', text: command.slice(0, 20), detail: JSON.stringify({ command }) });
-  fs.writeFileSync(path.join(root, 'transcripts', `${id}.jsonl`), [line(1, 'sleep 300'), line(2, 'ls'), line(3, 'sleep 300')].join('\n') + '\n');
+  const line = (seq, at, tool, command, kind = 'tool_call') => JSON.stringify({ v: 1, seq, at: NOW + at * 1000, kind, tool, text: command.slice(0, 20), detail: JSON.stringify({ command }) });
+  // The shape of job d674cc94: loops that sleep many times (counted once by a literal count), a Monitor call and a Codex 'shell' call.
+  const waiting = [line(1, 0, 'Bash', 'until [ x ]; do sleep 20; done'), line(2, 300, 'Read', 'f'), line(3, 301, 'Monitor', 'while true; do jq; sleep 5; done'),
+    line(4, 500, 'assistant', 'waiting', 'assistant'), line(5, 501, 'shell', 'while true; do sleep 30; done'), line(6, 601, 'Read', 'f')];
+  fs.writeFileSync(path.join(root, 'transcripts', `${id}.jsonl`), waiting.join('\n') + '\n');
+  assert.equal(waitedMs(waiting.map(l => JSON.parse(l))), 300000 + 199000 + 100000, 'loops, Monitor and shell calls count by wall time');
   const flagged = pollingOf({ root, jobId: id, capMs: 900000 });
-  assert.deepEqual(flagged, { sleptMs: 600000, capMs: 900000 });
+  assert.deepEqual(flagged, { sleptMs: 599000, capMs: 900000 });
   assert.equal(pollingOf({ root, jobId: id, capMs: 3600000 }), null, 'a small share of a long cap is not flagged');
   const teamDir = tmp(t); fs.mkdirSync(path.join(teamDir, 'inbox', 'k'), { recursive: true });
   const patch = inboxEndPatch({ id, j: { ticket: 'k', capStopped: true }, job: { status: 'stopped' }, teamDir, capMs: 900000, root });
