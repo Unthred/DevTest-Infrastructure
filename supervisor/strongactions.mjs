@@ -52,11 +52,17 @@ async function approveDecision({ team, n, pr, deps }) {
 }
 
 // The entry the review gate reads (team.s.verdicts), marked as the homeowner's. A verdict already at this head is archived, not erased.
-function recordVerdict({ team, n, head, item, now }, verdict) {
+// A CHANGES verdict starts a fix round, so it carries the homeowner's reason as a blocking finding and says it publicly on the pull request
+// (the fix prompt tells the writer to read the findings there). The comment is posted first: a failed post records nothing.
+async function recordVerdict({ team, n, head, item, now }, verdict) {
   const key = keyOf(n, head), prior = team.s.verdicts[key];
   if (prior?.verdict === verdict && prior.homeowner === true) return refused(`pull request #${n} already has your ${verdict} verdict at ${head.slice(0, 7)}`);
+  const changes = verdict === 'CHANGES';
+  if (changes && missing(team.gh, 'comment').length) return refused('this supervisor cannot comment on the pull request, so the fix loop would have no findings to read; nothing was changed');
+  const findings = changes ? [{ kind: 'blocking', text: `Homeowner verdict: ${item.reason}` }] : [];
+  if (changes) await team.gh.comment(n, `**CHANGES** — homeowner verdict on head ${head}, recorded from the Foreman dashboard after typing pull request number ${n}.\n\n${findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n')}`);
   if (prior) team.archiveVerdict(key, prior);
-  team.s.verdicts[key] = { verdict, reviewer: 'homeowner', homeowner: true, independent: true, findings: [], commandsRun: [], reason: item.reason, at: now };
+  team.s.verdicts[key] = { verdict, reviewer: 'homeowner', homeowner: true, independent: true, findings, commandsRun: [], reason: item.reason, at: now };
   team.save();
   const read = team.s.verdicts[key];
   if (read?.verdict !== verdict || read.homeowner !== true) return failed(`the ${verdict} verdict for pull request #${n} could not be read back from the review gate`);

@@ -166,6 +166,25 @@ test('verdict: a homeowner CHANGES replaces and archives an earlier PASS, and th
   const again = await approveAndTick(w, propose(w, item('verdict_changes', '5', 'again')));
   assert.equal(again.state, 'refused'); assert.match(again.reason, /already has your CHANGES verdict/);
 });
+test('verdict: a homeowner CHANGES gives the fix loop a blocking finding and a public comment, and a fix job is planned from it', async t => {
+  const w = world(t);
+  const st = await approveAndTick(w, propose(w, item('verdict_changes', '5', 'the retry path loses the head')));
+  assert.equal(st.state, 'done');
+  const entry = w.team.s.verdicts[`5:${w.r.head}`];
+  assert.deepEqual(entry.findings, [{ kind: 'blocking', text: 'Homeowner verdict: the retry path loses the head' }]);
+  const posted = w.calls.comments.filter(([n]) => n === 5).map(c => c[1]).join('\n');
+  assert.match(posted, /CHANGES/); assert.match(posted, /the retry path loses the head/); assert.ok(posted.includes(w.r.head));
+  const fix = (await w.team.plan()).find(a => a.type === 'fix' && a.pr === 5);
+  assert.ok(fix, 'the planner starts a fix round for the rejected head');
+  assert.ok(w.team.s.verdicts[fix.key].findings.some(f => f.kind === 'blocking' && /retry path/.test(f.text)), 'the fix job has text to correct');
+});
+test('verdict: a CHANGES whose public comment fails records nothing', async t => {
+  const w = world(t);
+  w.gh.comment = async () => { throw new Error('boom'); };
+  const st = await approveAndTick(w, propose(w, item('verdict_changes', '5', 'x')));
+  assert.equal(st.state, 'failed');
+  assert.equal(w.team.s.verdicts[`5:${w.r.head}`], undefined);
+});
 test('verdict: for a head that is not the confirmed one nothing is recorded', async t => {
   const w = world(t), id = propose(w, item('verdict_pass'));
   assert.equal(inbox.decide(w.dir, id, 'approve', 2000, confirmFor(w)).ok, true);
