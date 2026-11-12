@@ -1,0 +1,8 @@
+{
+  "name": "devtest-infrastructure",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e:dashboard": "node tests/e2e/dashboard/run.mjs"
+  }
+}

@@ -564,7 +564,7 @@ export const TOP_LEVEL_DIRS = new Set(['.github', 'bin', 'broker', 'browser', 'c
 const noDotSegments = w => !w.split('/').some(seg => seg === '..' || seg === '.');
 const isRepoDir = w => /^(?:[\w.-]+\/)+(?:[\w-]+)?$/.test(w) && !w.includes('..') && TOP_LEVEL_DIRS.has(w.split('/')[0]) && noDotSegments(w);
 // Issue #559: a file token needs the same anchoring. With a slash it must start at a top-level directory; without one it must be a root file or carry a source/doc extension (so "fix.retry" is not a path). Tokens are lower-cased before the check.
-export const ROOT_FILES = new Set(['.gitignore', 'agents.md', 'claude.md', 'readme.md']);
+export const ROOT_FILES = new Set(['.gitignore', 'agents.md', 'claude.md', 'package.json', 'readme.md']);
 const FILE_EXT = /\.(?:mjs|cjs|js|ts|json|jsonl|md|yml|yaml|sh|cs|csproj|sln|txt|toml|html|css|ps1|patch|diff|conf|ini|cfg)$|\/dockerfile(?:\.[\w-]+)?$/;
 // Issue #678: a Dockerfile suffix is accepted only on a slashed path (docker/Dockerfile.retry); a bare "dockerfile.retry" is refused like any other unlisted bare token. A bare root "Dockerfile" stays refused (this repository has none, and tests pin ROOT_FILES to real root files).
 // Issue #588: the extension list applies to slashed tokens too (so "tests/fix.retry" is not a path), and ".." is refused anywhere in the token (so "docs/a..b.md" is not).
