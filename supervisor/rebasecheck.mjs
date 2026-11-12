@@ -4,6 +4,7 @@
 // --force-with-lease against the head that was fetched). Nothing here reads comment text or touches another branch.
 import { spawnSync } from 'node:child_process';
 import { SupervisorError } from './core.mjs';
+import { recordRefusal } from './rebaserefusal.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const BRANCH = /^[A-Za-z0-9._/-]+$/;
@@ -377,8 +378,13 @@ export function pushRebase({ worktree, branch, base, oldHead }) {
   run(['fetch', '--quiet', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`]);
   const newHead = run(['rev-parse', 'HEAD']).trim();
   const check = checkRebase({ repoPath: worktree, base: `origin/${base}`, oldHead, newHead });
-  if (check.missing.length) return { pushed: false, reason: 'missing', message: refusal(check, branch, oldHead), ...check };
-  if (check.lostChanges.length) return { pushed: false, reason: 'lost-changes', message: refusal(check, branch, oldHead), ...check };   // issue #415: nothing is pushed as a clean rebase
+  const refused = reason => {
+    const message = refusal(check, branch, oldHead);
+    recordRefusal(worktree, { oldHead, reason, message });
+    return { pushed: false, reason, message, ...check };
+  };
+  if (check.missing.length) return refused('missing');
+  if (check.lostChanges.length) return refused('lost-changes');   // issue #415: nothing is pushed as a clean rebase
   const r = spawnSync('git', ['-C', worktree, 'push', '--quiet', `--force-with-lease=refs/heads/${branch}:${oldHead}`, 'origin', `HEAD:refs/heads/${branch}`], { encoding: 'utf8', timeout: 120000 });
   if (r.status !== 0) return { pushed: false, reason: 'lease', ...check };
   return { pushed: true, ...check };
