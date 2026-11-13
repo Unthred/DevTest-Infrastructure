@@ -5,6 +5,7 @@ import { SupervisorError } from './core.mjs';
 import { isStatusIssue } from './statusissue.mjs';
 import { citeFacts } from './github-cite-facts.mjs';
 import { redactTopology } from './redact.mjs';
+import { recentlyClosedIssues } from './github-recent.mjs';
 
 const TRANSIENT = /error connecting to|connection (reset|refused|timed out)|timeout|timed out|temporarily unavailable|\bEOF\b|TLS handshake|HTTP 5\d\d|could not resolve host/i;
 export const isRateLimit = text => /rate limit/i.test(String(text || ''));
@@ -58,7 +59,7 @@ export function githubClient(config, gh = ghRunner()) {
     listIssues: async () => {
       const list = state => json(['issue', 'list', '--repo', repo, '--state', state, '--limit', state === 'open' ? '1000' : '200', '--json', ISSUE_FIELDS + ',createdAt,closedAt']) || [];
       const byNo = new Map();
-      for (const i of [...list('open'), ...list('all')]) byNo.set(i.number, i);
+      for (const i of [...list('open'), ...list('all'), ...recentlyClosedIssues(json, repo, ISSUE_FIELDS + ',createdAt,closedAt')]) byNo.set(i.number, i);
       return [...byNo.values()].filter(i => !isStatusIssue(i)).map(i => ({ ...i, labels: (i.labels || []).map(l => l.name) }));
     },
     // One issue by number, for when it is not in the capped list.

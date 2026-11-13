@@ -12,6 +12,7 @@ import { validate } from '../supervisor/api/validate.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
 import { readRecord, ensureStartedAt } from '../supervisor/closedreason-store.mjs';
 import { MARKER } from '../supervisor/closedreason.mjs';
+import { asyncGithubClient } from '../supervisor/github-async.mjs';
 import { parseIssues } from '../supervisor/api/commands/work-item-close-reason.mjs';
 
 const NOW = Date.UTC(2026, 10, 13, 12, 0, 0);
@@ -50,7 +51,7 @@ async function serve(t, issues, options = {}) {
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ fetchedAt: NOW, delivered: [], pulls: [], issues, tick }));
   fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ jobs: {} }));
   ensureStartedAt(root, START);
-  const github = stubGithub(issues, options);
+  const github = options.client ?? stubGithub(issues, options);
   const server = http.createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
@@ -186,4 +187,27 @@ test('parseIssues reads commas and spaces, drops repeats and refuses anything el
   assert.deepEqual(parseIssues(' 5 ,5'), [5]);
   assert.equal(parseIssues('5x'), null);
   assert.equal(parseIssues(''), null);
+});
+
+test('the server keeps answering while a sweep is recorded: the real async client with a gh that takes 20 ms a call, 10 issues, no blocked timer', async t => {
+  const issues = Array.from({ length: 10 }, (_, k) => dropped(2000 + k));
+  const calls = [];
+  const gh = async (args, input) => {
+    calls.push(args.slice(0, 2).join(' '));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    if (args[1] === 'view' && args.includes('comments')) return JSON.stringify({ comments: [] });
+    if (args[1] === 'view') return JSON.stringify(issues.find(i => String(i.number) === args[2]));
+    assert.ok(input.startsWith(MARKER));
+    return '';
+  };
+  const s = await serve(t, issues, { client: asyncGithubClient({ repository: 'o/r' }, gh) });
+  let longest = 0;
+  let last = Date.now();
+  const watch = setInterval(() => { const n = Date.now(); longest = Math.max(longest, n - last); last = n; }, 10);
+  const r = await s.close(issues.map(i => i.number).join(' '));
+  clearInterval(watch);
+  assert.equal(r.body.outcome, 'applied');
+  assert.equal(calls.length, 30);
+  assert.ok(longest < 150, `the event loop was blocked for ${longest} ms`);
+  assert.deepEqual(await s.needsYou(), []);
 });

@@ -5,7 +5,8 @@
 export const COUNTED_REASONS = Object.freeze(['NOT_PLANNED', 'DUPLICATE']);
 export const MIN_REASON = 10;
 export const MARKER = '<!-- devtest-close-reason v1 -->';
-// The issue list holds every open issue plus the newest 200 of any state (supervisor/github.mjs listIssues).
+// The issue list holds every open issue, the newest 200 of any state, and the 200 closed issues updated most recently
+// (supervisor/github.mjs listIssues), so the close of an old issue is seen too.
 export const WINDOW = 200;
 export const ITEM_ID = 'closed-noreason';
 
@@ -28,10 +29,11 @@ export function closedWithoutReason({ issues, record, startedAt }) {
     .sort((a, b) => a.closedAt - b.closedAt || a.number - b.number);
 }
 
-// The window can show every closed issue it holds as counted: then a larger sweep may be cut off at its edge, so the count is a floor.
-export function windowFull({ issues, counted }) {
-  const closed = (Array.isArray(issues) ? issues : []).filter(isClosed).length;
-  return counted > 0 && counted >= closed;
+// The closed-by-update fetch is capped at WINDOW. When that many issues closed after the start time are held, the fetch may have cut
+// off more of them, so the count is a floor.
+export function windowFull({ issues, startedAt }) {
+  const since = (Array.isArray(issues) ? issues : []).filter(issue => isClosed(issue) && closedAtOf(issue) > startedAt).length;
+  return Number.isFinite(startedAt) && since >= WINDOW;
 }
 
 const kindOf = reason => (reason === 'DUPLICATE' ? 'duplicate' : 'not planned');
@@ -41,10 +43,10 @@ const line = c => `#${c.number} ${c.title} (${kindOf(c.reason)})`;
 export function closedReasonItem({ issues, record, startedAt }) {
   const counted = closedWithoutReason({ issues, record, startedAt });
   if (!counted.length) return null;
-  const atLeast = windowFull({ issues, counted: counted.length });
+  const atLeast = windowFull({ issues, startedAt });
   const head = `${atLeast ? 'At least ' : ''}${counted.length} closed issue${counted.length === 1 ? ' was' : 's were'} dropped with no reason recorded: `;
   const limit = atLeast
-    ? ` Foreman sees every open issue and the newest ${WINDOW} of any state, so a sweep that closed more issues between two refreshes is shown only in part.`
+    ? ` Foreman sees every open issue and the ${WINDOW} most recently updated closed issues, so a larger sweep is shown only in part.`
     : '';
   return {
     id: ITEM_ID,

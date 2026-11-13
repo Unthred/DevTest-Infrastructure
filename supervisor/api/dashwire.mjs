@@ -4,7 +4,7 @@
 import { readCache, readVersion, codeVersion, STALE_TICK_MS } from '../dashdata.mjs';
 import { proofValid, reserveCooldown, releaseCooldown } from '../dashwrite.mjs';
 import { createApiRouter } from './router.mjs';
-import { githubClient } from '../github.mjs';
+import { asyncGithubClient } from '../github-async.mjs';
 
 const SHORT = 7;
 const dirs = () => {
@@ -48,7 +48,7 @@ export function withApi({ root, headers, allowedHost, now, cachedView, source, s
   const api = createApiRouter({
     ...dirs(), root, getConfig: () => source(), headers,
     guard: makeGuard({ root, now, source, store, originAllowed, wake }), allowedHost, now, getView, staleAfterMs: STALE_TICK_MS,
-    tickAt: () => lastTickAt(root), coreVersion: () => shortVersion(root), getGithub: () => github ?? githubClient(source()),
+    tickAt: () => lastTickAt(root), coreVersion: () => shortVersion(root), getGithub: () => github ?? asyncGithubClient(source()),
   });
   return (req, res) => {
     const [path] = (req.url || '/').split('?');

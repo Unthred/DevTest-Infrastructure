@@ -80,15 +80,16 @@ test('no counted issue gives no item', () => {
   assert.equal(closedReasonItem({ issues: [i895], record: { reasons: { 895: { reason: 'Moved to V2 as issue 1300', at: 1, call: 'k' } } }, startedAt: START_BEFORE }), null);
 });
 
-test('limit: the item says at least when every closed issue the window holds counts, and not when a completed one is among them', () => {
-  const dropped = [issue(1), issue(2)];
-  assert.equal(windowFull({ issues: dropped, counted: 2 }), true);
-  assert.equal(windowFull({ issues: [...dropped, issue(3, { stateReason: 'COMPLETED' })], counted: 2 }), false);
-  assert.equal(windowFull({ issues: [], counted: 0 }), false);
-  const full = closedReasonItem({ issues: dropped, record: EMPTY, startedAt: START_BEFORE });
-  assert.match(full.text, /^At least 2 closed issues were dropped/);
-  assert.ok(full.text.includes(`newest ${WINDOW} of any state`));
-  const partial = closedReasonItem({ issues: [...dropped, issue(3, { stateReason: 'COMPLETED' })], record: EMPTY, startedAt: START_BEFORE });
+test('limit: the item says at least when the closed-by-update fetch is full of closes after the start, and not below that', () => {
+  const sweep = n => Array.from({ length: n }, (_, k) => issue(1000 + k));
+  assert.equal(windowFull({ issues: sweep(WINDOW), startedAt: START_BEFORE }), true);
+  assert.equal(windowFull({ issues: sweep(WINDOW - 1), startedAt: START_BEFORE }), false);
+  assert.equal(windowFull({ issues: sweep(WINDOW), startedAt: START_AFTER }), false, 'closes before the start time do not fill it');
+  assert.equal(windowFull({ issues: sweep(WINDOW), startedAt: null }), false);
+  const full = closedReasonItem({ issues: sweep(WINDOW), record: EMPTY, startedAt: START_BEFORE });
+  assert.match(full.text, new RegExp(`^At least ${WINDOW} closed issues were dropped`));
+  assert.ok(full.text.includes(`${WINDOW} most recently updated closed issues`));
+  const partial = closedReasonItem({ issues: sweep(2), record: EMPTY, startedAt: START_BEFORE });
   assert.match(partial.text, /^2 closed issues were dropped/);
   assert.ok(!partial.text.includes('At least'));
 });
