@@ -140,3 +140,41 @@ test('the served Usage page shows the stale marker for a 3 hour old reading and 
   assert.match(old, /data-stale="true"/); assert.match(old, /Last reading 3h 0m ago/); assert.match(old, /Limits in this reading: weekly, all models\./);
   assert.match(fresh, /data-stale="false"/); assert.doesNotMatch(fresh, /data-stale="true"/);
 });
+
+// ---- Issue #1172: the reserve holds work, never the refresh of a stale reading
+import { reserveHeld } from '../supervisor/capacityrule.mjs';
+const HELD = { used: 0.9, capacity: { basis: 'absolute', capacity: 100, reserve: 20 } };
+const FREE = { used: 0.5, capacity: { basis: 'absolute', capacity: 100, reserve: 20 } };
+test('reserveHeld: remaining capacity at or below the reserve, absolute capacity only', () => {
+  assert.equal(reserveHeld({ used: 0.8, capacity: { basis: 'absolute', capacity: 100, reserve: 20 } }), true, 'exactly at the reserve');
+  assert.equal(reserveHeld(HELD), true);
+  assert.equal(reserveHeld(FREE), false);
+  assert.equal(reserveHeld({ used: 0.99, capacity: { basis: 'percent' } }), false);
+  assert.equal(reserveHeld(undefined), false);
+});
+test('probeDue: a normal agent held by the reserve with a reading older than the probe age gets a stale probe, without demand', () => {
+  const age = h => al(0.9, { ageMin: h * 60 });
+  const args = a => ({ mode: 'normal', allowance: a, settings: S, now: NOW });
+  assert.equal(probeDue({ ...args(age(3)), reserveHeld: true })?.reason, 'stale', 'stale and held by the reserve');
+  assert.equal(probeDue({ ...args(age(1)), reserveHeld: true }), null, 'fresh: no probe');
+  assert.equal(probeDue({ ...args(age(3)), reserveHeld: false }), null, 'not held: as before');
+  assert.equal(probeDue({ ...args(age(2)), reserveHeld: true })?.reason, 'stale', 'exactly the probe age');
+  assert.equal(probeDue({ ...args(al(0.9, { ageMin: 119 })), reserveHeld: true }), null, 'a minute under the probe age');
+  assert.equal(probeDue({ ...args(age(3)), reserveHeld: true, state: { at: NOW - 10 * MINUTE } }), null, 'one attempt per interval');
+});
+test('team: probesDue probes a reserve-held agent with no demand; an agent above the reserve is not probed', t => {
+  const LATE = RESET - 12 * HOUR;   // inside the last 24h, so the high-water rule releases the agent to mode normal and only the reserve holds it
+  const reading = (used, ageMin) => ({ ...al(used), observedAt: LATE - ageMin * MINUTE });
+  const world = (used, ageMin) => {
+    const w = team(t, reading(used, ageMin));
+    w.clock.t = LATE;
+    w.tm.c.budget = { starting_capacity: { claude: 100 } };
+    return w;
+  };
+  const held = world(0.97, 180);
+  assert.equal(held.tm.budgets().claude.mode, 'normal');
+  assert.equal(reserveHeld(held.tm.budgets().claude), true);
+  assert.deepEqual(held.tm.probesDue(() => true).map(d => [d.agent, d.reason]), [['claude', 'stale']], 'no demand needed: the reserve holds work, not the refresh');
+  assert.deepEqual(world(0.97, 60).tm.probesDue(() => true), [], 'fresh reading: no probe');
+  assert.deepEqual(world(0.5, 180).tm.probesDue(() => true), [], 'not held and no demand: as before');
+});
