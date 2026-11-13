@@ -28,7 +28,10 @@ export function bindApproveAll(postDecision) {
   const wait = ms => new Promise(res => setTimeout(res, ms));
   const post = f => postDecision(fetch.bind(window), f.action, new FormData(f));
   // The server says when a proposal or decision arrives or is decided anywhere; the page then re-reads itself in place. EventSource reconnects by itself.
-  if (typeof EventSource !== 'undefined' && document.querySelector('[data-approvals-count]')) new EventSource('/api/approvals/events').addEventListener('changed', refreshNow);
+  // The count badge is on the Overview; the Inbox page is marked by the layout of its card grid, present even when no card is shown
+  // (issue #1287). One stream either way.
+  const wantsStream = !!document.querySelector('[data-approvals-count], [data-layout="inbox"]');
+  if (typeof EventSource !== 'undefined' && wantsStream) new EventSource('/api/approvals/events').addEventListener('changed', refreshNow);
   document.addEventListener('click', async e => {
     const btn = e.target.closest?.('[data-approve-all]');
     if (!btn) return;
