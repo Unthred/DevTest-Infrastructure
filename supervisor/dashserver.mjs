@@ -28,6 +28,7 @@ import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
 import { installs, breakerHistory } from './installs.mjs';
 import { readIndex, searchIndex } from './issueindex.mjs';
+import { withApi } from './api/dashwire.mjs';
 import { wasteByCause, configView, testRunsView, ticksView } from './mcpreads.mjs';
 import { alertsView } from './alertsview.mjs';
 import { summarize as failCausesOf } from './failcause.mjs';
@@ -309,7 +310,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     store.invalidate();
     return send(303, 'text/plain; charset=utf-8', 'requested', { location: '/' });
   };
-  return async (req, res) => {
+  return withApi({ root, headers: HEADERS, allowedHost, now, cachedView, source }, async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
     const limitResets = limitResetsRoute({ root, source, allowedHost, originAllowed, now, store });
@@ -413,7 +414,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       console.error(`dashboard: ${error?.name || 'Error'}: ${redact(error?.message, 160)}`);
       return send(500, 'text/plain; charset=utf-8', 'dashboard could not read the supervisor state');
     }
-  };
+  });
 }
 
 export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot }) {

@@ -1,0 +1,46 @@
+{
+  "$id": "meta.schema.json",
+  "title": "The meta model: reply of GET /api/v1/meta (issue #1248)",
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "meta" },
+        "data": {
+          "type": "object",
+          "required": ["contract", "core_version", "models", "states", "commands", "events"],
+          "additionalProperties": false,
+          "properties": {
+            "contract": { "const": "1.0" },
+            "core_version": { "type": ["string", "null"] },
+            "models": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name", "path", "schema"],
+                "additionalProperties": false,
+                "properties": { "name": { "type": "string" }, "path": { "type": "string" }, "schema": { "type": "string" } }
+              }
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["state", "group", "applies_to"],
+                "additionalProperties": false,
+                "properties": {
+                  "state": { "type": "string" },
+                  "group": { "enum": ["active", "waiting", "held", "done", "failed", "off", "unknown"] },
+                  "applies_to": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            },
+            "commands": { "type": "array", "items": { "type": "object" } },
+            "events": { "type": "array", "items": { "type": "object" } }
+          }
+        }
+      }
+    }
+  ]
+}
