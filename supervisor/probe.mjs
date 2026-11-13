@@ -13,6 +13,7 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { sessionLogAllowanceProbe, hasReading } from './allowance.mjs';
 import { provider, safeEnvironment } from './core.mjs';
+import { runMinimalSession } from './probesession.mjs';
 
 export const MINUTE = 60000, HOUR = 3600000;
 export const RESET_GRACE_MS = MINUTE;          // "just after a reported reset time passes"
@@ -114,17 +115,37 @@ export function runProbeCommand({ spec, adapter, config, now = Date.now(), spawn
   });
 }
 
-// One probe of one provider through its manifest. Returns { record } or { record: null, error }.
-export async function probeProvider(registry, providerId, { now = Date.now(), spawnFn = spawn, env = process.env, home = undefined } = {}) {
+// Issue #1330: a session-log probe reads the log; when the log holds nothing newer than the stored reading and the manifest names a minimal session, run
+// that one session and read the log again. Refused under the same overage rule as a model-run probe. Returns { record, outcome } where outcome is
+// 'new' (a reading newer than the stored one), 'nothing-newer' (the stored reading is still the newest that exists), or { record: null, error }.
+async function probeSessionLog({ spec, config, now, home, spawnFn, env, stored, exhaustedAt, allowSession }) {
+  const read = () => sessionLogAllowanceProbe({ now, ...(home ? { home } : {}) });
+  const newer = r => !!r && !(Number.isFinite(stored?.observedAt) && r.observedAt <= stored.observedAt);
+  const tag = r => ({ ...r, source: 'session-log' });
+  const first = read();
+  if (newer(first)) return { record: tag(first), outcome: 'new' };
+  if (spec.command && allowSession) {
+    if (overageRisk(stored, now, exhaustedAt)) return { record: null, error: 'overage-risk' };
+    const ran = await runMinimalSession({ spec, config, spawnFn, env });
+    if (!ran.ok) return { record: null, error: 'session-failed' };
+    const second = read();
+    if (newer(second)) return { record: tag(second), outcome: 'new' };
+    if (second) return { record: tag(second), outcome: 'nothing-newer' };
+    return { record: null, error: 'no-reading' };
+  }
+  return first ? { record: tag(first), outcome: 'nothing-newer' } : { record: null, error: 'no-reading' };
+}
+
+// One probe of one provider through its manifest. Returns { record, outcome } or { record: null, error }.
+//   stored, exhaustedAt: the newest stored reading and the budget's exhausted_at (the overage rule). allowSession: false for a probe that is not
+//   for a held agent (the admission refresh), which only reads the log.
+export async function probeProvider(registry, providerId, { now = Date.now(), spawnFn = spawn, env = process.env, home = undefined, stored = null, exhaustedAt = 0.995, allowSession = true } = {}) {
   const { config, adapter } = await provider(registry, providerId);
   const spec = config.manifest.probe;
   if (!spec) return { record: null, error: 'unsupported' };
-  if (spec.kind === 'session-log') {
-    const r = sessionLogAllowanceProbe({ now, ...(home ? { home } : {}) });
-    return r ? { record: { ...r, source: 'session-log' } } : { record: null, error: 'no-reading' };
-  }
+  if (spec.kind === 'session-log') return probeSessionLog({ spec, config, now, home, spawnFn, env, stored, exhaustedAt, allowSession });
   const record = await runProbeCommand({ spec, adapter, config, now, spawnFn, env });
-  return record ? { record } : { record: null, error: 'no-reading' };
+  return record ? { record, outcome: 'new' } : { record: null, error: 'no-reading' };
 }
 
 // Synchronous: does this provider's manifest declare a probe? (the dashboard decides whether to show the button)

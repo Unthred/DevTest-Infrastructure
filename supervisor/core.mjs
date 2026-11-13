@@ -195,7 +195,8 @@ export function validateManifest(m, id) {
   if (m.probe) {
     exact(m.probe, ['kind', 'command', 'args', 'timeout_seconds'], ['kind'], 'probe');
     if (!['command', 'session-log'].includes(m.probe.kind)) throw new SupervisorError('invalid probe kind');
-    if (m.probe.kind === 'command') {
+    // A session-log probe may name the minimal session that makes the provider write a fresh reading (issue #1330); a command probe must.
+    if (m.probe.kind === 'command' || m.probe.command !== undefined) {
       if (typeof m.probe.command !== 'string' || !m.probe.command || !Array.isArray(m.probe.args) || !m.probe.args.every(x => typeof x === 'string' && x.length <= 4096 && !/[\0\r\n]/.test(x))) throw new SupervisorError('invalid probe command');
       if (m.probe.timeout_seconds !== undefined && !(Number.isInteger(m.probe.timeout_seconds) && m.probe.timeout_seconds >= 5 && m.probe.timeout_seconds <= 300)) throw new SupervisorError('invalid probe timeout');
     }
