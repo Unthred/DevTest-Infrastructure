@@ -23,6 +23,7 @@ import { allowanceBody as allowanceCard } from './allowancecard.mjs';
 import { outcomeFromQuery, outcomeNote } from './probeoutcome.mjs';
 import { agentBarHtml } from './appbaragent.mjs';
 import { withWorkViews } from './jobs-page.mjs';
+import { bestLine } from './dashbest.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -526,7 +527,9 @@ function headlineCards(view) {
   return CARD_IDS.map(id => {
     const rows = Object.keys(WINDOWS).map(name => {
       const c = h.windows[name].cards[id], t = HEADLINE[id](c);
-      return `<div class="hl-row" data-window="${esc(name)}"><span class="hl-w">${esc(name === '24h' ? 'Last 24 hours' : 'Last 7 days')}</span><a class="hl-v" href="${esc(`/headline/${id}?window=${name}`)}">${esc(t.big)}</a><span class="sub">${esc(t.sub)}</span><span class="sub hl-trend" data-dir="${esc(c.direction || '')}">${icon(c.direction === 'up' ? 'up' : c.direction === 'down' ? 'down' : 'sort')}${esc(trendText(c, name === '24h' ? '24 hours' : '7 days'))}</span></div>`;
+      return `<div class="hl-row" data-window="${esc(name)}"><span class="hl-w">${esc(name === '24h' ? 'Last 24 hours' : 'Last 7 days')}</span><a class="hl-v" href="${esc(`/headline/${id}?window=${name}`)}">${esc(t.big)}</a><span class="sub">${esc(t.sub)}</span>
+        <span class="sub hl-trend" data-dir="${esc(c.direction || '')}">${icon(c.direction === 'up' ? 'up' : c.direction === 'down' ? 'down' : 'sort')}${esc(trendText(c, name === '24h' ? '24 hours' : '7 days'))}</span>
+        ${name === '24h' ? bestLine(id, view.best, view.tz) : ''}</div>`;
     }).join('');
     const extra = id === 'issues' ? `<p class="sub">${h.openNow} open now</p>` : '';
     return card({ id: `hl-${id}`, title: CARD_TITLES[id], span: 3, href: `/headline/${id}`, cls: 'panel headline', type: 'panel', body: rows + extra });

@@ -6,7 +6,7 @@ import { bridge, isAllowed } from '/src/browser/capture.mjs';
 
 const [target, variant] = process.argv.slice(2);
 const validTarget = /^[a-z][a-z0-9-]{0,31}$/.test(target || '');
-const validVariant = ['valid', 'long', 'empty', 'malformed'].includes(variant);
+const validVariant = ['valid', 'long', 'empty', 'malformed', 'best', 'best-none', 'best-beaten'].includes(variant);
 if (!validTarget || !validVariant) {
   throw new Error('usage: scenario.mjs <target> <valid|empty|malformed>');
 }
@@ -50,6 +50,21 @@ try {
     const issues = page.locator('[data-table="issues"]');
     await check('long work list has the first fixture item', issues.getByRole('link', { name: '#2000 Long fixture issue 1' }).waitFor());
     await check('long work list links to its next page', page.getByLabel('issues pages').getByRole('link', { name: 'Next' }).waitFor());
+  } else if (variant === 'best') {
+    const card = id => page.locator(`#hl-${id} .hl-row[data-window="24h"] .hl-best`);
+    await check('approval card shows the record line', card('first-pass').filter({ hasText: 'Best 24 hours 84.9% (45 of 53), 6 to 7 Nov' }).waitFor());
+    await check('merged card shows the most merged line', card('merge-rate').filter({ hasText: 'Most merged in 24 hours 106, 6 to 7 Nov' }).waitFor());
+    await check('the record is not called beaten', page.getByText('Record beaten').count().then(count => {
+      if (count !== 0) throw new Error(`expected no beaten wording, got ${count}`);
+    }));
+  } else if (variant === 'best-none') {
+    await check('no record line on either card', page.locator('.hl-best').count().then(count => {
+      if (count !== 0) throw new Error(`expected no record line, got ${count}`);
+    }));
+    await check('the approval card is still there', page.locator('#hl-first-pass').waitFor());
+  } else if (variant === 'best-beaten') {
+    await check('approval card says the record is beaten', page.locator('#hl-first-pass .hl-row[data-window="24h"] .hl-best').filter({ hasText: 'Record beaten' }).waitFor());
+    await check('merged card says the record is beaten', page.locator('#hl-merge-rate .hl-row[data-window="24h"] .hl-best').filter({ hasText: 'Record beaten' }).waitFor());
   } else if (variant === 'empty') {
     await check('empty overview has no-needs state', page.getByText('Nothing needs you').waitFor());
     await check('empty overview has no-plan state', page.getByText('Nothing planned').waitFor());

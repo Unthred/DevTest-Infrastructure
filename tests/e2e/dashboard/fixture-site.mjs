@@ -5,6 +5,7 @@ import path from 'node:path';
 import { currentView, handler, STATIC } from '../../../supervisor/dashserver.mjs';
 import { renderRoute } from '../../../supervisor/dashrender.mjs';
 import { scan } from '../../../supervisor/inbox.mjs';
+import { bestFixture } from './best-fixture.mjs';
 
 const FIXTURES = new URL('./fixtures/', import.meta.url);
 const ITEM_ID = 'a'.repeat(32);
@@ -63,6 +64,7 @@ function writeState(root, fixture, now) {
     issues: fixtureIssues(fixture)
   });
   writeJson(path.join(root, 'team', 'state.json'), { verdicts: {}, jobs: {} });
+  if (fixture.best) writeJson(path.join(root, 'dashboard', 'best-day.json'), bestFixture(fixture.best, now));
   if (fixture.inbox) {
     writeJson(path.join(root, 'inbox', 'items', `${ITEM_ID}.json`), fixture.inbox);
     scan(path.join(root, 'inbox'), now);
