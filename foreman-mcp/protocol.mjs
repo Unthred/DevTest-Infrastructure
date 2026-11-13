@@ -14,7 +14,7 @@ const INSTRUCTIONS = [
 const err = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 const ok = (id, result) => ({ jsonrpc: '2.0', id, result });
 
-export function createProtocol({ tools, log = () => {} }) {
+export function createProtocol({ tools, log = () => {}, version = SERVER_INFO.version }) {
   let initialized = false;
   return {
     async handleLine(line) {
@@ -28,8 +28,8 @@ export function createProtocol({ tools, log = () => {} }) {
       if (method === 'ping') return ok(id, {});
       if (method === 'initialize') {
         const asked = params?.protocolVersion;
-        return ok(id, { protocolVersion: SUPPORTED.includes(asked) ? asked : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: SERVER_INFO,
-          instructions: INSTRUCTIONS });
+        return ok(id, { protocolVersion: SUPPORTED.includes(asked) ? asked : SUPPORTED[0], capabilities: { tools: { listChanged: false } },
+          serverInfo: { ...SERVER_INFO, version }, instructions: INSTRUCTIONS });
       }
       if (method === 'tools/list') return ok(id, { tools: tools.list() });
       if (method === 'tools/call') {
