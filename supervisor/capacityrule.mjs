@@ -23,3 +23,9 @@ export function reserveRefusal(a, type, reviewsOnlyTypes) {
   if (cap?.basis !== 'absolute' || reviewsOnlyTypes.has(type) || type === 'review') return null;
   return remainingOf(cap.capacity, a.used) <= cap.reserve ? `remaining capacity is at or below the reserve (${cap.text})` : null;
 }
+
+// Is the agent held by the reserve, whatever its mode says? Same test as reserveRefusal, without a job type: used to keep its reading fresh (issue #1172).
+export function reserveHeld(a) {
+  const cap = a?.capacity;
+  return cap?.basis === 'absolute' && remainingOf(cap.capacity, a.used) <= cap.reserve;
+}
