@@ -2,7 +2,7 @@
 // and no agent names (an agent is whatever string the caller gives; the numbers decide, so swapping which plan is large changes the outcome).
 //
 // Candidate (one per agent that could take the job):
-//   { agent, job, slotFree, eligible, why, used, rate, hoursToReset, short: { used } | null,
+//   { agent, job, slotFree, eligible, why, used, rate, hoursToReset, short: { used, rate, hoursToReset } | null,
 //     share: { weekly, short, source, note }, requiredAgent, preferredAgent, credit: boolean }
 //   requiredAgent / preferredAgent: the job's pins (null when none), the same on every candidate; a required pin leaves the job to that agent alone.
 //   used: weekly use as a fraction (null when unknown); rate: use per hour (fraction), projected to the reset over hoursToReset.
@@ -21,8 +21,12 @@ export function spareOf(c) {
   return 1 - c.used - burn;
 }
 
-// Short window room left, null when there is no short window.
-export const shortRoomOf = c => (c.short && Number.isFinite(c.short.used) ? 1 - c.short.used : null);
+// Short window room left once its recent rate is projected to the short window's reset; null when there is no short window.
+export function shortRoomOf(c) {
+  if (!c.short || !Number.isFinite(c.short.used)) return null;
+  const burn = Number.isFinite(c.short.rate) && Number.isFinite(c.short.hoursToReset) ? Math.max(0, c.short.rate) * c.short.hoursToReset : 0;
+  return 1 - c.short.used - burn;
+}
 
 // Lower is better: the job's weekly share relative to the spare. An agent with no spare (or an unknown reading) ranks after every agent with some.
 function cost(c, spare) {

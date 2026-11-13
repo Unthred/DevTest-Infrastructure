@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// Runs INSIDE the pinned Playwright container (no network; one declared target, like capture.mjs). Checks the Limit resets card
-// (issue #1159) in a real browser: both recorded resets show with their Helps Foreman now line and expiry colour, the record form
-// is reachable, controls sit inside the viewport, no script errors and no sideways scroll. Writes <name>.json and a screenshot to /out.
-// Usage: node limit-resets-scenario.mjs --target fixture --profile <name> --page /card.html --name <stem>
+// Runs INSIDE the pinned Playwright container (no network; one declared target, like capture.mjs). Checks the Next card agent-choice reason
+// (issue #1166) in a real browser: the chosen agent and deciding rule, every candidate's figures, controls inside the viewport, no script
+// errors and no sideways scroll. Writes <name>.json and a screenshot to /out.
+// Usage: node agent-choice-scenario.mjs --target fixture --profile <name> --page /card.html --name <stem>
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { bridge, isAllowed, PROFILES } from './capture.mjs';
 
 const arg = k => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : null; };
-const target = arg('target') || 'fixture', profile = arg('profile') || 'desktop-1280', name = arg('name') || 'resets', out = arg('out') || '/out';
+const target = arg('target') || 'fixture', profile = arg('profile') || 'desktop-1280', name = arg('name') || 'agent-choice', out = arg('out') || '/out';
 const checks = [];
 const check = (n, ok, detail = '') => checks.push({ name: n, ok: !!ok, detail: String(detail) });
 const { port } = await bridge(path.join('/targets', `${target}.sock`));

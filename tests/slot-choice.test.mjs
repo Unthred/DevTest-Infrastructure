@@ -24,7 +24,7 @@ const pr = (n, branch, head) => ({ number: n, title: `t${n}`, headRefName: branc
 const issue = (n, state = 'OPEN') => ({ number: n, title: `Issue ${n} title here`, state, body: '', labels: [] });
 const finished = (provider, kind, tokens, i) => ({ id: String(i).repeat(32), provider, kind, status: 'completed', createdAt: NOW - (i + 1) * HOUR, usage: { inputTokens: tokens, outputTokens: 0 } });
 
-function world(t, { pulls = [], issues = [], budget, roles, allowance, jobRecords = [] }) {
+function world(t, { pulls = [], issues = [], budget, roles, allowance, jobRecords = [], snapshots = [] }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-planner-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = { alerts: [] };
   const gh = { listPulls: async () => pulls, getPull: async n => pulls.find(p => p.number === n) || null, listIssues: async () => issues,
@@ -32,7 +32,7 @@ function world(t, { pulls = [], issues = [], budget, roles, allowance, jobRecord
   const jobs = { listActive: async () => [], get: async () => null, create: async () => ({ id: 'f'.repeat(32) }) };
   const git = { ensureWorktree: async o => o.path, worktreeFor: async () => null };
   const team = new Team({ config: config(budget, roles), root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: '## D-020 — x\n- Status: homeowner-approved\n',
-    clock: { now: () => NOW }, usage: { allowance, jobs: jobRecords, snapshots: [] }, limitedOf: () => ({ out: false }), timeZone: 'Europe/London', alert: async text => { calls.alerts.push(text); } });
+    clock: { now: () => NOW }, usage: { allowance, jobs: jobRecords, snapshots }, limitedOf: () => ({ out: false }), timeZone: 'Europe/London', alert: async text => { calls.alerts.push(text); } });
   return { team, calls };
 }
 
@@ -91,6 +91,43 @@ test('a rising recent rate moves new work to the other agent before its reserve'
   const [act] = implementOf(await world(t, { budget: CAPS, issues: OPEN, jobRecords, allowance: fast }).team.plan());
   assert.equal(act.agent, 'codex');
   assert.ok(act.choice.candidates[0].rate > 0.01, 'the recent rate is part of the record');
+});
+
+// Dashboard snapshots as the dispatcher keeps them: one reading per tick.
+const reading = (agent, hoursAgo, weeklyUsed, shortUsed) => {
+  const a = withShort(agent, weeklyUsed, shortUsed);
+  a.observedAt = NOW - hoursAgo * HOUR;
+  return { allowance: { [agent]: a } };
+};
+
+test('a burst in the last two hours moves new work away, though the week so far is quiet', async t => {
+  const jobRecords = [...history('claude', 1e5, 0), ...history('codex', 1e5, 10)];
+  const allowance = { claude: weekly('claude', 0.2, RESET), codex: weekly('codex', 0.2, RESET) };
+  const quiet = await world(t, { budget: CAPS, issues: OPEN, jobRecords, allowance }).team.plan();
+  assert.equal(implementOf(quiet)[0].agent, 'claude');
+  const burst = [reading('claude', 1.5, 0.05, 0.1), reading('claude', 0.75, 0.12, 0.2)];   // 15 points in 1.5 hours: 10% an hour
+  const [act] = implementOf(await world(t, { budget: CAPS, issues: OPEN, jobRecords, allowance, snapshots: burst }).team.plan());
+  assert.equal(act.agent, 'codex');
+  assert.ok(Math.abs(act.choice.candidates[0].rate - 0.1) < 1e-6, 'the one to two hour rate, not the window average');
+});
+
+test('the short window room is what is left after its recent rate runs to its reset', async t => {
+  const jobRecords = [...history('claude', 1e5, 0), ...history('codex', 1e6, 10)];
+  const allowance = { claude: withShort('claude', 0.1, 0.8), codex: withShort('codex', 0.1, 0.1) };
+  const burst = [reading('claude', 1, 0.1, 0.1)];   // short window +70 points in one hour, one hour to its reset: nothing is left
+  const [act] = implementOf(await world(t, { budget: CAPS, issues: OPEN, jobRecords, allowance, snapshots: burst }).team.plan());
+  assert.equal(act.agent, 'codex');
+  assert.match(act.choice.candidates[0].skipped, /short window cannot cover the job/);
+});
+
+test('work is conserved: a job nobody can take does not hold another agent's lower-ranked work', async t => {
+  const failing = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'ci' }];
+  const red = { ...pr(40, 'claude/issue-7-x', H(1)), statusCheckRollup: failing };
+  const w = world(t, { budget: CAPS, issues: OPEN, pulls: [red], jobRecords: [...history('claude', 1e5, 0), ...history('codex', 1e5, 10)],
+    allowance: { claude: withShort('claude', 0.1, 0.97), codex: withShort('codex', 0.1, 0.1) } });
+  const plan = await w.team.plan();
+  assert.equal(implementOf(plan)[0]?.agent, 'codex', 'the free implementer slot runs the other agent\'s own implement');
+  assert.ok(!/job waits/.test(w.team.held.codex?.implement || ''), 'no false hold reason on the job that runs');
 });
 
 test('a preferred pin breaks a tie; a required pin leaves the job to its agent alone', async t => {

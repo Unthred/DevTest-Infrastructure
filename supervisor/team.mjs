@@ -911,8 +911,8 @@ export class Team {
           if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) + 0.1 * actions.filter(x => x.agent === agent).length });   // tie-break: spread load to an agent without a slot this tick
         }
         if (!cands.length) break;
-        const { best, why, choice } = chooseForSlot(this, cands, { prs, usedBy, role, planned: actions });
-        if (!best) { holdUnchosen(this, cands, why); continue; }
+        const { best, why, choice, group } = chooseForSlot(this, cands, { prs, usedBy, role, planned: actions });
+        if (!best) { holdUnchosen(this, group, why); continue; }
         actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}), ...(choice ? { choice } : {}) }); used[role]++; if (role !== 'inbox') total++;
         { const k = `${this.c.agents[best.agent].provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
