@@ -65,9 +65,19 @@ export function dependentsOf(inboxDir, id) {
   return moved;
 }
 
-// Does the new item's own `after` name the item it replaces? That would make it wait for itself.
+// Does the new item's `after` reach the item it replaces, directly or through the `after` links of other drafts? Then the new item would wait for
+// itself (a cycle that never posts and shows no failure), for example when A is replaced by an A' that waits for a B that already waits for A.
 export function afterNamesReplaced(inboxDir, after, oldId) {
-  return (Array.isArray(after) ? after : []).some(ref => { const match = resolveRef(inboxDir, ref); return match.id && followReplaced(inboxDir, match.id) === oldId; });
+  const seen = new Set();
+  const reaches = refs => (Array.isArray(refs) ? refs : []).some(ref => {
+    const match = resolveRef(inboxDir, ref);
+    const id = match.id ? followReplaced(inboxDir, match.id) : null;
+    if (!id || seen.has(id)) return false;
+    if (id === oldId) return true;
+    seen.add(id);
+    return reaches(readJson(path.join(inboxDir, 'items', `${id}.json`))?.after);
+  });
+  return reaches(after);
 }
 
 // The check made when a new item that names `replaces` is picked up. Returns { ok, old } or { ok:false, reason }.

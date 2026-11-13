@@ -228,6 +228,18 @@ test('invalid: a replacement whose after names the item it replaces is refused; 
   assert.equal(w.posted.length, 0);
 });
 
+test('invalid: a replacement that would wait for itself through another draft is refused at submit and at pickup, and nothing is withdrawn', async t => {
+  const w = world(t);
+  const motion = w.submit(MOTION);
+  const styles = w.submit({ ...STYLES, after: [motion] });
+  assert.throws(() => w.mcp.propose({ ...MOTION, replaces: motion, after: [styles] }), /would wait for itself/);
+  const raw = rawDraft(w, { ...MOTION, replaces: motion, after: [styles] });
+  inbox.scan(w.dir, 1);
+  assert.equal(w.state(raw).state, 'refused');
+  assert.match(w.state(raw).reason, /would wait for itself/);
+  assert.equal(w.state(motion).state, 'pending');
+});
+
 test('the withdraw is applied when the control item is picked up, with no timer: one scan and one pass finish it', async t => {
   const w = world(t);
   const a = w.submit(MOTION);
