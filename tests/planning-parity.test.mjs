@@ -145,6 +145,7 @@ test('`team status` reads the register from origin/main: no warning when readabl
   fs.cpSync(new URL('../foreman-mcp/gbp.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'gbp.mjs'));
   fs.cpSync(new URL('../foreman-mcp/inbox-search.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'inbox-search.mjs'));
   fs.cpSync(new URL('../foreman-mcp/draft-after.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'draft-after.mjs'));
+  fs.cpSync(new URL('../foreman-mcp/inbox-replace.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'inbox-replace.mjs'));
   const cli = path.join(pkg, 'supervisor', 'cli.mjs');
   const run = repoPath => {
     const shipped = JSON.parse(fs.readFileSync(path.join(pkg, 'supervisor', 'team.json'), 'utf8'));

@@ -4,6 +4,7 @@
 import { addLabelAsApp } from './appidentity.mjs';
 import { refusalNote } from './pendingsteps.mjs';
 import { postIssueDraft } from './issue-drafts.mjs';
+import { withdrawControl } from './inbox-withdraw.mjs';
 const PARKED = 'parked';
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 // The planner reads pull requests through this, so a parked one gets no rebase, fix, review or merge.
@@ -69,7 +70,8 @@ export async function stopJob(prefix, deps) {
   return done(true, `job ${prefix} stopped; it will not restart and uses no attempt`);
 }
 
-export async function applyControl({ action, target }, deps) {
+export async function applyControl({ action, target, reason }, deps) {
+  if (action === 'withdraw') return withdrawControl(deps.io, deps.inboxDir, target, reason, deps.now());   // issue #1316
   if (action === 'park') return park(Number(target), deps);
   if (action === 'unpark') return unpark(Number(target), deps);
   if (action === 'stop_job') return stopJob(target, deps);
@@ -85,7 +87,7 @@ export async function runControl(team, dir, st, item, inboxStore, report) {
   const now = () => team.clock.now();
   if (!inboxStore.claim(dir, st.id, 'approved', { state: 'running' }, now())) return;
   try {
-    const r = await applyControl(item, depsOf(team));
+    const r = await applyControl(item, { ...depsOf(team), io: inboxStore.io, inboxDir: dir, now });
     const control = { ...(st.control || {}), changed: r.changed };
     if (r.outcome === 'refused') inboxStore.finish(dir, st.id, { state: 'refused', reason: r.text, result: 'nothing was changed', control }, now());
     else inboxStore.finish(dir, st.id, { state: 'done', result: r.text, control }, now());

@@ -236,6 +236,7 @@ function plannerWorld(t, { tweak = () => {}, issue = 950, open = true } = {}) {
   fs.cpSync(path.join(here, '..', 'foreman-mcp', 'gbp.mjs'), path.join(code, 'foreman-mcp', 'gbp.mjs'));
   fs.cpSync(path.join(here, '..', 'foreman-mcp', 'inbox-search.mjs'), path.join(code, 'foreman-mcp', 'inbox-search.mjs'));
   fs.cpSync(path.join(here, '..', 'foreman-mcp', 'draft-after.mjs'), path.join(code, 'foreman-mcp', 'draft-after.mjs'));
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'inbox-replace.mjs'), path.join(code, 'foreman-mcp', 'inbox-replace.mjs'));
   const teamFile = path.join(code, 'supervisor', 'team.json'), team = JSON.parse(fs.readFileSync(teamFile, 'utf8'));
   team.enabled = true; team.repo_path = repo; team.worktree_base = dir; team.agents.claude.issues = [issue]; team.agents.codex.issues = [];
   team.limits.chain_seconds = 0;   // a chained tick would keep the first pass alive while its job runs; these tests count passes

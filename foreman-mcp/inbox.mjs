@@ -9,6 +9,7 @@ import { redact } from './redact.mjs';
 import { matchesInboxSearch } from './inbox-search.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependency-parser.mjs';
 import { afterFormatRefusal, afterLabels, resolveAfter } from './draft-after.mjs';
+import { checkReplacement, replaceReply, replacesFormatRefusal, withdrawnView } from './inbox-replace.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 // issue #629: the names Foreman accepts; issue #1160: clear_latch takes no target (checkProposal fills in the fixed word)
@@ -19,7 +20,7 @@ const ACTIONS = { new_review_attempt: NUMBER, clear_retry_cap: NUMBER, reopen: N
 export const BREAKER_SCOPE = /^(?:@global|all|[A-Za-z0-9_.:-]{1,160})$/;
 export const BREAKER_SCOPE_MAX = 160;
 const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, release_agent: /^[a-z][a-z0-9_-]{0,11}$/, resume_breaker: BREAKER_SCOPE };
-const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
+const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job, withdraw: ACTIONS.stop_job };   // issue #1316: withdraw takes the 8-character item id
 const ID_RE = /^[a-f0-9]{32}$/;
 const PROMPT_EFFECTS = ['read_only', 'report_only'];   // issue #1238: same values as supervisor/inbox.mjs (this module imports nothing from supervisor/)
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
@@ -37,12 +38,14 @@ export function checkProposal(args) {
   const bodyKey = kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', allowed = named ? ['kind', 'title', 'action', 'target', 'reason'] : ['kind', 'title', bodyKey, 'why'];
   if (kind === 'issue_draft') allowed.push('after');   // issue #1259: earlier drafts this one is posted after
   if (kind === 'prompt') allowed.push('effect');   // issue #1238: optional, read_only or report_only
+  if (kind !== 'control') allowed.push('replaces');   // issue #1316: the pending item of the same kind this one takes the place of
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, error: `unknown argument: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const item = { kind };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = a[k];
-    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
+    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after' || k === 'replaces')) continue;
+    if (k === 'replaces') { const bad = replacesFormatRefusal(v); if (bad) return { ok: false, error: bad }; item.replaces = v; continue; }
     if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, error: bad }; item.after = v; continue; }
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, error: `effect must be one of: ${PROMPT_EFFECTS.join(', ')}` };
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
@@ -95,13 +98,22 @@ export function createInbox({ dir, baseUrl = null }) {
       const c = checkProposal(args);
       if (!c.ok) throw new Error(c.error);
       if (c.item.after) { const known = resolveAfter(dir, 'none', c.item.after); if (!known.ok) throw new Error(known.reason); }
-      const w = waiting(), full = c.item.kind !== 'control' && w.total >= w.limit;   // a stop is never held back by a full queue (issue #1115)
+      const swap = c.item.replaces ? checkReplacement(dir, c.item) : null;   // issue #1316
+      if (swap && !swap.ok) throw new Error(swap.reason);
+      const w = waiting();
+      if (swap) w.total -= 1;   // issue #1316: the pending item it replaces leaves, so the limit counts the new item only
+      const full = c.item.kind !== 'control' && w.total >= w.limit;   // a stop is never held back by a full queue (issue #1115)
       if (full) throw new Error(`the inbox is full: ${w.total} items are waiting (${w.pending} for the homeowner's decision, ${w.unpicked} not yet picked up by Foreman); the limit is ${w.limit}. Wait for the homeowner to decide some`);
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
       fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
       // Issue #1314: which optional fields were stored, so a dropped one is visible in this reply.
       const stored = OPTIONAL.filter(k => c.item[k] !== undefined);
-      return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', stored, ...(c.item.after ? { waitsFor: afterLabels(dir, c.item.after) } : {}), note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.' };
+      return {
+        id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', stored,
+        ...(c.item.after ? { waitsFor: afterLabels(dir, c.item.after) } : {}),
+        ...replaceReply(dir, swap),
+        note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.',
+      };
     },
     status(id) {
       if (!dir) throw new Error('the inbox is not configured on this server');
@@ -126,6 +138,7 @@ export function createInbox({ dir, baseUrl = null }) {
         decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null,
         updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
         issue: s.issue ?? null, job: s.job ?? null,
+        ...withdrawnView(s),
         ...waitsForOf(dir, s, readJson(path.join(items, `${id}.json`))),
       };
     },
@@ -133,7 +146,7 @@ export function createInbox({ dir, baseUrl = null }) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       if (typeof search !== 'string' || search.length > 200) throw new Error('search must be text of at most 200 characters');
       if (kind && !['prompt', 'issue_draft', 'action', 'host_value'].includes(kind)) throw new Error('kind is not recognised');
-      const states = ['pending', 'approved', 'rejected', 'running', 'posting', 'done', 'failed', 'refused'];
+      const states = ['pending', 'approved', 'rejected', 'running', 'posting', 'done', 'failed', 'refused', 'withdrawn'];
       if (state && !states.includes(state)) {
         throw new Error('state is not recognised');
       }

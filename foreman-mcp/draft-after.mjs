@@ -2,6 +2,7 @@
 // and Foreman (pickup) refuse a bad value with the same words, so the check lives here; it only reads the inbox directory.
 import fs from 'node:fs';
 import path from 'node:path';
+import { followReplaced } from './inbox-replace.mjs';
 
 export const AFTER_MAX = 10;
 const REF = /^(?:[a-f0-9]{8}|[a-f0-9]{32})$/;
@@ -37,7 +38,7 @@ export function resolveAfter(inboxDir, selfId, after) {
     const matches = known.filter(id => id.startsWith(ref));
     if (matches.length > 1) return { ok: false, reason: `${where} matches more than one item; use the full id` };
     if (!matches.length) return { ok: false, reason: `${where} is not an item the Inbox knows` };
-    const id = matches[0];
+    const id = followReplaced(inboxDir, matches[0]);   // issue #1316: a replaced draft is followed to its replacement
     if (id === selfId) return { ok: false, reason: `${where} names the draft itself` };
     const kind = readJson(path.join(status, `${id}.json`))?.kind ?? itemKind(items, id);
     if (kind !== 'issue_draft') return { ok: false, reason: `${where} is not an issue draft` };
@@ -54,7 +55,7 @@ export function afterLabels(inboxDir, after) {
   return (Array.isArray(after) ? after : []).map(ref => {
     const matches = known.filter(id => id.startsWith(String(ref)));
     if (matches.length !== 1) return String(ref).slice(0, 8);
-    const id = matches[0];
+    const id = followReplaced(inboxDir, matches[0]);
     const title = readJson(path.join(status, `${id}.json`))?.title ?? readJson(path.join(items, `${id}.json`))?.title;
     return typeof title === 'string' && title.trim() ? `${title.replace(/\s+/g, ' ').trim().slice(0, 200)} (${id.slice(0, 8)})` : id.slice(0, 8);
   });
